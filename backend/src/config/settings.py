@@ -38,6 +38,19 @@ class Settings(BaseSettings):
 
     # Security
     backend_token: str = ""  # Token for authenticating OpenClaw plugin calls
+    rate_limit_rpm: int = 120  # Requests per minute per IP
+    max_request_body_bytes: int = 1_048_576  # 1MB
+    cors_allowed_origins: str = ""  # Comma-separated origins (empty = no CORS)
+
+    # Retry policy
+    retry_max_attempts: int = 3
+    retry_base_delay: float = 1.0  # seconds
+    retry_max_delay: float = 30.0  # seconds
+
+    # Hardening
+    plan_ttl_hours: int = 72  # Plans older than this are invalidated
+    approval_ttl_hours: int = 24  # Approvals expire after this
+    dlq_max_attempts: int = 3  # Dead-letter retry limit
 
 
 @lru_cache

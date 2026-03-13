@@ -34,6 +34,15 @@ def make_mock_settings(**overrides) -> MagicMock:
         importance_threshold=0.7,
         briefing_lookback_hours=24,
         debug=False,
+        retry_max_attempts=3,
+        retry_base_delay=0.01,
+        retry_max_delay=0.1,
+        plan_ttl_hours=72,
+        approval_ttl_hours=24,
+        dlq_max_attempts=3,
+        rate_limit_rpm=120,
+        max_request_body_bytes=1_048_576,
+        cors_allowed_origins="",
     )
     defaults.update(overrides)
     for k, v in defaults.items():

@@ -25,6 +25,7 @@ from src.config.settings import Settings
 from src.models.events import NormalizedEvent
 
 if TYPE_CHECKING:
+    from src.services.dead_letter import DeadLetterService
     from src.services.memory_service import MemoryService
     from src.services.world_model import WorldModel
 
@@ -102,6 +103,7 @@ class EventProcessor:
         on_event_processed: list | None = None,
         world_model: WorldModel | None = None,
         memory_service: MemoryService | None = None,
+        dead_letter: DeadLetterService | None = None,
     ):
         self._settings = settings
         self._db = db
@@ -111,6 +113,7 @@ class EventProcessor:
         # Optional context providers for enriched scoring
         self._world_model = world_model
         self._memory_service = memory_service
+        self._dead_letter = dead_letter
 
     async def process(self, raw: RawEvent, user_id: str) -> str | None:
         """Process a raw event. Returns event_id if stored, None if duplicate."""
@@ -162,12 +165,23 @@ class EventProcessor:
         for callback in self._on_event_processed:
             try:
                 await callback(event_id, user_id)
-            except Exception:
+            except Exception as exc:
                 logger.warning(
-                    "Post-process callback failed for %s",
+                    "Post-process callback failed for %s: %s",
                     event_id,
+                    str(exc)[:200],
                     exc_info=True,
                 )
+                # Enqueue to dead-letter queue if available
+                if hasattr(self, "_dead_letter") and self._dead_letter:
+                    await self._dead_letter.enqueue(
+                        user_id=user_id,
+                        operation_type=f"callback:{callback.__name__}",
+                        error_type=type(exc).__name__,
+                        error_message=str(exc),
+                        source_id=event_id,
+                        payload={"event_id": event_id, "callback": callback.__name__},
+                    )
 
         return event_id
 

@@ -201,12 +201,17 @@ async def reject_action(
 
 
 async def _get_approval(db: AsyncSession, approval_id: str, user_id: str) -> Approval:
-    """Fetch an approval, raising 404 if not found or not pending."""
+    """Fetch an approval with row-level locking, raising 404 if not found or not pending.
+
+    Uses SELECT ... FOR UPDATE to prevent concurrent approval race conditions.
+    """
     result = await db.execute(
-        select(Approval).where(
+        select(Approval)
+        .where(
             Approval.approval_id == approval_id,
             Approval.user_id == user_id,
         )
+        .with_for_update()
     )
     approval = result.scalar_one_or_none()
     if not approval:

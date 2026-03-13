@@ -22,6 +22,7 @@ from src.config.settings import Settings
 from src.models.executions import Execution, ExecutionTaskRun
 from src.models.plans import Plan, PlanTask
 from src.services.audit import AuditService
+from src.services.retry import retry_async
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +165,11 @@ class Operator:
         else:
             return {"status": "completed", "note": f"Task type '{task_type}' executed (stub)"}
 
+    @retry_async(
+        max_retries=2,
+        base_delay=1.0,
+        retryable_exceptions=(anthropic.APIConnectionError, anthropic.RateLimitError),
+    )
     async def _draft_email(self, input_data: dict, plan: Plan) -> dict:
         """Generate an email draft using Claude."""
         context_parts = [f"Goal: {plan.goal}"]
@@ -195,6 +201,11 @@ class Operator:
             "status": "completed",
         }
 
+    @retry_async(
+        max_retries=2,
+        base_delay=1.0,
+        retryable_exceptions=(anthropic.APIConnectionError, anthropic.RateLimitError),
+    )
     async def _summarize(self, input_data: dict) -> dict:
         """Generate a summary using Claude."""
         content = input_data.get("content", input_data.get("text", ""))

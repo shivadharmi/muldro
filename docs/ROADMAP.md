@@ -66,12 +66,12 @@
 
 ## Milestone 4: Hardening
 
-- [ ] Retry and idempotency
-- [ ] Stale plan invalidation
-- [ ] Execution locks
-- [ ] Dead-letter queues
-- [ ] Observability dashboards
-- [ ] Security audit
+- [x] Retry and idempotency (exponential backoff decorator, SELECT FOR UPDATE on approvals)
+- [x] Stale plan invalidation (TTL-based plan expiry, approval expiry enforcement in heartbeat)
+- [x] Execution locks (PostgreSQL advisory locks, row-level locking on approvals)
+- [x] Dead-letter queues (DLQ model + service, failed callback capture, retry tracking)
+- [x] Observability dashboards (request tracing middleware, correlation IDs, metrics endpoint)
+- [x] Security audit (rate limiting middleware, request size limits, CORS configuration)
 
 ## Future
 

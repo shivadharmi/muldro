@@ -35,14 +35,12 @@ async def test_expire_stale_memories(settings, mock_db):
     fresh_memory.ttl_days = 30
     fresh_memory.status = "active"
 
-    # First query: memories with TTL, second: stale plans
+    empty = MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[]))))
+
     mem_result = MagicMock()
     mem_result.scalars.return_value.all.return_value = [old_memory, fresh_memory]
 
-    plan_result = MagicMock()
-    plan_result.scalars.return_value.all.return_value = []
-
-    mock_db.execute = AsyncMock(side_effect=[mem_result, plan_result])
+    mock_db.execute = AsyncMock(side_effect=[mem_result, empty, empty, empty])
 
     service = HeartbeatService(settings=settings, db=mock_db)
     result = await service.run("usr_default")
@@ -61,14 +59,12 @@ async def test_escalate_stale_plans(settings, mock_db):
     stale_plan.status = "created"
     stale_plan.created_at = datetime.now(timezone.utc) - timedelta(hours=48)
 
-    # First query: memories, second: stale plans
-    mem_result = MagicMock()
-    mem_result.scalars.return_value.all.return_value = []
+    empty = MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[]))))
 
     plan_result = MagicMock()
     plan_result.scalars.return_value.all.return_value = [stale_plan]
 
-    mock_db.execute = AsyncMock(side_effect=[mem_result, plan_result])
+    mock_db.execute = AsyncMock(side_effect=[empty, plan_result, empty, empty])
 
     service = HeartbeatService(settings=settings, db=mock_db)
     result = await service.run("usr_default")
@@ -103,13 +99,12 @@ async def test_critical_plans_not_escalated(settings, mock_db):
     critical_plan.status = "created"
     critical_plan.created_at = datetime.now(timezone.utc) - timedelta(hours=48)
 
-    mem_result = MagicMock()
-    mem_result.scalars.return_value.all.return_value = []
+    empty = MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[]))))
 
     plan_result = MagicMock()
     plan_result.scalars.return_value.all.return_value = [critical_plan]
 
-    mock_db.execute = AsyncMock(side_effect=[mem_result, plan_result])
+    mock_db.execute = AsyncMock(side_effect=[empty, plan_result, empty, empty])
 
     service = HeartbeatService(settings=settings, db=mock_db)
     result = await service.run("usr_default")
