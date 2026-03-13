@@ -259,7 +259,7 @@ systemctl start jarvis-backend
 # ============================================================
 echo "=== Phase 7: Setting up OpenClaw ==="
 
-npm i -g openclaw
+npm i -g openclaw@latest
 
 # Build jarvis-tools plugin
 cd "$INSTALL_DIR/jarvis-tools"
@@ -267,44 +267,47 @@ sudo -u ubuntu npm ci
 
 # Create OpenClaw config directory
 OPENCLAW_HOME="/home/ubuntu/.openclaw"
-mkdir -p "$OPENCLAW_HOME"
+mkdir -p "$OPENCLAW_HOME/agents/main/sessions"
 
 cat > "$OPENCLAW_HOME/openclaw.json" <<OCEOF
 {
   "gateway": {
-    "bind": "127.0.0.1",
+    "mode": "local",
+    "bind": "loopback",
     "port": 18789,
-    "token": "$OPENCLAW_GATEWAY_TOKEN"
-  },
-  "agent": {
-    "model": "claude-sonnet-4-20250514",
-    "anthropicApiKey": "$ANTHROPIC_API_KEY"
-  },
-  "plugins": [
-    {
-      "path": "$INSTALL_DIR/jarvis-tools"
+    "auth": {
+      "mode": "token",
+      "token": "$OPENCLAW_GATEWAY_TOKEN"
     }
-  ],
-  "cron": [
-    {
-      "schedule": "0 7 * * *",
-      "command": "jarvis_brief",
-      "description": "Daily morning briefing"
-    },
-    {
-      "schedule": "0 * * * *",
-      "command": "jarvis_heartbeat",
-      "description": "Hourly heartbeat"
-    },
-    {
-      "schedule": "*/15 * * * *",
-      "command": "jarvis_ingest_event",
-      "args": { "source": "email", "action": "check" },
-      "description": "Check email every 15 minutes"
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "anthropic/claude-sonnet-4-20250514"
+      }
     }
-  ]
+  },
+  "plugins": {
+    "enabled": true,
+    "load": {
+      "paths": ["$INSTALL_DIR/jarvis-tools"]
+    },
+    "entries": {
+      "jarvis-tools": {
+        "enabled": true,
+        "config": {
+          "backendUrl": "http://127.0.0.1:8000",
+          "backendToken": "$BACKEND_TOKEN"
+        }
+      }
+    }
+  },
+  "cron": {
+    "enabled": true
+  }
 }
 OCEOF
+chmod 700 "$OPENCLAW_HOME"
 chmod 600 "$OPENCLAW_HOME/openclaw.json"
 chown -R ubuntu:ubuntu "$OPENCLAW_HOME"
 
@@ -320,7 +323,11 @@ Type=simple
 User=ubuntu
 Group=ubuntu
 Environment=HOME=/home/ubuntu
-Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=PATH=/usr/bin:/usr/local/bin:/bin
+Environment=ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
+Environment=VOYAGE_API_KEY=$VOYAGE_API_KEY
+Environment=NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache
+Environment=OPENCLAW_NO_RESPAWN=1
 ExecStart=/usr/bin/openclaw gateway
 Restart=always
 RestartSec=5
@@ -331,6 +338,8 @@ SyslogIdentifier=openclaw
 [Install]
 WantedBy=multi-user.target
 OCSVCEOF
+
+mkdir -p /var/tmp/openclaw-compile-cache
 
 systemctl daemon-reload
 systemctl enable openclaw
