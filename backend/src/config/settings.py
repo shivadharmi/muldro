@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     openclaw_gateway_url: str = "http://localhost:18789"
     openclaw_hook_token: str = ""
 
+    # Thresholds
+    importance_threshold: float = 0.7  # Events above this score trigger planning
+    briefing_lookback_hours: int = 24  # Default time window for briefing data
+
     # Security
     backend_token: str = ""  # Token for authenticating OpenClaw plugin calls
 

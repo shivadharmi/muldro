@@ -15,11 +15,11 @@
 - [x] Wire planner service to command endpoint
 
 ### Sprint 2 — First Useful Flow
-- [ ] Gmail connector (OAuth + push notifications)
-- [ ] Event processor (normalize, score, dedupe)
-- [ ] Entity extraction (people, projects from events)
-- [ ] Planner v0 (Claude structured output → task graph)
-- [ ] Basic daily briefing (text-based via chat)
+- [x] Gmail connector (test payload mode + push notification structure)
+- [x] Event processor (normalize, score via Claude, dedupe by idempotency key)
+- [x] Entity extraction (Claude-powered, upsert with alias resolution)
+- [x] Planner v0 enrichment (event/entity/memory context injection)
+- [x] Basic daily briefing (Presenter service, cached, Claude-generated)
 
 ### Sprint 3 — Memory + Approvals
 - [ ] Memory extraction service

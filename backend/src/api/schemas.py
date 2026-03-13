@@ -103,6 +103,22 @@ class MeetingPrepResponse(BaseModel):
 # ── Webhook ───────────────────────────────────────────────────────
 
 
+class GmailTestPayload(BaseModel):
+    """Single email payload for the test webhook endpoint."""
+
+    message_id: str
+    thread_id: str
+    from_email: str
+    from_name: str | None = None
+    to: list[str] = []
+    cc: list[str] | None = None
+    subject: str = ""
+    snippet: str = ""
+    date: datetime | None = None
+    labels: list[str] | None = None
+    has_attachments: bool = False
+
+
 class WebhookResponse(BaseModel):
     received: bool = True
     event_id: str | None = None

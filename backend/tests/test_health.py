@@ -36,8 +36,9 @@ def test_health():
     assert data["status"] == "ok"
 
 
+@patch("src.api.routes_command.WorldModel")
 @patch("src.api.routes_command.Planner")
-def test_command_calls_planner(mock_planner_cls):
+def test_command_calls_planner(mock_planner_cls, mock_wm_cls):
     """Command endpoint should call planner and return the plan summary."""
     mock_instance = MagicMock()
     mock_instance.plan_for_command = AsyncMock(return_value=_make_mock_plan())
@@ -56,8 +57,9 @@ def test_command_calls_planner(mock_planner_cls):
     mock_instance.plan_for_command.assert_called_once()
 
 
+@patch("src.api.routes_command.WorldModel")
 @patch("src.api.routes_command.Planner")
-def test_command_handles_planner_error(mock_planner_cls):
+def test_command_handles_planner_error(mock_planner_cls, mock_wm_cls):
     """Command endpoint should return error gracefully if planner fails."""
     mock_instance = MagicMock()
     mock_instance.plan_for_command = AsyncMock(side_effect=RuntimeError("API unavailable"))

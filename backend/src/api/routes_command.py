@@ -9,6 +9,7 @@ from src.api.deps import get_current_user, get_session
 from src.api.schemas import CommandRequest, CommandResponse
 from src.config.settings import Settings, get_settings
 from src.services.planner import Planner
+from src.services.world_model import WorldModel
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,8 @@ async def handle_command(
 
     Flow: parse intent → retrieve context → plan → execute/draft → respond.
     """
-    planner = Planner(settings=settings, db=db)
+    world_model = WorldModel(settings=settings, db=db)
+    planner = Planner(settings=settings, db=db, world_model=world_model)
 
     try:
         plan = await planner.plan_for_command(
