@@ -74,7 +74,7 @@ AllowUsers ubuntu
 X11Forwarding no
 AllowTcpForwarding no
 SSHEOF
-systemctl restart sshd
+systemctl restart ssh
 
 # fail2ban: SSH jail
 cat > /etc/fail2ban/jail.local <<'F2BEOF'
@@ -203,17 +203,21 @@ JARVIS_ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
 JARVIS_VOYAGE_API_KEY=$VOYAGE_API_KEY
 JARVIS_BACKEND_TOKEN=$BACKEND_TOKEN
 JARVIS_OPENCLAW_HOOK_TOKEN=$OPENCLAW_HOOK_TOKEN
-JARVIS_OPENCLAW_URL=http://127.0.0.1:18789
+JARVIS_OPENCLAW_GATEWAY_URL=http://127.0.0.1:18789
 JARVIS_HOST=127.0.0.1
 JARVIS_PORT=8000
-JARVIS_LOG_LEVEL=info
 ENVEOF
 chmod 600 "$INSTALL_DIR/backend/.env"
 
-# Set up Python environment
-cd "$INSTALL_DIR/backend"
+# Install uv for ubuntu user
+sudo -u ubuntu bash -c "curl -LsSf https://astral.sh/uv/install.sh | sh"
+
+# Set up Python environment and run migrations
+DB_URL="postgresql+asyncpg://jarvis:$POSTGRES_PASSWORD@127.0.0.1:5432/jarvis"
+sudo -u ubuntu sed -i "s|sqlalchemy.url = .*|sqlalchemy.url = $DB_URL|" "$INSTALL_DIR/backend/alembic.ini"
+
 sudo -u ubuntu bash -c "
-  export PATH='/root/.local/bin:/home/ubuntu/.local/bin:\$PATH'
+  export PATH='\$HOME/.local/bin:\$PATH'
   cd $INSTALL_DIR/backend
   uv venv
   source .venv/bin/activate
