@@ -3,6 +3,7 @@ from src.models.audit import AuditLog
 from src.models.base import Base
 from src.models.briefings import Briefing
 from src.models.connectors import Connector, ConnectorAccount
+from src.models.dead_letter import DeadLetterEntry
 from src.models.entities import Entity, EntityAlias, EntityRelationship
 from src.models.events import NormalizedEvent
 from src.models.executions import Execution, ExecutionTaskRun
@@ -25,4 +26,5 @@ __all__ = [
     "AuditLog",
     "Connector",
     "ConnectorAccount",
+    "DeadLetterEntry",
 ]
