@@ -114,9 +114,14 @@ def test_briefing_endpoint_returns_response():
         from fastapi.testclient import TestClient
 
         from src.api.app import app
+        from src.api.deps import get_current_user
 
-        client = TestClient(app)
-        response = client.get("/v1/briefings/2026-03-13")
+        app.dependency_overrides[get_current_user] = lambda: "usr_default"
+        try:
+            client = TestClient(app)
+            response = client.get("/v1/briefings/2026-03-13")
+        finally:
+            app.dependency_overrides.pop(get_current_user, None)
 
         assert response.status_code == 200
         data = response.json()
