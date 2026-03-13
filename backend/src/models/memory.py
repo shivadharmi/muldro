@@ -1,3 +1,4 @@
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import Float, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -14,6 +15,7 @@ class Memory(Base, TimestampMixin):
     # episodic, semantic, preference, relationship, task_context
     scope: Mapped[str | None] = mapped_column(String(64))  # presentation, planning, general
     fact_text: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding: Mapped[list | None] = mapped_column(Vector(1536))
     embedding_ref: Mapped[str | None] = mapped_column(String(128))
     confidence: Mapped[float] = mapped_column(Float, default=0.5)
     stability_score: Mapped[float] = mapped_column(Float, default=0.0)

@@ -12,6 +12,7 @@ from src.connectors.calendar import CalendarConnector
 from src.connectors.gmail import GmailConnector
 from src.services.event_processor import EventProcessor
 from src.services.memory_service import MemoryService
+from src.services.planner import Planner
 from src.services.world_model import WorldModel
 
 logger = logging.getLogger(__name__)
@@ -19,9 +20,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _make_gmail_connector(settings: Settings, db: AsyncSession) -> GmailConnector:
+def _make_event_processor(settings: Settings, db: AsyncSession) -> EventProcessor:
+    """Build an EventProcessor with the full callback pipeline.
+
+    Callbacks (in order):
+    1. Entity extraction (WorldModel)
+    2. Memory extraction (MemoryService)
+    3. Proactive planning (Planner — for high-importance events)
+    """
     world_model = WorldModel(settings=settings, db=db)
     memory_service = MemoryService(settings=settings, db=db)
+    planner = Planner(
+        settings=settings,
+        db=db,
+        world_model=world_model,
+        memory_service=memory_service,
+    )
 
     async def _extract_entities(event_id: str, user_id: str) -> None:
         await world_model.extract_from_event(event_id, user_id)
@@ -38,12 +52,36 @@ def _make_gmail_connector(settings: Settings, db: AsyncSession) -> GmailConnecto
         if event and event.summary:
             await memory_service.extract_and_store(user_id, event.summary, [event_id])
 
-    event_processor = EventProcessor(
+    async def _proactive_plan(event_id: str, user_id: str) -> None:
+        """Auto-trigger planning for high-importance events."""
+        plan = await planner.plan_for_event(event_id, user_id)
+        if plan:
+            logger.info(
+                "Proactive plan created: %s decision=%s for event %s",
+                plan.plan_id,
+                plan.decision,
+                event_id,
+            )
+
+    return EventProcessor(
         settings=settings,
         db=db,
-        on_event_processed=[_extract_entities, _extract_memories],
+        on_event_processed=[_extract_entities, _extract_memories, _proactive_plan],
+        world_model=world_model,
+        memory_service=memory_service,
     )
-    return GmailConnector(settings=settings, db=db, event_processor=event_processor)
+
+
+def _make_gmail_connector(settings: Settings, db: AsyncSession) -> GmailConnector:
+    return GmailConnector(
+        settings=settings, db=db, event_processor=_make_event_processor(settings, db)
+    )
+
+
+def _make_calendar_connector(settings: Settings, db: AsyncSession) -> CalendarConnector:
+    return CalendarConnector(
+        settings=settings, db=db, event_processor=_make_event_processor(settings, db)
+    )
 
 
 @router.post("/v1/webhooks/gmail", response_model=WebhookResponse)
@@ -58,7 +96,6 @@ async def gmail_webhook(
     """
     body = await request.json()
     connector = _make_gmail_connector(settings, db)
-    # Use a default user_id; in production this would be resolved from the push subscription
     user_id = body.get("user_id", "usr_default")
     event_ids = await connector.handle_push_notification(body, user_id)
     return WebhookResponse(received=True, event_id=event_ids[0] if event_ids else None)
@@ -78,33 +115,6 @@ async def gmail_test_webhook(
     connector = _make_gmail_connector(settings, db)
     event_id = await connector.process_test_message(msg, user_id)
     return WebhookResponse(received=True, event_id=event_id)
-
-
-def _make_calendar_connector(settings: Settings, db: AsyncSession) -> CalendarConnector:
-    world_model = WorldModel(settings=settings, db=db)
-    memory_service = MemoryService(settings=settings, db=db)
-
-    async def _extract_entities(event_id: str, user_id: str) -> None:
-        await world_model.extract_from_event(event_id, user_id)
-
-    async def _extract_memories(event_id: str, user_id: str) -> None:
-        from sqlalchemy import select as sa_select
-
-        from src.models.events import NormalizedEvent
-
-        result = await db.execute(
-            sa_select(NormalizedEvent).where(NormalizedEvent.event_id == event_id)
-        )
-        event = result.scalar_one_or_none()
-        if event and event.summary:
-            await memory_service.extract_and_store(user_id, event.summary, [event_id])
-
-    event_processor = EventProcessor(
-        settings=settings,
-        db=db,
-        on_event_processed=[_extract_entities, _extract_memories],
-    )
-    return CalendarConnector(settings=settings, db=db, event_processor=event_processor)
 
 
 @router.post("/v1/webhooks/calendar", response_model=WebhookResponse)

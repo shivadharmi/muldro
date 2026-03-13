@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     openclaw_gateway_url: str = "http://localhost:18789"
     openclaw_hook_token: str = ""
 
+    # Embeddings (Voyage AI)
+    voyage_api_key: str = ""
+    embedding_model: str = "voyage-3-lite"
+
     # Thresholds
     importance_threshold: float = 0.7  # Events above this score trigger planning
     briefing_lookback_hours: int = 24  # Default time window for briefing data

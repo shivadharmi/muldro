@@ -36,11 +36,11 @@
 
 ## Milestone 2: Intelligence Layer
 
-- [ ] Semantic memory search (pgvector)
-- [ ] Personalization: preference extraction
-- [ ] Proactive event-driven planning
-- [ ] Importance scoring model tuning
-- [ ] Heartbeat cron for priority re-evaluation
+- [x] Semantic memory search (pgvector embeddings with Voyage AI, cosine similarity)
+- [x] Personalization: preference extraction (Claude-powered, category-scoped)
+- [x] Proactive event-driven planning (auto-plan callback on event ingestion)
+- [x] Importance scoring model tuning (context-aware: entities + preferences)
+- [x] Heartbeat cron for priority re-evaluation (memory expiry + plan escalation)
 
 ## Milestone 3: User Experience
 

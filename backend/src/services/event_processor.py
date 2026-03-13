@@ -3,15 +3,18 @@
 Responsibilities:
 - Receive raw events from connectors
 - Normalize to NormalizedEvent schema
-- Score importance/urgency/confidence via Claude
+- Score importance/urgency/confidence via Claude (context-aware)
 - Deduplicate by idempotency key
 - Store and trigger downstream processing (entity extraction, planning)
 """
+
+from __future__ import annotations
 
 import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 import anthropic
 from sqlalchemy import select
@@ -20,6 +23,10 @@ from ulid import ULID
 
 from src.config.settings import Settings
 from src.models.events import NormalizedEvent
+
+if TYPE_CHECKING:
+    from src.services.memory_service import MemoryService
+    from src.services.world_model import WorldModel
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +46,8 @@ class RawEvent:
 
 
 SCORING_SYSTEM_PROMPT = """\
-You are Jarvis's event scoring engine. Given an event, evaluate its importance \
-and urgency for a busy founder.
+You are Jarvis's event scoring engine. Given an event and optional user context, \
+evaluate its importance and urgency for this specific user.
 
 You MUST respond with valid JSON matching this schema:
 {
@@ -66,6 +73,10 @@ Scoring guidelines:
 - contains_deadline: explicit dates, "by EOD", "ASAP", "urgent"
 - contains_question: direct questions requiring response
 - related_to_active_project: references to known projects or ongoing work
+
+If user context is provided (known entities, preferences, active projects), \
+use it to calibrate scores. A message from a known investor should score higher \
+than one from an unknown sender.
 """
 
 DEFAULT_SCORES = {
@@ -89,12 +100,17 @@ class EventProcessor:
         settings: Settings,
         db: AsyncSession,
         on_event_processed: list | None = None,
+        world_model: WorldModel | None = None,
+        memory_service: MemoryService | None = None,
     ):
         self._settings = settings
         self._db = db
         self._client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         # Optional async callbacks: called with (event_id, user_id) after processing
         self._on_event_processed = on_event_processed or []
+        # Optional context providers for enriched scoring
+        self._world_model = world_model
+        self._memory_service = memory_service
 
     async def process(self, raw: RawEvent, user_id: str) -> str | None:
         """Process a raw event. Returns event_id if stored, None if duplicate."""
@@ -109,7 +125,7 @@ class EventProcessor:
             logger.debug("Duplicate event skipped: %s", idempotency_key)
             return None
 
-        scores = await self._score_event(raw)
+        scores = await self._score_event(raw, user_id)
 
         event_id = f"evt_{ULID()}"
         event = NormalizedEvent(
@@ -155,9 +171,9 @@ class EventProcessor:
 
         return event_id
 
-    async def _score_event(self, raw: RawEvent) -> dict:
-        """Score an event using Claude. Falls back to defaults on failure."""
-        user_message = self._build_scoring_message(raw)
+    async def _score_event(self, raw: RawEvent, user_id: str) -> dict:
+        """Score an event using Claude with user context. Falls back to defaults."""
+        user_message = await self._build_scoring_message(raw, user_id)
 
         try:
             response = await self._client.messages.create(
@@ -174,7 +190,7 @@ class EventProcessor:
             logger.warning("Event scoring failed, using defaults", exc_info=True)
             return {**DEFAULT_SCORES, "summary": raw.summary}
 
-    def _build_scoring_message(self, raw: RawEvent) -> str:
+    async def _build_scoring_message(self, raw: RawEvent, user_id: str) -> str:
         parts = [f"Source: {raw.source}", f"Type: {raw.event_type}"]
         if raw.title:
             parts.append(f"Title: {raw.title}")
@@ -183,4 +199,39 @@ class EventProcessor:
         if raw.actor:
             actor_str = raw.actor.get("name", raw.actor.get("email", "unknown"))
             parts.append(f"From: {actor_str}")
+
+        # Enrich with user context for better scoring
+        context = await self._gather_scoring_context(raw, user_id)
+        if context:
+            parts.append(f"\n--- User Context ---\n{context}")
+
         return "\n".join(parts)
+
+    async def _gather_scoring_context(self, raw: RawEvent, user_id: str) -> str | None:
+        """Gather entity and preference context to improve scoring accuracy."""
+        context_parts = []
+
+        # Look up the sender/actor in the entity graph
+        if self._world_model and raw.actor:
+            actor_query = raw.actor.get("email") or raw.actor.get("name", "")
+            if actor_query:
+                entities = await self._world_model.find_entity(user_id, actor_query)
+                if entities:
+                    ent = entities[0]
+                    attrs = ent.get("attributes") or {}
+                    line = f"Known entity: {ent['canonical_name']} ({ent['entity_type']})"
+                    if attrs.get("role"):
+                        line += f", role: {attrs['role']}"
+                    if attrs.get("company"):
+                        line += f", company: {attrs['company']}"
+                    context_parts.append(line)
+
+        # Inject user preferences relevant to scoring
+        if self._memory_service:
+            prefs = await self._memory_service.get_user_preferences(user_id, max_results=5)
+            if prefs:
+                pref_lines = [p["fact_text"] for p in prefs[:5]]
+                pref_text = "\n".join(f"- {p}" for p in pref_lines)
+                context_parts.append(f"User preferences:\n{pref_text}")
+
+        return "\n".join(context_parts) if context_parts else None
