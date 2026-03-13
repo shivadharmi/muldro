@@ -24,7 +24,9 @@ from ulid import ULID
 from src.config.settings import Settings
 from src.models.approvals import Approval
 from src.models.briefings import Briefing
+from src.models.entities import Entity
 from src.models.events import NormalizedEvent
+from src.models.memory import Memory
 from src.models.plans import Plan
 
 logger = logging.getLogger(__name__)
@@ -53,6 +55,42 @@ Rules:
 - Recommended actions should be concrete and actionable
 - full_text should be scannable — use bold, bullets, short paragraphs
 - If there are no events, say so briefly
+"""
+
+
+MEETING_PREP_SYSTEM_PROMPT = """\
+You are Jarvis's meeting preparation engine. Given structured data about an \
+upcoming meeting (attendees, related emails, memories, entity info), produce \
+a comprehensive meeting prep document for a busy founder.
+
+You MUST respond with valid JSON matching this schema:
+{
+  "agenda": ["topic 1", "topic 2", ...],
+  "attendee_briefs": [
+    {
+      "name": "string",
+      "email": "string",
+      "role": "string or null",
+      "recent_context": "what you know about recent interactions"
+    }
+  ],
+  "related_threads": [
+    {"title": "email/event title", "summary": "brief summary", "event_id": "string"}
+  ],
+  "action_items": [
+    {"description": "string", "owner": "string or null", "priority": "high|medium|low"}
+  ],
+  "risks": ["potential risk or concern"],
+  "talking_points": ["key point to raise"]
+}
+
+Rules:
+- Infer agenda from title, description, attendees, and related threads
+- Keep attendee_briefs focused on what matters for this meeting
+- Related threads should surface emails/events involving the same people
+- Action items should be concrete and specific
+- Risks: scheduling conflicts, missing context, unresolved issues
+- Talking points: 3-5 max, most important first
 """
 
 
@@ -105,10 +143,42 @@ class Presenter:
         logger.info("Briefing generated: %s for %s", briefing_id, briefing_date)
         return briefing
 
-    async def generate_meeting_prep(self, meeting_id: str, user_id: str) -> dict:
-        """Generate meeting preparation content."""
-        # TODO: Implement in Sprint 4 (Calendar + Meeting Prep)
-        return {}
+    async def generate_meeting_prep(
+        self, meeting_id: str, user_id: str, next_meeting: bool = False
+    ) -> dict:
+        """Generate meeting preparation content.
+
+        If next_meeting is True, finds the next upcoming calendar event.
+        Otherwise, looks up by meeting_id (which is the calendar_event entity_id).
+        """
+        meeting_event = await self._find_meeting_event(user_id, meeting_id, next_meeting)
+        if not meeting_event:
+            return {
+                "meeting_id": meeting_id or "none",
+                "title": "Meeting not found",
+                "attendees": [],
+                "agenda": [],
+                "related_threads": [],
+                "action_items": [],
+                "risks": ["Could not find the specified meeting."],
+            }
+
+        context = await self._gather_meeting_context(user_id, meeting_event)
+        prep = await self._call_meeting_prep(context)
+
+        return {
+            "meeting_id": meeting_event.event_id,
+            "title": meeting_event.title or "Untitled Meeting",
+            "starts_at": (
+                meeting_event.occurred_at.isoformat() if meeting_event.occurred_at else None
+            ),
+            "attendees": prep.get("attendee_briefs", []),
+            "agenda": prep.get("agenda", []),
+            "related_threads": prep.get("related_threads", []),
+            "action_items": prep.get("action_items", []),
+            "risks": prep.get("risks", []),
+            "talking_points": prep.get("talking_points", []),
+        }
 
     async def _gather_briefing_data(self, user_id: str, briefing_date: date) -> str:
         """Compose structured context from events, plans, approvals."""
@@ -119,6 +189,7 @@ class Presenter:
         events = await self._get_recent_events(user_id, cutoff)
         plans = await self._get_active_plans(user_id)
         approvals = await self._get_pending_approvals(user_id)
+        upcoming_meetings = await self._get_upcoming_meetings(user_id)
 
         sections = [f"Date: {briefing_date.isoformat()}"]
 
@@ -136,6 +207,18 @@ class Presenter:
             sections.append(f"## Recent Events ({len(events)})\n" + "\n".join(event_lines))
         else:
             sections.append("## Recent Events\nNo events in the lookback window.")
+
+        if upcoming_meetings:
+            meeting_lines = []
+            for m in upcoming_meetings:
+                time_str = m.occurred_at.strftime("%H:%M") if m.occurred_at else "TBD"
+                line = f"- {time_str} — {m.title or 'Untitled Meeting'}"
+                if m.summary:
+                    line += f"\n  {m.summary[:100]}"
+                meeting_lines.append(line)
+            sections.append(
+                f"## Upcoming Meetings ({len(upcoming_meetings)})\n" + "\n".join(meeting_lines)
+            )
 
         if plans:
             plan_lines = [f"- {p.goal} (priority: {p.priority}, status: {p.status})" for p in plans]
@@ -184,6 +267,216 @@ class Presenter:
             .limit(10)
         )
         return list(result.scalars().all())
+
+    async def _get_upcoming_meetings(self, user_id: str, limit: int = 10) -> list[NormalizedEvent]:
+        """Get upcoming calendar events for today and tomorrow."""
+        now = datetime.now(timezone.utc)
+        end = now + timedelta(hours=36)
+        result = await self._db.execute(
+            select(NormalizedEvent)
+            .where(
+                NormalizedEvent.user_id == user_id,
+                NormalizedEvent.source == "calendar",
+                NormalizedEvent.occurred_at >= now,
+                NormalizedEvent.occurred_at <= end,
+            )
+            .order_by(NormalizedEvent.occurred_at.asc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def _find_meeting_event(
+        self,
+        user_id: str,
+        meeting_id: str | None,
+        next_meeting: bool,
+    ) -> NormalizedEvent | None:
+        """Find a calendar event by ID or get the next upcoming one."""
+        if next_meeting:
+            result = await self._db.execute(
+                select(NormalizedEvent)
+                .where(
+                    NormalizedEvent.user_id == user_id,
+                    NormalizedEvent.source == "calendar",
+                    NormalizedEvent.occurred_at >= datetime.now(timezone.utc),
+                )
+                .order_by(NormalizedEvent.occurred_at.asc())
+                .limit(1)
+            )
+            return result.scalar_one_or_none()
+
+        if meeting_id:
+            result = await self._db.execute(
+                select(NormalizedEvent).where(
+                    NormalizedEvent.user_id == user_id,
+                    NormalizedEvent.event_id == meeting_id,
+                    NormalizedEvent.source == "calendar",
+                )
+            )
+            evt = result.scalar_one_or_none()
+            if evt:
+                return evt
+
+            # Also try matching by entity_id (calendar_event_id)
+            result = await self._db.execute(
+                select(NormalizedEvent).where(
+                    NormalizedEvent.user_id == user_id,
+                    NormalizedEvent.entity_id == meeting_id,
+                    NormalizedEvent.source == "calendar",
+                )
+            )
+            return result.scalar_one_or_none()
+
+        return None
+
+    async def _gather_meeting_context(self, user_id: str, meeting: NormalizedEvent) -> str:
+        """Compose structured context for meeting prep."""
+        sections = [
+            f"Meeting: {meeting.title or 'Untitled'}",
+            f"Time: {meeting.occurred_at.isoformat() if meeting.occurred_at else 'unknown'}",
+        ]
+
+        if meeting.summary:
+            sections.append(f"Description: {meeting.summary}")
+
+        # Extract attendee emails from actor_entities
+        attendee_emails = []
+        if meeting.actor_entities:
+            for actor in meeting.actor_entities:
+                if isinstance(actor, dict) and actor.get("email"):
+                    attendee_emails.append(actor["email"])
+
+        # Get attendee info from entities
+        attendee_info = await self._get_attendee_entities(user_id, attendee_emails)
+        if attendee_info:
+            att_lines = []
+            for att in attendee_info:
+                line = f"- {att['canonical_name']} ({att['entity_type']})"
+                if att.get("attributes"):
+                    attrs = att["attributes"]
+                    if attrs.get("role"):
+                        line += f" — {attrs['role']}"
+                    if attrs.get("company"):
+                        line += f" at {attrs['company']}"
+                att_lines.append(line)
+            sections.append("## Known Attendees\n" + "\n".join(att_lines))
+
+        # Find related events (same attendees, recent)
+        related = await self._get_related_events(user_id, attendee_emails, meeting.event_id)
+        if related:
+            rel_lines = [
+                f"- [{e.source}] {e.title or 'Untitled'}: {e.summary or 'no summary'}"
+                for e in related
+            ]
+            sections.append(f"## Related Events ({len(related)})\n" + "\n".join(rel_lines))
+
+        # Find relevant memories about attendees
+        memories = await self._get_attendee_memories(user_id, attendee_emails)
+        if memories:
+            mem_lines = [f"- {m.fact_text}" for m in memories]
+            sections.append(f"## Relevant Memories ({len(memories)})\n" + "\n".join(mem_lines))
+
+        return "\n\n".join(sections)
+
+    async def _get_attendee_entities(self, user_id: str, emails: list[str]) -> list[dict]:
+        """Look up entity info for attendee emails."""
+        if not emails:
+            return []
+
+        from src.models.entities import EntityAlias
+
+        result = await self._db.execute(
+            select(Entity).where(
+                Entity.user_id == user_id,
+                Entity.entity_id.in_(
+                    select(EntityAlias.entity_id).where(EntityAlias.alias.in_(emails))
+                ),
+            )
+        )
+        entities = result.scalars().all()
+        return [
+            {
+                "entity_id": e.entity_id,
+                "entity_type": e.entity_type,
+                "canonical_name": e.canonical_name,
+                "attributes": e.attributes,
+            }
+            for e in entities
+        ]
+
+    async def _get_related_events(
+        self,
+        user_id: str,
+        attendee_emails: list[str],
+        exclude_event_id: str,
+    ) -> list[NormalizedEvent]:
+        """Find recent events involving the same attendees."""
+        if not attendee_emails:
+            return []
+
+        lookback = datetime.now(timezone.utc) - timedelta(days=7)
+        # Search for events mentioning attendee emails in summary or title
+        from sqlalchemy import or_
+
+        conditions = [NormalizedEvent.summary.ilike(f"%{email}%") for email in attendee_emails[:5]]
+
+        result = await self._db.execute(
+            select(NormalizedEvent)
+            .where(
+                NormalizedEvent.user_id == user_id,
+                NormalizedEvent.event_id != exclude_event_id,
+                NormalizedEvent.occurred_at >= lookback,
+                or_(*conditions),
+            )
+            .order_by(NormalizedEvent.occurred_at.desc())
+            .limit(10)
+        )
+        return list(result.scalars().all())
+
+    async def _get_attendee_memories(self, user_id: str, emails: list[str]) -> list:
+        """Find memories mentioning attendee emails."""
+        if not emails:
+            return []
+
+        from sqlalchemy import or_
+
+        conditions = [Memory.fact_text.ilike(f"%{email}%") for email in emails[:5]]
+
+        result = await self._db.execute(
+            select(Memory)
+            .where(
+                Memory.user_id == user_id,
+                Memory.status == "active",
+                or_(*conditions),
+            )
+            .order_by(Memory.confidence.desc())
+            .limit(10)
+        )
+        return list(result.scalars().all())
+
+    async def _call_meeting_prep(self, context: str) -> dict:
+        """Call Claude to generate meeting prep content."""
+        try:
+            response = await self._client.messages.create(
+                model=self._settings.anthropic_model,
+                max_tokens=2048,
+                system=MEETING_PREP_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": context}],
+            )
+            text = response.content[0].text
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1].rsplit("```", 1)[0]
+            return json.loads(text)
+        except Exception:
+            logger.warning("Meeting prep generation failed", exc_info=True)
+            return {
+                "agenda": [],
+                "attendee_briefs": [],
+                "related_threads": [],
+                "action_items": [],
+                "risks": ["Meeting prep generation failed."],
+                "talking_points": [],
+            }
 
     async def _call_claude(self, context: str) -> dict:
         """Call Claude to generate briefing content."""

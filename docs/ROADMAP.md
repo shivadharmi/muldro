@@ -29,10 +29,10 @@
 - [x] Audit logging (full correlation IDs, immutable trail)
 
 ### Sprint 4 — Calendar + Meeting Prep
-- [ ] Calendar connector (OAuth + polling)
-- [ ] Meeting entity and relationship support
-- [ ] Meeting prep workflow
-- [ ] Improved briefing with calendar data
+- [x] Calendar connector (test payload mode + push notification structure)
+- [x] Meeting entity and relationship support (via WorldModel extraction)
+- [x] Meeting prep workflow (Presenter.generate_meeting_prep, Claude-powered)
+- [x] Improved briefing with calendar data (upcoming meetings section)
 
 ## Milestone 2: Intelligence Layer
 

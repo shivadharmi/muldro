@@ -100,6 +100,27 @@ class MeetingPrepResponse(BaseModel):
     risks: list[str] = []
 
 
+# ── Calendar ──────────────────────────────────────────────────────
+
+
+class CalendarTestPayload(BaseModel):
+    """Single calendar event payload for the test webhook endpoint."""
+
+    calendar_event_id: str
+    calendar_id: str = "primary"
+    title: str = ""
+    description: str | None = None
+    location: str | None = None
+    start_time: datetime
+    end_time: datetime
+    attendees: list[dict] = []
+    organizer_email: str | None = None
+    recurrence: str | None = None
+    status: str = "confirmed"
+    html_link: str | None = None
+    conference_link: str | None = None
+
+
 # ── Webhook ───────────────────────────────────────────────────────
 
 
