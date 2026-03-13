@@ -28,11 +28,6 @@ class Settings(BaseSettings):
     voyage_base_url: str = "https://api.voyageai.com/v1"
     embedding_model: str = "voyage-3-lite"
 
-    # Slack
-    slack_webhook_url: str = ""
-    slack_bot_token: str = ""
-    slack_signing_secret: str = ""
-
     # Thresholds
     importance_threshold: float = 0.7  # Events above this score trigger planning
     briefing_lookback_hours: int = 24  # Default time window for briefing data

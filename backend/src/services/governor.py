@@ -58,9 +58,10 @@ BLOCKED_ACTIONS = {
 class Governor:
     """Evaluate plans against safety policies."""
 
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, openclaw_client=None):
         self._db = db
         self._audit = AuditService(db)
+        self._openclaw = openclaw_client
 
     async def evaluate_plan(self, plan_id: str, user_id: str) -> str:
         """Evaluate a plan and determine execution mode.
@@ -107,6 +108,16 @@ class Governor:
                 approval_id,
                 plan_id,
             )
+
+            # Wake the OpenClaw agent to notify user of pending approval
+            if self._openclaw:
+                try:
+                    await self._openclaw.wake_agent(
+                        f"Approval needed: {plan.goal}. "
+                        f"Use jarvis_approval_card with ID {approval_id} for details."
+                    )
+                except Exception:
+                    logger.warning("Failed to wake agent for approval notification", exc_info=True)
 
         if policy_decision == "blocked":
             execution.status = "cancelled"

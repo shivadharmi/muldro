@@ -1,8 +1,11 @@
 """Execution locks — prevent concurrent operations on the same resource.
 
-Uses PostgreSQL advisory locks for distributed-safe locking without
-additional infrastructure. Advisory locks are session-scoped and
-automatically released when the session ends.
+Supports two backends:
+1. Redis distributed locks (preferred — faster, works across instances)
+2. PostgreSQL advisory locks (fallback when Redis unavailable)
+
+Advisory locks are session-scoped and automatically released when the session ends.
+Redis locks use SET NX EX pattern with configurable TTL.
 """
 
 import hashlib
@@ -13,6 +16,46 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
+
+
+# ── Redis distributed locks ─────────────────────────────────────
+
+
+class RedisLock:
+    """Redis-based distributed lock using SET NX EX pattern."""
+
+    def __init__(self, redis):
+        self._redis = redis
+
+    async def acquire(self, key: str, ttl_seconds: int = 30) -> bool:
+        """Try to acquire a lock. Returns True if acquired."""
+        lock_key = f"lock:{key}"
+        acquired = await self._redis.set(lock_key, "1", nx=True, ex=ttl_seconds)
+        if acquired:
+            logger.debug("Acquired Redis lock: %s (ttl=%ds)", key, ttl_seconds)
+        return bool(acquired)
+
+    async def release(self, key: str) -> None:
+        """Release a previously acquired lock."""
+        lock_key = f"lock:{key}"
+        await self._redis.delete(lock_key)
+        logger.debug("Released Redis lock: %s", key)
+
+
+@asynccontextmanager
+async def distributed_lock(redis, key: str, ttl: int = 30):
+    """Redis-backed distributed lock with auto-release."""
+    lock = RedisLock(redis)
+    acquired = await lock.acquire(key, ttl_seconds=ttl)
+    if not acquired:
+        raise RuntimeError(f"Failed to acquire lock: {key}")
+    try:
+        yield
+    finally:
+        await lock.release(key)
+
+
+# ── PostgreSQL advisory locks (fallback) ────────────────────────
 
 
 def _resource_to_lock_id(resource_key: str) -> int:

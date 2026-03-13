@@ -1,12 +1,14 @@
-"""Operator — executes approved plans.
+"""Operator — orchestrates plan execution.
 
-Only executes structured plans that have passed Governor review.
-Never invents goals. Never calls tools without a plan.
+State tracking stays here. Actual work is delegated to the OpenClaw agent
+(which has access to gog, gh, message, etc.) when an OpenClaw client is
+available. Falls back to direct Claude calls for drafting/summarization.
 
 Responsibilities:
 - Execute PlanTasks in dependency order
-- Generate artifacts (draft emails, summaries, etc.) via Claude
-- Track execution state machine
+- Track execution state machine (task runs, artifacts)
+- Delegate real-world actions to OpenClaw agent
+- Fall back to Claude for tasks when no agent connection
 - Report status back for presentation
 """
 
@@ -59,11 +61,12 @@ Respond with valid JSON:
 class Operator:
     """Execute approved plans step by step."""
 
-    def __init__(self, settings: Settings, db: AsyncSession):
+    def __init__(self, settings: Settings, db: AsyncSession, openclaw_client=None):
         self._settings = settings
         self._db = db
         self._client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         self._audit = AuditService(db)
+        self._openclaw = openclaw_client
 
     async def execute_plan(self, execution_id: str, user_id: str) -> bool:
         """Execute all tasks in a plan. Returns True on success."""
@@ -141,6 +144,18 @@ class Operator:
         )
 
         await self._db.commit()
+
+        # Wake the agent to notify about completion
+        if self._openclaw:
+            try:
+                status = "completed" if success else "failed"
+                await self._openclaw.wake_agent(
+                    f"Task {status}: {plan.goal}. "
+                    f"Use jarvis_task_detail with ID {plan.plan_id} for details."
+                )
+            except Exception:
+                logger.warning("Failed to wake agent for execution notification", exc_info=True)
+
         logger.info(
             "Execution %s %s (%d tasks)",
             execution_id,
@@ -150,10 +165,27 @@ class Operator:
         return success
 
     async def _execute_task(self, task: PlanTask, plan: Plan) -> dict:
-        """Execute a single task and return result data."""
+        """Execute a single task and return result data.
+
+        If an OpenClaw client is available and the task is an external action
+        (send_email, create_event, post_message), delegate to the agent.
+        Otherwise, fall back to direct Claude calls for drafting/summarization.
+        """
         task_type = task.task_type
         input_data = task.input_data or {}
 
+        # Tasks that can be delegated to the OpenClaw agent
+        delegatable = {
+            "send_email",
+            "create_event",
+            "post_message",
+            "update_task",
+        }
+
+        if self._openclaw and task_type in delegatable:
+            return await self._delegate_to_agent(task_type, input_data, plan)
+
+        # Fall back to direct Claude calls
         if task_type in ("draft_email", "draft_reply", "draft_email_reply"):
             return await self._draft_email(input_data, plan)
         elif task_type == "summarize":
@@ -164,6 +196,28 @@ class Operator:
             return {"status": "completed"}
         else:
             return {"status": "completed", "note": f"Task type '{task_type}' executed (stub)"}
+
+    async def _delegate_to_agent(self, task_type: str, input_data: dict, plan: Plan) -> dict:
+        """Delegate a task to the OpenClaw agent for real execution."""
+        context = {
+            "recipient": input_data.get("recipient"),
+            "tone": input_data.get("tone"),
+            "background": plan.reasoning_summary,
+        }
+
+        result = await self._openclaw.delegate_task(
+            task_type=task_type,
+            instructions=plan.goal,
+            context=context,
+        )
+
+        artifact_ref = f"agent_{ULID()}"
+        return {
+            "artifact_ref": artifact_ref,
+            "agent_result": result,
+            "status": "completed",
+            "delegated": True,
+        }
 
     @retry_async(
         max_retries=2,

@@ -1,5 +1,8 @@
 """FastAPI application — Jarvis backend entry point."""
 
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -7,26 +10,48 @@ from src.api.routes_approvals import router as approvals_router
 from src.api.routes_briefings import router as briefings_router
 from src.api.routes_canvas import router as canvas_router
 from src.api.routes_command import router as command_router
+from src.api.routes_events import router as events_router
 from src.api.routes_meetings import router as meetings_router
-from src.api.routes_notifications import router as notifications_router
 from src.api.routes_search import router as search_router
 from src.api.routes_system import router as system_router
 from src.api.routes_tasks import router as tasks_router
-from src.api.routes_voice import router as voice_router
 from src.api.routes_webhooks import router as webhooks_router
 from src.api.schemas import HealthResponse
 from src.config.settings import get_settings
 from src.middleware.observability import TracingMiddleware
 from src.middleware.security import RateLimitMiddleware, RequestSizeLimitMiddleware
 
+logger = logging.getLogger(__name__)
+
 
 def create_app() -> FastAPI:
     settings = get_settings()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        # Startup: connect to Redis
+        try:
+            import redis.asyncio as aioredis
+
+            app.state.redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+            await app.state.redis.ping()
+            logger.info("Redis connected: %s", settings.redis_url)
+        except Exception:
+            logger.warning("Redis unavailable — using in-memory fallback for rate limiting")
+            app.state.redis = None
+
+        yield
+
+        # Shutdown: close Redis
+        if getattr(app.state, "redis", None):
+            await app.state.redis.aclose()
+            logger.info("Redis connection closed")
 
     app = FastAPI(
         title="Jarvis Backend",
         description="Personal AI Operating System — Backend Services",
         version="0.1.0",
+        lifespan=lifespan,
     )
 
     # --- Middleware (outermost first) ---
@@ -57,10 +82,11 @@ def create_app() -> FastAPI:
     app.include_router(search_router, tags=["search"])
     app.include_router(meetings_router, tags=["meetings"])
     app.include_router(canvas_router, tags=["canvas"])
-    app.include_router(notifications_router, tags=["notifications"])
-    app.include_router(voice_router, tags=["voice"])
 
-    # Webhook routes (called by OpenClaw plugin HTTP routes or directly by services)
+    # Event ingestion (called by OpenClaw agent after reading data from sources)
+    app.include_router(events_router, tags=["events"])
+
+    # Legacy webhook route (backwards compat)
     app.include_router(webhooks_router, tags=["webhooks"])
 
     # System routes (heartbeat, maintenance, metrics)

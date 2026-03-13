@@ -31,6 +31,7 @@ def make_mock_settings(**overrides) -> MagicMock:
         anthropic_api_key="test-key",
         anthropic_model="claude-sonnet-4-20250514",
         database_url="postgresql+asyncpg://test:test@localhost/test",
+        redis_url="redis://localhost:6379/0",
         importance_threshold=0.7,
         briefing_lookback_hours=24,
         debug=False,
@@ -43,6 +44,8 @@ def make_mock_settings(**overrides) -> MagicMock:
         rate_limit_rpm=120,
         max_request_body_bytes=1_048_576,
         cors_allowed_origins="",
+        openclaw_gateway_url="http://localhost:18789",
+        openclaw_hook_token="test-hook-token",
     )
     defaults.update(overrides)
     for k, v in defaults.items():

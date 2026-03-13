@@ -34,7 +34,7 @@
     ]
   },
 
-  // Tool permissions — deny dangerous defaults, allow jarvis tools
+  // Tool permissions — allow jarvis tools + data access tools
   tools: {
     profile: "minimal",
     allow: [
@@ -44,7 +44,12 @@
       "jarvis_tasks",
       "jarvis_search",
       "jarvis_meeting_prep",
-      "group:memory"
+      "jarvis_ingest_event",
+      "jarvis_heartbeat",
+      "group:memory",
+      // gog skills for Gmail/Calendar/Drive access
+      // gh for GitHub access
+      // These let the agent read data, then ingest via jarvis_ingest_event
     ],
     deny: [
       "group:runtime",
@@ -88,6 +93,19 @@
       }
     ]
   },
+
+  // Cron jobs — agent-driven periodic tasks
+  cron: [
+    // Daily briefing at 7am
+    { name: "daily-brief", cron: "0 7 * * *", session: "isolated",
+      message: "Generate today's briefing using jarvis_brief and deliver it." },
+    // Heartbeat every hour
+    { name: "heartbeat", every: 3600000, session: "isolated",
+      message: "Run jarvis_heartbeat to expire stale plans and memories." },
+    // Email check every 15 min
+    { name: "email-check", every: 900000, session: "isolated",
+      message: "Check for new emails using gog gmail, then ingest important ones via jarvis_ingest_event." },
+  ],
 
   // Session settings
   session: {

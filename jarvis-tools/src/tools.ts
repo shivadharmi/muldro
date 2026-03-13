@@ -345,75 +345,71 @@ export function registerTools(api: PluginApi, config: BackendConfig) {
     },
   });
 
-  // ── jarvis_voice ─────────────────────────────────────────────
-  // Convert content to voice-friendly spoken text.
-  api.registerTool(
-    {
-      name: "jarvis_voice",
-      description:
-        "Convert Jarvis content to voice-friendly spoken text for Talk Mode. " +
-        "Use when the user is in voice/talk mode and needs a spoken response. " +
-        "Pass the content from a briefing, approval, or task detail.",
-      parameters: Type.Object({
-        content: Type.String({ description: "The content to convert to voice" }),
-        content_type: Type.Optional(
-          Type.Union([
-            Type.Literal("briefing"),
-            Type.Literal("approval"),
-            Type.Literal("task"),
-            Type.Literal("general"),
-          ])
-        ),
-      }),
-      async execute(
-        _id: string,
-        params: { content: string; content_type?: string }
-      ) {
-        const res = await callBackend(config, "/v1/voice/convert", "POST", {
-          content: params.content,
-          content_type: params.content_type || "general",
-        });
-        if (!res.success) return textResult(`Error: ${res.error}`);
-        const v = res.data as { spoken_text: string; duration_hint: string };
-        return textResult(v.spoken_text);
-      },
+  // ── jarvis_ingest_event ─────────────────────────────────────
+  // Ingest an event into the Jarvis intelligence pipeline.
+  api.registerTool({
+    name: "jarvis_ingest_event",
+    description:
+      "Ingest an event into the Jarvis intelligence backend for scoring, " +
+      "entity extraction, memory extraction, and proactive planning. " +
+      "Use this AFTER reading data from external sources (emails via gog gmail, " +
+      "calendar events via gog calendar, GitHub activity via gh, Slack messages, etc.). " +
+      "Extract the key fields from what you read and pass them here so Jarvis can " +
+      "track, score, and act on important events.",
+    parameters: Type.Object({
+      source: Type.String({ description: "Source system (gmail, calendar, github, slack, etc.)" }),
+      event_type: Type.String({ description: "Type of event (email_received, meeting_created, pr_opened, message_received, etc.)" }),
+      entity_type: Type.String({ description: "Type of entity (email_thread, calendar_event, pull_request, channel_message, etc.)" }),
+      entity_id: Type.String({ description: "Unique ID of the entity from the source system" }),
+      title: Type.String({ description: "Human-readable title/subject of the event" }),
+      summary: Type.Optional(Type.String({ description: "Brief summary of the event content" })),
+      actor: Type.Optional(Type.Object({
+        type: Type.Optional(Type.String({ description: "Actor type (person, bot, system)" })),
+        name: Type.Optional(Type.String({ description: "Actor display name" })),
+        email: Type.Optional(Type.String({ description: "Actor email address" })),
+      })),
+      occurred_at: Type.Optional(Type.String({ description: "ISO 8601 timestamp of when the event occurred" })),
+      raw_payload: Type.Optional(Type.Object({}, { additionalProperties: true })),
+    }),
+    async execute(
+      _id: string,
+      params: {
+        source: string;
+        event_type: string;
+        entity_type: string;
+        entity_id: string;
+        title: string;
+        summary?: string;
+        actor?: { type?: string; name?: string; email?: string };
+        occurred_at?: string;
+        raw_payload?: Record<string, unknown>;
+      }
+    ) {
+      const res = await callBackend(config, "/v1/events/ingest", "POST", params);
+      if (!res.success) return textResult(`Error: ${res.error}`);
+      const d = res.data as { event_id: string | null; status: string; importance_score: number | null };
+      if (d.status === "duplicate") {
+        return textResult("Event already ingested (duplicate). No action needed.");
+      }
+      return textResult(
+        `Event ingested: ${d.event_id} (importance: ${d.importance_score?.toFixed(2) ?? "n/a"})`
+      );
     },
-    { optional: true }
-  );
+  });
 
-  // ── jarvis_notify ────────────────────────────────────────────
-  // Send a notification to a configured channel.
+  // ── jarvis_heartbeat ────────────────────────────────────────
+  // Trigger periodic maintenance tasks.
   api.registerTool(
     {
-      name: "jarvis_notify",
+      name: "jarvis_heartbeat",
       description:
-        "Send a notification to the user via Slack or other configured channel. " +
-        "Use when the user asks to be reminded or notified about something.",
-      parameters: Type.Object({
-        title: Type.String({ description: "Notification title" }),
-        body: Type.String({ description: "Notification message body" }),
-        channel: Type.Optional(
-          Type.Union([Type.Literal("slack")])
-        ),
-        urgency: Type.Optional(
-          Type.Union([
-            Type.Literal("low"),
-            Type.Literal("normal"),
-            Type.Literal("high"),
-          ])
-        ),
-      }),
-      async execute(
-        _id: string,
-        params: { title: string; body: string; channel?: string; urgency?: string }
-      ) {
-        const res = await callBackend(config, "/v1/notifications/send", "POST", params);
-        if (!res.success) return textResult(`Error: ${res.error}`);
-        const n = res.data as { delivered: boolean; channel: string; error?: string };
-        if (n.delivered) {
-          return textResult(`Notification sent via ${n.channel}.`);
-        }
-        return textResult(`Notification not sent: ${n.error || "unknown error"}`);
+        "Trigger Jarvis heartbeat for periodic maintenance. " +
+        "Expires stale plans and approvals, processes dead-letter queue retries, " +
+        "and cleans up expired memories. Typically called by cron every hour.",
+      parameters: Type.Object({}),
+      async execute() {
+        const res = await callBackend(config, "/v1/system/heartbeat", "POST");
+        return formatResult(res);
       },
     },
     { optional: true }
