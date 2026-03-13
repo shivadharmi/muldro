@@ -1,0 +1,26 @@
+# Copy to terraform.tfvars and fill in values
+# terraform.tfvars is gitignored — never commit secrets
+
+aws_region       = "ap-south-1"
+instance_type    = "t3.medium"
+root_volume_size = 40
+
+key_pair_name    = "your-key-pair-name"
+allowed_ssh_cidr = "x.x.x.x/32"  # Your IP address
+
+domain_name = "brrdcast.in"
+subdomain   = "jarvis"
+
+github_repo_url = "https://github.com/your-org/jarvis.git"
+git_branch      = "main"
+
+project_name = "jarvis"
+
+# Secrets — set via environment variables or terraform.tfvars (never commit!)
+# TF_VAR_anthropic_api_key=...
+# TF_VAR_voyage_api_key=...
+# TF_VAR_backend_token=...
+# TF_VAR_openclaw_gateway_token=...
+# TF_VAR_openclaw_hook_token=...
+# TF_VAR_postgres_password=...
+# TF_VAR_github_pat=...
