@@ -10,82 +10,89 @@ Perceive → Understand → Update Model → Plan → Act → Communicate → re
 
 The system is split into two halves:
 
-- **OpenClaw Gateway** — the user-facing interaction runtime (chat, voice, Canvas, scheduling)
-- **Jarvis Backend** — the intelligence engine (connectors, events, world model, memory, planning, execution)
+- **OpenClaw Gateway + Agent** — the user-facing interaction runtime and execution surface (chat, voice, Canvas, scheduling, data access via gog/gh/message)
+- **Jarvis Backend** — the intelligence engine (event processing, world model, memory, planning, governance, execution tracking, briefings, audit)
 
 ## Component Map
 
 ```
-┌─────────────────────────────────────────────────────┐
-│               User Surfaces                          │
-│  WhatsApp · Slack · Web UI · Voice · Canvas · CLI    │
-└──────────────────────┬──────────────────────────────┘
-                       │
-┌──────────────────────▼──────────────────────────────┐
-│               OpenClaw Gateway                       │
-│                                                      │
-│  Message routing (bindings) · Session management     │
-│  Claude model turns · Tool dispatch                  │
-│  Canvas UI · Cron scheduling                         │
-│  jarvis-tools plugin (thin HTTP bridge)              │
-└────────┬─────────────────────────┬──────────────────┘
-         │ tool calls (HTTP)       │ webhooks (HTTP)
-┌────────▼─────────────────────────▼──────────────────┐
-│               Jarvis Backend (FastAPI)               │
-│                                                      │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐            │
-│  │ API      │ │Connector │ │ Event    │            │
-│  │ Gateway  │ │ Service  │ │ Processor│            │
-│  └────┬─────┘ └────┬─────┘ └────┬─────┘            │
-│       │            │            │                    │
-│  ┌────▼────────────▼────────────▼─────┐             │
-│  │       Internal Event Bus            │             │
-│  │  (Postgres queues / Redis streams)  │             │
-│  └────┬────────────┬────────────┬─────┘             │
-│       │            │            │                    │
-│  ┌────▼────┐ ┌─────▼────┐ ┌────▼─────┐             │
-│  │ World   │ │ Memory   │ │ Planner  │             │
-│  │ Model   │ │ Service  │ │          │             │
-│  └─────────┘ └──────────┘ └────┬─────┘             │
-│                                 │                    │
-│  ┌──────────┐ ┌──────────┐ ┌───▼──────┐            │
-│  │ Governor │ │ Presenter│ │ Operator │            │
-│  └──────────┘ └──────────┘ └──────────┘            │
-│                                                      │
-│  ┌────────────────────────────────────────────┐     │
-│  │  Postgres · pgvector · Redis · S3          │     │
-│  └────────────────────────────────────────────┘     │
-└──────────────────────────────────────────────────────┘
++-----------------------------------------------------+
+|               User Surfaces                          |
+|  WhatsApp . Slack . Web UI . Voice . Canvas . CLI    |
++------------------------+----------------------------+
+                         |
++------------------------v----------------------------+
+|               OpenClaw Gateway                       |
+|                                                      |
+|  Message routing (bindings) . Session management     |
+|  Claude model turns . Tool dispatch                  |
+|  Canvas UI . Cron scheduling                         |
+|  jarvis-tools plugin (thin HTTP bridge)              |
++--------+---------------------------+----------------+
+         | tool calls (HTTP)         | /hooks/wake & /hooks/agent
++--------v---------------------------v----------------+
+|               Jarvis Backend (FastAPI)               |
+|                                                      |
+|  +----------+ +----------+ +----------+             |
+|  | API      | | Event    | | OpenClaw |             |
+|  | Gateway  | | Processor| | Client   |             |
+|  +----+-----+ +----+-----+ +----+-----+             |
+|       |            |            |                    |
+|  +----v------------v------------v------+             |
+|  |       Internal Event Bus            |             |
+|  |  (Redis streams / Postgres queues)  |             |
+|  +----+------------+------------+------+             |
+|       |            |            |                    |
+|  +----v----+ +-----v----+ +----v-----+              |
+|  | World   | | Memory   | | Planner  |              |
+|  | Model   | | Service  | |          |              |
+|  +---------+ +----------+ +----+-----+              |
+|                                |                     |
+|  +----------+ +----------+ +--v-------+             |
+|  | Governor | | Presenter| | Operator |             |
+|  +----------+ +----------+ +----+-----+             |
+|                                  |                   |
+|                           delegates to               |
+|                           OpenClaw agent             |
+|                           (gog/gh/message)           |
+|                                                      |
+|  +--------------------------------------------+     |
+|  |  Postgres . pgvector . Redis . Audit Trail  |     |
+|  +--------------------------------------------+     |
++------------------------------------------------------+
 ```
 
 ## Data Flow: Important Email
 
 ```
-1. Gmail Pub/Sub → OpenClaw plugin HTTP route → Jarvis backend webhook endpoint
-2. Gmail connector fetches new message, stores raw payload
+1. OpenClaw agent reads new emails via gog gmail
+2. Agent calls jarvis_ingest_event → POST /v1/events/ingest
 3. Event processor normalizes, scores importance/urgency/confidence
-4. World model identifies sender entity and project linkage
-5. Memory service retrieves relevant preferences and relationship context
-6. Planner produces structured task graph: draft_reply + request_approval
-7. Governor evaluates policy → marks approval_required
-8. Operator creates draft email artifact
-9. Presenter generates approval prompt
-10. Backend notifies OpenClaw via /hooks/wake
-11. OpenClaw model calls jarvis_approve tool → presents to user
+4. Callbacks fire:
+   a. World model identifies sender entity and project linkage
+   b. Memory service retrieves relevant preferences and relationship context
+   c. Planner produces structured task graph: draft_reply + request_approval
+5. Governor evaluates policy → marks approval_required
+6. Governor wakes OpenClaw agent via /hooks/wake
+7. Agent presents approval prompt to user (jarvis_approval_card)
+8. User approves → Operator delegates email send to agent via /hooks/agent
+9. Agent sends email via gog gmail send
+10. Operator records result, audit trail updated
 ```
 
 ## Data Flow: Morning Brief
 
 ```
 1. OpenClaw cron triggers at configured time
-2. Model calls jarvis_brief tool
+2. Agent calls jarvis_brief tool
 3. Backend daily briefing workflow:
    a. Fetch events since last briefing
    b. Group by project, people, deadlines
    c. Retrieve active goals and pending approvals
-   d. Planner selects top priorities
-   e. Presenter generates structured brief
-4. Returns to OpenClaw model for natural language presentation
+   d. Fetch upcoming meetings
+   e. Presenter generates structured brief via Claude
+4. Backend wakes agent via /hooks/wake to deliver briefing
+5. Agent presents briefing to user via chat/Canvas
 ```
 
 ## Database Schema
@@ -98,7 +105,7 @@ The system is split into two halves:
 | entities | People, projects, tasks, meetings | (user_id, entity_type, canonical_name) |
 | entity_aliases | Email addresses, handles, etc. | (alias) |
 | entity_relationships | Graph edges between entities | (from_entity_id), (to_entity_id) |
-| memories | Long-term learned knowledge | (user_id, memory_type, status) |
+| memories | Long-term learned knowledge (pgvector) | (user_id, memory_type, status), HNSW on embedding |
 | plans | Planner output / task graphs | (user_id, created_at) |
 | plan_tasks | Individual tasks within a plan | (plan_id) |
 | executions | Plan execution state | (user_id) |
@@ -106,8 +113,7 @@ The system is split into two halves:
 | approvals | Pending/decided approval items | (user_id, status, created_at) |
 | briefings | Daily briefing snapshots | (user_id, briefing_date) |
 | audit_logs | Every external action | (user_id) |
-| connectors | Configured source integrations | (user_id) |
-| connector_accounts | OAuth credentials + sync state | (connector_id) |
+| dead_letter_queue | Failed operations for retry | (status, created_at) |
 
 ## Execution State Machine
 
@@ -119,11 +125,21 @@ detected → planned → policy_checked → awaiting_approval → approved → e
                                                                                 → failed
 ```
 
+## Infrastructure
+
+| Component | Purpose |
+|-----------|---------|
+| PostgreSQL 17 | Primary data store, pgvector for embeddings |
+| Redis 7 | Caching (briefings, entities), rate limiting, distributed locks, task streams |
+| CallbackWorker | Background processor for async event callbacks (entity/memory/planning) |
+| OpenClawClient | HTTP bridge to OpenClaw gateway (/hooks/wake, /hooks/agent) |
+
 ## Security Model
 
 - **v1**: Single trusted user boundary per gateway
 - **Trust layers**: OpenClaw gateway trusted → Jarvis backend trusted → External APIs scoped
-- **Secrets**: Connector credentials encrypted at rest, never in model context
 - **Approvals**: All external writes gated (no auto-send in v1)
 - **Audit**: Full trail with event_id, plan_id, execution_id, approval_id correlation
-- **Threats mitigated**: Prompt injection (content separation), duplicate webhooks (idempotency), stale plans (version checks), memory pollution (significance thresholds), over-automation (execution modes)
+- **Rate limiting**: Redis-backed sliding window (with in-memory fallback)
+- **Request size limits**: Configurable max body size
+- **Threats mitigated**: Prompt injection (content separation), duplicate events (idempotency keys), stale plans (TTL + heartbeat invalidation), memory pollution (significance thresholds), over-automation (execution modes + policy gates)

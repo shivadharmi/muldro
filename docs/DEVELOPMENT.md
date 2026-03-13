@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Python 3.12+ (via pyenv or system)
+- Python 3.13+ (via pyenv or system)
 - Node.js 22+ (via nvm)
 - Docker & Docker Compose
 - uv (Python package manager)
@@ -44,6 +44,9 @@ alembic upgrade head
 # Run the server
 python run.py
 # Backend runs on http://localhost:8000
+
+# Run the background worker (for async callback processing)
+python run.py --worker
 
 # Verify
 curl http://localhost:8000/v1/health
@@ -147,21 +150,21 @@ alembic current
 7. Update schemas in `backend/src/api/schemas.py`
 8. Write tests in `backend/tests/`
 
-## Adding a New Connector
-
-1. Create `backend/src/connectors/your_source.py`
-2. Implement `handle_push_notification()` and `sync()` methods
-3. Add a webhook endpoint in `backend/src/api/routes_webhooks.py`
-4. Add a webhook route in `jarvis-tools/src/routes.ts`
-5. Store OAuth credentials in `connector_accounts` table (encrypted)
-6. Output events through the Event Processor
-
 ## Adding a New OpenClaw Tool
 
 1. Add the tool definition in `jarvis-tools/src/tools.ts`
 2. Add the corresponding backend endpoint in `backend/src/api/`
 3. Add the tool name to the `tools.allow` list in `openclaw.json`
 4. Type-check: `cd jarvis-tools && npx tsc --noEmit`
+
+## Adding Event Ingestion for a New Source
+
+The agent reads data from sources (Gmail via `gog gmail`, GitHub via `gh`, etc.) and ingests it to the backend:
+
+1. Teach the agent (in `SOUL.md`) how to read the new source
+2. Agent calls `jarvis_ingest_event` with normalized data
+3. Backend's EventProcessor handles scoring, dedup, and callbacks
+4. No new backend code needed unless you need source-specific scoring logic
 
 ## Environment Variables
 
@@ -173,4 +176,6 @@ See `backend/.env.example` for all configuration options. Key ones:
 | `JARVIS_REDIS_URL` | Redis connection | `redis://localhost:6379/0` |
 | `JARVIS_ANTHROPIC_API_KEY` | Claude API key | (required) |
 | `JARVIS_BACKEND_TOKEN` | Auth token for plugin → backend calls | (optional for dev) |
+| `JARVIS_OPENCLAW_GATEWAY_URL` | OpenClaw gateway URL | `http://localhost:18789` |
+| `JARVIS_OPENCLAW_HOOK_TOKEN` | Auth token for backend → OpenClaw calls | (optional for dev) |
 | `JARVIS_DEBUG` | Enable debug mode / auto-reload | `false` |

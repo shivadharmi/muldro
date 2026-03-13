@@ -8,11 +8,46 @@ Jarvis is a **Personal AI Operating System** for founders. It continuously obser
 
 **OpenClaw owns the surface. Jarvis backend owns the intelligence.**
 
-- OpenClaw: chat channels, voice, sessions, tool dispatch, Canvas UI, cron triggers, webhook intake
-- Jarvis backend: connectors, events, world model, memory, planner, governor, operator, presenter, audit
+- OpenClaw: chat channels, voice, sessions, tool dispatch, Canvas UI, cron triggers
+- OpenClaw agent: reads data via `gog` (Google Workspace), `gh` (GitHub), `message` (channels), sends messages, executes delegated tasks
+- Jarvis backend: event processing, world model, memory, planning, governance, execution tracking, briefings, audit
 - The `jarvis-tools` plugin is a **thin bridge** — HTTP calls only, no business logic, no state
 
 Never put business logic in the OpenClaw plugin. Never use OpenClaw sessions as durable task state. Never use OpenClaw memory as the product memory system.
+
+## Architecture
+
+```
+User <-> OpenClaw Gateway (channels, voice, Canvas, cron)
+              |
+         OpenClaw Agent (Pi — Claude-powered)
+         Has: gog, gh, message, browser, memory, cron, sub-agents
+              |
+         jarvis-tools plugin (thin HTTP bridge)
+              | HTTP
+         Jarvis Intelligence Backend
+         +-------------------------------------+
+         | /v1/events/ingest <- agent feeds    |
+         |          |                          |
+         | EventProcessor (score, dedup)       |
+         |          |                          |
+         | WorldModel + MemoryService          |
+         | (entities, relationships, pgvector) |
+         |          |                          |
+         | Planner (Claude structured planning)|
+         |          |                          |
+         | Governor (policy + approval gates)  |
+         |          |                          |
+         | Operator (state tracking) --------->|-> OpenClaw agent
+         |          |               (delegate) |   (executes via
+         | Presenter (briefings, meeting prep) |    gog/gh/message)
+         |          |                          |
+         | Audit + DLQ + Heartbeat + Locking   |
+         +-------------------------------------+
+```
+
+**Jarvis = the brain (decides, scores, remembers, audits)**
+**OpenClaw agent = the hands (reads, writes, sends, searches)**
 
 ## Project Structure
 
@@ -22,10 +57,9 @@ jarvis/
 │   ├── src/
 │   │   ├── api/             # REST endpoints (called by OpenClaw plugin)
 │   │   ├── config/          # Settings (pydantic-settings)
-│   │   ├── connectors/      # Source connectors (Gmail, Calendar, Slack)
+│   │   ├── middleware/       # Observability, security (rate limit, CORS, size limits)
 │   │   ├── models/          # SQLAlchemy models (Postgres)
-│   │   ├── services/        # Business logic (planner, governor, operator, etc.)
-│   │   └── workflows/       # Durable workflows (Temporal)
+│   │   └── services/        # Business logic (planner, governor, operator, etc.)
 │   ├── tests/
 │   ├── alembic/             # Database migrations
 │   └── pyproject.toml
@@ -33,7 +67,7 @@ jarvis/
 │   ├── src/
 │   │   ├── index.ts         # Plugin entry point
 │   │   ├── tools.ts         # Agent tool registrations
-│   │   ├── routes.ts        # HTTP route registrations (webhooks)
+│   │   ├── routes.ts        # HTTP route registrations
 │   │   └── backend-client.ts
 │   └── openclaw.plugin.json
 ├── jarvis-agent/            # OpenClaw agent config
@@ -47,11 +81,11 @@ jarvis/
 
 | Layer | Technology |
 |-------|-----------|
-| Backend | Python 3.12+ / FastAPI |
+| Backend | Python 3.13+ / FastAPI |
 | Database | PostgreSQL 17 (pgvector extension) |
-| Cache/Queue | Redis 7 |
-| Workflows | Temporal (or background workers for v0) |
+| Cache/Queue | Redis 7 (caching, rate limiting, locks, task streams) |
 | AI Model | Claude (Anthropic API) |
+| Embeddings | Voyage AI (voyage-3-lite, 1536 dim) |
 | Gateway | OpenClaw (self-hosted) |
 | Plugin | TypeScript / Node.js |
 | Migrations | Alembic |
@@ -97,10 +131,20 @@ jarvis/
 | Librarian (World Model + Memory) | Update entities, extract memories | entities, relationships, memories |
 | Planner | Decide what to do, produce task graphs | plans, plan_tasks |
 | Governor | Evaluate policies, gate approvals | policy decisions, approvals |
-| Operator | Execute approved plans | executions, execution_task_runs |
+| Operator | Track execution state, delegate work to OpenClaw agent | executions, execution_task_runs |
 | Presenter | Generate user-facing output | briefings, canvas payloads |
 
-Only Planner decides intent. Only Operator calls external tools. Only Presenter talks to the user. Governor sits before every external write.
+Only Planner decides intent. Only Operator delegates external work (to OpenClaw agent). Only Presenter talks to the user. Governor sits before every external write.
+
+### Data Flow
+
+1. **Agent reads data** (via gog, gh, message, browser)
+2. **Agent ingests** to backend via `jarvis_ingest_event` tool → `/v1/events/ingest`
+3. **EventProcessor** normalizes, scores importance, deduplicates
+4. **Callbacks fire**: entity extraction → memory extraction → proactive planning
+5. **Governor** evaluates policy → creates approval if needed
+6. **Backend wakes agent** via OpenClaw `/hooks/wake` for notifications
+7. **Operator delegates** real-world actions back to OpenClaw agent via `/hooks/agent`
 
 ### Core Contracts (freeze these before prompt tuning)
 
@@ -114,10 +158,10 @@ Only Planner decides intent. Only Operator calls external tools. Only Presenter 
 
 - Single trusted user boundary in v1
 - All external writes require approval (no auto-send)
-- Connector credentials encrypted at rest, never in model context
 - Audit log for every external write with full correlation IDs
 - Idempotency keys on all events to prevent duplicates
-- Rate limit planning triggered by events
+- Rate limiting (Redis-backed with in-memory fallback)
+- Request size limits and CORS enforcement
 
 ## Development Workflow
 
@@ -130,6 +174,9 @@ docker compose up -d
 # Run backend
 cd backend && source .venv/bin/activate
 python run.py  # starts on :8000
+
+# Run background worker (processes async callbacks)
+python run.py --worker
 
 # Run tests
 pytest tests/ -v
@@ -154,12 +201,31 @@ openclaw gateway
 
 ## Current Phase
 
-We are in **Phase 1: Foundation + Plugin Wiring**. The skeleton is built. Next steps:
-1. Wire planner service to `/v1/jarvis/command` endpoint
-2. Implement Gmail connector with real OAuth
-3. Implement event processor with importance scoring
-4. Build the daily briefing workflow
-5. Add Alembic initial migration
+All foundation milestones are complete. We are in **post-ecosystem-alignment**:
+- Milestones 1-4 complete (foundation, intelligence, UX, hardening)
+- Ecosystem alignment complete (removed redundant connectors/notification/voice, wired OpenClaw integration, added Redis infrastructure)
+
+Next focus areas:
+1. End-to-end acceptance tests for PRD scenarios
+2. Policy modes (full_auto, suggest_only, approval_required, critical_only, lockdown)
+3. Real OAuth integration for data sources
+4. Monitoring SLOs and alerting
+
+## Plugin Tools (jarvis-tools)
+
+| Tool | Purpose |
+|------|---------|
+| `jarvis_command` | Natural language command → plan |
+| `jarvis_brief` | Daily briefing generation |
+| `jarvis_approve` | Approve/reject pending actions |
+| `jarvis_tasks` | List tasks and plans |
+| `jarvis_search` | Search events, entities, memories |
+| `jarvis_meeting_prep` | Meeting preparation cards |
+| `jarvis_dashboard` | Canvas: unified dashboard |
+| `jarvis_approval_card` | Canvas: approval detail |
+| `jarvis_task_detail` | Canvas: task progress |
+| `jarvis_ingest_event` | Ingest events from any source |
+| `jarvis_heartbeat` | Trigger periodic maintenance |
 
 ## Common Mistakes to Avoid
 
@@ -169,4 +235,4 @@ We are in **Phase 1: Foundation + Plugin Wiring**. The skeleton is built. Next s
 - Do not skip the Governor for external writes
 - Do not store secrets in memory or model context
 - Do not start with prompts — start with contracts and schemas
-- Do not over-engineer with Kafka/Neo4j in v1 — Postgres + Redis is enough
+- Do not over-engineer with Kafka/Neo4j — Postgres + Redis is enough

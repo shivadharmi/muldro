@@ -1,6 +1,6 @@
 # Jarvis Roadmap
 
-## Milestone 1: Foundation (Current)
+## Milestone 1: Foundation (Complete)
 
 **Goal**: Working daily briefing from Gmail + Calendar, with approval-gated email drafts.
 
@@ -34,7 +34,7 @@
 - [x] Meeting prep workflow (Presenter.generate_meeting_prep, Claude-powered)
 - [x] Improved briefing with calendar data (upcoming meetings section)
 
-## Milestone 2: Intelligence Layer
+## Milestone 2: Intelligence Layer (Complete)
 
 - [x] Semantic memory search (pgvector embeddings with Voyage AI, cosine similarity)
 - [x] Personalization: preference extraction (Claude-powered, category-scoped)
@@ -42,7 +42,7 @@
 - [x] Importance scoring model tuning (context-aware: entities + preferences)
 - [x] Heartbeat cron for priority re-evaluation (memory expiry + plan escalation)
 
-## Milestone 3: User Experience
+## Milestone 3: User Experience (Complete)
 
 ### Sprint 5 — Canvas UI
 - [x] Canvas dashboard endpoint (unified view: briefing + approvals + tasks + meetings)
@@ -54,17 +54,15 @@
 
 ### Sprint 6 — Slack + Notifications
 - [x] Slack connector (Events API callback, message normalization, bot filtering)
-- [x] Notification service (outbound Slack via webhooks, approval/briefing/execution alerts)
-- [x] Slack webhook endpoint wired with full callback pipeline
-- [x] Plugin: jarvis_notify tool (send notifications to channels)
+- [x] Notification service (outbound Slack via webhooks)
+- [x] Plugin: jarvis_notify tool
 
 ### Sprint 7 — Voice + WhatsApp
-- [x] Voice service (Claude-powered TTS-friendly conversion, markdown stripping)
-- [x] WhatsApp connector stub (Business API webhook format, test payloads)
-- [x] Voice endpoint (/v1/voice/convert)
-- [x] Plugin: jarvis_voice tool (voice mode output)
+- [x] Voice service (TTS-friendly conversion)
+- [x] WhatsApp connector stub (Business API webhook format)
+- [x] Plugin: jarvis_voice tool
 
-## Milestone 4: Hardening
+## Milestone 4: Hardening (Complete)
 
 - [x] Retry and idempotency (exponential backoff decorator, SELECT FOR UPDATE on approvals)
 - [x] Stale plan invalidation (TTL-based plan expiry, approval expiry enforcement in heartbeat)
@@ -73,11 +71,40 @@
 - [x] Observability dashboards (request tracing middleware, correlation IDs, metrics endpoint)
 - [x] Security audit (rate limiting middleware, request size limits, CORS configuration)
 
-## Future
+## Milestone 5: Ecosystem Alignment (Complete)
 
-- Multi-connector expansion (Notion, Drive, GitHub)
-- Dynamic API generation for task data
-- Multi-agent routing (home/work personas)
-- Temporal workflow orchestration
-- Mobile companion app
-- Enterprise multi-user support
+Removed redundant plumbing that overlaps with OpenClaw's built-in capabilities.
+
+### Cleanup
+- [x] Remove source-specific connectors (Gmail, Calendar, Slack, WhatsApp, GitHub) — agent reads via gog/gh
+- [x] Remove NotificationService — agent sends via message tool
+- [x] Remove VoiceService — agent uses OpenClaw TTS
+- [x] Remove source-specific webhook endpoints and schemas
+- [x] Add generic `/v1/events/ingest` endpoint for agent-driven ingestion
+- [x] Add `jarvis_ingest_event` and `jarvis_heartbeat` plugin tools
+
+### OpenClaw Integration
+- [x] OpenClawClient service (wake_agent, run_agent_turn, delegate_task)
+- [x] Governor wakes agent on approval creation
+- [x] Presenter wakes agent on briefing generation
+- [x] Operator delegates external actions to OpenClaw agent (send_email, create_event, post_message)
+- [x] Operator falls back to Claude for drafting/summarization when no agent available
+
+### Redis Infrastructure
+- [x] RedisCache (briefings, entity lookups, dedup window)
+- [x] Redis-backed rate limiting (with in-memory fallback)
+- [x] Redis distributed locks (alongside existing PG advisory locks)
+- [x] Redis Streams task queue for async callback processing
+- [x] CallbackWorker background processor
+
+## Next Up
+
+- [ ] End-to-end acceptance tests (PRD scenarios)
+- [ ] Policy modes (full_auto, suggest_only, approval_required, critical_only, lockdown)
+- [ ] Real OAuth integration for data sources
+- [ ] Monitoring SLOs (event latency < 2s, briefing < 5s, zero missed approvals, < 1% error rate)
+- [ ] Multi-connector expansion (Notion, Drive)
+- [ ] Dynamic API generation for task data
+- [ ] Multi-agent routing (home/work personas)
+- [ ] Mobile companion app
+- [ ] Enterprise multi-user support
