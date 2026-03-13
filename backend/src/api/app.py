@@ -4,11 +4,14 @@ from fastapi import FastAPI
 
 from src.api.routes_approvals import router as approvals_router
 from src.api.routes_briefings import router as briefings_router
+from src.api.routes_canvas import router as canvas_router
 from src.api.routes_command import router as command_router
 from src.api.routes_meetings import router as meetings_router
+from src.api.routes_notifications import router as notifications_router
 from src.api.routes_search import router as search_router
 from src.api.routes_system import router as system_router
 from src.api.routes_tasks import router as tasks_router
+from src.api.routes_voice import router as voice_router
 from src.api.routes_webhooks import router as webhooks_router
 from src.api.schemas import HealthResponse
 
@@ -32,6 +35,9 @@ def create_app() -> FastAPI:
     app.include_router(tasks_router, tags=["tasks"])
     app.include_router(search_router, tags=["search"])
     app.include_router(meetings_router, tags=["meetings"])
+    app.include_router(canvas_router, tags=["canvas"])
+    app.include_router(notifications_router, tags=["notifications"])
+    app.include_router(voice_router, tags=["voice"])
 
     # Webhook routes (called by OpenClaw plugin HTTP routes or directly by services)
     app.include_router(webhooks_router, tags=["webhooks"])

@@ -8,16 +8,63 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import get_current_user, get_session
-from src.api.schemas import ApprovalDecisionRequest, ApprovalResponse
+from src.api.schemas import ApprovalDecisionRequest, ApprovalDetailResponse, ApprovalResponse
 from src.config.settings import Settings, get_settings
 from src.models.approvals import Approval
 from src.models.executions import Execution
+from src.models.plans import Plan
 from src.services.audit import AuditService
 from src.services.operator import Operator
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+@router.get("/v1/approvals/{approval_id}", response_model=ApprovalDetailResponse)
+async def get_approval_detail(
+    approval_id: str,
+    user_id: str = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Get detailed info for a single approval, including execution and plan context."""
+    result = await db.execute(
+        select(Approval).where(
+            Approval.approval_id == approval_id,
+            Approval.user_id == user_id,
+        )
+    )
+    approval = result.scalar_one_or_none()
+    if not approval:
+        raise HTTPException(status_code=404, detail=f"Approval {approval_id} not found")
+
+    # Get plan goal via execution
+    plan_goal = None
+    if approval.execution_id:
+        exec_result = await db.execute(
+            select(Execution).where(Execution.execution_id == approval.execution_id)
+        )
+        execution = exec_result.scalar_one_or_none()
+        if execution:
+            plan_result = await db.execute(
+                select(Plan.goal).where(Plan.plan_id == execution.plan_id)
+            )
+            plan_goal = plan_result.scalar_one_or_none()
+
+    return ApprovalDetailResponse(
+        approval_id=approval.approval_id,
+        status=approval.status,
+        title=approval.title,
+        summary=approval.summary,
+        approval_type=approval.approval_type,
+        risk_level=approval.risk_level,
+        created_at=approval.created_at,
+        decided_at=approval.decided_at,
+        decision_reason=approval.decision_reason,
+        execution_id=approval.execution_id,
+        plan_goal=plan_goal,
+        artifact_refs=approval.artifact_refs,
+    )
 
 
 @router.get("/v1/approvals", response_model=list[ApprovalResponse])

@@ -44,11 +44,25 @@
 
 ## Milestone 3: User Experience
 
-- [ ] Canvas UI: approval cards
-- [ ] Canvas UI: briefing dashboard
-- [ ] Canvas UI: task/progress view
-- [ ] Voice integration (Talk Mode)
-- [ ] WhatsApp/Slack channel integration
+### Sprint 5 — Canvas UI
+- [x] Canvas dashboard endpoint (unified view: briefing + approvals + tasks + meetings)
+- [x] Approval detail endpoint (execution context, plan goal, artifact refs)
+- [x] Task detail endpoint (execution steps, progress, run results)
+- [x] Plugin: jarvis_dashboard tool (Canvas-rendered dashboard)
+- [x] Plugin: jarvis_approval_card tool (rich approval detail)
+- [x] Plugin: jarvis_task_detail tool (task progress view)
+
+### Sprint 6 — Slack + Notifications
+- [x] Slack connector (Events API callback, message normalization, bot filtering)
+- [x] Notification service (outbound Slack via webhooks, approval/briefing/execution alerts)
+- [x] Slack webhook endpoint wired with full callback pipeline
+- [x] Plugin: jarvis_notify tool (send notifications to channels)
+
+### Sprint 7 — Voice + WhatsApp
+- [x] Voice service (Claude-powered TTS-friendly conversion, markdown stripping)
+- [x] WhatsApp connector stub (Business API webhook format, test payloads)
+- [x] Voice endpoint (/v1/voice/convert)
+- [x] Plugin: jarvis_voice tool (voice mode output)
 
 ## Milestone 4: Hardening
 

@@ -168,4 +168,319 @@ export function registerTools(api: PluginApi, config: BackendConfig) {
     },
     { optional: true }
   );
+
+  // ── jarvis_dashboard ─────────────────────────────────────────
+  // Canvas dashboard showing approvals, tasks, meetings at a glance.
+  api.registerTool({
+    name: "jarvis_dashboard",
+    description:
+      "Show the Jarvis dashboard on Canvas. Displays pending approvals, " +
+      "active tasks with progress, upcoming meetings, and recommended actions. " +
+      "Use when the user asks for an overview, dashboard, or 'what's going on'.",
+    parameters: Type.Object({}),
+    async execute() {
+      const res = await callBackend(config, "/v1/canvas/dashboard", "GET");
+      if (!res.success) return textResult(`Error: ${res.error}`);
+
+      const d = res.data as DashboardData;
+      const lines: string[] = [];
+
+      if (d.headline) {
+        lines.push(`# ${d.headline}\n`);
+      } else {
+        lines.push(`# Dashboard — ${d.date}\n`);
+      }
+
+      if (d.pending_approvals?.length) {
+        lines.push("## Pending Approvals\n");
+        for (const a of d.pending_approvals) {
+          const risk = a.risk_level === "high" ? " ⚠️" : "";
+          lines.push(`- **${a.title}**${risk}`);
+          if (a.summary) lines.push(`  ${a.summary}`);
+          lines.push(`  ID: \`${a.approval_id}\` | Type: ${a.approval_type || "action"}\n`);
+        }
+      }
+
+      if (d.active_tasks?.length) {
+        lines.push("## Active Tasks\n");
+        for (const t of d.active_tasks) {
+          const progress =
+            t.step_count > 0
+              ? ` [${t.steps_completed}/${t.step_count}]`
+              : "";
+          lines.push(
+            `- **${t.goal}**${progress} — ${t.priority} priority, ${t.status}`
+          );
+        }
+        lines.push("");
+      }
+
+      if (d.upcoming_meetings?.length) {
+        lines.push("## Upcoming Meetings\n");
+        for (const m of d.upcoming_meetings) {
+          const time = m.starts_at
+            ? new Date(m.starts_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+            : "TBD";
+          const attendees = m.attendee_count > 0 ? ` (${m.attendee_count} attendees)` : "";
+          lines.push(`- **${time}** — ${m.title}${attendees}`);
+        }
+        lines.push("");
+      }
+
+      if (d.recommended_actions?.length) {
+        lines.push("## Recommended Actions\n");
+        for (const action of d.recommended_actions) {
+          lines.push(`- ${action}`);
+        }
+      }
+
+      return textResult(lines.join("\n"));
+    },
+  });
+
+  // ── jarvis_approval_card ─────────────────────────────────────
+  // Detailed approval card for Canvas.
+  api.registerTool({
+    name: "jarvis_approval_card",
+    description:
+      "Show detailed approval information on Canvas. " +
+      "Use when the user asks about a specific pending approval or wants more detail " +
+      "before approving/rejecting.",
+    parameters: Type.Object({
+      approval_id: Type.String({ description: "The approval ID to display" }),
+    }),
+    async execute(_id: string, params: { approval_id: string }) {
+      const res = await callBackend(
+        config,
+        `/v1/approvals/${params.approval_id}`,
+        "GET"
+      );
+      if (!res.success) return textResult(`Error: ${res.error}`);
+
+      const a = res.data as ApprovalDetail;
+      const lines: string[] = [
+        `# Approval: ${a.title}\n`,
+        `| Field | Value |`,
+        `|-------|-------|`,
+        `| Status | ${a.status} |`,
+        `| Risk | ${a.risk_level} |`,
+        `| Type | ${a.approval_type || "action"} |`,
+      ];
+      if (a.plan_goal) lines.push(`| Plan | ${a.plan_goal} |`);
+      if (a.created_at) lines.push(`| Created | ${a.created_at} |`);
+      if (a.decided_at) lines.push(`| Decided | ${a.decided_at} |`);
+      if (a.decision_reason) lines.push(`| Reason | ${a.decision_reason} |`);
+      lines.push("");
+
+      if (a.summary) {
+        lines.push(`## Summary\n\n${a.summary}\n`);
+      }
+
+      if (a.status === "pending") {
+        lines.push(
+          `## Actions\n\n` +
+            `To approve: use \`jarvis_approve\` with ID \`${a.approval_id}\` and decision \`approve\`\n` +
+            `To reject: use \`jarvis_approve\` with ID \`${a.approval_id}\` and decision \`reject\``
+        );
+      }
+
+      return textResult(lines.join("\n"));
+    },
+  });
+
+  // ── jarvis_task_detail ───────────────────────────────────────
+  // Detailed task view with execution steps for Canvas.
+  api.registerTool({
+    name: "jarvis_task_detail",
+    description:
+      "Show detailed task information with execution steps on Canvas. " +
+      "Use when the user asks about a specific task's progress or details.",
+    parameters: Type.Object({
+      task_id: Type.String({ description: "The task/plan ID to display" }),
+    }),
+    async execute(_id: string, params: { task_id: string }) {
+      const res = await callBackend(
+        config,
+        `/v1/tasks/${params.task_id}`,
+        "GET"
+      );
+      if (!res.success) return textResult(`Error: ${res.error}`);
+
+      const t = res.data as TaskDetail;
+      const lines: string[] = [
+        `# Task: ${t.goal}\n`,
+        `| Field | Value |`,
+        `|-------|-------|`,
+        `| Priority | ${t.priority} |`,
+        `| Status | ${t.status} |`,
+        `| Risk | ${t.risk_level} |`,
+        `| Decision | ${t.decision} |`,
+      ];
+      if (t.execution_status) lines.push(`| Execution | ${t.execution_status} |`);
+      if (t.created_at) lines.push(`| Created | ${t.created_at} |`);
+      lines.push("");
+
+      if (t.reasoning_summary) {
+        lines.push(`## Reasoning\n\n${t.reasoning_summary}\n`);
+      }
+
+      if (t.steps?.length) {
+        lines.push("## Steps\n");
+        for (const step of t.steps) {
+          const icon =
+            step.status === "completed"
+              ? "✅"
+              : step.status === "running"
+                ? "🔄"
+                : step.status === "failed"
+                  ? "❌"
+                  : "⬜";
+          let line = `${icon} **${step.task_type}** — ${step.status}`;
+          if (step.result_summary) line += `\n   ${step.result_summary}`;
+          lines.push(line);
+        }
+      }
+
+      return textResult(lines.join("\n"));
+    },
+  });
+
+  // ── jarvis_voice ─────────────────────────────────────────────
+  // Convert content to voice-friendly spoken text.
+  api.registerTool(
+    {
+      name: "jarvis_voice",
+      description:
+        "Convert Jarvis content to voice-friendly spoken text for Talk Mode. " +
+        "Use when the user is in voice/talk mode and needs a spoken response. " +
+        "Pass the content from a briefing, approval, or task detail.",
+      parameters: Type.Object({
+        content: Type.String({ description: "The content to convert to voice" }),
+        content_type: Type.Optional(
+          Type.Union([
+            Type.Literal("briefing"),
+            Type.Literal("approval"),
+            Type.Literal("task"),
+            Type.Literal("general"),
+          ])
+        ),
+      }),
+      async execute(
+        _id: string,
+        params: { content: string; content_type?: string }
+      ) {
+        const res = await callBackend(config, "/v1/voice/convert", "POST", {
+          content: params.content,
+          content_type: params.content_type || "general",
+        });
+        if (!res.success) return textResult(`Error: ${res.error}`);
+        const v = res.data as { spoken_text: string; duration_hint: string };
+        return textResult(v.spoken_text);
+      },
+    },
+    { optional: true }
+  );
+
+  // ── jarvis_notify ────────────────────────────────────────────
+  // Send a notification to a configured channel.
+  api.registerTool(
+    {
+      name: "jarvis_notify",
+      description:
+        "Send a notification to the user via Slack or other configured channel. " +
+        "Use when the user asks to be reminded or notified about something.",
+      parameters: Type.Object({
+        title: Type.String({ description: "Notification title" }),
+        body: Type.String({ description: "Notification message body" }),
+        channel: Type.Optional(
+          Type.Union([Type.Literal("slack")])
+        ),
+        urgency: Type.Optional(
+          Type.Union([
+            Type.Literal("low"),
+            Type.Literal("normal"),
+            Type.Literal("high"),
+          ])
+        ),
+      }),
+      async execute(
+        _id: string,
+        params: { title: string; body: string; channel?: string; urgency?: string }
+      ) {
+        const res = await callBackend(config, "/v1/notifications/send", "POST", params);
+        if (!res.success) return textResult(`Error: ${res.error}`);
+        const n = res.data as { delivered: boolean; channel: string; error?: string };
+        if (n.delivered) {
+          return textResult(`Notification sent via ${n.channel}.`);
+        }
+        return textResult(`Notification not sent: ${n.error || "unknown error"}`);
+      },
+    },
+    { optional: true }
+  );
+}
+
+// ── Type helpers for backend responses ────────────────────────────
+
+interface DashboardData {
+  headline?: string;
+  date: string;
+  pending_approvals: Array<{
+    approval_id: string;
+    title: string;
+    summary?: string;
+    risk_level: string;
+    approval_type: string;
+    created_at?: string;
+  }>;
+  active_tasks: Array<{
+    task_id: string;
+    goal: string;
+    priority: string;
+    status: string;
+    decision: string;
+    step_count: number;
+    steps_completed: number;
+  }>;
+  upcoming_meetings: Array<{
+    event_id: string;
+    title: string;
+    starts_at?: string;
+    attendee_count: number;
+  }>;
+  recommended_actions: string[];
+  briefing_id?: string;
+}
+
+interface ApprovalDetail {
+  approval_id: string;
+  status: string;
+  title: string;
+  summary?: string;
+  approval_type?: string;
+  risk_level: string;
+  created_at?: string;
+  decided_at?: string;
+  decision_reason?: string;
+  execution_id?: string;
+  plan_goal?: string;
+  artifact_refs?: Record<string, unknown>;
+}
+
+interface TaskDetail {
+  task_id: string;
+  goal: string;
+  priority: string;
+  status: string;
+  decision: string;
+  risk_level: string;
+  reasoning_summary?: string;
+  execution_status?: string;
+  created_at?: string;
+  steps: Array<{
+    task_id: string;
+    task_type: string;
+    status: string;
+    result_summary?: string;
+  }>;
 }

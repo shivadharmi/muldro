@@ -60,6 +60,9 @@ export function registerRoutes(api: PluginApi, config: BackendConfig) {
   // Slack events
   forwardRoute(api, "/jarvis/webhook/slack", "/v1/webhooks/slack", config);
 
+  // WhatsApp events
+  forwardRoute(api, "/jarvis/webhook/whatsapp", "/v1/webhooks/whatsapp", config);
+
   // Generic connector webhook (for future connectors)
   forwardRoute(api, "/jarvis/webhook/generic", "/v1/webhooks/generic", config);
 
