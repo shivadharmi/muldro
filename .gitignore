@@ -30,3 +30,8 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Reference docs (not part of codebase)
+jarvis_discussion_export/
+jarvis_docs/
+setup_bedrock_for_claude.sh
