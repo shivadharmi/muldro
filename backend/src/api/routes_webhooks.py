@@ -10,6 +10,8 @@ from src.api.schemas import GmailTestPayload, WebhookResponse
 from src.config.settings import Settings, get_settings
 from src.connectors.gmail import GmailConnector
 from src.services.event_processor import EventProcessor
+from src.services.memory_service import MemoryService
+from src.services.world_model import WorldModel
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +19,29 @@ router = APIRouter()
 
 
 def _make_gmail_connector(settings: Settings, db: AsyncSession) -> GmailConnector:
-    event_processor = EventProcessor(settings=settings, db=db)
+    world_model = WorldModel(settings=settings, db=db)
+    memory_service = MemoryService(settings=settings, db=db)
+
+    async def _extract_entities(event_id: str, user_id: str) -> None:
+        await world_model.extract_from_event(event_id, user_id)
+
+    async def _extract_memories(event_id: str, user_id: str) -> None:
+        from sqlalchemy import select as sa_select
+
+        from src.models.events import NormalizedEvent
+
+        result = await db.execute(
+            sa_select(NormalizedEvent).where(NormalizedEvent.event_id == event_id)
+        )
+        event = result.scalar_one_or_none()
+        if event and event.summary:
+            await memory_service.extract_and_store(user_id, event.summary, [event_id])
+
+    event_processor = EventProcessor(
+        settings=settings,
+        db=db,
+        on_event_processed=[_extract_entities, _extract_memories],
+    )
     return GmailConnector(settings=settings, db=db, event_processor=event_processor)
 
 

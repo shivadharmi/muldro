@@ -84,10 +84,17 @@ DEFAULT_SCORES = {
 class EventProcessor:
     """Process raw events into normalized, scored events."""
 
-    def __init__(self, settings: Settings, db: AsyncSession):
+    def __init__(
+        self,
+        settings: Settings,
+        db: AsyncSession,
+        on_event_processed: list | None = None,
+    ):
         self._settings = settings
         self._db = db
         self._client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        # Optional async callbacks: called with (event_id, user_id) after processing
+        self._on_event_processed = on_event_processed or []
 
     async def process(self, raw: RawEvent, user_id: str) -> str | None:
         """Process a raw event. Returns event_id if stored, None if duplicate."""
@@ -134,6 +141,18 @@ class EventProcessor:
             event.importance_score or 0,
             event.urgency_score or 0,
         )
+
+        # Fire downstream hooks (entity extraction, memory extraction, etc.)
+        for callback in self._on_event_processed:
+            try:
+                await callback(event_id, user_id)
+            except Exception:
+                logger.warning(
+                    "Post-process callback failed for %s",
+                    event_id,
+                    exc_info=True,
+                )
+
         return event_id
 
     async def _score_event(self, raw: RawEvent) -> dict:

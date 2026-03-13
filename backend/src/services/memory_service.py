@@ -6,26 +6,110 @@ long-term, structured, searchable, and scored.
 Responsibilities:
 - Extract candidate memories from interactions and events
 - Score memory usefulness and stability
-- Store with provenance and embedding
+- Store with provenance
 - Provide retrieval API scoped by type, entity, and time
 - Expire or demote low-value memories
+
+Note: pgvector semantic search is deferred to Milestone 2.
+For now, retrieval uses text-based ILIKE matching.
+"""
+
+import json
+import logging
+
+import anthropic
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from ulid import ULID
+
+from src.config.settings import Settings
+from src.models.memory import Memory
+
+logger = logging.getLogger(__name__)
+
+MEMORY_EXTRACTION_PROMPT = """\
+You are Jarvis's memory extraction engine. Given text from an event or \
+interaction, extract facts worth remembering long-term.
+
+You MUST respond with valid JSON matching this schema:
+{
+  "memories": [
+    {
+      "memory_type": "episodic" | "semantic" | "preference" | "relationship" | "task_context",
+      "scope": "general" | "planning" | "presentation",
+      "fact_text": "Concise, standalone fact (should make sense without context)",
+      "confidence": float 0.0-1.0,
+      "ttl_days": int or null (null = permanent)
+    }
+  ]
+}
+
+Rules:
+- Extract 0-5 memories per input (don't force it — only extract genuinely useful facts)
+- episodic: specific events ("User met with Alice on March 13")
+- semantic: general knowledge ("Alice is CFO at Acme Corp")
+- preference: user habits ("User prefers concise briefings")
+- relationship: people patterns ("User and Bob discuss fundraising weekly")
+- task_context: active work ("Series B deck is being finalized")
+- Set confidence high (>0.8) for explicit facts, lower for inferences
+- Set ttl_days to null for permanent facts, 30-90 for task_context
+- Each fact_text must be self-contained — no pronouns without antecedents
 """
 
 
 class MemoryService:
     """Manage Jarvis long-term memory."""
 
+    def __init__(self, settings: Settings, db: AsyncSession):
+        self._settings = settings
+        self._db = db
+        self._client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+
     async def extract_and_store(
-        self, user_id: str, source_text: str, source_event_ids: list[str]
+        self,
+        user_id: str,
+        source_text: str,
+        source_event_ids: list[str],
     ) -> list[str]:
         """Extract memories from text and store them. Returns memory_ids."""
-        # TODO: Implement
-        # 1. Call Claude to extract candidate memories
-        # 2. Score usefulness
-        # 3. Dedupe against existing memories
-        # 4. Generate embeddings
-        # 5. Store in memories table + pgvector
-        return []
+        extracted = await self._call_extraction(source_text)
+        memory_ids = []
+
+        for mem_data in extracted.get("memories", []):
+            fact_text = mem_data.get("fact_text", "")
+            if not fact_text:
+                continue
+
+            is_dup = await self._is_duplicate(user_id, fact_text)
+            if is_dup:
+                continue
+
+            memory_id = f"mem_{ULID()}"
+            memory = Memory(
+                memory_id=memory_id,
+                user_id=user_id,
+                memory_type=mem_data.get("memory_type", "semantic"),
+                scope=mem_data.get("scope", "general"),
+                fact_text=fact_text,
+                confidence=mem_data.get("confidence", 0.5),
+                stability_score=0.0,
+                source_event_ids=source_event_ids,
+                provenance={"extraction_method": "claude_auto"},
+                ttl_days=mem_data.get("ttl_days"),
+                status="active",
+            )
+            self._db.add(memory)
+            memory_ids.append(memory_id)
+
+        if memory_ids:
+            await self._db.flush()
+            logger.info(
+                "Extracted %d memories from %d events",
+                len(memory_ids),
+                len(source_event_ids),
+            )
+
+        return memory_ids
 
     async def retrieve(
         self,
@@ -35,6 +119,60 @@ class MemoryService:
         entity_refs: list[str] | None = None,
         max_results: int = 10,
     ) -> list[dict]:
-        """Retrieve relevant memories for a given context."""
-        # TODO: Implement semantic search with pgvector
-        return []
+        """Retrieve relevant memories for a given context.
+
+        For now uses text-based ILIKE matching.
+        pgvector semantic search will be added in Milestone 2.
+        """
+        stmt = select(Memory).where(
+            Memory.user_id == user_id,
+            Memory.status == "active",
+            Memory.fact_text.ilike(f"%{query}%"),
+        )
+
+        if memory_types:
+            stmt = stmt.where(Memory.memory_type.in_(memory_types))
+
+        stmt = stmt.order_by(Memory.confidence.desc()).limit(max_results)
+
+        result = await self._db.execute(stmt)
+        memories = result.scalars().all()
+
+        return [
+            {
+                "memory_id": m.memory_id,
+                "memory_type": m.memory_type,
+                "fact_text": m.fact_text,
+                "confidence": m.confidence,
+                "scope": m.scope,
+            }
+            for m in memories
+        ]
+
+    async def _call_extraction(self, source_text: str) -> dict:
+        """Call Claude to extract memories from text."""
+        try:
+            response = await self._client.messages.create(
+                model=self._settings.anthropic_model,
+                max_tokens=1024,
+                system=MEMORY_EXTRACTION_PROMPT,
+                messages=[{"role": "user", "content": source_text}],
+            )
+            text = response.content[0].text
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1].rsplit("```", 1)[0]
+            return json.loads(text)
+        except Exception:
+            logger.warning("Memory extraction failed", exc_info=True)
+            return {"memories": []}
+
+    async def _is_duplicate(self, user_id: str, fact_text: str) -> bool:
+        """Check if a substantially similar memory already exists."""
+        result = await self._db.execute(
+            select(Memory.memory_id).where(
+                Memory.user_id == user_id,
+                Memory.status == "active",
+                Memory.fact_text == fact_text,
+            )
+        )
+        return result.scalar_one_or_none() is not None

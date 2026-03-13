@@ -22,11 +22,11 @@
 - [x] Basic daily briefing (Presenter service, cached, Claude-generated)
 
 ### Sprint 3 — Memory + Approvals
-- [ ] Memory extraction service
-- [ ] Approval schema and flow
-- [ ] Operator: draft email
-- [ ] Governor: policy rules v0
-- [ ] Audit logging
+- [x] Memory extraction service (Claude-powered, text-based retrieval, dedup)
+- [x] Approval schema and flow (list/approve/reject with execution state)
+- [x] Operator: draft email (Claude-powered, task graph execution)
+- [x] Governor: policy rules v0 (action type + risk-based policy evaluation)
+- [x] Audit logging (full correlation IDs, immutable trail)
 
 ### Sprint 4 — Calendar + Meeting Prep
 - [ ] Calendar connector (OAuth + polling)
