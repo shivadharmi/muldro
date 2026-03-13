@@ -259,13 +259,13 @@ class MemoryService:
 
         sql = text(f"""
             SELECT memory_id, memory_type, fact_text, confidence, scope,
-                   1 - (embedding <=> :embedding::vector) AS similarity
+                   1 - (embedding <=> cast(:embedding as vector)) AS similarity
             FROM memories
             WHERE user_id = :user_id
               AND status = 'active'
               AND embedding IS NOT NULL
               {type_filter}
-            ORDER BY embedding <=> :embedding::vector
+            ORDER BY embedding <=> cast(:embedding as vector)
             LIMIT :limit
         """)
 
@@ -377,7 +377,7 @@ class MemoryService:
                 WHERE user_id = :user_id
                   AND status = 'active'
                   AND embedding IS NOT NULL
-                  AND 1 - (embedding <=> :embedding::vector) > 0.92
+                  AND 1 - (embedding <=> cast(:embedding as vector)) > 0.92
                 LIMIT 1
             """)
             result = await self._db.execute(sql, {"user_id": user_id, "embedding": str(embedding)})

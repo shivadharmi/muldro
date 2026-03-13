@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    model_config = {"env_prefix": "JARVIS_"}
+    model_config = {"env_prefix": "JARVIS_", "env_file": ".env", "env_file_encoding": "utf-8"}
 
     # Database
     database_url: str = "postgresql+asyncpg://jarvis:jarvis@localhost:5432/jarvis"
@@ -25,6 +25,7 @@ class Settings(BaseSettings):
 
     # Embeddings (Voyage AI)
     voyage_api_key: str = ""
+    voyage_base_url: str = "https://api.voyageai.com/v1"
     embedding_model: str = "voyage-3-lite"
 
     # Slack

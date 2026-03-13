@@ -128,14 +128,16 @@ class Planner:
             )
             return None
 
+        imp = f"{event.importance_score:.2f}" if event.importance_score is not None else "N/A"
+        urg = f"{event.urgency_score:.2f}" if event.urgency_score is not None else "N/A"
         sections = [
             f"## Event\n"
             f"Type: {event.event_type}\n"
             f"Source: {event.source}\n"
             f"Title: {event.title or 'N/A'}\n"
             f"Summary: {event.summary or 'N/A'}\n"
-            f"Importance: {event.importance_score:.2f}\n"
-            f"Urgency: {event.urgency_score:.2f if event.urgency_score else 'N/A'}"
+            f"Importance: {imp}\n"
+            f"Urgency: {urg}"
         ]
 
         if event.actor_entities:
