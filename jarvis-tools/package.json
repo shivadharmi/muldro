@@ -1,0 +1,17 @@
+{
+  "name": "jarvis-tools",
+  "version": "0.1.0",
+  "description": "Jarvis Personal AI OS - OpenClaw integration plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": ["src/index.ts"]
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@sinclair/typebox": "^0.34.0"
+  }
+}

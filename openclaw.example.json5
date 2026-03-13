@@ -1,0 +1,100 @@
+// Example OpenClaw configuration for Jarvis
+// Copy to ~/.openclaw/openclaw.json and adjust paths/keys
+{
+  // Gateway settings
+  gateway: {
+    port: 18789,
+    bind: "loopback",
+    auth: {
+      mode: "token",
+      token: "your-gateway-token"
+    }
+  },
+
+  // Model provider
+  models: {
+    providers: {
+      anthropic: {
+        apiKey: "${ANTHROPIC_API_KEY}"
+      }
+    },
+    default: "anthropic/claude-sonnet-4-20250514"
+  },
+
+  // Single agent for v1
+  agents: {
+    defaults: {
+      workspace: "~/.openclaw/workspace"
+    },
+    list: [
+      {
+        id: "jarvis",
+        workspace: "~/.openclaw/workspace-jarvis"
+      }
+    ]
+  },
+
+  // Tool permissions — deny dangerous defaults, allow jarvis tools
+  tools: {
+    profile: "minimal",
+    allow: [
+      "jarvis_command",
+      "jarvis_brief",
+      "jarvis_approve",
+      "jarvis_tasks",
+      "jarvis_search",
+      "jarvis_meeting_prep",
+      "group:memory"
+    ],
+    deny: [
+      "group:runtime",
+      "group:fs",
+      "group:automation",
+      "sessions_spawn",
+      "sessions_send",
+      "cron",
+      "gateway"
+    ]
+  },
+
+  // Plugin configuration
+  plugins: {
+    enabled: true,
+    load: {
+      // Point to your local jarvis-tools plugin directory
+      paths: ["~/work/jarvis/jarvis-tools"]
+    },
+    entries: {
+      "jarvis-tools": {
+        enabled: true,
+        config: {
+          backendUrl: "http://localhost:8000",
+          backendToken: "your-backend-token-here"
+        }
+      }
+    }
+  },
+
+  // Hooks for receiving proactive notifications from backend
+  hooks: {
+    token: "your-hook-token-here",
+    defaultSessionKey: "hook:jarvis",
+    mappings: [
+      {
+        match: { path: "jarvis-notify" },
+        action: "agent",
+        agentId: "jarvis",
+        message: "{{message}}"
+      }
+    ]
+  },
+
+  // Session settings
+  session: {
+    scope: "per-sender",
+    reset: {
+      mode: "daily",
+      hour: 4
+    }
+  }
+}

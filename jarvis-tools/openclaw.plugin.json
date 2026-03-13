@@ -1,0 +1,20 @@
+{
+  "id": "jarvis-tools",
+  "version": "0.1.0",
+  "description": "Jarvis Personal AI OS - OpenClaw integration plugin",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "backendUrl": {
+        "type": "string",
+        "default": "http://localhost:8000",
+        "description": "URL of the Jarvis backend API"
+      },
+      "backendToken": {
+        "type": "string",
+        "description": "Authentication token for Jarvis backend"
+      }
+    },
+    "required": ["backendUrl"]
+  }
+}
