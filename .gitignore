@@ -26,6 +26,7 @@ Thumbs.db
 # Build
 *.tgz
 
-# Alembic
-backend/alembic/versions/*.py
-!backend/alembic/versions/.gitkeep
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/

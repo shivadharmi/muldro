@@ -18,18 +18,14 @@ class Plan(Base, TimestampMixin):
     reasoning_summary: Mapped[str | None] = mapped_column(Text)
     required_context: Mapped[dict | None] = mapped_column(JSONB)
     risk_level: Mapped[str] = mapped_column(String(16), default="low")
-    execution_mode: Mapped[str] = mapped_column(
-        String(32), default="approval_required"
-    )
+    execution_mode: Mapped[str] = mapped_column(String(32), default="approval_required")
     status: Mapped[str] = mapped_column(String(32), default="created")
 
     tasks: Mapped[list["PlanTask"]] = relationship(
         back_populates="plan", cascade="all, delete-orphan"
     )
 
-    __table_args__ = (
-        Index("ix_plans_user_created", "user_id", "created_at"),
-    )
+    __table_args__ = (Index("ix_plans_user_created", "user_id", "created_at"),)
 
 
 class PlanTask(Base):

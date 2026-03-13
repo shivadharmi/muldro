@@ -28,6 +28,4 @@ class ConnectorAccount(Base, TimestampMixin):
     sync_state: Mapped[dict | None] = mapped_column(JSONB)
     status: Mapped[str] = mapped_column(String(16), default="active")
 
-    __table_args__ = (
-        Index("ix_connector_accounts_connector", "connector_id"),
-    )
+    __table_args__ = (Index("ix_connector_accounts_connector", "connector_id"),)

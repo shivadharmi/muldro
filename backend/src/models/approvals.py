@@ -25,6 +25,4 @@ class Approval(Base, TimestampMixin):
     decision_reason: Mapped[str | None] = mapped_column(Text)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    __table_args__ = (
-        Index("ix_approvals_user_status", "user_id", "status", "created_at"),
-    )
+    __table_args__ = (Index("ix_approvals_user_status", "user_id", "status", "created_at"),)

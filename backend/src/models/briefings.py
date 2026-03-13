@@ -20,6 +20,4 @@ class Briefing(Base, TimestampMixin):
     recommended_actions: Mapped[dict | None] = mapped_column(JSONB)
     full_text: Mapped[str | None] = mapped_column(Text)
 
-    __table_args__ = (
-        Index("ix_briefings_user_date", "user_id", "briefing_date"),
-    )
+    __table_args__ = (Index("ix_briefings_user_date", "user_id", "briefing_date"),)

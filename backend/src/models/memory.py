@@ -22,6 +22,4 @@ class Memory(Base, TimestampMixin):
     ttl_days: Mapped[int | None] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(16), default="active")  # active, expired, merged
 
-    __table_args__ = (
-        Index("ix_memories_user_type_status", "user_id", "memory_type", "status"),
-    )
+    __table_args__ = (Index("ix_memories_user_type_status", "user_id", "memory_type", "status"),)

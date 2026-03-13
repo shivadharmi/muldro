@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 # ── Command ───────────────────────────────────────────────────────
 
+
 class CommandRequest(BaseModel):
     command: str
     context: str | None = None
@@ -20,6 +21,7 @@ class CommandResponse(BaseModel):
 
 # ── Briefing ──────────────────────────────────────────────────────
 
+
 class BriefingResponse(BaseModel):
     briefing_id: str
     date: date
@@ -32,6 +34,7 @@ class BriefingResponse(BaseModel):
 
 
 # ── Approval ──────────────────────────────────────────────────────
+
 
 class ApprovalDecisionRequest(BaseModel):
     reason: str | None = None
@@ -48,6 +51,7 @@ class ApprovalResponse(BaseModel):
 
 # ── Tasks ─────────────────────────────────────────────────────────
 
+
 class TaskResponse(BaseModel):
     task_id: str
     goal: str
@@ -58,6 +62,7 @@ class TaskResponse(BaseModel):
 
 
 # ── Search ────────────────────────────────────────────────────────
+
 
 class SearchRequest(BaseModel):
     query: str
@@ -78,6 +83,7 @@ class SearchResponse(BaseModel):
 
 # ── Meeting Prep ──────────────────────────────────────────────────
 
+
 class MeetingPrepRequest(BaseModel):
     meeting_id: str | None = None
     next: bool | None = None
@@ -96,12 +102,14 @@ class MeetingPrepResponse(BaseModel):
 
 # ── Webhook ───────────────────────────────────────────────────────
 
+
 class WebhookResponse(BaseModel):
     received: bool = True
     event_id: str | None = None
 
 
 # ── Health ────────────────────────────────────────────────────────
+
 
 class HealthResponse(BaseModel):
     status: str = "ok"

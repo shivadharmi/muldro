@@ -10,9 +10,9 @@
 - [x] API endpoint stubs
 - [x] OpenClaw plugin with tools + routes
 - [x] Docker Compose (Postgres + Redis)
-- [ ] Git init + CI pipeline
-- [ ] Alembic initial migration
-- [ ] Wire planner service to command endpoint
+- [x] Git init + CI pipeline
+- [x] Alembic initial migration
+- [x] Wire planner service to command endpoint
 
 ### Sprint 2 — First Useful Flow
 - [ ] Gmail connector (OAuth + push notifications)
