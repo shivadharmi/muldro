@@ -206,6 +206,9 @@ JARVIS_OPENCLAW_HOOK_TOKEN=$OPENCLAW_HOOK_TOKEN
 JARVIS_OPENCLAW_GATEWAY_URL=http://127.0.0.1:18789
 JARVIS_HOST=127.0.0.1
 JARVIS_PORT=8000
+JARVIS_USE_BEDROCK=true
+JARVIS_BEDROCK_REGION=$AWS_REGION
+JARVIS_ANTHROPIC_MODEL=anthropic.claude-sonnet-4-20250514-v1:0
 ENVEOF
 chmod 600 "$INSTALL_DIR/backend/.env"
 
@@ -278,17 +281,48 @@ cat > "$OPENCLAW_HOME/openclaw.json" <<OCEOF
     "auth": {
       "mode": "token",
       "token": "$OPENCLAW_GATEWAY_TOKEN"
-    }
+    },
+    "controlUi": {
+      "allowedOrigins": ["https://$DOMAIN"],
+      "dangerouslyDisableDeviceAuth": true
+    },
+    "trustedProxies": ["127.0.0.1"]
   },
   "agents": {
     "defaults": {
       "model": {
-        "primary": "anthropic/claude-sonnet-4-20250514"
+        "primary": "amazon-bedrock/anthropic.claude-sonnet-4-20250514-v1:0"
       }
+    }
+  },
+  "models": {
+    "providers": {
+      "amazon-bedrock": {
+        "baseUrl": "https://bedrock-runtime.$AWS_REGION.amazonaws.com",
+        "api": "bedrock-converse-stream",
+        "auth": "aws-sdk",
+        "models": [
+          {
+            "id": "anthropic.claude-sonnet-4-20250514-v1:0",
+            "name": "Claude Sonnet 4 (Bedrock)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          }
+        ]
+      }
+    },
+    "bedrockDiscovery": {
+      "enabled": true,
+      "region": "$AWS_REGION",
+      "providerFilter": ["anthropic"],
+      "refreshInterval": 3600
     }
   },
   "plugins": {
     "enabled": true,
+    "allow": ["jarvis-tools"],
     "load": {
       "paths": ["$INSTALL_DIR/jarvis-tools"]
     },
@@ -326,6 +360,7 @@ Environment=HOME=/home/ubuntu
 Environment=PATH=/usr/bin:/usr/local/bin:/bin
 Environment=ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
 Environment=VOYAGE_API_KEY=$VOYAGE_API_KEY
+Environment=AWS_REGION=$AWS_REGION
 Environment=NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache
 Environment=OPENCLAW_NO_RESPAWN=1
 ExecStart=/usr/bin/openclaw gateway
