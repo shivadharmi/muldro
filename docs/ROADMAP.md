@@ -97,6 +97,19 @@ Removed redundant plumbing that overlaps with OpenClaw's built-in capabilities.
 - [x] Redis Streams task queue for async callback processing
 - [x] CallbackWorker background processor
 
+## Milestone 6: Production Deployment (Complete)
+
+- [x] AWS infrastructure (Terraform: EC2, VPC, Route53, IAM, SSM Parameter Store)
+- [x] Bedrock integration (backend `AsyncAnthropicBedrock` + OpenClaw `bedrock-converse-stream`)
+- [x] Caddy reverse proxy with automatic TLS
+- [x] Systemd services (jarvis-backend, openclaw, caddy)
+- [x] User-data bootstrap script (9-phase automated provisioning)
+- [x] Deploy script for code updates (`infra/scripts/deploy.sh`)
+- [x] Daily Postgres backup with 7-day retention
+- [x] Security hardening (UFW, fail2ban, SSH hardening, kernel sysctl)
+- [x] Telegram channel integration
+- [x] Production deployment on `jarvis.brrdcast.in`
+
 ## Next Up
 
 - [ ] End-to-end acceptance tests (PRD scenarios)

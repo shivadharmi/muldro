@@ -30,9 +30,9 @@ def mock_db():
     return db
 
 
-@patch("src.services.presenter.anthropic.AsyncAnthropic")
+@patch("src.services.presenter.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_generate_briefing_creates_new(mock_anthropic_cls, settings, mock_db):
+async def test_generate_briefing_creates_new(mock_get_client, settings, mock_db):
     """Should generate a new briefing when none exists for the date."""
     briefing_content = {
         "headline": "2 priorities, 1 follow-up",
@@ -46,7 +46,7 @@ async def test_generate_briefing_creates_new(mock_anthropic_cls, settings, mock_
     response = MagicMock()
     response.content = [MagicMock(text=json.dumps(briefing_content))]
     mock_client.messages.create = AsyncMock(return_value=response)
-    mock_anthropic_cls.return_value = mock_client
+    mock_get_client.return_value = mock_client
 
     presenter = Presenter(settings=settings, db=mock_db)
     briefing = await presenter.generate_briefing("usr_default", date(2026, 3, 13))
@@ -58,9 +58,9 @@ async def test_generate_briefing_creates_new(mock_anthropic_cls, settings, mock_
     mock_db.commit.assert_called_once()
 
 
-@patch("src.services.presenter.anthropic.AsyncAnthropic")
+@patch("src.services.presenter.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_generate_briefing_returns_cached(mock_anthropic_cls, settings, mock_db):
+async def test_generate_briefing_returns_cached(mock_get_client, settings, mock_db):
     """Should return existing briefing without calling Claude."""
     cached_briefing = MagicMock()
     cached_briefing.briefing_id = "brief_cached"
@@ -70,23 +70,24 @@ async def test_generate_briefing_returns_cached(mock_anthropic_cls, settings, mo
     cached_result.scalar_one_or_none.return_value = cached_briefing
     mock_db.execute = AsyncMock(return_value=cached_result)
 
-    mock_anthropic_cls.return_value = MagicMock()
+    mock_client = MagicMock()
+    mock_get_client.return_value = mock_client
 
     presenter = Presenter(settings=settings, db=mock_db)
     briefing = await presenter.generate_briefing("usr_default", date(2026, 3, 13))
 
     assert briefing.briefing_id == "brief_cached"
     # Claude should NOT have been called
-    mock_anthropic_cls.return_value.messages.create.assert_not_called()
+    mock_client.messages.create.assert_not_called()
 
 
-@patch("src.services.presenter.anthropic.AsyncAnthropic")
+@patch("src.services.presenter.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_generate_briefing_handles_claude_failure(mock_anthropic_cls, settings, mock_db):
+async def test_generate_briefing_handles_claude_failure(mock_get_client, settings, mock_db):
     """Should return a fallback briefing if Claude fails."""
     mock_client = MagicMock()
     mock_client.messages.create = AsyncMock(side_effect=RuntimeError("API down"))
-    mock_anthropic_cls.return_value = mock_client
+    mock_get_client.return_value = mock_client
 
     presenter = Presenter(settings=settings, db=mock_db)
     briefing = await presenter.generate_briefing("usr_default", date(2026, 3, 13))

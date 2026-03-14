@@ -1,118 +1,99 @@
-// Example OpenClaw configuration for Jarvis
-// Copy to ~/.openclaw/openclaw.json and adjust paths/keys
+// OpenClaw v2026.3 configuration for Jarvis
+// Copy to ~/.openclaw/openclaw.json and adjust values
 {
   // Gateway settings
-  gateway: {
-    port: 18789,
-    bind: "loopback",
-    auth: {
-      mode: "token",
-      token: "your-gateway-token"
+  "gateway": {
+    "mode": "local",
+    "bind": "loopback",
+    "port": 18789,
+    "auth": {
+      "mode": "token",
+      "token": "your-gateway-token"
+    },
+    "controlUi": {
+      "allowedOrigins": ["https://your-domain.example.com"],
+      // Set to true if running headless (no browser device auth)
+      "dangerouslyDisableDeviceAuth": false
+    },
+    "trustedProxies": ["127.0.0.1"]
+  },
+
+  // Agent defaults
+  "agents": {
+    "defaults": {
+      "model": {
+        // Option A: Direct Anthropic API
+        "primary": "anthropic/claude-sonnet-4-20250514"
+        // Option B: AWS Bedrock (use inference profile ID)
+        // "primary": "amazon-bedrock/apac.anthropic.claude-sonnet-4-20250514-v1:0"
+      }
     }
   },
 
-  // Model provider
-  models: {
-    providers: {
-      anthropic: {
-        apiKey: "${ANTHROPIC_API_KEY}"
+  // Model providers
+  "models": {
+    "providers": {
+      // Option A: Direct Anthropic API
+      "anthropic": {
+        "apiKey": "${ANTHROPIC_API_KEY}"
       }
-    },
-    default: "anthropic/claude-sonnet-4-20250514"
-  },
 
-  // Single agent for v1
-  agents: {
-    defaults: {
-      workspace: "~/.openclaw/workspace"
-    },
-    list: [
-      {
-        id: "jarvis",
-        workspace: "~/.openclaw/workspace-jarvis"
-      }
-    ]
-  },
+      // Option B: AWS Bedrock — uncomment and remove anthropic block above
+      // "amazon-bedrock": {
+      //   "baseUrl": "https://bedrock-runtime.ap-south-1.amazonaws.com",
+      //   "api": "bedrock-converse-stream",
+      //   "auth": "aws-sdk",
+      //   "models": [
+      //     {
+      //       "id": "apac.anthropic.claude-sonnet-4-20250514-v1:0",
+      //       "name": "Claude Sonnet 4 (Bedrock)",
+      //       "reasoning": true,
+      //       "input": ["text", "image"],
+      //       "contextWindow": 200000,
+      //       "maxTokens": 8192
+      //     }
+      //   ]
+      // }
+    }
 
-  // Tool permissions — allow jarvis tools + data access tools
-  tools: {
-    profile: "minimal",
-    allow: [
-      "jarvis_command",
-      "jarvis_brief",
-      "jarvis_approve",
-      "jarvis_tasks",
-      "jarvis_search",
-      "jarvis_meeting_prep",
-      "jarvis_ingest_event",
-      "jarvis_heartbeat",
-      "group:memory",
-      // gog skills for Gmail/Calendar/Drive access
-      // gh for GitHub access
-      // These let the agent read data, then ingest via jarvis_ingest_event
-    ],
-    deny: [
-      "group:runtime",
-      "group:fs",
-      "group:automation",
-      "sessions_spawn",
-      "sessions_send",
-      "cron",
-      "gateway"
-    ]
+    // Optional: auto-discover Bedrock models
+    // "bedrockDiscovery": {
+    //   "enabled": true,
+    //   "region": "ap-south-1",
+    //   "providerFilter": ["anthropic"],
+    //   "refreshInterval": 3600
+    // }
   },
 
   // Plugin configuration
-  plugins: {
-    enabled: true,
-    load: {
+  "plugins": {
+    "enabled": true,
+    "allow": ["jarvis-tools"],
+    "load": {
       // Point to your local jarvis-tools plugin directory
-      paths: ["~/work/jarvis/jarvis-tools"]
+      "paths": ["~/work/jarvis/jarvis-tools"]
     },
-    entries: {
+    "entries": {
       "jarvis-tools": {
-        enabled: true,
-        config: {
-          backendUrl: "http://localhost:8000",
-          backendToken: "your-backend-token-here"
+        "enabled": true,
+        "config": {
+          "backendUrl": "http://localhost:8000",
+          "backendToken": "your-backend-token-here"
         }
       }
     }
   },
 
-  // Hooks for receiving proactive notifications from backend
-  hooks: {
-    token: "your-hook-token-here",
-    defaultSessionKey: "hook:jarvis",
-    mappings: [
-      {
-        match: { path: "jarvis-notify" },
-        action: "agent",
-        agentId: "jarvis",
-        message: "{{message}}"
-      }
-    ]
-  },
-
-  // Cron jobs — agent-driven periodic tasks
-  cron: [
-    // Daily briefing at 7am
-    { name: "daily-brief", cron: "0 7 * * *", session: "isolated",
-      message: "Generate today's briefing using jarvis_brief and deliver it." },
-    // Heartbeat every hour
-    { name: "heartbeat", every: 3600000, session: "isolated",
-      message: "Run jarvis_heartbeat to expire stale plans and memories." },
-    // Email check every 15 min
-    { name: "email-check", every: 900000, session: "isolated",
-      message: "Check for new emails using gog gmail, then ingest important ones via jarvis_ingest_event." },
-  ],
-
-  // Session settings
-  session: {
-    scope: "per-sender",
-    reset: {
-      mode: "daily",
-      hour: 4
-    }
+  // Cron — enabled globally; individual jobs configured via agent/plugin
+  "cron": {
+    "enabled": true
   }
+
+  // Optional: Telegram channel
+  // "channels": {
+  //   "telegram": {
+  //     "botToken": "${TELEGRAM_BOT_TOKEN}",
+  //     "allowedUsers": [123456789]
+  //   }
+  // }
 }

@@ -27,9 +27,9 @@ def mock_db():
     return db
 
 
-@patch("src.services.memory_service.anthropic.AsyncAnthropic")
+@patch("src.services.memory_service.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_extract_stores_memories(mock_anthropic_cls, settings, mock_db):
+async def test_extract_stores_memories(mock_get_client, settings, mock_db):
     """Should extract and store memories from text."""
     extraction = {
         "memories": [
@@ -54,7 +54,7 @@ async def test_extract_stores_memories(mock_anthropic_cls, settings, mock_db):
     response = MagicMock()
     response.content = [MagicMock(text=json.dumps(extraction))]
     mock_client.messages.create = AsyncMock(return_value=response)
-    mock_anthropic_cls.return_value = mock_client
+    mock_get_client.return_value = mock_client
 
     service = MemoryService(settings=settings, db=mock_db)
     memory_ids = await service.extract_and_store(
@@ -66,9 +66,9 @@ async def test_extract_stores_memories(mock_anthropic_cls, settings, mock_db):
     assert mock_db.add.call_count == 2
 
 
-@patch("src.services.memory_service.anthropic.AsyncAnthropic")
+@patch("src.services.memory_service.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_extract_skips_duplicates(mock_anthropic_cls, settings, mock_db):
+async def test_extract_skips_duplicates(mock_get_client, settings, mock_db):
     """Should not store duplicate memories."""
     extraction = {
         "memories": [
@@ -84,7 +84,7 @@ async def test_extract_skips_duplicates(mock_anthropic_cls, settings, mock_db):
     response = MagicMock()
     response.content = [MagicMock(text=json.dumps(extraction))]
     mock_client.messages.create = AsyncMock(return_value=response)
-    mock_anthropic_cls.return_value = mock_client
+    mock_get_client.return_value = mock_client
 
     # First execute: extraction call, second: duplicate check returns existing
     no_result = MagicMock()
@@ -97,9 +97,9 @@ async def test_extract_skips_duplicates(mock_anthropic_cls, settings, mock_db):
     assert len(memory_ids) == 0
 
 
-@patch("src.services.memory_service.anthropic.AsyncAnthropic")
+@patch("src.services.memory_service.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_retrieve_returns_matching(mock_anthropic_cls, settings, mock_db):
+async def test_retrieve_returns_matching(mock_get_client, settings, mock_db):
     """Should return memories matching the query."""
     mock_memory = MagicMock()
     mock_memory.memory_id = "mem_001"
@@ -112,7 +112,7 @@ async def test_retrieve_returns_matching(mock_anthropic_cls, settings, mock_db):
     result_mock.scalars.return_value.all.return_value = [mock_memory]
     mock_db.execute = AsyncMock(return_value=result_mock)
 
-    mock_anthropic_cls.return_value = MagicMock()
+    mock_get_client.return_value = MagicMock()
     service = MemoryService(settings=settings, db=mock_db)
     results = await service.retrieve("usr_default", "Alice")
 

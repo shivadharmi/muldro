@@ -34,9 +34,9 @@ def _make_claude_response(scores: dict) -> MagicMock:
     return response
 
 
-@patch("src.services.event_processor.anthropic.AsyncAnthropic")
+@patch("src.services.event_processor.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_process_stores_event(mock_anthropic_cls, settings, mock_db):
+async def test_process_stores_event(mock_get_client, settings, mock_db):
     """Processing a new event should score it and store it."""
     scores = {
         "importance_score": 0.85,
@@ -52,7 +52,7 @@ async def test_process_stores_event(mock_anthropic_cls, settings, mock_db):
     }
     mock_client = MagicMock()
     mock_client.messages.create = AsyncMock(return_value=_make_claude_response(scores))
-    mock_anthropic_cls.return_value = mock_client
+    mock_get_client.return_value = mock_client
 
     processor = EventProcessor(settings=settings, db=mock_db)
     raw = make_raw_event()
@@ -69,16 +69,16 @@ async def test_process_stores_event(mock_anthropic_cls, settings, mock_db):
     assert stored_event.status == "processed"
 
 
-@patch("src.services.event_processor.anthropic.AsyncAnthropic")
+@patch("src.services.event_processor.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_process_deduplicates(mock_anthropic_cls, settings, mock_db):
+async def test_process_deduplicates(mock_get_client, settings, mock_db):
     """Duplicate events (same idempotency key) should return None."""
     # Simulate existing event found
     result_mock = MagicMock()
     result_mock.scalar_one_or_none.return_value = "evt_existing"
     mock_db.execute = AsyncMock(return_value=result_mock)
 
-    mock_anthropic_cls.return_value = MagicMock()
+    mock_get_client.return_value = MagicMock()
 
     processor = EventProcessor(settings=settings, db=mock_db)
     raw = make_raw_event()
@@ -88,13 +88,13 @@ async def test_process_deduplicates(mock_anthropic_cls, settings, mock_db):
     mock_db.add.assert_not_called()
 
 
-@patch("src.services.event_processor.anthropic.AsyncAnthropic")
+@patch("src.services.event_processor.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_score_fallback_on_error(mock_anthropic_cls, settings, mock_db):
+async def test_score_fallback_on_error(mock_get_client, settings, mock_db):
     """If Claude scoring fails, default scores should be used."""
     mock_client = MagicMock()
     mock_client.messages.create = AsyncMock(side_effect=RuntimeError("API down"))
-    mock_anthropic_cls.return_value = mock_client
+    mock_get_client.return_value = mock_client
 
     processor = EventProcessor(settings=settings, db=mock_db)
     raw = make_raw_event()

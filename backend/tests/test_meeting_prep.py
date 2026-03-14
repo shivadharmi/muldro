@@ -40,9 +40,9 @@ def _make_meeting_event():
     return event
 
 
-@patch("src.services.presenter.anthropic.AsyncAnthropic")
+@patch("src.services.presenter.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_meeting_prep_not_found(mock_anthropic_cls, settings, mock_db):
+async def test_meeting_prep_not_found(mock_get_client, settings, mock_db):
     """Should return 'not found' when meeting doesn't exist."""
     # All DB queries return empty
     empty_result = MagicMock()
@@ -57,9 +57,9 @@ async def test_meeting_prep_not_found(mock_anthropic_cls, settings, mock_db):
     assert "Could not find" in result["risks"][0]
 
 
-@patch("src.services.presenter.anthropic.AsyncAnthropic")
+@patch("src.services.presenter.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_meeting_prep_generates_content(mock_anthropic_cls, settings, mock_db):
+async def test_meeting_prep_generates_content(mock_get_client, settings, mock_db):
     """Should generate meeting prep with Claude for a valid meeting."""
     meeting = _make_meeting_event()
     prep_output = {
@@ -88,7 +88,7 @@ async def test_meeting_prep_generates_content(mock_anthropic_cls, settings, mock
     response = MagicMock()
     response.content = [MagicMock(text=json.dumps(prep_output))]
     mock_client.messages.create = AsyncMock(return_value=response)
-    mock_anthropic_cls.return_value = mock_client
+    mock_get_client.return_value = mock_client
 
     # First query: find meeting by event_id
     meeting_result = MagicMock()
@@ -114,9 +114,9 @@ async def test_meeting_prep_generates_content(mock_anthropic_cls, settings, mock
     mock_client.messages.create.assert_called_once()
 
 
-@patch("src.services.presenter.anthropic.AsyncAnthropic")
+@patch("src.services.presenter.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_meeting_prep_next_meeting(mock_anthropic_cls, settings, mock_db):
+async def test_meeting_prep_next_meeting(mock_get_client, settings, mock_db):
     """Should find the next upcoming meeting when next=True."""
     meeting = _make_meeting_event()
     prep_output = {
@@ -132,7 +132,7 @@ async def test_meeting_prep_next_meeting(mock_anthropic_cls, settings, mock_db):
     response = MagicMock()
     response.content = [MagicMock(text=json.dumps(prep_output))]
     mock_client.messages.create = AsyncMock(return_value=response)
-    mock_anthropic_cls.return_value = mock_client
+    mock_get_client.return_value = mock_client
 
     # First query: find next upcoming meeting
     meeting_result = MagicMock()
@@ -151,15 +151,15 @@ async def test_meeting_prep_next_meeting(mock_anthropic_cls, settings, mock_db):
     assert result["title"] == "Series B Strategy Meeting"
 
 
-@patch("src.services.presenter.anthropic.AsyncAnthropic")
+@patch("src.services.presenter.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_meeting_prep_claude_failure(mock_anthropic_cls, settings, mock_db):
+async def test_meeting_prep_claude_failure(mock_get_client, settings, mock_db):
     """Should return fallback when Claude fails."""
     meeting = _make_meeting_event()
 
     mock_client = MagicMock()
     mock_client.messages.create = AsyncMock(side_effect=RuntimeError("Claude unavailable"))
-    mock_anthropic_cls.return_value = mock_client
+    mock_get_client.return_value = mock_client
 
     meeting_result = MagicMock()
     meeting_result.scalar_one_or_none.return_value = meeting

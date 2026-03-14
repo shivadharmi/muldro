@@ -6,7 +6,9 @@
 - Node.js 22+ (via nvm)
 - Docker & Docker Compose
 - uv (Python package manager)
-- An Anthropic API key
+- One of:
+  - An Anthropic API key (direct), OR
+  - AWS credentials with Bedrock model access (see [Deployment Guide](DEPLOYMENT.md) for Bedrock setup)
 
 ## Initial Setup
 
@@ -36,7 +38,7 @@ uv pip install -e ".[dev]"
 
 # Copy env file and configure
 cp .env.example .env
-# Edit .env with your Anthropic API key and tokens
+# Edit .env — set your API key (Anthropic or Bedrock) and tokens
 
 # Run migrations (after Postgres is up)
 alembic upgrade head
@@ -67,21 +69,18 @@ npx tsc --noEmit
 npm run build
 ```
 
-### 4. OpenClaw (when ready to integrate)
+### 4. OpenClaw
 
 ```bash
 # Install OpenClaw
 npm i -g openclaw
 
-# Onboard with API key
-openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
-
-# Copy our example config as a starting point
+# Copy the example config
 cp openclaw.example.json5 ~/.openclaw/openclaw.json
-# Edit to adjust paths to your local jarvis-tools directory
-
-# Copy agent persona
-cp -r jarvis-agent/* ~/.openclaw/workspace-jarvis/
+# Edit ~/.openclaw/openclaw.json:
+#   - Set your model provider (Anthropic API key or Bedrock)
+#   - Set the path to your local jarvis-tools directory
+#   - Set backendUrl and backendToken in plugins.entries
 
 # Start gateway
 openclaw gateway
@@ -154,7 +153,7 @@ alembic current
 
 1. Add the tool definition in `jarvis-tools/src/tools.ts`
 2. Add the corresponding backend endpoint in `backend/src/api/`
-3. Add the tool name to the `tools.allow` list in `openclaw.json`
+3. Add the tool name to the `plugins.allow` list in `openclaw.json`
 4. Type-check: `cd jarvis-tools && npx tsc --noEmit`
 
 ## Adding Event Ingestion for a New Source
@@ -174,8 +173,12 @@ See `backend/.env.example` for all configuration options. Key ones:
 |----------|---------|---------|
 | `JARVIS_DATABASE_URL` | Postgres connection | `postgresql+asyncpg://jarvis:jarvis@localhost:5432/jarvis` |
 | `JARVIS_REDIS_URL` | Redis connection | `redis://localhost:6379/0` |
-| `JARVIS_ANTHROPIC_API_KEY` | Claude API key | (required) |
-| `JARVIS_BACKEND_TOKEN` | Auth token for plugin → backend calls | (optional for dev) |
+| `JARVIS_ANTHROPIC_API_KEY` | Claude API key (direct mode) | (required if not using Bedrock) |
+| `JARVIS_ANTHROPIC_MODEL` | Model ID | `claude-sonnet-4-20250514` |
+| `JARVIS_USE_BEDROCK` | Use AWS Bedrock instead of direct API | `false` |
+| `JARVIS_BEDROCK_REGION` | AWS region for Bedrock | `ap-south-1` |
+| `JARVIS_VOYAGE_API_KEY` | Voyage AI key for embeddings | (required for semantic search) |
+| `JARVIS_BACKEND_TOKEN` | Auth token for plugin -> backend calls | (optional for dev) |
 | `JARVIS_OPENCLAW_GATEWAY_URL` | OpenClaw gateway URL | `http://localhost:18789` |
-| `JARVIS_OPENCLAW_HOOK_TOKEN` | Auth token for backend → OpenClaw calls | (optional for dev) |
+| `JARVIS_OPENCLAW_HOOK_TOKEN` | Auth token for backend -> OpenClaw calls | (optional for dev) |
 | `JARVIS_DEBUG` | Enable debug mode / auto-reload | `false` |

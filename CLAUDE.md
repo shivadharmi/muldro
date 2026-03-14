@@ -72,6 +72,8 @@ jarvis/
 │   └── openclaw.plugin.json
 ├── jarvis-agent/            # OpenClaw agent config
 │   └── SOUL.md              # Agent system prompt
+├── infra/                   # Terraform (AWS: EC2, VPC, Route53, IAM, SSM)
+│   └── scripts/             # deploy.sh, backup-postgres.sh
 ├── docs/                    # Architecture and design docs
 ├── docker-compose.yml       # Local dev (Postgres + Redis)
 └── openclaw.example.json5   # Example OpenClaw config
@@ -84,10 +86,12 @@ jarvis/
 | Backend | Python 3.13+ / FastAPI |
 | Database | PostgreSQL 17 (pgvector extension) |
 | Cache/Queue | Redis 7 (caching, rate limiting, locks, task streams) |
-| AI Model | Claude (Anthropic API) |
+| AI Model | Claude (Anthropic API or AWS Bedrock) |
 | Embeddings | Voyage AI (voyage-3-lite, 1536 dim) |
 | Gateway | OpenClaw (self-hosted) |
 | Plugin | TypeScript / Node.js |
+| Reverse Proxy | Caddy (automatic TLS, production) |
+| Infrastructure | AWS (Terraform: EC2, VPC, Route53, IAM, SSM) |
 | Migrations | Alembic |
 
 ## Coding Standards
@@ -190,20 +194,24 @@ alembic revision --autogenerate -m "description"
 alembic upgrade head
 ```
 
-### Running OpenClaw (when ready)
+### Running OpenClaw
 
 ```bash
-openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
-# Edit ~/.openclaw/openclaw.json to add jarvis-tools plugin
+npm i -g openclaw
+cp openclaw.example.json5 ~/.openclaw/openclaw.json
+# Edit config: set model provider, plugin path, tokens
 openclaw gateway
-# Open http://localhost:18789
+# Gateway runs on http://localhost:18789
 ```
 
 ## Current Phase
 
-All foundation milestones are complete. We are in **post-ecosystem-alignment**:
+All milestones through production deployment are complete:
 - Milestones 1-4 complete (foundation, intelligence, UX, hardening)
 - Ecosystem alignment complete (removed redundant connectors/notification/voice, wired OpenClaw integration, added Redis infrastructure)
+- Production deployment complete (AWS EC2, Bedrock, Caddy, Telegram, `jarvis.brrdcast.in`)
+
+Backend supports both direct Anthropic API (`JARVIS_USE_BEDROCK=false`) and AWS Bedrock (`JARVIS_USE_BEDROCK=true`, `JARVIS_BEDROCK_REGION`). See `backend/src/config/settings.py`.
 
 Next focus areas:
 1. End-to-end acceptance tests for PRD scenarios

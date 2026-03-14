@@ -28,11 +28,11 @@ def mock_db():
     return db
 
 
-@patch("src.services.world_model.anthropic.AsyncAnthropic")
+@patch("src.services.world_model.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_upsert_creates_new_entity(mock_anthropic_cls, settings, mock_db):
+async def test_upsert_creates_new_entity(mock_get_client, settings, mock_db):
     """Upserting a new entity should create it with an ent_ ID."""
-    mock_anthropic_cls.return_value = MagicMock()
+    mock_get_client.return_value = MagicMock()
 
     wm = WorldModel(settings=settings, db=mock_db)
     entity_id = await wm.upsert_entity(
@@ -48,9 +48,9 @@ async def test_upsert_creates_new_entity(mock_anthropic_cls, settings, mock_db):
     mock_db.commit.assert_called_once()
 
 
-@patch("src.services.world_model.anthropic.AsyncAnthropic")
+@patch("src.services.world_model.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_upsert_updates_existing_entity(mock_anthropic_cls, settings, mock_db):
+async def test_upsert_updates_existing_entity(mock_get_client, settings, mock_db):
     """Upserting an existing entity should merge attributes."""
     # Simulate existing entity found
     existing_entity = MagicMock()
@@ -64,7 +64,7 @@ async def test_upsert_updates_existing_entity(mock_anthropic_cls, settings, mock
     alias_result.scalars.return_value.all.return_value = []
     mock_db.execute = AsyncMock(side_effect=[result_mock, alias_result])
 
-    mock_anthropic_cls.return_value = MagicMock()
+    mock_get_client.return_value = MagicMock()
 
     wm = WorldModel(settings=settings, db=mock_db)
     entity_id = await wm.upsert_entity(
@@ -80,9 +80,9 @@ async def test_upsert_updates_existing_entity(mock_anthropic_cls, settings, mock
     assert existing_entity.attributes == {"role": "investor", "company": "BigFund"}
 
 
-@patch("src.services.world_model.anthropic.AsyncAnthropic")
+@patch("src.services.world_model.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_extract_from_event_calls_claude(mock_anthropic_cls, settings, mock_db):
+async def test_extract_from_event_calls_claude(mock_get_client, settings, mock_db):
     """extract_from_event should call Claude and create entities."""
     # Mock the event fetch
     mock_event = MagicMock()
@@ -108,7 +108,7 @@ async def test_extract_from_event_calls_claude(mock_anthropic_cls, settings, moc
     response = MagicMock()
     response.content = [MagicMock(text=json.dumps(extraction_result))]
     mock_client.messages.create = AsyncMock(return_value=response)
-    mock_anthropic_cls.return_value = mock_client
+    mock_get_client.return_value = mock_client
 
     # First execute returns the event, subsequent return no-entity-found for upsert
     event_result = MagicMock()

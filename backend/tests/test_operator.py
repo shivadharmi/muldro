@@ -51,9 +51,9 @@ def _make_mock_task(task_type="draft_email", input_data=None):
     return task
 
 
-@patch("src.services.operator.anthropic.AsyncAnthropic")
+@patch("src.services.operator.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_execute_plan_drafts_email(mock_anthropic_cls, settings, mock_db):
+async def test_execute_plan_drafts_email(mock_get_client, settings, mock_db):
     """Operator should execute a draft_email task via Claude."""
     draft = {
         "subject": "Re: Investor Follow-up",
@@ -65,7 +65,7 @@ async def test_execute_plan_drafts_email(mock_anthropic_cls, settings, mock_db):
     response = MagicMock()
     response.content = [MagicMock(text=json.dumps(draft))]
     mock_client.messages.create = AsyncMock(return_value=response)
-    mock_anthropic_cls.return_value = mock_client
+    mock_get_client.return_value = mock_client
 
     execution = _make_mock_execution()
     task = _make_mock_task()
@@ -90,13 +90,13 @@ async def test_execute_plan_drafts_email(mock_anthropic_cls, settings, mock_db):
     mock_client.messages.create.assert_called_once()
 
 
-@patch("src.services.operator.anthropic.AsyncAnthropic")
+@patch("src.services.operator.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_execute_plan_handles_failure(mock_anthropic_cls, settings, mock_db):
+async def test_execute_plan_handles_failure(mock_get_client, settings, mock_db):
     """Operator should mark execution as failed on task error."""
     mock_client = MagicMock()
     mock_client.messages.create = AsyncMock(side_effect=RuntimeError("Claude unavailable"))
-    mock_anthropic_cls.return_value = mock_client
+    mock_get_client.return_value = mock_client
 
     execution = _make_mock_execution()
     task = _make_mock_task()
@@ -119,11 +119,11 @@ async def test_execute_plan_handles_failure(mock_anthropic_cls, settings, mock_d
     assert task.status == "failed"
 
 
-@patch("src.services.operator.anthropic.AsyncAnthropic")
+@patch("src.services.operator.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_execute_stub_task(mock_anthropic_cls, settings, mock_db):
+async def test_execute_stub_task(mock_get_client, settings, mock_db):
     """Stub tasks (fetch_info, acknowledge) should complete without Claude."""
-    mock_anthropic_cls.return_value = MagicMock()
+    mock_get_client.return_value = MagicMock()
 
     execution = _make_mock_execution()
     task = _make_mock_task(task_type="fetch_info")

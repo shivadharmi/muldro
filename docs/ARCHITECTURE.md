@@ -5,12 +5,12 @@
 Jarvis is a Personal AI Operating System. It runs a continuous intelligence loop:
 
 ```
-Perceive → Understand → Update Model → Plan → Act → Communicate → repeat
+Perceive -> Understand -> Update Model -> Plan -> Act -> Communicate -> repeat
 ```
 
 The system is split into two halves:
 
-- **OpenClaw Gateway + Agent** — the user-facing interaction runtime and execution surface (chat, voice, Canvas, scheduling, data access via gog/gh/message)
+- **OpenClaw Gateway + Agent** — the user-facing interaction runtime and execution surface (chat, Telegram, Canvas, scheduling, data access via gog/gh/message)
 - **Jarvis Backend** — the intelligence engine (event processing, world model, memory, planning, governance, execution tracking, briefings, audit)
 
 ## Component Map
@@ -18,7 +18,7 @@ The system is split into two halves:
 ```
 +-----------------------------------------------------+
 |               User Surfaces                          |
-|  WhatsApp . Slack . Web UI . Voice . Canvas . CLI    |
+|  Telegram . Web UI . Canvas . CLI                    |
 +------------------------+----------------------------+
                          |
 +------------------------v----------------------------+
@@ -66,16 +66,16 @@ The system is split into two halves:
 
 ```
 1. OpenClaw agent reads new emails via gog gmail
-2. Agent calls jarvis_ingest_event → POST /v1/events/ingest
+2. Agent calls jarvis_ingest_event -> POST /v1/events/ingest
 3. Event processor normalizes, scores importance/urgency/confidence
 4. Callbacks fire:
    a. World model identifies sender entity and project linkage
    b. Memory service retrieves relevant preferences and relationship context
    c. Planner produces structured task graph: draft_reply + request_approval
-5. Governor evaluates policy → marks approval_required
+5. Governor evaluates policy -> marks approval_required
 6. Governor wakes OpenClaw agent via /hooks/wake
 7. Agent presents approval prompt to user (jarvis_approval_card)
-8. User approves → Operator delegates email send to agent via /hooks/agent
+8. User approves -> Operator delegates email send to agent via /hooks/agent
 9. Agent sends email via gog gmail send
 10. Operator records result, audit trail updated
 ```
@@ -118,11 +118,11 @@ The system is split into two halves:
 ## Execution State Machine
 
 ```
-detected → planned → policy_checked → awaiting_approval → approved → executing → completed
-                                    → auto_execute     ─────────────────────────→ completed
-                                    → blocked          ─────────────────────────→ cancelled
-                                                        → rejected ────────────→ cancelled
-                                                                                → failed
+detected -> planned -> policy_checked -> awaiting_approval -> approved -> executing -> completed
+                                      -> auto_execute     --------------------------> completed
+                                      -> blocked          --------------------------> cancelled
+                                                           -> rejected --------------> cancelled
+                                                                                    -> failed
 ```
 
 ## Infrastructure
@@ -133,11 +133,13 @@ detected → planned → policy_checked → awaiting_approval → approved → e
 | Redis 7 | Caching (briefings, entities), rate limiting, distributed locks, task streams |
 | CallbackWorker | Background processor for async event callbacks (entity/memory/planning) |
 | OpenClawClient | HTTP bridge to OpenClaw gateway (/hooks/wake, /hooks/agent) |
+| AWS Bedrock | Alternative model provider (Claude via AWS IAM, no API key needed) |
+| Caddy | Reverse proxy with automatic TLS (production) |
 
 ## Security Model
 
 - **v1**: Single trusted user boundary per gateway
-- **Trust layers**: OpenClaw gateway trusted → Jarvis backend trusted → External APIs scoped
+- **Trust layers**: OpenClaw gateway trusted -> Jarvis backend trusted -> External APIs scoped
 - **Approvals**: All external writes gated (no auto-send in v1)
 - **Audit**: Full trail with event_id, plan_id, execution_id, approval_id correlation
 - **Rate limiting**: Redis-backed sliding window (with in-memory fallback)
