@@ -24,7 +24,8 @@ class Settings(BaseSettings):
 
     # OpenClaw integration
     openclaw_gateway_url: str = "http://localhost:18789"
-    openclaw_hook_token: str = ""
+    openclaw_hook_token: str = ""  # Legacy hook token (unused — kept for compat)
+    openclaw_gateway_token: str = ""  # Gateway auth token for /v1/chat/completions
 
     # Embeddings (Voyage AI)
     voyage_api_key: str = ""

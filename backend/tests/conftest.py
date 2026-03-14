@@ -46,6 +46,7 @@ def make_mock_settings(**overrides) -> MagicMock:
         cors_allowed_origins="",
         openclaw_gateway_url="http://localhost:18789",
         openclaw_hook_token="test-hook-token",
+        openclaw_gateway_token="test-gateway-token",
     )
     defaults.update(overrides)
     for k, v in defaults.items():

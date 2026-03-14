@@ -1,7 +1,9 @@
-"""OpenClaw client — two-way bridge to the OpenClaw gateway.
+"""OpenClaw client — communicates with the OpenClaw gateway via its
+OpenAI-compatible HTTP API (/v1/chat/completions).
 
 Allows the Jarvis backend to proactively communicate with the OpenClaw agent:
 - Wake the agent with system messages (briefings ready, approvals needed)
+- Run agent turns for scheduled tasks (observations, meeting prep, etc.)
 - Delegate task execution to the agent (which has gog, gh, message, etc.)
 """
 
@@ -16,11 +18,11 @@ logger = logging.getLogger(__name__)
 
 
 class OpenClawClient:
-    """Two-way bridge to OpenClaw gateway."""
+    """Communicates with OpenClaw gateway via /v1/chat/completions."""
 
     def __init__(self, settings: Settings):
         self._base_url = settings.openclaw_gateway_url
-        self._token = settings.openclaw_hook_token
+        self._token = settings.openclaw_gateway_token
 
     def _headers(self) -> dict[str, str]:
         headers: dict[str, str] = {"Content-Type": "application/json"}
@@ -33,53 +35,48 @@ class OpenClawClient:
         base_delay=1.0,
         retryable_exceptions=(httpx.ConnectError, httpx.TimeoutException),
     )
-    async def wake_agent(self, message: str, session_key: str = "hook:jarvis") -> dict:
-        """POST /hooks/wake — enqueue system event to main session.
-
-        Wakes the agent with a message (e.g. "Daily briefing ready",
-        "Approval needed: draft reply to investor").
-        """
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"{self._base_url}/hooks/wake",
-                headers=self._headers(),
-                json={"message": message, "sessionKey": session_key},
-            )
-            response.raise_for_status()
-            result = response.json()
-            logger.info("Agent woken: %s", message[:100])
-            return result
-
-    @retry_async(
-        max_retries=2,
-        base_delay=1.0,
-        retryable_exceptions=(httpx.ConnectError, httpx.TimeoutException),
-    )
     async def run_agent_turn(
         self,
         message: str,
-        agent_id: str = "jarvis",
-        deliver: str | None = None,
+        agent_id: str = "main",
+        timeout: float = 120.0,
     ) -> dict:
-        """POST /hooks/agent — run isolated agent turn.
+        """Run an agent turn via the OpenAI-compatible chat completions API.
 
-        Used to delegate execution tasks (draft email via gog, send message, etc.)
-        The agent runs in an isolated session and returns the result.
+        Sends a message to the OpenClaw agent and waits for the full response.
+        Used for scheduled tasks, delegated execution, and system notifications.
         """
-        payload: dict = {"message": message, "agentId": agent_id}
-        if deliver:
-            payload["deliver"] = deliver
+        payload = {
+            "model": f"openclaw:{agent_id}",
+            "messages": [{"role": "user", "content": message}],
+            "stream": False,
+        }
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
-                f"{self._base_url}/hooks/agent",
+                f"{self._base_url}/v1/chat/completions",
                 headers=self._headers(),
                 json=payload,
             )
             response.raise_for_status()
             result = response.json()
-            logger.info("Agent turn completed for: %s", message[:100])
+            content = ""
+            if result.get("choices"):
+                content = result["choices"][0].get("message", {}).get("content", "")
+            logger.info(
+                "Agent turn completed (%d chars) for: %s",
+                len(content),
+                message[:100],
+            )
             return result
+
+    async def wake_agent(self, message: str) -> dict:
+        """Send a system message to the agent.
+
+        Uses the chat completions API with a system-prefixed message.
+        The agent's SOUL.md instructs it to deliver important items to the user.
+        """
+        return await self.run_agent_turn(message)
 
     async def delegate_task(self, task_type: str, instructions: str, context: dict) -> dict:
         """Delegate a task to the OpenClaw agent for execution.
