@@ -77,12 +77,60 @@ class CallbackWorker:
 
     async def _handle_entity_extraction(self, event_id: str, user_id: str) -> None:
         """Extract entities from an event into the world model."""
-        logger.info("Entity extraction for event %s (stub — needs DB session)", event_id)
+        from src.models.database import get_session_factory
+        from src.services.world_model import WorldModel
+
+        factory = get_session_factory()
+        async with factory() as db:
+            world_model = WorldModel(settings=self._settings, db=db)
+            entity_ids = await world_model.extract_from_event(event_id, user_id)
+            await db.commit()
+            logger.info("Entity extraction for event %s: %d entities", event_id, len(entity_ids))
 
     async def _handle_memory_extraction(self, event_id: str, user_id: str) -> None:
         """Extract memories from an event summary."""
-        logger.info("Memory extraction for event %s (stub — needs DB session)", event_id)
+        from sqlalchemy import select
+
+        from src.models.database import get_session_factory
+        from src.models.events import NormalizedEvent
+        from src.services.memory_service import MemoryService
+
+        factory = get_session_factory()
+        async with factory() as db:
+            result = await db.execute(
+                select(NormalizedEvent).where(NormalizedEvent.event_id == event_id)
+            )
+            event = result.scalar_one_or_none()
+            if not event:
+                logger.warning("Event not found for memory extraction: %s", event_id)
+                return
+
+            source_text = f"Title: {event.title or ''}\nSummary: {event.summary or ''}"
+            memory_service = MemoryService(settings=self._settings, db=db)
+            memory_ids = await memory_service.extract_and_store(
+                user_id=user_id,
+                source_text=source_text,
+                source_event_ids=[event_id],
+            )
+            await db.commit()
+            logger.info("Memory extraction for event %s: %d memories", event_id, len(memory_ids))
 
     async def _handle_proactive_planning(self, event_id: str, user_id: str) -> None:
         """Auto-trigger planning for high-importance events."""
-        logger.info("Proactive planning for event %s (stub — needs DB session)", event_id)
+        from src.models.database import get_session_factory
+        from src.services.planner import Planner
+
+        factory = get_session_factory()
+        async with factory() as db:
+            planner = Planner(settings=self._settings, db=db)
+            plan = await planner.plan_for_event(event_id, user_id)
+            await db.commit()
+            if plan:
+                logger.info(
+                    "Proactive plan created for event %s: %s (decision=%s)",
+                    event_id,
+                    plan.plan_id,
+                    plan.decision,
+                )
+            else:
+                logger.info("No plan needed for event %s", event_id)

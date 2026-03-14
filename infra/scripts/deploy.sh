@@ -20,6 +20,7 @@ sudo -u ubuntu git pull origin "$BRANCH"
 echo "Updating backend..."
 cd "$INSTALL_DIR/backend"
 sudo -u ubuntu bash -c "
+  export PATH=\"/home/ubuntu/.local/bin:\$PATH\"
   source .venv/bin/activate
   uv pip install -e '.[dev]'
   alembic upgrade head

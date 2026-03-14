@@ -71,9 +71,7 @@ async def test_extract_stores_with_embedding(mock_get_client, mock_embed_cls, se
 @patch("src.services.memory_service.EmbeddingService")
 @patch("src.services.memory_service.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_semantic_retrieve_with_embedding(
-    mock_get_client, mock_embed_cls, settings, mock_db
-):
+async def test_semantic_retrieve_with_embedding(mock_get_client, mock_embed_cls, settings, mock_db):
     """Should use semantic search when query embedding succeeds."""
     mock_get_client.return_value = MagicMock()
 

@@ -204,20 +204,37 @@ openclaw gateway
 # Gateway runs on http://localhost:18789
 ```
 
+## Design Principle: Don't Build What OpenClaw Already Does
+
+OpenClaw provides: channels, agent runtime, sessions, workspace memory, multi-agent routing,
+cron scheduling, OAuth/auth (gog/gh), voice, notifications, plugin ecosystem, mobile access.
+
+Jarvis builds **only the intelligence layer**: event scoring, world model, semantic memory,
+structured planning, governance, execution orchestration, briefings, and audit.
+
+Do NOT build: connectors, OAuth, channel adapters, notification services, voice, mobile apps,
+multi-agent routing logic, or session management. These are OpenClaw's domain.
+
 ## Current Phase
 
-All milestones through production deployment are complete:
-- Milestones 1-4 complete (foundation, intelligence, UX, hardening)
-- Ecosystem alignment complete (removed redundant connectors/notification/voice, wired OpenClaw integration, added Redis infrastructure)
-- Production deployment complete (AWS EC2, Bedrock, Caddy, Telegram, `jarvis.brrdcast.in`)
+Phase 0 (Foundation) complete — Milestones 1-6 done:
+- Core services: EventProcessor, WorldModel, MemoryService, Planner, Governor, Operator, Presenter
+- Infrastructure: Postgres+pgvector, Redis, Bedrock, OpenClaw integration
+- Production: AWS EC2, Caddy, Telegram, `jarvis.brrdcast.in`
+- 109 tests passing, all lint clean
 
 Backend supports both direct Anthropic API (`JARVIS_USE_BEDROCK=false`) and AWS Bedrock (`JARVIS_USE_BEDROCK=true`, `JARVIS_BEDROCK_REGION`). See `backend/src/config/settings.py`.
 
+**Now entering Phase 1: Make It Real** — wire the observation loop, prove end-to-end scenarios.
+
 Next focus areas:
-1. End-to-end acceptance tests for PRD scenarios
-2. Policy modes (full_auto, suggest_only, approval_required, critical_only, lockdown)
-3. Real OAuth integration for data sources
-4. Monitoring SLOs and alerting
+1. Scheduled observation loop (agent reads data on cron, ingests to backend)
+2. End-to-end acceptance tests for real founder scenarios
+3. Cross-source intelligence (event correlation, thread tracking, deadline detection)
+4. Policy modes (full_auto, suggest_only, approval_required, critical_only, lockdown)
+5. Monitoring SLOs and alerting
+
+See `docs/ROADMAP.md` for the full phased roadmap.
 
 ## Plugin Tools (jarvis-tools)
 

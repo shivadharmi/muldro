@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     retry_base_delay: float = 1.0  # seconds
     retry_max_delay: float = 30.0  # seconds
 
+    # Observation stale thresholds
+    observation_stale_gmail_minutes: int = 30
+    observation_stale_calendar_minutes: int = 180
+    observation_stale_github_minutes: int = 60
+
     # Hardening
     plan_ttl_hours: int = 72  # Plans older than this are invalidated
     approval_ttl_hours: int = 24  # Approvals expire after this

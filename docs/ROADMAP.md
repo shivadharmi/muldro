@@ -1,123 +1,205 @@
 # Jarvis Roadmap
 
-## Milestone 1: Foundation (Complete)
+## Design Principle: Don't Build What OpenClaw Already Does
 
-**Goal**: Working daily briefing from Gmail + Calendar, with approval-gated email drafts.
+OpenClaw provides: channels, agent runtime, sessions, workspace memory, multi-agent routing,
+cron scheduling, OAuth/auth (gog/gh), voice, notifications, plugin ecosystem, mobile access.
 
-### Sprint 1 — Infrastructure + Wiring
+Jarvis builds **only the intelligence layer** that OpenClaw cannot provide:
+event scoring, world model, semantic memory, structured planning, governance,
+execution orchestration, briefings, and audit.
+
+---
+
+## Phase 0: Foundation (Complete)
+
+### Milestone 1: Infrastructure + First Flows
 - [x] Project skeleton (backend + plugin)
-- [x] Database models (SQLAlchemy)
-- [x] API endpoint stubs
-- [x] OpenClaw plugin with tools + routes
-- [x] Docker Compose (Postgres + Redis)
-- [x] Git init + CI pipeline
-- [x] Alembic initial migration
-- [x] Wire planner service to command endpoint
+- [x] Database models, Alembic migrations, Docker Compose
+- [x] Event processor (normalize, score, dedupe)
+- [x] Entity extraction (Claude-powered, alias resolution)
+- [x] Planner v0 (context-enriched structured decisions)
+- [x] Daily briefing (Presenter, cached, Claude-generated)
+- [x] Memory extraction + approval flow + audit logging
+- [x] Meeting prep workflow
+- [x] OpenClaw plugin: 11 tools (command, brief, approve, tasks, search, meeting_prep, dashboard, approval_card, task_detail, ingest_event, heartbeat)
 
-### Sprint 2 — First Useful Flow
-- [x] Gmail connector (test payload mode + push notification structure)
-- [x] Event processor (normalize, score via Claude, dedupe by idempotency key)
-- [x] Entity extraction (Claude-powered, upsert with alias resolution)
-- [x] Planner v0 enrichment (event/entity/memory context injection)
-- [x] Basic daily briefing (Presenter service, cached, Claude-generated)
+### Milestone 2: Intelligence Layer
+- [x] Semantic memory search (pgvector + Voyage AI embeddings)
+- [x] Preference extraction (Claude-powered)
+- [x] Proactive event-driven planning (auto-plan on ingestion)
+- [x] Context-aware importance scoring (entities + preferences)
+- [x] Heartbeat cron (memory expiry, plan escalation)
 
-### Sprint 3 — Memory + Approvals
-- [x] Memory extraction service (Claude-powered, text-based retrieval, dedup)
-- [x] Approval schema and flow (list/approve/reject with execution state)
-- [x] Operator: draft email (Claude-powered, task graph execution)
-- [x] Governor: policy rules v0 (action type + risk-based policy evaluation)
-- [x] Audit logging (full correlation IDs, immutable trail)
+### Milestone 3: User Experience
+- [x] Canvas UI (dashboard, approval cards, task detail)
+- [x] Slack connector + notifications (later removed — OpenClaw handles)
+- [x] Voice + WhatsApp stubs (later removed — OpenClaw handles)
 
-### Sprint 4 — Calendar + Meeting Prep
-- [x] Calendar connector (test payload mode + push notification structure)
-- [x] Meeting entity and relationship support (via WorldModel extraction)
-- [x] Meeting prep workflow (Presenter.generate_meeting_prep, Claude-powered)
-- [x] Improved briefing with calendar data (upcoming meetings section)
+### Milestone 4: Hardening
+- [x] Retry + idempotency, execution locks, dead-letter queues
+- [x] Observability (tracing, correlation IDs, metrics)
+- [x] Security (rate limiting, request size limits, CORS)
 
-## Milestone 2: Intelligence Layer (Complete)
+### Milestone 5: Ecosystem Alignment
+- [x] Removed connectors, notification, voice (OpenClaw owns these)
+- [x] Generic `/v1/events/ingest` + agent-driven ingestion model
+- [x] OpenClawClient (wake, delegate, run_agent_turn)
+- [x] Redis infrastructure (cache, locks, streams, rate limiting)
 
-- [x] Semantic memory search (pgvector embeddings with Voyage AI, cosine similarity)
-- [x] Personalization: preference extraction (Claude-powered, category-scoped)
-- [x] Proactive event-driven planning (auto-plan callback on event ingestion)
-- [x] Importance scoring model tuning (context-aware: entities + preferences)
-- [x] Heartbeat cron for priority re-evaluation (memory expiry + plan escalation)
+### Milestone 6: Production Deployment
+- [x] AWS (Terraform), Bedrock, Caddy, systemd, Telegram
+- [x] Deploy script, daily backups, security hardening
+- [x] Live on `jarvis.brrdcast.in`
 
-## Milestone 3: User Experience (Complete)
+---
 
-### Sprint 5 — Canvas UI
-- [x] Canvas dashboard endpoint (unified view: briefing + approvals + tasks + meetings)
-- [x] Approval detail endpoint (execution context, plan goal, artifact refs)
-- [x] Task detail endpoint (execution steps, progress, run results)
-- [x] Plugin: jarvis_dashboard tool (Canvas-rendered dashboard)
-- [x] Plugin: jarvis_approval_card tool (rich approval detail)
-- [x] Plugin: jarvis_task_detail tool (task progress view)
+## Phase 1: Make It Real (Next)
 
-### Sprint 6 — Slack + Notifications
-- [x] Slack connector (Events API callback, message normalization, bot filtering)
-- [x] Notification service (outbound Slack via webhooks)
-- [x] Plugin: jarvis_notify tool
+**Goal**: The full Perceive → Understand → Plan → Act → Communicate loop runs continuously with real data. Not just services that exist — a system that actually works end-to-end.
 
-### Sprint 7 — Voice + WhatsApp
-- [x] Voice service (TTS-friendly conversion)
-- [x] WhatsApp connector stub (Business API webhook format)
-- [x] Plugin: jarvis_voice tool
+### Milestone 7: Observation Loop
 
-## Milestone 4: Hardening (Complete)
+The agent needs to periodically read data and feed it to Jarvis. This is the "always watching" behavior.
 
-- [x] Retry and idempotency (exponential backoff decorator, SELECT FOR UPDATE on approvals)
-- [x] Stale plan invalidation (TTL-based plan expiry, approval expiry enforcement in heartbeat)
-- [x] Execution locks (PostgreSQL advisory locks, row-level locking on approvals)
-- [x] Dead-letter queues (DLQ model + service, failed callback capture, retry tracking)
-- [x] Observability dashboards (request tracing middleware, correlation IDs, metrics endpoint)
-- [x] Security audit (rate limiting middleware, request size limits, CORS configuration)
+- [ ] **Scheduled observation skill**: OpenClaw skill/cron that triggers agent to read Gmail, Calendar, GitHub and ingest via `jarvis_ingest_event`
+- [ ] **Observation cadence config**: Define per-source polling intervals (email: 5min, calendar: 15min, github: 10min)
+- [ ] **Smart batching**: Agent reads multiple items per observation, batches ingestion calls
+- [ ] **Observation health**: Backend tracks last-seen timestamps per source; heartbeat flags stale sources
+- [ ] **First real daily brief**: Morning cron → agent observes → backend generates brief → agent delivers via Telegram
 
-## Milestone 5: Ecosystem Alignment (Complete)
+### Milestone 8: End-to-End Acceptance
 
-Removed redundant plumbing that overlaps with OpenClaw's built-in capabilities.
+Prove the full loop works for real founder scenarios.
 
-### Cleanup
-- [x] Remove source-specific connectors (Gmail, Calendar, Slack, WhatsApp, GitHub) — agent reads via gog/gh
-- [x] Remove NotificationService — agent sends via message tool
-- [x] Remove VoiceService — agent uses OpenClaw TTS
-- [x] Remove source-specific webhook endpoints and schemas
-- [x] Add generic `/v1/events/ingest` endpoint for agent-driven ingestion
-- [x] Add `jarvis_ingest_event` and `jarvis_heartbeat` plugin tools
+- [ ] **Scenario: Important email** — Email arrives → scored high → plan: draft reply → approval → agent sends
+- [ ] **Scenario: Meeting prep** — Calendar event approaching → agent observes → backend generates prep card → delivered proactively
+- [ ] **Scenario: GitHub PR** — PR opened on key repo → scored → added to briefing → user informed
+- [ ] **Scenario: Follow-up needed** — Email sent 3 days ago, no reply → detected → added to brief as "follow up"
+- [ ] **Scenario: Conflicting meeting** — Double-booked calendar → detected → flagged in brief with recommendation
+- [ ] **Integration test suite**: Automated tests for each scenario with mocked OpenClaw agent
 
-### OpenClaw Integration
-- [x] OpenClawClient service (wake_agent, run_agent_turn, delegate_task)
-- [x] Governor wakes agent on approval creation
-- [x] Presenter wakes agent on briefing generation
-- [x] Operator delegates external actions to OpenClaw agent (send_email, create_event, post_message)
-- [x] Operator falls back to Claude for drafting/summarization when no agent available
+---
 
-### Redis Infrastructure
-- [x] RedisCache (briefings, entity lookups, dedup window)
-- [x] Redis-backed rate limiting (with in-memory fallback)
-- [x] Redis distributed locks (alongside existing PG advisory locks)
-- [x] Redis Streams task queue for async callback processing
-- [x] CallbackWorker background processor
+## Phase 2: Make It Smart
 
-## Milestone 6: Production Deployment (Complete)
+**Goal**: Jarvis doesn't just process events — it connects dots, anticipates needs, and gets smarter over time. This is where the "Iron Man's Jarvis" feeling starts.
 
-- [x] AWS infrastructure (Terraform: EC2, VPC, Route53, IAM, SSM Parameter Store)
-- [x] Bedrock integration (backend `AsyncAnthropicBedrock` + OpenClaw `bedrock-converse-stream`)
-- [x] Caddy reverse proxy with automatic TLS
-- [x] Systemd services (jarvis-backend, openclaw, caddy)
-- [x] User-data bootstrap script (9-phase automated provisioning)
-- [x] Deploy script for code updates (`infra/scripts/deploy.sh`)
-- [x] Daily Postgres backup with 7-day retention
-- [x] Security hardening (UFW, fail2ban, SSH hardening, kernel sysctl)
-- [x] Telegram channel integration
-- [x] Production deployment on `jarvis.brrdcast.in`
+### Milestone 9: Cross-Source Intelligence
 
-## Next Up
+- [ ] **Event correlation**: Email from person X + meeting with X tomorrow → auto-generate meeting context
+- [ ] **Thread tracking**: Track email/Slack threads across time, detect stale conversations needing follow-up
+- [ ] **Deadline detection**: Extract deadlines from events, track countdown, escalate in briefs
+- [ ] **Project pulse**: Aggregate events per project → "Project X: 3 emails, 2 PRs, 1 meeting this week — trending hot"
+- [ ] **People pulse**: Track interaction frequency per entity → "Haven't heard from investor Y in 2 weeks"
 
-- [ ] End-to-end acceptance tests (PRD scenarios)
-- [ ] Policy modes (full_auto, suggest_only, approval_required, critical_only, lockdown)
-- [ ] Real OAuth integration for data sources
-- [ ] Monitoring SLOs (event latency < 2s, briefing < 5s, zero missed approvals, < 1% error rate)
-- [ ] Multi-connector expansion (Notion, Drive)
-- [ ] Dynamic API generation for task data
-- [ ] Multi-agent routing (home/work personas)
-- [ ] Mobile companion app
-- [ ] Enterprise multi-user support
+### Milestone 10: Learning from Behavior
+
+- [ ] **Approval pattern learning**: Track what user approves/rejects → adjust importance scoring weights
+- [ ] **Brief feedback loop**: Track which brief items user acts on → prioritize similar items higher
+- [ ] **Preference refinement**: Auto-extract preferences from approval patterns ("user always approves calendar invites from team")
+- [ ] **Scoring model v2**: Learned weights + rule-based signals → better importance/urgency scores
+- [ ] **Memory consolidation**: Periodic merging of related memories, pruning low-confidence ones
+
+### Milestone 11: Proactive Intelligence
+
+- [ ] **Proactive nudges**: Backend detects actionable patterns → wakes agent with suggestions (not just briefs)
+- [ ] **Preparation triggers**: Upcoming meeting in 30min with entity X → auto-generate and deliver prep
+- [ ] **Follow-up reminders**: Sent email 3 days ago, no reply → proactive nudge in brief
+- [ ] **Anomaly detection**: Unusual patterns (10x normal email volume, missed recurring meeting) → flag
+- [ ] **Weekly digest**: Aggregate weekly patterns, highlight trends, suggest focus areas
+
+---
+
+## Phase 3: Make It Autonomous
+
+**Goal**: Graduated trust. Jarvis earns autonomy by proving reliability. Move from "approve everything" to "Jarvis handles routine, flags exceptions."
+
+### Milestone 12: Policy Modes
+
+- [ ] **Configurable policy modes**: `lockdown` (approve all) → `approval_required` (default) → `suggest_only` → `full_auto`
+- [ ] **Per-action-type policies**: Different trust levels for email send vs calendar create vs GitHub comment
+- [ ] **Risk-based escalation**: Low-risk actions auto-execute, high-risk always require approval
+- [ ] **Time-based policies**: Auto-approve during work hours, lockdown at night
+- [ ] **Policy dashboard**: Show current mode, recent auto-executions, approval history
+
+### Milestone 13: Trust Calibration
+
+- [ ] **Trust score per action type**: Built from approval history (approved 50/50 email sends → trust = 1.0)
+- [ ] **Auto-approve threshold**: Actions above trust threshold + below risk threshold → auto-execute
+- [ ] **Escalation chains**: If agent delegation fails → retry → DLQ → escalate to user
+- [ ] **Rollback capability**: For auto-executed actions, track what was done for potential undo
+- [ ] **Trust reset**: User can reset trust scores, return to lockdown mode
+
+---
+
+## Phase 4: Make It Personal
+
+**Goal**: Jarvis knows you deeply. Not just your calendar — your thinking patterns, communication style, relationship dynamics, and working rhythms.
+
+### Milestone 14: Deep Personalization
+
+- [ ] **Communication style profiles**: Learn user's writing style per context (formal for investors, casual for team)
+- [ ] **Relationship graph enrichment**: Track relationship strength, last interaction, sentiment trends
+- [ ] **Working rhythm model**: Learn when user is most productive, when they prefer meetings, break patterns
+- [ ] **Context-aware drafting**: Drafts match user's style for the specific recipient and context
+- [ ] **Priority model personalization**: User-specific importance weights (fundraising > hiring > ops)
+
+### Milestone 15: Multi-Agent Specialization (via OpenClaw)
+
+Leverage OpenClaw's native multi-agent routing — don't build custom routing.
+
+- [ ] **Work agent**: Optimized for professional context (email, meetings, PRs, tasks)
+- [ ] **Research agent**: Deep analysis mode (longer context, web search, document synthesis)
+- [ ] **Quick agent**: Fast responses for routine queries (schedule check, status, approvals)
+- [ ] **Agent-specific SOUL.md files**: Each agent gets different system prompt + tool access
+- [ ] **Shared backend**: All agents talk to same Jarvis backend (world model, memory, planner)
+
+---
+
+## Phase 5: Scale & Reliability
+
+### Milestone 16: Production Hardening
+
+- [ ] **Monitoring SLOs**: Event latency < 2s, briefing < 5s, zero missed approvals, < 1% error rate
+- [ ] **Alerting**: PagerDuty/Telegram alerts on SLO breaches
+- [ ] **Load testing**: Simulate 1000 events/day, 50 plans/day, 10 briefs/day
+- [ ] **Graceful degradation**: If Claude/Bedrock is down → queue events, serve cached briefs
+- [ ] **Cost tracking**: Per-user Claude token usage, embedding costs, infrastructure costs
+
+### Milestone 17: Multi-User (Future)
+
+- [ ] **User isolation**: Per-user data partitioning, separate API keys
+- [ ] **Team awareness**: Shared entity graph with private memories
+- [ ] **Admin dashboard**: Usage, costs, audit trail per user
+- [ ] **Onboarding flow**: New user setup, data source connection, preference calibration
+
+---
+
+## Dropped Items (OpenClaw Handles These)
+
+These were originally planned but are **not needed** — OpenClaw provides them natively:
+
+| Item | Why Dropped | OpenClaw Alternative |
+|------|-------------|---------------------|
+| OAuth integration for data sources | OpenClaw agent handles auth | `gog` (Google), `gh` (GitHub) tools |
+| Multi-connector expansion (Notion, Drive) | OpenClaw plugin ecosystem | Community/custom plugins |
+| Mobile companion app | Channels provide mobile access | Telegram, WhatsApp channels |
+| Custom multi-agent routing | OpenClaw has native routing | `agentId` + `binding` config |
+| Notification service | OpenClaw agent sends messages | `message` tool |
+| Voice features | OpenClaw has native TTS/STT | Built-in voice support |
+| Channel adapters | OpenClaw's core feature | Built-in + plugin channels |
+
+---
+
+## Success Metrics
+
+| Metric | Target | Phase |
+|--------|--------|-------|
+| Daily brief delivered by 9am | 100% | Phase 1 |
+| Event-to-brief latency | < 5 min | Phase 1 |
+| Important email detected and planned | > 90% recall | Phase 2 |
+| Meeting prep delivered 30min before | > 95% | Phase 2 |
+| Auto-approved actions (after trust calibration) | > 60% of routine | Phase 3 |
+| User acts on brief recommendation | > 40% | Phase 4 |
+| Briefing satisfaction (user feedback) | > 4/5 | Phase 4 |
