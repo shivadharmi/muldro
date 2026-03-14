@@ -42,6 +42,27 @@ resource "aws_iam_role_policy" "ssm_parameters" {
   })
 }
 
+# Bedrock model invocation access
+resource "aws_iam_role_policy" "bedrock" {
+  name = "${var.project_name}-bedrock"
+  role = aws_iam_role.ec2.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "bedrock:InvokeModel",
+          "bedrock:InvokeModelWithResponseStream",
+          "bedrock:ListFoundationModels"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
 # SSM Session Manager access
 resource "aws_iam_role_policy_attachment" "ssm_managed" {
   role       = aws_iam_role.ec2.name

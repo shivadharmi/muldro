@@ -16,12 +16,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-import anthropic
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
-from src.config.settings import Settings
+from src.config.settings import Settings, get_anthropic_client
 from src.models.events import NormalizedEvent
 
 if TYPE_CHECKING:
@@ -107,7 +106,7 @@ class EventProcessor:
     ):
         self._settings = settings
         self._db = db
-        self._client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        self._client = get_anthropic_client(settings)
         # Optional async callbacks: called with (event_id, user_id) after processing
         self._on_event_processed = on_event_processed or []
         # Optional context providers for enriched scoring

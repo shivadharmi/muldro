@@ -14,12 +14,11 @@ Responsibilities:
 import json
 import logging
 
-import anthropic
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
-from src.config.settings import Settings
+from src.config.settings import Settings, get_anthropic_client
 from src.models.entities import Entity, EntityAlias, EntityRelationship
 from src.models.events import NormalizedEvent
 
@@ -63,7 +62,7 @@ class WorldModel:
     def __init__(self, settings: Settings, db: AsyncSession):
         self._settings = settings
         self._db = db
-        self._client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        self._client = get_anthropic_client(settings)
 
     async def extract_from_event(self, event_id: str, user_id: str) -> list[str]:
         """Extract entities from a normalized event. Returns list of entity_ids."""

@@ -24,7 +24,7 @@ type HttpResponse = {
 type PluginApi = {
   registerHttpRoute: (def: {
     path: string;
-    auth: "plugin" | "gateway" | "none";
+    auth: "plugin" | "gateway";
     match: "exact" | "prefix";
     handler: (req: HttpRequest, res: HttpResponse) => Promise<boolean>;
   }) => void;
@@ -34,7 +34,7 @@ export function registerRoutes(api: PluginApi, config: BackendConfig) {
   // Health check — verifies backend is reachable
   api.registerHttpRoute({
     path: "/jarvis/health",
-    auth: "none",
+    auth: "plugin",
     match: "exact",
     handler: async (_req: HttpRequest, res: HttpResponse) => {
       const result = await callBackend(config, "/v1/health", "GET");

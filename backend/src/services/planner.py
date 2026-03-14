@@ -19,12 +19,11 @@ import json
 import logging
 from typing import TYPE_CHECKING
 
-import anthropic
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
-from src.config.settings import Settings
+from src.config.settings import Settings, get_anthropic_client
 from src.models.events import NormalizedEvent
 from src.models.plans import Plan, PlanTask
 
@@ -93,7 +92,7 @@ class Planner:
         self._db = db
         self._world_model = world_model
         self._memory_service = memory_service
-        self._client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        self._client = get_anthropic_client(settings)
 
     async def plan_for_command(
         self, command: str, user_id: str, context: str | None = None

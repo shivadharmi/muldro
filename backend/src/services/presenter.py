@@ -16,12 +16,11 @@ import json
 import logging
 from datetime import date, datetime, timedelta, timezone
 
-import anthropic
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
-from src.config.settings import Settings
+from src.config.settings import Settings, get_anthropic_client
 from src.models.approvals import Approval
 from src.models.briefings import Briefing
 from src.models.entities import Entity
@@ -100,7 +99,7 @@ class Presenter:
     def __init__(self, settings: Settings, db: AsyncSession, openclaw_client=None):
         self._settings = settings
         self._db = db
-        self._client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        self._client = get_anthropic_client(settings)
         self._openclaw = openclaw_client
 
     async def generate_briefing(self, user_id: str, briefing_date: date) -> Briefing:

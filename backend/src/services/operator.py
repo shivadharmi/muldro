@@ -20,7 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
-from src.config.settings import Settings
+from src.config.settings import Settings, get_anthropic_client
 from src.models.executions import Execution, ExecutionTaskRun
 from src.models.plans import Plan, PlanTask
 from src.services.audit import AuditService
@@ -64,7 +64,7 @@ class Operator:
     def __init__(self, settings: Settings, db: AsyncSession, openclaw_client=None):
         self._settings = settings
         self._db = db
-        self._client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        self._client = get_anthropic_client(settings)
         self._audit = AuditService(db)
         self._openclaw = openclaw_client
 

@@ -17,17 +17,20 @@ import type { BackendConfig } from "./backend-client.js";
 interface PluginApi {
   registerTool: (def: unknown, opts?: { optional: boolean }) => void;
   registerHttpRoute: (def: unknown) => void;
-}
-
-interface PluginConfig {
-  backendUrl?: string;
-  backendToken?: string;
+  config: {
+    plugins: {
+      entries: Record<string, { config?: Record<string, unknown> }>;
+    };
+  };
 }
 
 export default {
   id: "jarvis-tools",
 
-  register(api: PluginApi, pluginConfig?: PluginConfig) {
+  register(api: PluginApi) {
+    const pluginConfig = api.config?.plugins?.entries?.["jarvis-tools"]?.config as
+      | { backendUrl?: string; backendToken?: string }
+      | undefined;
     const config: BackendConfig = {
       backendUrl: pluginConfig?.backendUrl || process.env.JARVIS_BACKEND_URL || "http://localhost:8000",
       backendToken: pluginConfig?.backendToken || process.env.JARVIS_BACKEND_TOKEN,

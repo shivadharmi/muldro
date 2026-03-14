@@ -14,12 +14,11 @@ Responsibilities:
 import json
 import logging
 
-import anthropic
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
-from src.config.settings import Settings
+from src.config.settings import Settings, get_anthropic_client
 from src.models.memory import Memory
 from src.services.embedding_service import EmbeddingService
 
@@ -87,7 +86,7 @@ class MemoryService:
     def __init__(self, settings: Settings, db: AsyncSession):
         self._settings = settings
         self._db = db
-        self._client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        self._client = get_anthropic_client(settings)
         self._embedder = EmbeddingService(settings)
 
     async def extract_and_store(

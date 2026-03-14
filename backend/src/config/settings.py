@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+import anthropic
 from pydantic_settings import BaseSettings
 
 
@@ -13,6 +14,8 @@ class Settings(BaseSettings):
     # Anthropic
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-4-20250514"
+    use_bedrock: bool = False
+    bedrock_region: str = "ap-south-1"
 
     # Server
     host: str = "0.0.0.0"
@@ -52,3 +55,12 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def get_anthropic_client(settings: Settings) -> anthropic.AsyncAnthropic:
+    """Create the appropriate Anthropic client based on config."""
+    if settings.use_bedrock:
+        from anthropic import AsyncAnthropicBedrock
+
+        return AsyncAnthropicBedrock(aws_region=settings.bedrock_region)  # type: ignore[return-value]
+    return anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
