@@ -22,6 +22,7 @@ cd "$INSTALL_DIR/backend"
 sudo -u ubuntu bash -c "
   export PATH=\"/home/ubuntu/.local/bin:\$PATH\"
   source .venv/bin/activate
+  [ -f .env ] && set -a && source .env && set +a
   uv pip install -e '.[dev]'
   alembic upgrade head
 "
