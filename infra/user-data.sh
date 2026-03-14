@@ -208,7 +208,7 @@ JARVIS_HOST=127.0.0.1
 JARVIS_PORT=8000
 JARVIS_USE_BEDROCK=true
 JARVIS_BEDROCK_REGION=$AWS_REGION
-JARVIS_ANTHROPIC_MODEL=anthropic.claude-sonnet-4-20250514-v1:0
+JARVIS_ANTHROPIC_MODEL=apac.anthropic.claude-sonnet-4-20250514-v1:0
 ENVEOF
 chmod 600 "$INSTALL_DIR/backend/.env"
 
@@ -291,7 +291,7 @@ cat > "$OPENCLAW_HOME/openclaw.json" <<OCEOF
   "agents": {
     "defaults": {
       "model": {
-        "primary": "amazon-bedrock/anthropic.claude-sonnet-4-20250514-v1:0"
+        "primary": "amazon-bedrock/apac.anthropic.claude-sonnet-4-20250514-v1:0"
       }
     }
   },
@@ -303,7 +303,7 @@ cat > "$OPENCLAW_HOME/openclaw.json" <<OCEOF
         "auth": "aws-sdk",
         "models": [
           {
-            "id": "anthropic.claude-sonnet-4-20250514-v1:0",
+            "id": "apac.anthropic.claude-sonnet-4-20250514-v1:0",
             "name": "Claude Sonnet 4 (Bedrock)",
             "reasoning": true,
             "input": ["text", "image"],

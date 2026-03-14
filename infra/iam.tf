@@ -55,7 +55,10 @@ resource "aws_iam_role_policy" "bedrock" {
         Action = [
           "bedrock:InvokeModel",
           "bedrock:InvokeModelWithResponseStream",
-          "bedrock:ListFoundationModels"
+          "bedrock:ListFoundationModels",
+          "bedrock:ListInferenceProfiles",
+          "bedrock:GetFoundationModel",
+          "bedrock:GetInferenceProfile"
         ]
         Resource = "*"
       }
