@@ -1,4 +1,5 @@
 import asyncio
+import os
 import sys
 from pathlib import Path
 from logging.config import fileConfig
@@ -15,6 +16,11 @@ from src.models import Base
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
+
+# Override sqlalchemy.url from environment if available (.env or systemd)
+env_db_url = os.environ.get("JARVIS_DATABASE_URL")
+if env_db_url:
+    config.set_main_option("sqlalchemy.url", env_db_url)
 
 target_metadata = Base.metadata
 
