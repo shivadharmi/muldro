@@ -20,6 +20,7 @@ sudo -u ubuntu git pull origin "$BRANCH"
 echo "Updating backend..."
 cd "$INSTALL_DIR/backend"
 sudo -u ubuntu bash -c "
+  cd $INSTALL_DIR/backend
   export PATH=\"/home/ubuntu/.local/bin:\$PATH\"
   source .venv/bin/activate
   [ -f .env ] && set -a && source .env && set +a
