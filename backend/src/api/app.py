@@ -12,6 +12,8 @@ from src.api.routes_canvas import router as canvas_router
 from src.api.routes_command import router as command_router
 from src.api.routes_events import router as events_router
 from src.api.routes_meetings import router as meetings_router
+from src.api.routes_observation import router as observation_router
+from src.api.routes_schedules import router as schedules_router
 from src.api.routes_search import router as search_router
 from src.api.routes_system import router as system_router
 from src.api.routes_tasks import router as tasks_router
@@ -88,6 +90,12 @@ def create_app() -> FastAPI:
 
     # Legacy webhook route (backwards compat)
     app.include_router(webhooks_router, tags=["webhooks"])
+
+    # Observation health tracking
+    app.include_router(observation_router, tags=["observations"])
+
+    # Schedules (backend-owned dynamic scheduling)
+    app.include_router(schedules_router, tags=["schedules"])
 
     # System routes (heartbeat, maintenance, metrics)
     app.include_router(system_router, tags=["system"])

@@ -397,6 +397,184 @@ export function registerTools(api: PluginApi, config: BackendConfig) {
     },
   });
 
+  // ── jarvis_report_observation ───────────────────────────────
+  // Report observation cycle results to backend.
+  api.registerTool(
+    {
+      name: "jarvis_report_observation",
+      description:
+        "Report the results of an observation cycle to Jarvis. " +
+        "Call this AFTER completing an observation (checking emails, calendar, GitHub) " +
+        "to track observation health and freshness.",
+      parameters: Type.Object({
+        source: Type.String({ description: "Source that was observed (gmail, calendar, github)" }),
+        items_found: Type.Number({ description: "Number of items found during observation", default: 0 }),
+        items_ingested: Type.Number({ description: "Number of items ingested to Jarvis", default: 0 }),
+        status: Type.Optional(
+          Type.Union([Type.Literal("ok"), Type.Literal("error")])
+        ),
+        error_message: Type.Optional(Type.String({ description: "Error message if status is error" })),
+      }),
+      async execute(
+        _id: string,
+        params: {
+          source: string;
+          items_found: number;
+          items_ingested: number;
+          status?: string;
+          error_message?: string;
+        }
+      ) {
+        const res = await callBackend(config, "/v1/observations/report", "POST", {
+          source: params.source,
+          items_found: params.items_found,
+          items_ingested: params.items_ingested,
+          status: params.status ?? "ok",
+          error_message: params.error_message,
+        });
+        if (!res.success) return textResult(`Error: ${res.error}`);
+        const d = res.data as { source: string; is_stale: boolean; status: string };
+        return textResult(
+          `Observation reported: ${d.source} (status: ${d.status}, stale: ${d.is_stale})`
+        );
+      },
+    },
+    { optional: true }
+  );
+
+  // ── jarvis_schedule ──────────────────────────────────────────
+  // Manage backend-owned dynamic schedules.
+  api.registerTool({
+    name: "jarvis_schedule",
+    description:
+      "Manage Jarvis schedules — create, list, update, pause, resume, or delete " +
+      "scheduled tasks. Use when the user says things like 'check email every 5 minutes', " +
+      "'stop monitoring GitHub', 'remind me at 3pm', 'show my schedules', etc.",
+    parameters: Type.Object({
+      action: Type.Union([
+        Type.Literal("create"),
+        Type.Literal("list"),
+        Type.Literal("update"),
+        Type.Literal("pause"),
+        Type.Literal("resume"),
+        Type.Literal("delete"),
+      ]),
+      schedule_id: Type.Optional(
+        Type.String({ description: "Schedule ID (required for update/pause/resume/delete)" })
+      ),
+      name: Type.Optional(Type.String({ description: "Human-readable name for the schedule" })),
+      description: Type.Optional(Type.String({ description: "Description of what this schedule does" })),
+      schedule_type: Type.Optional(
+        Type.Union([Type.Literal("recurring"), Type.Literal("one_shot")])
+      ),
+      cron_expr: Type.Optional(
+        Type.String({ description: "Cron expression for recurring schedules (e.g. '*/15 * * * *')" })
+      ),
+      run_at: Type.Optional(
+        Type.String({ description: "ISO 8601 timestamp for one_shot schedules" })
+      ),
+      action_type: Type.Optional(
+        Type.Union([
+          Type.Literal("observe_source"),
+          Type.Literal("generate_briefing"),
+          Type.Literal("meeting_prep"),
+          Type.Literal("heartbeat"),
+          Type.Literal("custom_agent_task"),
+          Type.Literal("wake_agent"),
+        ])
+      ),
+      action_config: Type.Optional(
+        Type.Object({}, { additionalProperties: true, description: "Action-specific config" })
+      ),
+      priority: Type.Optional(
+        Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")])
+      ),
+      enabled: Type.Optional(Type.Boolean()),
+      source: Type.Optional(Type.String()),
+    }),
+    async execute(
+      _id: string,
+      params: {
+        action: string;
+        schedule_id?: string;
+        name?: string;
+        description?: string;
+        schedule_type?: string;
+        cron_expr?: string;
+        run_at?: string;
+        action_type?: string;
+        action_config?: Record<string, unknown>;
+        priority?: string;
+        enabled?: boolean;
+        source?: string;
+      }
+    ) {
+      const { action, schedule_id } = params;
+
+      if (action === "create") {
+        const res = await callBackend(config, "/v1/schedules", "POST", {
+          name: params.name,
+          description: params.description,
+          schedule_type: params.schedule_type ?? "recurring",
+          cron_expr: params.cron_expr,
+          run_at: params.run_at,
+          action_type: params.action_type,
+          action_config: params.action_config,
+          priority: params.priority ?? "medium",
+          enabled: params.enabled ?? true,
+          source: params.source ?? "user",
+        });
+        return formatResult(res);
+      }
+
+      if (action === "list") {
+        const query = new URLSearchParams();
+        if (params.enabled !== undefined) query.set("enabled", String(params.enabled));
+        if (params.action_type) query.set("action_type", params.action_type);
+        if (params.source) query.set("source", params.source);
+        const qs = query.toString();
+        const res = await callBackend(config, `/v1/schedules${qs ? `?${qs}` : ""}`, "GET");
+        return formatResult(res);
+      }
+
+      if (!schedule_id) {
+        return textResult(`Error: schedule_id is required for action '${action}'`);
+      }
+
+      if (action === "update") {
+        const body: Record<string, unknown> = {};
+        if (params.name !== undefined) body.name = params.name;
+        if (params.description !== undefined) body.description = params.description;
+        if (params.cron_expr !== undefined) body.cron_expr = params.cron_expr;
+        if (params.run_at !== undefined) body.run_at = params.run_at;
+        if (params.action_type !== undefined) body.action_type = params.action_type;
+        if (params.action_config !== undefined) body.action_config = params.action_config;
+        if (params.priority !== undefined) body.priority = params.priority;
+        if (params.enabled !== undefined) body.enabled = params.enabled;
+        const res = await callBackend(config, `/v1/schedules/${schedule_id}`, "PATCH", body);
+        return formatResult(res);
+      }
+
+      if (action === "pause") {
+        const res = await callBackend(config, `/v1/schedules/${schedule_id}/pause`, "POST");
+        return formatResult(res);
+      }
+
+      if (action === "resume") {
+        const res = await callBackend(config, `/v1/schedules/${schedule_id}/resume`, "POST");
+        return formatResult(res);
+      }
+
+      if (action === "delete") {
+        const res = await callBackend(config, `/v1/schedules/${schedule_id}`, "DELETE");
+        if (!res.success) return textResult(`Error: ${res.error}`);
+        return textResult(`Schedule ${schedule_id} deleted.`);
+      }
+
+      return textResult(`Error: Unknown action '${action}'`);
+    },
+  });
+
   // ── jarvis_heartbeat ────────────────────────────────────────
   // Trigger periodic maintenance tasks.
   api.registerTool(

@@ -84,9 +84,11 @@
     }
   },
 
-  // Cron — enabled globally; individual jobs configured via agent/plugin
+  // Cron — disabled. Backend owns all scheduling via SchedulerLoop.
+  // Schedules are stored in Postgres and managed via /v1/schedules API.
+  // See: jarvis_schedule tool, backend/src/services/scheduler.py
   "cron": {
-    "enabled": true
+    "enabled": false
   }
 
   // Optional: Telegram channel

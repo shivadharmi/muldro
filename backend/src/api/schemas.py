@@ -208,6 +208,76 @@ class TaskDetailResponse(BaseModel):
     created_at: datetime | None = None
 
 
+# ── Observation ──────────────────────────────────────────────────
+
+
+class ObservationReportRequest(BaseModel):
+    source: str
+    items_found: int = 0
+    items_ingested: int = 0
+    status: str = "ok"
+    error_message: str | None = None
+
+
+class ObservationStatusResponse(BaseModel):
+    source: str
+    last_observed_at: datetime | None = None
+    items_found: int = 0
+    items_ingested: int = 0
+    status: str = "ok"
+    error_message: str | None = None
+    is_stale: bool = False
+
+
+# ── Schedule ─────────────────────────────────────────────────────
+
+
+class ScheduleCreateRequest(BaseModel):
+    name: str
+    description: str | None = None
+    schedule_type: str = "recurring"  # recurring | one_shot
+    cron_expr: str | None = None
+    run_at: datetime | None = None
+    action_type: str
+    action_config: dict | None = None
+    enabled: bool = True
+    source: str = "user"  # system | user | reflection
+    priority: str = "medium"  # low | medium | high
+
+
+class ScheduleUpdateRequest(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    cron_expr: str | None = None
+    run_at: datetime | None = None
+    action_type: str | None = None
+    action_config: dict | None = None
+    enabled: bool | None = None
+    priority: str | None = None
+
+
+class ScheduleResponse(BaseModel):
+    schedule_id: str
+    user_id: str
+    name: str
+    description: str | None = None
+    schedule_type: str
+    cron_expr: str | None = None
+    run_at: datetime | None = None
+    action_type: str
+    action_config: dict | None = None
+    enabled: bool
+    last_run_at: datetime | None = None
+    next_run_at: datetime | None = None
+    run_count: int = 0
+    consecutive_failures: int = 0
+    last_error: str | None = None
+    source: str
+    priority: str
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
 # ── Health ────────────────────────────────────────────────────────
 
 

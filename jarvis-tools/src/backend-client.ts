@@ -17,7 +17,7 @@ export interface BackendResponse {
 export async function callBackend(
   config: BackendConfig,
   path: string,
-  method: "GET" | "POST" = "POST",
+  method: "GET" | "POST" | "PATCH" | "DELETE" = "POST",
   body?: unknown
 ): Promise<BackendResponse> {
   const url = `${config.backendUrl}${path}`;
@@ -28,16 +28,22 @@ export async function callBackend(
     headers["Authorization"] = `Bearer ${config.backendToken}`;
   }
 
+  const hasBody = method !== "GET" && method !== "DELETE" && body;
+
   try {
     const res = await fetch(url, {
       method,
       headers,
-      body: method === "POST" && body ? JSON.stringify(body) : undefined,
+      body: hasBody ? JSON.stringify(body) : undefined,
     });
 
     if (!res.ok) {
       const text = await res.text();
       return { success: false, error: `Backend returned ${res.status}: ${text}` };
+    }
+
+    if (res.status === 204) {
+      return { success: true };
     }
 
     const data = await res.json();

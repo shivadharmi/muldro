@@ -40,7 +40,10 @@ async def test_expire_stale_memories(settings, mock_db):
     mem_result = MagicMock()
     mem_result.scalars.return_value.all.return_value = [old_memory, fresh_memory]
 
-    mock_db.execute = AsyncMock(side_effect=[mem_result, empty, empty, empty])
+    # 5 original calls + 3 from _reflect_on_schedules
+    mock_db.execute = AsyncMock(
+        side_effect=[mem_result, empty, empty, empty, empty, empty, empty, empty]
+    )
 
     service = HeartbeatService(settings=settings, db=mock_db)
     result = await service.run("usr_default")
@@ -64,7 +67,10 @@ async def test_escalate_stale_plans(settings, mock_db):
     plan_result = MagicMock()
     plan_result.scalars.return_value.all.return_value = [stale_plan]
 
-    mock_db.execute = AsyncMock(side_effect=[empty, plan_result, empty, empty])
+    # 5 original calls + 3 from _reflect_on_schedules
+    mock_db.execute = AsyncMock(
+        side_effect=[empty, plan_result, empty, empty, empty, empty, empty, empty]
+    )
 
     service = HeartbeatService(settings=settings, db=mock_db)
     result = await service.run("usr_default")
@@ -104,7 +110,10 @@ async def test_critical_plans_not_escalated(settings, mock_db):
     plan_result = MagicMock()
     plan_result.scalars.return_value.all.return_value = [critical_plan]
 
-    mock_db.execute = AsyncMock(side_effect=[empty, plan_result, empty, empty])
+    # 5 original calls + 3 from _reflect_on_schedules
+    mock_db.execute = AsyncMock(
+        side_effect=[empty, plan_result, empty, empty, empty, empty, empty, empty]
+    )
 
     service = HeartbeatService(settings=settings, db=mock_db)
     result = await service.run("usr_default")

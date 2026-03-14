@@ -42,18 +42,25 @@ async def test_expire_approvals(settings, mock_db):
     exec_result = MagicMock()
     exec_result.scalar_one_or_none.return_value = execution
 
+    empty = MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[]))))
     mock_db.execute = AsyncMock(
         side_effect=[
             # _expire_stale_memories → empty
-            MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))),
+            empty,
             # _find_stale_plans → empty
-            MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))),
+            empty,
             # _expire_approvals → expired_approval
             approval_result,
             # execution lookup
             exec_result,
             # _invalidate_old_plans → empty
-            MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))),
+            empty,
+            # _check_observation_health → empty
+            empty,
+            # _reflect_on_schedules: observe schedules, obs statuses, failing schedules
+            empty,
+            empty,
+            empty,
         ]
     )
 
@@ -73,18 +80,25 @@ async def test_invalidate_old_plans(settings, mock_db):
     old_plan.status = "created"
     old_plan.created_at = datetime.now(timezone.utc) - timedelta(hours=100)
 
+    empty = MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[]))))
     mock_db.execute = AsyncMock(
         side_effect=[
             # _expire_stale_memories → empty
-            MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))),
+            empty,
             # _find_stale_plans → empty (24h stale)
-            MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))),
+            empty,
             # _expire_approvals → empty
-            MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))),
+            empty,
             # _invalidate_old_plans → old_plan
             MagicMock(
                 scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[old_plan])))
             ),
+            # _check_observation_health → empty
+            empty,
+            # _reflect_on_schedules: observe schedules, obs statuses, failing schedules
+            empty,
+            empty,
+            empty,
         ]
     )
 

@@ -8,7 +8,9 @@ from src.models.entities import Entity, EntityAlias, EntityRelationship
 from src.models.events import NormalizedEvent
 from src.models.executions import Execution, ExecutionTaskRun
 from src.models.memory import Memory
+from src.models.observation import ObservationStatus
 from src.models.plans import Plan, PlanTask
+from src.models.schedules import Schedule
 
 __all__ = [
     "Base",
@@ -27,4 +29,6 @@ __all__ = [
     "Connector",
     "ConnectorAccount",
     "DeadLetterEntry",
+    "ObservationStatus",
+    "Schedule",
 ]
