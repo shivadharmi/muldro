@@ -33,6 +33,35 @@ class BriefingResponse(BaseModel):
     full_text: str | None = None
 
 
+# ── Briefing Feedback ─────────────────────────────────────────────
+
+
+class BriefingFeedbackRequest(BaseModel):
+    feedback_type: str  # "rating" | "item_acted_on" | "item_dismissed" | "follow_up_asked"
+    rating: int | None = None  # 1-5 when feedback_type="rating"
+    item_section: str | None = None  # e.g. "top_priorities", "recommended_actions"
+    item_index: int | None = None
+    item_title: str | None = None
+    comment: str | None = None
+    extra_data: dict | None = None
+
+
+class BriefingFeedbackResponse(BaseModel):
+    feedback_id: str
+    briefing_id: str
+    feedback_type: str
+    status: str = "recorded"
+
+
+class BriefingFeedbackSummary(BaseModel):
+    briefing_id: str
+    total_feedback: int = 0
+    average_rating: float | None = None
+    items_acted_on: int = 0
+    items_dismissed: int = 0
+    follow_ups_asked: int = 0
+
+
 # ── Approval ──────────────────────────────────────────────────────
 
 

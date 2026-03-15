@@ -175,6 +175,13 @@ async def update_schedule(
         sched.action_config = req.action_config
     if req.enabled is not None:
         sched.enabled = req.enabled
+        # When enabling, ensure next_run_at is computed (same as resume)
+        if req.enabled and sched.next_run_at is None:
+            now = datetime.now(timezone.utc)
+            if sched.schedule_type == "recurring" and sched.cron_expr:
+                sched.next_run_at = _compute_next_run(sched.cron_expr, now)
+            elif sched.schedule_type == "one_shot" and sched.run_at:
+                sched.next_run_at = sched.run_at
     if req.priority is not None:
         if req.priority not in VALID_PRIORITIES:
             raise HTTPException(400, f"Invalid priority: {req.priority}")

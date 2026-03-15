@@ -1,6 +1,7 @@
 from src.models.approvals import Approval
 from src.models.audit import AuditLog
 from src.models.base import Base
+from src.models.briefing_feedback import BriefingFeedback
 from src.models.briefings import Briefing
 from src.models.connectors import Connector, ConnectorAccount
 from src.models.dead_letter import DeadLetterEntry
@@ -25,6 +26,7 @@ __all__ = [
     "ExecutionTaskRun",
     "Approval",
     "Briefing",
+    "BriefingFeedback",
     "AuditLog",
     "Connector",
     "ConnectorAccount",

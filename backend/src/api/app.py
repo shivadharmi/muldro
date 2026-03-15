@@ -11,6 +11,7 @@ from src.api.routes_briefings import router as briefings_router
 from src.api.routes_canvas import router as canvas_router
 from src.api.routes_command import router as command_router
 from src.api.routes_events import router as events_router
+from src.api.routes_feedback import router as feedback_router
 from src.api.routes_meetings import router as meetings_router
 from src.api.routes_observation import router as observation_router
 from src.api.routes_schedules import router as schedules_router
@@ -84,6 +85,7 @@ def create_app() -> FastAPI:
     app.include_router(search_router, tags=["search"])
     app.include_router(meetings_router, tags=["meetings"])
     app.include_router(canvas_router, tags=["canvas"])
+    app.include_router(feedback_router, tags=["feedback"])
 
     # Event ingestion (called by OpenClaw agent after reading data from sources)
     app.include_router(events_router, tags=["events"])

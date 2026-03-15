@@ -56,17 +56,38 @@ class SchedulerLoop:
 
         async with factory() as db:
             now = datetime.now(timezone.utc)
+
+            # Fix any enabled schedules with null next_run_at (can happen if
+            # enabled via PATCH without recomputing, or from old seed data)
+            from sqlalchemy import or_
+
             result = await db.execute(
                 select(Schedule)
                 .where(
                     Schedule.enabled.is_(True),
-                    Schedule.next_run_at <= now,
+                    or_(
+                        Schedule.next_run_at <= now,
+                        Schedule.next_run_at.is_(None),
+                    ),
                 )
-                .order_by(Schedule.next_run_at)
+                .order_by(Schedule.next_run_at.asc().nullsfirst())
             )
-            due = list(result.scalars().all())
+            candidates = list(result.scalars().all())
+
+            # Separate: schedules needing next_run_at repair vs actually due
+            due = []
+            for sched in candidates:
+                if sched.next_run_at is None and sched.cron_expr:
+                    sched.next_run_at = compute_next_run(sched.cron_expr, now)
+                    logger.info(
+                        "Repaired next_run_at for %s → %s",
+                        sched.schedule_id, sched.next_run_at,
+                    )
+                elif sched.next_run_at is not None and sched.next_run_at <= now:
+                    due.append(sched)
 
             if not due:
+                await db.commit()  # persist any repairs
                 return
 
             openclaw = OpenClawClient(self._settings)

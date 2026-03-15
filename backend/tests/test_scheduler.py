@@ -123,8 +123,8 @@ class TestSchedulerTick:
 
         with patch("src.services.scheduler.get_session_factory", return_value=mock_factory):
             await scheduler._tick()
-            # No commit because no due schedules
-            mock_db.commit.assert_not_awaited()
+            # Commit is called (to persist any next_run_at repairs) but no fire
+            mock_db.commit.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_tick_advances_next_run_at(self, settings):

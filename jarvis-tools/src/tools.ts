@@ -575,6 +575,69 @@ export function registerTools(api: PluginApi, config: BackendConfig) {
     },
   });
 
+  // ── jarvis_brief_feedback ─────────────────────────────────────
+  // Report user feedback on a briefing back to the backend.
+  api.registerTool({
+    name: "jarvis_brief_feedback",
+    description:
+      "Report user feedback on a daily briefing. Call this when the user " +
+      "rates a briefing, acts on a briefing item, dismisses an item, or asks " +
+      "a follow-up question about a briefing item. This feeds the learning loop " +
+      "so future briefings improve.",
+    parameters: Type.Object({
+      briefing_id: Type.String({ description: "The briefing ID" }),
+      feedback_type: Type.Union([
+        Type.Literal("rating"),
+        Type.Literal("item_acted_on"),
+        Type.Literal("item_dismissed"),
+        Type.Literal("follow_up_asked"),
+      ]),
+      rating: Type.Optional(
+        Type.Number({ description: "1-5 rating (required when feedback_type is rating)" })
+      ),
+      item_section: Type.Optional(
+        Type.String({ description: "Briefing section (top_priorities, recommended_actions, changes_since_last)" })
+      ),
+      item_index: Type.Optional(
+        Type.Number({ description: "Index of the item in the section (0-based)" })
+      ),
+      item_title: Type.Optional(
+        Type.String({ description: "Title or text of the item" })
+      ),
+      comment: Type.Optional(
+        Type.String({ description: "User's comment or follow-up question" })
+      ),
+    }),
+    async execute(
+      _id: string,
+      params: {
+        briefing_id: string;
+        feedback_type: string;
+        rating?: number;
+        item_section?: string;
+        item_index?: number;
+        item_title?: string;
+        comment?: string;
+      }
+    ) {
+      const res = await callBackend(
+        config,
+        `/v1/briefings/${params.briefing_id}/feedback`,
+        "POST",
+        {
+          feedback_type: params.feedback_type,
+          rating: params.rating,
+          item_section: params.item_section,
+          item_index: params.item_index,
+          item_title: params.item_title,
+          comment: params.comment,
+        }
+      );
+      if (!res.success) return textResult(`Error: ${res.error}`);
+      return textResult("Feedback recorded. Thank you!");
+    },
+  });
+
   // ── jarvis_heartbeat ────────────────────────────────────────
   // Trigger periodic maintenance tasks.
   api.registerTool(
