@@ -12,8 +12,8 @@ from tests.conftest import make_mock_settings
 @pytest.fixture
 def settings():
     s = make_mock_settings()
-    s.voyage_api_key = "test-voyage-key"
-    s.embedding_model = "voyage-3-lite"
+    s.embedding_model = "amazon.titan-embed-text-v2:0"
+    s.bedrock_region = "ap-south-1"
     return s
 
 
@@ -48,7 +48,7 @@ async def test_extract_stores_with_embedding(mock_get_client, mock_embed_cls, se
     mock_client.messages.create = AsyncMock(return_value=response)
     mock_get_client.return_value = mock_client
 
-    fake_embedding = [0.1] * 1536
+    fake_embedding = [0.1] * 1024
     mock_embedder = MagicMock()
     mock_embedder.embed_text = AsyncMock(return_value=fake_embedding)
     mock_embed_cls.return_value = mock_embedder
@@ -75,7 +75,7 @@ async def test_semantic_retrieve_with_embedding(mock_get_client, mock_embed_cls,
     """Should use semantic search when query embedding succeeds."""
     mock_get_client.return_value = MagicMock()
 
-    fake_embedding = [0.2] * 1536
+    fake_embedding = [0.2] * 1024
     mock_embedder = MagicMock()
     mock_embedder.embed_text = AsyncMock(return_value=fake_embedding)
     mock_embed_cls.return_value = mock_embedder
@@ -155,7 +155,7 @@ async def test_extract_preferences(mock_get_client, mock_embed_cls, settings, mo
     mock_get_client.return_value = mock_client
 
     mock_embedder = MagicMock()
-    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 1536)
+    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 1024)
     mock_embed_cls.return_value = mock_embedder
 
     no_result = MagicMock()

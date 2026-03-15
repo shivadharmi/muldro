@@ -119,10 +119,22 @@ class SchedulerLoop:
             await db.commit()
             logger.info("Scheduler tick: %d due, fired", len(due))
 
+    def _delivery_instruction(self) -> str:
+        """Build instruction for agent to deliver results to user via Telegram."""
+        chat_id = self._settings.telegram_chat_id
+        if not chat_id:
+            return ""
+        return (
+            f"\n\nIMPORTANT: After completing the task, send a concise summary to the user "
+            f"using the message tool with channel=telegram and to={chat_id}. "
+            f"Keep it brief and actionable."
+        )
+
     async def _fire(self, sched: Schedule, openclaw: OpenClawClient) -> None:
         """Dispatch a single schedule's action."""
         config = sched.action_config or {}
         action = sched.action_type
+        deliver = self._delivery_instruction()
 
         if action == "observe_source":
             source = config["source"]
@@ -130,16 +142,19 @@ class SchedulerLoop:
                 f"[SCHEDULED:observe-{source}] Check {source} for new items, "
                 f"ingest important ones via jarvis_ingest_event, "
                 f"then report via jarvis_report_observation."
+                f"{deliver}"
             )
         elif action == "generate_briefing":
             await openclaw.run_agent_turn(
                 "[SCHEDULED:briefing] Run observations, generate daily briefing "
                 "via jarvis_brief, and deliver to user via message."
+                f"{deliver}"
             )
         elif action == "meeting_prep":
             await openclaw.run_agent_turn(
                 "[SCHEDULED:meeting-prep] Check calendar for meetings in next 30min. "
                 "If found, call jarvis_meeting_prep and deliver to user."
+                f"{deliver}"
             )
         elif action == "heartbeat":
             factory = get_session_factory()
@@ -149,7 +164,9 @@ class SchedulerLoop:
                 await hb_db.commit()
         elif action == "custom_agent_task":
             instructions = config.get("instructions", "")
-            await openclaw.run_agent_turn(f"[SCHEDULED:custom] {instructions}")
+            await openclaw.run_agent_turn(
+                f"[SCHEDULED:custom] {instructions}{deliver}"
+            )
         elif action == "wake_agent":
             message = config.get("message", "Scheduled wake-up")
             await openclaw.wake_agent(message)

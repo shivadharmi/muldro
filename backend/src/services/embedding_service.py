@@ -1,84 +1,86 @@
 """Embedding Service — generate and manage vector embeddings.
 
-Wraps the Anthropic/Voyage embedding API to produce vectors for
-semantic search across memories, entities, and events.
+Uses AWS Bedrock Titan Text Embeddings V2 for vector generation.
+Supports semantic search across memories, entities, and events.
 """
 
 import asyncio
+import json
 import logging
-
-import httpx
 
 from src.config.settings import Settings
 
 logger = logging.getLogger(__name__)
 
-# Default embedding dimension (voyage-3.5-lite = 1024)
+# Titan Text Embeddings V2 supports 256, 512, or 1024 dimensions
 EMBEDDING_DIM = 1024
 
 
 class EmbeddingService:
-    """Generate embeddings for text content."""
+    """Generate embeddings via AWS Bedrock Titan Text Embeddings V2."""
 
     def __init__(self, settings: Settings):
         self._settings = settings
-        self._api_key = settings.voyage_api_key or settings.anthropic_api_key
-        self._model = settings.embedding_model
-        self._base_url = settings.voyage_base_url
+        self._region = settings.bedrock_region
+        self._model_id = settings.embedding_model
+
+    def _get_client(self):
+        """Create a boto3 Bedrock Runtime client (sync)."""
+        import boto3
+
+        return boto3.client("bedrock-runtime", region_name=self._region)
 
     async def embed_text(self, text: str) -> list[float] | None:
         """Generate an embedding vector for a single text string."""
-        return await self._embed_batch([text])
+        results = await self._embed_batch([text])
+        if results is None:
+            return None
+        return results[0] if results else None
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]] | None:
         """Generate embedding vectors for multiple texts."""
         if not texts:
             return []
+        # Titan accepts one text at a time, so we batch sequentially
         results = []
-        # Batch in groups of 128 (Voyage API limit)
-        for i in range(0, len(texts), 128):
-            batch = texts[i : i + 128]
-            batch_result = await self._embed_batch(batch, return_all=True)
-            if batch_result is None:
+        for text in texts:
+            vec = await self.embed_text(text)
+            if vec is None:
                 return None
-            results.extend(batch_result)
+            results.append(vec)
         return results
 
-    async def _embed_batch(
-        self, texts: list[str], return_all: bool = False
-    ) -> list[float] | list[list[float]] | None:
-        """Call embedding API for a batch of texts, with retry on 429."""
+    async def _embed_batch(self, texts: list[str]) -> list[list[float]] | None:
+        """Call Bedrock Titan for each text, with retry."""
         max_retries = 3
-        for attempt in range(max_retries + 1):
-            try:
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    response = await client.post(
-                        f"{self._base_url}/embeddings",
-                        headers={
-                            "Authorization": f"Bearer {self._api_key}",
-                            "Content-Type": "application/json",
-                        },
-                        json={
-                            "model": self._model,
-                            "input": texts,
-                            "input_type": "document",
-                        },
-                    )
-                    if response.status_code == 429 and attempt < max_retries:
-                        delay = 2 ** (attempt + 1)
-                        logger.info("Embedding rate limited, retrying in %ds", delay)
-                        await asyncio.sleep(delay)
+        results = []
+        for text in texts:
+            for attempt in range(max_retries + 1):
+                try:
+                    vec = await asyncio.to_thread(self._invoke_titan, text)
+                    results.append(vec)
+                    break
+                except Exception:
+                    if attempt < max_retries:
+                        await asyncio.sleep(2 ** (attempt + 1))
                         continue
-                    response.raise_for_status()
-                    data = response.json()
-                    embeddings = [item["embedding"] for item in data["data"]]
-                    if return_all:
-                        return embeddings
-                    return embeddings[0] if embeddings else None
-            except Exception:
-                if attempt < max_retries:
-                    await asyncio.sleep(2 ** (attempt + 1))
-                    continue
-                logger.warning("Embedding generation failed", exc_info=True)
-                return None
-        return None
+                    logger.warning("Embedding generation failed", exc_info=True)
+                    return None
+        return results
+
+    def _invoke_titan(self, text: str) -> list[float]:
+        """Synchronous call to Bedrock Titan Text Embeddings V2."""
+        client = self._get_client()
+        body = json.dumps({
+            "inputText": text,
+            "dimensions": EMBEDDING_DIM,
+            "normalize": True,
+        })
+        response = client.invoke_model(
+            modelId=self._model_id,
+            contentType="application/json",
+            accept="application/json",
+            body=body,
+        )
+        result = json.loads(response["body"].read())
+        return result["embedding"]

@@ -5,7 +5,12 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    model_config = {"env_prefix": "JARVIS_", "env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {
+        "env_prefix": "JARVIS_",
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+    }
 
     # Database
     database_url: str = "postgresql+asyncpg://jarvis:jarvis@localhost:5432/jarvis"
@@ -26,11 +31,10 @@ class Settings(BaseSettings):
     openclaw_gateway_url: str = "http://localhost:18789"
     openclaw_hook_token: str = ""  # Legacy hook token (unused — kept for compat)
     openclaw_gateway_token: str = ""  # Gateway auth token for /v1/chat/completions
+    telegram_chat_id: str = ""  # Telegram chat ID for proactive message delivery
 
-    # Embeddings (Voyage AI)
-    voyage_api_key: str = ""
-    voyage_base_url: str = "https://api.voyageai.com/v1"
-    embedding_model: str = "voyage-3-lite"
+    # Embeddings (Bedrock Titan)
+    embedding_model: str = "amazon.titan-embed-text-v2:0"
 
     # Thresholds
     importance_threshold: float = 0.7  # Events above this score trigger planning
