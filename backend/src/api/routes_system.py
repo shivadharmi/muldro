@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_current_user, get_session
+from src.api.deps import get_current_user_id, get_session
 from src.config.settings import Settings, get_settings
 from src.middleware.observability import RequestMetrics
 from src.services.dead_letter import DeadLetterService
@@ -31,7 +31,7 @@ class DeadLetterStats(BaseModel):
 
 @router.post("/v1/system/heartbeat", response_model=HeartbeatResponse)
 async def heartbeat(
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ):
@@ -50,7 +50,7 @@ async def get_metrics():
 
 @router.get("/v1/system/dlq", response_model=DeadLetterStats)
 async def get_dlq_stats(
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Return dead-letter queue statistics."""

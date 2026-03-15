@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_current_user, get_session
+from src.api.deps import get_current_user_id, get_session
 from src.api.schemas import TaskDetailResponse, TaskResponse, TaskStepResponse
 from src.models.executions import Execution, ExecutionTaskRun
 from src.models.plans import Plan, PlanTask
@@ -15,7 +15,7 @@ router = APIRouter()
 @router.get("/v1/tasks/{task_id}", response_model=TaskDetailResponse)
 async def get_task_detail(
     task_id: str,
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Get detailed info for a single task, including execution steps and progress."""
@@ -84,7 +84,7 @@ async def get_task_detail(
 async def list_tasks(
     status: str | None = None,
     limit: int = 10,
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_session),
 ):
     """List tasks (plans) for the current user, optionally filtered by status."""

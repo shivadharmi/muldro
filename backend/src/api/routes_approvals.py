@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_current_user, get_session
+from src.api.deps import get_current_user_id, get_session
 from src.api.schemas import ApprovalDecisionRequest, ApprovalDetailResponse, ApprovalResponse
 from src.config.settings import Settings, get_settings
 from src.models.approvals import Approval
@@ -24,7 +24,7 @@ router = APIRouter()
 @router.get("/v1/approvals/{approval_id}", response_model=ApprovalDetailResponse)
 async def get_approval_detail(
     approval_id: str,
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Get detailed info for a single approval, including execution and plan context."""
@@ -70,7 +70,7 @@ async def get_approval_detail(
 @router.get("/v1/approvals", response_model=list[ApprovalResponse])
 async def list_approvals(
     status: str = "pending",
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_session),
 ):
     """List approvals for the user, filtered by status."""
@@ -101,7 +101,7 @@ async def list_approvals(
 async def approve_action(
     approval_id: str,
     req: ApprovalDecisionRequest | None = None,
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ):
@@ -160,7 +160,7 @@ async def approve_action(
 async def reject_action(
     approval_id: str,
     req: ApprovalDecisionRequest | None = None,
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Reject a pending action."""

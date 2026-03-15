@@ -38,26 +38,6 @@ resource "aws_ssm_parameter" "postgres_password" {
   }
 }
 
-resource "aws_ssm_parameter" "openclaw_gateway_token" {
-  name  = "/${var.project_name}/openclaw-gateway-token"
-  type  = "SecureString"
-  value = var.openclaw_gateway_token
-
-  tags = {
-    Name = "${var.project_name}-openclaw-gateway-token"
-  }
-}
-
-resource "aws_ssm_parameter" "openclaw_hook_token" {
-  name  = "/${var.project_name}/openclaw-hook-token"
-  type  = "SecureString"
-  value = var.openclaw_hook_token
-
-  tags = {
-    Name = "${var.project_name}-openclaw-hook-token"
-  }
-}
-
 resource "aws_ssm_parameter" "github_pat" {
   name  = "/${var.project_name}/github-pat"
   type  = "SecureString"

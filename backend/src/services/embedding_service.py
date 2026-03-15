@@ -71,11 +71,13 @@ class EmbeddingService:
     def _invoke_titan(self, text: str) -> list[float]:
         """Synchronous call to Bedrock Titan Text Embeddings V2."""
         client = self._get_client()
-        body = json.dumps({
-            "inputText": text,
-            "dimensions": EMBEDDING_DIM,
-            "normalize": True,
-        })
+        body = json.dumps(
+            {
+                "inputText": text,
+                "dimensions": EMBEDDING_DIM,
+                "normalize": True,
+            }
+        )
         response = client.invoke_model(
             modelId=self._model_id,
             contentType="application/json",

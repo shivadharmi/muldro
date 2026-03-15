@@ -5,7 +5,7 @@ import logging
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_current_user, get_session
+from src.api.deps import get_current_user_id, get_session
 from src.api.schemas import EventIngestRequest, EventIngestResponse
 from src.config.settings import Settings, get_settings
 from src.services.event_processor import EventProcessor, RawEvent
@@ -73,14 +73,14 @@ def _make_event_processor(settings: Settings, db: AsyncSession) -> EventProcesso
 @router.post("/v1/events/ingest", response_model=EventIngestResponse)
 async def ingest_event(
     req: EventIngestRequest,
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ):
     """Ingest a generic event from any source.
 
-    The OpenClaw agent calls this after reading data from Gmail (via gog),
-    Calendar, GitHub (via gh), Slack, or any other source. The backend
+    Called by the observer agent or external integrations after reading data
+    from Gmail, Calendar, GitHub, Slack, or any other source. The backend
     normalizes, scores, deduplicates, and triggers downstream processing.
     """
     raw = RawEvent(

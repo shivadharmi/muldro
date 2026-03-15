@@ -115,14 +115,19 @@ def test_briefing_endpoint_returns_response():
         from fastapi.testclient import TestClient
 
         from src.api.app import app
-        from src.api.deps import get_current_user
+        from src.api.deps import get_current_user, get_current_user_id
 
-        app.dependency_overrides[get_current_user] = lambda: "usr_default"
+        mock_user = MagicMock()
+        mock_user.user_id = "usr_default"
+
+        app.dependency_overrides[get_current_user] = lambda: mock_user
+        app.dependency_overrides[get_current_user_id] = lambda: "usr_default"
         try:
             client = TestClient(app)
             response = client.get("/v1/briefings/2026-03-13")
         finally:
             app.dependency_overrides.pop(get_current_user, None)
+            app.dependency_overrides.pop(get_current_user_id, None)
 
         assert response.status_code == 200
         data = response.json()

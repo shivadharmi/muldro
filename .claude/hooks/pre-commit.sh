@@ -1,6 +1,6 @@
 #!/bin/bash
 # Pre-commit hook for Jarvis project
-# Runs lint checks on staged Python and TypeScript files
+# Runs lint checks on staged Python files
 
 set -e
 
@@ -16,19 +16,6 @@ if git diff --cached --name-only | grep -q '\.py$'; then
     source .venv/bin/activate
     if ! ruff check src/ tests/ 2>/dev/null; then
       echo "ERROR: Python lint failed. Run 'ruff check --fix src/ tests/' to fix."
-      ERRORS=1
-    fi
-  fi
-  cd ..
-fi
-
-# Check TypeScript
-if git diff --cached --name-only | grep -qE '\.tsx?$'; then
-  echo "Checking TypeScript types..."
-  cd jarvis-tools
-  if [ -d "node_modules" ]; then
-    if ! npx tsc --noEmit 2>/dev/null; then
-      echo "ERROR: TypeScript type check failed."
       ERRORS=1
     fi
   fi

@@ -28,4 +28,4 @@ The user wants to add a new service to the Jarvis backend. Follow these steps ex
    - Wire into `backend/src/api/app.py`
 8. **Create a test** at `backend/tests/test_{name}.py`
 9. **Run lint and tests**: `ruff check src/ tests/ && pytest tests/ -v`
-10. If there's a corresponding OpenClaw tool needed, add it to `jarvis-tools/src/tools.ts`
+10. If there's a corresponding MCP tool needed, register it in the backend's MCP server

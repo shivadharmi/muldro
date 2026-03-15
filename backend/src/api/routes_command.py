@@ -1,11 +1,11 @@
-"""Command endpoint — the primary entry point from OpenClaw's jarvis_command tool."""
+"""Command endpoint — the primary entry point for natural language commands."""
 
 import logging
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_current_user, get_session
+from src.api.deps import get_current_user_id, get_session
 from src.api.schemas import CommandRequest, CommandResponse
 from src.config.settings import Settings, get_settings
 from src.services.planner import Planner
@@ -19,7 +19,7 @@ router = APIRouter()
 @router.post("/v1/jarvis/command", response_model=CommandResponse)
 async def handle_command(
     req: CommandRequest,
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ):

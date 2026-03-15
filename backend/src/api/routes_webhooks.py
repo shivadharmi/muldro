@@ -10,7 +10,7 @@ import logging
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_current_user, get_session
+from src.api.deps import get_current_user_id, get_session
 from src.api.routes_events import _make_event_processor
 from src.api.schemas import EventIngestResponse
 from src.config.settings import Settings, get_settings
@@ -24,7 +24,7 @@ router = APIRouter()
 @router.post("/v1/webhooks/generic", response_model=EventIngestResponse)
 async def generic_webhook(
     request: Request,
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ):

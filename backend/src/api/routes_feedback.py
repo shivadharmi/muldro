@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
-from src.api.deps import get_current_user, get_session
+from src.api.deps import get_current_user_id, get_session
 from src.api.schemas import (
     BriefingFeedbackRequest,
     BriefingFeedbackResponse,
@@ -28,7 +28,7 @@ router = APIRouter()
 async def submit_briefing_feedback(
     briefing_id: str,
     req: BriefingFeedbackRequest,
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Record user feedback on a briefing or briefing item."""
@@ -96,7 +96,7 @@ async def submit_briefing_feedback(
 )
 async def get_briefing_feedback_summary(
     briefing_id: str,
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Get aggregated feedback summary for a briefing."""

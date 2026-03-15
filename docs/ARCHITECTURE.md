@@ -8,34 +8,24 @@ Jarvis is a Personal AI Operating System. It runs a continuous intelligence loop
 Perceive -> Understand -> Update Model -> Plan -> Act -> Communicate -> repeat
 ```
 
-The system is split into two halves:
+The system is a unified intelligence backend with Telegram as the primary user surface:
 
-- **OpenClaw Gateway + Agent** — the user-facing interaction runtime and execution surface (chat, Telegram, Canvas, scheduling, data access via gog/gh/message)
-- **Jarvis Backend** — the intelligence engine (event processing, world model, memory, planning, governance, execution tracking, briefings, audit)
+- **Jarvis Backend** — the intelligence engine (event processing, world model, memory, planning, governance, execution tracking, briefings, audit, scheduling, Telegram delivery)
 
 ## Component Map
 
 ```
 +-----------------------------------------------------+
 |               User Surfaces                          |
-|  Telegram . Web UI . Canvas . CLI                    |
+|  Telegram Bot . REST API . MCP Tools                 |
 +------------------------+----------------------------+
                          |
 +------------------------v----------------------------+
-|               OpenClaw Gateway                       |
-|                                                      |
-|  Message routing (bindings) . Session management     |
-|  Claude model turns . Tool dispatch                  |
-|  Canvas UI . Cron scheduling                         |
-|  jarvis-tools plugin (thin HTTP bridge)              |
-+--------+---------------------------+----------------+
-         | tool calls (HTTP)         | /hooks/wake & /hooks/agent
-+--------v---------------------------v----------------+
 |               Jarvis Backend (FastAPI)               |
 |                                                      |
 |  +----------+ +----------+ +----------+             |
-|  | API      | | Event    | | OpenClaw |             |
-|  | Gateway  | | Processor| | Client   |             |
+|  | API      | | Event    | | Scheduler|             |
+|  | Gateway  | | Processor| | Loop     |             |
 |  +----+-----+ +----+-----+ +----+-----+             |
 |       |            |            |                    |
 |  +----v------------v------------v------+             |
@@ -52,9 +42,9 @@ The system is split into two halves:
 |  | Governor | | Presenter| | Operator |             |
 |  +----------+ +----------+ +----+-----+             |
 |                                  |                   |
-|                           delegates to               |
-|                           OpenClaw agent             |
-|                           (gog/gh/message)           |
+|                           executes via               |
+|                           Google API / GitHub API     |
+|                           / Telegram Bot API         |
 |                                                      |
 |  +--------------------------------------------+     |
 |  |  Postgres . pgvector . Redis . Audit Trail  |     |
@@ -65,34 +55,30 @@ The system is split into two halves:
 ## Data Flow: Important Email
 
 ```
-1. OpenClaw agent reads new emails via gog gmail
-2. Agent calls jarvis_ingest_event -> POST /v1/events/ingest
+1. Scheduler triggers observation -> backend reads new emails via Google API
+2. Events ingested via internal event processing pipeline
 3. Event processor normalizes, scores importance/urgency/confidence
 4. Callbacks fire:
    a. World model identifies sender entity and project linkage
    b. Memory service retrieves relevant preferences and relationship context
    c. Planner produces structured task graph: draft_reply + request_approval
 5. Governor evaluates policy -> marks approval_required
-6. Governor wakes OpenClaw agent via /hooks/wake
-7. Agent presents approval prompt to user (jarvis_approval_card)
-8. User approves -> Operator delegates email send to agent via /hooks/agent
-9. Agent sends email via gog gmail send
-10. Operator records result, audit trail updated
+6. Notification sent to user via Telegram
+7. User approves via Telegram -> Operator executes email send via Google API
+8. Operator records result, audit trail updated
 ```
 
 ## Data Flow: Morning Brief
 
 ```
-1. OpenClaw cron triggers at configured time
-2. Agent calls jarvis_brief tool
-3. Backend daily briefing workflow:
+1. Scheduler triggers at configured time (e.g., 9am daily)
+2. Backend daily briefing workflow:
    a. Fetch events since last briefing
    b. Group by project, people, deadlines
    c. Retrieve active goals and pending approvals
    d. Fetch upcoming meetings
    e. Presenter generates structured brief via Claude
-4. Backend wakes agent via /hooks/wake to deliver briefing
-5. Agent presents briefing to user via chat/Canvas
+3. Backend delivers briefing to user via Telegram
 ```
 
 ## Database Schema
@@ -132,14 +118,15 @@ detected -> planned -> policy_checked -> awaiting_approval -> approved -> execut
 | PostgreSQL 17 | Primary data store, pgvector for embeddings |
 | Redis 7 | Caching (briefings, entities), rate limiting, distributed locks, task streams |
 | CallbackWorker | Background processor for async event callbacks (entity/memory/planning) |
-| OpenClawClient | HTTP bridge to OpenClaw gateway (/hooks/wake, /hooks/agent) |
+| SchedulerLoop | Dynamic scheduling for observations, briefings, and maintenance |
+| TelegramClient | Delivers briefings, notifications, and approval prompts to user |
 | AWS Bedrock | Alternative model provider (Claude via AWS IAM, no API key needed) |
 | Caddy | Reverse proxy with automatic TLS (production) |
 
 ## Security Model
 
-- **v1**: Single trusted user boundary per gateway
-- **Trust layers**: OpenClaw gateway trusted -> Jarvis backend trusted -> External APIs scoped
+- **v1**: Single trusted user boundary
+- **Trust layers**: Jarvis backend trusted -> External APIs scoped
 - **Approvals**: All external writes gated (no auto-send in v1)
 - **Audit**: Full trail with event_id, plan_id, execution_id, approval_id correlation
 - **Rate limiting**: Redis-backed sliding window (with in-memory fallback)

@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
-from src.api.deps import get_current_user, get_session
+from src.api.deps import get_current_user_id, get_session
 from src.api.schemas import ScheduleCreateRequest, ScheduleResponse, ScheduleUpdateRequest
 from src.models.schedules import Schedule
 
@@ -59,7 +59,7 @@ def _to_response(sched: Schedule) -> ScheduleResponse:
 @router.post("/v1/schedules", response_model=ScheduleResponse, status_code=201)
 async def create_schedule(
     req: ScheduleCreateRequest,
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Create a new schedule."""
@@ -115,7 +115,7 @@ async def list_schedules(
     enabled: bool | None = None,
     action_type: str | None = None,
     source: str | None = None,
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_session),
 ):
     """List schedules with optional filters."""
@@ -135,7 +135,7 @@ async def list_schedules(
 @router.get("/v1/schedules/{schedule_id}", response_model=ScheduleResponse)
 async def get_schedule(
     schedule_id: str,
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Get a single schedule."""
@@ -152,7 +152,7 @@ async def get_schedule(
 async def update_schedule(
     schedule_id: str,
     req: ScheduleUpdateRequest,
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Update schedule fields. Recomputes next_run_at if cron_expr changes."""
@@ -209,7 +209,7 @@ async def update_schedule(
 @router.delete("/v1/schedules/{schedule_id}", status_code=204)
 async def delete_schedule(
     schedule_id: str,
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Delete a schedule."""
@@ -226,7 +226,7 @@ async def delete_schedule(
 @router.post("/v1/schedules/{schedule_id}/pause", response_model=ScheduleResponse)
 async def pause_schedule(
     schedule_id: str,
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Pause a schedule (set enabled=False)."""
@@ -245,7 +245,7 @@ async def pause_schedule(
 @router.post("/v1/schedules/{schedule_id}/resume", response_model=ScheduleResponse)
 async def resume_schedule(
     schedule_id: str,
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Resume a schedule (set enabled=True, recompute next_run_at from now)."""

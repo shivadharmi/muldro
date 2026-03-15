@@ -9,7 +9,7 @@ Review recent changes against the Jarvis architecture rules. Check for violation
 
 1. **Read CLAUDE.md** — the source of truth for architecture rules
 2. **Check agent boundaries**:
-   - Is business logic leaking into the OpenClaw plugin?
+   - Is business logic leaking outside the backend services?
    - Is the planner the only component deciding intent?
    - Is the operator the only component calling external tools?
    - Does the governor sit before external writes?

@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.api.app import app
-from src.api.deps import get_current_user, get_session
+from src.api.deps import get_current_user, get_current_user_id, get_session
 from src.config.settings import get_settings
 
 
@@ -104,7 +104,11 @@ def _override_deps():
     mock_settings = MagicMock()
     mock_settings.backend_token = ""
 
-    app.dependency_overrides[get_current_user] = lambda: "usr_default"
+    mock_user = MagicMock()
+    mock_user.user_id = "usr_default"
+
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_current_user_id] = lambda: "usr_default"
     app.dependency_overrides[get_settings] = lambda: mock_settings
     yield
     app.dependency_overrides.clear()

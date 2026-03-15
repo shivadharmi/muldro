@@ -1,20 +1,17 @@
 # Jarvis Roadmap
 
-## Design Principle: Don't Build What OpenClaw Already Does
+## Design Principle
 
-OpenClaw provides: channels, agent runtime, sessions, workspace memory, multi-agent routing,
-cron scheduling, OAuth/auth (gog/gh), voice, notifications, plugin ecosystem, mobile access.
-
-Jarvis builds **only the intelligence layer** that OpenClaw cannot provide:
-event scoring, world model, semantic memory, structured planning, governance,
-execution orchestration, briefings, and audit.
+Jarvis is the full-stack intelligence system — from perception to action to communication.
+It owns the entire loop: event scoring, world model, semantic memory, structured planning,
+governance, execution orchestration, briefings, delivery (Telegram), and audit.
 
 ---
 
 ## Phase 0: Foundation (Complete)
 
 ### Milestone 1: Infrastructure + First Flows
-- [x] Project skeleton (backend + plugin)
+- [x] Project skeleton (backend)
 - [x] Database models, Alembic migrations, Docker Compose
 - [x] Event processor (normalize, score, dedupe)
 - [x] Entity extraction (Claude-powered, alias resolution)
@@ -22,7 +19,7 @@ execution orchestration, briefings, and audit.
 - [x] Daily briefing (Presenter, cached, Claude-generated)
 - [x] Memory extraction + approval flow + audit logging
 - [x] Meeting prep workflow
-- [x] OpenClaw plugin: 11 tools (command, brief, approve, tasks, search, meeting_prep, dashboard, approval_card, task_detail, ingest_event, heartbeat)
+- [x] MCP tools: 11 tools (command, brief, approve, tasks, search, meeting_prep, dashboard, approval_card, task_detail, ingest_event, heartbeat)
 
 ### Milestone 2: Intelligence Layer
 - [x] Semantic memory search (pgvector + Voyage AI embeddings)
@@ -33,8 +30,8 @@ execution orchestration, briefings, and audit.
 
 ### Milestone 3: User Experience
 - [x] Canvas UI (dashboard, approval cards, task detail)
-- [x] Slack connector + notifications (later removed — OpenClaw handles)
-- [x] Voice + WhatsApp stubs (later removed — OpenClaw handles)
+- [x] Slack connector + notifications (later removed — Telegram replaces)
+- [x] Voice + WhatsApp stubs (later removed — Telegram replaces)
 
 ### Milestone 4: Hardening
 - [x] Retry + idempotency, execution locks, dead-letter queues
@@ -42,9 +39,9 @@ execution orchestration, briefings, and audit.
 - [x] Security (rate limiting, request size limits, CORS)
 
 ### Milestone 5: Ecosystem Alignment
-- [x] Removed connectors, notification, voice (OpenClaw owns these)
-- [x] Generic `/v1/events/ingest` + agent-driven ingestion model
-- [x] OpenClawClient (wake, delegate, run_agent_turn)
+- [x] Removed connectors, notification, voice (Telegram handles delivery)
+- [x] Generic `/v1/events/ingest` + orchestrator-driven ingestion model
+- [x] Orchestrator client (scheduling, delegation, Telegram delivery)
 - [x] Redis infrastructure (cache, locks, streams, rate limiting)
 
 ### Milestone 6: Production Deployment
@@ -62,11 +59,11 @@ execution orchestration, briefings, and audit.
 
 The agent needs to periodically read data and feed it to Jarvis. This is the "always watching" behavior.
 
-- [ ] **Scheduled observation skill**: OpenClaw skill/cron that triggers agent to read Gmail, Calendar, GitHub and ingest via `jarvis_ingest_event`
+- [ ] **Scheduled observation loop**: Backend scheduler triggers observation of Gmail, Calendar, GitHub and ingests via internal event processing
 - [ ] **Observation cadence config**: Define per-source polling intervals (email: 5min, calendar: 15min, github: 10min)
 - [ ] **Smart batching**: Agent reads multiple items per observation, batches ingestion calls
 - [ ] **Observation health**: Backend tracks last-seen timestamps per source; heartbeat flags stale sources
-- [ ] **First real daily brief**: Morning cron → agent observes → backend generates brief → agent delivers via Telegram
+- [ ] **First real daily brief**: Morning schedule → backend observes → generates brief → delivers via Telegram
 
 ### Milestone 8: End-to-End Acceptance
 
@@ -77,7 +74,7 @@ Prove the full loop works for real founder scenarios.
 - [ ] **Scenario: GitHub PR** — PR opened on key repo → scored → added to briefing → user informed
 - [ ] **Scenario: Follow-up needed** — Email sent 3 days ago, no reply → detected → added to brief as "follow up"
 - [ ] **Scenario: Conflicting meeting** — Double-booked calendar → detected → flagged in brief with recommendation
-- [ ] **Integration test suite**: Automated tests for each scenario with mocked OpenClaw agent
+- [ ] **Integration test suite**: Automated tests for each scenario with mocked orchestrator
 
 ---
 
@@ -88,7 +85,7 @@ Prove the full loop works for real founder scenarios.
 ### Milestone 9: Cross-Source Intelligence
 
 - [ ] **Event correlation**: Email from person X + meeting with X tomorrow → auto-generate meeting context
-- [ ] **Thread tracking**: Track email/Slack threads across time, detect stale conversations needing follow-up
+- [ ] **Thread tracking**: Track email threads across time, detect stale conversations needing follow-up
 - [ ] **Deadline detection**: Extract deadlines from events, track countdown, escalate in briefs
 - [ ] **Project pulse**: Aggregate events per project → "Project X: 3 emails, 2 PRs, 1 meeting this week — trending hot"
 - [ ] **People pulse**: Track interaction frequency per entity → "Haven't heard from investor Y in 2 weeks"
@@ -145,14 +142,14 @@ Prove the full loop works for real founder scenarios.
 - [ ] **Context-aware drafting**: Drafts match user's style for the specific recipient and context
 - [ ] **Priority model personalization**: User-specific importance weights (fundraising > hiring > ops)
 
-### Milestone 15: Multi-Agent Specialization (via OpenClaw)
+### Milestone 15: Multi-Agent Specialization
 
-Leverage OpenClaw's native multi-agent routing — don't build custom routing.
+Leverage the orchestrator's sub-agent capabilities for specialized tasks.
 
 - [ ] **Work agent**: Optimized for professional context (email, meetings, PRs, tasks)
 - [ ] **Research agent**: Deep analysis mode (longer context, web search, document synthesis)
 - [ ] **Quick agent**: Fast responses for routine queries (schedule check, status, approvals)
-- [ ] **Agent-specific SOUL.md files**: Each agent gets different system prompt + tool access
+- [ ] **Agent-specific system prompts**: Each sub-agent gets different prompt + MCP tool access
 - [ ] **Shared backend**: All agents talk to same Jarvis backend (world model, memory, planner)
 
 ---
@@ -176,19 +173,18 @@ Leverage OpenClaw's native multi-agent routing — don't build custom routing.
 
 ---
 
-## Dropped Items (OpenClaw Handles These)
+## Dropped Items
 
-These were originally planned but are **not needed** — OpenClaw provides them natively:
+These were originally planned but are **not needed** — handled natively:
 
-| Item | Why Dropped | OpenClaw Alternative |
-|------|-------------|---------------------|
-| OAuth integration for data sources | OpenClaw agent handles auth | `gog` (Google), `gh` (GitHub) tools |
-| Multi-connector expansion (Notion, Drive) | OpenClaw plugin ecosystem | Community/custom plugins |
-| Mobile companion app | Channels provide mobile access | Telegram, WhatsApp channels |
-| Custom multi-agent routing | OpenClaw has native routing | `agentId` + `binding` config |
-| Notification service | OpenClaw agent sends messages | `message` tool |
-| Voice features | OpenClaw has native TTS/STT | Built-in voice support |
-| Channel adapters | OpenClaw's core feature | Built-in + plugin channels |
+| Item | Why Dropped | Alternative |
+|------|-------------|-------------|
+| OAuth integration for data sources | Backend handles auth directly | Google API, GitHub API |
+| Multi-connector expansion (Notion, Drive) | MCP tool ecosystem | Community MCP servers |
+| Mobile companion app | Telegram provides mobile access | Telegram bot |
+| Notification service | Backend sends directly | Telegram delivery |
+| Voice features | Not needed for v1 | Future consideration |
+| Channel adapters | Telegram is the primary channel | Telegram bot API |
 
 ---
 

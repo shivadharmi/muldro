@@ -1,7 +1,7 @@
 """End-to-end acceptance tests from PRD scenarios.
 
 These tests exercise full API flows through the route → service chain,
-mocking only external dependencies (Claude API, database, OpenClaw gateway).
+mocking only external dependencies (Claude API, database).
 
 Scenarios from PRD Document 08:
 1. High-priority email → event/plan/execution/approval card
@@ -17,16 +17,21 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.api.app import app
-from src.api.deps import get_current_user
+from src.api.deps import get_current_user, get_current_user_id
 from src.models.approvals import Approval
 from src.models.executions import Execution
 
 
 @pytest.fixture(autouse=True)
 def _override_auth():
-    app.dependency_overrides[get_current_user] = lambda: "usr_default"
+    mock_user = MagicMock()
+    mock_user.user_id = "usr_default"
+
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_current_user_id] = lambda: "usr_default"
     yield
     app.dependency_overrides.pop(get_current_user, None)
+    app.dependency_overrides.pop(get_current_user_id, None)
 
 
 client = TestClient(app)

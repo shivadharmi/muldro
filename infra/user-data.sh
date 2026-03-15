@@ -139,8 +139,6 @@ ANTHROPIC_API_KEY=$(get_ssm_param "anthropic-api-key")
 VOYAGE_API_KEY=$(get_ssm_param "voyage-api-key")
 BACKEND_TOKEN=$(get_ssm_param "backend-token")
 POSTGRES_PASSWORD=$(get_ssm_param "postgres-password")
-OPENCLAW_GATEWAY_TOKEN=$(get_ssm_param "openclaw-gateway-token")
-OPENCLAW_HOOK_TOKEN=$(get_ssm_param "openclaw-hook-token")
 GITHUB_PAT=$(get_ssm_param "github-pat")
 
 echo "Secrets retrieved successfully"
@@ -202,8 +200,6 @@ JARVIS_REDIS_URL=redis://127.0.0.1:6379/0
 JARVIS_ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
 JARVIS_VOYAGE_API_KEY=$VOYAGE_API_KEY
 JARVIS_BACKEND_TOKEN=$BACKEND_TOKEN
-JARVIS_OPENCLAW_HOOK_TOKEN=$OPENCLAW_HOOK_TOKEN
-JARVIS_OPENCLAW_GATEWAY_URL=http://127.0.0.1:18789
 JARVIS_HOST=127.0.0.1
 JARVIS_PORT=8000
 JARVIS_USE_BEDROCK=true
@@ -258,150 +254,22 @@ systemctl enable jarvis-backend
 systemctl start jarvis-backend
 
 # ============================================================
-# Phase 7: Set up OpenClaw
+# Phase 7: Set up Caddy reverse proxy
 # ============================================================
-echo "=== Phase 7: Setting up OpenClaw ==="
-
-npm i -g openclaw@latest
-
-# Build jarvis-tools plugin
-cd "$INSTALL_DIR/jarvis-tools"
-sudo -u ubuntu npm ci
-
-# Create OpenClaw config directory
-OPENCLAW_HOME="/home/ubuntu/.openclaw"
-mkdir -p "$OPENCLAW_HOME/agents/main/sessions"
-
-cat > "$OPENCLAW_HOME/openclaw.json" <<OCEOF
-{
-  "gateway": {
-    "mode": "local",
-    "bind": "loopback",
-    "port": 18789,
-    "auth": {
-      "mode": "token",
-      "token": "$OPENCLAW_GATEWAY_TOKEN"
-    },
-    "controlUi": {
-      "allowedOrigins": ["https://$DOMAIN"],
-      "dangerouslyDisableDeviceAuth": true
-    },
-    "trustedProxies": ["127.0.0.1"]
-  },
-  "agents": {
-    "defaults": {
-      "model": {
-        "primary": "amazon-bedrock/apac.anthropic.claude-sonnet-4-20250514-v1:0"
-      }
-    }
-  },
-  "models": {
-    "providers": {
-      "amazon-bedrock": {
-        "baseUrl": "https://bedrock-runtime.$AWS_REGION.amazonaws.com",
-        "api": "bedrock-converse-stream",
-        "auth": "aws-sdk",
-        "models": [
-          {
-            "id": "apac.anthropic.claude-sonnet-4-20250514-v1:0",
-            "name": "Claude Sonnet 4 (Bedrock)",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "contextWindow": 200000,
-            "maxTokens": 8192
-          }
-        ]
-      }
-    },
-    "bedrockDiscovery": {
-      "enabled": true,
-      "region": "$AWS_REGION",
-      "providerFilter": ["anthropic"],
-      "refreshInterval": 3600
-    }
-  },
-  "plugins": {
-    "enabled": true,
-    "allow": ["jarvis-tools"],
-    "load": {
-      "paths": ["$INSTALL_DIR/jarvis-tools"]
-    },
-    "entries": {
-      "jarvis-tools": {
-        "enabled": true,
-        "config": {
-          "backendUrl": "http://127.0.0.1:8000",
-          "backendToken": "$BACKEND_TOKEN"
-        }
-      }
-    }
-  },
-  "cron": {
-    "enabled": true
-  }
-}
-OCEOF
-chmod 700 "$OPENCLAW_HOME"
-chmod 600 "$OPENCLAW_HOME/openclaw.json"
-chown -R ubuntu:ubuntu "$OPENCLAW_HOME"
-
-# Create systemd service for OpenClaw
-cat > /etc/systemd/system/openclaw.service <<OCSVCEOF
-[Unit]
-Description=OpenClaw Gateway
-After=network.target jarvis-backend.service
-Wants=jarvis-backend.service
-
-[Service]
-Type=simple
-User=ubuntu
-Group=ubuntu
-Environment=HOME=/home/ubuntu
-Environment=PATH=/usr/bin:/usr/local/bin:/bin
-Environment=ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
-Environment=VOYAGE_API_KEY=$VOYAGE_API_KEY
-Environment=AWS_REGION=$AWS_REGION
-Environment=NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache
-Environment=OPENCLAW_NO_RESPAWN=1
-ExecStart=/usr/bin/openclaw gateway
-Restart=always
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=openclaw
-
-[Install]
-WantedBy=multi-user.target
-OCSVCEOF
-
-mkdir -p /var/tmp/openclaw-compile-cache
-
-systemctl daemon-reload
-systemctl enable openclaw
-systemctl start openclaw
-
-# ============================================================
-# Phase 8: Set up Caddy reverse proxy
-# ============================================================
-echo "=== Phase 8: Setting up Caddy ==="
+echo "=== Phase 7: Setting up Caddy ==="
 
 mkdir -p /var/log/caddy
 
 cat > /etc/caddy/Caddyfile <<CADDYEOF
 $DOMAIN {
-    # OpenClaw gateway (webhooks, agent API)
-    handle /jarvis/* {
-        reverse_proxy localhost:18789
-    }
-
     # Jarvis backend API
     handle /v1/* {
         reverse_proxy localhost:8000
     }
 
-    # Default: OpenClaw gateway
+    # Default: Jarvis backend
     handle {
-        reverse_proxy localhost:18789
+        reverse_proxy localhost:8000
     }
 
     # Security headers
@@ -428,9 +296,9 @@ systemctl enable caddy
 systemctl restart caddy
 
 # ============================================================
-# Phase 9: Monitoring & backups
+# Phase 8: Monitoring & backups
 # ============================================================
-echo "=== Phase 9: Setting up backups ==="
+echo "=== Phase 8: Setting up backups ==="
 
 # Install backup script
 cp "$INSTALL_DIR/infra/scripts/backup-postgres.sh" /usr/local/bin/backup-postgres.sh
@@ -440,6 +308,6 @@ chmod +x /usr/local/bin/backup-postgres.sh
 echo "0 3 * * * root /usr/local/bin/backup-postgres.sh" > /etc/cron.d/jarvis-backup
 
 echo "=== Jarvis bootstrap completed at $(date -u) ==="
-echo "Services: caddy, jarvis-backend, openclaw"
+echo "Services: caddy, jarvis-backend"
 echo "Logs: journalctl -u <service> -f"
 echo "Bootstrap log: /var/log/jarvis-setup.log"

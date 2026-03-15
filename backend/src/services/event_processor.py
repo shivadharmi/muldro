@@ -25,6 +25,7 @@ from src.models.events import NormalizedEvent
 
 if TYPE_CHECKING:
     from src.services.dead_letter import DeadLetterService
+    from src.services.event_bus import EventBus
     from src.services.memory_service import MemoryService
     from src.services.world_model import WorldModel
 
@@ -103,6 +104,7 @@ class EventProcessor:
         world_model: WorldModel | None = None,
         memory_service: MemoryService | None = None,
         dead_letter: DeadLetterService | None = None,
+        event_bus: EventBus | None = None,
     ):
         self._settings = settings
         self._db = db
@@ -113,6 +115,7 @@ class EventProcessor:
         self._world_model = world_model
         self._memory_service = memory_service
         self._dead_letter = dead_letter
+        self._event_bus = event_bus
 
     async def process(self, raw: RawEvent, user_id: str) -> str | None:
         """Process a raw event. Returns event_id if stored, None if duplicate."""
@@ -160,7 +163,25 @@ class EventProcessor:
             event.urgency_score or 0,
         )
 
-        # Fire downstream hooks (entity extraction, memory extraction, etc.)
+        # Publish to event bus for decoupled downstream processing
+        if self._event_bus:
+            try:
+                await self._event_bus.publish(
+                    self._event_bus.event_stream(user_id),
+                    "event_processed",
+                    {
+                        "event_id": event_id,
+                        "source": raw.source,
+                        "event_type": raw.event_type,
+                        "importance_score": event.importance_score or 0,
+                        "urgency_score": event.urgency_score or 0,
+                    },
+                    user_id=user_id,
+                )
+            except Exception:
+                logger.warning("Failed to publish to event bus", exc_info=True)
+
+        # Fire legacy callbacks (kept for backward compatibility)
         for callback in self._on_event_processed:
             try:
                 await callback(event_id, user_id)
@@ -171,7 +192,6 @@ class EventProcessor:
                     str(exc)[:200],
                     exc_info=True,
                 )
-                # Enqueue to dead-letter queue if available
                 if hasattr(self, "_dead_letter") and self._dead_letter:
                     await self._dead_letter.enqueue(
                         user_id=user_id,

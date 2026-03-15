@@ -4,79 +4,64 @@
 
 Jarvis is a **Personal AI Operating System** for founders. It continuously observes, understands, plans, acts, and briefs. It is NOT a chatbot with tools — it is an operating system with a core loop: Perceive → Understand → Update Model → Plan → Act → Communicate.
 
-## System Boundary (non-negotiable)
-
-**OpenClaw owns the surface. Jarvis backend owns the intelligence.**
-
-- OpenClaw: chat channels, voice, sessions, tool dispatch, Canvas UI, cron triggers
-- OpenClaw agent: reads data via `gog` (Google Workspace), `gh` (GitHub), `message` (channels), sends messages, executes delegated tasks
-- Jarvis backend: event processing, world model, memory, planning, governance, execution tracking, briefings, audit
-- The `jarvis-tools` plugin is a **thin bridge** — HTTP calls only, no business logic, no state
-
-Never put business logic in the OpenClaw plugin. Never use OpenClaw sessions as durable task state. Never use OpenClaw memory as the product memory system.
-
 ## Architecture
 
+Multi-agent hub-and-spoke topology with 8 specialized sub-agents orchestrated by a central JarvisOrchestrator. External MCP servers provide connectors (Google Workspace, GitHub, Slack, etc.), while internal FastMCP servers wrap the intelligence layer.
+
 ```
-User <-> OpenClaw Gateway (channels, voice, Canvas, cron)
+User <-> Telegram Bot / Web Frontend (Next.js + A2UI)
               |
-         OpenClaw Agent (Pi — Claude-powered)
-         Has: gog, gh, message, browser, memory, cron, sub-agents
+         JarvisOrchestrator (Claude API)
+         Routes to 8 sub-agents:
+         Observer, Librarian, Planner, Governor,
+         Operator, Presenter, Researcher, Persona
               |
-         jarvis-tools plugin (thin HTTP bridge)
-              | HTTP
+         Tool Layer (MCP Servers)
+         Internal: Intelligence + Communication
+         External: Google Workspace, GitHub, Slack, etc.
+              |
          Jarvis Intelligence Backend
          +-------------------------------------+
-         | /v1/events/ingest <- agent feeds    |
-         |          |                          |
          | EventProcessor (score, dedup)       |
-         |          |                          |
          | WorldModel + MemoryService          |
          | (entities, relationships, pgvector) |
-         |          |                          |
          | Planner (Claude structured planning)|
-         |          |                          |
          | Governor (policy + approval gates)  |
-         |          |                          |
-         | Operator (state tracking) --------->|-> OpenClaw agent
-         |          |               (delegate) |   (executes via
-         | Presenter (briefings, meeting prep) |    gog/gh/message)
-         |          |                          |
+         | Operator (execution tracking)       |
+         | Presenter (briefings, A2UI, notify) |
          | Audit + DLQ + Heartbeat + Locking   |
          +-------------------------------------+
 ```
-
-**Jarvis = the brain (decides, scores, remembers, audits)**
-**OpenClaw agent = the hands (reads, writes, sends, searches)**
 
 ## Project Structure
 
 ```
 jarvis/
-├── backend/                 # Python FastAPI backend (the brain)
+├── backend/                 # Python FastAPI backend
 │   ├── src/
-│   │   ├── api/             # REST endpoints (called by OpenClaw plugin)
-│   │   ├── config/          # Settings (pydantic-settings)
-│   │   ├── middleware/       # Observability, security (rate limit, CORS, size limits)
+│   │   ├── api/             # REST + WebSocket endpoints
+│   │   ├── config/          # Settings, logging (pydantic-settings)
+│   │   ├── interface/       # Telegram bot
+│   │   ├── middleware/      # Observability, security
 │   │   ├── models/          # SQLAlchemy models (Postgres)
-│   │   └── services/        # Business logic (planner, governor, operator, etc.)
+│   │   ├── orchestrator/    # JarvisOrchestrator, agents, prompts, hooks, tracing, budget
+│   │   ├── services/        # Business logic (planner, governor, operator, etc.)
+│   │   ├── tools/           # FastMCP intelligence + communication servers
+│   │   ├── ui/              # A2UI contracts and rendering helpers
+│   │   └── workflows/       # High-level workflow compositions
 │   ├── tests/
 │   ├── alembic/             # Database migrations
 │   └── pyproject.toml
-├── jarvis-tools/            # OpenClaw plugin (TypeScript, thin bridge)
-│   ├── src/
-│   │   ├── index.ts         # Plugin entry point
-│   │   ├── tools.ts         # Agent tool registrations
-│   │   ├── routes.ts        # HTTP route registrations
-│   │   └── backend-client.ts
-│   └── openclaw.plugin.json
-├── jarvis-agent/            # OpenClaw agent config
-│   └── SOUL.md              # Agent system prompt
+├── frontend/                # Next.js + A2UI dynamic UI
+│   └── src/
+│       ├── app/             # Pages and layout
+│       ├── components/      # A2UI renderer + Jarvis chat panel
+│       ├── hooks/           # WebSocket + surface state hooks
+│       └── lib/             # API client + A2UI types
 ├── infra/                   # Terraform (AWS: EC2, VPC, Route53, IAM, SSM)
 │   └── scripts/             # deploy.sh, backup-postgres.sh
 ├── docs/                    # Architecture and design docs
-├── docker-compose.yml       # Local dev (Postgres + Redis)
-└── openclaw.example.json5   # Example OpenClaw config
+└── docker-compose.yml       # Local dev (Postgres + Redis)
 ```
 
 ## Tech Stack
@@ -87,9 +72,11 @@ jarvis/
 | Database | PostgreSQL 17 (pgvector extension) |
 | Cache/Queue | Redis 7 (caching, rate limiting, locks, task streams) |
 | AI Model | Claude (Anthropic API or AWS Bedrock) |
-| Embeddings | Voyage AI (voyage-3-lite, 1536 dim) |
-| Gateway | OpenClaw (self-hosted) |
-| Plugin | TypeScript / Node.js |
+| Embeddings | Bedrock Titan V2 (amazon.titan-embed-text-v2:0) |
+| Agent Runtime | JarvisOrchestrator (Claude API + sub-agent prompts) |
+| MCP Tools | FastMCP (internal), external MCP servers |
+| Frontend | Next.js + A2UI protocol |
+| Interface | Telegram Bot (python-telegram-bot) |
 | Reverse Proxy | Caddy (automatic TLS, production) |
 | Infrastructure | AWS (Terraform: EC2, VPC, Route53, IAM, SSM) |
 | Migrations | Alembic |
@@ -106,12 +93,6 @@ jarvis/
 - **Tests**: pytest + pytest-asyncio. Test files mirror source structure. Each service gets unit tests.
 - **Imports**: Absolute imports from `src.` prefix. Ruff handles sorting.
 
-### TypeScript (jarvis-tools/)
-
-- **Style**: TypeScript strict mode. No `any` types.
-- **Plugin rule**: Tools only do HTTP calls to backend. No business logic. No state.
-- **Schema**: Use TypeBox (`@sinclair/typebox`) for tool parameter schemas.
-
 ### Database
 
 - **Migrations**: Always use Alembic. Never modify tables by hand.
@@ -123,7 +104,6 @@ jarvis/
 
 - **Versioned**: All endpoints prefixed with `/v1/`
 - **REST-first**: Use proper HTTP methods. Return stable IDs and status.
-- **Internal vs external**: Internal execution APIs don't leak to OpenClaw. Only the schemas in `api/schemas.py` are external contracts.
 
 ## Architecture Rules
 
@@ -131,26 +111,29 @@ jarvis/
 
 | Agent | Responsibility | Write Scope |
 |-------|---------------|-------------|
-| Observer (Event Processor) | Classify, score, dedupe events | normalized_events |
-| Librarian (World Model + Memory) | Update entities, extract memories | entities, relationships, memories |
+| Observer | Perceive the world — read sources, detect changes, ingest events | normalized_events, observation_health |
+| Librarian | Understand events — extract entities, update world model | entities, relationships, memories |
 | Planner | Decide what to do, produce task graphs | plans, plan_tasks |
 | Governor | Evaluate policies, gate approvals | policy decisions, approvals |
-| Operator | Track execution state, delegate work to OpenClaw agent | executions, execution_task_runs |
-| Presenter | Generate user-facing output | briefings, canvas payloads |
+| Operator | Execute approved plans via MCP tools | executions, execution_task_runs |
+| Presenter | Generate user-facing output, A2UI surfaces | briefings, UI payloads |
+| Researcher | Deep context gathering, cross-source synthesis | None (read-only) |
+| Persona | Learn preferences, adapt communication style | memories (preference type) |
 
-Only Planner decides intent. Only Operator delegates external work (to OpenClaw agent). Only Presenter talks to the user. Governor sits before every external write.
+Only Planner decides intent. Only Operator executes external actions. Only Presenter talks to the user. Governor sits before every external write.
 
 ### Data Flow
 
-1. **Agent reads data** (via gog, gh, message, browser)
-2. **Agent ingests** to backend via `jarvis_ingest_event` tool → `/v1/events/ingest`
+1. **Observer** reads data sources via MCP tools (Gmail, Calendar, GitHub, Slack)
+2. **Observer** ingests events to intelligence pipeline → `/v1/events/ingest`
 3. **EventProcessor** normalizes, scores importance, deduplicates
-4. **Callbacks fire**: entity extraction → memory extraction → proactive planning
-5. **Governor** evaluates policy → creates approval if needed
-6. **Backend wakes agent** via OpenClaw `/hooks/wake` for notifications
-7. **Operator delegates** real-world actions back to OpenClaw agent via `/hooks/agent`
+4. **Librarian** extracts entities and memories
+5. **Planner** evaluates and creates task graphs
+6. **Governor** evaluates policy → creates approval if needed
+7. **Operator** executes approved plans
+8. **Presenter** delivers results via Telegram + web A2UI surfaces
 
-### Core Contracts (freeze these before prompt tuning)
+### Core Contracts
 
 1. **Normalized Event** — the universal event schema
 2. **Plan + Task Graph** — structured planner output (never free-form text)
@@ -182,6 +165,9 @@ python run.py  # starts on :8000
 # Run background worker (processes async callbacks)
 python run.py --worker
 
+# Run with Telegram bot
+python run.py --worker --bot
+
 # Run tests
 pytest tests/ -v
 
@@ -194,68 +180,8 @@ alembic revision --autogenerate -m "description"
 alembic upgrade head
 ```
 
-### Running OpenClaw
-
-```bash
-npm i -g openclaw
-cp openclaw.example.json5 ~/.openclaw/openclaw.json
-# Edit config: set model provider, plugin path, tokens
-openclaw gateway
-# Gateway runs on http://localhost:18789
-```
-
-## Design Principle: Don't Build What OpenClaw Already Does
-
-OpenClaw provides: channels, agent runtime, sessions, workspace memory, multi-agent routing,
-cron scheduling, OAuth/auth (gog/gh), voice, notifications, plugin ecosystem, mobile access.
-
-Jarvis builds **only the intelligence layer**: event scoring, world model, semantic memory,
-structured planning, governance, execution orchestration, briefings, and audit.
-
-Do NOT build: connectors, OAuth, channel adapters, notification services, voice, mobile apps,
-multi-agent routing logic, or session management. These are OpenClaw's domain.
-
-## Current Phase
-
-Phase 0 (Foundation) complete — Milestones 1-6 done:
-- Core services: EventProcessor, WorldModel, MemoryService, Planner, Governor, Operator, Presenter
-- Infrastructure: Postgres+pgvector, Redis, Bedrock, OpenClaw integration
-- Production: AWS EC2, Caddy, Telegram, `jarvis.brrdcast.in`
-- 109 tests passing, all lint clean
-
-Backend supports both direct Anthropic API (`JARVIS_USE_BEDROCK=false`) and AWS Bedrock (`JARVIS_USE_BEDROCK=true`, `JARVIS_BEDROCK_REGION`). See `backend/src/config/settings.py`.
-
-**Now entering Phase 1: Make It Real** — wire the observation loop, prove end-to-end scenarios.
-
-Next focus areas:
-1. Scheduled observation loop (agent reads data on cron, ingests to backend)
-2. End-to-end acceptance tests for real founder scenarios
-3. Cross-source intelligence (event correlation, thread tracking, deadline detection)
-4. Policy modes (full_auto, suggest_only, approval_required, critical_only, lockdown)
-5. Monitoring SLOs and alerting
-
-See `docs/ROADMAP.md` for the full phased roadmap.
-
-## Plugin Tools (jarvis-tools)
-
-| Tool | Purpose |
-|------|---------|
-| `jarvis_command` | Natural language command → plan |
-| `jarvis_brief` | Daily briefing generation |
-| `jarvis_approve` | Approve/reject pending actions |
-| `jarvis_tasks` | List tasks and plans |
-| `jarvis_search` | Search events, entities, memories |
-| `jarvis_meeting_prep` | Meeting preparation cards |
-| `jarvis_dashboard` | Canvas: unified dashboard |
-| `jarvis_approval_card` | Canvas: approval detail |
-| `jarvis_task_detail` | Canvas: task progress |
-| `jarvis_ingest_event` | Ingest events from any source |
-| `jarvis_heartbeat` | Trigger periodic maintenance |
-
 ## Common Mistakes to Avoid
 
-- Do not put business logic in the OpenClaw plugin
-- Do not use OpenClaw sessions for task state
 - Do not let the planner output free-form text — always structured JSON
 - Do not skip the Governor for external writes
 - Do not store secrets in memory or model context

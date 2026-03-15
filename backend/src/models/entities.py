@@ -1,4 +1,6 @@
-from sqlalchemy import ForeignKey, Index, String
+from datetime import date, datetime
+
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -15,6 +17,9 @@ class Entity(Base, TimestampMixin):
     canonical_name: Mapped[str] = mapped_column(String(256), nullable=False)
     attributes: Mapped[dict | None] = mapped_column(JSONB)
     source_refs: Mapped[dict | None] = mapped_column(JSONB)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    interaction_count: Mapped[int] = mapped_column(Integer, default=0)
+    importance_score: Mapped[float] = mapped_column(Float, default=0.0)
 
     aliases: Mapped[list["EntityAlias"]] = relationship(
         back_populates="entity", cascade="all, delete-orphan"
@@ -58,6 +63,10 @@ class EntityRelationship(Base, TimestampMixin):
         String(64), ForeignKey("entities.entity_id", ondelete="CASCADE"), nullable=False
     )
     attributes: Mapped[dict | None] = mapped_column(JSONB)
+    strength: Mapped[float] = mapped_column(Float, default=1.0)
+    start_date: Mapped[date | None] = mapped_column(Date)
+    end_date: Mapped[date | None] = mapped_column(Date)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     __table_args__ = (
         Index("ix_relations_from", "from_entity_id", "relation_type"),

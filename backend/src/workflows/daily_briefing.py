@@ -1,6 +1,6 @@
 """Daily Briefing Workflow.
 
-Triggered by OpenClaw cron or manual request via the briefing endpoint.
+Triggered by scheduler or manual request via the briefing endpoint.
 
 Steps:
 1. Fetch all important events since last briefing
@@ -9,7 +9,7 @@ Steps:
 4. Planner produces top priorities
 5. Presenter generates text brief + structured payload
 6. Store briefing snapshot
-7. Optionally notify OpenClaw to deliver (via /hooks/wake)
+7. Notify user via Telegram / web dashboard
 """
 
 import logging

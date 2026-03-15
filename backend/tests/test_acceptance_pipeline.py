@@ -20,7 +20,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.api.app import app
-from src.api.deps import get_current_user, get_session
+from src.api.deps import get_current_user, get_current_user_id, get_session
 from src.models.approvals import Approval
 from src.models.executions import Execution
 from src.models.observation import ObservationStatus
@@ -28,9 +28,14 @@ from src.models.observation import ObservationStatus
 
 @pytest.fixture(autouse=True)
 def _override_auth():
-    app.dependency_overrides[get_current_user] = lambda: "usr_default"
+    mock_user = MagicMock()
+    mock_user.user_id = "usr_default"
+
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_current_user_id] = lambda: "usr_default"
     yield
     app.dependency_overrides.pop(get_current_user, None)
+    app.dependency_overrides.pop(get_current_user_id, None)
 
 
 client = TestClient(app)

@@ -1,5 +1,7 @@
+from datetime import datetime
+
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Float, Index, Integer, String, Text
+from sqlalchemy import DateTime, Float, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -12,7 +14,7 @@ class Memory(Base, TimestampMixin):
     memory_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     memory_type: Mapped[str] = mapped_column(String(32), nullable=False)
-    # episodic, semantic, preference, relationship, task_context
+    # episodic, semantic, preference, relationship, task_context, procedural
     scope: Mapped[str | None] = mapped_column(String(64))  # presentation, planning, general
     fact_text: Mapped[str] = mapped_column(Text, nullable=False)
     embedding: Mapped[list | None] = mapped_column(Vector(1024))
@@ -23,5 +25,10 @@ class Memory(Base, TimestampMixin):
     provenance: Mapped[dict | None] = mapped_column(JSONB)
     ttl_days: Mapped[int | None] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(16), default="active")  # active, expired, merged
+    refresh_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_accessed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    __table_args__ = (Index("ix_memories_user_type_status", "user_id", "memory_type", "status"),)
+    __table_args__ = (
+        Index("ix_memories_user_type_status", "user_id", "memory_type", "status"),
+        Index("ix_memories_last_accessed", "last_accessed_at"),
+    )

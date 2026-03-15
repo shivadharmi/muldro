@@ -1,0 +1,27 @@
+"""OAuth token storage model.
+
+Stores encrypted OAuth tokens (access + refresh) per provider per user.
+Supports automatic refresh detection via expires_at.
+"""
+
+from datetime import datetime
+
+from sqlalchemy import DateTime, Index, String, Text
+from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.orm import Mapped, mapped_column
+
+from src.models.base import Base, TimestampMixin
+
+
+class OAuthToken(Base, TimestampMixin):
+    __tablename__ = "oauth_tokens"
+
+    token_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)  # google, github, slack
+    access_token_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    refresh_token_encrypted: Mapped[str] = mapped_column(Text, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    scopes: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True)
+
+    __table_args__ = (Index("ix_oauth_tokens_user_provider", "user_id", "provider", unique=True),)

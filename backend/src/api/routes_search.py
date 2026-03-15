@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_current_user, get_session
+from src.api.deps import get_current_user_id, get_session
 from src.api.schemas import SearchRequest, SearchResponse, SearchResult
 from src.config.settings import Settings, get_settings
 from src.services.memory_service import MemoryService
@@ -15,7 +15,7 @@ router = APIRouter()
 @router.post("/v1/search", response_model=SearchResponse)
 async def search(
     req: SearchRequest,
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ):

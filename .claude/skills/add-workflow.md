@@ -21,9 +21,9 @@ The user wants to add a new durable workflow (e.g., daily briefing, meeting prep
    - Respect agent boundaries: only Planner decides intent, only Operator calls tools
    - Use correlation IDs throughout
 5. **Add a trigger mechanism**:
-   - If cron-triggered: document the OpenClaw cron job config
+   - If cron-triggered: add a schedule entry via the scheduler API
    - If event-triggered: wire from EventProcessor
-   - If user-triggered: add API endpoint + OpenClaw tool
+   - If user-triggered: add API endpoint + MCP tool
 6. **Add presenter output**:
    - Define the output schema in `backend/src/api/schemas.py`
    - The Presenter turns internal state into user-facing content

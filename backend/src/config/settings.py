@@ -26,11 +26,8 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
     debug: bool = False
+    log_json: bool = False  # Use JSON structured logging
 
-    # OpenClaw integration
-    openclaw_gateway_url: str = "http://localhost:18789"
-    openclaw_hook_token: str = ""  # Legacy hook token (unused — kept for compat)
-    openclaw_gateway_token: str = ""  # Gateway auth token for /v1/chat/completions
     telegram_chat_id: str = ""  # Telegram chat ID for proactive message delivery
 
     # Embeddings (Bedrock Titan)
@@ -41,7 +38,7 @@ class Settings(BaseSettings):
     briefing_lookback_hours: int = 24  # Default time window for briefing data
 
     # Security
-    backend_token: str = ""  # Token for authenticating OpenClaw plugin calls
+    backend_token: str = ""  # Token for authenticating API calls
     rate_limit_rpm: int = 120  # Requests per minute per IP
     max_request_body_bytes: int = 1_048_576  # 1MB
     cors_allowed_origins: str = ""  # Comma-separated origins (empty = no CORS)
@@ -60,6 +57,48 @@ class Settings(BaseSettings):
     plan_ttl_hours: int = 72  # Plans older than this are invalidated
     approval_ttl_hours: int = 24  # Approvals expire after this
     dlq_max_attempts: int = 3  # Dead-letter retry limit
+
+    # Budget
+    daily_token_budget_usd: float = 5.0  # Daily spend limit before degradation
+
+    # Telegram bot
+    telegram_bot_token: str = ""  # Telegram Bot API token
+
+    # Auth
+    session_secret_key: str = ""  # Secret for signing session tokens
+    magic_link_ttl_minutes: int = 15
+    session_ttl_hours: int = 720  # 30 days
+
+    # Frontend
+    frontend_url: str = "http://localhost:3000"
+
+    # OAuth token encryption
+    oauth_encryption_key: str = ""
+
+    # OAuth providers
+    google_oauth_client_id: str = ""
+    google_oauth_client_secret: str = ""
+    google_oauth_redirect_uri: str = "http://localhost:8000/v1/auth/google/callback"
+    github_oauth_client_id: str = ""
+    github_oauth_client_secret: str = ""
+    github_oauth_redirect_uri: str = "http://localhost:8000/v1/auth/github/callback"
+
+    # S3 / artifact storage
+    s3_bucket: str = ""
+    s3_endpoint_url: str = ""  # For MinIO local dev
+    s3_region: str = "ap-south-1"
+
+    # Elasticsearch
+    elasticsearch_url: str = ""
+
+    # Qdrant
+    qdrant_url: str = ""
+    qdrant_api_key: str = ""
+
+    # Neo4j
+    neo4j_url: str = ""
+    neo4j_user: str = "neo4j"
+    neo4j_password: str = ""
 
 
 @lru_cache

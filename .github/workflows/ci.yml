@@ -38,21 +38,3 @@ jobs:
         run: |
           source .venv/bin/activate
           pytest tests/ -v
-
-  plugin:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: jarvis-tools
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Type check
-        run: npx tsc --noEmit

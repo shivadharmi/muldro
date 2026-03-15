@@ -42,8 +42,6 @@ Set secrets via environment variables (never commit to tfvars):
 export TF_VAR_anthropic_api_key="<your-anthropic-api-key>"
 export TF_VAR_voyage_api_key="<your-voyage-api-key>"
 export TF_VAR_backend_token="$(openssl rand -hex 32)"
-export TF_VAR_openclaw_gateway_token="$(openssl rand -hex 32)"
-export TF_VAR_openclaw_hook_token="$(openssl rand -hex 32)"
 export TF_VAR_postgres_password=$(openssl rand -hex 24)
 export TF_VAR_github_pat="<your-github-pat>"
 ```
@@ -74,9 +72,8 @@ The EC2 instance runs a 9-phase bootstrap script on first boot:
 4. **Clone repository** — Clones the private repo using GitHub PAT
 5. **Start databases** — Docker Compose for Postgres + Redis, enables pgvector
 6. **Backend setup** — Creates `.env`, installs Python deps, runs Alembic migrations, starts systemd service
-7. **OpenClaw setup** — Installs OpenClaw, builds plugin, writes `openclaw.json`, starts systemd service
-8. **Caddy reverse proxy** — Configures TLS termination, routes `/v1/*` to backend, everything else to OpenClaw
-9. **Monitoring & backups** — Daily Postgres backup cron (3am, 7-day retention)
+7. **Caddy reverse proxy** — Configures TLS termination, routes `/v1/*` to backend
+8. **Monitoring & backups** — Daily Postgres backup cron (3am, 7-day retention)
 
 Monitor bootstrap progress:
 
@@ -91,20 +88,16 @@ tail -f /var/log/jarvis-setup.log
 ssh ubuntu@<instance-ip>
 
 # Check all services are running
-systemctl status jarvis-backend openclaw caddy
+systemctl status jarvis-backend caddy
 
 # Check backend health
 curl http://localhost:8000/v1/health
-
-# Check OpenClaw is responding
-curl -H "Authorization: Bearer <gateway-token>" http://localhost:18789/health
 
 # Check Caddy TLS
 curl https://jarvis.brrdcast.in/v1/health
 
 # Check logs
 journalctl -u jarvis-backend -f
-journalctl -u openclaw -f
 journalctl -u caddy -f
 ```
 
@@ -132,61 +125,16 @@ If using AWS Bedrock instead of direct Anthropic API:
    JARVIS_ANTHROPIC_MODEL=apac.anthropic.claude-sonnet-4-20250514-v1:0
    ```
 
-5. **OpenClaw config** (in `openclaw.json`):
-   ```json
-   "models": {
-     "providers": {
-       "amazon-bedrock": {
-         "baseUrl": "https://bedrock-runtime.ap-south-1.amazonaws.com",
-         "api": "bedrock-converse-stream",
-         "auth": "aws-sdk",
-         "models": [{
-           "id": "apac.anthropic.claude-sonnet-4-20250514-v1:0",
-           "name": "Claude Sonnet 4 (Bedrock)",
-           "reasoning": true,
-           "input": ["text", "image"],
-           "contextWindow": 200000,
-           "maxTokens": 8192
-         }]
-       }
-     }
-   }
-   ```
+## 6. Telegram Bot Configuration
 
-## 6. OpenClaw Configuration
+Set the following environment variables in `backend/.env`:
 
-### Telegram Channel (optional)
-
-Add to `openclaw.json`:
-
-```json
-"channels": {
-  "telegram": {
-    "botToken": "<bot-token-from-botfather>",
-    "allowedUsers": [<your-telegram-user-id>]
-  }
-}
+```
+JARVIS_TELEGRAM_BOT_TOKEN=<bot-token-from-botfather>
+JARVIS_TELEGRAM_CHAT_ID=<your-telegram-chat-id>
 ```
 
-### Plugin Configuration
-
-Plugin config is passed via `plugins.entries.<name>.config`, NOT as a second argument to the plugin:
-
-```json
-"plugins": {
-  "entries": {
-    "jarvis-tools": {
-      "enabled": true,
-      "config": {
-        "backendUrl": "http://127.0.0.1:8000",
-        "backendToken": "<backend-token>"
-      }
-    }
-  }
-}
-```
-
-The plugin reads config via `api.config` in its initialization code.
+The backend's scheduler delivers briefings and notifications directly via the Telegram Bot API.
 
 ## 7. Updating Deployed Code
 
@@ -221,18 +169,6 @@ gunzip -c /opt/jarvis/backups/jarvis_YYYYMMDD_HHMMSS.sql.gz | \
 
 Ubuntu 24.04 uses `ssh.service` not `sshd.service`. The user-data script uses `systemctl restart ssh` which is correct. If you see `sshd` in error messages, it's a red herring — check `ssh.service` instead.
 
-### OpenClaw model config parsing errors
-
-Do NOT set the model in `agents.defaults.model.primary` if you're also using `ANTHROPIC_MODEL_ALIASES` environment variable — they conflict. Pick one method. The recommended approach is setting it in `agents.defaults.model.primary` in the config file.
-
-### Plugin route auth errors (401/403)
-
-In OpenClaw v2026.3, plugin route auth mode defaults may differ from what you expect. If your plugin routes return auth errors, check that the route registration uses the correct auth mode. For routes that need to be called without gateway auth (e.g., webhook receivers), set auth mode to `"none"`. For routes called by the backend, set auth mode to `"plugin"`.
-
-### Plugin config not accessible
-
-In OpenClaw v2026.3, plugin config is accessed via `api.config` in the plugin initialization — not passed as a second argument to the plugin entry function. Update your `index.ts` accordingly.
-
 ### Bedrock inference profile required
 
 When using Bedrock, you cannot use bare model IDs like `anthropic.claude-sonnet-4-20250514-v1:0`. You must use inference profile IDs which have a region prefix:
@@ -244,6 +180,3 @@ When using Bedrock, you cannot use bare model IDs like `anthropic.claude-sonnet-
 
 The `alembic.ini` file has a `sqlalchemy.url` value that must match your actual Postgres password. On deploy, the user-data script patches this automatically. If you run migrations manually, ensure the URL matches your `.env`.
 
-### Backend can't reach OpenClaw
-
-Ensure `JARVIS_OPENCLAW_GATEWAY_URL` points to `http://127.0.0.1:18789` (not `localhost`, which may resolve to IPv6 on some systems).

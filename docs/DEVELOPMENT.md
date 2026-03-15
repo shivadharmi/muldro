@@ -3,7 +3,6 @@
 ## Prerequisites
 
 - Python 3.13+ (via pyenv or system)
-- Node.js 22+ (via nvm)
 - Docker & Docker Compose
 - uv (Python package manager)
 - One of:
@@ -52,39 +51,6 @@ python run.py --worker
 
 # Verify
 curl http://localhost:8000/v1/health
-```
-
-### 3. Plugin (jarvis-tools)
-
-```bash
-cd jarvis-tools
-
-# Install dependencies
-npm install
-
-# Type check
-npx tsc --noEmit
-
-# Build (optional, OpenClaw loads TS via jiti)
-npm run build
-```
-
-### 4. OpenClaw
-
-```bash
-# Install OpenClaw
-npm i -g openclaw
-
-# Copy the example config
-cp openclaw.example.json5 ~/.openclaw/openclaw.json
-# Edit ~/.openclaw/openclaw.json:
-#   - Set your model provider (Anthropic API key or Bedrock)
-#   - Set the path to your local jarvis-tools directory
-#   - Set backendUrl and backendToken in plugins.entries
-
-# Start gateway
-openclaw gateway
-# Gateway runs on http://localhost:18789
 ```
 
 ## Running Tests
@@ -149,19 +115,18 @@ alembic current
 7. Update schemas in `backend/src/api/schemas.py`
 8. Write tests in `backend/tests/`
 
-## Adding a New OpenClaw Tool
+## Adding a New MCP Tool
 
-1. Add the tool definition in `jarvis-tools/src/tools.ts`
-2. Add the corresponding backend endpoint in `backend/src/api/`
-3. Add the tool name to the `plugins.allow` list in `openclaw.json`
-4. Type-check: `cd jarvis-tools && npx tsc --noEmit`
+1. Add the backend endpoint in `backend/src/api/`
+2. Register the tool as an MCP tool in the backend's MCP server
+3. Test the endpoint: `cd backend && pytest tests/ -v`
 
 ## Adding Event Ingestion for a New Source
 
-The agent reads data from sources (Gmail via `gog gmail`, GitHub via `gh`, etc.) and ingests it to the backend:
+The backend reads data from sources (Gmail via Google API, GitHub via GitHub API, etc.) and processes it:
 
-1. Teach the agent (in `SOUL.md`) how to read the new source
-2. Agent calls `jarvis_ingest_event` with normalized data
+1. Add a new observation handler in the scheduler/orchestrator
+2. Events are ingested via the internal event processing pipeline
 3. Backend's EventProcessor handles scoring, dedup, and callbacks
 4. No new backend code needed unless you need source-specific scoring logic
 
@@ -178,7 +143,7 @@ See `backend/.env.example` for all configuration options. Key ones:
 | `JARVIS_USE_BEDROCK` | Use AWS Bedrock instead of direct API | `false` |
 | `JARVIS_BEDROCK_REGION` | AWS region for Bedrock | `ap-south-1` |
 | `JARVIS_VOYAGE_API_KEY` | Voyage AI key for embeddings | (required for semantic search) |
-| `JARVIS_BACKEND_TOKEN` | Auth token for plugin -> backend calls | (optional for dev) |
-| `JARVIS_OPENCLAW_GATEWAY_URL` | OpenClaw gateway URL | `http://localhost:18789` |
-| `JARVIS_OPENCLAW_HOOK_TOKEN` | Auth token for backend -> OpenClaw calls | (optional for dev) |
+| `JARVIS_BACKEND_TOKEN` | Auth token for API calls | (optional for dev) |
+| `JARVIS_TELEGRAM_BOT_TOKEN` | Telegram bot token for delivery | (optional for dev) |
+| `JARVIS_TELEGRAM_CHAT_ID` | Telegram chat ID for notifications | (optional for dev) |
 | `JARVIS_DEBUG` | Enable debug mode / auto-reload | `false` |

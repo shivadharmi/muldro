@@ -1,19 +1,21 @@
 """Operator — orchestrates plan execution.
 
-State tracking stays here. Actual work is delegated to the OpenClaw agent
-(which has access to gog, gh, message, etc.) when an OpenClaw client is
-available. Falls back to direct Claude calls for drafting/summarization.
+Thin wrapper that delegates to GraphExecutor for DAG-based execution
+with checkpoints, parallel steps, and approval gates. Falls back to
+sequential execution for backward compatibility when GraphExecutor
+is unavailable.
 
 Responsibilities:
-- Execute PlanTasks in dependency order
+- Bridge between Execution records and the graph executor
 - Track execution state machine (task runs, artifacts)
-- Delegate real-world actions to OpenClaw agent
-- Fall back to Claude for tasks when no agent connection
 - Report status back for presentation
 """
 
+from __future__ import annotations
+
 import json
 import logging
+from typing import TYPE_CHECKING
 
 import anthropic
 from sqlalchemy import select
@@ -25,6 +27,9 @@ from src.models.executions import Execution, ExecutionTaskRun
 from src.models.plans import Plan, PlanTask
 from src.services.audit import AuditService
 from src.services.retry import retry_async
+
+if TYPE_CHECKING:
+    from src.services.graph_executor import GraphExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -59,14 +64,21 @@ Respond with valid JSON:
 
 
 class Operator:
-    """Execute approved plans step by step."""
+    """Execute approved plans — delegates to GraphExecutor when available."""
 
-    def __init__(self, settings: Settings, db: AsyncSession, openclaw_client=None):
+    def __init__(
+        self,
+        settings: Settings,
+        db: AsyncSession,
+        notifier=None,
+        graph_executor: GraphExecutor | None = None,
+    ):
         self._settings = settings
         self._db = db
         self._client = get_anthropic_client(settings)
         self._audit = AuditService(db)
-        self._openclaw = openclaw_client
+        self._notifier = notifier
+        self._graph_executor = graph_executor
 
     async def execute_plan(self, execution_id: str, user_id: str) -> bool:
         """Execute all tasks in a plan. Returns True on success."""
@@ -84,6 +96,61 @@ class Operator:
             logger.error("Plan not found: %s", execution.plan_id)
             return False
 
+        # Delegate to GraphExecutor if available
+        if self._graph_executor:
+            return await self._execute_via_graph(execution, plan, user_id)
+
+        # Fallback: sequential execution
+        return await self._execute_sequential(execution, plan, user_id)
+
+    async def _execute_via_graph(self, execution: Execution, plan: Plan, user_id: str) -> bool:
+        """Execute using the DAG-based graph executor."""
+        try:
+            run = await self._graph_executor.create_run(plan.plan_id, user_id)
+
+            execution.status = "running"
+            await self._db.flush()
+
+            await self._audit.log(
+                user_id=user_id,
+                action_type="execution_started",
+                plan_id=plan.plan_id,
+                execution_id=execution.execution_id,
+                summary=f"Executing plan via graph: {plan.goal}",
+            )
+
+            completed_run = await self._graph_executor.execute_run(run.run_id)
+            success = completed_run.status == "completed"
+
+            execution.status = "completed" if success else "failed"
+            execution.current_task_id = None
+            plan.status = "completed" if success else "failed"
+
+            await self._audit.log(
+                user_id=user_id,
+                action_type="execution_completed" if success else "execution_failed",
+                plan_id=plan.plan_id,
+                execution_id=execution.execution_id,
+                summary=f"Plan '{plan.goal}' {'completed' if success else 'failed'}",
+            )
+
+            await self._db.commit()
+            await self._notify_completion(execution, plan, user_id, success)
+
+            logger.info(
+                "Graph execution %s %s for plan %s",
+                execution.execution_id,
+                "completed" if success else "failed",
+                plan.plan_id,
+            )
+            return success
+
+        except Exception as exc:
+            logger.error("Graph execution failed, falling back to sequential: %s", exc)
+            return await self._execute_sequential(execution, plan, user_id)
+
+    async def _execute_sequential(self, execution: Execution, plan: Plan, user_id: str) -> bool:
+        """Sequential execution fallback (original logic)."""
         result = await self._db.execute(
             select(PlanTask).where(PlanTask.plan_id == plan.plan_id).order_by(PlanTask.id)
         )
@@ -96,7 +163,7 @@ class Operator:
             user_id=user_id,
             action_type="execution_started",
             plan_id=plan.plan_id,
-            execution_id=execution_id,
+            execution_id=execution.execution_id,
             summary=f"Executing plan: {plan.goal}",
         )
 
@@ -105,7 +172,7 @@ class Operator:
             execution.current_task_id = task.task_id
 
             task_run = ExecutionTaskRun(
-                execution_id=execution_id,
+                execution_id=execution.execution_id,
                 task_id=task.task_id,
                 status="running",
             )
@@ -139,53 +206,43 @@ class Operator:
             user_id=user_id,
             action_type="execution_completed" if success else "execution_failed",
             plan_id=plan.plan_id,
-            execution_id=execution_id,
+            execution_id=execution.execution_id,
             summary=f"Plan '{plan.goal}' {'completed' if success else 'failed'}",
         )
 
         await self._db.commit()
-
-        # Wake the agent to notify about completion
-        if self._openclaw:
-            try:
-                status = "completed" if success else "failed"
-                await self._openclaw.wake_agent(
-                    f"Task {status}: {plan.goal}. "
-                    f"Use jarvis_task_detail with ID {plan.plan_id} for details."
-                )
-            except Exception:
-                logger.warning("Failed to wake agent for execution notification", exc_info=True)
+        await self._notify_completion(execution, plan, user_id, success)
 
         logger.info(
             "Execution %s %s (%d tasks)",
-            execution_id,
+            execution.execution_id,
             "completed" if success else "failed",
             len(tasks),
         )
         return success
 
-    async def _execute_task(self, task: PlanTask, plan: Plan) -> dict:
-        """Execute a single task and return result data.
+    async def _notify_completion(
+        self, execution: Execution, plan: Plan, user_id: str, success: bool
+    ) -> None:
+        """Notify user about execution completion."""
+        if self._notifier:
+            try:
+                status = "completed" if success else "failed"
+                await self._notifier.notify(
+                    user_id=user_id,
+                    notification_type="info_update",
+                    title=f"Task {status}: {plan.goal}",
+                    body=f"Execution {execution.execution_id} {status}.",
+                    data={"plan_id": plan.plan_id, "execution_id": execution.execution_id},
+                )
+            except Exception:
+                logger.warning("Failed to notify for execution", exc_info=True)
 
-        If an OpenClaw client is available and the task is an external action
-        (send_email, create_event, post_message), delegate to the agent.
-        Otherwise, fall back to direct Claude calls for drafting/summarization.
-        """
+    async def _execute_task(self, task: PlanTask, plan: Plan) -> dict:
+        """Execute a single task and return result data."""
         task_type = task.task_type
         input_data = task.input_data or {}
 
-        # Tasks that can be delegated to the OpenClaw agent
-        delegatable = {
-            "send_email",
-            "create_event",
-            "post_message",
-            "update_task",
-        }
-
-        if self._openclaw and task_type in delegatable:
-            return await self._delegate_to_agent(task_type, input_data, plan)
-
-        # Fall back to direct Claude calls
         if task_type in ("draft_email", "draft_reply", "draft_email_reply"):
             return await self._draft_email(input_data, plan)
         elif task_type == "summarize":
@@ -196,28 +253,6 @@ class Operator:
             return {"status": "completed"}
         else:
             return {"status": "completed", "note": f"Task type '{task_type}' executed (stub)"}
-
-    async def _delegate_to_agent(self, task_type: str, input_data: dict, plan: Plan) -> dict:
-        """Delegate a task to the OpenClaw agent for real execution."""
-        context = {
-            "recipient": input_data.get("recipient"),
-            "tone": input_data.get("tone"),
-            "background": plan.reasoning_summary,
-        }
-
-        result = await self._openclaw.delegate_task(
-            task_type=task_type,
-            instructions=plan.goal,
-            context=context,
-        )
-
-        artifact_ref = f"agent_{ULID()}"
-        return {
-            "artifact_ref": artifact_ref,
-            "agent_result": result,
-            "status": "completed",
-            "delegated": True,
-        }
 
     @retry_async(
         max_retries=2,

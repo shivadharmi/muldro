@@ -96,11 +96,11 @@ Rules:
 class Presenter:
     """Generate user-facing content from internal state."""
 
-    def __init__(self, settings: Settings, db: AsyncSession, openclaw_client=None):
+    def __init__(self, settings: Settings, db: AsyncSession, notifier=None):
         self._settings = settings
         self._db = db
         self._client = get_anthropic_client(settings)
-        self._openclaw = openclaw_client
+        self._notifier = notifier
 
     async def generate_briefing(self, user_id: str, briefing_date: date) -> Briefing:
         """Generate or retrieve the daily briefing. Returns Briefing model."""
@@ -142,15 +142,19 @@ class Presenter:
 
         logger.info("Briefing generated: %s for %s", briefing_id, briefing_date)
 
-        # Wake the OpenClaw agent to deliver the briefing
-        if self._openclaw:
+        # Notify user that briefing is ready via active surfaces
+        if self._notifier:
             try:
                 headline = briefing.headline or "Daily briefing ready"
-                await self._openclaw.wake_agent(
-                    f"Daily briefing ready: {headline}. Use jarvis_brief to fetch and present it."
+                await self._notifier.notify(
+                    user_id=user_id,
+                    notification_type="info_update",
+                    title="Daily Briefing Ready",
+                    body=headline,
+                    data={"briefing_id": briefing_id, "date": str(briefing_date)},
                 )
             except Exception:
-                logger.warning("Failed to wake agent for briefing delivery", exc_info=True)
+                logger.warning("Failed to notify for briefing", exc_info=True)
 
         return briefing
 

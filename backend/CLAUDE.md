@@ -64,6 +64,6 @@ class Thing(Base, TimestampMixin):
 - Generate IDs using ULID for time-ordering: `from ulid import ULID; f"evt_{ULID()}"`
 - All service methods are async
 - Never return bare dicts from API endpoints — always Pydantic models
-- Never import from OpenClaw or jarvis-tools — this is a standalone Python service
+- This is a standalone Python service — no external gateway dependencies
 - Database access through SQLAlchemy async sessions only
 - Config via pydantic-settings (env vars with JARVIS_ prefix)

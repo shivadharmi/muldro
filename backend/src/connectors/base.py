@@ -1,0 +1,51 @@
+"""Base connector interface for all data source connectors."""
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from datetime import datetime
+
+from src.services.event_processor import RawEvent
+
+
+@dataclass
+class ConnectorHealth:
+    provider: str
+    status: str  # healthy, degraded, down
+    last_poll_at: datetime | None
+    error: str | None = None
+    events_last_poll: int = 0
+
+
+class BaseConnector(ABC):
+    """Abstract base class for all data source connectors."""
+
+    provider: str
+
+    @abstractmethod
+    async def poll(
+        self, user_id: str, cursor: str | None, credentials: dict
+    ) -> tuple[list[RawEvent], str | None]:
+        """Poll for new events since cursor. Returns (events, new_cursor)."""
+
+    @abstractmethod
+    async def test(self, credentials: dict) -> ConnectorHealth:
+        """Test the connection and return health status."""
+
+    @abstractmethod
+    async def get_auth_url(self, scopes: list[str] | None = None) -> str:
+        """Get the OAuth authorization URL for this connector."""
+
+
+# Registry of connector classes by provider name
+CONNECTOR_REGISTRY: dict[str, type[BaseConnector]] = {}
+
+
+def register_connector(provider: str):
+    """Decorator to register a connector class."""
+
+    def decorator(cls: type[BaseConnector]):
+        CONNECTOR_REGISTRY[provider] = cls
+        cls.provider = provider
+        return cls
+
+    return decorator

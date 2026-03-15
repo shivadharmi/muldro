@@ -1,0 +1,239 @@
+"""Telegram bot interface for Jarvis.
+
+Provides bidirectional communication: user sends messages, Jarvis responds.
+Supports inline keyboard callbacks for approvals.
+Registers with SurfaceRegistry for multi-surface coordination.
+"""
+
+import json
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class TelegramInterface:
+    """Manages the Telegram bot lifecycle and message handling."""
+
+    def __init__(self, settings, orchestrator, surface_registry=None, notifier=None):
+        self._settings = settings
+        self._orchestrator = orchestrator
+        self._surface_registry = surface_registry
+        self._notifier = notifier
+        self._app = None
+
+    async def start(self) -> None:
+        """Start the Telegram bot (polling mode)."""
+        if not self._settings.telegram_bot_token:
+            logger.info("Telegram bot not configured (no JARVIS_TELEGRAM_BOT_TOKEN)")
+            return
+
+        try:
+            from telegram.ext import (
+                Application,
+                CallbackQueryHandler,
+                CommandHandler,
+                MessageHandler,
+                filters,
+            )
+        except ImportError:
+            logger.error("python-telegram-bot not installed")
+            return
+
+        self._app = Application.builder().token(self._settings.telegram_bot_token).build()
+
+        # Register handlers
+        self._app.add_handler(CommandHandler("start", self._handle_start))
+        self._app.add_handler(CommandHandler("brief", self._handle_brief))
+        self._app.add_handler(CommandHandler("status", self._handle_status))
+        self._app.add_handler(CallbackQueryHandler(self._handle_callback))
+        self._app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message))
+
+        await self._app.initialize()
+        await self._app.start()
+        await self._app.updater.start_polling(drop_pending_updates=True)
+
+        # Register Telegram as an active surface
+        if self._surface_registry:
+            await self._surface_registry.register(
+                "usr_default",
+                "telegram",
+                metadata={"chat_id": self._settings.telegram_chat_id},
+            )
+
+        logger.info("Telegram bot started (polling)")
+
+    async def stop(self) -> None:
+        """Stop the Telegram bot."""
+        if self._surface_registry:
+            await self._surface_registry.unregister("usr_default", "telegram")
+
+        if self._app:
+            await self._app.updater.stop()
+            await self._app.stop()
+            await self._app.shutdown()
+            logger.info("Telegram bot stopped")
+
+    async def send_message(
+        self, text: str, parse_mode: str = "Markdown", reply_markup: str = ""
+    ) -> dict:
+        """Send a message via Telegram (callable by Notifier)."""
+        if not self._settings.telegram_chat_id:
+            return {"status": "skipped", "reason": "no_chat_id"}
+
+        if not self._app or not self._app.bot:
+            return await self._send_http(text, parse_mode, reply_markup)
+
+        try:
+            kwargs = {
+                "chat_id": self._settings.telegram_chat_id,
+                "text": text,
+                "parse_mode": parse_mode,
+            }
+            if reply_markup:
+                kwargs["reply_markup"] = json.loads(reply_markup)
+
+            msg = await self._app.bot.send_message(**kwargs)
+            return {"status": "sent", "message_id": msg.message_id}
+        except Exception as e:
+            logger.error("send_message failed: %s", e, exc_info=True)
+            return {"status": "error", "error": str(e)}
+
+    async def _handle_start(self, update, context) -> None:
+        """Handle /start command."""
+        await update.message.reply_text(
+            "Jarvis is online. Send me any message to interact.\n\n"
+            "Commands:\n"
+            "/brief - Get your daily briefing\n"
+            "/status - System status"
+        )
+
+    async def _handle_brief(self, update, context) -> None:
+        """Handle /brief command — generate and send daily briefing."""
+        await update.message.reply_text("Generating your briefing...")
+        try:
+            result = await self._orchestrator.generate_briefing()
+            briefing_text = result.get("briefing", "No briefing available.")
+            if len(briefing_text) > 4000:
+                briefing_text = briefing_text[:4000] + "\n\n_(truncated)_"
+            await update.message.reply_text(briefing_text, parse_mode="Markdown")
+        except Exception as e:
+            logger.error("Brief command failed: %s", e)
+            await update.message.reply_text(f"Error generating briefing: {e}")
+
+    async def _handle_status(self, update, context) -> None:
+        """Handle /status command — show system status."""
+        try:
+            db = self._orchestrator._db_factory()
+            budget = await self._orchestrator._budget.get_budget_status(db)
+
+            surfaces = []
+            if self._surface_registry:
+                surfaces = await self._surface_registry.get_active_surfaces("usr_default")
+
+            text = (
+                f"*Jarvis Status*\n"
+                f"Budget: ${budget.daily_spend_usd:.2f} / "
+                f"${budget.daily_limit_usd:.2f} "
+                f"({budget.percent_used:.0f}%)\n"
+                f"Mode: {budget.budget_mode}\n"
+                f"Active surfaces: {', '.join(surfaces) or 'none'}"
+            )
+            await update.message.reply_text(text, parse_mode="Markdown")
+        except Exception as e:
+            logger.error("Status command failed: %s", e)
+            await update.message.reply_text(f"Error: {e}")
+
+    async def _handle_message(self, update, context) -> None:
+        """Handle regular text messages — route through orchestrator."""
+        text = update.message.text
+        chat_id = str(update.message.chat_id)
+
+        logger.info(
+            "telegram_message_received",
+            extra={"chat_id": chat_id, "text_length": len(text)},
+        )
+
+        try:
+            result = await self._orchestrator.process_message(
+                message=text,
+                surface="telegram",
+                context={"chat_id": chat_id},
+            )
+
+            response = result.get("presentation") or result.get("summary", "")
+            if not response:
+                response = json.dumps(result, indent=2, default=str)
+
+            if len(response) > 4000:
+                response = response[:4000] + "\n\n_(truncated)_"
+
+            await update.message.reply_text(response, parse_mode="Markdown")
+        except Exception as e:
+            logger.error("Message handling failed: %s", e)
+            await update.message.reply_text(f"Error: {e}")
+
+    async def _handle_callback(self, update, context) -> None:
+        """Handle inline keyboard callbacks (approval buttons)."""
+        query = update.callback_query
+        await query.answer()
+
+        data = query.data
+        if not data:
+            return
+
+        try:
+            if data.startswith("approve:") or data.startswith("reject:"):
+                action, approval_id = data.split(":", 1)
+                decision = "approved" if action == "approve" else "rejected"
+
+                from src.tools.intelligence_server import approve_action
+
+                result = await approve_action(
+                    approval_id=approval_id,
+                    decision=decision,
+                    reason=f"{decision.title()} via Telegram",
+                )
+                status = result.get("status", "done")
+                await query.edit_message_text(
+                    f"{decision.title()}: {approval_id}\nStatus: {status}"
+                )
+
+                # Notify other surfaces that action was taken
+                if self._notifier:
+                    await self._notifier.on_action_taken("usr_default", approval_id, "telegram")
+        except Exception as e:
+            logger.error("Callback handling failed: %s", e)
+            await query.edit_message_text(f"Error: {e}")
+
+    async def _send_http(self, text: str, parse_mode: str, reply_markup: str) -> dict:
+        """Fallback: send via HTTP API when bot app isn't available."""
+        if not self._settings.telegram_bot_token:
+            return {"status": "skipped", "reason": "no_bot_token"}
+
+        import httpx
+
+        url = f"https://api.telegram.org/bot{self._settings.telegram_bot_token}/sendMessage"
+        payload = {
+            "chat_id": self._settings.telegram_chat_id,
+            "text": text,
+            "parse_mode": parse_mode,
+        }
+        if reply_markup:
+            payload["reply_markup"] = json.loads(reply_markup)
+
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(url, json=payload, timeout=10)
+                data = resp.json()
+                if data.get("ok"):
+                    return {
+                        "status": "sent",
+                        "message_id": data["result"]["message_id"],
+                    }
+                return {
+                    "status": "error",
+                    "error": data.get("description", "Unknown"),
+                }
+        except Exception as e:
+            logger.error("Telegram HTTP fallback failed: %s", e)
+            return {"status": "error", "error": str(e)}

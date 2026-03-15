@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.api.app import create_app
-from src.api.deps import get_current_user, get_session
+from src.api.deps import get_current_user, get_current_user_id, get_session
 from src.models.schedules import Schedule
 
 
@@ -25,7 +25,13 @@ def mock_db():
 @pytest.fixture
 def client(mock_db):
     app = create_app()
-    app.dependency_overrides[get_current_user] = lambda: "usr_default"
+
+    # Mock user object
+    mock_user = MagicMock()
+    mock_user.user_id = "usr_default"
+
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_current_user_id] = lambda: "usr_default"
     app.dependency_overrides[get_session] = lambda: mock_db
     with TestClient(app) as c:
         yield c

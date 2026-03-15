@@ -217,52 +217,68 @@ class TestSchedulerTick:
 
 class TestFireActions:
     @pytest.mark.asyncio
-    async def test_fire_observe_source_calls_agent(self, settings):
-        """observe_source should call run_agent_turn with source-specific message."""
+    async def test_fire_observe_source_calls_orchestrator(self, settings):
+        """observe_source should use orchestrator.run_perception_cycle."""
         sched = _make_schedule(
             action_type="observe_source",
             action_config={"source": "gmail"},
         )
 
-        mock_openclaw = MagicMock()
-        mock_openclaw.run_agent_turn = AsyncMock()
+        mock_orch = MagicMock()
+        mock_orch.run_perception_cycle = AsyncMock(return_value={"status": "completed"})
 
-        scheduler = SchedulerLoop(settings)
-        await scheduler._fire(sched, mock_openclaw)
+        scheduler = SchedulerLoop(settings, orchestrator=mock_orch)
+        await scheduler._fire(sched)
 
-        mock_openclaw.run_agent_turn.assert_awaited_once()
-        call_args = mock_openclaw.run_agent_turn.call_args[0][0]
-        assert "[SCHEDULED:observe-gmail]" in call_args
-        assert "jarvis_ingest_event" in call_args
+        mock_orch.run_perception_cycle.assert_awaited_once_with("gmail")
 
     @pytest.mark.asyncio
-    async def test_fire_generate_briefing_calls_agent(self, settings):
-        """generate_briefing should call run_agent_turn."""
+    async def test_fire_observe_source_requires_orchestrator(self, settings):
+        """observe_source without orchestrator should raise RuntimeError."""
+        sched = _make_schedule(
+            action_type="observe_source",
+            action_config={"source": "gmail"},
+        )
+
+        scheduler = SchedulerLoop(settings)
+        with pytest.raises(RuntimeError, match="Orchestrator required"):
+            await scheduler._fire(sched)
+
+    @pytest.mark.asyncio
+    async def test_fire_generate_briefing_calls_orchestrator(self, settings):
+        """generate_briefing should use orchestrator."""
         sched = _make_schedule(
             action_type="generate_briefing",
             action_config={},
         )
 
-        mock_openclaw = MagicMock()
-        mock_openclaw.run_agent_turn = AsyncMock()
+        mock_orch = MagicMock()
+        mock_orch.generate_briefing = AsyncMock(return_value={"status": "completed"})
+
+        scheduler = SchedulerLoop(settings, orchestrator=mock_orch)
+        await scheduler._fire(sched)
+
+        mock_orch.generate_briefing.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_fire_generate_briefing_requires_orchestrator(self, settings):
+        """generate_briefing without orchestrator should raise RuntimeError."""
+        sched = _make_schedule(
+            action_type="generate_briefing",
+            action_config={},
+        )
 
         scheduler = SchedulerLoop(settings)
-        await scheduler._fire(sched, mock_openclaw)
-
-        mock_openclaw.run_agent_turn.assert_awaited_once()
-        call_args = mock_openclaw.run_agent_turn.call_args[0][0]
-        assert "[SCHEDULED:briefing]" in call_args
+        with pytest.raises(RuntimeError, match="Orchestrator required"):
+            await scheduler._fire(sched)
 
     @pytest.mark.asyncio
     async def test_fire_heartbeat_runs_directly(self, settings):
-        """heartbeat should run HeartbeatService directly, not via agent."""
+        """heartbeat should run HeartbeatService directly."""
         sched = _make_schedule(
             action_type="heartbeat",
             action_config={},
         )
-
-        mock_openclaw = MagicMock()
-        mock_openclaw.run_agent_turn = AsyncMock()
 
         mock_hb = MagicMock()
         mock_hb.run = AsyncMock(return_value={})
@@ -279,41 +295,50 @@ class TestFireActions:
             patch("src.services.scheduler.get_session_factory", return_value=mock_factory),
             patch("src.services.scheduler.HeartbeatService", return_value=mock_hb),
         ):
-            await scheduler._fire(sched, mock_openclaw)
+            await scheduler._fire(sched)
 
             mock_hb.run.assert_awaited_once_with(sched.user_id)
-            mock_openclaw.run_agent_turn.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_fire_custom_agent_task(self, settings):
-        """custom_agent_task should pass instructions to agent."""
+    async def test_fire_custom_agent_task_uses_orchestrator(self, settings):
+        """custom_agent_task should use orchestrator.process_message."""
         sched = _make_schedule(
             action_type="custom_agent_task",
-            action_config={"instructions": "Review open PRs and summarize"},
+            action_config={"instructions": "Review open PRs"},
         )
 
-        mock_openclaw = MagicMock()
-        mock_openclaw.run_agent_turn = AsyncMock()
+        mock_orch = MagicMock()
+        mock_orch.process_message = AsyncMock(return_value={"status": "ok"})
 
-        scheduler = SchedulerLoop(settings)
-        await scheduler._fire(sched, mock_openclaw)
+        scheduler = SchedulerLoop(settings, orchestrator=mock_orch)
+        await scheduler._fire(sched)
 
-        call_args = mock_openclaw.run_agent_turn.call_args[0][0]
-        assert "[SCHEDULED:custom]" in call_args
-        assert "Review open PRs" in call_args
+        mock_orch.process_message.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_fire_wake_agent(self, settings):
-        """wake_agent should call wake_agent with message."""
+    async def test_fire_custom_agent_task_requires_orchestrator(self, settings):
+        """custom_agent_task without orchestrator should raise RuntimeError."""
         sched = _make_schedule(
-            action_type="wake_agent",
-            action_config={"message": "Time for standup"},
+            action_type="custom_agent_task",
+            action_config={"instructions": "Do something"},
         )
 
-        mock_openclaw = MagicMock()
-        mock_openclaw.wake_agent = AsyncMock()
-
         scheduler = SchedulerLoop(settings)
-        await scheduler._fire(sched, mock_openclaw)
+        with pytest.raises(RuntimeError, match="Orchestrator required"):
+            await scheduler._fire(sched)
 
-        mock_openclaw.wake_agent.assert_awaited_once_with("Time for standup")
+    @pytest.mark.asyncio
+    async def test_fire_meeting_prep_uses_orchestrator(self, settings):
+        """meeting_prep should use orchestrator.process_message."""
+        sched = _make_schedule(
+            action_type="meeting_prep",
+            action_config={},
+        )
+
+        mock_orch = MagicMock()
+        mock_orch.process_message = AsyncMock(return_value={"status": "ok"})
+
+        scheduler = SchedulerLoop(settings, orchestrator=mock_orch)
+        await scheduler._fire(sched)
+
+        mock_orch.process_message.assert_awaited_once()

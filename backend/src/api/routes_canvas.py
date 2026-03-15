@@ -1,4 +1,4 @@
-"""Canvas endpoints — structured data for OpenClaw Canvas UI rendering."""
+"""Canvas endpoints — structured data for UI rendering."""
 
 from datetime import date, datetime, timedelta, timezone
 
@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_current_user, get_session
+from src.api.deps import get_current_user_id, get_session
 from src.api.schemas import (
     DashboardApproval,
     DashboardMeeting,
@@ -24,7 +24,7 @@ router = APIRouter()
 
 @router.get("/v1/canvas/dashboard", response_model=DashboardResponse)
 async def get_dashboard(
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ):

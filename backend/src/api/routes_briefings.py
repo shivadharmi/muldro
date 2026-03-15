@@ -5,7 +5,7 @@ from datetime import date
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_current_user, get_session
+from src.api.deps import get_current_user_id, get_session
 from src.api.schemas import BriefingResponse
 from src.config.settings import Settings, get_settings
 from src.services.presenter import Presenter
@@ -16,7 +16,7 @@ router = APIRouter()
 @router.get("/v1/briefings/{briefing_date}", response_model=BriefingResponse)
 async def get_briefing(
     briefing_date: str,
-    user_id: str = Depends(get_current_user),
+    user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ):

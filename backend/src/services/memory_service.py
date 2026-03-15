@@ -1,7 +1,6 @@
 """Memory Service — episodic, semantic, preference, and behavioral memory.
 
-This is NOT OpenClaw's session memory. This is Jarvis's product memory —
-long-term, structured, searchable, and scored.
+Jarvis's product memory — long-term, structured, searchable, and scored.
 
 Responsibilities:
 - Extract candidate memories from interactions and events
@@ -11,10 +10,12 @@ Responsibilities:
 - Expire or demote low-value memories
 """
 
+import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 
-from sqlalchemy import select, text
+from sqlalchemy import case, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
@@ -198,12 +199,18 @@ class MemoryService:
         # Try semantic search first
         query_embedding = await self._embedder.embed_text(query)
         if query_embedding:
-            return await self._semantic_retrieve(
+            results = await self._semantic_retrieve(
                 user_id, query_embedding, memory_types, max_results
             )
+        else:
+            # Fall back to text-based ILIKE matching
+            results = await self._text_retrieve(user_id, query, memory_types, max_results)
 
-        # Fall back to text-based ILIKE matching
-        return await self._text_retrieve(user_id, query, memory_types, max_results)
+        # Fire-and-forget refresh stability for each retrieved memory
+        for result in results:
+            asyncio.create_task(self.refresh_stability(result["memory_id"]))
+
+        return results
 
     async def get_user_preferences(
         self,
@@ -237,6 +244,99 @@ class MemoryService:
             for m in memories
         ]
 
+    async def consolidate_memories(self, user_id: str) -> int:
+        """Find and merge highly similar memories (>0.95 similarity).
+
+        Keeps the memory with higher confidence, increments its stability_score,
+        and marks the duplicate as 'merged'. Returns count of merged memories.
+        """
+        # Find all active memories with embeddings for this user
+        stmt = select(Memory).where(
+            Memory.user_id == user_id,
+            Memory.status == "active",
+            Memory.embedding.isnot(None),
+        )
+        result = await self._db.execute(stmt)
+        memories = result.scalars().all()
+
+        if len(memories) < 2:
+            return 0
+
+        merged_count = 0
+
+        # Compare each pair of memories
+        for i, mem1 in enumerate(memories):
+            if mem1.status != "active":  # May have been marked merged in previous iteration
+                continue
+
+            for mem2 in memories[i + 1 :]:
+                if mem2.status != "active":
+                    continue
+
+                # Calculate similarity
+                sql = text("""
+                    SELECT 1 - (
+                        cast(:embedding1 as vector) <=> cast(:embedding2 as vector)
+                    ) AS similarity
+                """)
+                sim_result = await self._db.execute(
+                    sql, {"embedding1": str(mem1.embedding), "embedding2": str(mem2.embedding)}
+                )
+                similarity = sim_result.scalar_one()
+
+                # If very high similarity, merge them
+                if similarity > 0.95:
+                    # Keep the one with higher confidence
+                    if mem1.confidence >= mem2.confidence:
+                        keeper, duplicate = mem1, mem2
+                    else:
+                        keeper, duplicate = mem2, mem1
+
+                    # Update keeper: increment stability
+                    keeper.stability_score = min(keeper.stability_score + 0.1, 1.0)
+
+                    # Mark duplicate as merged
+                    duplicate.status = "merged"
+
+                    merged_count += 1
+                    logger.info(
+                        "Merged memory %s into %s (similarity=%.4f)",
+                        duplicate.memory_id,
+                        keeper.memory_id,
+                        similarity,
+                    )
+
+        if merged_count > 0:
+            await self._db.flush()
+            logger.info("Consolidated %d memories for user %s", merged_count, user_id)
+
+        return merged_count
+
+    async def refresh_stability(self, memory_id: str) -> None:
+        """Refresh memory stability when accessed.
+
+        Increments refresh_count, updates last_accessed_at, and increases
+        stability_score by 0.1 (capped at 1.0).
+        """
+        try:
+            stmt = (
+                update(Memory)
+                .where(Memory.memory_id == memory_id)
+                .values(
+                    refresh_count=Memory.refresh_count + 1,
+                    last_accessed_at=datetime.now(timezone.utc),
+                    stability_score=case(
+                        (Memory.stability_score + 0.1 < 1.0, Memory.stability_score + 0.1),
+                        else_=1.0,
+                    ),
+                )
+            )
+            await self._db.execute(stmt)
+            await self._db.flush()
+        except Exception:
+            # Fire-and-forget, don't let refresh failure block retrieval
+            logger.debug("Failed to refresh stability for %s", memory_id, exc_info=True)
+
     async def _semantic_retrieve(
         self,
         user_id: str,
@@ -244,7 +344,7 @@ class MemoryService:
         memory_types: list[str] | None,
         max_results: int,
     ) -> list[dict]:
-        """Retrieve memories using pgvector cosine similarity."""
+        """Retrieve memories using pgvector cosine similarity with recency boost."""
         type_filter = ""
         params: dict = {
             "user_id": user_id,
@@ -256,15 +356,28 @@ class MemoryService:
             type_filter = "AND memory_type = ANY(:memory_types)"
             params["memory_types"] = memory_types
 
+        # Add recency weighting: boost memories accessed in last 7 days by 0.05
         sql = text(f"""
             SELECT memory_id, memory_type, fact_text, confidence, scope,
-                   1 - (embedding <=> cast(:embedding as vector)) AS similarity
+                   1 - (embedding <=> cast(:embedding as vector)) AS similarity,
+                   CASE
+                       WHEN last_accessed_at IS NOT NULL
+                       AND last_accessed_at > NOW() - INTERVAL '7 days'
+                       THEN 0.05
+                       ELSE 0.0
+                   END AS recency_boost
             FROM memories
             WHERE user_id = :user_id
               AND status = 'active'
               AND embedding IS NOT NULL
               {type_filter}
-            ORDER BY embedding <=> cast(:embedding as vector)
+            ORDER BY (1 - (embedding <=> cast(:embedding as vector))) +
+                     CASE
+                         WHEN last_accessed_at IS NOT NULL
+                         AND last_accessed_at > NOW() - INTERVAL '7 days'
+                         THEN 0.05
+                         ELSE 0.0
+                     END DESC
             LIMIT :limit
         """)
 

@@ -56,18 +56,6 @@ variable "backend_token" {
   sensitive   = true
 }
 
-variable "openclaw_gateway_token" {
-  description = "OpenClaw gateway auth token"
-  type        = string
-  sensitive   = true
-}
-
-variable "openclaw_hook_token" {
-  description = "Token for backend to OpenClaw hook calls"
-  type        = string
-  sensitive   = true
-}
-
 variable "postgres_password" {
   description = "PostgreSQL password"
   type        = string
