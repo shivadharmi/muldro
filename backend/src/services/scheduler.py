@@ -15,7 +15,6 @@ from src.config.settings import Settings
 from src.models.database import get_session_factory
 from src.models.schedules import Schedule
 from src.services.heartbeat import HeartbeatService
-from src.services.openclaw_client import OpenClawClient
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +29,9 @@ class SchedulerLoop:
 
     POLL_INTERVAL = 30  # seconds between schedule checks
 
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, orchestrator=None):
         self._settings = settings
+        self._orchestrator = orchestrator
         self._running = False
 
     async def run(self) -> None:
@@ -81,7 +81,8 @@ class SchedulerLoop:
                     sched.next_run_at = compute_next_run(sched.cron_expr, now)
                     logger.info(
                         "Repaired next_run_at for %s → %s",
-                        sched.schedule_id, sched.next_run_at,
+                        sched.schedule_id,
+                        sched.next_run_at,
                     )
                 elif sched.next_run_at is not None and sched.next_run_at <= now:
                     due.append(sched)
@@ -90,11 +91,9 @@ class SchedulerLoop:
                 await db.commit()  # persist any repairs
                 return
 
-            openclaw = OpenClawClient(self._settings)
-
             for sched in due:
                 try:
-                    await self._fire(sched, openclaw)
+                    await self._fire(sched)
                     sched.last_run_at = now
                     sched.run_count += 1
                     sched.consecutive_failures = 0
@@ -119,56 +118,63 @@ class SchedulerLoop:
             await db.commit()
             logger.info("Scheduler tick: %d due, fired", len(due))
 
-    def _delivery_instruction(self) -> str:
-        """Build instruction for agent to deliver results to user via Telegram."""
-        chat_id = self._settings.telegram_chat_id
-        if not chat_id:
-            return ""
-        return (
-            f"\n\nIMPORTANT: After completing the task, send a concise summary to the user "
-            f"using the message tool with channel=telegram and to={chat_id}. "
-            f"Keep it brief and actionable."
-        )
-
-    async def _fire(self, sched: Schedule, openclaw: OpenClawClient) -> None:
-        """Dispatch a single schedule's action."""
+    async def _fire(self, sched: Schedule) -> None:
+        """Dispatch a single schedule's action via the orchestrator."""
         config = sched.action_config or {}
         action = sched.action_type
-        deliver = self._delivery_instruction()
 
         if action == "observe_source":
             source = config["source"]
-            await openclaw.run_agent_turn(
-                f"[SCHEDULED:observe-{source}] Check {source} for new items, "
-                f"ingest important ones via jarvis_ingest_event, "
-                f"then report via jarvis_report_observation."
-                f"{deliver}"
-            )
+            if self._orchestrator:
+                await self._orchestrator.run_perception_cycle(source)
+            else:
+                raise RuntimeError("Orchestrator required for observe_source")
         elif action == "generate_briefing":
-            await openclaw.run_agent_turn(
-                "[SCHEDULED:briefing] Run observations, generate daily briefing "
-                "via jarvis_brief, and deliver to user via message."
-                f"{deliver}"
-            )
+            if self._orchestrator:
+                await self._orchestrator.generate_briefing()
+            else:
+                raise RuntimeError("Orchestrator required for generate_briefing")
         elif action == "meeting_prep":
-            await openclaw.run_agent_turn(
-                "[SCHEDULED:meeting-prep] Check calendar for meetings in next 30min. "
-                "If found, call jarvis_meeting_prep and deliver to user."
-                f"{deliver}"
-            )
+            if self._orchestrator:
+                await self._orchestrator.process_message(
+                    message="Check calendar for meetings in next 30min. "
+                    "If found, generate meeting prep and deliver to user.",
+                    surface="scheduler",
+                )
+            else:
+                raise RuntimeError("Orchestrator required for meeting_prep")
         elif action == "heartbeat":
             factory = get_session_factory()
             async with factory() as hb_db:
                 hb = HeartbeatService(self._settings, hb_db)
                 await hb.run(sched.user_id)
                 await hb_db.commit()
+        elif action == "check_slos":
+            from src.services.alerting import AlertingService
+            from src.services.trace_store import TraceStore
+
+            trace_store = TraceStore(elasticsearch_url=self._settings.elasticsearch_url)
+            alerting = AlertingService(trace_store=trace_store)
+            checks = await alerting.check_all_slos()
+            logger.info(
+                "SLO check complete: %s",
+                {c.name: c.status for c in checks},
+            )
+        elif action == "consolidate_memories":
+            user_id = sched.user_id
+            factory = get_session_factory()
+            async with factory() as db:
+                from src.services.memory_service import MemoryService
+
+                ms = MemoryService(settings=self._settings, db=db)
+                merged = await ms.consolidate_memories(user_id)
+                await db.commit()
+                logger.info("Memory consolidation for %s: %d merged", user_id, merged)
         elif action == "custom_agent_task":
             instructions = config.get("instructions", "")
-            await openclaw.run_agent_turn(
-                f"[SCHEDULED:custom] {instructions}{deliver}"
-            )
-        elif action == "wake_agent":
-            message = config.get("message", "Scheduled wake-up")
-            await openclaw.wake_agent(message)
+            if self._orchestrator:
+                await self._orchestrator.process_message(message=instructions, surface="scheduler")
+            else:
+                raise RuntimeError("Orchestrator required for custom_agent_task")
         else:
             logger.warning("Unknown action_type: %s for schedule %s", action, sched.schedule_id)

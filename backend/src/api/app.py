@@ -7,18 +7,31 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.routes_approvals import router as approvals_router
+from src.api.routes_auth import router as auth_router
 from src.api.routes_briefings import router as briefings_router
 from src.api.routes_canvas import router as canvas_router
+from src.api.routes_chat import router as chat_router
 from src.api.routes_command import router as command_router
+from src.api.routes_connectors import router as connectors_router
+from src.api.routes_conversations import router as conversations_router
 from src.api.routes_events import router as events_router
+from src.api.routes_executions import router as executions_router
 from src.api.routes_feedback import router as feedback_router
+from src.api.routes_health import router as health_router
 from src.api.routes_meetings import router as meetings_router
+from src.api.routes_memories import router as memories_router
+from src.api.routes_metrics import router as metrics_router
 from src.api.routes_observation import router as observation_router
 from src.api.routes_schedules import router as schedules_router
 from src.api.routes_search import router as search_router
+from src.api.routes_settings import router as settings_router
 from src.api.routes_system import router as system_router
 from src.api.routes_tasks import router as tasks_router
+from src.api.routes_traces import router as traces_router
+from src.api.routes_triggers import router as triggers_router
+from src.api.routes_ui import router as ui_router
 from src.api.routes_webhooks import router as webhooks_router
+from src.api.routes_ws import router as ws_router
 from src.api.schemas import HealthResponse
 from src.config.settings import get_settings
 from src.middleware.observability import TracingMiddleware
@@ -42,6 +55,11 @@ def create_app() -> FastAPI:
         except Exception:
             logger.warning("Redis unavailable — using in-memory fallback for rate limiting")
             app.state.redis = None
+
+        # Initialize surface registry
+        from src.services.surface_registry import SurfaceRegistry
+
+        app.state.surface_registry = SurfaceRegistry(redis=app.state.redis)
 
         yield
 
@@ -77,7 +95,8 @@ def create_app() -> FastAPI:
     async def health():
         return HealthResponse()
 
-    # Core product routes (called by OpenClaw jarvis-tools plugin)
+    # Core product routes
+    app.include_router(chat_router, tags=["chat"])
     app.include_router(command_router, tags=["command"])
     app.include_router(briefings_router, tags=["briefings"])
     app.include_router(approvals_router, tags=["approvals"])
@@ -87,7 +106,7 @@ def create_app() -> FastAPI:
     app.include_router(canvas_router, tags=["canvas"])
     app.include_router(feedback_router, tags=["feedback"])
 
-    # Event ingestion (called by OpenClaw agent after reading data from sources)
+    # Event ingestion
     app.include_router(events_router, tags=["events"])
 
     # Legacy webhook route (backwards compat)
@@ -101,6 +120,42 @@ def create_app() -> FastAPI:
 
     # System routes (heartbeat, maintenance, metrics)
     app.include_router(system_router, tags=["system"])
+
+    # OAuth authentication callbacks
+    app.include_router(auth_router, tags=["auth"])
+
+    # A2UI surface state REST endpoints
+    app.include_router(ui_router, tags=["ui"])
+
+    # WebSocket for real-time A2UI surface streaming
+    app.include_router(ws_router, tags=["websocket"])
+
+    # System health dashboard
+    app.include_router(health_router, tags=["health"])
+
+    # User settings
+    app.include_router(settings_router, tags=["settings"])
+
+    # Connectors
+    app.include_router(connectors_router, tags=["connectors"])
+
+    # Prometheus metrics
+    app.include_router(metrics_router, tags=["metrics"])
+
+    # Memories
+    app.include_router(memories_router, tags=["memories"])
+
+    # Executions
+    app.include_router(executions_router, tags=["executions"])
+
+    # Triggers
+    app.include_router(triggers_router, tags=["triggers"])
+
+    # Traces (observability)
+    app.include_router(traces_router, tags=["traces"])
+
+    # Conversations (chat session persistence)
+    app.include_router(conversations_router, tags=["conversations"])
 
     return app
 
