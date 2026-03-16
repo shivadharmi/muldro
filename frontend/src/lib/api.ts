@@ -493,9 +493,10 @@ export function addTaskDependency(
 
 // ── Goals ───────────────────────────────────────────────────────
 
-export function fetchGoals(status?: string): Promise<Goal[]> {
+export async function fetchGoals(status?: string): Promise<Goal[]> {
   const qs = status ? `?status=${status}` : "";
-  return api(`/goals${qs}`);
+  const data = await api<{ goals: Goal[] }>(`/goals${qs}`);
+  return data.goals ?? [];
 }
 
 export function createGoal(input: GoalCreateInput): Promise<Goal> {
@@ -549,9 +550,10 @@ export function startWorkflow(
 
 // ── Artifacts ───────────────────────────────────────────────────
 
-export function fetchArtifacts(limit?: number): Promise<Artifact[]> {
+export async function fetchArtifacts(limit?: number): Promise<Artifact[]> {
   const qs = limit ? `?limit=${limit}` : "";
-  return api(`/artifacts${qs}`);
+  const data = await api<{ artifacts: Artifact[] }>(`/artifacts${qs}`);
+  return data.artifacts ?? [];
 }
 
 export function fetchArtifact(id: string): Promise<Artifact> {

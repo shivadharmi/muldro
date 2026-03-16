@@ -42,13 +42,12 @@ function WorkflowCard({
           <div className="flex-1">
             <p className="text-sm font-medium">{workflow.name}</p>
             <p className="text-xs text-neutral-500 mt-1">{workflow.description}</p>
-            {workflow.steps.length > 0 && (
-              <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-                {workflow.steps.map((step, i) => (
-                  <Badge key={i} variant="default">{step}</Badge>
-                ))}
-              </div>
-            )}
+            <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+              <Badge variant="default">{workflow.step_count} steps</Badge>
+              {workflow.tags.map((tag, i) => (
+                <Badge key={i} variant="default">{tag}</Badge>
+              ))}
+            </div>
           </div>
           <div className="ml-3 flex flex-col items-end gap-2">
             <button

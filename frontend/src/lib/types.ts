@@ -333,7 +333,8 @@ export interface Notification {
 export interface Workflow {
   name: string;
   description: string;
-  steps: string[];
+  step_count: number;
+  tags: string[];
 }
 
 // ── Artifacts ───────────────────────────────────────────────────

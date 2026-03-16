@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { streamChat, type ChatSSEEvent, type ConversationMessage } from "@/lib/api";
 import { CommandInput } from "./command-input";
+import { MarkdownRenderer } from "./markdown-renderer";
 
 interface AgentStep {
   agent: string;
@@ -366,7 +367,7 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
         {/* Final response */}
         {msg.content ? (
           <div className="rounded-lg px-3 py-2 text-sm bg-neutral-800 text-neutral-200">
-            <p className="whitespace-pre-wrap">{msg.content}</p>
+            <MarkdownRenderer content={msg.content} />
           </div>
         ) : msg.streaming ? (
           <div className="rounded-lg px-3 py-2 text-sm bg-neutral-800 text-neutral-400">

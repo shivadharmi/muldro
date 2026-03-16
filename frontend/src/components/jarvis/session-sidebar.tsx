@@ -90,9 +90,17 @@ export function SessionSidebar({
           </p>
         ) : (
           conversations.map((convo) => (
-            <button
+            <div
               key={convo.conversation_id}
+              role="button"
+              tabIndex={0}
               onClick={() => onSelectConversation(convo.conversation_id)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onSelectConversation(convo.conversation_id);
+                }
+              }}
               className={`w-full text-left px-3 py-2.5 border-b border-neutral-900 hover:bg-neutral-800/50 transition-colors group cursor-pointer ${
                 activeConversationId === convo.conversation_id
                   ? "bg-neutral-800/70 border-l-2 border-l-blue-500"
@@ -121,7 +129,7 @@ export function SessionSidebar({
                   </span>
                 )}
               </div>
-            </button>
+            </div>
           ))
         )}
       </div>
