@@ -241,25 +241,8 @@ def upgrade() -> None:
     )
     op.create_index("ix_task_checkpoints_run", "task_checkpoints", ["run_id", "created_at"])
 
-    # ── Seed default user ────────────────────────────────────
-    op.execute("""
-        INSERT INTO users (user_id, email, display_name, status, onboarding_completed, settings)
-        VALUES ('usr_default', 'admin@jarvis.local', 'Default User', 'active', true, '{}')
-        ON CONFLICT (user_id) DO NOTHING
-    """)
-
-    # Create default workspace
-    op.execute("""
-        INSERT INTO workspaces (workspace_id, name, owner_user_id, plan)
-        VALUES ('ws_default', 'Default Workspace', 'usr_default', 'free')
-        ON CONFLICT (workspace_id) DO NOTHING
-    """)
-
-    op.execute("""
-        INSERT INTO workspace_members (workspace_id, user_id, role)
-        VALUES ('ws_default', 'usr_default', 'owner')
-        ON CONFLICT DO NOTHING
-    """)
+    # Users are created at runtime via AuthService (magic link or OAuth flow).
+    # No seed data — use scripts/create_test_user.py for testing.
 
 
 def downgrade() -> None:

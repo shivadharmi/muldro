@@ -6,7 +6,7 @@ recovered on reconnect or fetched via REST API.
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Index, String
+from sqlalchemy import DateTime, ForeignKey, Index, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -18,6 +18,9 @@ class UISurface(Base, TimestampMixin):
 
     surface_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
+    )
     surface_type: Mapped[str] = mapped_column(String(32), nullable=False)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

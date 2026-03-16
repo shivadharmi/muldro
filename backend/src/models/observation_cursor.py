@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Index, String, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.models.base import Base, TimestampMixin
@@ -11,6 +11,9 @@ class ObservationCursor(Base, TimestampMixin):
 
     cursor_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
+    )
     source: Mapped[str] = mapped_column(
         String(32), nullable=False
     )  # gmail, calendar, slack, github

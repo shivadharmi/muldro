@@ -6,7 +6,7 @@ Supports automatic refresh detection via expires_at.
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Index, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, String, Text
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -18,6 +18,9 @@ class OAuthToken(Base, TimestampMixin):
 
     token_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
+    )
     provider: Mapped[str] = mapped_column(String(32), nullable=False)  # google, github, slack
     access_token_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
     refresh_token_encrypted: Mapped[str] = mapped_column(Text, nullable=True)

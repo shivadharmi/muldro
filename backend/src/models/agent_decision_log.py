@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Index, Integer, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.models.base import Base
@@ -10,6 +10,9 @@ class AgentDecisionLog(Base):
     __tablename__ = "agent_decision_logs"
 
     log_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
+    )
     trace_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     span_id: Mapped[str | None] = mapped_column(String(64))
     agent_name: Mapped[str] = mapped_column(String(32), nullable=False)

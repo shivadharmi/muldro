@@ -2,7 +2,8 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Index, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.models.base import Base, TimestampMixin
@@ -13,12 +14,16 @@ class BrowserSession(Base, TimestampMixin):
 
     session_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
+    )
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="idle"
     )  # idle/active/recording
     url: Mapped[str | None] = mapped_column(Text, nullable=True)
     page_title: Mapped[str | None] = mapped_column(String(500), nullable=True)
     screenshot_artifact_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     last_action_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (Index("ix_browser_sessions_user_status", "user_id", "status"),)
@@ -29,6 +34,9 @@ class BrowserAction(Base, TimestampMixin):
 
     action_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     session_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
+    )
     action_type: Mapped[str] = mapped_column(
         String(50), nullable=False
     )  # navigate/click/fill/screenshot/extract
@@ -39,5 +47,6 @@ class BrowserAction(Base, TimestampMixin):
     )  # pending/success/failed
     screenshot_before: Mapped[str | None] = mapped_column(String(64), nullable=True)  # artifact_id
     screenshot_after: Mapped[str | None] = mapped_column(String(64), nullable=True)  # artifact_id
+    output_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     __table_args__ = (Index("ix_browser_actions_session", "session_id", "created_at"),)

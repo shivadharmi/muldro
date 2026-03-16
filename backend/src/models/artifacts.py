@@ -1,6 +1,6 @@
 """Artifacts — S3-backed document/file storage with metadata."""
 
-from sqlalchemy import Index, Integer, String
+from sqlalchemy import ForeignKey, Index, Integer, String
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -12,6 +12,9 @@ class Artifact(Base, TimestampMixin):
 
     artifact_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
+    )
     artifact_type: Mapped[str] = mapped_column(
         String(32), nullable=False
     )  # document, email, screenshot, output, attachment
@@ -20,6 +23,9 @@ class Artifact(Base, TimestampMixin):
     size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     s3_key: Mapped[str] = mapped_column(String(512), nullable=False)
     s3_bucket: Mapped[str] = mapped_column(String(128), nullable=False)
+    run_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    step_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    task_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     source_ref: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     entity_links: Mapped[list | None] = mapped_column(ARRAY(String(64)), nullable=True)
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB, nullable=True)

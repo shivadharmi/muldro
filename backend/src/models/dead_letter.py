@@ -1,6 +1,6 @@
 """Dead-letter queue model — stores failed operations for retry or inspection."""
 
-from sqlalchemy import DateTime, Index, Integer, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -13,6 +13,9 @@ class DeadLetterEntry(Base, TimestampMixin):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     entry_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
+    )
 
     # What failed
     operation_type: Mapped[str] = mapped_column(String(64), nullable=False)

@@ -1,4 +1,4 @@
-from sqlalchemy import ForeignKey, Index, String, Text
+from sqlalchemy import ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -10,6 +10,9 @@ class Plan(Base, TimestampMixin):
 
     plan_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
+    )
     trigger_type: Mapped[str] = mapped_column(String(32), nullable=False)
     trigger_ref: Mapped[str | None] = mapped_column(String(128))
     goal: Mapped[str] = mapped_column(String(256), nullable=False)
@@ -32,10 +35,13 @@ class Plan(Base, TimestampMixin):
 class PlanTask(Base):
     __tablename__ = "plan_tasks"
 
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     task_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     plan_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("plans.plan_id", ondelete="CASCADE"), nullable=False
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
     )
     task_type: Mapped[str] = mapped_column(String(64), nullable=False)
     input_data: Mapped[dict | None] = mapped_column(JSONB)

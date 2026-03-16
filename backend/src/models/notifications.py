@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, Index, String, Text
+from sqlalchemy import DateTime, Float, ForeignKey, Index, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -13,10 +13,12 @@ class Notification(Base, TimestampMixin):
     __tablename__ = "notifications"
 
     notification_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    workspace_id: Mapped[str | None] = mapped_column(String(64))
     user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
+    )
     channel: Mapped[str] = mapped_column(String(32), default="web")
-    # web, telegram, email
+    # web, telegram, email, slack
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     body: Mapped[str | None] = mapped_column(Text)
     payload_json: Mapped[dict | None] = mapped_column(JSONB)
@@ -26,6 +28,7 @@ class Notification(Base, TimestampMixin):
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    follow_up_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
         Index("ix_notifications_user_status", "user_id", "status", "created_at"),

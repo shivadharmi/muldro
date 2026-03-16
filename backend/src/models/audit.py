@@ -1,4 +1,4 @@
-from sqlalchemy import String, Text
+from sqlalchemy import ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -10,6 +10,9 @@ class AuditLog(Base, TimestampMixin):
 
     audit_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
+    )
     event_id: Mapped[str | None] = mapped_column(String(64))
     plan_id: Mapped[str | None] = mapped_column(String(64))
     execution_id: Mapped[str | None] = mapped_column(String(64))

@@ -1,5 +1,6 @@
 from datetime import date, datetime
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -12,6 +13,9 @@ class Entity(Base, TimestampMixin):
 
     entity_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
+    )
     entity_type: Mapped[str] = mapped_column(String(32), nullable=False)
     # person, organization, project, goal, task, meeting, document, message_thread, note, decision
     canonical_name: Mapped[str] = mapped_column(String(256), nullable=False)
@@ -21,6 +25,7 @@ class Entity(Base, TimestampMixin):
     interaction_count: Mapped[int] = mapped_column(Integer, default=0)
     importance_score: Mapped[float] = mapped_column(Float, default=0.0)
     confidence_score: Mapped[float] = mapped_column(Float, default=1.0)
+    embedding: Mapped[list | None] = mapped_column(Vector(1024))
 
     aliases: Mapped[list["EntityAlias"]] = relationship(
         back_populates="entity", cascade="all, delete-orphan"
@@ -38,6 +43,9 @@ class EntityAlias(Base):
     entity_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("entities.entity_id", ondelete="CASCADE"), nullable=False
     )
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
+    )
     alias: Mapped[str] = mapped_column(String(256), nullable=False)
     alias_type: Mapped[str] = mapped_column(String(32), default="name")  # name, email, handle
 
@@ -54,6 +62,9 @@ class EntityRelationship(Base, TimestampMixin):
 
     relation_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
+    )
     from_entity_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("entities.entity_id", ondelete="CASCADE"), nullable=False
     )

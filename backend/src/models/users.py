@@ -102,6 +102,9 @@ class OAuthConnection(Base, TimestampMixin):
 
     connection_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(64), ForeignKey("users.user_id"), nullable=False)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
+    )
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
     # google, github
     provider_user_id: Mapped[str | None] = mapped_column(String(128))

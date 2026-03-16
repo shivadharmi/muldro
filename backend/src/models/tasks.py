@@ -13,8 +13,10 @@ class Task(Base, TimestampMixin):
     __tablename__ = "tasks"
 
     task_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    workspace_id: Mapped[str | None] = mapped_column(String(64))
     user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
+    )
     goal_id: Mapped[str | None] = mapped_column(
         String(64), ForeignKey("goals.goal_id", ondelete="SET NULL")
     )
@@ -29,7 +31,8 @@ class Task(Base, TimestampMixin):
     priority: Mapped[str] = mapped_column(String(16), default="medium")
     status: Mapped[str] = mapped_column(String(32), default="created")
     # created, queued, planning, executing, awaiting_approval, awaiting_input,
-    # completed, failed, cancelled, blocked
+    # completed, failed, cancelled, blocked, draft, ready, waiting_for_data,
+    # waiting_for_external_event, partially_completed, archived
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     metadata_json: Mapped[dict | None] = mapped_column(JSONB)
     assigned_agent: Mapped[str | None] = mapped_column(String(32))
@@ -51,6 +54,9 @@ class TaskDependency(Base):
     __tablename__ = "task_dependencies"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
+    )
     task_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("tasks.task_id", ondelete="CASCADE"), nullable=False
     )

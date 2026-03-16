@@ -1,4 +1,4 @@
-from sqlalchemy import Float, Index, Integer, String, Text
+from sqlalchemy import Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -17,6 +17,9 @@ class BriefingFeedback(Base, TimestampMixin):
     feedback_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     briefing_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
+    )
 
     # "rating" | "item_acted_on" | "item_dismissed" | "follow_up_asked"
     feedback_type: Mapped[str] = mapped_column(String(32), nullable=False)

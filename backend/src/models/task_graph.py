@@ -10,23 +10,39 @@ from src.models.base import Base, TimestampMixin
 
 
 class TaskRun(Base, TimestampMixin):
+    """Unified execution record — tracks every interaction and plan execution.
+
+    Lightweight runs (source='user_message') have no plan_id.
+    Plan-backed runs (source='plan') link to a Plan via plan_id.
+    """
+
     __tablename__ = "task_runs"
 
     run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    plan_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("plans.plan_id", ondelete="CASCADE"), nullable=False
+    plan_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("plans.plan_id", ondelete="CASCADE"), nullable=True
     )
     user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
+    )
     status: Mapped[str] = mapped_column(String(32), default="pending")
     # pending, running, paused, awaiting_approval, completed, failed, cancelled
+    source: Mapped[str] = mapped_column(String(32), default="plan")
+    # user_message, event, schedule, trigger, plan
+    execution_mode: Mapped[str | None] = mapped_column(String(32))
+    # auto_execute, approval_required, blocked, suggest_only
+    policy_decision: Mapped[dict | None] = mapped_column(JSONB)
+    conversation_id: Mapped[str | None] = mapped_column(String(64))
     graph_definition: Mapped[dict | None] = mapped_column(JSONB)
     current_step_ids: Mapped[list[str] | None] = mapped_column(ARRAY(String(64)))
     checkpoint: Mapped[dict | None] = mapped_column(JSONB)
-    task_id_ref: Mapped[str | None] = mapped_column(String(64))
+    task_id_ref: Mapped[str | None] = mapped_column(String(64), index=True)
     runtime_version: Mapped[str | None] = mapped_column(String(32))
     planner_version: Mapped[str | None] = mapped_column(String(32))
     verifier_version: Mapped[str | None] = mapped_column(String(32))
     context_pack_json: Mapped[dict | None] = mapped_column(JSONB)
+    trace_id: Mapped[str | None] = mapped_column(String(64))
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     max_retries: Mapped[int] = mapped_column(Integer, default=3)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -37,7 +53,10 @@ class TaskRun(Base, TimestampMixin):
         back_populates="run", cascade="all, delete-orphan"
     )
 
-    __table_args__ = (Index("ix_task_runs_user_status", "user_id", "status", "created_at"),)
+    __table_args__ = (
+        Index("ix_task_runs_user_status", "user_id", "status", "created_at"),
+        Index("ix_task_runs_source", "source", "created_at"),
+    )
 
 
 class TaskStep(Base, TimestampMixin):
@@ -47,7 +66,11 @@ class TaskStep(Base, TimestampMixin):
     run_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("task_runs.run_id", ondelete="CASCADE"), nullable=False
     )
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
+    )
     task_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    plan_task_id: Mapped[str | None] = mapped_column(String(64))
     step_order: Mapped[int | None] = mapped_column(Integer)
     step_type: Mapped[str | None] = mapped_column(String(32))
     name: Mapped[str | None] = mapped_column(String(256))
@@ -74,6 +97,9 @@ class TaskCheckpoint(Base):
     checkpoint_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     run_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("task_runs.run_id", ondelete="CASCADE"), nullable=False
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
     )
     step_id: Mapped[str | None] = mapped_column(String(64))
     state_snapshot: Mapped[dict | None] = mapped_column(JSONB)

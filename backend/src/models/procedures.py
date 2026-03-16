@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, Index, Integer, String
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -14,6 +14,9 @@ class Procedure(Base, TimestampMixin):
 
     procedure_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
+    )
     name: Mapped[str] = mapped_column(String(256), nullable=False)
     description: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     trigger_pattern: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

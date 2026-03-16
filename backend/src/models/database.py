@@ -11,7 +11,13 @@ def get_engine():
     engine = getattr(_local, "engine", None)
     if engine is None:
         settings = get_settings()
-        engine = create_async_engine(settings.database_url, echo=settings.debug, pool_size=10)
+        engine = create_async_engine(
+            settings.database_url,
+            echo=settings.debug,
+            pool_size=10,
+            pool_pre_ping=True,
+            pool_recycle=3600,
+        )
         _local.engine = engine
     return engine
 
@@ -27,4 +33,8 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
 async def get_db() -> AsyncSession:
     factory = get_session_factory()
     async with factory() as session:
-        yield session
+        try:
+            yield session
+        except Exception:
+            await session.rollback()
+            raise

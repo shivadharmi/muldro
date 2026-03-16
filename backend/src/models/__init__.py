@@ -1,4 +1,6 @@
 from src.models.agent_decision_log import AgentDecisionLog
+from src.models.agent_routes import AgentRoute
+from src.models.agents import Agent
 from src.models.approvals import Approval
 from src.models.artifacts import Artifact
 from src.models.audit import AuditLog
@@ -11,7 +13,6 @@ from src.models.conversations import Conversation, Message
 from src.models.dead_letter import DeadLetterEntry
 from src.models.entities import Entity, EntityAlias, EntityRelationship
 from src.models.events import NormalizedEvent
-from src.models.executions import Execution, ExecutionTaskRun
 from src.models.goals import Goal, TrustScore
 from src.models.memory import Memory
 from src.models.notifications import Notification
@@ -25,6 +26,7 @@ from src.models.task_graph import TaskCheckpoint, TaskRun, TaskStep
 from src.models.tasks import Task, TaskDependency
 from src.models.token_usage import TokenUsage
 from src.models.tool_definitions import ToolDefinition
+from src.models.traces import ModelCall, Trace
 from src.models.triggers import Trigger
 from src.models.ui_state import UISurface
 from src.models.users import (
@@ -39,6 +41,8 @@ from src.models.users import (
 from src.models.working_memory import WorkingMemoryEntry
 
 __all__ = [
+    "Agent",
+    "AgentRoute",
     "Base",
     "NormalizedEvent",
     "Entity",
@@ -47,8 +51,6 @@ __all__ = [
     "Memory",
     "Plan",
     "PlanTask",
-    "Execution",
-    "ExecutionTaskRun",
     "Approval",
     "Briefing",
     "BriefingFeedback",
@@ -96,4 +98,7 @@ __all__ = [
     "ToolDefinition",
     # Notifications
     "Notification",
+    # Traces
+    "Trace",
+    "ModelCall",
 ]

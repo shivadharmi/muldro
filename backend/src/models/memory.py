@@ -1,8 +1,8 @@
 from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, Float, Index, Integer, String, Text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.models.base import Base, TimestampMixin
@@ -13,6 +13,9 @@ class Memory(Base, TimestampMixin):
 
     memory_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
+    )
     memory_type: Mapped[str] = mapped_column(String(32), nullable=False)
     # episodic, semantic, preference, relationship, task_context, procedural
     scope: Mapped[str | None] = mapped_column(String(64))  # presentation, planning, general
@@ -28,6 +31,7 @@ class Memory(Base, TimestampMixin):
     refresh_count: Mapped[int] = mapped_column(Integer, default=0)
     last_accessed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     superseded_by: Mapped[str | None] = mapped_column(String(64))
+    entity_ids: Mapped[list[str] | None] = mapped_column(ARRAY(String(64)))
 
     __table_args__ = (
         Index("ix_memories_user_type_status", "user_id", "memory_type", "status"),

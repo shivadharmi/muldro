@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Index, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -14,6 +14,9 @@ class Trigger(Base, TimestampMixin):
 
     trigger_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
+    )
     name: Mapped[str] = mapped_column(String(256), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     conditions: Mapped[dict] = mapped_column(JSONB, nullable=False)
@@ -21,6 +24,9 @@ class Trigger(Base, TimestampMixin):
     action_type: Mapped[str] = mapped_column(String(32), nullable=False)
     # notify, plan, escalate, procedure
     action_config: Mapped[dict | None] = mapped_column(JSONB)
+    action_plan_json: Mapped[dict | None] = mapped_column(JSONB)
+    status: Mapped[str] = mapped_column(String(20), default="active")
+    # pending, active, evaluating, triggered, snoozed, failed, disabled
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     fire_count: Mapped[int] = mapped_column(Integer, default=0)
     last_fired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -1,4 +1,4 @@
-from sqlalchemy import Index, String, Text
+from sqlalchemy import ForeignKey, Index, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -10,6 +10,9 @@ class Connector(Base, TimestampMixin):
 
     connector_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
+    )
     provider: Mapped[str] = mapped_column(String(32), nullable=False)  # gmail, calendar, slack
     status: Mapped[str] = mapped_column(String(16), default="active")
     # active, paused, reauth_needed, error
@@ -22,6 +25,9 @@ class ConnectorAccount(Base, TimestampMixin):
     account_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     connector_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
+    )
     external_account_id: Mapped[str] = mapped_column(String(256), nullable=False)
     credentials_encrypted: Mapped[str | None] = mapped_column(Text)  # encrypted OAuth tokens
     sync_cursor: Mapped[str | None] = mapped_column(String(512))  # last sync position
