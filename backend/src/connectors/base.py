@@ -21,6 +21,11 @@ class BaseConnector(ABC):
 
     provider: str
 
+    # Override in subclasses that support webhooks / write actions
+    supports_webhooks: bool = False
+    supports_actions: bool = False
+    available_actions: list[str] = []
+
     @abstractmethod
     async def poll(
         self, user_id: str, cursor: str | None, credentials: dict
@@ -34,6 +39,21 @@ class BaseConnector(ABC):
     @abstractmethod
     async def get_auth_url(self, scopes: list[str] | None = None) -> str:
         """Get the OAuth authorization URL for this connector."""
+
+    async def handle_webhook(self, payload: dict) -> list[RawEvent]:
+        """Parse incoming webhook payload into RawEvents.
+
+        Override in connectors that set supports_webhooks = True.
+        """
+        raise NotImplementedError(f"{self.__class__.__name__} does not support webhooks")
+
+    async def execute_action(self, action: str, params: dict, credentials: dict) -> dict:
+        """Execute a write action (e.g. send_email, create_issue).
+
+        Override in connectors that set supports_actions = True.
+        Returns a result dict with at least {"status": "ok"|"error"}.
+        """
+        raise NotImplementedError(f"{self.__class__.__name__} does not support actions")
 
 
 # Registry of connector classes by provider name

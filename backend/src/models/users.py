@@ -19,6 +19,7 @@ class User(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(16), default="active")
     # active, suspended, deleted
     onboarding_completed: Mapped[bool] = mapped_column(default=False)
+    timezone: Mapped[str | None] = mapped_column(String(64))
     settings: Mapped[dict | None] = mapped_column(JSONB)
     # policy_mode, notification_prefs, budget_limit_usd, observation_intervals, etc.
 
@@ -34,6 +35,8 @@ class Workspace(Base, TimestampMixin):
     owner_user_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("users.user_id"), nullable=False
     )
+    slug: Mapped[str | None] = mapped_column(String(128))
+    type: Mapped[str] = mapped_column(String(32), default="personal")
     plan: Mapped[str] = mapped_column(String(16), default="free")
     # free, pro, enterprise
     settings: Mapped[dict | None] = mapped_column(JSONB)
@@ -80,6 +83,7 @@ class Session(Base):
     user_id: Mapped[str] = mapped_column(String(64), ForeignKey("users.user_id"), nullable=False)
     token_hash: Mapped[str] = mapped_column(String(256), nullable=False, unique=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    workspace_id: Mapped[str | None] = mapped_column(String(64))
     surface: Mapped[str] = mapped_column(String(32), default="web")
     # web, telegram, api
     device_info: Mapped[dict | None] = mapped_column(JSONB)

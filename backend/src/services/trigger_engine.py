@@ -109,6 +109,12 @@ class TriggerEngine:
         """Check if an event matches trigger conditions."""
         conditions = trigger.conditions or {}
 
+        # Check cooldown
+        cooldown = getattr(trigger, "cooldown_until", None)
+        if cooldown and isinstance(cooldown, datetime):
+            if datetime.now(timezone.utc) < cooldown:
+                return False
+
         # Match event_type
         if "event_type" in conditions:
             expected = conditions["event_type"]
@@ -140,12 +146,42 @@ class TriggerEngine:
             if match.get("entity_id") and entity_id != match["entity_id"]:
                 return False
 
+        # Match keyword in payload
+        if "keyword_match" in conditions:
+            keyword = conditions["keyword_match"]
+            payload_str = str(event.payload)
+            if keyword.lower() not in payload_str.lower():
+                return False
+
+        # Match minimum confidence
+        if "min_confidence" in conditions:
+            confidence = event.payload.get("confidence_score", 0)
+            if confidence < conditions["min_confidence"]:
+                return False
+
+        # Match actor entity type
+        if "actor_entity_type" in conditions:
+            actor_type = event.payload.get("actor_entity_type", "")
+            if actor_type != conditions["actor_entity_type"]:
+                return False
+
         return True
 
     async def _fire_trigger(self, trigger: Trigger, event: BusEvent) -> None:
         """Execute the trigger action."""
         trigger.fire_count += 1
         trigger.last_fired_at = datetime.now(timezone.utc)
+        trigger.last_evaluated_at = datetime.now(timezone.utc)
+
+        # Apply cooldown if configured
+        cooldown_seconds = (trigger.conditions or {}).get("cooldown_seconds")
+        if cooldown_seconds:
+            from datetime import timedelta
+
+            trigger.cooldown_until = datetime.now(timezone.utc) + timedelta(
+                seconds=cooldown_seconds
+            )
+
         await self._db.flush()
 
         action_type = trigger.action_type

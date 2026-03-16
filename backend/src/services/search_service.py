@@ -122,9 +122,7 @@ class SearchService:
                 body={"user_id": user_id, **data},
             )
 
-    async def index_artifact(
-        self, artifact_id: str, user_id: str, data: dict
-    ) -> None:
+    async def index_artifact(self, artifact_id: str, user_id: str, data: dict) -> None:
         """Index an artifact to ES and Qdrant."""
         es = await self._get_es()
         if es:
@@ -184,9 +182,7 @@ class SearchService:
             counts["memories"] += 1
 
         for artifact in artifacts or []:
-            await self.index_artifact(
-                artifact["artifact_id"], user_id, artifact
-            )
+            await self.index_artifact(artifact["artifact_id"], user_id, artifact)
             counts["artifacts"] += 1
 
         logger.info("Reindexed for user %s: %s", user_id, counts)

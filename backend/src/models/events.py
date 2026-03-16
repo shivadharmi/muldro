@@ -29,6 +29,8 @@ class NormalizedEvent(Base, TimestampMixin):
     importance_score: Mapped[float | None] = mapped_column(Float)
     confidence_score: Mapped[float | None] = mapped_column(Float)
     raw_ref: Mapped[str | None] = mapped_column(String(512))
+    correlation_id: Mapped[str | None] = mapped_column(String(128))
+    causation_id: Mapped[str | None] = mapped_column(String(128))
     idempotency_key: Mapped[str] = mapped_column(String(256), unique=True, nullable=False)
     status: Mapped[str] = mapped_column(
         String(32), default="pending"

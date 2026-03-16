@@ -207,9 +207,7 @@ async def oauth_callback(
 
         expires_at = None
         if token_data.get("expires_in"):
-            expires_at = datetime.now(timezone.utc) + timedelta(
-                seconds=token_data["expires_in"]
-            )
+            expires_at = datetime.now(timezone.utc) + timedelta(seconds=token_data["expires_in"])
 
         scopes = token_data.get("scope", "").split() if token_data.get("scope") else None
 
@@ -257,9 +255,7 @@ async def oauth_callback(
                 return _error_redirect(settings, "Failed to exchange authorization code")
             token_data = resp.json()
 
-        scopes = (
-            token_data.get("scope", "").split(",") if token_data.get("scope") else None
-        )
+        scopes = token_data.get("scope", "").split(",") if token_data.get("scope") else None
 
         db_factory = get_session_factory()
         oauth_mgr = OAuthManager(db_factory, encryption_key=settings.oauth_encryption_key)
@@ -297,9 +293,7 @@ async def _ensure_connector(
     db = db_factory()
     try:
         result = await db.execute(
-            sa_select(Connector).where(
-                Connector.user_id == user_id, Connector.provider == provider
-            )
+            sa_select(Connector).where(Connector.user_id == user_id, Connector.provider == provider)
         )
         existing = result.scalar_one_or_none()
         if existing:

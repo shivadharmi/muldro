@@ -44,6 +44,8 @@ class RawEvent:
     summary: str | None = None
     actor: dict | None = None
     raw_payload: dict | None = None
+    correlation_id: str | None = None
+    causation_id: str | None = None
 
 
 SCORING_SYSTEM_PROMPT = """\
@@ -149,6 +151,8 @@ class EventProcessor:
             urgency_score=scores.get("urgency_score"),
             importance_score=scores.get("importance_score"),
             confidence_score=scores.get("confidence_score"),
+            correlation_id=raw.correlation_id,
+            causation_id=raw.causation_id,
             idempotency_key=idempotency_key,
             status="processed",
         )

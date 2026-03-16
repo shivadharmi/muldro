@@ -267,3 +267,81 @@ export interface CommandResponse {
   pending_approvals: Record<string, unknown>[] | null;
   presentation?: string;
 }
+
+// ── Standalone Tasks ────────────────────────────────────────────
+
+export interface StandaloneTask {
+  task_id: string;
+  title: string;
+  description: string | null;
+  task_type: string;
+  source: string;
+  priority: string;
+  status: string;
+  goal_id: string | null;
+  parent_task_id: string | null;
+  due_at: string | null;
+  assigned_agent: string | null;
+  created_at: string | null;
+}
+
+export interface StandaloneTaskCreateInput {
+  title: string;
+  description?: string;
+  task_type?: string;
+  priority?: string;
+  goal_id?: string;
+  parent_task_id?: string;
+  due_at?: string;
+}
+
+// ── Goals ───────────────────────────────────────────────────────
+
+export interface Goal {
+  goal_id: string;
+  title: string;
+  description: string | null;
+  status: string;
+  progress: number;
+  priority: string;
+  created_at: string | null;
+}
+
+export interface GoalCreateInput {
+  title: string;
+  description?: string;
+  priority?: string;
+  target_date?: string;
+}
+
+// ── Notifications ───────────────────────────────────────────────
+
+export interface Notification {
+  notification_id: string;
+  channel: string;
+  title: string;
+  body: string | null;
+  priority_score: number;
+  status: string;
+  sent_at: string | null;
+  read_at: string | null;
+  created_at: string | null;
+}
+
+// ── Workflows ───────────────────────────────────────────────────
+
+export interface Workflow {
+  name: string;
+  description: string;
+  steps: string[];
+}
+
+// ── Artifacts ───────────────────────────────────────────────────
+
+export interface Artifact {
+  artifact_id: string;
+  artifact_type: string;
+  title: string;
+  content_preview: string | null;
+  created_at: string | null;
+}

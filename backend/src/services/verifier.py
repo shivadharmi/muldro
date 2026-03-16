@@ -1,0 +1,224 @@
+"""Verifier — validates run outcomes against success conditions."""
+
+import json
+import logging
+from enum import Enum
+
+from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.config.settings import Settings, get_anthropic_client
+from src.models.task_graph import TaskRun, TaskStep
+
+logger = logging.getLogger(__name__)
+
+
+class Verdict(str, Enum):
+    passed = "passed"
+    failed = "failed"
+    partial = "partial"
+    skipped = "skipped"
+
+
+class VerificationResult(BaseModel):
+    verdict: Verdict
+    score: float = 0.0
+    details: str = ""
+    checks_passed: list[str] = []
+    checks_failed: list[str] = []
+
+
+class Verifier:
+    """Verify run outcomes against success conditions."""
+
+    def __init__(self, settings: Settings, db: AsyncSession):
+        self._settings = settings
+        self._db = db
+        self._client = get_anthropic_client(settings)
+
+    async def verify_run(
+        self,
+        run_id: str,
+        success_conditions: dict | None = None,
+    ) -> VerificationResult:
+        """Verify a completed run against its success conditions."""
+        result = await self._db.execute(select(TaskRun).where(TaskRun.run_id == run_id))
+        run = result.scalar_one_or_none()
+        if not run:
+            return VerificationResult(verdict=Verdict.skipped, details=f"Run not found: {run_id}")
+
+        if not success_conditions:
+            return VerificationResult(
+                verdict=Verdict.skipped, details="No success conditions defined"
+            )
+
+        steps_result = await self._db.execute(select(TaskStep).where(TaskStep.run_id == run_id))
+        steps = list(steps_result.scalars().all())
+
+        checks_passed = []
+        checks_failed = []
+
+        conditions = success_conditions.get("conditions", [])
+        if not conditions:
+            conditions = [success_conditions]
+
+        for condition in conditions:
+            cond_type = condition.get("type", "status_equals")
+            passed = await self._check_condition(condition, cond_type, run, steps)
+            label = condition.get("label", cond_type)
+            if passed:
+                checks_passed.append(label)
+            else:
+                checks_failed.append(label)
+
+        total = len(checks_passed) + len(checks_failed)
+        score = len(checks_passed) / total if total > 0 else 0.0
+
+        if not checks_failed:
+            verdict = Verdict.passed
+        elif not checks_passed:
+            verdict = Verdict.failed
+        else:
+            verdict = Verdict.partial
+
+        return VerificationResult(
+            verdict=verdict,
+            score=score,
+            details=f"{len(checks_passed)}/{total} checks passed",
+            checks_passed=checks_passed,
+            checks_failed=checks_failed,
+        )
+
+    async def verify_step(
+        self,
+        step_id: str,
+        expected_output: dict | None = None,
+    ) -> VerificationResult:
+        """Verify a single step's output."""
+        result = await self._db.execute(select(TaskStep).where(TaskStep.step_id == step_id))
+        step = result.scalar_one_or_none()
+        if not step:
+            return VerificationResult(verdict=Verdict.skipped, details=f"Step not found: {step_id}")
+
+        if step.status != "completed":
+            return VerificationResult(
+                verdict=Verdict.failed,
+                details=f"Step not completed (status={step.status})",
+                checks_failed=["step_completed"],
+            )
+
+        if not expected_output:
+            return VerificationResult(
+                verdict=Verdict.passed,
+                score=1.0,
+                details="Step completed, no output validation required",
+                checks_passed=["step_completed"],
+            )
+
+        passed = []
+        failed = []
+        output = step.output_data or {}
+
+        if "output_contains" in expected_output:
+            needle = expected_output["output_contains"]
+            if needle in json.dumps(output):
+                passed.append("output_contains")
+            else:
+                failed.append("output_contains")
+
+        if "output_matches_schema" in expected_output:
+            required_keys = expected_output["output_matches_schema"]
+            if all(k in output for k in required_keys):
+                passed.append("output_matches_schema")
+            else:
+                failed.append("output_matches_schema")
+
+        if "status_equals" in expected_output:
+            if output.get("status") == expected_output["status_equals"]:
+                passed.append("status_equals")
+            else:
+                failed.append("status_equals")
+
+        total = len(passed) + len(failed)
+        score = len(passed) / total if total > 0 else 1.0
+        verdict = Verdict.passed if not failed else (Verdict.partial if passed else Verdict.failed)
+
+        return VerificationResult(
+            verdict=verdict,
+            score=score,
+            details=f"{len(passed)}/{total} checks passed",
+            checks_passed=passed,
+            checks_failed=failed,
+        )
+
+    async def _check_condition(
+        self,
+        condition: dict,
+        cond_type: str,
+        run: TaskRun,
+        steps: list[TaskStep],
+    ) -> bool:
+        if cond_type == "status_equals":
+            return run.status == condition.get("value", "completed")
+
+        if cond_type == "all_steps_completed":
+            return all(s.status == "completed" for s in steps)
+
+        if cond_type == "output_contains":
+            needle = condition.get("value", "")
+            for step in steps:
+                if step.output_data and needle in json.dumps(step.output_data):
+                    return True
+            return False
+
+        if cond_type == "artifact_created":
+            for step in steps:
+                refs = step.artifact_refs or []
+                if refs:
+                    return True
+            return False
+
+        if cond_type == "llm_judge":
+            return await self._llm_judge(condition, run, steps)
+
+        return True
+
+    async def _llm_judge(
+        self,
+        condition: dict,
+        run: TaskRun,
+        steps: list[TaskStep],
+    ) -> bool:
+        """Use Claude to judge if the run met a qualitative condition."""
+        criteria = condition.get("criteria", "Did the run complete successfully?")
+        step_summaries = []
+        for s in steps:
+            out = json.dumps(s.output_data)[:200] if s.output_data else "no output"
+            step_summaries.append(f"Step {s.task_id} ({s.status}): {out}")
+
+        prompt = (
+            f"Evaluation criteria: {criteria}\n\n"
+            f"Run status: {run.status}\n"
+            f"Steps:\n" + "\n".join(step_summaries) + "\n\n"
+            'Respond with JSON: {"passed": true/false, "reason": "..."}'
+        )
+
+        try:
+            response = await self._client.messages.create(
+                model=self._settings.anthropic_model,
+                max_tokens=256,
+                system=(
+                    "You are a quality verification engine. "
+                    "Evaluate whether the run met the criteria."
+                ),
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = response.content[0].text
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1].rsplit("```", 1)[0]
+            result = json.loads(text)
+            return result.get("passed", False)
+        except Exception:
+            logger.warning("LLM judge verification failed", exc_info=True)
+            return False

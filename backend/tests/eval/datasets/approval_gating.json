@@ -1,0 +1,63 @@
+{
+  "suite": "approval_gating",
+  "description": "Evaluates governor approval gating decisions",
+  "cases": [
+    {
+      "case_id": "ag_send_email_high_risk",
+      "input": {
+        "action": "gmail_send_email",
+        "risk_level": "high",
+        "decision": "approval_required",
+        "recipient": "investor@fund.com",
+        "subject": "Term sheet response"
+      },
+      "expected": {
+        "decision": "approval_required",
+        "risk_level": "high",
+        "contains_keywords": ["investor", "term sheet"]
+      },
+      "tags": ["email", "high_risk"]
+    },
+    {
+      "case_id": "ag_read_calendar_low_risk",
+      "input": {
+        "action": "calendar_list",
+        "risk_level": "low",
+        "decision": "auto_execute"
+      },
+      "expected": {
+        "decision": "auto_execute",
+        "risk_level": "low"
+      },
+      "tags": ["calendar", "low_risk"]
+    },
+    {
+      "case_id": "ag_delete_blocked",
+      "input": {
+        "action": "gmail_delete",
+        "risk_level": "critical",
+        "decision": "blocked"
+      },
+      "expected": {
+        "decision": "blocked",
+        "risk_level": "critical"
+      },
+      "tags": ["delete", "critical"]
+    },
+    {
+      "case_id": "ag_slack_message_medium",
+      "input": {
+        "action": "slack_post_message",
+        "risk_level": "high",
+        "decision": "approval_required",
+        "channel": "#general",
+        "message": "Weekly update"
+      },
+      "expected": {
+        "decision": "approval_required",
+        "risk_level": "high"
+      },
+      "tags": ["slack", "high_risk"]
+    }
+  ]
+}

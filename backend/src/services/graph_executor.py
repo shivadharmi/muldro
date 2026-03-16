@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
 from src.config.settings import Settings, get_anthropic_client
+from src.models.approvals import Approval
 from src.models.plans import Plan, PlanTask
 from src.models.task_graph import TaskCheckpoint, TaskRun, TaskStep
 from src.services.audit import AuditService
@@ -24,13 +25,23 @@ logger = logging.getLogger(__name__)
 class GraphExecutor:
     """Durable graph executor with parallel steps, checkpoints, and approval gates."""
 
-    def __init__(self, settings: Settings, db: AsyncSession, event_bus=None, notifier=None):
+    def __init__(
+        self,
+        settings: Settings,
+        db: AsyncSession,
+        event_bus=None,
+        notifier=None,
+        tool_registry=None,
+        verifier=None,
+    ):
         self._settings = settings
         self._db = db
         self._client = get_anthropic_client(settings)
         self._audit = AuditService(db)
         self._event_bus = event_bus
         self._notifier = notifier
+        self._tool_registry = tool_registry
+        self._verifier = verifier
 
     async def create_run(self, plan_id: str, user_id: str) -> TaskRun:
         """Create a TaskRun from a Plan, building the step DAG."""
@@ -184,6 +195,9 @@ class GraphExecutor:
                 if not pending:
                     run.status = "completed"
                     run.completed_at = datetime.now(timezone.utc)
+                    # Run verifier if available
+                    if self._verifier:
+                        await self._run_verification(run)
                     break
                 # If there are pending steps but none ready, we're blocked
                 failed = [s for s in all_steps if s.status == "failed"]
@@ -215,7 +229,48 @@ class GraphExecutor:
                 break
 
     async def _execute_step(self, run: TaskRun, step: TaskStep) -> None:
-        """Execute a single step."""
+        """Execute a single step, with approval gate if required."""
+        # Check if step requires approval via ToolRegistry
+        if self._tool_registry and step.input_data:
+            task_type = step.input_data.get("task_type", "")
+            tool = await self._tool_registry.get_tool(task_type)
+            if tool and tool.requires_approval:
+                # Create approval record and pause
+                approval = Approval(
+                    approval_id=f"apr_{ULID()}",
+                    user_id=run.user_id,
+                    execution_id=run.run_id,
+                    approval_type=f"step:{task_type}",
+                    title=f"Approve step: {step.name or task_type}",
+                    summary=f"Step in run {run.run_id} requires approval",
+                    risk_level=tool.risk_level,
+                    status="pending",
+                    step_id=step.step_id,
+                    run_id=run.run_id,
+                )
+                self._db.add(approval)
+                step.status = "waiting_approval"
+                run.status = "awaiting_approval"
+                await self._checkpoint(run, step.step_id, "approval_gate")
+                await self._db.flush()
+
+                if self._notifier:
+                    try:
+                        await self._notifier.notify(
+                            user_id=run.user_id,
+                            notification_type="approval_request",
+                            title=f"Approve: {step.name or task_type}",
+                            body=f"Step requires approval in run {run.run_id}",
+                            data={
+                                "approval_id": approval.approval_id,
+                                "run_id": run.run_id,
+                                "step_id": step.step_id,
+                            },
+                        )
+                    except Exception:
+                        logger.warning("Failed to notify for step approval", exc_info=True)
+                return
+
         step.status = "running"
         step.started_at = datetime.now(timezone.utc)
         await self._db.flush()
@@ -360,6 +415,32 @@ class GraphExecutor:
         self._db.add(checkpoint)
         run.checkpoint = checkpoint.state_snapshot
         await self._db.flush()
+
+    async def _run_verification(self, run: TaskRun) -> None:
+        """Run verification on a completed run."""
+        try:
+            # Load success conditions from the plan
+            plan_result = await self._db.execute(select(Plan).where(Plan.plan_id == run.plan_id))
+            plan = plan_result.scalar_one_or_none()
+            conditions = plan.success_conditions if plan else None
+
+            result = await self._verifier.verify_run(run.run_id, conditions)
+            # Store verdict in checkpoint
+            await self._checkpoint(run, None, "verification")
+            run.checkpoint = {
+                **(run.checkpoint or {}),
+                "verification": {
+                    "verdict": result.verdict.value,
+                    "score": result.score,
+                    "details": result.details,
+                },
+            }
+            if result.verdict.value == "failed":
+                run.status = "failed"
+                run.error = {"verification_failed": result.details}
+                logger.warning("Run %s failed verification: %s", run.run_id, result.details)
+        except Exception:
+            logger.warning("Verification failed for run %s", run.run_id, exc_info=True)
 
     @staticmethod
     def _build_graph_definition(tasks: list[PlanTask]) -> dict:

@@ -14,6 +14,7 @@ from src.models.events import NormalizedEvent
 from src.models.executions import Execution, ExecutionTaskRun
 from src.models.goals import Goal, TrustScore
 from src.models.memory import Memory
+from src.models.notifications import Notification
 from src.models.oauth_token import OAuthToken
 from src.models.observation import ObservationStatus
 from src.models.observation_cursor import ObservationCursor
@@ -21,7 +22,9 @@ from src.models.plans import Plan, PlanTask
 from src.models.procedures import Procedure
 from src.models.schedules import Schedule
 from src.models.task_graph import TaskCheckpoint, TaskRun, TaskStep
+from src.models.tasks import Task, TaskDependency
 from src.models.token_usage import TokenUsage
+from src.models.tool_definitions import ToolDefinition
 from src.models.triggers import Trigger
 from src.models.ui_state import UISurface
 from src.models.users import (
@@ -74,6 +77,9 @@ __all__ = [
     "TaskRun",
     "TaskStep",
     "TaskCheckpoint",
+    # Standalone tasks
+    "Task",
+    "TaskDependency",
     # Goals & trust
     "Goal",
     "TrustScore",
@@ -86,4 +92,8 @@ __all__ = [
     # Browser automation
     "BrowserSession",
     "BrowserAction",
+    # Tool definitions
+    "ToolDefinition",
+    # Notifications
+    "Notification",
 ]

@@ -284,6 +284,10 @@ def test_rejected_approval_cancels_execution_and_audits(mock_op_cls, mock_audit_
     mock_approval.summary = "Draft reply about term sheet"
     mock_approval.risk_level = "medium"
     mock_approval.created_at = datetime(2026, 3, 14, 9, 0, tzinfo=timezone.utc)
+    mock_approval.run_id = None
+    mock_approval.step_id = None
+    mock_approval.requested_by = None
+    mock_approval.approved_by = None
 
     # Set up mock execution
     mock_execution = MagicMock(spec=Execution)

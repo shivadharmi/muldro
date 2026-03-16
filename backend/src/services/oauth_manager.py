@@ -17,6 +17,7 @@ from src.models.oauth_token import OAuthToken
 
 logger = logging.getLogger(__name__)
 
+
 def _get_fernet(key: str = "") -> Fernet:
     if not key:
         key = os.environ.get("JARVIS_OAUTH_ENCRYPTION_KEY", "")

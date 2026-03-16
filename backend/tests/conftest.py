@@ -44,6 +44,10 @@ def make_mock_settings(**overrides) -> MagicMock:
         rate_limit_rpm=120,
         max_request_body_bytes=1_048_576,
         cors_allowed_origins="",
+        elasticsearch_url="",
+        daily_token_budget_usd=5.0,
+        bedrock_region="us-east-1",
+        use_bedrock=False,
     )
     defaults.update(overrides)
     for k, v in defaults.items():

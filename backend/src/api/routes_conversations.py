@@ -121,9 +121,7 @@ async def create_conversation(
     return ConversationCreateResponse(conversation_id=convo.conversation_id)
 
 
-@router.get(
-    "/v1/conversations/{conversation_id}/messages", response_model=MessageListResponse
-)
+@router.get("/v1/conversations/{conversation_id}/messages", response_model=MessageListResponse)
 async def get_conversation_messages(
     conversation_id: str,
     user_id: str = Depends(get_current_user_id),
@@ -212,9 +210,7 @@ async def update_conversation(
     await db.commit()
 
     count_result = await db.execute(
-        select(func.count(Message.message_id)).where(
-            Message.conversation_id == conversation_id
-        )
+        select(func.count(Message.message_id)).where(Message.conversation_id == conversation_id)
     )
     msg_count = count_result.scalar() or 0
 

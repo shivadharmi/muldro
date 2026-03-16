@@ -37,9 +37,7 @@ class BrowserAction(Base, TimestampMixin):
     result_status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="pending"
     )  # pending/success/failed
-    screenshot_before: Mapped[str | None] = mapped_column(
-        String(64), nullable=True
-    )  # artifact_id
+    screenshot_before: Mapped[str | None] = mapped_column(String(64), nullable=True)  # artifact_id
     screenshot_after: Mapped[str | None] = mapped_column(String(64), nullable=True)  # artifact_id
 
     __table_args__ = (Index("ix_browser_actions_session", "session_id", "created_at"),)

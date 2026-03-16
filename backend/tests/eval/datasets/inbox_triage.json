@@ -1,0 +1,46 @@
+{
+  "suite": "inbox_triage",
+  "description": "Evaluates inbox classification and grouping quality",
+  "cases": [
+    {
+      "case_id": "it_mixed_inbox",
+      "input": {
+        "emails": [
+          {"subject": "Re: Term Sheet Review", "from": "investor@fund.com", "priority": "high"},
+          {"subject": "Weekly Newsletter", "from": "news@techdigest.com", "priority": "low"},
+          {"subject": "Urgent: Production Down", "from": "oncall@company.com", "priority": "critical"}
+        ],
+        "groups": [
+          {"label": "Urgent", "items": [{"subject": "Urgent: Production Down"}]},
+          {"label": "Important", "items": [{"subject": "Re: Term Sheet Review"}]},
+          {"label": "Low Priority", "items": [{"subject": "Weekly Newsletter"}]}
+        ]
+      },
+      "expected": {
+        "required_fields": ["emails", "groups"],
+        "min_items": 3,
+        "items_field": "groups",
+        "contains_keywords": ["urgent", "investor"]
+      },
+      "tags": ["mixed_priority"]
+    },
+    {
+      "case_id": "it_all_low",
+      "input": {
+        "emails": [
+          {"subject": "Team lunch Friday?", "from": "colleague@company.com", "priority": "low"},
+          {"subject": "Office wifi update", "from": "it@company.com", "priority": "low"}
+        ],
+        "groups": [
+          {"label": "Low Priority", "items": [{"subject": "Team lunch Friday?"}, {"subject": "Office wifi update"}]}
+        ]
+      },
+      "expected": {
+        "required_fields": ["emails", "groups"],
+        "min_items": 1,
+        "items_field": "groups"
+      },
+      "tags": ["all_low"]
+    }
+  ]
+}

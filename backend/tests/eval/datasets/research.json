@@ -1,0 +1,41 @@
+{
+  "suite": "research",
+  "description": "Evaluates research agent output quality",
+  "cases": [
+    {
+      "case_id": "res_competitor_analysis",
+      "input": {
+        "query": "Analyze competitor pricing strategies",
+        "findings": [
+          {"title": "Competitor A pricing", "body": "Freemium model with $29/mo pro tier", "source": "memory"},
+          {"title": "Competitor B pricing", "body": "Enterprise-only, starts at $500/mo", "source": "web"}
+        ],
+        "summary": "Two main competitors identified with different pricing models"
+      },
+      "expected": {
+        "required_fields": ["query", "findings", "summary"],
+        "min_items": 2,
+        "items_field": "findings",
+        "contains_keywords": ["competitor", "pricing"]
+      },
+      "tags": ["competitive_intel"]
+    },
+    {
+      "case_id": "res_market_size",
+      "input": {
+        "query": "What is the TAM for AI dev tools?",
+        "findings": [
+          {"title": "Market report 2025", "body": "TAM estimated at $15B by 2027", "source": "web"}
+        ],
+        "summary": "AI dev tools market growing rapidly, $15B TAM by 2027"
+      },
+      "expected": {
+        "required_fields": ["query", "findings", "summary"],
+        "min_items": 1,
+        "items_field": "findings",
+        "contains_keywords": ["market", "tam"]
+      },
+      "tags": ["market_research"]
+    }
+  ]
+}

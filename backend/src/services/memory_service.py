@@ -244,6 +244,92 @@ class MemoryService:
             for m in memories
         ]
 
+    async def check_contradictions(
+        self,
+        user_id: str,
+        new_fact: str,
+        new_memory_id: str,
+    ) -> list[str]:
+        """Check if a new memory contradicts existing ones.
+
+        If contradiction found: set old memory superseded_by = new_memory_id,
+        lower old confidence. Returns list of superseded memory_ids.
+        """
+        superseded = []
+        # Find similar memories that might contradict
+        embedding = await self._embedder.embed_text(new_fact)
+        if not embedding:
+            return superseded
+
+        sql = text("""
+            SELECT memory_id, fact_text
+            FROM memories
+            WHERE user_id = :user_id
+              AND status = 'active'
+              AND memory_id != :new_id
+              AND embedding IS NOT NULL
+              AND 1 - (embedding <=> cast(:embedding as vector)) > 0.7
+            LIMIT 10
+        """)
+        result = await self._db.execute(
+            sql, {"user_id": user_id, "new_id": new_memory_id, "embedding": str(embedding)}
+        )
+        candidates = result.all()
+
+        if not candidates:
+            return superseded
+
+        # Ask Claude to check for contradictions
+        for row in candidates:
+            is_contradiction = await self._check_contradiction_pair(new_fact, row.fact_text)
+            if is_contradiction:
+                # Supersede the old memory
+                stmt = (
+                    update(Memory)
+                    .where(Memory.memory_id == row.memory_id)
+                    .values(
+                        superseded_by=new_memory_id,
+                        confidence=Memory.confidence * 0.5,
+                    )
+                )
+                await self._db.execute(stmt)
+                superseded.append(row.memory_id)
+                logger.info(
+                    "Memory %s superseded by %s (contradiction)",
+                    row.memory_id,
+                    new_memory_id,
+                )
+
+        if superseded:
+            await self._db.flush()
+
+        return superseded
+
+    async def _check_contradiction_pair(self, fact_a: str, fact_b: str) -> bool:
+        """Check if two facts contradict each other using Claude."""
+        try:
+            response = await self._client.messages.create(
+                model=self._settings.anthropic_model,
+                max_tokens=64,
+                system=(
+                    "You check if two facts contradict each other. "
+                    'Respond with JSON: {"contradicts": true/false}'
+                ),
+                messages=[
+                    {
+                        "role": "user",
+                        "content": f"Fact A: {fact_a}\nFact B: {fact_b}",
+                    }
+                ],
+            )
+            result_text = response.content[0].text
+            if result_text.startswith("```"):
+                result_text = result_text.split("\n", 1)[1].rsplit("```", 1)[0]
+            return json.loads(result_text).get("contradicts", False)
+        except Exception:
+            logger.debug("Contradiction check failed", exc_info=True)
+            return False
+
     async def consolidate_memories(self, user_id: str) -> int:
         """Find and merge highly similar memories (>0.95 similarity).
 

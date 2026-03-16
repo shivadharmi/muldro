@@ -24,5 +24,8 @@ class Trigger(Base, TimestampMixin):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     fire_count: Mapped[int] = mapped_column(Integer, default=0)
     last_fired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cooldown_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_evaluated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source_config_json: Mapped[dict | None] = mapped_column(JSONB)
 
     __table_args__ = (Index("ix_triggers_user_enabled", "user_id", "enabled"),)

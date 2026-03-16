@@ -19,6 +19,11 @@ class ViewType(str, Enum):
     MEMORY_BROWSER = "memory_browser"
     CONNECTOR_STATUS = "connector_status"
     BRIEFING_VIEW = "briefing_view"
+    BRIEFING_FULL = "briefing_full"
+    RESEARCH_REPORT = "research_report"
+    MEETING_PREP = "meeting_prep"
+    INBOX_TRIAGE = "inbox_triage"
+    DETAIL_CARD = "detail_card"
     TIMELINE = "timeline"
     SETTINGS_PANEL = "settings_panel"
 
@@ -293,6 +298,194 @@ def connector_status_view(
     )
 
 
+def briefing_full_view(
+    user_id: str,
+    briefing: dict,
+) -> A2UISurface:
+    """Full daily briefing view."""
+    children = [
+        r.heading("brief_title", "Daily Briefing"),
+        r.text(
+            "brief_headline",
+            briefing.get("headline", "No briefing"),
+            variant="subtitle",
+        ),
+        r.divider("brief_div"),
+    ]
+
+    priorities = briefing.get("top_priorities", [])
+    if priorities:
+        prio_items = [
+            r.card(
+                f"prio_{i}",
+                [
+                    r.text(f"prio_{i}_t", p.get("title", "")),
+                    r.text(
+                        f"prio_{i}_r",
+                        p.get("reason", ""),
+                        variant="caption",
+                    ),
+                ],
+            )
+            for i, p in enumerate(priorities)
+        ]
+        children.append(
+            r.card(
+                "priorities",
+                [
+                    r.text("prio_hd", "Top Priorities", variant="heading"),
+                    r.list_component("prio_list", prio_items),
+                ],
+            )
+        )
+
+    actions = briefing.get("recommended_actions", [])
+    if actions:
+        action_items = [r.text(f"act_{i}", f"• {a}") for i, a in enumerate(actions)]
+        children.append(
+            r.card(
+                "actions",
+                [
+                    r.text("act_hd", "Recommended Actions", variant="heading"),
+                    *action_items,
+                ],
+            )
+        )
+
+    return r.surface(f"briefing_{user_id}", children)
+
+
+def research_report_view(
+    user_id: str,
+    report: dict,
+) -> A2UISurface:
+    """Research report view with sources and findings."""
+    children = [
+        r.heading("res_title", report.get("title", "Research Report")),
+    ]
+
+    summary = report.get("summary", "")
+    if summary:
+        children.append(r.text("res_summary", summary))
+
+    findings = report.get("findings", [])
+    for i, finding in enumerate(findings[:10]):
+        children.append(
+            r.card(
+                f"find_{i}",
+                [
+                    r.text(f"find_{i}_t", finding.get("title", "")),
+                    r.text(
+                        f"find_{i}_b",
+                        finding.get("body", ""),
+                        variant="body",
+                    ),
+                    r.badge(
+                        f"find_{i}_s",
+                        finding.get("source", "unknown"),
+                    ),
+                ],
+            )
+        )
+
+    return r.surface(f"research_{user_id}", children)
+
+
+def meeting_prep_view(
+    user_id: str,
+    prep: dict,
+) -> A2UISurface:
+    """Meeting preparation card."""
+    children = [
+        r.heading("mp_title", prep.get("title", "Meeting Prep")),
+    ]
+
+    agenda = prep.get("agenda", [])
+    if agenda:
+        agenda_items = [r.text(f"ag_{i}", f"{i + 1}. {item}") for i, item in enumerate(agenda)]
+        children.append(
+            r.card(
+                "mp_agenda",
+                [
+                    r.text("ag_hd", "Agenda", variant="heading"),
+                    *agenda_items,
+                ],
+            )
+        )
+
+    attendees = prep.get("attendees", [])
+    if attendees:
+        att_items = [
+            r.card(
+                f"att_{i}",
+                [
+                    r.text(f"att_{i}_n", a.get("name", "")),
+                    r.text(
+                        f"att_{i}_c",
+                        a.get("recent_context", ""),
+                        variant="caption",
+                    ),
+                ],
+            )
+            for i, a in enumerate(attendees)
+        ]
+        children.append(
+            r.card(
+                "mp_attendees",
+                [
+                    r.text("att_hd", "Attendees", variant="heading"),
+                    r.list_component("att_list", att_items),
+                ],
+            )
+        )
+
+    talking = prep.get("talking_points", [])
+    if talking:
+        tp_items = [r.text(f"tp_{i}", f"• {t}") for i, t in enumerate(talking)]
+        children.append(
+            r.card(
+                "mp_talking",
+                [
+                    r.text("tp_hd", "Talking Points", variant="heading"),
+                    *tp_items,
+                ],
+            )
+        )
+
+    return r.surface(f"meeting_prep_{user_id}", children)
+
+
+def inbox_triage_view(
+    user_id: str,
+    groups: list[dict],
+) -> A2UISurface:
+    """Inbox triage view — grouped emails with actions."""
+    children = [r.heading("it_title", "Inbox Triage")]
+
+    for i, group in enumerate(groups[:10]):
+        items = group.get("items", [])
+        item_widgets = [
+            r.text(f"it_{i}_item_{j}", f"• {item.get('subject', '')}")
+            for j, item in enumerate(items[:5])
+        ]
+        children.append(
+            r.card(
+                f"it_group_{i}",
+                [
+                    r.text(
+                        f"it_{i}_label",
+                        group.get("label", "Uncategorized"),
+                        variant="heading",
+                    ),
+                    r.badge(f"it_{i}_count", f"{len(items)} emails"),
+                    *item_widgets,
+                ],
+            )
+        )
+
+    return r.surface(f"inbox_{user_id}", children)
+
+
 VIEWS = {
     ViewType.DASHBOARD: dashboard_view,
     ViewType.TASK_BOARD: task_board_view,
@@ -300,4 +493,8 @@ VIEWS = {
     ViewType.ENTITY_EXPLORER: entity_explorer_view,
     ViewType.MEMORY_BROWSER: memory_browser_view,
     ViewType.CONNECTOR_STATUS: connector_status_view,
+    ViewType.BRIEFING_FULL: briefing_full_view,
+    ViewType.RESEARCH_REPORT: research_report_view,
+    ViewType.MEETING_PREP: meeting_prep_view,
+    ViewType.INBOX_TRIAGE: inbox_triage_view,
 }

@@ -336,6 +336,10 @@ def test_rejection_audit_trail(mock_op_cls, mock_audit_cls):
     mock_approval.summary = "Automated weekly report to team"
     mock_approval.risk_level = "low"
     mock_approval.created_at = datetime(2026, 3, 14, 9, 0, tzinfo=timezone.utc)
+    mock_approval.run_id = None
+    mock_approval.step_id = None
+    mock_approval.requested_by = None
+    mock_approval.approved_by = None
 
     mock_execution = MagicMock(spec=Execution)
     mock_execution.execution_id = "exec_pipeline_001"

@@ -1,0 +1,66 @@
+{
+  "suite": "ui_selection",
+  "description": "Evaluates presenter view type selection",
+  "cases": [
+    {
+      "case_id": "ui_draft_email",
+      "input": {
+        "task_type": "draft_email",
+        "expected_view": "approval_panel"
+      },
+      "expected": {
+        "required_fields": ["task_type", "expected_view"],
+        "contains_keywords": ["draft_email"]
+      },
+      "tags": ["email"]
+    },
+    {
+      "case_id": "ui_research",
+      "input": {
+        "task_type": "research",
+        "expected_view": "research_report"
+      },
+      "expected": {
+        "required_fields": ["task_type", "expected_view"],
+        "contains_keywords": ["research"]
+      },
+      "tags": ["research"]
+    },
+    {
+      "case_id": "ui_meeting_prep",
+      "input": {
+        "task_type": "meeting_prep",
+        "expected_view": "meeting_prep"
+      },
+      "expected": {
+        "required_fields": ["task_type", "expected_view"],
+        "contains_keywords": ["meeting"]
+      },
+      "tags": ["meeting"]
+    },
+    {
+      "case_id": "ui_general_fallback",
+      "input": {
+        "task_type": "general",
+        "expected_view": "detail_card"
+      },
+      "expected": {
+        "required_fields": ["task_type", "expected_view"],
+        "contains_keywords": ["general"]
+      },
+      "tags": ["general"]
+    },
+    {
+      "case_id": "ui_inbox_triage",
+      "input": {
+        "task_type": "inbox_triage",
+        "expected_view": "inbox_triage"
+      },
+      "expected": {
+        "required_fields": ["task_type", "expected_view"],
+        "contains_keywords": ["inbox"]
+      },
+      "tags": ["inbox"]
+    }
+  ]
+}

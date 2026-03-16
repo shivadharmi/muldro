@@ -132,8 +132,30 @@ async def approve_action(
 
     await db.commit()
 
-    # Trigger execution in background
-    if execution:
+    # If approval has a run_id, resume the graph executor run
+    if approval.run_id:
+        from src.services.graph_executor import GraphExecutor
+
+        executor = GraphExecutor(settings=settings, db=db)
+        try:
+            # Mark the waiting step as ready
+            from src.models.task_graph import TaskStep
+
+            step_result = await db.execute(
+                select(TaskStep).where(
+                    TaskStep.step_id == approval.step_id,
+                    TaskStep.run_id == approval.run_id,
+                )
+            )
+            step = step_result.scalar_one_or_none()
+            if step and step.status == "waiting_approval":
+                step.status = "pending"
+                await db.flush()
+            await executor.resume_run(approval.run_id)
+        except Exception:
+            logger.exception("Resume failed after approval: %s", approval.run_id)
+    elif execution:
+        # Legacy: trigger execution via Operator
         operator = Operator(settings=settings, db=db)
         try:
             await operator.execute_plan(execution.execution_id, user_id)
@@ -162,6 +184,7 @@ async def reject_action(
     req: ApprovalDecisionRequest | None = None,
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ):
     """Reject a pending action."""
     approval = await _get_approval(db, approval_id, user_id)
@@ -177,6 +200,16 @@ async def reject_action(
     execution = exec_result.scalar_one_or_none()
     if execution:
         execution.status = "cancelled"
+
+    # If approval has a run_id, cancel the run
+    if approval.run_id:
+        from src.services.graph_executor import GraphExecutor
+
+        executor = GraphExecutor(settings=settings, db=db)
+        try:
+            await executor.cancel_run(approval.run_id)
+        except Exception:
+            logger.warning("Failed to cancel run %s", approval.run_id, exc_info=True)
 
     audit = AuditService(db)
     await audit.log(

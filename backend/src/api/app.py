@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.routes_approvals import router as approvals_router
+from src.api.routes_artifacts import router as artifacts_router
 from src.api.routes_auth import router as auth_router
 from src.api.routes_briefings import router as briefings_router
 from src.api.routes_canvas import router as canvas_router
@@ -17,11 +18,14 @@ from src.api.routes_conversations import router as conversations_router
 from src.api.routes_events import router as events_router
 from src.api.routes_executions import router as executions_router
 from src.api.routes_feedback import router as feedback_router
+from src.api.routes_goals import router as goals_router
 from src.api.routes_health import router as health_router
 from src.api.routes_meetings import router as meetings_router
 from src.api.routes_memories import router as memories_router
 from src.api.routes_metrics import router as metrics_router
+from src.api.routes_notifications import router as notifications_router
 from src.api.routes_observation import router as observation_router
+from src.api.routes_realtime import router as realtime_router
 from src.api.routes_schedules import router as schedules_router
 from src.api.routes_search import router as search_router
 from src.api.routes_settings import router as settings_router
@@ -31,6 +35,7 @@ from src.api.routes_traces import router as traces_router
 from src.api.routes_triggers import router as triggers_router
 from src.api.routes_ui import router as ui_router
 from src.api.routes_webhooks import router as webhooks_router
+from src.api.routes_workflows import router as workflows_router
 from src.api.routes_ws import router as ws_router
 from src.api.schemas import HealthResponse
 from src.config.settings import get_settings
@@ -60,6 +65,23 @@ def create_app() -> FastAPI:
         from src.services.surface_registry import SurfaceRegistry
 
         app.state.surface_registry = SurfaceRegistry(redis=app.state.redis)
+
+        # Seed default tool definitions
+        try:
+            from src.api.deps import get_session_factory
+            from src.services.tool_registry import ToolRegistry
+
+            async with get_session_factory()() as db:
+                registry = ToolRegistry(db)
+                count = await registry.seed_defaults()
+                if count:
+                    await db.commit()
+                    logger.info("Seeded %d tool definitions", count)
+        except Exception:
+            logger.debug(
+                "Tool registry seed skipped (DB not ready)",
+                exc_info=True,
+            )
 
         yield
 
@@ -156,6 +178,21 @@ def create_app() -> FastAPI:
 
     # Conversations (chat session persistence)
     app.include_router(conversations_router, tags=["conversations"])
+
+    # Goals
+    app.include_router(goals_router, tags=["goals"])
+
+    # Artifacts
+    app.include_router(artifacts_router, tags=["artifacts"])
+
+    # Realtime SSE streaming
+    app.include_router(realtime_router, tags=["realtime"])
+
+    # Notifications
+    app.include_router(notifications_router, tags=["notifications"])
+
+    # Workflows
+    app.include_router(workflows_router, tags=["workflows"])
 
     return app
 

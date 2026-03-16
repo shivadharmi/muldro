@@ -108,9 +108,7 @@ class EventCorrelator:
             "thread": thread,
         }
 
-    async def detect_anomaly(
-        self, user_id: str, source: str, hours: int = 24
-    ) -> dict | None:
+    async def detect_anomaly(self, user_id: str, source: str, hours: int = 24) -> dict | None:
         """Detect anomalous event patterns for a source.
 
         Checks for:
@@ -167,8 +165,7 @@ class EventCorrelator:
                 "source": source,
                 "previous_count": prev_count,
                 "message": (
-                    f"No {source} events in the last {hours}h "
-                    f"(previously had {prev_count})"
+                    f"No {source} events in the last {hours}h (previously had {prev_count})"
                 ),
             }
 

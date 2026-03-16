@@ -3,7 +3,7 @@
 import { usePathname } from "next/navigation";
 import { NavItem } from "./nav-item";
 import { useQuery } from "@tanstack/react-query";
-import { fetchSystemDashboard } from "@/lib/api";
+import { fetchSystemDashboard, fetchNotifications } from "@/lib/api";
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -13,7 +13,16 @@ export function Sidebar() {
     refetchInterval: 30_000,
   });
 
+  const { data: notifData } = useQuery({
+    queryKey: ["notifications-nav"],
+    queryFn: () => fetchNotifications(undefined, 50),
+    refetchInterval: 30_000,
+  });
+
   const pendingApprovals = data?.queues?.approvals_pending ?? 0;
+  const unreadNotifications = Array.isArray(notifData)
+    ? notifData.filter((n) => n.status === "sent" || n.status === "pending").length
+    : 0;
 
   return (
     <aside className="w-56 flex-shrink-0 border-r border-neutral-800 bg-neutral-950 flex flex-col h-screen overflow-y-auto">
@@ -82,6 +91,19 @@ export function Sidebar() {
             active={pathname === "/schedules"}
             icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.5" stroke="currentColor" strokeWidth="1.5"/><path d="M8 5v3l2 2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
           />
+          <NavItem
+            href="/goals"
+            label="Goals"
+            active={pathname === "/goals"}
+            icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.5"/><circle cx="8" cy="8" r="3" stroke="currentColor" strokeWidth="1.5"/><circle cx="8" cy="8" r="1" fill="currentColor"/></svg>}
+          />
+          <NavItem
+            href="/notifications"
+            label="Notifications"
+            active={pathname === "/notifications"}
+            badge={unreadNotifications > 0 ? unreadNotifications : undefined}
+            icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 6a4 4 0 018 0v3l1.5 2H2.5L4 9V6z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/><path d="M6 12a2 2 0 004 0" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>}
+          />
         </div>
 
         <div>
@@ -123,6 +145,12 @@ export function Sidebar() {
             label="Triggers"
             active={pathname === "/triggers"}
             icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M9 2L5 9h3l-1 5 5-7H9l1-5z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/></svg>}
+          />
+          <NavItem
+            href="/workflows"
+            label="Workflows"
+            active={pathname === "/workflows"}
+            icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 4h4v3H3V4zM9 4h4v3H9V4zM6 9h4v3H6V9z" stroke="currentColor" strokeWidth="1.5"/><path d="M5 7v1.5a.5.5 0 00.5.5H6M11 7v1.5a.5.5 0 01-.5.5H10" stroke="currentColor" strokeWidth="1.2"/></svg>}
           />
         </div>
 

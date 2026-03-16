@@ -1,0 +1,56 @@
+{
+  "suite": "meeting_prep",
+  "description": "Evaluates meeting preparation quality",
+  "cases": [
+    {
+      "case_id": "mp_investor_meeting",
+      "input": {
+        "title": "Q1 Board Review with Series A Investors",
+        "attendees": ["investor@fund.com", "cfo@company.com"],
+        "agenda": ["Q1 financials", "Growth metrics", "Hiring plan"],
+        "talking_points": ["Revenue up 40%", "Need bridge round discussion"],
+        "risks": ["CFO might push back on hiring pace"]
+      },
+      "expected": {
+        "required_fields": ["title", "attendees", "agenda"],
+        "min_items": 2,
+        "items_field": "agenda",
+        "contains_keywords": ["investor", "q1"]
+      },
+      "tags": ["high_stakes", "investor"]
+    },
+    {
+      "case_id": "mp_team_standup",
+      "input": {
+        "title": "Weekly Engineering Standup",
+        "attendees": ["eng1@company.com", "eng2@company.com", "pm@company.com"],
+        "agenda": ["Sprint review", "Blockers"],
+        "talking_points": ["Deploy v2.1 by Friday"],
+        "risks": []
+      },
+      "expected": {
+        "required_fields": ["title", "attendees"],
+        "min_items": 1,
+        "items_field": "agenda"
+      },
+      "tags": ["routine", "internal"]
+    },
+    {
+      "case_id": "mp_customer_demo",
+      "input": {
+        "title": "Product Demo for Enterprise Client",
+        "attendees": ["buyer@enterprise.com", "sales@company.com"],
+        "agenda": ["Feature walkthrough", "Pricing discussion", "Timeline"],
+        "talking_points": ["Custom integration available", "Volume discount"],
+        "risks": ["Competitor also demoing this week"]
+      },
+      "expected": {
+        "required_fields": ["title", "attendees", "agenda", "risks"],
+        "min_items": 3,
+        "items_field": "agenda",
+        "contains_keywords": ["demo", "enterprise"]
+      },
+      "tags": ["sales", "external"]
+    }
+  ]
+}

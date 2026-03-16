@@ -6,21 +6,28 @@
 import type {
   Approval,
   ApprovalDetail,
+  Artifact,
   Briefing,
   BriefingFeedbackInput,
   BriefingFeedbackSummary,
   CanvasDashboard,
   CommandResponse,
   DLQStats,
+  Goal,
+  GoalCreateInput,
   HeartbeatResult,
+  Notification,
   ObservationStatus,
   Schedule,
   ScheduleCreateInput,
   ScheduleUpdateInput,
   SearchResponse,
+  StandaloneTask,
+  StandaloneTaskCreateInput,
   SystemDashboard,
   Task,
   TaskDetail,
+  Workflow,
 } from "./types";
 
 import { getStoredToken } from "./auth";
@@ -438,4 +445,138 @@ export function createConversation(): Promise<{ conversation_id: string }> {
 
 export function deleteConversation(id: string): Promise<void> {
   return del(`/conversations/${id}`);
+}
+
+// ── Standalone Tasks ────────────────────────────────────────────
+
+export function createTask(input: StandaloneTaskCreateInput): Promise<StandaloneTask> {
+  return post("/tasks", input);
+}
+
+export function fetchStandaloneTasks(params?: {
+  status?: string;
+  goal_id?: string;
+  task_type?: string;
+  priority?: string;
+}): Promise<StandaloneTask[]> {
+  const qs = new URLSearchParams();
+  if (params?.status) qs.set("status", params.status);
+  if (params?.goal_id) qs.set("goal_id", params.goal_id);
+  if (params?.task_type) qs.set("task_type", params.task_type);
+  if (params?.priority) qs.set("priority", params.priority);
+  const q = qs.toString();
+  return api(`/tasks${q ? `?${q}` : ""}`);
+}
+
+export function startTask(id: string): Promise<StandaloneTask> {
+  return post(`/tasks/${id}/start`, {});
+}
+
+export function cancelTask(id: string): Promise<StandaloneTask> {
+  return post(`/tasks/${id}/cancel`, {});
+}
+
+export function resumeTask(id: string): Promise<StandaloneTask> {
+  return post(`/tasks/${id}/resume`, {});
+}
+
+export function addTaskDependency(
+  taskId: string,
+  dependsOnTaskId: string,
+  dependencyType?: string
+): Promise<Record<string, unknown>> {
+  return post(`/tasks/${taskId}/dependencies`, {
+    depends_on_task_id: dependsOnTaskId,
+    dependency_type: dependencyType || "blocks",
+  });
+}
+
+// ── Goals ───────────────────────────────────────────────────────
+
+export function fetchGoals(status?: string): Promise<Goal[]> {
+  const qs = status ? `?status=${status}` : "";
+  return api(`/goals${qs}`);
+}
+
+export function createGoal(input: GoalCreateInput): Promise<Goal> {
+  return post("/goals", input);
+}
+
+export function updateGoal(
+  id: string,
+  input: Partial<GoalCreateInput & { status: string; progress: number }>
+): Promise<Goal> {
+  return patch(`/goals/${id}`, input);
+}
+
+export function deleteGoal(id: string): Promise<void> {
+  return del(`/goals/${id}`);
+}
+
+// ── Notifications ───────────────────────────────────────────────
+
+export function fetchNotifications(
+  status?: string,
+  limit?: number
+): Promise<Notification[]> {
+  const qs = new URLSearchParams();
+  if (status) qs.set("status", status);
+  if (limit) qs.set("limit", String(limit));
+  const q = qs.toString();
+  return api(`/notifications${q ? `?${q}` : ""}`);
+}
+
+export function markNotificationRead(id: string): Promise<void> {
+  return post(`/notifications/${id}/read`, {});
+}
+
+export function dismissNotification(id: string): Promise<void> {
+  return post(`/notifications/${id}/dismiss`, {});
+}
+
+// ── Workflows ───────────────────────────────────────────────────
+
+export function fetchWorkflows(): Promise<Workflow[]> {
+  return api("/workflows");
+}
+
+export function startWorkflow(
+  name: string,
+  params?: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  return post(`/workflows/${name}/start`, params || {});
+}
+
+// ── Artifacts ───────────────────────────────────────────────────
+
+export function fetchArtifacts(limit?: number): Promise<Artifact[]> {
+  const qs = limit ? `?limit=${limit}` : "";
+  return api(`/artifacts${qs}`);
+}
+
+export function fetchArtifact(id: string): Promise<Artifact> {
+  return api(`/artifacts/${id}`);
+}
+
+// ── Realtime SSE ────────────────────────────────────────────────
+
+export function subscribeToEvents(
+  onEvent: (event: { event_type: string; data: Record<string, unknown> }) => void,
+  signal?: AbortSignal
+): void {
+  const url = `/api/realtime/events`;
+  const eventSource = new EventSource(url);
+
+  eventSource.onmessage = (msg) => {
+    try {
+      const parsed = JSON.parse(msg.data);
+      onEvent(parsed);
+    } catch {
+      // skip malformed
+    }
+  };
+
+  if (signal) {
+    signal.addEventListener("abort", () => eventSource.close());
+  }
 }

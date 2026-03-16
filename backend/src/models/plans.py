@@ -19,6 +19,7 @@ class Plan(Base, TimestampMixin):
     required_context: Mapped[dict | None] = mapped_column(JSONB)
     risk_level: Mapped[str] = mapped_column(String(16), default="low")
     execution_mode: Mapped[str] = mapped_column(String(32), default="approval_required")
+    success_conditions: Mapped[dict | None] = mapped_column(JSONB)
     status: Mapped[str] = mapped_column(String(32), default="created")
 
     tasks: Mapped[list["PlanTask"]] = relationship(

@@ -31,8 +31,25 @@ class Notification:
     created_at: str
 
 
+def compute_priority_score(
+    urgency: float = 0.5,
+    goal_relevance: float = 0.5,
+    novelty: float = 0.5,
+    confidence: float = 0.5,
+    interruptibility: float = 0.5,
+) -> float:
+    """Compute notification priority score using weighted formula."""
+    return (
+        0.30 * urgency
+        + 0.25 * goal_relevance
+        + 0.20 * novelty
+        + 0.15 * confidence
+        + 0.10 * interruptibility
+    )
+
+
 class Notifier:
-    """Coordinates notification delivery across surfaces."""
+    """Coordinates notification delivery across surfaces with persistence."""
 
     def __init__(
         self,
@@ -40,11 +57,13 @@ class Notifier:
         redis=None,
         telegram_sender=None,
         websocket_sender=None,
+        db=None,
     ):
         self._registry = surface_registry
         self._redis = redis
         self._telegram_sender = telegram_sender
         self._ws_sender = websocket_sender
+        self._db = db
         # Track delivered notifications for dedup
         self._delivered: dict[str, set[str]] = {}
 
@@ -60,6 +79,14 @@ class Notifier:
 
         Returns delivery status per surface.
         """
+        priority = compute_priority_score(
+            urgency=data.get("urgency", 0.5) if data else 0.5,
+            goal_relevance=data.get("goal_relevance", 0.5) if data else 0.5,
+            novelty=data.get("novelty", 0.5) if data else 0.5,
+            confidence=data.get("confidence", 0.5) if data else 0.5,
+            interruptibility=data.get("interruptibility", 0.5) if data else 0.5,
+        )
+
         notification = Notification(
             notification_id=f"notif_{ULID()}",
             user_id=user_id,
@@ -69,6 +96,26 @@ class Notifier:
             data=data or {},
             created_at=datetime.now(timezone.utc).isoformat(),
         )
+
+        # Persist to DB if available
+        if self._db:
+            try:
+                from src.models.notifications import Notification as NotifModel
+
+                notif_record = NotifModel(
+                    notification_id=notification.notification_id,
+                    user_id=user_id,
+                    channel=notification_type,
+                    title=title,
+                    body=body,
+                    payload_json=data,
+                    priority_score=priority,
+                    status="pending",
+                )
+                self._db.add(notif_record)
+                await self._db.flush()
+            except Exception:
+                logger.warning("Failed to persist notification", exc_info=True)
 
         surfaces = await self._registry.get_active_surfaces(user_id)
         if not surfaces:

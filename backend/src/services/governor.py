@@ -58,6 +58,14 @@ AUTO_EXECUTE_ACTIONS = {
     "answer_directly",
 }
 
+CRITICAL_ACTIONS = {
+    "payment",
+    "deploy",
+    "delete_data",
+    "modify_permissions",
+    "security_change",
+}
+
 BLOCKED_ACTIONS = {
     "delete_data",
     "modify_permissions",
@@ -298,6 +306,10 @@ class Governor:
         # Always block dangerous actions regardless of mode
         if decision in BLOCKED_ACTIONS:
             return "blocked"
+
+        # Critical actions always require approval, even in full_auto
+        if decision in CRITICAL_ACTIONS or risk == "critical":
+            return "approval_required"
 
         # Full auto mode: auto-execute unless high-risk or blocked
         if policy_mode == "full_auto":

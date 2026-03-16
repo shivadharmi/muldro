@@ -20,6 +20,7 @@ class Entity(Base, TimestampMixin):
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     interaction_count: Mapped[int] = mapped_column(Integer, default=0)
     importance_score: Mapped[float] = mapped_column(Float, default=0.0)
+    confidence_score: Mapped[float] = mapped_column(Float, default=1.0)
 
     aliases: Mapped[list["EntityAlias"]] = relationship(
         back_populates="entity", cascade="all, delete-orphan"

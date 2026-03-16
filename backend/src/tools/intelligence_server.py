@@ -565,3 +565,183 @@ async def update_execution(
         logger.error("update_execution failed: %s", e, exc_info=True)
         await db.rollback()
         return {"status": "error", "error": str(e)}
+
+
+# ── Task Management ─────────────────────────────────────────────────
+
+
+@intelligence.tool()
+async def create_task(
+    title: str,
+    description: str = "",
+    task_type: str = "general",
+    priority: str = "medium",
+    goal_id: str = "",
+) -> dict:
+    """Create a standalone task in the task system.
+
+    task_type: general, draft_email, research, meeting_prep, etc.
+    priority: low, medium, high, critical
+    """
+    db = await _get_db()
+    try:
+        from src.services.task_service import TaskService
+
+        svc = TaskService(db)
+        task = await svc.create_task(
+            user_id="usr_default",
+            title=title,
+            description=description or None,
+            task_type=task_type,
+            priority=priority,
+            goal_id=goal_id or None,
+        )
+        await db.commit()
+        return {
+            "status": "created",
+            "task_id": task.task_id,
+            "title": task.title,
+        }
+    except Exception as e:
+        logger.error("create_task failed: %s", e, exc_info=True)
+        await db.rollback()
+        return {"status": "error", "error": str(e)}
+
+
+@intelligence.tool()
+async def get_task(task_id: str) -> dict:
+    """Get details of a standalone task by ID."""
+    db = await _get_db()
+    try:
+        from src.services.task_service import TaskService
+
+        svc = TaskService(db)
+        task = await svc.get_task(task_id, "usr_default")
+        if not task:
+            return {"status": "not_found", "task_id": task_id}
+        return {
+            "task_id": task.task_id,
+            "title": task.title,
+            "description": task.description,
+            "status": task.status,
+            "priority": task.priority,
+            "task_type": task.task_type,
+            "goal_id": task.goal_id,
+        }
+    except Exception as e:
+        logger.error("get_task failed: %s", e, exc_info=True)
+        return {"status": "error", "error": str(e)}
+
+
+@intelligence.tool()
+async def get_goals(
+    status: str = "active",
+    limit: int = 10,
+) -> dict:
+    """Get user goals, optionally filtered by status."""
+    await _get_db()
+    try:
+        goal_tracker = _services.get("goal_tracker")
+        if not goal_tracker:
+            return {
+                "goals": [],
+                "error": "Goal tracker not available",
+            }
+        goals = await goal_tracker.list_goals("usr_default", status=status)
+        return {
+            "goals": [
+                {
+                    "goal_id": g.goal_id,
+                    "title": g.title,
+                    "status": g.status,
+                    "progress": g.progress,
+                    "priority": getattr(g, "priority", "medium"),
+                }
+                for g in goals[:limit]
+            ],
+            "count": min(len(goals), limit),
+        }
+    except Exception as e:
+        logger.error("get_goals failed: %s", e, exc_info=True)
+        return {"goals": [], "error": str(e)}
+
+
+@intelligence.tool()
+async def build_context(
+    query: str,
+    task_type: str = "",
+) -> dict:
+    """Build a rich context pack for a query/task.
+
+    Returns assembled context from entities, memories, goals,
+    procedures, and artifacts.
+    """
+    await _get_db()
+    try:
+        from src.services.context_builder import ContextBuilder
+
+        builder = ContextBuilder(
+            world_model=_services.get("world_model"),
+            memory_service=_services.get("memory_service"),
+            goal_tracker=_services.get("goal_tracker"),
+            procedure_library=_services.get("procedure_library"),
+            artifact_store=_services.get("artifact_store"),
+        )
+        pack = await builder.build(
+            "usr_default",
+            query,
+            task_type=task_type or None,
+        )
+        prompt_text = ContextBuilder.to_prompt(pack)
+        return {
+            "context_prompt": prompt_text,
+            "entity_count": len(pack.entities),
+            "goal_count": len(pack.goals),
+            "memory_count": (len(pack.recent_events) + len(pack.preferences)),
+        }
+    except Exception as e:
+        logger.error("build_context failed: %s", e, exc_info=True)
+        return {"context_prompt": "", "error": str(e)}
+
+
+@intelligence.tool()
+async def verify_run(
+    run_id: str,
+) -> dict:
+    """Verify a completed run against success conditions.
+
+    Returns verdict (passed/failed/partial/skipped) and details.
+    """
+    db = await _get_db()
+    try:
+        from src.models.plans import Plan
+        from src.models.task_graph import TaskRun
+        from src.services.verifier import Verifier
+
+        run_result = await db.execute(select(TaskRun).where(TaskRun.run_id == run_id))
+        run = run_result.scalar_one_or_none()
+        if not run:
+            return {
+                "verdict": "skipped",
+                "details": "Run not found",
+            }
+
+        conditions = None
+        if run.plan_id:
+            plan_result = await db.execute(select(Plan).where(Plan.plan_id == run.plan_id))
+            plan = plan_result.scalar_one_or_none()
+            if plan:
+                conditions = getattr(plan, "success_conditions", None)
+
+        verifier = Verifier(_settings, db)
+        result = await verifier.verify_run(run_id, conditions)
+        return {
+            "verdict": result.verdict.value,
+            "score": result.score,
+            "details": result.details,
+            "checks_passed": result.checks_passed,
+            "checks_failed": result.checks_failed,
+        }
+    except Exception as e:
+        logger.error("verify_run failed: %s", e, exc_info=True)
+        return {"verdict": "skipped", "error": str(e)}

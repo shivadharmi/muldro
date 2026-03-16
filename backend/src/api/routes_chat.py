@@ -200,9 +200,7 @@ async def chat_stream(
         try:
             # Send conversation_id as first event
             if conversation_id:
-                cid_data = json.dumps(
-                    {"event": "conversation", "conversation_id": conversation_id}
-                )
+                cid_data = json.dumps({"event": "conversation", "conversation_id": conversation_id})
                 yield f"event: conversation\ndata: {cid_data}\n\n"
 
             async for event in orchestrator.process_message_stream(
@@ -254,9 +252,7 @@ async def chat_stream(
 
                         await db.execute(
                             update(Conversation)
-                            .where(
-                                Conversation.conversation_id == conversation_id
-                            )
+                            .where(Conversation.conversation_id == conversation_id)
                             .values(last_active_at=datetime.now(timezone.utc))
                         )
                         await db.commit()

@@ -93,6 +93,19 @@ Rules:
 """
 
 
+VIEW_TYPE_MAP: dict[str, str] = {
+    "draft_email": "approval_panel",
+    "send_email": "approval_panel",
+    "research": "research_report",
+    "meeting_prep": "meeting_prep",
+    "create_event": "approval_panel",
+    "inbox_triage": "inbox_triage",
+    "post_message": "approval_panel",
+    "briefing": "briefing_full",
+    "general": "detail_card",
+}
+
+
 class Presenter:
     """Generate user-facing content from internal state."""
 
@@ -101,6 +114,21 @@ class Presenter:
         self._db = db
         self._client = get_anthropic_client(settings)
         self._notifier = notifier
+
+    @staticmethod
+    def select_view(
+        task_type: str | None = None,
+        output: dict | None = None,
+    ) -> str:
+        """Select the best A2UI view type for a task output.
+
+        Returns a view_type string used by the frontend renderer.
+        """
+        if task_type and task_type in VIEW_TYPE_MAP:
+            return VIEW_TYPE_MAP[task_type]
+        if output and output.get("requires_approval"):
+            return "approval_panel"
+        return "detail_card"
 
     async def generate_briefing(self, user_id: str, briefing_date: date) -> Briefing:
         """Generate or retrieve the daily briefing. Returns Briefing model."""
