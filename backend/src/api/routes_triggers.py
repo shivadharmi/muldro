@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
-from src.api.deps import get_current_user_id, get_session
+from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
 from src.models.triggers import Trigger
 
 router = APIRouter()
@@ -70,12 +70,13 @@ def _to_item(t: Trigger) -> TriggerItem:
 async def list_triggers(
     limit: int = Query(50, ge=1, le=200),
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
     """List triggers for the current user."""
     stmt = (
         select(Trigger)
-        .where(Trigger.user_id == user_id)
+        .where(Trigger.user_id == user_id, Trigger.workspace_id == workspace_id)
         .order_by(Trigger.created_at.desc())
         .limit(limit)
     )
@@ -88,12 +89,14 @@ async def list_triggers(
 async def create_trigger(
     req: TriggerCreateRequest,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Create a new trigger."""
     trigger = Trigger(
         trigger_id=f"trg_{ULID()}",
         user_id=user_id,
+        workspace_id=workspace_id,
         name=req.name,
         description=req.description,
         conditions=req.conditions,
@@ -112,11 +115,16 @@ async def patch_trigger(
     trigger_id: str,
     req: TriggerPatchRequest,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Update a trigger (partial)."""
     result = await db.execute(
-        select(Trigger).where(Trigger.trigger_id == trigger_id, Trigger.user_id == user_id)
+        select(Trigger).where(
+            Trigger.trigger_id == trigger_id,
+            Trigger.user_id == user_id,
+            Trigger.workspace_id == workspace_id,
+        )
     )
     trigger = result.scalar_one_or_none()
     if not trigger:
@@ -134,11 +142,16 @@ async def patch_trigger(
 async def delete_trigger(
     trigger_id: str,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Delete a trigger."""
     result = await db.execute(
-        select(Trigger).where(Trigger.trigger_id == trigger_id, Trigger.user_id == user_id)
+        select(Trigger).where(
+            Trigger.trigger_id == trigger_id,
+            Trigger.user_id == user_id,
+            Trigger.workspace_id == workspace_id,
+        )
     )
     trigger = result.scalar_one_or_none()
     if not trigger:

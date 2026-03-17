@@ -42,7 +42,7 @@ class BudgetResponse(BaseModel):
     daily_limit_usd: float
 
 
-# ── Settings CRUD ────────────────────────────────────────────
+# ── Settings Read ────────────────────────────────────────────
 
 
 @router.get("/v1/settings", response_model=SettingsResponse)
@@ -54,21 +54,6 @@ async def get_all_settings(
     svc = SettingsService(db)
     settings = await svc.get_all(user.user_id)
     return SettingsResponse(settings=settings)
-
-
-@router.put("/v1/settings/{category}/{key}")
-async def update_setting(
-    category: str,
-    key: str,
-    req: SettingUpdateRequest,
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_session),
-):
-    """Update a single setting."""
-    svc = SettingsService(db)
-    await svc.set(user.user_id, category, key, req.value)
-    await db.commit()
-    return {"status": "updated", "category": category, "key": key}
 
 
 # ── Policy ───────────────────────────────────────────────────
@@ -158,3 +143,21 @@ async def set_connector_interval(
     await svc.set(user.user_id, "observation", key, req.interval_minutes)
     await db.commit()
     return {"status": "updated", "source": source, "interval_minutes": req.interval_minutes}
+
+
+# ── Generic Settings (MUST be last — catches {category}/{key}) ──
+
+
+@router.put("/v1/settings/{category}/{key}")
+async def update_setting(
+    category: str,
+    key: str,
+    req: SettingUpdateRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Update a single setting."""
+    svc = SettingsService(db)
+    await svc.set(user.user_id, category, key, req.value)
+    await db.commit()
+    return {"status": "updated", "category": category, "key": key}

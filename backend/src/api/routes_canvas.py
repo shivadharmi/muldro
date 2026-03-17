@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_current_user_id, get_session
+from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
 from src.api.schemas import (
     DashboardApproval,
     DashboardMeeting,
@@ -25,6 +25,7 @@ router = APIRouter()
 @router.get("/v1/canvas/dashboard", response_model=DashboardResponse)
 async def get_dashboard(
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ):
@@ -90,6 +91,7 @@ async def get_dashboard(
         select(NormalizedEvent)
         .where(
             NormalizedEvent.user_id == user_id,
+            NormalizedEvent.workspace_id == workspace_id,
             NormalizedEvent.source == "calendar",
             NormalizedEvent.occurred_at >= now,
             NormalizedEvent.occurred_at <= now + timedelta(hours=36),

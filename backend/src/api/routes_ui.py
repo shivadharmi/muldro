@@ -28,7 +28,9 @@ class UISurfaceListResponse(BaseModel):
 
 
 @router.get("/v1/ui/surfaces/{user_id}", response_model=UISurfaceListResponse)
-async def get_user_surfaces(user_id: str, surface_type: str = ""):
+async def get_user_surfaces(
+    user_id: str, surface_type: str = "", workspace_id: str = ""
+):
     """Get latest A2UI surfaces for a user.
 
     Optionally filter by surface_type (briefing, approval, dashboard).
@@ -38,6 +40,8 @@ async def get_user_surfaces(user_id: str, surface_type: str = ""):
 
     async with get_session_factory()() as db:
         stmt = select(UISurface).where(UISurface.user_id == user_id)
+        if workspace_id:
+            stmt = stmt.where(UISurface.workspace_id == workspace_id)
         if surface_type:
             stmt = stmt.where(UISurface.surface_type == surface_type)
         stmt = stmt.order_by(UISurface.updated_at.desc()).limit(20)

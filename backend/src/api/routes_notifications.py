@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_current_user_id, get_session
+from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
 from src.models.notifications import Notification
 
 logger = logging.getLogger(__name__)
@@ -34,10 +34,14 @@ async def list_notifications(
     status: str | None = None,
     limit: int = 50,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
     """List notifications for the user."""
-    stmt = select(Notification).where(Notification.user_id == user_id)
+    stmt = select(Notification).where(
+        Notification.user_id == user_id,
+        Notification.workspace_id == workspace_id,
+    )
     if status:
         stmt = stmt.where(Notification.status == status)
     stmt = stmt.order_by(Notification.created_at.desc()).limit(limit)
@@ -64,6 +68,7 @@ async def list_notifications(
 async def mark_read(
     notification_id: str,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Mark a notification as read."""
@@ -71,6 +76,7 @@ async def mark_read(
         select(Notification).where(
             Notification.notification_id == notification_id,
             Notification.user_id == user_id,
+            Notification.workspace_id == workspace_id,
         )
     )
     notif = result.scalar_one_or_none()
@@ -99,6 +105,7 @@ async def mark_read(
 async def dismiss_notification(
     notification_id: str,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Dismiss a notification."""
@@ -106,6 +113,7 @@ async def dismiss_notification(
         select(Notification).where(
             Notification.notification_id == notification_id,
             Notification.user_id == user_id,
+            Notification.workspace_id == workspace_id,
         )
     )
     notif = result.scalar_one_or_none()
@@ -127,3 +135,66 @@ async def dismiss_notification(
         read_at=notif.read_at,
         created_at=notif.created_at,
     )
+
+
+# ── Web Push subscription ─────────────────────────────────────────
+
+
+class PushSubscriptionRequest(BaseModel):
+    endpoint: str
+    keys: dict  # {"p256dh": "...", "auth": "..."}
+
+
+@router.post("/v1/notifications/push/subscribe")
+async def subscribe_push(
+    req: PushSubscriptionRequest,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_session),
+):
+    """Register a Web Push subscription for the user."""
+    from src.models.users import UserSettings
+
+    result = await db.execute(
+        select(UserSettings).where(
+            UserSettings.user_id == user_id,
+            UserSettings.category == "notification",
+            UserSettings.key == "push_subscription",
+        )
+    )
+    existing = result.scalar_one_or_none()
+    subscription_data = {"endpoint": req.endpoint, "keys": req.keys}
+
+    if existing:
+        existing.value = subscription_data
+    else:
+        setting = UserSettings(
+            user_id=user_id,
+            category="notification",
+            key="push_subscription",
+            value=subscription_data,
+        )
+        db.add(setting)
+
+    await db.commit()
+    return {"status": "subscribed"}
+
+
+@router.delete("/v1/notifications/push/subscribe")
+async def unsubscribe_push(
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_session),
+):
+    """Unregister Web Push subscription."""
+    from sqlalchemy import delete
+
+    from src.models.users import UserSettings
+
+    await db.execute(
+        delete(UserSettings).where(
+            UserSettings.user_id == user_id,
+            UserSettings.category == "notification",
+            UserSettings.key == "push_subscription",
+        )
+    )
+    await db.commit()
+    return {"status": "unsubscribed"}

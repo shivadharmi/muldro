@@ -2,14 +2,14 @@
 
 import logging
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_current_user, get_session
+from src.api.deps import get_current_user, get_current_user_id, get_session
 from src.config.settings import Settings, get_settings
 from src.models.users import User
 from src.services.auth_service import AuthService
@@ -28,6 +28,7 @@ class MagicLinkRequest(BaseModel):
 class MagicLinkResponse(BaseModel):
     status: str
     message: str
+    token: str | None = None  # Only returned in dev mode (no backend_token set)
 
 
 class VerifyRequest(BaseModel):
@@ -68,8 +69,35 @@ async def send_magic_link(
     """Send a magic link to the provided email."""
     auth = AuthService(settings, db)
     token = await auth.send_magic_link(req.email)
-    # In production, send email. For now, return status.
     logger.info("Magic link generated for %s (token length=%d)", req.email, len(token))
+
+    # In dev mode (no backend_token set), return the token so the user can verify
+    if not settings.backend_token:
+        return MagicLinkResponse(
+            status="sent",
+            message="Dev mode: use the token below to verify.",
+            token=token,
+        )
+
+    # Production: send magic link email via SES
+    from src.services.email_sender import EmailSender
+    from src.services.email_templates import magic_link_email
+
+    verify_url = f"{settings.frontend_url.rstrip('/')}/login?token={quote(token, safe='')}"
+    body_html, body_text = magic_link_email(verify_url, settings.magic_link_ttl_minutes)
+
+    try:
+        sender = EmailSender(settings)
+        await sender.send(
+            to=req.email,
+            subject="Sign in to Jarvis",
+            body_html=body_html,
+            body_text=body_text,
+        )
+    except Exception as e:
+        logger.error("Failed to send magic link email to %s: %s", req.email, e)
+        raise HTTPException(status_code=500, detail="Failed to send verification email") from e
+
     return MagicLinkResponse(
         status="sent",
         message="Magic link sent to your email. Check your inbox.",
@@ -111,6 +139,7 @@ async def verify_magic_link(
 async def oauth_authorize(
     provider: str,
     scopes: str = Query("", description="Space-separated OAuth scopes"),
+    user_id: str = Depends(get_current_user_id),
     settings: Settings = Depends(get_settings),
 ):
     """Generate OAuth authorization URL for a provider."""
@@ -131,6 +160,7 @@ async def oauth_authorize(
             "scope": scopes or default_scopes,
             "access_type": "offline",
             "prompt": "consent",
+            "state": user_id,
         }
         url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
         return OAuthUrlResponse(url=url, provider="google")
@@ -144,6 +174,7 @@ async def oauth_authorize(
             "client_id": client_id,
             "redirect_uri": settings.github_oauth_redirect_uri,
             "scope": scopes or "read:user user:email repo",
+            "state": user_id,
         }
         url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
         return OAuthUrlResponse(url=url, provider="github")
@@ -171,8 +202,10 @@ async def oauth_callback(
     from src.models.database import get_session_factory
     from src.services.oauth_manager import OAuthManager
 
-    # user_id comes from state param or defaults to single-user
-    user_id = state if state.startswith("usr_") else "usr_default"
+    # user_id must be passed in state param from the authorize step
+    if not state or not state.startswith("usr_"):
+        return _error_redirect(settings, "Invalid OAuth state: missing user_id")
+    user_id = state
 
     if provider == "google":
         client_id = settings.google_oauth_client_id
@@ -211,8 +244,14 @@ async def oauth_callback(
 
         scopes = token_data.get("scope", "").split() if token_data.get("scope") else None
 
-        # Store tokens via OAuthManager (encrypted at rest)
+        # Resolve workspace_id for this user
         db_factory = get_session_factory()
+        from src.api.deps import resolve_workspace_id
+
+        async with db_factory() as _db:
+            workspace_id = await resolve_workspace_id(_db, user_id)
+
+        # Store tokens via OAuthManager (encrypted at rest)
         oauth_mgr = OAuthManager(db_factory, encryption_key=settings.oauth_encryption_key)
         await oauth_mgr.store_token(
             user_id=user_id,
@@ -221,11 +260,16 @@ async def oauth_callback(
             refresh_token=token_data.get("refresh_token"),
             expires_at=expires_at,
             scopes=scopes,
+            workspace_id=workspace_id,
         )
 
         # Register connectors for the Google services
-        await _ensure_connector(db_factory, user_id, "gmail", userinfo.get("email"))
-        await _ensure_connector(db_factory, user_id, "calendar", userinfo.get("email"))
+        await _ensure_connector(
+            db_factory, user_id, "gmail", userinfo.get("email"), workspace_id=workspace_id
+        )
+        await _ensure_connector(
+            db_factory, user_id, "calendar", userinfo.get("email"), workspace_id=workspace_id
+        )
 
         logger.info(
             "Google connector linked for %s (%s)",
@@ -258,6 +302,11 @@ async def oauth_callback(
         scopes = token_data.get("scope", "").split(",") if token_data.get("scope") else None
 
         db_factory = get_session_factory()
+        from src.api.deps import resolve_workspace_id
+
+        async with db_factory() as _db:
+            workspace_id = await resolve_workspace_id(_db, user_id)
+
         oauth_mgr = OAuthManager(db_factory, encryption_key=settings.oauth_encryption_key)
         await oauth_mgr.store_token(
             user_id=user_id,
@@ -266,9 +315,10 @@ async def oauth_callback(
             refresh_token=None,
             expires_at=None,
             scopes=scopes,
+            workspace_id=workspace_id,
         )
 
-        await _ensure_connector(db_factory, user_id, "github")
+        await _ensure_connector(db_factory, user_id, "github", workspace_id=workspace_id)
 
         logger.info("GitHub connector linked for %s", user_id)
 
@@ -282,7 +332,11 @@ async def oauth_callback(
 
 
 async def _ensure_connector(
-    db_factory, user_id: str, provider: str, account_email: str | None = None
+    db_factory,
+    user_id: str,
+    provider: str,
+    account_email: str | None = None,
+    workspace_id: str = "",
 ) -> None:
     """Create or reactivate a connector record after OAuth."""
     from sqlalchemy import select as sa_select
@@ -290,27 +344,29 @@ async def _ensure_connector(
 
     from src.models.connectors import Connector
 
-    db = db_factory()
     try:
-        result = await db.execute(
-            sa_select(Connector).where(Connector.user_id == user_id, Connector.provider == provider)
-        )
-        existing = result.scalar_one_or_none()
-        if existing:
-            existing.status = "active"
-        else:
-            db.add(
-                Connector(
-                    connector_id=f"conn_{ULID()}",
-                    user_id=user_id,
-                    provider=provider,
-                    status="active",
-                    config={"account_email": account_email} if account_email else {},
+        async with db_factory() as db:
+            result = await db.execute(
+                sa_select(Connector).where(
+                    Connector.user_id == user_id, Connector.provider == provider
                 )
             )
-        await db.commit()
+            existing = result.scalar_one_or_none()
+            if existing:
+                existing.status = "active"
+            else:
+                db.add(
+                    Connector(
+                        connector_id=f"conn_{ULID()}",
+                        user_id=user_id,
+                        workspace_id=workspace_id,
+                        provider=provider,
+                        status="active",
+                        config={"account_email": account_email} if account_email else {},
+                    )
+                )
+            await db.commit()
     except Exception:
-        await db.rollback()
         logger.warning("Failed to ensure connector %s for %s", provider, user_id, exc_info=True)
 
 
@@ -357,12 +413,38 @@ async def refresh_token(
 
 @router.post("/v1/auth/logout")
 async def logout(
-    user: User = Depends(get_current_user),
+    authorization: str | None = Header(None),
     db: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ):
-    """Revoke the current session."""
-    # In a full implementation, we'd get the session_id from the token
+    """Revoke the current session by looking up the token hash."""
+    if not authorization or not authorization.startswith("Bearer "):
+        return {"status": "logged_out"}
+
+    raw_token = authorization.removeprefix("Bearer ")
+
+    # Don't try to revoke the legacy backend_token
+    if settings.backend_token and raw_token == settings.backend_token:
+        return {"status": "logged_out"}
+
+    auth = AuthService(settings, db)
+    import hashlib
+
+    from sqlalchemy import select as sa_select
+
+    from src.models.users import Session as UserSession
+
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    result = await db.execute(
+        sa_select(UserSession).where(
+            UserSession.token_hash == token_hash,
+            UserSession.revoked_at.is_(None),
+        )
+    )
+    session = result.scalar_one_or_none()
+    if session:
+        await auth.revoke_session(session.session_id)
+
     return {"status": "logged_out"}
 
 

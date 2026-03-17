@@ -5,7 +5,7 @@ import logging
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_current_user_id, get_session
+from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
 from src.api.schemas import EventIngestRequest, EventIngestResponse
 from src.config.settings import Settings, get_settings
 from src.services.event_processor import EventProcessor, RawEvent
@@ -74,6 +74,7 @@ def _make_event_processor(settings: Settings, db: AsyncSession) -> EventProcesso
 async def ingest_event(
     req: EventIngestRequest,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ):
@@ -97,7 +98,7 @@ async def ingest_event(
     )
 
     processor = _make_event_processor(settings, db)
-    event_id = await processor.process(raw, user_id)
+    event_id = await processor.process(raw, user_id, workspace_id=workspace_id)
 
     if event_id is None:
         return EventIngestResponse(event_id=None, status="duplicate", importance_score=None)

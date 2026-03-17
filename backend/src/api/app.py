@@ -6,6 +6,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.api.routes_agent_routes import router as agent_routes_router
+from src.api.routes_agents import router as agents_router
 from src.api.routes_approvals import router as approvals_router
 from src.api.routes_artifacts import router as artifacts_router
 from src.api.routes_auth import router as auth_router
@@ -26,6 +28,7 @@ from src.api.routes_metrics import router as metrics_router
 from src.api.routes_notifications import router as notifications_router
 from src.api.routes_observation import router as observation_router
 from src.api.routes_realtime import router as realtime_router
+from src.api.routes_runs import router as runs_router
 from src.api.routes_schedules import router as schedules_router
 from src.api.routes_search import router as search_router
 from src.api.routes_settings import router as settings_router
@@ -66,24 +69,90 @@ def create_app() -> FastAPI:
 
         app.state.surface_registry = SurfaceRegistry(redis=app.state.redis)
 
-        # Seed default tool definitions
+        # Seed default tool definitions and agent configurations
         try:
-            from src.api.deps import get_session_factory
+            from src.models.database import get_session_factory
+            from src.services.agent_registry import AgentRegistry
+            from src.services.route_resolver import RouteResolver
             from src.services.tool_registry import ToolRegistry
 
             async with get_session_factory()() as db:
-                registry = ToolRegistry(db)
-                count = await registry.seed_defaults()
-                if count:
+                tool_count = await ToolRegistry(db).seed_defaults()
+                agent_count = await AgentRegistry(db).seed_defaults()
+                route_count = await RouteResolver(db).seed_defaults()
+
+                from sqlalchemy import select as sa_select
+
+                from src.models.users import User, WorkspaceMember
+                from src.services.schedule_seeder import seed_default_schedules
+
+                user_rows = await db.execute(sa_select(User.user_id))
+                user_ids = [row[0] for row in user_rows.all()]
+
+                # Build user → workspace mapping for schedule seeding
+                wm_rows = await db.execute(
+                    sa_select(WorkspaceMember.user_id, WorkspaceMember.workspace_id)
+                )
+                user_workspace = {r[0]: r[1] for r in wm_rows.all()}
+
+                sched_count = 0
+                for uid in user_ids:
+                    sched_count += await seed_default_schedules(
+                        db, user_id=uid, workspace_id=user_workspace.get(uid, ""),
+                    )
+
+                if tool_count or agent_count or route_count or sched_count:
                     await db.commit()
-                    logger.info("Seeded %d tool definitions", count)
+                    if tool_count:
+                        logger.info("Seeded %d tool definitions", tool_count)
+                    if agent_count:
+                        logger.info("Seeded %d agent definitions", agent_count)
+                    if sched_count:
+                        logger.info("Seeded %d default schedules", sched_count)
         except Exception:
             logger.debug(
-                "Tool registry seed skipped (DB not ready)",
+                "Registry seed skipped (DB not ready)",
                 exc_info=True,
             )
 
+        # Initialize MCP bridge to external servers (Google Workspace, GitHub, Slack, etc.)
+        try:
+            from src.connectors.mcp_bridge import initialize_mcp_bridge
+
+            await initialize_mcp_bridge()
+        except Exception:
+            logger.debug("MCP bridge init skipped", exc_info=True)
+
         yield
+
+        # Shutdown: close MCP bridge
+        try:
+            from src.connectors.mcp_bridge import shutdown_mcp_bridge
+
+            await shutdown_mcp_bridge()
+        except Exception:
+            pass
+
+        # Shutdown: close long-lived orchestrator DB session
+        try:
+            from src.api.routes_chat import _module_svc_db_ref
+
+            for db_ref in _module_svc_db_ref:
+                await db_ref.close()
+            _module_svc_db_ref.clear()
+            logger.info("Orchestrator DB sessions closed")
+        except Exception:
+            pass
+
+        # Shutdown: dispose DB engine pool (returns all connections)
+        try:
+            from src.models.database import get_engine
+
+            engine = get_engine()
+            await engine.dispose()
+            logger.info("Database engine disposed")
+        except Exception:
+            pass
 
         # Shutdown: close Redis
         if getattr(app.state, "redis", None):
@@ -193,6 +262,12 @@ def create_app() -> FastAPI:
 
     # Workflows
     app.include_router(workflows_router, tags=["workflows"])
+
+    # Runs (task execution runs)
+    app.include_router(runs_router, tags=["runs"])
+    # Agent management
+    app.include_router(agents_router, tags=["agents"])
+    app.include_router(agent_routes_router, tags=["agent-routes"])
 
     return app
 

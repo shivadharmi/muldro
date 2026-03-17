@@ -1,6 +1,6 @@
 """FastAPI dependency injection."""
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config.settings import Settings, get_settings
@@ -10,32 +10,30 @@ from src.models.users import User
 
 async def get_current_user(
     authorization: str | None = Header(None),
+    token: str | None = Query(None, description="Auth token (for SSE/EventSource)"),
     settings: Settings = Depends(get_settings),
     db: AsyncSession = Depends(get_db),
 ) -> User:
     """Validate the request and return the authenticated User.
 
     Supports two modes:
-    1. Session token: Bearer <session_token> (multi-user)
-    2. Legacy backend token: Bearer <backend_token> (backward compat, returns usr_default)
+    1. Session token: Bearer <session_token> (primary auth)
+    2. Query param token: ?token=<token> (for SSE/EventSource which can't set headers)
     """
+    # If no Authorization header, check query param (for SSE)
+    if (not authorization or not authorization.startswith("Bearer ")) and token:
+        authorization = f"Bearer {token}"
+
     if not authorization or not authorization.startswith("Bearer "):
-        # Allow unauthenticated access if no backend_token configured (dev mode)
-        if not settings.backend_token:
-            return await _get_default_user(db)
         raise HTTPException(status_code=401, detail="Missing authorization")
 
-    token = authorization.removeprefix("Bearer ")
+    raw_token = authorization.removeprefix("Bearer ")
 
-    # Check legacy backend token first (backward compat)
-    if settings.backend_token and token == settings.backend_token:
-        return await _get_default_user(db)
-
-    # Try session-based auth
+    # Session-based auth
     from src.services.auth_service import AuthService
 
     auth = AuthService(settings, db)
-    user = await auth.validate_session(token)
+    user = await auth.validate_session(raw_token)
     if user:
         return user
 
@@ -46,31 +44,50 @@ async def get_current_user_id(
     user: User = Depends(get_current_user),
 ) -> str:
     """Convenience dependency that returns just the user_id string."""
+    from src.models.ids import validate_user_id
+
+    if not validate_user_id(user.user_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid user_id format",
+        )
     return user.user_id
+
+
+async def get_current_workspace_id(
+    user: User = Depends(get_current_user),
+) -> str:
+    """Return the workspace_id from the authenticated session.
+
+    Zero extra DB queries — workspace_id is set on the User during
+    validate_session() from the Session record.
+    """
+    workspace_id = getattr(user, "_workspace_id", None)
+    if not workspace_id:
+        raise HTTPException(status_code=403, detail="No workspace found for user")
+    return workspace_id
 
 
 async def get_session(db: AsyncSession = Depends(get_db)) -> AsyncSession:
     return db
 
 
-async def _get_default_user(db: AsyncSession) -> User:
-    """Get or create the default user for backward compatibility."""
+async def resolve_workspace_id(db: AsyncSession, user_id: str) -> str:
+    """Resolve workspace_id from user_id for background services.
+
+    API routes should use get_current_workspace_id() instead (zero extra queries).
+    This is for scheduler, worker, perception, and other non-request code paths.
+    """
     from sqlalchemy import select
 
-    result = await db.execute(select(User).where(User.user_id == "usr_default"))
-    user = result.scalar_one_or_none()
-    if user:
-        return user
+    from src.models.users import WorkspaceMember
 
-    # Create inline if migration hasn't run yet
-    user = User(
-        user_id="usr_default",
-        email="admin@jarvis.local",
-        display_name="Default User",
-        status="active",
-        onboarding_completed=True,
-        settings={},
+    result = await db.execute(
+        select(WorkspaceMember.workspace_id)
+        .where(WorkspaceMember.user_id == user_id, WorkspaceMember.role == "owner")
+        .limit(1)
     )
-    db.add(user)
-    await db.flush()
-    return user
+    ws_id = result.scalar_one_or_none()
+    if not ws_id:
+        raise ValueError(f"No workspace found for user {user_id}")
+    return ws_id

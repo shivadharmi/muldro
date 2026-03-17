@@ -7,10 +7,10 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_current_user_id, get_session
+from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
 from src.api.schemas import TaskDetailResponse, TaskResponse, TaskStepResponse
-from src.models.executions import Execution, ExecutionTaskRun
 from src.models.plans import Plan, PlanTask
+from src.models.task_graph import TaskRun, TaskStep
 from src.models.tasks import Task
 from src.services.task_service import TaskService
 
@@ -58,12 +58,14 @@ class AddDependencyRequest(BaseModel):
 async def create_task(
     req: StandaloneTaskCreateRequest,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Create a standalone task."""
     svc = TaskService(db)
     task = await svc.create_task(
         user_id=user_id,
+        workspace_id=workspace_id,
         title=req.title,
         description=req.description,
         task_type=req.task_type,
@@ -85,6 +87,7 @@ async def list_tasks(
     priority: str | None = None,
     limit: int = 50,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
     """List tasks — returns both standalone tasks and legacy plan-based tasks."""
@@ -94,6 +97,7 @@ async def list_tasks(
     svc = TaskService(db)
     tasks = await svc.list_tasks(
         user_id=user_id,
+        workspace_id=workspace_id,
         status=status,
         goal_id=goal_id,
         task_type=task_type,
@@ -103,7 +107,7 @@ async def list_tasks(
     results.extend([_task_response(t) for t in tasks])
 
     # Legacy plan-based tasks (for backward compat)
-    stmt = select(Plan).where(Plan.user_id == user_id)
+    stmt = select(Plan).where(Plan.user_id == user_id, Plan.workspace_id == workspace_id)
     if status:
         stmt = stmt.where(Plan.status == status)
     stmt = stmt.order_by(Plan.created_at.desc()).limit(limit)
@@ -127,6 +131,7 @@ async def list_tasks(
 async def get_task_detail(
     task_id: str,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Get detailed info for a task (standalone or plan-based)."""
@@ -150,7 +155,11 @@ async def get_task_detail(
         }
 
     # Fall back to legacy plan-based task
-    result = await db.execute(select(Plan).where(Plan.plan_id == task_id, Plan.user_id == user_id))
+    result = await db.execute(
+        select(Plan).where(
+            Plan.plan_id == task_id, Plan.user_id == user_id, Plan.workspace_id == workspace_id
+        )
+    )
     plan = result.scalar_one_or_none()
     if not plan:
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
@@ -158,33 +167,36 @@ async def get_task_detail(
     steps_result = await db.execute(select(PlanTask).where(PlanTask.plan_id == plan.plan_id))
     plan_tasks = steps_result.scalars().all()
 
-    exec_result = await db.execute(
-        select(Execution)
-        .where(Execution.plan_id == plan.plan_id)
-        .order_by(Execution.created_at.desc())
+    # Look up the latest TaskRun for this plan
+    run_result = await db.execute(
+        select(TaskRun)
+        .where(TaskRun.plan_id == plan.plan_id)
+        .order_by(TaskRun.created_at.desc())
         .limit(1)
     )
-    execution = exec_result.scalar_one_or_none()
+    task_run = run_result.scalar_one_or_none()
 
     steps = []
-    task_run_map: dict[str, ExecutionTaskRun] = {}
-    if execution:
-        runs_result = await db.execute(
-            select(ExecutionTaskRun).where(ExecutionTaskRun.execution_id == execution.execution_id)
+    step_map: dict[str, TaskStep] = {}
+    if task_run:
+        steps_result = await db.execute(
+            select(TaskStep).where(TaskStep.run_id == task_run.run_id)
         )
-        for run in runs_result.scalars().all():
-            task_run_map[run.task_id] = run
+        for step in steps_result.scalars().all():
+            if step.plan_task_id:
+                step_map[step.plan_task_id] = step
+            step_map[step.task_id] = step
 
     for pt in plan_tasks:
-        run = task_run_map.get(pt.task_id)
+        step = step_map.get(pt.task_id)
         result_summary = None
         task_status = pt.status
-        if run:
-            task_status = run.status
-            if run.result_data and isinstance(run.result_data, dict):
-                result_summary = run.result_data.get("summary")
-            if run.error_message:
-                result_summary = f"Error: {run.error_message}"
+        if step:
+            task_status = step.status
+            if step.output_data and isinstance(step.output_data, dict):
+                result_summary = step.output_data.get("summary")
+            if step.error and isinstance(step.error, dict):
+                result_summary = f"Error: {step.error.get('message', '')}"
         steps.append(
             TaskStepResponse(
                 task_id=pt.task_id,
@@ -203,7 +215,7 @@ async def get_task_detail(
         risk_level=plan.risk_level,
         reasoning_summary=plan.reasoning_summary,
         steps=steps,
-        execution_status=execution.status if execution else None,
+        execution_status=task_run.status if task_run else None,
         created_at=plan.created_at,
     )
 
@@ -212,6 +224,7 @@ async def get_task_detail(
 async def start_task(
     task_id: str,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Start a standalone task (transitions to planning)."""
@@ -228,6 +241,7 @@ async def start_task(
 async def cancel_task(
     task_id: str,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Cancel a standalone task."""
@@ -244,6 +258,7 @@ async def cancel_task(
 async def resume_task(
     task_id: str,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Resume a blocked/failed task."""
@@ -264,12 +279,15 @@ async def add_dependency(
     task_id: str,
     req: AddDependencyRequest,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Add a dependency to a task."""
     svc = TaskService(db)
     try:
-        dep = await svc.add_dependency(task_id, req.depends_on_task_id, req.dependency_type)
+        dep = await svc.add_dependency(
+            task_id, req.depends_on_task_id, req.dependency_type, workspace_id
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     await db.commit()

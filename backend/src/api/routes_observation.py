@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_current_user_id, get_session
+from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
 from src.api.schemas import ObservationReportRequest, ObservationStatusResponse
 from src.config.settings import Settings, get_settings
 from src.models.observation import ObservationStatus
@@ -25,6 +25,7 @@ DEFAULT_STALE_MINUTES = 60
 async def report_observation(
     req: ObservationReportRequest,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ):
@@ -48,6 +49,7 @@ async def report_observation(
     else:
         obs = ObservationStatus(
             user_id=user_id,
+            workspace_id=workspace_id,
             source=req.source,
             last_observed_at=now,
             items_found=req.items_found,

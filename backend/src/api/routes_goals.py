@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
-from src.api.deps import get_current_user_id, get_session
+from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
 from src.models.goals import Goal
 
 router = APIRouter()
@@ -70,12 +70,14 @@ def _to_item(g: Goal) -> GoalItem:
 async def create_goal(
     req: GoalCreateRequest,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Create a new goal."""
     goal = Goal(
         goal_id=f"goal_{ULID()}",
         user_id=user_id,
+        workspace_id=workspace_id,
         title=req.title,
         description=req.description,
         target_date=req.target_date,
@@ -93,10 +95,11 @@ async def list_goals(
     status: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
     """List goals for the current user, optionally filtered by status."""
-    stmt = select(Goal).where(Goal.user_id == user_id)
+    stmt = select(Goal).where(Goal.user_id == user_id, Goal.workspace_id == workspace_id)
 
     if status:
         stmt = stmt.where(Goal.status == status)
@@ -112,10 +115,15 @@ async def list_goals(
 async def get_goal(
     goal_id: str,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Get a single goal by ID."""
-    result = await db.execute(select(Goal).where(Goal.goal_id == goal_id, Goal.user_id == user_id))
+    result = await db.execute(
+        select(Goal).where(
+            Goal.goal_id == goal_id, Goal.user_id == user_id, Goal.workspace_id == workspace_id
+        )
+    )
     goal = result.scalar_one_or_none()
     if not goal:
         raise HTTPException(status_code=404, detail=f"Goal {goal_id} not found")
@@ -127,10 +135,15 @@ async def patch_goal(
     goal_id: str,
     req: GoalPatchRequest,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Update goal fields (partial)."""
-    result = await db.execute(select(Goal).where(Goal.goal_id == goal_id, Goal.user_id == user_id))
+    result = await db.execute(
+        select(Goal).where(
+            Goal.goal_id == goal_id, Goal.user_id == user_id, Goal.workspace_id == workspace_id
+        )
+    )
     goal = result.scalar_one_or_none()
     if not goal:
         raise HTTPException(status_code=404, detail=f"Goal {goal_id} not found")
@@ -147,10 +160,15 @@ async def patch_goal(
 async def delete_goal(
     goal_id: str,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Delete a goal."""
-    result = await db.execute(select(Goal).where(Goal.goal_id == goal_id, Goal.user_id == user_id))
+    result = await db.execute(
+        select(Goal).where(
+            Goal.goal_id == goal_id, Goal.user_id == user_id, Goal.workspace_id == workspace_id
+        )
+    )
     goal = result.scalar_one_or_none()
     if not goal:
         raise HTTPException(status_code=404, detail=f"Goal {goal_id} not found")

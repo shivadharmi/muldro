@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
-from src.api.deps import get_current_user_id, get_session
+from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
 from src.api.schemas import ScheduleCreateRequest, ScheduleResponse, ScheduleUpdateRequest
 from src.models.schedules import Schedule
 
@@ -60,6 +60,7 @@ def _to_response(sched: Schedule) -> ScheduleResponse:
 async def create_schedule(
     req: ScheduleCreateRequest,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Create a new schedule."""
@@ -90,6 +91,7 @@ async def create_schedule(
     sched = Schedule(
         schedule_id=f"sched_{ULID()}",
         user_id=user_id,
+        workspace_id=workspace_id,
         name=req.name,
         description=req.description,
         schedule_type=req.schedule_type,
@@ -116,10 +118,14 @@ async def list_schedules(
     action_type: str | None = None,
     source: str | None = None,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
     """List schedules with optional filters."""
-    query = select(Schedule).where(Schedule.user_id == user_id)
+    query = select(Schedule).where(
+        Schedule.user_id == user_id,
+        Schedule.workspace_id == workspace_id,
+    )
     if enabled is not None:
         query = query.where(Schedule.enabled.is_(enabled))
     if action_type:
@@ -136,11 +142,16 @@ async def list_schedules(
 async def get_schedule(
     schedule_id: str,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Get a single schedule."""
     result = await db.execute(
-        select(Schedule).where(Schedule.schedule_id == schedule_id, Schedule.user_id == user_id)
+        select(Schedule).where(
+            Schedule.schedule_id == schedule_id,
+            Schedule.user_id == user_id,
+            Schedule.workspace_id == workspace_id,
+        )
     )
     sched = result.scalar_one_or_none()
     if not sched:
@@ -153,11 +164,16 @@ async def update_schedule(
     schedule_id: str,
     req: ScheduleUpdateRequest,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Update schedule fields. Recomputes next_run_at if cron_expr changes."""
     result = await db.execute(
-        select(Schedule).where(Schedule.schedule_id == schedule_id, Schedule.user_id == user_id)
+        select(Schedule).where(
+            Schedule.schedule_id == schedule_id,
+            Schedule.user_id == user_id,
+            Schedule.workspace_id == workspace_id,
+        )
     )
     sched = result.scalar_one_or_none()
     if not sched:
@@ -210,11 +226,16 @@ async def update_schedule(
 async def delete_schedule(
     schedule_id: str,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Delete a schedule."""
     result = await db.execute(
-        select(Schedule).where(Schedule.schedule_id == schedule_id, Schedule.user_id == user_id)
+        select(Schedule).where(
+            Schedule.schedule_id == schedule_id,
+            Schedule.user_id == user_id,
+            Schedule.workspace_id == workspace_id,
+        )
     )
     sched = result.scalar_one_or_none()
     if not sched:
@@ -227,11 +248,16 @@ async def delete_schedule(
 async def pause_schedule(
     schedule_id: str,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Pause a schedule (set enabled=False)."""
     result = await db.execute(
-        select(Schedule).where(Schedule.schedule_id == schedule_id, Schedule.user_id == user_id)
+        select(Schedule).where(
+            Schedule.schedule_id == schedule_id,
+            Schedule.user_id == user_id,
+            Schedule.workspace_id == workspace_id,
+        )
     )
     sched = result.scalar_one_or_none()
     if not sched:
@@ -246,11 +272,16 @@ async def pause_schedule(
 async def resume_schedule(
     schedule_id: str,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Resume a schedule (set enabled=True, recompute next_run_at from now)."""
     result = await db.execute(
-        select(Schedule).where(Schedule.schedule_id == schedule_id, Schedule.user_id == user_id)
+        select(Schedule).where(
+            Schedule.schedule_id == schedule_id,
+            Schedule.user_id == user_id,
+            Schedule.workspace_id == workspace_id,
+        )
     )
     sched = result.scalar_one_or_none()
     if not sched:

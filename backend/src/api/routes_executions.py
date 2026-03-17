@@ -1,4 +1,4 @@
-"""Execution listing and detail routes."""
+"""Execution listing and detail routes — backed by TaskRun."""
 
 import logging
 
@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import get_current_user_id, get_session
-from src.models.executions import Execution
+from src.models.task_graph import TaskRun
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -16,10 +16,12 @@ logger = logging.getLogger(__name__)
 
 class ExecutionItem(BaseModel):
     execution_id: str
-    plan_id: str
+    plan_id: str | None = None
     status: str
-    current_task_id: str | None = None
-    errors: dict | None = None
+    source: str = "plan"
+    execution_mode: str | None = None
+    current_step_ids: list[str] | None = None
+    error: dict | None = None
     created_at: str | None = None
 
     model_config = {"from_attributes": True}
@@ -28,31 +30,36 @@ class ExecutionItem(BaseModel):
 @router.get("/v1/executions", response_model=list[ExecutionItem])
 async def list_executions(
     status: str | None = Query(None),
+    source: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_session),
 ):
-    """List executions for the current user."""
-    stmt = select(Execution).where(Execution.user_id == user_id)
+    """List executions (TaskRuns) for the current user."""
+    stmt = select(TaskRun).where(TaskRun.user_id == user_id)
 
     if status:
-        stmt = stmt.where(Execution.status == status)
+        stmt = stmt.where(TaskRun.status == status)
+    if source:
+        stmt = stmt.where(TaskRun.source == source)
 
-    stmt = stmt.order_by(Execution.created_at.desc()).limit(limit)
+    stmt = stmt.order_by(TaskRun.created_at.desc()).limit(limit)
 
     result = await db.execute(stmt)
     rows = result.scalars().all()
 
     return [
         ExecutionItem(
-            execution_id=e.execution_id,
-            plan_id=e.plan_id,
-            status=e.status,
-            current_task_id=e.current_task_id,
-            errors=e.errors,
-            created_at=e.created_at.isoformat() if e.created_at else None,
+            execution_id=r.run_id,
+            plan_id=r.plan_id,
+            status=r.status,
+            source=r.source or "plan",
+            execution_mode=r.execution_mode,
+            current_step_ids=r.current_step_ids,
+            error=r.error,
+            created_at=r.created_at.isoformat() if r.created_at else None,
         )
-        for e in rows
+        for r in rows
     ]
 
 
@@ -64,19 +71,21 @@ async def get_execution(
 ):
     """Get a single execution by ID."""
     result = await db.execute(
-        select(Execution).where(
-            Execution.execution_id == execution_id, Execution.user_id == user_id
+        select(TaskRun).where(
+            TaskRun.run_id == execution_id, TaskRun.user_id == user_id
         )
     )
-    exc = result.scalar_one_or_none()
-    if not exc:
+    run = result.scalar_one_or_none()
+    if not run:
         raise HTTPException(status_code=404, detail="Execution not found")
 
     return ExecutionItem(
-        execution_id=exc.execution_id,
-        plan_id=exc.plan_id,
-        status=exc.status,
-        current_task_id=exc.current_task_id,
-        errors=exc.errors,
-        created_at=exc.created_at.isoformat() if exc.created_at else None,
+        execution_id=run.run_id,
+        plan_id=run.plan_id,
+        status=run.status,
+        source=run.source or "plan",
+        execution_mode=run.execution_mode,
+        current_step_ids=run.current_step_ids,
+        error=run.error,
+        created_at=run.created_at.isoformat() if run.created_at else None,
     )

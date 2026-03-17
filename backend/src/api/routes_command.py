@@ -5,7 +5,7 @@ import logging
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_current_user_id, get_session
+from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
 from src.api.schemas import CommandRequest, CommandResponse
 from src.config.settings import Settings, get_settings
 from src.services.planner import Planner
@@ -20,6 +20,7 @@ router = APIRouter()
 async def handle_command(
     req: CommandRequest,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ):
@@ -35,6 +36,7 @@ async def handle_command(
             command=req.command,
             user_id=user_id,
             context=req.context,
+            workspace_id=workspace_id,
         )
     except Exception:
         logger.exception("Planner failed for command: %s", req.command)

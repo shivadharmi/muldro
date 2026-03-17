@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_current_user_id, get_session
+from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
 from src.models.memory import Memory
 
 router = APIRouter()
@@ -35,10 +35,13 @@ async def list_memories(
     memory_type: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
     """List memories for the current user."""
-    stmt = select(Memory).where(Memory.user_id == user_id, Memory.status == "active")
+    stmt = select(Memory).where(
+        Memory.user_id == user_id, Memory.workspace_id == workspace_id, Memory.status == "active"
+    )
 
     if memory_type:
         stmt = stmt.where(Memory.memory_type == memory_type)

@@ -21,13 +21,33 @@ _connections: dict[str, list[WebSocket]] = {}
 
 
 @router.websocket("/ws/{user_id}")
-async def jarvis_ws(websocket: WebSocket, user_id: str):
+async def jarvis_ws(websocket: WebSocket, user_id: str, token: str | None = None):
     """WebSocket endpoint for real-time A2UI surface updates.
 
     Subscribes to Redis pub/sub channels for the user and forwards
     messages to the WebSocket client. Also handles incoming actions
     from the client (button clicks, form submissions).
+
+    Accepts optional ?token= query param for auth validation.
     """
+    # Validate token if provided
+    if token:
+        try:
+            from src.config.settings import get_settings
+            from src.models.database import get_session_factory
+            from src.services.auth_service import AuthService
+
+            settings = get_settings()
+            async with get_session_factory()() as db:
+                auth = AuthService(settings, db)
+                user = await auth.validate_session(token)
+                if not user or user.user_id != user_id:
+                    await websocket.close(code=4003, reason="Invalid token")
+                    return
+        except Exception:
+            await websocket.close(code=4003, reason="Auth validation failed")
+            return
+
     await websocket.accept()
 
     # Track connection

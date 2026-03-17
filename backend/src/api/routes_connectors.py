@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_current_user_id, get_session
+from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
 from src.services.connector_manager import ConnectorManager
 
 router = APIRouter()
@@ -37,6 +37,7 @@ async def list_connectors(
 async def create_connector(
     req: ConnectorCreateRequest,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Register a new connector."""
@@ -46,7 +47,7 @@ async def create_connector(
             status_code=400, detail=f"Unknown provider. Must be one of: {valid_providers}"
         )
     mgr = ConnectorManager(db)
-    result = await mgr.register_connector(user_id, req.provider, req.config)
+    result = await mgr.register_connector(user_id, req.provider, req.config, workspace_id)
     return result
 
 

@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
-from src.api.deps import get_current_user_id, get_session
+from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
 from src.config.settings import Settings, get_settings
 from src.models.artifacts import Artifact
 from src.services.artifact_store import ArtifactStore
@@ -65,10 +65,13 @@ async def list_artifacts(
     artifact_type: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
     """List artifacts for the current user."""
-    stmt = select(Artifact).where(Artifact.user_id == user_id)
+    stmt = select(Artifact).where(
+        Artifact.user_id == user_id, Artifact.workspace_id == workspace_id
+    )
 
     if artifact_type:
         stmt = stmt.where(Artifact.artifact_type == artifact_type)
@@ -84,11 +87,16 @@ async def list_artifacts(
 async def get_artifact(
     artifact_id: str,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Get artifact metadata by ID."""
     result = await db.execute(
-        select(Artifact).where(Artifact.artifact_id == artifact_id, Artifact.user_id == user_id)
+        select(Artifact).where(
+            Artifact.artifact_id == artifact_id,
+            Artifact.user_id == user_id,
+            Artifact.workspace_id == workspace_id,
+        )
     )
     artifact = result.scalar_one_or_none()
     if not artifact:
@@ -100,12 +108,17 @@ async def get_artifact(
 async def get_artifact_content(
     artifact_id: str,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ):
     """Get artifact content from S3."""
     result = await db.execute(
-        select(Artifact).where(Artifact.artifact_id == artifact_id, Artifact.user_id == user_id)
+        select(Artifact).where(
+            Artifact.artifact_id == artifact_id,
+            Artifact.user_id == user_id,
+            Artifact.workspace_id == workspace_id,
+        )
     )
     artifact = result.scalar_one_or_none()
     if not artifact:
@@ -129,6 +142,7 @@ async def get_artifact_content(
 async def create_artifact(
     req: ArtifactCreateRequest,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ):
@@ -154,6 +168,7 @@ async def create_artifact(
     artifact = Artifact(
         artifact_id=artifact_id,
         user_id=user_id,
+        workspace_id=workspace_id,
         artifact_type=req.artifact_type,
         title=req.title,
         mime_type=req.mime_type,

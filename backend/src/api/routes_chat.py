@@ -13,8 +13,9 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from src.api.deps import get_current_user_id
+from src.api.deps import get_current_user_id, get_current_workspace_id
 from src.config.settings import Settings, get_settings
+from src.orchestrator.contracts import MessageAgentStep, MessageMetadata, MessageToolCall
 
 logger = logging.getLogger(__name__)
 
@@ -32,95 +33,104 @@ def _build_orchestrator(settings: Settings):
     """Build orchestrator with all services for the API process."""
     from src.models.database import get_session_factory
     from src.orchestrator.jarvis import JarvisOrchestrator
+    from src.orchestrator.services import ServiceContainer
     from src.tools import intelligence_server
 
     db_factory = get_session_factory()
 
-    services = {}
+    svc = ServiceContainer()
+
+    # Long-lived session for services that hold a db reference.
+    # These persist for the orchestrator lifetime (one per API process).
+    # Stored as module-level so it can be closed during app shutdown.
+    svc_db = db_factory()
+    _module_svc_db_ref.append(svc_db)
+
     try:
         from src.services.event_processor import EventProcessor
 
-        services["event_processor"] = EventProcessor(settings)
-    except Exception:
-        pass
-    try:
-        from src.services.planner import Planner
-
-        services["planner"] = Planner(settings)
-    except Exception:
-        pass
-    try:
-        from src.services.governor import Governor
-
-        services["governor"] = Governor(settings)
-    except Exception:
-        pass
-    try:
-        from src.services.presenter import Presenter
-
-        services["presenter"] = Presenter(settings)
+        svc.event_processor = EventProcessor(settings)
     except Exception:
         pass
     try:
         from src.services.world_model import WorldModel
 
-        db = db_factory()
-        services["world_model"] = WorldModel(settings, db)
+        svc.world_model = WorldModel(settings, svc_db)
     except Exception:
         pass
     try:
         from src.services.memory_service import MemoryService
 
-        db = db_factory()
-        services["memory_service"] = MemoryService(settings, db)
-        services["memory"] = services["memory_service"]
+        svc.memory_service = MemoryService(settings, svc_db)
+    except Exception:
+        pass
+    try:
+        from src.services.planner import Planner
+
+        svc.planner = Planner(
+            settings,
+            svc_db,
+            world_model=svc.world_model,
+            memory_service=svc.memory_service,
+        )
+    except Exception:
+        pass
+    try:
+        from src.services.governor import Governor
+
+        svc.governor = Governor(svc_db)
+    except Exception:
+        pass
+    try:
+        from src.services.presenter import Presenter
+
+        svc.presenter = Presenter(settings, svc_db)
     except Exception:
         pass
     try:
         from src.services.audit import AuditService
 
-        services["audit"] = AuditService()
+        svc.audit = AuditService()
     except Exception:
         pass
     try:
         from src.services.vector_store import VectorStore
 
-        services["vector_store"] = VectorStore(settings)
+        svc.vector_store = VectorStore(settings)
     except Exception:
         pass
     try:
         from src.services.search_service import SearchService
 
-        services["search_service"] = SearchService(
-            settings, vector_store=services.get("vector_store")
-        )
+        svc.search_service = SearchService(settings, vector_store=svc.vector_store)
     except Exception:
         pass
     try:
         from src.services.working_memory import WorkingMemoryService
 
-        db = db_factory()
-        services["working_memory"] = WorkingMemoryService(settings, db)
+        svc.working_memory = WorkingMemoryService(svc_db)
     except Exception:
         pass
 
-    intelligence_server.configure(db_factory, settings, services)
+    intelligence_server.configure(db_factory, settings, svc)
 
     return JarvisOrchestrator(
         settings=settings,
         db_factory=db_factory,
-        services=services,
+        services=svc,
     )
 
 
 # Lazy singleton — created on first request
 _orchestrator = None
+_module_svc_db_ref: list = []  # holds the long-lived session for shutdown cleanup
 
 
-def _get_orchestrator(settings: Settings):
+async def _get_orchestrator(settings: Settings):
     global _orchestrator
     if _orchestrator is None:
         _orchestrator = _build_orchestrator(settings)
+        await _orchestrator.load_agents_from_db()
     return _orchestrator
 
 
@@ -129,6 +139,7 @@ async def chat_stream(
     req: ChatRequest,
     request: Request,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     settings: Settings = Depends(get_settings),
 ):
     """Stream a chat response through the full multi-agent orchestrator.
@@ -145,7 +156,7 @@ async def chat_stream(
       - error: {message}
       - done: {trace_id}
     """
-    orchestrator = _get_orchestrator(settings)
+    orchestrator = await _get_orchestrator(settings)
 
     # Resolve or create conversation
     conversation_id = req.conversation_id
@@ -160,6 +171,7 @@ async def chat_stream(
                 convo = Conversation(
                     conversation_id=f"conv_{ULID()}",
                     user_id=user_id,
+                    workspace_id=workspace_id,
                     surface=req.surface,
                     status="active",
                 )
@@ -183,6 +195,7 @@ async def chat_stream(
                     Message(
                         message_id=f"msg_{ULID()}",
                         conversation_id=conversation_id,
+                        workspace_id=workspace_id,
                         role="user",
                         content=req.message,
                         surface=req.surface,
@@ -194,9 +207,11 @@ async def chat_stream(
 
     final_response_text = ""
     final_trace_id = None
+    final_decision: str | None = None
+    agent_steps: list[MessageAgentStep] = []
 
     async def event_generator():
-        nonlocal final_response_text, final_trace_id
+        nonlocal final_response_text, final_trace_id, final_decision
         try:
             # Send conversation_id as first event
             if conversation_id:
@@ -205,8 +220,11 @@ async def chat_stream(
 
             async for event in orchestrator.process_message_stream(
                 message=req.message,
+                user_id=user_id,
+                workspace_id=workspace_id,
                 surface=req.surface,
                 context=req.context,
+                conversation_id=conversation_id,
             ):
                 # Check if client disconnected
                 if await request.is_disconnected():
@@ -218,6 +236,58 @@ async def chat_stream(
                     final_response_text = event.get("text", "")
                 if event_type == "trace":
                     final_trace_id = event.get("trace_id")
+                if event_type == "decision":
+                    final_decision = event.get("decision")
+
+                # Collect agent step data using Pydantic models
+                if event_type == "agent_start":
+                    agent_steps.append(
+                        MessageAgentStep(
+                            agent=event.get("agent", "unknown"),
+                            model=event.get("model"),
+                        )
+                    )
+                elif event_type == "agent_done" and agent_steps:
+                    agent_name = event.get("agent")
+                    for step in agent_steps:
+                        if step.agent == agent_name:
+                            step.response_text = event.get("text", "")
+                            step.input_tokens = event.get("input_tokens")
+                            step.output_tokens = event.get("output_tokens")
+                            step.cache_creation_tokens = event.get("cache_creation_tokens")
+                            step.cache_read_tokens = event.get("cache_read_tokens")
+                            step.cost_usd = event.get("cost_usd")
+                            step.latency_ms = event.get("latency_ms")
+                            step.status = "done"
+                            break
+                elif event_type == "thinking" and agent_steps and event.get("is_thinking"):
+                    # Capture first thinking snippet as preview
+                    agent_name = event.get("agent")
+                    for step in reversed(agent_steps):
+                        if step.agent == agent_name and not step.thinking_preview:
+                            text = event.get("text", "")
+                            step.thinking_preview = text[:500] if len(text) > 500 else text
+                            break
+                elif event_type == "tool_call" and agent_steps:
+                    agent_name = event.get("agent")
+                    for step in reversed(agent_steps):
+                        if step.agent == agent_name:
+                            step.tool_calls.append(
+                                MessageToolCall(
+                                    tool_name=event.get("tool", ""),
+                                    status="success",
+                                )
+                            )
+                            break
+                elif event_type == "tool_result" and agent_steps:
+                    # Update last tool call status if it was blocked/errored
+                    agent_name = event.get("agent")
+                    blocked = event.get("blocked", False)
+                    if blocked:
+                        for step in reversed(agent_steps):
+                            if step.agent == agent_name and step.tool_calls:
+                                step.tool_calls[-1].status = "blocked"
+                                break
 
                 data = json.dumps(event, default=str)
                 yield f"event: {event_type}\ndata: {data}\n\n"
@@ -226,7 +296,7 @@ async def chat_stream(
             error_data = json.dumps({"event": "error", "message": str(e)})
             yield f"event: error\ndata: {error_data}\n\n"
         finally:
-            # Save assistant response
+            # Save assistant response with typed metadata
             if conversation_id and final_response_text:
                 try:
                     from datetime import datetime, timezone
@@ -236,24 +306,46 @@ async def chat_stream(
                     from src.models.conversations import Conversation, Message
                     from src.models.database import get_session_factory
 
+                    metadata = MessageMetadata(
+                        trace_id=final_trace_id,
+                        decision=final_decision,
+                        agent_steps=agent_steps if agent_steps else [],
+                    )
+
+                    # Compute aggregate token/cost from agent steps
+                    total_input = sum(s.input_tokens or 0 for s in agent_steps)
+                    total_output = sum(s.output_tokens or 0 for s in agent_steps)
+                    total_cost = sum(s.cost_usd or 0.0 for s in agent_steps)
+
                     async with get_session_factory()() as db:
                         db.add(
                             Message(
                                 message_id=f"msg_{ULID()}",
                                 conversation_id=conversation_id,
+                                workspace_id=workspace_id,
                                 role="assistant",
                                 content=final_response_text,
-                                metadata_={"trace_id": final_trace_id},
+                                metadata_=metadata.model_dump(mode="json"),
                                 surface=req.surface,
+                                trace_id=final_trace_id,
+                                input_tokens=total_input if total_input else None,
+                                output_tokens=total_output if total_output else None,
+                                cost_usd=total_cost if total_cost else None,
                             )
                         )
-                        # Update last_active_at
+                        # Update conversation aggregates
                         from sqlalchemy import update
 
                         await db.execute(
                             update(Conversation)
                             .where(Conversation.conversation_id == conversation_id)
-                            .values(last_active_at=datetime.now(timezone.utc))
+                            .values(
+                                last_active_at=datetime.now(timezone.utc),
+                                message_count=Conversation.message_count + 2,  # user + assistant
+                                total_input_tokens=Conversation.total_input_tokens + total_input,
+                                total_output_tokens=Conversation.total_output_tokens + total_output,
+                                total_cost_usd=Conversation.total_cost_usd + total_cost,
+                            )
                         )
                         await db.commit()
                 except Exception:
