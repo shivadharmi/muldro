@@ -30,6 +30,7 @@ class WorkingMemoryService:
         session_id: str | None = None,
         entry_type: str = "variable",
         ttl_seconds: int = 3600,
+        workspace_id: str = "",
     ) -> str:
         """Set a working memory entry (upsert)."""
         result = await self._db.execute(
@@ -57,6 +58,7 @@ class WorkingMemoryService:
         entry = WorkingMemoryEntry(
             entry_id=entry_id,
             user_id=user_id,
+            workspace_id=workspace_id,
             session_id=session_id,
             entry_type=entry_type,
             key=key,
@@ -68,16 +70,21 @@ class WorkingMemoryService:
         await self._db.flush()
         return entry_id
 
-    async def get(self, user_id: str, key: str, session_id: str | None = None) -> object | None:
+    async def get(
+        self, user_id: str, key: str, session_id: str | None = None, workspace_id: str = ""
+    ) -> object | None:
         """Get a working memory value. Returns None if expired or missing."""
+        conditions = [
+            WorkingMemoryEntry.user_id == user_id,
+            WorkingMemoryEntry.key == key,
+            WorkingMemoryEntry.session_id == session_id
+            if session_id
+            else WorkingMemoryEntry.session_id.is_(None),
+        ]
+        if workspace_id:
+            conditions.append(WorkingMemoryEntry.workspace_id == workspace_id)
         result = await self._db.execute(
-            select(WorkingMemoryEntry).where(
-                WorkingMemoryEntry.user_id == user_id,
-                WorkingMemoryEntry.key == key,
-                WorkingMemoryEntry.session_id == session_id
-                if session_id
-                else WorkingMemoryEntry.session_id.is_(None),
-            )
+            select(WorkingMemoryEntry).where(*conditions)
         )
         entry = result.scalar_one_or_none()
         if not entry:
@@ -90,12 +97,16 @@ class WorkingMemoryService:
 
         return entry.value
 
-    async def get_all(self, user_id: str, session_id: str | None = None) -> dict[str, object]:
+    async def get_all(
+        self, user_id: str, session_id: str | None = None, workspace_id: str = ""
+    ) -> dict[str, object]:
         """Get all non-expired entries for a user/session."""
         now = datetime.now(timezone.utc)
         query = select(WorkingMemoryEntry).where(
             WorkingMemoryEntry.user_id == user_id,
         )
+        if workspace_id:
+            query = query.where(WorkingMemoryEntry.workspace_id == workspace_id)
         if session_id:
             query = query.where(WorkingMemoryEntry.session_id == session_id)
 
@@ -109,14 +120,17 @@ class WorkingMemoryService:
             data[entry.key] = entry.value
         return data
 
-    async def get_task_focus(self, user_id: str) -> list[dict]:
+    async def get_task_focus(self, user_id: str, workspace_id: str = "") -> list[dict]:
         """Get all active task focus entries."""
         now = datetime.now(timezone.utc)
+        conditions = [
+            WorkingMemoryEntry.user_id == user_id,
+            WorkingMemoryEntry.entry_type == "task_focus",
+        ]
+        if workspace_id:
+            conditions.append(WorkingMemoryEntry.workspace_id == workspace_id)
         result = await self._db.execute(
-            select(WorkingMemoryEntry).where(
-                WorkingMemoryEntry.user_id == user_id,
-                WorkingMemoryEntry.entry_type == "task_focus",
-            )
+            select(WorkingMemoryEntry).where(*conditions)
         )
         entries = result.scalars().all()
         return [

@@ -25,16 +25,16 @@ class WatcherService:
     def __init__(self, db: AsyncSession):
         self._db = db
 
-    async def run_watchers(self, user_id: str) -> list[dict]:
+    async def run_watchers(self, user_id: str, workspace_id: str = "") -> list[dict]:
         """Run all watcher checks. Returns list of insights."""
         insights = []
-        insights.extend(await self._check_stale_threads(user_id))
-        insights.extend(await self._check_approaching_deadlines(user_id))
-        insights.extend(await self._check_people_pulse(user_id))
-        insights.extend(await self._check_project_pulse(user_id))
+        insights.extend(await self._check_stale_threads(user_id, workspace_id=workspace_id))
+        insights.extend(await self._check_approaching_deadlines(user_id, workspace_id=workspace_id))
+        insights.extend(await self._check_people_pulse(user_id, workspace_id=workspace_id))
+        insights.extend(await self._check_project_pulse(user_id, workspace_id=workspace_id))
         return insights
 
-    async def _check_stale_threads(self, user_id: str) -> list[dict]:
+    async def _check_stale_threads(self, user_id: str, workspace_id: str = "") -> list[dict]:
         """Find email threads with no activity in 48+ hours where user was involved."""
         cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
 
@@ -42,6 +42,7 @@ class WatcherService:
             select(NormalizedEvent)
             .where(
                 NormalizedEvent.user_id == user_id,
+                NormalizedEvent.workspace_id == workspace_id,
                 NormalizedEvent.source == "gmail",
                 NormalizedEvent.event_type.in_(["email_received", "email_sent"]),
                 NormalizedEvent.occurred_at < cutoff,
@@ -65,6 +66,7 @@ class WatcherService:
             # Check if there's any activity after this event for this thread
             recent_stmt = select(NormalizedEvent).where(
                 NormalizedEvent.user_id == user_id,
+                NormalizedEvent.workspace_id == workspace_id,
                 NormalizedEvent.entity_id == entity_id,
                 NormalizedEvent.occurred_at > latest_event.occurred_at,
             )
@@ -98,7 +100,9 @@ class WatcherService:
 
         return insights[:5]
 
-    async def _check_approaching_deadlines(self, user_id: str) -> list[dict]:
+    async def _check_approaching_deadlines(
+        self, user_id: str, workspace_id: str = ""
+    ) -> list[dict]:
         """Look at calendar events in the next 24 hours that might need prep."""
         now = datetime.now(timezone.utc)
         tomorrow = now + timedelta(hours=24)
@@ -107,6 +111,7 @@ class WatcherService:
             select(NormalizedEvent)
             .where(
                 NormalizedEvent.user_id == user_id,
+                NormalizedEvent.workspace_id == workspace_id,
                 NormalizedEvent.source == "calendar",
                 NormalizedEvent.event_type.in_(["event_created", "event_upcoming"]),
                 NormalizedEvent.occurred_at.between(now, tomorrow),
@@ -142,7 +147,7 @@ class WatcherService:
 
         return insights
 
-    async def _check_people_pulse(self, user_id: str) -> list[dict]:
+    async def _check_people_pulse(self, user_id: str, workspace_id: str = "") -> list[dict]:
         """Detect interaction frequency drops with important contacts."""
         # Get entities of type 'person' with high importance and recent activity
         stmt = (
@@ -169,6 +174,7 @@ class WatcherService:
             # Count interactions in last week
             last_week_stmt = select(func.count(NormalizedEvent.event_id)).where(
                 NormalizedEvent.user_id == user_id,
+                NormalizedEvent.workspace_id == workspace_id,
                 NormalizedEvent.occurred_at.between(week_ago, now),
                 NormalizedEvent.actor_entities.isnot(None),
             )
@@ -178,6 +184,7 @@ class WatcherService:
             # Count interactions in previous week
             prev_week_stmt = select(func.count(NormalizedEvent.event_id)).where(
                 NormalizedEvent.user_id == user_id,
+                NormalizedEvent.workspace_id == workspace_id,
                 NormalizedEvent.occurred_at.between(two_weeks_ago, week_ago),
                 NormalizedEvent.actor_entities.isnot(None),
             )
@@ -201,7 +208,7 @@ class WatcherService:
 
         return insights[:3]
 
-    async def _check_project_pulse(self, user_id: str) -> list[dict]:
+    async def _check_project_pulse(self, user_id: str, workspace_id: str = "") -> list[dict]:
         """Aggregate recent activity per project entity and flag activity changes."""
         # Get project entities
         stmt = (
@@ -227,6 +234,7 @@ class WatcherService:
             # Count events mentioning this project in last 24h
             last_24h_stmt = select(func.count(NormalizedEvent.event_id)).where(
                 NormalizedEvent.user_id == user_id,
+                NormalizedEvent.workspace_id == workspace_id,
                 NormalizedEvent.occurred_at.between(last_24h, now),
                 NormalizedEvent.title.ilike(f"%{entity.canonical_name}%"),
             )
@@ -236,6 +244,7 @@ class WatcherService:
             # Count events in previous 24h
             prev_24h_stmt = select(func.count(NormalizedEvent.event_id)).where(
                 NormalizedEvent.user_id == user_id,
+                NormalizedEvent.workspace_id == workspace_id,
                 NormalizedEvent.occurred_at.between(prev_24h, last_24h),
                 NormalizedEvent.title.ilike(f"%{entity.canonical_name}%"),
             )

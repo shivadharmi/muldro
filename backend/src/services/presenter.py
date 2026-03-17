@@ -130,7 +130,9 @@ class Presenter:
             return "approval_panel"
         return "detail_card"
 
-    async def generate_briefing(self, user_id: str, briefing_date: date) -> Briefing:
+    async def generate_briefing(
+        self, user_id: str, briefing_date: date, workspace_id: str = ""
+    ) -> Briefing:
         """Generate or retrieve the daily briefing. Returns Briefing model."""
         existing = await self._db.execute(
             select(Briefing).where(
@@ -142,13 +144,16 @@ class Presenter:
         if cached:
             return cached
 
-        context = await self._gather_briefing_data(user_id, briefing_date)
+        context = await self._gather_briefing_data(
+            user_id, briefing_date, workspace_id=workspace_id,
+        )
         briefing_content = await self._call_claude(context)
 
         briefing_id = f"brief_{ULID()}"
         briefing = Briefing(
             briefing_id=briefing_id,
             user_id=user_id,
+            workspace_id=workspace_id,
             briefing_date=briefing_date,
             headline=briefing_content.get("headline"),
             top_priorities=briefing_content.get("top_priorities"),
@@ -158,7 +163,7 @@ class Presenter:
             full_text=briefing_content.get("full_text"),
         )
 
-        pending = await self._get_pending_approvals(user_id)
+        pending = await self._get_pending_approvals(user_id, workspace_id=workspace_id)
         if pending:
             briefing.pending_approvals = [
                 {"approval_id": a.approval_id, "title": a.title} for a in pending
@@ -187,14 +192,16 @@ class Presenter:
         return briefing
 
     async def generate_meeting_prep(
-        self, meeting_id: str, user_id: str, next_meeting: bool = False
+        self, meeting_id: str, user_id: str, next_meeting: bool = False, workspace_id: str = ""
     ) -> dict:
         """Generate meeting preparation content.
 
         If next_meeting is True, finds the next upcoming calendar event.
         Otherwise, looks up by meeting_id (which is the calendar_event entity_id).
         """
-        meeting_event = await self._find_meeting_event(user_id, meeting_id, next_meeting)
+        meeting_event = await self._find_meeting_event(
+            user_id, meeting_id, next_meeting, workspace_id=workspace_id,
+        )
         if not meeting_event:
             return {
                 "meeting_id": meeting_id or "none",
@@ -206,7 +213,9 @@ class Presenter:
                 "risks": ["Could not find the specified meeting."],
             }
 
-        context = await self._gather_meeting_context(user_id, meeting_event)
+        context = await self._gather_meeting_context(
+            user_id, meeting_event, workspace_id=workspace_id,
+        )
         prep = await self._call_meeting_prep(context)
 
         return {
@@ -223,16 +232,18 @@ class Presenter:
             "talking_points": prep.get("talking_points", []),
         }
 
-    async def _gather_briefing_data(self, user_id: str, briefing_date: date) -> str:
+    async def _gather_briefing_data(
+        self, user_id: str, briefing_date: date, workspace_id: str = ""
+    ) -> str:
         """Compose structured context from events, plans, approvals."""
         lookback = timedelta(hours=self._settings.briefing_lookback_hours)
         start_of_day = datetime.combine(briefing_date, datetime.min.time(), tzinfo=timezone.utc)
         cutoff = start_of_day - lookback
 
-        events = await self._get_recent_events(user_id, cutoff)
-        plans = await self._get_active_plans(user_id)
-        approvals = await self._get_pending_approvals(user_id)
-        upcoming_meetings = await self._get_upcoming_meetings(user_id)
+        events = await self._get_recent_events(user_id, cutoff, workspace_id=workspace_id)
+        plans = await self._get_active_plans(user_id, workspace_id=workspace_id)
+        approvals = await self._get_pending_approvals(user_id, workspace_id=workspace_id)
+        upcoming_meetings = await self._get_upcoming_meetings(user_id, workspace_id=workspace_id)
 
         sections = [f"Date: {briefing_date.isoformat()}"]
 
@@ -275,11 +286,14 @@ class Presenter:
 
         return "\n\n".join(sections)
 
-    async def _get_recent_events(self, user_id: str, cutoff: datetime) -> list[NormalizedEvent]:
+    async def _get_recent_events(
+        self, user_id: str, cutoff: datetime, workspace_id: str = ""
+    ) -> list[NormalizedEvent]:
         result = await self._db.execute(
             select(NormalizedEvent)
             .where(
                 NormalizedEvent.user_id == user_id,
+                NormalizedEvent.workspace_id == workspace_id,
                 NormalizedEvent.occurred_at >= cutoff,
             )
             .order_by(NormalizedEvent.importance_score.desc().nullslast())
@@ -287,11 +301,12 @@ class Presenter:
         )
         return list(result.scalars().all())
 
-    async def _get_active_plans(self, user_id: str) -> list[Plan]:
+    async def _get_active_plans(self, user_id: str, workspace_id: str = "") -> list[Plan]:
         result = await self._db.execute(
             select(Plan)
             .where(
                 Plan.user_id == user_id,
+                Plan.workspace_id == workspace_id,
                 Plan.status.in_(["created", "executing"]),
             )
             .order_by(Plan.created_at.desc())
@@ -299,11 +314,12 @@ class Presenter:
         )
         return list(result.scalars().all())
 
-    async def _get_pending_approvals(self, user_id: str) -> list[Approval]:
+    async def _get_pending_approvals(self, user_id: str, workspace_id: str = "") -> list[Approval]:
         result = await self._db.execute(
             select(Approval)
             .where(
                 Approval.user_id == user_id,
+                Approval.workspace_id == workspace_id,
                 Approval.status == "pending",
             )
             .order_by(Approval.created_at.desc())
@@ -311,7 +327,9 @@ class Presenter:
         )
         return list(result.scalars().all())
 
-    async def _get_upcoming_meetings(self, user_id: str, limit: int = 10) -> list[NormalizedEvent]:
+    async def _get_upcoming_meetings(
+        self, user_id: str, limit: int = 10, workspace_id: str = ""
+    ) -> list[NormalizedEvent]:
         """Get upcoming calendar events for today and tomorrow."""
         now = datetime.now(timezone.utc)
         end = now + timedelta(hours=36)
@@ -319,6 +337,7 @@ class Presenter:
             select(NormalizedEvent)
             .where(
                 NormalizedEvent.user_id == user_id,
+                NormalizedEvent.workspace_id == workspace_id,
                 NormalizedEvent.source == "calendar",
                 NormalizedEvent.occurred_at >= now,
                 NormalizedEvent.occurred_at <= end,
@@ -333,6 +352,7 @@ class Presenter:
         user_id: str,
         meeting_id: str | None,
         next_meeting: bool,
+        workspace_id: str = "",
     ) -> NormalizedEvent | None:
         """Find a calendar event by ID or get the next upcoming one."""
         if next_meeting:
@@ -340,6 +360,7 @@ class Presenter:
                 select(NormalizedEvent)
                 .where(
                     NormalizedEvent.user_id == user_id,
+                    NormalizedEvent.workspace_id == workspace_id,
                     NormalizedEvent.source == "calendar",
                     NormalizedEvent.occurred_at >= datetime.now(timezone.utc),
                 )
@@ -372,7 +393,9 @@ class Presenter:
 
         return None
 
-    async def _gather_meeting_context(self, user_id: str, meeting: NormalizedEvent) -> str:
+    async def _gather_meeting_context(
+        self, user_id: str, meeting: NormalizedEvent, workspace_id: str = ""
+    ) -> str:
         """Compose structured context for meeting prep."""
         sections = [
             f"Meeting: {meeting.title or 'Untitled'}",
@@ -390,7 +413,9 @@ class Presenter:
                     attendee_emails.append(actor["email"])
 
         # Get attendee info from entities
-        attendee_info = await self._get_attendee_entities(user_id, attendee_emails)
+        attendee_info = await self._get_attendee_entities(
+            user_id, attendee_emails, workspace_id=workspace_id,
+        )
         if attendee_info:
             att_lines = []
             for att in attendee_info:
@@ -405,7 +430,9 @@ class Presenter:
             sections.append("## Known Attendees\n" + "\n".join(att_lines))
 
         # Find related events (same attendees, recent)
-        related = await self._get_related_events(user_id, attendee_emails, meeting.event_id)
+        related = await self._get_related_events(
+            user_id, attendee_emails, meeting.event_id, workspace_id=workspace_id,
+        )
         if related:
             rel_lines = [
                 f"- [{e.source}] {e.title or 'Untitled'}: {e.summary or 'no summary'}"
@@ -414,14 +441,18 @@ class Presenter:
             sections.append(f"## Related Events ({len(related)})\n" + "\n".join(rel_lines))
 
         # Find relevant memories about attendees
-        memories = await self._get_attendee_memories(user_id, attendee_emails)
+        memories = await self._get_attendee_memories(
+            user_id, attendee_emails, workspace_id=workspace_id,
+        )
         if memories:
             mem_lines = [f"- {m.fact_text}" for m in memories]
             sections.append(f"## Relevant Memories ({len(memories)})\n" + "\n".join(mem_lines))
 
         return "\n\n".join(sections)
 
-    async def _get_attendee_entities(self, user_id: str, emails: list[str]) -> list[dict]:
+    async def _get_attendee_entities(
+        self, user_id: str, emails: list[str], workspace_id: str = ""
+    ) -> list[dict]:
         """Look up entity info for attendee emails."""
         if not emails:
             return []
@@ -431,6 +462,7 @@ class Presenter:
         result = await self._db.execute(
             select(Entity).where(
                 Entity.user_id == user_id,
+                Entity.workspace_id == workspace_id,
                 Entity.entity_id.in_(
                     select(EntityAlias.entity_id).where(EntityAlias.alias.in_(emails))
                 ),
@@ -452,6 +484,7 @@ class Presenter:
         user_id: str,
         attendee_emails: list[str],
         exclude_event_id: str,
+        workspace_id: str = "",
     ) -> list[NormalizedEvent]:
         """Find recent events involving the same attendees."""
         if not attendee_emails:
@@ -467,6 +500,7 @@ class Presenter:
             select(NormalizedEvent)
             .where(
                 NormalizedEvent.user_id == user_id,
+                NormalizedEvent.workspace_id == workspace_id,
                 NormalizedEvent.event_id != exclude_event_id,
                 NormalizedEvent.occurred_at >= lookback,
                 or_(*conditions),
@@ -476,7 +510,9 @@ class Presenter:
         )
         return list(result.scalars().all())
 
-    async def _get_attendee_memories(self, user_id: str, emails: list[str]) -> list:
+    async def _get_attendee_memories(
+        self, user_id: str, emails: list[str], workspace_id: str = ""
+    ) -> list:
         """Find memories mentioning attendee emails."""
         if not emails:
             return []
@@ -489,6 +525,7 @@ class Presenter:
             select(Memory)
             .where(
                 Memory.user_id == user_id,
+                Memory.workspace_id == workspace_id,
                 Memory.status == "active",
                 or_(*conditions),
             )
@@ -501,7 +538,7 @@ class Presenter:
         """Call Claude to generate meeting prep content."""
         try:
             response = await self._client.messages.create(
-                model=self._settings.anthropic_model,
+                model=self._settings.resolved_model,
                 max_tokens=2048,
                 system=MEETING_PREP_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": context}],
@@ -525,7 +562,7 @@ class Presenter:
         """Call Claude to generate briefing content."""
         try:
             response = await self._client.messages.create(
-                model=self._settings.anthropic_model,
+                model=self._settings.resolved_model,
                 max_tokens=2048,
                 system=BRIEFING_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": context}],

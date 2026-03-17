@@ -45,11 +45,13 @@ class TaskService:
         due_at: datetime | None = None,
         metadata_json: dict | None = None,
         assigned_agent: str | None = None,
+        workspace_id: str = "",
     ) -> Task:
         task_id = f"task_{ULID()}"
         task = Task(
             task_id=task_id,
             user_id=user_id,
+            workspace_id=workspace_id,
             title=title,
             description=description,
             task_type=task_type,
@@ -76,10 +78,11 @@ class TaskService:
         logger.info("Task created: %s '%s'", task_id, title)
         return task
 
-    async def get_task(self, task_id: str, user_id: str) -> Task | None:
-        result = await self._db.execute(
-            select(Task).where(Task.task_id == task_id, Task.user_id == user_id)
-        )
+    async def get_task(self, task_id: str, user_id: str, workspace_id: str = "") -> Task | None:
+        stmt = select(Task).where(Task.task_id == task_id, Task.user_id == user_id)
+        if workspace_id:
+            stmt = stmt.where(Task.workspace_id == workspace_id)
+        result = await self._db.execute(stmt)
         return result.scalar_one_or_none()
 
     async def list_tasks(
@@ -90,8 +93,11 @@ class TaskService:
         task_type: str | None = None,
         priority: str | None = None,
         limit: int = 50,
+        workspace_id: str = "",
     ) -> list[Task]:
         stmt = select(Task).where(Task.user_id == user_id)
+        if workspace_id:
+            stmt = stmt.where(Task.workspace_id == workspace_id)
         if status:
             stmt = stmt.where(Task.status == status)
         if goal_id:
@@ -162,6 +168,7 @@ class TaskService:
         task_id: str,
         depends_on_task_id: str,
         dependency_type: str = "blocks",
+        workspace_id: str = "",
     ) -> TaskDependency:
         if await self._would_create_cycle(task_id, depends_on_task_id):
             raise ValueError(
@@ -172,6 +179,7 @@ class TaskService:
             task_id=task_id,
             depends_on_task_id=depends_on_task_id,
             dependency_type=dependency_type,
+            workspace_id=workspace_id,
         )
         self._db.add(dep)
         await self._db.flush()

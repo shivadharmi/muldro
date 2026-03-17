@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
 from src.config.settings import Settings
+from src.models.ids import generate_user_id
 from src.models.users import MagicLink, OAuthConnection, Session, User, Workspace, WorkspaceMember
 
 logger = logging.getLogger(__name__)
@@ -109,7 +110,10 @@ class AuthService:
         return session
 
     async def validate_session(self, token: str) -> User | None:
-        """Validate a session token. Returns the User or None."""
+        """Validate a session token. Returns the User or None.
+
+        Sets user._workspace_id as a transient attribute from the session.
+        """
         token_hash = self._hash_token(token)
         now = datetime.now(timezone.utc)
 
@@ -127,7 +131,10 @@ class AuthService:
         result = await self._db.execute(
             select(User).where(User.user_id == session.user_id, User.status == "active")
         )
-        return result.scalar_one_or_none()
+        user = result.scalar_one_or_none()
+        if user:
+            user._workspace_id = session.workspace_id  # type: ignore[attr-defined]
+        return user
 
     async def refresh_session(self, refresh_token: str) -> Session:
         """Refresh an expired or active session. Returns a new session.
@@ -187,7 +194,7 @@ class AuthService:
         if user:
             return user
 
-        user_id = f"usr_{ULID()}"
+        user_id = generate_user_id()
         user = User(
             user_id=user_id,
             email=email,
@@ -226,6 +233,15 @@ class AuthService:
         raw_token = secrets.token_urlsafe(48)
         token_hash = self._hash_token(raw_token)
 
+        # Resolve workspace_id — every user has exactly one owner workspace
+        ws_result = await self._db.execute(
+            select(WorkspaceMember.workspace_id).where(
+                WorkspaceMember.user_id == user_id,
+                WorkspaceMember.role == "owner",
+            )
+        )
+        workspace_id = ws_result.scalar_one_or_none()
+
         session = Session(
             session_id=f"sess_{ULID()}",
             user_id=user_id,
@@ -233,6 +249,7 @@ class AuthService:
             expires_at=datetime.now(timezone.utc)
             + timedelta(hours=self._settings.session_ttl_hours),
             surface=surface,
+            workspace_id=workspace_id,
         )
         self._db.add(session)
         # Store raw token as transient attribute for the caller
@@ -259,11 +276,14 @@ class AuthService:
         )
         conn = result.scalar_one_or_none()
 
+        encrypted_access = self._encrypt_token(access_token)
+        encrypted_refresh = self._encrypt_token(refresh_token) if refresh_token else None
+
         if conn:
             conn.provider_user_id = provider_user_id
             conn.email = email
-            conn.access_token_encrypted = access_token  # TODO: encrypt with Fernet
-            conn.refresh_token_encrypted = refresh_token
+            conn.access_token_encrypted = encrypted_access
+            conn.refresh_token_encrypted = encrypted_refresh
             conn.expires_at = expires_at
             conn.scopes = scopes
         else:
@@ -273,12 +293,27 @@ class AuthService:
                 provider=provider,
                 provider_user_id=provider_user_id,
                 email=email,
-                access_token_encrypted=access_token,
-                refresh_token_encrypted=refresh_token,
+                access_token_encrypted=encrypted_access,
+                refresh_token_encrypted=encrypted_refresh,
                 expires_at=expires_at,
                 scopes=scopes,
             )
             self._db.add(conn)
+
+    def _encrypt_token(self, plaintext: str) -> str:
+        """Encrypt a token using Fernet if an encryption key is configured."""
+        key = self._settings.oauth_encryption_key
+        if not key:
+            logger.warning("No oauth_encryption_key set — storing token as-is")
+            return plaintext
+        try:
+            from cryptography.fernet import Fernet
+
+            f = Fernet(key.encode() if isinstance(key, str) else key)
+            return f.encrypt(plaintext.encode()).decode()
+        except Exception:
+            logger.warning("Fernet encryption failed, storing token as-is", exc_info=True)
+            return plaintext
 
     @staticmethod
     def _hash_token(token: str) -> str:

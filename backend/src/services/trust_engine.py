@@ -21,9 +21,11 @@ class TrustEngine:
     def __init__(self, db: AsyncSession):
         self._db = db
 
-    async def record_decision(self, user_id: str, action_type: str, approved: bool) -> float:
+    async def record_decision(
+        self, user_id: str, action_type: str, approved: bool, workspace_id: str = ""
+    ) -> float:
         """Record an approval/rejection decision and update trust score."""
-        score = await self._get_or_create(user_id, action_type)
+        score = await self._get_or_create(user_id, action_type, workspace_id=workspace_id)
 
         if approved:
             score.approved_count += 1
@@ -45,26 +47,34 @@ class TrustEngine:
         )
         return score.trust_score
 
-    async def get_trust_score(self, user_id: str, action_type: str) -> float:
+    async def get_trust_score(
+        self, user_id: str, action_type: str, workspace_id: str = ""
+    ) -> float:
         """Get the current trust score for an action type."""
+        conditions = [
+            TrustScore.user_id == user_id,
+            TrustScore.action_type == action_type,
+        ]
+        if workspace_id:
+            conditions.append(TrustScore.workspace_id == workspace_id)
         result = await self._db.execute(
-            select(TrustScore).where(
-                TrustScore.user_id == user_id,
-                TrustScore.action_type == action_type,
-            )
+            select(TrustScore).where(*conditions)
         )
         score = result.scalar_one_or_none()
         return score.trust_score if score else 0.0
 
     async def should_auto_approve(
-        self, user_id: str, action_type: str, risk_level: str = "low"
+        self, user_id: str, action_type: str, risk_level: str = "low", workspace_id: str = ""
     ) -> bool:
         """Determine if an action should be auto-approved based on trust."""
+        conditions = [
+            TrustScore.user_id == user_id,
+            TrustScore.action_type == action_type,
+        ]
+        if workspace_id:
+            conditions.append(TrustScore.workspace_id == workspace_id)
         result = await self._db.execute(
-            select(TrustScore).where(
-                TrustScore.user_id == user_id,
-                TrustScore.action_type == action_type,
-            )
+            select(TrustScore).where(*conditions)
         )
         score = result.scalar_one_or_none()
         if not score:
@@ -81,13 +91,13 @@ class TrustEngine:
 
         return score.trust_score >= score.auto_approve_threshold
 
-    async def get_trust_dashboard(self, user_id: str) -> list[dict]:
+    async def get_trust_dashboard(self, user_id: str, workspace_id: str = "") -> list[dict]:
         """Get all trust scores for a user."""
-        result = await self._db.execute(
-            select(TrustScore)
-            .where(TrustScore.user_id == user_id)
-            .order_by(TrustScore.trust_score.desc())
-        )
+        query = select(TrustScore).where(TrustScore.user_id == user_id)
+        if workspace_id:
+            query = query.where(TrustScore.workspace_id == workspace_id)
+        query = query.order_by(TrustScore.trust_score.desc())
+        result = await self._db.execute(query)
         scores = result.scalars().all()
         return [
             {
@@ -101,14 +111,19 @@ class TrustEngine:
             for s in scores
         ]
 
-    async def reset_trust(self, user_id: str, action_type: str | None = None) -> None:
+    async def reset_trust(
+        self, user_id: str, action_type: str | None = None, workspace_id: str = ""
+    ) -> None:
         """Reset trust scores."""
         if action_type:
+            conditions = [
+                TrustScore.user_id == user_id,
+                TrustScore.action_type == action_type,
+            ]
+            if workspace_id:
+                conditions.append(TrustScore.workspace_id == workspace_id)
             result = await self._db.execute(
-                select(TrustScore).where(
-                    TrustScore.user_id == user_id,
-                    TrustScore.action_type == action_type,
-                )
+                select(TrustScore).where(*conditions)
             )
             score = result.scalar_one_or_none()
             if score:
@@ -116,7 +131,10 @@ class TrustEngine:
                 score.rejected_count = 0
                 score.trust_score = 0.0
         else:
-            result = await self._db.execute(select(TrustScore).where(TrustScore.user_id == user_id))
+            conditions = [TrustScore.user_id == user_id]
+            if workspace_id:
+                conditions.append(TrustScore.workspace_id == workspace_id)
+            result = await self._db.execute(select(TrustScore).where(*conditions))
             for score in result.scalars().all():
                 score.approved_count = 0
                 score.rejected_count = 0
@@ -124,12 +142,17 @@ class TrustEngine:
 
         await self._db.flush()
 
-    async def _get_or_create(self, user_id: str, action_type: str) -> TrustScore:
+    async def _get_or_create(
+        self, user_id: str, action_type: str, workspace_id: str = ""
+    ) -> TrustScore:
+        conditions = [
+            TrustScore.user_id == user_id,
+            TrustScore.action_type == action_type,
+        ]
+        if workspace_id:
+            conditions.append(TrustScore.workspace_id == workspace_id)
         result = await self._db.execute(
-            select(TrustScore).where(
-                TrustScore.user_id == user_id,
-                TrustScore.action_type == action_type,
-            )
+            select(TrustScore).where(*conditions)
         )
         score = result.scalar_one_or_none()
         if score:
@@ -137,6 +160,7 @@ class TrustEngine:
 
         score = TrustScore(
             user_id=user_id,
+            workspace_id=workspace_id,
             action_type=action_type,
             approved_count=0,
             rejected_count=0,

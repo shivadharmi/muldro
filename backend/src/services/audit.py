@@ -25,6 +25,7 @@ class AuditService:
         user_id: str,
         action_type: str,
         *,
+        workspace_id: str = "",
         event_id: str | None = None,
         plan_id: str | None = None,
         execution_id: str | None = None,
@@ -39,6 +40,7 @@ class AuditService:
         entry = AuditLog(
             audit_id=audit_id,
             user_id=user_id,
+            workspace_id=workspace_id,
             event_id=event_id,
             plan_id=plan_id,
             execution_id=execution_id,

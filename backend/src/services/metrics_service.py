@@ -32,6 +32,26 @@ AGENT_CALLS = Counter(
     "Total agent calls",
     ["agent_name", "model"],
 )
+TOOL_CALLS = Counter(
+    "jarvis_tool_calls_total",
+    "Total tool calls",
+    ["tool_name", "status"],
+)
+NOTIFICATIONS_SENT = Counter(
+    "jarvis_notifications_sent_total",
+    "Total notifications sent",
+    ["notification_type", "surface"],
+)
+TRIGGERS_FIRED = Counter(
+    "jarvis_triggers_fired_total",
+    "Total triggers fired",
+    ["action_type"],
+)
+MEMORY_WRITES = Counter(
+    "jarvis_memory_writes_total",
+    "Total memory writes",
+    ["memory_type"],
+)
 
 # Gauges
 ACTIVE_RUNS = Gauge(
@@ -112,6 +132,22 @@ class MetricsService:
     @staticmethod
     def set_budget_remaining(user_id: str, amount: float) -> None:
         BUDGET_REMAINING.labels(user_id=user_id).set(amount)
+
+    @staticmethod
+    def record_tool_call(tool_name: str, status: str = "success") -> None:
+        TOOL_CALLS.labels(tool_name=tool_name, status=status).inc()
+
+    @staticmethod
+    def record_notification_sent(notification_type: str, surface: str = "unknown") -> None:
+        NOTIFICATIONS_SENT.labels(notification_type=notification_type, surface=surface).inc()
+
+    @staticmethod
+    def record_trigger_fired(action_type: str) -> None:
+        TRIGGERS_FIRED.labels(action_type=action_type).inc()
+
+    @staticmethod
+    def record_memory_write(memory_type: str = "general") -> None:
+        MEMORY_WRITES.labels(memory_type=memory_type).inc()
 
     @staticmethod
     def generate_metrics() -> bytes:

@@ -68,14 +68,27 @@ _DEFAULT_TOOLS = [
     _t("drive_search", "low", False, "drive"),
     _t("drive_create", "medium", True, "drive"),
     _t("drive_delete", "critical", True, "drive", enabled=False),
-    # Internal intelligence tools
+    # Internal intelligence tools (read-only)
     _t("search_memory", "low", False, "internal"),
     _t("get_entities", "low", False, "internal"),
     _t("get_active_plans", "low", False, "internal"),
     _t("get_briefing", "low", False, "internal"),
     _t("get_observation_cursor", "low", False, "internal"),
     _t("report_observation", "low", False, "internal"),
+    _t("get_task", "low", False, "internal"),
+    _t("get_goals", "low", False, "internal"),
+    _t("build_context", "low", False, "internal"),
+    # Internal intelligence tools (write)
     _t("ingest_event", "low", False, "internal"),
+    _t("update_entity", "low", False, "internal"),
+    _t("plan_command", "low", False, "internal"),
+    _t("evaluate_policy", "low", False, "internal"),
+    _t("approve_action", "medium", True, "internal"),
+    _t("update_observation_cursor", "low", False, "internal"),
+    _t("extract_preferences", "low", False, "internal"),
+    _t("create_task", "low", False, "internal"),
+    _t("verify_run", "low", False, "internal"),
+    _t("update_execution", "low", False, "internal"),
     # Communication
     _t("send_telegram", "medium", True, "telegram"),
     _t("send_approval_prompt", "medium", True, "telegram"),
@@ -97,7 +110,7 @@ class ToolRegistry:
         self._db = db
         self._cache: dict[str, ToolDefinition] = {}
 
-    async def seed_defaults(self) -> int:
+    async def seed_defaults(self, workspace_id: str = "") -> int:
         """Seed default tool definitions if they don't exist. Returns count added."""
         added = 0
         for tool_data in _DEFAULT_TOOLS:
@@ -108,6 +121,7 @@ class ToolRegistry:
                 continue
             tool = ToolDefinition(
                 tool_id=f"tool_{ULID()}",
+                workspace_id=workspace_id,
                 name=tool_data["name"],
                 risk_level=tool_data.get("risk_level", "low"),
                 requires_approval=tool_data.get("requires_approval", False),
@@ -133,6 +147,7 @@ class ToolRegistry:
         output_schema: dict | None = None,
         timeout_seconds: int = 30,
         idempotent: bool = False,
+        workspace_id: str = "",
     ) -> ToolDefinition:
         existing = await self._db.execute(select(ToolDefinition).where(ToolDefinition.name == name))
         tool = existing.scalar_one_or_none()
@@ -147,6 +162,7 @@ class ToolRegistry:
 
         tool = ToolDefinition(
             tool_id=f"tool_{ULID()}",
+            workspace_id=workspace_id,
             name=name,
             risk_level=risk_level,
             requires_approval=requires_approval,

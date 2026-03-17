@@ -26,7 +26,10 @@ from src.models.events import NormalizedEvent
 if TYPE_CHECKING:
     from src.services.dead_letter import DeadLetterService
     from src.services.event_bus import EventBus
+    from src.services.goal_tracker import GoalTracker
     from src.services.memory_service import MemoryService
+    from src.services.notifier import Notifier
+    from src.services.planner import Planner
     from src.services.world_model import WorldModel
 
 logger = logging.getLogger(__name__)
@@ -107,6 +110,9 @@ class EventProcessor:
         memory_service: MemoryService | None = None,
         dead_letter: DeadLetterService | None = None,
         event_bus: EventBus | None = None,
+        notifier: Notifier | None = None,
+        planner: Planner | None = None,
+        goal_tracker: GoalTracker | None = None,
     ):
         self._settings = settings
         self._db = db
@@ -118,8 +124,11 @@ class EventProcessor:
         self._memory_service = memory_service
         self._dead_letter = dead_letter
         self._event_bus = event_bus
+        self._notifier = notifier
+        self._planner = planner
+        self._goal_tracker = goal_tracker
 
-    async def process(self, raw: RawEvent, user_id: str) -> str | None:
+    async def process(self, raw: RawEvent, user_id: str, workspace_id: str = "") -> str | None:
         """Process a raw event. Returns event_id if stored, None if duplicate."""
         idempotency_key = f"{raw.source}:{raw.entity_id}:{raw.event_type}"
 
@@ -138,6 +147,7 @@ class EventProcessor:
         event = NormalizedEvent(
             event_id=event_id,
             user_id=user_id,
+            workspace_id=workspace_id,
             source=raw.source,
             source_account_id=raw.source_account_id,
             event_type=raw.event_type,
@@ -167,6 +177,14 @@ class EventProcessor:
             event.urgency_score or 0,
         )
 
+        # Record Prometheus metrics
+        try:
+            from src.services.metrics_service import MetricsService
+
+            MetricsService.record_event_ingested(raw.source, raw.event_type)
+        except Exception:
+            pass
+
         # Publish to event bus for decoupled downstream processing
         if self._event_bus:
             try:
@@ -184,6 +202,12 @@ class EventProcessor:
                 )
             except Exception:
                 logger.warning("Failed to publish to event bus", exc_info=True)
+
+        # Evaluate triggers against this event
+        await self._evaluate_triggers(event, user_id, workspace_id=workspace_id)
+
+        # Initiative scoring — decide if Jarvis should proactively act
+        await self._evaluate_initiative(event, user_id, workspace_id=workspace_id)
 
         # Fire legacy callbacks (kept for backward compatibility)
         for callback in self._on_event_processed:
@@ -208,13 +232,225 @@ class EventProcessor:
 
         return event_id
 
+    async def _evaluate_triggers(
+        self, event: NormalizedEvent, user_id: str, workspace_id: str = ""
+    ) -> None:
+        """Evaluate active triggers against a new event. Fire matching ones."""
+        try:
+            from src.models.triggers import Trigger
+
+            now = datetime.now(timezone.utc)
+            result = await self._db.execute(
+                select(Trigger).where(
+                    Trigger.user_id == user_id,
+                    Trigger.enabled.is_(True),
+                )
+            )
+            triggers = list(result.scalars().all())
+
+            for trigger in triggers:
+                # Skip if in cooldown
+                if trigger.cooldown_until and trigger.cooldown_until > now:
+                    continue
+
+                if self._trigger_matches(trigger, event):
+                    trigger.fire_count += 1
+                    trigger.last_fired_at = now
+                    trigger.last_evaluated_at = now
+
+                    # Apply cooldown from action_config (default 5 min)
+                    from datetime import timedelta
+
+                    cooldown_secs = (trigger.action_config or {}).get("cooldown_seconds", 300)
+                    trigger.cooldown_until = now + timedelta(seconds=cooldown_secs)
+
+                    logger.info(
+                        "Trigger fired: %s for event %s",
+                        trigger.trigger_id,
+                        event.event_id,
+                    )
+
+                    # Execute the trigger's action
+                    try:
+                        await self._execute_trigger_action(
+                            trigger, event, user_id, workspace_id=workspace_id
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Trigger action execution failed: %s",
+                            trigger.trigger_id,
+                            exc_info=True,
+                        )
+
+                    # Publish trigger fired event
+                    if self._event_bus:
+                        await self._event_bus.publish(
+                            self._event_bus.event_stream(user_id),
+                            "trigger.fired",
+                            {
+                                "trigger_id": trigger.trigger_id,
+                                "trigger_name": trigger.name,
+                                "event_id": event.event_id,
+                                "action_type": trigger.action_type,
+                                "action_config": trigger.action_config,
+                            },
+                            user_id=user_id,
+                        )
+                else:
+                    trigger.last_evaluated_at = now
+
+            await self._db.flush()
+        except Exception:
+            logger.debug("Trigger evaluation failed", exc_info=True)
+
+    async def _execute_trigger_action(
+        self, trigger, event: NormalizedEvent, user_id: str, workspace_id: str = ""
+    ) -> None:
+        """Execute the action associated with a fired trigger."""
+        action_type = trigger.action_type
+        action_config = trigger.action_config or {}
+
+        if action_type == "notify" and self._notifier:
+            await self._notifier.notify(
+                user_id=user_id,
+                notification_type="info_update",
+                title=f"Trigger: {trigger.name}",
+                body=action_config.get(
+                    "message",
+                    f"Trigger '{trigger.name}' fired for event: {event.title or event.event_type}",
+                ),
+                data={
+                    "trigger_id": trigger.trigger_id,
+                    "event_id": event.event_id,
+                    "urgency": event.urgency_score or 0.5,
+                },
+            )
+        elif action_type == "plan" and self._planner:
+            context = (
+                f"Triggered by: {trigger.name}\n"
+                f"Event: {event.title or event.event_type}\n"
+                f"Source: {event.source}\n"
+                f"Summary: {event.summary or 'N/A'}"
+            )
+            instructions = action_config.get(
+                "instructions",
+                f"Handle event: {event.title or event.summary or event.event_type}",
+            )
+            await self._planner.plan_for_command(
+                instructions, user_id, context=context, workspace_id=workspace_id
+            )
+        elif action_type == "escalate" and self._notifier:
+            await self._notifier.notify(
+                user_id=user_id,
+                notification_type="critical_alert",
+                title=f"ESCALATION: {trigger.name}",
+                body=action_config.get(
+                    "message",
+                    f"Trigger '{trigger.name}' escalated: {event.title or event.event_type}",
+                ),
+                data={
+                    "trigger_id": trigger.trigger_id,
+                    "event_id": event.event_id,
+                    "urgency": 1.0,
+                },
+            )
+        else:
+            logger.debug(
+                "Trigger action '%s' not executed (missing service)",
+                action_type,
+            )
+
+    async def _evaluate_initiative(
+        self, event: NormalizedEvent, user_id: str, workspace_id: str = ""
+    ) -> None:
+        """Score event for proactive action. Auto-plan or notify if warranted."""
+        try:
+            from src.services.initiative_scorer import InitiativeScorer
+
+            scorer = InitiativeScorer(
+                db=self._db,
+                world_model=self._world_model,
+                memory_service=self._memory_service,
+                goal_tracker=self._goal_tracker,
+            )
+            result = await scorer.score(event, user_id)
+
+            if result.should_plan and self._planner:
+                logger.info(
+                    "Auto-planning for event %s (score=%.3f)",
+                    event.event_id,
+                    result.score,
+                )
+                await self._planner.plan_for_event(
+                    event.event_id, user_id, workspace_id=workspace_id
+                )
+
+                if self._event_bus:
+                    await self._event_bus.publish(
+                        self._event_bus.event_stream(user_id),
+                        "initiative.auto_plan",
+                        {
+                            "event_id": event.event_id,
+                            "score": result.score,
+                            "signals": result.signals,
+                        },
+                        user_id=user_id,
+                    )
+
+            elif result.should_notify and self._notifier:
+                await self._notifier.notify(
+                    user_id=user_id,
+                    notification_type="info_update",
+                    title=event.title or f"New {event.event_type}",
+                    body=event.summary or f"From {event.source}",
+                    data={
+                        "event_id": event.event_id,
+                        "urgency": event.urgency_score or 0.5,
+                        "novelty": result.signals.get("novelty", 0.5),
+                    },
+                )
+        except Exception:
+            logger.debug("Initiative evaluation failed", exc_info=True)
+
+    @staticmethod
+    def _trigger_matches(trigger, event: NormalizedEvent) -> bool:
+        """Check if a trigger's conditions match an event."""
+        cond = trigger.conditions or {}
+
+        # Match event_type
+        if cond.get("event_type") and cond["event_type"] != event.event_type:
+            return False
+
+        # Match source
+        if cond.get("source") and cond["source"] != event.source:
+            return False
+
+        # Match entity_type
+        if cond.get("entity_type") and cond["entity_type"] != event.entity_type:
+            return False
+
+        # Match importance threshold
+        threshold = cond.get("importance_threshold")
+        if threshold is not None:
+            if (event.importance_score or 0) < threshold:
+                return False
+
+        # Match entity pattern (substring in entity_id or title)
+        entity_match = cond.get("entity_match")
+        if entity_match:
+            target = f"{event.entity_id or ''} {event.title or ''}".lower()
+            if entity_match.lower() not in target:
+                return False
+
+        return True
+
     async def _score_event(self, raw: RawEvent, user_id: str) -> dict:
         """Score an event using Claude with user context. Falls back to defaults."""
         user_message = await self._build_scoring_message(raw, user_id)
 
         try:
             response = await self._client.messages.create(
-                model=self._settings.anthropic_model,
+                model=self._settings.resolved_model,
                 max_tokens=512,
                 system=SCORING_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_message}],

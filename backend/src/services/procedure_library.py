@@ -11,9 +11,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
-from src.models.executions import Execution
 from src.models.plans import Plan, PlanTask
 from src.models.procedures import Procedure
+from src.models.task_graph import TaskRun
 
 logger = logging.getLogger(__name__)
 
@@ -24,19 +24,21 @@ class ProcedureLibrary:
     def __init__(self, db: AsyncSession):
         self._db = db
 
-    async def extract_procedure(self, execution_id: str, user_id: str) -> Procedure | None:
-        """Analyze a completed execution and extract a reusable pattern."""
+    async def extract_procedure(
+        self, execution_id: str, user_id: str, workspace_id: str = ""
+    ) -> Procedure | None:
+        """Analyze a completed run and extract a reusable pattern."""
         result = await self._db.execute(
-            select(Execution).where(
-                Execution.execution_id == execution_id,
-                Execution.status == "completed",
+            select(TaskRun).where(
+                TaskRun.run_id == execution_id,
+                TaskRun.status == "completed",
             )
         )
-        execution = result.scalar_one_or_none()
-        if not execution:
+        run = result.scalar_one_or_none()
+        if not run or not run.plan_id:
             return None
 
-        result = await self._db.execute(select(Plan).where(Plan.plan_id == execution.plan_id))
+        result = await self._db.execute(select(Plan).where(Plan.plan_id == run.plan_id))
         plan = result.scalar_one_or_none()
         if not plan:
             return None
@@ -68,6 +70,7 @@ class ProcedureLibrary:
         procedure = Procedure(
             procedure_id=f"proc_{ULID()}",
             user_id=user_id,
+            workspace_id=workspace_id,
             name=f"Learned: {plan.goal}",
             description=f"Extracted from execution {execution_id}",
             trigger_pattern=trigger_pattern,
@@ -88,14 +91,17 @@ class ProcedureLibrary:
         return procedure
 
     async def find_matching(
-        self, user_id: str, event_type: str, source: str | None = None
+        self, user_id: str, event_type: str, source: str | None = None, workspace_id: str = ""
     ) -> list[Procedure]:
         """Find procedures that match an incoming event pattern."""
+        conditions = [
+            Procedure.user_id == user_id,
+            Procedure.status == "active",
+        ]
+        if workspace_id:
+            conditions.append(Procedure.workspace_id == workspace_id)
         result = await self._db.execute(
-            select(Procedure).where(
-                Procedure.user_id == user_id,
-                Procedure.status == "active",
-            )
+            select(Procedure).where(*conditions)
         )
         procedures = result.scalars().all()
 
@@ -110,9 +116,13 @@ class ProcedureLibrary:
 
         return sorted(matched, key=lambda p: p.confidence, reverse=True)
 
-    async def get_procedures(self, user_id: str, status: str | None = None) -> list[Procedure]:
+    async def get_procedures(
+        self, user_id: str, status: str | None = None, workspace_id: str = ""
+    ) -> list[Procedure]:
         """Get all procedures for a user."""
         query = select(Procedure).where(Procedure.user_id == user_id)
+        if workspace_id:
+            query = query.where(Procedure.workspace_id == workspace_id)
         if status:
             query = query.where(Procedure.status == status)
         query = query.order_by(Procedure.created_at.desc())

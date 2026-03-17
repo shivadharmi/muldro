@@ -16,11 +16,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config.settings import Settings
 from src.models.approvals import Approval
-from src.models.executions import Execution
 from src.models.memory import Memory
 from src.models.observation import ObservationStatus
 from src.models.plans import Plan
 from src.models.schedules import Schedule
+from src.models.task_graph import TaskRun
 
 logger = logging.getLogger(__name__)
 
@@ -159,11 +159,11 @@ class HeartbeatService:
 
             # Cancel the associated execution
             exec_result = await self._db.execute(
-                select(Execution).where(Execution.execution_id == approval.execution_id)
+                select(TaskRun).where(TaskRun.run_id == approval.execution_id)
             )
-            execution = exec_result.scalar_one_or_none()
-            if execution and execution.status == "awaiting_approval":
-                execution.status = "cancelled"
+            run = exec_result.scalar_one_or_none()
+            if run and run.status == "awaiting_approval":
+                run.status = "cancelled"
 
         if approvals:
             await self._db.flush()

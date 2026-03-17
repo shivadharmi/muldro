@@ -74,6 +74,7 @@ class Notifier:
         title: str,
         body: str,
         data: dict | None = None,
+        workspace_id: str = "",
     ) -> dict:
         """Send a notification to the appropriate surface(s).
 
@@ -105,6 +106,7 @@ class Notifier:
                 notif_record = NotifModel(
                     notification_id=notification.notification_id,
                     user_id=user_id,
+                    workspace_id=workspace_id,
                     channel=notification_type,
                     title=title,
                     body=body,
@@ -150,6 +152,26 @@ class Notifier:
                 "surfaces": list(results.keys()),
             },
         )
+
+        # Emit notification.sent domain event
+        if self._redis:
+            try:
+                import json as _json
+
+                await self._redis.publish(
+                    f"jarvis:realtime:{user_id}",
+                    _json.dumps(
+                        {
+                            "event": "notification.sent",
+                            "notification_id": notification.notification_id,
+                            "type": notification_type,
+                            "title": title,
+                        }
+                    ),
+                )
+            except Exception:
+                logger.debug("Failed to emit notification.sent event", exc_info=True)
+
         return {"status": "sent", "surfaces": results}
 
     async def on_action_taken(
@@ -185,11 +207,33 @@ class Notifier:
         """Deliver a notification to a specific surface."""
         try:
             if surface == "telegram":
-                return await self._deliver_telegram(notification)
+                result = await self._deliver_telegram(notification)
             elif surface == "web":
-                return await self._deliver_web(notification)
+                result = await self._deliver_web(notification)
+            elif surface == "slack":
+                result = await self._deliver_slack(notification)
+            elif surface == "email":
+                result = await self._deliver_email(notification)
             else:
                 return {"status": "unsupported_surface"}
+
+            # Emit notification.delivered domain event
+            if result.get("status") not in ("error", "skipped") and self._redis:
+                try:
+                    await self._redis.publish(
+                        f"jarvis:realtime:{notification.user_id}",
+                        json.dumps(
+                            {
+                                "event": "notification.delivered",
+                                "notification_id": notification.notification_id,
+                                "surface": surface,
+                            }
+                        ),
+                    )
+                except Exception:
+                    logger.debug("Failed to emit notification.delivered", exc_info=True)
+
+            return result
         except Exception as e:
             logger.error(
                 "notification_delivery_failed",
@@ -236,6 +280,65 @@ class Notifier:
         else:
             text = f"*{notification.title}*\n{notification.body}"
             return await self._telegram_sender(text=text, parse_mode="Markdown")
+
+    async def _deliver_slack(self, notification: Notification) -> dict:
+        """Send notification via Slack using MCP bridge."""
+        try:
+            from src.connectors.mcp_bridge import call_mcp_tool, is_mcp_tool
+
+            tool_name = "slack_send_message"
+            if not is_mcp_tool(tool_name):
+                return {"status": "skipped", "reason": "slack_mcp_not_available"}
+
+            text = f"*{notification.title}*\n{notification.body or ''}"
+            result = await call_mcp_tool(
+                tool_name,
+                {
+                    "text": text,
+                    "channel": notification.data.get("slack_channel", "#jarvis"),
+                },
+            )
+            return {"status": "sent", "slack_result": result}
+        except Exception as e:
+            logger.warning("Slack delivery failed: %s", e, exc_info=True)
+            return {"status": "error", "error": str(e)}
+
+    async def _deliver_email(self, notification: Notification) -> dict:
+        """Send notification via email using MCP bridge or SES fallback."""
+        try:
+            from src.connectors.mcp_bridge import call_mcp_tool, is_mcp_tool
+
+            if is_mcp_tool("email_send"):
+                result = await call_mcp_tool(
+                    "email_send",
+                    {
+                        "to": notification.data.get("email", ""),
+                        "subject": notification.title,
+                        "body": notification.body,
+                    },
+                )
+                return {"status": "sent", "via": "mcp", "result": result}
+        except Exception:
+            logger.debug("MCP email_send unavailable", exc_info=True)
+
+        # SES fallback via EmailSender
+        try:
+            from src.config.settings import get_settings
+            from src.services.email_sender import EmailSender
+
+            to_addr = notification.data.get("email", "")
+            if not to_addr:
+                return {"status": "skipped", "reason": "no_email_address"}
+
+            sender = EmailSender(get_settings())
+            await sender.send(
+                to=to_addr,
+                subject=notification.title,
+                body_text=notification.body,
+            )
+            return {"status": "sent", "via": "ses"}
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
 
     async def _deliver_web(self, notification: Notification) -> dict:
         """Push notification to web dashboard via WebSocket/Redis pub/sub."""

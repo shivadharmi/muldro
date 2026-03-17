@@ -17,7 +17,7 @@ class EventCorrelator:
     def __init__(self, db: AsyncSession):
         self._db = db
 
-    async def correlate(self, event_id: str, user_id: str) -> list[dict]:
+    async def correlate(self, event_id: str, user_id: str, workspace_id: str = "") -> list[dict]:
         """Find events related to the given event."""
         result = await self._db.execute(
             select(NormalizedEvent).where(NormalizedEvent.event_id == event_id)
@@ -29,7 +29,9 @@ class EventCorrelator:
         correlations = []
 
         # Same entity (e.g., same email thread, same PR)
-        entity_events = await self._find_by_entity(user_id, event.entity_id, event_id)
+        entity_events = await self._find_by_entity(
+            user_id, event.entity_id, event_id, workspace_id=workspace_id,
+        )
         if entity_events:
             correlations.append(
                 {
@@ -42,7 +44,8 @@ class EventCorrelator:
         # Same actor within time window
         if event.actor_entities:
             actor_events = await self._find_by_actor(
-                user_id, event.actor_entities, event_id, hours=48
+                user_id, event.actor_entities, event_id, hours=48,
+                workspace_id=workspace_id,
             )
             if actor_events:
                 correlations.append(
@@ -53,7 +56,9 @@ class EventCorrelator:
                 )
 
         # Same source + type within time window (burst detection)
-        burst = await self._detect_burst(user_id, event.source, event.event_type, hours=1)
+        burst = await self._detect_burst(
+            user_id, event.source, event.event_type, hours=1, workspace_id=workspace_id,
+        )
         if burst and len(burst) > 3:
             correlations.append(
                 {
@@ -66,12 +71,15 @@ class EventCorrelator:
 
         return correlations
 
-    async def detect_thread(self, user_id: str, entity_id: str) -> dict | None:
+    async def detect_thread(
+        self, user_id: str, entity_id: str, workspace_id: str = ""
+    ) -> dict | None:
         """Detect if events form a conversational thread."""
         result = await self._db.execute(
             select(NormalizedEvent)
             .where(
                 NormalizedEvent.user_id == user_id,
+                NormalizedEvent.workspace_id == workspace_id,
                 NormalizedEvent.entity_id == entity_id,
             )
             .order_by(NormalizedEvent.occurred_at)
@@ -89,9 +97,11 @@ class EventCorrelator:
             "sources": list({e.source for e in events}),
         }
 
-    async def get_event_context(self, event_id: str, user_id: str) -> dict:
+    async def get_event_context(
+        self, event_id: str, user_id: str, workspace_id: str = ""
+    ) -> dict:
         """Get full context for an event: related events, entities, thread."""
-        correlations = await self.correlate(event_id, user_id)
+        correlations = await self.correlate(event_id, user_id, workspace_id=workspace_id)
 
         result = await self._db.execute(
             select(NormalizedEvent).where(NormalizedEvent.event_id == event_id)
@@ -100,7 +110,9 @@ class EventCorrelator:
 
         thread = None
         if event:
-            thread = await self.detect_thread(user_id, event.entity_id)
+            thread = await self.detect_thread(
+                user_id, event.entity_id, workspace_id=workspace_id,
+            )
 
         return {
             "event_id": event_id,
@@ -108,7 +120,9 @@ class EventCorrelator:
             "thread": thread,
         }
 
-    async def detect_anomaly(self, user_id: str, source: str, hours: int = 24) -> dict | None:
+    async def detect_anomaly(
+        self, user_id: str, source: str, hours: int = 24, workspace_id: str = ""
+    ) -> dict | None:
         """Detect anomalous event patterns for a source.
 
         Checks for:
@@ -124,6 +138,7 @@ class EventCorrelator:
         current = await self._db.execute(
             select(NormalizedEvent.event_id).where(
                 NormalizedEvent.user_id == user_id,
+                NormalizedEvent.workspace_id == workspace_id,
                 NormalizedEvent.source == source,
                 NormalizedEvent.occurred_at > window,
             )
@@ -134,6 +149,7 @@ class EventCorrelator:
         prev = await self._db.execute(
             select(NormalizedEvent.event_id).where(
                 NormalizedEvent.user_id == user_id,
+                NormalizedEvent.workspace_id == workspace_id,
                 NormalizedEvent.source == source,
                 NormalizedEvent.occurred_at > prev_window,
                 NormalizedEvent.occurred_at <= window,
@@ -172,12 +188,13 @@ class EventCorrelator:
         return None
 
     async def _find_by_entity(
-        self, user_id: str, entity_id: str, exclude_event_id: str
+        self, user_id: str, entity_id: str, exclude_event_id: str, workspace_id: str = ""
     ) -> list[dict]:
         result = await self._db.execute(
             select(NormalizedEvent)
             .where(
                 NormalizedEvent.user_id == user_id,
+                NormalizedEvent.workspace_id == workspace_id,
                 NormalizedEvent.entity_id == entity_id,
                 NormalizedEvent.event_id != exclude_event_id,
             )
@@ -190,7 +207,8 @@ class EventCorrelator:
         ]
 
     async def _find_by_actor(
-        self, user_id: str, actor_entities: list, exclude_event_id: str, hours: int
+        self, user_id: str, actor_entities: list, exclude_event_id: str, hours: int,
+        workspace_id: str = "",
     ) -> list[dict]:
         cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
         # Simple: look for events with matching actor email/name in the window
@@ -198,6 +216,7 @@ class EventCorrelator:
             select(NormalizedEvent)
             .where(
                 NormalizedEvent.user_id == user_id,
+                NormalizedEvent.workspace_id == workspace_id,
                 NormalizedEvent.event_id != exclude_event_id,
                 NormalizedEvent.occurred_at > cutoff,
             )
@@ -222,12 +241,14 @@ class EventCorrelator:
         return matched[:5]
 
     async def _detect_burst(
-        self, user_id: str, source: str, event_type: str, hours: int
+        self, user_id: str, source: str, event_type: str, hours: int,
+        workspace_id: str = "",
     ) -> list[str]:
         cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
         result = await self._db.execute(
             select(NormalizedEvent.event_id).where(
                 NormalizedEvent.user_id == user_id,
+                NormalizedEvent.workspace_id == workspace_id,
                 NormalizedEvent.source == source,
                 NormalizedEvent.event_type == event_type,
                 NormalizedEvent.occurred_at > cutoff,

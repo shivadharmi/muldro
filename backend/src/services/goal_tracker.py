@@ -25,11 +25,13 @@ class GoalTracker:
         description: str | None = None,
         target_date: datetime | None = None,
         related_entity_ids: list[str] | None = None,
+        workspace_id: str = "",
     ) -> Goal:
         """Create a new goal."""
         goal = Goal(
             goal_id=f"goal_{ULID()}",
             user_id=user_id,
+            workspace_id=workspace_id,
             title=title,
             description=description,
             target_date=target_date,
@@ -42,11 +44,15 @@ class GoalTracker:
         logger.info("Goal created: %s '%s' for user %s", goal.goal_id, title, user_id)
         return goal
 
-    async def get_active_goals(self, user_id: str) -> list[dict]:
+    async def get_active_goals(self, user_id: str, workspace_id: str = "") -> list[dict]:
         """Get all active goals for a user."""
         result = await self._db.execute(
             select(Goal)
-            .where(Goal.user_id == user_id, Goal.status == "active")
+            .where(
+                Goal.user_id == user_id,
+                Goal.workspace_id == workspace_id,
+                Goal.status == "active",
+            )
             .order_by(Goal.created_at.desc())
         )
         return [
@@ -89,9 +95,11 @@ class GoalTracker:
         await self._db.commit()
         return goal
 
-    async def get_goal(self, goal_id: str) -> dict | None:
+    async def get_goal(self, goal_id: str, workspace_id: str = "") -> dict | None:
         """Get a single goal."""
-        result = await self._db.execute(select(Goal).where(Goal.goal_id == goal_id))
+        result = await self._db.execute(
+            select(Goal).where(Goal.goal_id == goal_id, Goal.workspace_id == workspace_id)
+        )
         g = result.scalar_one_or_none()
         if not g:
             return None

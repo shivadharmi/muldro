@@ -39,13 +39,14 @@ class ConnectorManager:
         ]
 
     async def register_connector(
-        self, user_id: str, provider: str, config: dict | None = None
+        self, user_id: str, provider: str, config: dict | None = None, workspace_id: str = ""
     ) -> dict:
         """Register a new connector for a user."""
         connector_id = f"conn_{ULID()}"
         connector = Connector(
             connector_id=connector_id,
             user_id=user_id,
+            workspace_id=workspace_id,
             provider=provider,
             status="active",
             config=config or {},
@@ -103,7 +104,7 @@ class ConnectorManager:
 
         # Update cursor
         if new_cursor:
-            await self._update_cursor(user_id, provider, new_cursor)
+            await self._update_cursor(user_id, provider, new_cursor, connector.workspace_id)
 
         # Publish events to event bus
         if events and self._event_bus:
@@ -182,7 +183,9 @@ class ConnectorManager:
         cursor = result.scalar_one_or_none()
         return cursor.cursor_value if cursor else None
 
-    async def _update_cursor(self, user_id: str, provider: str, value: str) -> None:
+    async def _update_cursor(
+        self, user_id: str, provider: str, value: str, workspace_id: str = ""
+    ) -> None:
         """Update the observation cursor."""
         result = await self._db.execute(
             select(ObservationCursor).where(
@@ -199,7 +202,9 @@ class ConnectorManager:
                 ObservationCursor(
                     cursor_id=f"cur_{ULID()}",
                     user_id=user_id,
+                    workspace_id=workspace_id,
                     source=provider,
+                    cursor_type="sync_token",
                     cursor_value=value,
                 )
             )

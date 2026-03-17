@@ -5,7 +5,7 @@ is allowed, needs approval, or should be blocked.
 
 Responsibilities:
 - Evaluate action policies based on plan decision and risk level
-- Create Execution records from plans
+- Create TaskRun records from plans
 - Create Approval records when approval_required
 - Log all policy decisions to audit trail
 - Integrate with TrustEngine for graduated autonomy
@@ -29,8 +29,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
 from src.models.approvals import Approval
-from src.models.executions import Execution
 from src.models.plans import Plan
+from src.models.task_graph import TaskRun
+from src.orchestrator.contracts import PolicyDecision
 from src.services.audit import AuditService
 
 if TYPE_CHECKING:
@@ -83,37 +84,50 @@ class Governor:
         notifier=None,
         trust_engine: TrustEngine | None = None,
         settings_service: SettingsService | None = None,
+        event_bus=None,
     ):
         self._db = db
         self._audit = AuditService(db)
         self._notifier = notifier
         self._trust_engine = trust_engine
         self._settings_service = settings_service
+        self._event_bus = event_bus
 
-    async def evaluate_plan(self, plan_id: str, user_id: str) -> str:
+    async def evaluate_plan(
+        self, plan_id: str, user_id: str, workspace_id: str = ""
+    ) -> PolicyDecision:
         """Evaluate a plan and determine execution mode.
 
-        Creates an Execution record. If approval is needed, also creates
+        Creates a TaskRun record. If approval is needed, also creates
         an Approval record.
 
-        Returns: 'auto_execute', 'approval_required', or 'blocked'
+        Returns: PolicyDecision with decision, run_id, and justification.
         """
         result = await self._db.execute(select(Plan).where(Plan.plan_id == plan_id))
         plan = result.scalar_one_or_none()
         if not plan:
             logger.warning("Plan not found for governance: %s", plan_id)
-            return "blocked"
+            return PolicyDecision(
+                decision="blocked", justification="Plan not found", risk_level="high"
+            )
 
         policy_decision = await self._apply_policy(plan, user_id)
 
-        execution_id = f"exec_{ULID()}"
-        execution = Execution(
-            execution_id=execution_id,
+        run_id = f"run_{ULID()}"
+        run = TaskRun(
+            run_id=run_id,
             plan_id=plan_id,
             user_id=user_id,
+            workspace_id=workspace_id,
+            source="plan",
+            execution_mode=policy_decision,
+            policy_decision={
+                "decision": policy_decision,
+                "risk_level": plan.risk_level or "low",
+            },
             status="pending" if policy_decision == "auto_execute" else policy_decision,
         )
-        self._db.add(execution)
+        self._db.add(run)
 
         plan.status = "policy_checked"
         plan.execution_mode = policy_decision
@@ -122,14 +136,16 @@ class Governor:
             user_id=user_id,
             action_type="policy_evaluated",
             plan_id=plan_id,
-            execution_id=execution_id,
+            execution_id=run_id,
             policy_decision=policy_decision,
             summary=f"Plan '{plan.goal}' → {policy_decision}",
+            workspace_id=workspace_id,
         )
 
+        approval_id = None
         if policy_decision == "approval_required":
-            approval_id = await self._create_approval(plan, execution_id, user_id)
-            execution.status = "awaiting_approval"
+            approval_id = await self._create_approval(plan, run_id, user_id, workspace_id)
+            run.status = "awaiting_approval"
             logger.info(
                 "Approval created: %s for plan %s",
                 approval_id,
@@ -148,25 +164,52 @@ class Governor:
                             "plan_id": plan_id,
                             "risk_level": plan.risk_level or "medium",
                         },
+                        workspace_id=workspace_id,
                     )
                 except Exception:
                     logger.warning("Failed to notify for approval", exc_info=True)
 
         if policy_decision == "blocked":
-            execution.status = "cancelled"
+            run.status = "cancelled"
             plan.status = "blocked"
 
         await self._db.commit()
 
+        # Emit domain events
+        event_type = (
+            "plan.approved"
+            if policy_decision == "auto_execute"
+            else "plan.rejected"
+            if policy_decision == "blocked"
+            else "approval.requested"
+        )
+        await self._emit_event(
+            event_type,
+            user_id,
+            {
+                "plan_id": plan_id,
+                "run_id": run_id,
+                "policy_decision": policy_decision,
+            },
+        )
+
         logger.info(
-            "Governor: plan=%s decision=%s exec=%s",
+            "Governor: plan=%s decision=%s run=%s",
             plan_id,
             policy_decision,
-            execution_id,
+            run_id,
         )
-        return policy_decision
+        return PolicyDecision(
+            decision=policy_decision,
+            justification=f"Plan '{plan.goal}' evaluated as {policy_decision}",
+            risk_level=plan.risk_level or "low",
+            approval_id=approval_id,
+            execution_id=run_id,
+        )
 
-    async def _create_approval(self, plan: Plan, execution_id: str, user_id: str) -> str:
+    async def _create_approval(
+        self, plan: Plan, execution_id: str, user_id: str, workspace_id: str = ""
+    ) -> str:
         """Create an approval record for a plan requiring user consent."""
         approval_id = f"apr_{ULID()}"
 
@@ -177,6 +220,7 @@ class Governor:
         approval = Approval(
             approval_id=approval_id,
             user_id=user_id,
+            workspace_id=workspace_id,
             execution_id=execution_id,
             approval_type=task_types[0] if task_types else plan.decision,
             title=f"Approve: {plan.goal}",
@@ -195,6 +239,7 @@ class Governor:
             execution_id=execution_id,
             approval_id=approval_id,
             summary=f"Approval requested: {plan.goal}",
+            workspace_id=workspace_id,
         )
 
         return approval_id
@@ -341,3 +386,13 @@ class Governor:
 
         # Default: require approval for safety
         return "approval_required"
+
+    async def _emit_event(self, event_type: str, user_id: str, payload: dict) -> None:
+        """Publish a domain event (best-effort)."""
+        if not self._event_bus:
+            return
+        try:
+            stream = self._event_bus.agent_stream(user_id)
+            await self._event_bus.publish(stream, event_type, payload, user_id)
+        except Exception:
+            logger.debug("Failed to emit %s event", event_type, exc_info=True)

@@ -29,11 +29,13 @@ class TriggerEngine:
         action_type: str,
         action_config: dict | None = None,
         description: str | None = None,
+        workspace_id: str = "",
     ) -> Trigger:
         """Create a new trigger rule."""
         trigger = Trigger(
             trigger_id=f"trig_{ULID()}",
             user_id=user_id,
+            workspace_id=workspace_id,
             name=name,
             description=description,
             conditions=conditions,
@@ -46,17 +48,26 @@ class TriggerEngine:
         logger.info("Trigger created: %s (%s) for user %s", trigger.trigger_id, name, user_id)
         return trigger
 
-    async def get_triggers(self, user_id: str) -> list[Trigger]:
+    async def get_triggers(self, user_id: str, workspace_id: str = "") -> list[Trigger]:
         """Get all triggers for a user."""
         result = await self._db.execute(
-            select(Trigger).where(Trigger.user_id == user_id).order_by(Trigger.created_at.desc())
+            select(Trigger).where(
+                Trigger.user_id == user_id,
+                Trigger.workspace_id == workspace_id,
+            ).order_by(Trigger.created_at.desc())
         )
         return list(result.scalars().all())
 
-    async def update_trigger(self, trigger_id: str, user_id: str, **kwargs) -> Trigger | None:
+    async def update_trigger(
+        self, trigger_id: str, user_id: str, workspace_id: str = "", **kwargs
+    ) -> Trigger | None:
         """Update a trigger."""
         result = await self._db.execute(
-            select(Trigger).where(Trigger.trigger_id == trigger_id, Trigger.user_id == user_id)
+            select(Trigger).where(
+                Trigger.trigger_id == trigger_id,
+                Trigger.user_id == user_id,
+                Trigger.workspace_id == workspace_id,
+            )
         )
         trigger = result.scalar_one_or_none()
         if not trigger:
@@ -66,13 +77,21 @@ class TriggerEngine:
             if hasattr(trigger, key):
                 setattr(trigger, key, value)
 
+        # Sync status with enabled flag
+        if "enabled" in kwargs:
+            trigger.status = "active" if kwargs["enabled"] else "disabled"
+
         await self._db.commit()
         return trigger
 
-    async def delete_trigger(self, trigger_id: str, user_id: str) -> bool:
+    async def delete_trigger(self, trigger_id: str, user_id: str, workspace_id: str = "") -> bool:
         """Delete a trigger."""
         result = await self._db.execute(
-            select(Trigger).where(Trigger.trigger_id == trigger_id, Trigger.user_id == user_id)
+            select(Trigger).where(
+                Trigger.trigger_id == trigger_id,
+                Trigger.user_id == user_id,
+                Trigger.workspace_id == workspace_id,
+            )
         )
         trigger = result.scalar_one_or_none()
         if not trigger:
@@ -81,11 +100,12 @@ class TriggerEngine:
         await self._db.commit()
         return True
 
-    async def evaluate(self, event: BusEvent) -> list[dict]:
+    async def evaluate(self, event: BusEvent, workspace_id: str = "") -> list[dict]:
         """Evaluate an event against all enabled triggers for the user."""
         result = await self._db.execute(
             select(Trigger).where(
                 Trigger.user_id == event.user_id,
+                Trigger.workspace_id == workspace_id,
                 Trigger.enabled.is_(True),
             )
         )
@@ -93,6 +113,8 @@ class TriggerEngine:
 
         fired = []
         for trigger in triggers:
+            trigger.status = "evaluating"
+            trigger.last_evaluated_at = datetime.now(timezone.utc)
             if self._matches(trigger, event):
                 await self._fire_trigger(trigger, event)
                 fired.append(
@@ -102,6 +124,23 @@ class TriggerEngine:
                         "action_type": trigger.action_type,
                     }
                 )
+            else:
+                # Emit evaluation event for non-matches too (observability)
+                trigger.status = "active"
+                if self._event_bus:
+                    try:
+                        await self._event_bus.publish(
+                            self._event_bus.agent_stream(event.user_id),
+                            "trigger.evaluated",
+                            {
+                                "trigger_id": trigger.trigger_id,
+                                "matched": False,
+                                "event_type": event.event_type,
+                            },
+                            user_id=event.user_id,
+                        )
+                    except Exception:
+                        logger.debug("Failed to emit trigger.evaluated (no-match)", exc_info=True)
 
         return fired
 
@@ -172,6 +211,7 @@ class TriggerEngine:
         trigger.fire_count += 1
         trigger.last_fired_at = datetime.now(timezone.utc)
         trigger.last_evaluated_at = datetime.now(timezone.utc)
+        trigger.status = "triggered"
 
         # Apply cooldown if configured
         cooldown_seconds = (trigger.conditions or {}).get("cooldown_seconds")
@@ -215,3 +255,19 @@ class TriggerEngine:
             trigger.name,
             action_type,
         )
+
+        # Emit domain event
+        if self._event_bus:
+            try:
+                await self._event_bus.publish(
+                    self._event_bus.agent_stream(event.user_id),
+                    "trigger.evaluated",
+                    {
+                        "trigger_id": trigger.trigger_id,
+                        "action_type": action_type,
+                        "event_type": event.event_type,
+                    },
+                    user_id=event.user_id,
+                )
+            except Exception:
+                logger.debug("Failed to emit trigger.evaluated event", exc_info=True)

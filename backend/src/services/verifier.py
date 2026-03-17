@@ -206,7 +206,7 @@ class Verifier:
 
         try:
             response = await self._client.messages.create(
-                model=self._settings.anthropic_model,
+                model=self._settings.resolved_model,
                 max_tokens=256,
                 system=(
                     "You are a quality verification engine. "
