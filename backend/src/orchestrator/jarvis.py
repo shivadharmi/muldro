@@ -12,16 +12,23 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 import anthropic
+from ulid import ULID
 
 from src.config.settings import Settings, get_anthropic_client
+from src.models.task_graph import TaskRun, TaskStep
 from src.orchestrator.agents import AGENTS, SubAgent
 from src.orchestrator.budget import BudgetTracker
+from src.orchestrator.contracts import AgentEnvelope, AgentResult, SpanToolCall
 from src.orchestrator.hooks import (
     audit_post_tool_hook,
     governor_pre_tool_hook,
 )
 from src.orchestrator.prompts import JARVIS_SOUL
+from src.orchestrator.services import ServiceContainer
 from src.orchestrator.tracing import TraceManager
+from src.services.agent_registry import AgentRegistry
+from src.services.context_builder import ContextBuilder, ContextPack
+from src.services.route_resolver import RouteResolver
 from src.services.trace_store import TraceStore
 
 logger = logging.getLogger(__name__)
@@ -40,11 +47,18 @@ AGENT_EVENT_TYPES = {
     "perception_completed",
 }
 
-# Model IDs for each tier
+# Model IDs for each tier (direct API)
 MODEL_TIERS = {
     "opus": "claude-opus-4-20250514",
     "sonnet": "claude-sonnet-4-20250514",
     "haiku": "claude-haiku-4-20250514",
+}
+
+# Bedrock inference profile IDs (cross-region, works in ap-south-1)
+BEDROCK_MODEL_TIERS = {
+    "opus": "global.anthropic.claude-opus-4-5-20251101-v1:0",
+    "sonnet": "apac.anthropic.claude-sonnet-4-20250514-v1:0",
+    "haiku": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
 }
 
 # Agents that benefit from context enrichment (read-heavy agents)
@@ -64,22 +78,154 @@ class JarvisOrchestrator:
         self,
         settings: Settings,
         db_factory,
-        services: dict,
+        services: dict | ServiceContainer,
     ):
         self._settings = settings
         self._db_factory = db_factory
-        self._services = services
+        # Accept both dict (legacy callers / tests) and ServiceContainer
+        if isinstance(services, ServiceContainer):
+            self._services = services
+        else:
+            self._services = ServiceContainer.from_dict(services)
         self._client = get_anthropic_client(settings)
-        self._trace_store = TraceStore(elasticsearch_url=settings.elasticsearch_url)
+        self._trace_store = TraceStore(
+            elasticsearch_url=settings.elasticsearch_url,
+            db_factory=db_factory,
+        )
         self._trace_manager = TraceManager(trace_store=self._trace_store)
         self._budget = BudgetTracker(daily_limit_usd=settings.daily_token_budget_usd)
         self._tools = self._build_tool_definitions()
+        self._agents: dict[str, SubAgent] = dict(AGENTS)  # Start with hardcoded defaults
         self._event_bus = None  # Lazy-init when Redis available
 
+    async def load_agents_from_db(self) -> None:
+        """Load agent definitions from the database, replacing hardcoded defaults."""
+        try:
+            async with self._db_factory() as db:
+                registry = AgentRegistry(db)
+                db_agents = await registry.load_as_sub_agents()
+                if db_agents:
+                    self._agents = db_agents
+                    logger.info(
+                        "Loaded %d agents from DB: %s",
+                        len(db_agents),
+                        sorted(db_agents.keys()),
+                    )
+        except Exception:
+            logger.debug("Agent DB load failed, using hardcoded defaults", exc_info=True)
+
+    async def _create_lightweight_run(
+        self,
+        user_id: str,
+        workspace_id: str,
+        decision: dict,
+        trace_id: str,
+        conversation_id: str | None = None,
+    ) -> str | None:
+        """Create a lightweight TaskRun for every user interaction.
+
+        Even simple decisions (acknowledge, answer_directly) get a single-step
+        run so ALL interactions are tracked in the runs table.
+        Returns the run_id on success, None if DB unavailable.
+        """
+        run_id = f"run_{ULID()}"
+        decision_type = decision.get("decision", "acknowledge")
+
+        try:
+            async with self._db_factory() as db:
+                run = TaskRun(
+                    run_id=run_id,
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    plan_id=None,
+                    status="running",
+                    source="user_message",
+                    execution_mode="auto_execute",
+                    policy_decision={"decision": decision_type},
+                    conversation_id=conversation_id,
+                    trace_id=trace_id,
+                )
+                db.add(run)
+
+                step = TaskStep(
+                    step_id=f"step_{ULID()}",
+                    run_id=run_id,
+                    workspace_id=workspace_id,
+                    task_id=f"task_{ULID()}",
+                    plan_task_id=None,
+                    step_type=decision_type,
+                    status="running",
+                    input_data={"decision": decision},
+                )
+                db.add(step)
+                await db.commit()
+        except Exception:
+            logger.debug("Failed to create lightweight run", exc_info=True)
+            return None
+
+        return run_id
+
+    async def _complete_lightweight_run(
+        self,
+        run_id: str,
+        result: dict,
+        success: bool = True,
+    ) -> None:
+        """Mark a lightweight run and its step as completed or failed."""
+        try:
+            async with self._db_factory() as db:
+                from sqlalchemy import select
+
+                res = await db.execute(
+                    select(TaskRun).where(TaskRun.run_id == run_id)
+                )
+                run = res.scalar_one_or_none()
+                if not run:
+                    return
+
+                run.status = "completed" if success else "failed"
+                if not success:
+                    run.error = {
+                        "message": result.get("summary", "unknown error")[:500]
+                    }
+
+                step_res = await db.execute(
+                    select(TaskStep).where(TaskStep.run_id == run_id)
+                )
+                for step in step_res.scalars().all():
+                    step.status = "completed" if success else "failed"
+                    if success:
+                        step.output_data = {
+                            "decision": result.get("decision"),
+                            "summary": str(result.get("summary", ""))[:1000],
+                        }
+
+                await db.commit()
+        except Exception:
+            logger.debug("Failed to complete lightweight run %s", run_id, exc_info=True)
+
     def _build_tool_definitions(self) -> list[dict]:
-        """Build Claude tool definitions from intelligence server tools."""
-        # These are the internal tools available to sub-agents.
-        # External MCP tools are added dynamically based on agent scope.
+        """Build Claude tool definitions from intelligence + MCP tools."""
+        # Internal tools + any discovered MCP tools from external servers
+        tools = self._build_internal_tool_definitions()
+
+        # Append MCP tools discovered from external servers
+        from src.connectors.mcp_bridge import list_mcp_tools
+
+        for mcp_tool in list_mcp_tools():
+            schema = mcp_tool.get("input_schema", {})
+            tools.append(
+                {
+                    "name": mcp_tool["name"],
+                    "description": mcp_tool.get("description", "External MCP tool"),
+                    "input_schema": schema if schema else {"type": "object", "properties": {}},
+                }
+            )
+
+        return tools
+
+    def _build_internal_tool_definitions(self) -> list[dict]:
+        """Build Claude tool definitions for internal intelligence tools."""
         return [
             {
                 "name": "ingest_event",
@@ -250,6 +396,62 @@ class JarvisOrchestrator:
                     "required": ["source_text"],
                 },
             },
+            {
+                "name": "create_task",
+                "description": "Create a standalone task in the task system.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "description": {"type": "string", "default": ""},
+                        "task_type": {"type": "string", "default": "general"},
+                        "priority": {"type": "string", "default": "medium"},
+                        "goal_id": {"type": "string", "default": ""},
+                    },
+                    "required": ["title"],
+                },
+            },
+            {
+                "name": "get_task",
+                "description": "Get details of a task by ID.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"task_id": {"type": "string"}},
+                    "required": ["task_id"],
+                },
+            },
+            {
+                "name": "get_goals",
+                "description": "Get user goals, optionally filtered by status.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "status": {"type": "string", "default": "active"},
+                        "limit": {"type": "integer", "default": 10},
+                    },
+                },
+            },
+            {
+                "name": "build_context",
+                "description": "Build a rich context pack for a query/task.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "task_type": {"type": "string", "default": ""},
+                    },
+                    "required": ["query"],
+                },
+            },
+            {
+                "name": "verify_run",
+                "description": "Verify a completed run against success conditions.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"run_id": {"type": "string"}},
+                    "required": ["run_id"],
+                },
+            },
         ]
 
     def _get_tools_for_agent(self, agent: SubAgent) -> list[dict]:
@@ -258,15 +460,15 @@ class JarvisOrchestrator:
 
     def _get_model_for_agent(self, agent: SubAgent) -> str:
         """Get the Claude model ID for an agent's tier."""
-        model = MODEL_TIERS.get(agent.model_tier, MODEL_TIERS["sonnet"])
-        # Use Bedrock model IDs if configured
         if self._settings.use_bedrock:
-            return f"anthropic.{model}-v1:0"
-        return model
+            return BEDROCK_MODEL_TIERS.get(agent.model_tier, BEDROCK_MODEL_TIERS["sonnet"])
+        return MODEL_TIERS.get(agent.model_tier, MODEL_TIERS["sonnet"])
 
     async def process_message(
         self,
         message: str,
+        user_id: str,
+        workspace_id: str,
         conversation_id: str | None = None,
         surface: str = "api",
         context: dict | None = None,
@@ -277,20 +479,41 @@ class JarvisOrchestrator:
         The orchestrator decides which sub-agents to invoke.
         """
         trace = self._trace_manager.start_trace("user_message")
+        run_id: str | None = None
 
         try:
+            # Load conversation history for multi-turn context
+            history_block = await self._load_conversation_history(conversation_id)
+
             # Step 1: Route to Planner for intent determination
+            planner_message = f"User message: {message}\n\nContext: {json.dumps(context or {})}"
+            if history_block:
+                planner_message = f"{history_block}\n\n{planner_message}"
+
             plan_result = await self._call_agent(
                 "planner",
-                message=f"User message: {message}\n\nContext: {json.dumps(context or {})}",
+                message=planner_message,
+                user_id=user_id,
                 trace=trace,
+                workspace_id=workspace_id,
             )
 
             decision = self._extract_decision(plan_result)
+            decision_json = json.dumps(decision)
 
-            # Step 2: Based on decision, route to appropriate agents
+            # Create a lightweight TaskRun for tracking
+            run_id = await self._create_lightweight_run(
+                user_id=user_id,
+                workspace_id=workspace_id,
+                decision=decision,
+                trace_id=trace.trace_id,
+                conversation_id=conversation_id,
+            )
+
+            # Step 2: Resolve route dynamically from DB
             result = {
                 "trace_id": trace.trace_id,
+                "run_id": run_id,
                 "decision": decision.get("decision", "acknowledge"),
                 "summary": decision.get("reasoning", plan_result),
             }
@@ -298,30 +521,62 @@ class JarvisOrchestrator:
             # Publish plan event
             await self._publish_event(
                 "plan_generated",
-                "usr_default",
+                user_id,
                 {"decision": decision, "trace_id": trace.trace_id},
                 trace_id=trace.trace_id,
             )
 
-            if decision.get("decision") == "create_task":
-                # Route to Governor for policy check
-                gov_result = await self._call_agent(
-                    "governor",
-                    message=f"Evaluate this plan: {json.dumps(decision)}",
-                    trace=trace,
-                )
-                result["governance"] = gov_result
+            # Resolve agent pipeline from routes
+            pipeline = await self._resolve_pipeline(decision)
 
-            if decision.get("decision") in ("ask_user", "recommend", "summarize"):
-                # Route to Presenter for formatting
+            for step in pipeline:
+                agent_name = step.get("agent", "")
+                if not agent_name or agent_name not in self._agents:
+                    continue
+
+                # Check step-level condition
+                step_cond = step.get("condition")
+                if step_cond and not self._check_step_condition(step_cond, decision):
+                    continue
+
+                # Handle special actions
+                action = step.get("action")
+                if action == "execute_plan":
+                    plan_id = decision.get("plan_id")
+                    if plan_id:
+                        exec_result = await self._execute_plan_via_graph(
+                            plan_id, user_id, trace
+                        )
+                        result["execution"] = exec_result
+                    continue
+
+                # Format message from template
+                template = step.get("message_template", "Process this: {decision_json}")
+                agent_message = template.format(
+                    decision_json=decision_json, surface=surface, message=message
+                )
+
+                agent_result = await self._call_agent(
+                    agent_name, message=agent_message, user_id=user_id, trace=trace,
+                    workspace_id=workspace_id,
+                )
+                result[agent_name] = agent_result
+
+            # Step 3: Presenter formats the response (if not already in pipeline)
+            if not any(s.get("agent") == "presenter" for s in pipeline):
+                presenter_msg = f"Format this for the user ({surface}): {decision_json}"
+                if history_block:
+                    presenter_msg = f"{history_block}\n\n{presenter_msg}"
                 present_result = await self._call_agent(
                     "presenter",
-                    message=f"Format this for the user ({surface}): {json.dumps(decision)}",
+                    message=presenter_msg,
+                    user_id=user_id,
                     trace=trace,
+                    workspace_id=workspace_id,
                 )
                 result["presentation"] = present_result
 
-            # Step 3: Persona learns from this interaction (fire-and-forget)
+            # Step 4: Persona learns from this interaction (fire-and-forget)
             try:
                 await self._call_agent(
                     "persona",
@@ -329,28 +584,41 @@ class JarvisOrchestrator:
                     f"User said: {message}\n"
                     f"Decision: {decision.get('decision', 'unknown')}\n"
                     f"Extract any preference signals.",
+                    user_id=user_id,
                     trace=trace,
+                    workspace_id=workspace_id,
                 )
             except Exception:
                 logger.debug("Persona reflection skipped", exc_info=True)
+
+            # Complete the lightweight run
+            await self._complete_lightweight_run(run_id, result, success=True)
 
             return result
 
         except Exception as e:
             logger.error("process_message failed: %s", e, exc_info=True)
-            return {
+            error_result = {
                 "trace_id": trace.trace_id,
                 "decision": "error",
                 "summary": f"Error processing message: {e}",
             }
+            if run_id:
+                await self._complete_lightweight_run(run_id, error_result, success=False)
+            return error_result
         finally:
-            await self._trace_manager.finish_trace(trace.trace_id)
+            await self._trace_manager.finish_trace(
+                trace.trace_id, user_id=user_id, workspace_id=workspace_id
+            )
 
     async def process_message_stream(
         self,
         message: str,
+        user_id: str,
+        workspace_id: str,
         surface: str = "web",
         context: dict | None = None,
+        conversation_id: str | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Stream events while processing a user message through the orchestrator.
 
@@ -359,44 +627,103 @@ class JarvisOrchestrator:
           response, error, done
         """
         trace = self._trace_manager.start_trace("user_message")
+        run_id: str | None = None
 
         try:
             yield {"event": "trace", "trace_id": trace.trace_id}
 
+            # Load conversation history for multi-turn context
+            history_block = await self._load_conversation_history(conversation_id)
+
             # Step 1: Planner determines intent
+            planner_message = f"User message: {message}\n\nContext: {json.dumps(context or {})}"
+            if history_block:
+                planner_message = f"{history_block}\n\n{planner_message}"
+
             plan_text = ""
             async for evt in self._call_agent_stream(
                 "planner",
-                message=f"User message: {message}\n\nContext: {json.dumps(context or {})}",
+                message=planner_message,
+                user_id=user_id,
                 trace=trace,
+                workspace_id=workspace_id,
             ):
                 yield evt
                 if evt.get("event") == "agent_done":
                     plan_text = evt.get("text", "")
 
             decision = self._extract_decision(plan_text)
-            yield {"event": "decision", "decision": decision}
+            decision_json = json.dumps(decision)
 
-            # Step 2: Route based on decision
-            if decision.get("decision") == "create_task":
+            # Create a lightweight TaskRun for tracking
+            run_id = await self._create_lightweight_run(
+                user_id=user_id,
+                workspace_id=workspace_id,
+                decision=decision,
+                trace_id=trace.trace_id,
+                conversation_id=conversation_id,
+            )
+
+            yield {"event": "decision", "decision": decision, "run_id": run_id}
+
+            # Step 2: Resolve route dynamically from DB
+            pipeline = await self._resolve_pipeline(decision)
+
+            for step in pipeline:
+                agent_name = step.get("agent", "")
+                if not agent_name or agent_name not in self._agents:
+                    continue
+
+                # Check step-level condition
+                step_cond = step.get("condition")
+                if step_cond and not self._check_step_condition(step_cond, decision):
+                    continue
+
+                # Handle special actions
+                action = step.get("action")
+                if action == "execute_plan":
+                    plan_id = decision.get("plan_id")
+                    if plan_id:
+                        yield {"event": "execution_start", "plan_id": plan_id}
+                        exec_result = await self._execute_plan_via_graph(
+                            plan_id, user_id, trace
+                        )
+                        yield {
+                            "event": "execution_result",
+                            "run_id": exec_result.get("run_id"),
+                            "status": exec_result.get("status"),
+                        }
+                    continue
+
+                # Format message from template
+                template = step.get("message_template", "Process this: {decision_json}")
+                agent_message = template.format(
+                    decision_json=decision_json, surface=surface, message=message
+                )
+
                 async for evt in self._call_agent_stream(
-                    "governor",
-                    message=f"Evaluate this plan: {json.dumps(decision)}",
-                    trace=trace,
+                    agent_name, message=agent_message, user_id=user_id, trace=trace,
+                    workspace_id=workspace_id,
                 ):
                     yield evt
 
             # Always route through presenter for user-facing response
+            presenter_msg = (
+                f"Format this for the user ({surface}). Be conversational and helpful.\n\n"
+                f"Original user message: {message}\n"
+                f"Planner decision: {decision_json}\n"
+                f"Planner analysis: {plan_text[:2000]}"
+            )
+            if history_block:
+                presenter_msg = f"{history_block}\n\n{presenter_msg}"
+
             presenter_text = ""
             async for evt in self._call_agent_stream(
                 "presenter",
-                message=(
-                    f"Format this for the user ({surface}). Be conversational and helpful.\n\n"
-                    f"Original user message: {message}\n"
-                    f"Planner decision: {json.dumps(decision)}\n"
-                    f"Planner analysis: {plan_text[:2000]}"
-                ),
+                message=presenter_msg,
+                user_id=user_id,
                 trace=trace,
+                workspace_id=workspace_id,
             ):
                 yield evt
                 if evt.get("event") == "agent_done":
@@ -411,28 +738,46 @@ class JarvisOrchestrator:
                     f"User said: {message}\n"
                     f"Decision: {decision.get('decision', 'unknown')}\n"
                     f"Extract any preference signals.",
+                    user_id=user_id,
                     trace=trace,
+                    workspace_id=workspace_id,
                 )
             except Exception:
                 pass
 
-            yield {"event": "done", "trace_id": trace.trace_id}
+            # Complete the lightweight run
+            if run_id:
+                await self._complete_lightweight_run(
+                    run_id,
+                    {"decision": decision.get("decision"), "summary": presenter_text},
+                    success=True,
+                )
+
+            yield {"event": "done", "trace_id": trace.trace_id, "run_id": run_id}
 
         except Exception as e:
             logger.error("process_message_stream failed: %s", e, exc_info=True)
+            if run_id:
+                await self._complete_lightweight_run(
+                    run_id, {"summary": str(e)}, success=False
+                )
             yield {"event": "error", "message": str(e)}
         finally:
-            await self._trace_manager.finish_trace(trace.trace_id)
+            await self._trace_manager.finish_trace(
+                trace.trace_id, user_id=user_id, workspace_id=workspace_id
+            )
 
     async def _call_agent_stream(
         self,
         agent_name: str,
         message: str,
+        user_id: str,
         trace=None,
         max_tool_rounds: int = 10,
+        workspace_id: str = "",
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Call a sub-agent, yielding events as it thinks, calls tools, etc."""
-        agent = AGENTS.get(agent_name)
+        agent = self._agents.get(agent_name)
         if not agent:
             yield {"event": "error", "message": f"Unknown agent: {agent_name}"}
             return
@@ -444,37 +789,93 @@ class JarvisOrchestrator:
         yield {"event": "agent_start", "agent": agent_name, "model": model}
 
         # Assemble context (memories + entities) for enriched agents
-        context_block = await self._assemble_context(agent_name, message)
+        context_block = await self._assemble_context(agent_name, message, user_id=user_id)
         system_blocks = self._build_system_prompt(agent, context_block)
 
         messages = [{"role": "user", "content": message}]
 
         total_input = 0
         total_output = 0
-        tools_called = []
+        total_cache_creation = 0
+        total_cache_read = 0
+        tools_called: list[str] = []
+        tool_call_details: list[SpanToolCall] = []
+        thinking_chunks: list[str] = []
         text = ""
         start_time = time.time()
+
+        # Extended thinking — all Claude 4+ models support it
+        thinking_budget = min(8192, max(1024, agent.max_tokens // 2))
+        if thinking_budget >= agent.max_tokens:
+            thinking_budget = agent.max_tokens - 1
 
         try:
             for _round in range(max_tool_rounds):
                 api_kwargs = {
                     "model": model,
                     "max_tokens": agent.max_tokens,
-                    "temperature": agent.temperature,
+                    "temperature": 1,  # required when thinking is enabled
+                    "thinking": {
+                        "type": "enabled",
+                        "budget_tokens": thinking_budget,
+                    },
                     "system": system_blocks,
                     "messages": messages,
                 }
                 if tools:
                     api_kwargs["tools"] = tools
 
-                response = await self._client.messages.create(**api_kwargs)
+                # Stream for real token-by-token output
+                response = None
+                try:
+                    async with self._client.messages.stream(**api_kwargs) as stream:
+                        async for event in stream:
+                            if event.type == "content_block_delta":
+                                delta = event.delta
+                                if delta.type == "thinking_delta":
+                                    thinking_chunks.append(delta.thinking)
+                                    yield {
+                                        "event": "thinking",
+                                        "agent": agent_name,
+                                        "text": delta.thinking,
+                                        "is_thinking": True,
+                                    }
+                                elif delta.type == "text_delta":
+                                    yield {
+                                        "event": "text_delta",
+                                        "agent": agent_name,
+                                        "text": delta.text,
+                                    }
+                        response = await stream.get_final_message()
+                except Exception as stream_err:
+                    if response is None:
+                        # Fallback to non-streaming if stream() fails
+                        logger.warning(
+                            "Streaming failed for %s, falling back: %s",
+                            agent_name, stream_err,
+                        )
+                        api_kwargs["temperature"] = agent.temperature
+                        api_kwargs.pop("thinking", None)
+                        response = await self._client.messages.create(**api_kwargs)
+
                 total_input += response.usage.input_tokens
                 total_output += response.usage.output_tokens
+                total_cache_creation += getattr(
+                    response.usage, "cache_creation_input_tokens", 0
+                ) or 0
+                total_cache_read += getattr(
+                    response.usage, "cache_read_input_tokens", 0
+                ) or 0
 
-                # Extract any thinking/text blocks
+                # Capture thinking text from final message for persistence
+                for block in response.content:
+                    if block.type == "thinking" and hasattr(block, "thinking"):
+                        thinking_chunks.append(block.thinking)
+
                 text_blocks = [b for b in response.content if b.type == "text"]
                 tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
 
+                # Emit text blocks as intermediate reasoning (non-streamed fallback)
                 for tb in text_blocks:
                     if tb.text.strip():
                         yield {
@@ -506,6 +907,7 @@ class JarvisOrchestrator:
                         tool_name,
                         tool_input,
                         agent_name,
+                        user_id=user_id,
                         db_factory=self._db_factory,
                         services=self._services,
                     )
@@ -523,6 +925,13 @@ class JarvisOrchestrator:
                                 "content": json.dumps(blocked_msg),
                             }
                         )
+                        tool_call_details.append(SpanToolCall(
+                            tool_name=tool_name,
+                            input_data=tool_input if isinstance(tool_input, dict) else {},
+                            output_data=blocked_msg,
+                            status="blocked",
+                            error=pre_result.get("reason", "Blocked by policy"),
+                        ))
                         yield {
                             "event": "tool_result",
                             "agent": agent_name,
@@ -533,7 +942,7 @@ class JarvisOrchestrator:
                         continue
 
                     tool_start = time.time()
-                    result = await self._execute_tool(tool_name, tool_input)
+                    result = await self._execute_tool(tool_name, tool_input, user_id=user_id)
                     tool_latency = int((time.time() - tool_start) * 1000)
 
                     tool_results.append(
@@ -545,6 +954,23 @@ class JarvisOrchestrator:
                             else str(result),
                         }
                     )
+
+                    # Truncate large results for persistence (keep first 2000 chars)
+                    persisted_output = result
+                    if isinstance(result, str) and len(result) > 2000:
+                        persisted_output = result[:2000] + "...[truncated]"
+                    elif isinstance(result, dict):
+                        result_str = json.dumps(result, default=str)
+                        if len(result_str) > 2000:
+                            persisted_output = {"_truncated": result_str[:2000]}
+
+                    tool_call_details.append(SpanToolCall(
+                        tool_name=tool_name,
+                        input_data=tool_input if isinstance(tool_input, dict) else {},
+                        output_data=persisted_output,
+                        status="success",
+                        duration_ms=tool_latency,
+                    ))
 
                     yield {
                         "event": "tool_result",
@@ -565,6 +991,7 @@ class JarvisOrchestrator:
                         db_factory=self._db_factory,
                     )
 
+                # Preserve thinking blocks for multi-turn tool-use continuity
                 messages.append({"role": "assistant", "content": response.content})
                 messages.append({"role": "user", "content": tool_results})
             else:
@@ -581,18 +1008,30 @@ class JarvisOrchestrator:
 
         latency_ms = int((time.time() - start_time) * 1000)
 
-        # Record usage
+        # Assemble thinking summary for persistence (truncate to 5000 chars)
+        thinking_summary = "".join(thinking_chunks)
+        if len(thinking_summary) > 5000:
+            thinking_summary = thinking_summary[:5000] + "...[truncated]"
+        thinking_summary = thinking_summary or None
+
+        # Record usage — must commit or data is lost on session close
+        cost_usd = 0.0
         try:
-            db = self._db_factory()
-            await self._budget.record_usage(
-                db,
-                agent_name=agent_name,
-                model=model,
-                input_tokens=total_input,
-                output_tokens=total_output,
-                trigger=trace.trigger if trace else "unknown",
-                trace_id=trace.trace_id if trace else None,
-            )
+            async with self._db_factory() as db:
+                usage = await self._budget.record_usage(
+                    db,
+                    agent_name=agent_name,
+                    model=model,
+                    input_tokens=total_input,
+                    output_tokens=total_output,
+                    cache_creation_input_tokens=total_cache_creation,
+                    cache_read_input_tokens=total_cache_read,
+                    trigger=trace.trigger if trace else "unknown",
+                    trace_id=trace.trace_id if trace else None,
+                    workspace_id=workspace_id,
+                )
+                cost_usd = usage.cost_usd
+                await db.commit()
         except Exception as e:
             logger.error("Failed to record token usage: %s", e)
 
@@ -601,7 +1040,14 @@ class JarvisOrchestrator:
                 span.span_id,
                 input_tokens=total_input,
                 output_tokens=total_output,
+                cache_creation_input_tokens=total_cache_creation,
+                cache_read_input_tokens=total_cache_read,
                 tools_called=tools_called,
+                tool_call_details=tool_call_details,
+                thinking_summary=thinking_summary,
+                response_text=text,
+                model=model,
+                cost_usd=cost_usd,
             )
 
         yield {
@@ -610,11 +1056,14 @@ class JarvisOrchestrator:
             "text": text,
             "input_tokens": total_input,
             "output_tokens": total_output,
+            "cache_creation_tokens": total_cache_creation,
+            "cache_read_tokens": total_cache_read,
             "tools_called": tools_called,
             "latency_ms": latency_ms,
+            "cost_usd": round(cost_usd, 6),
         }
 
-    async def run_perception_cycle(self, source: str) -> dict:
+    async def run_perception_cycle(self, source: str, user_id: str, workspace_id: str = "") -> dict:
         """Run a perception cycle for a specific data source.
 
         Observer reads new data -> Librarian extracts entities/memories ->
@@ -624,8 +1073,8 @@ class JarvisOrchestrator:
 
         try:
             # Check budget
-            db = self._db_factory()
-            budget_status = await self._budget.get_budget_status(db)
+            async with self._db_factory() as db:
+                budget_status = await self._budget.get_budget_status(db)
             if not self._budget.should_allow_perception(budget_status):
                 logger.warning(
                     "perception_skipped_budget",
@@ -638,15 +1087,31 @@ class JarvisOrchestrator:
                 "observer",
                 message=f"Observe {source} for new activity. Use get_observation_cursor "
                 f"to find where we left off, then fetch only new data.",
+                user_id=user_id,
                 trace=trace,
+                workspace_id=workspace_id,
             )
+
+            # Bail early if observer failed (e.g. API error, no credits)
+            if isinstance(observer_result, str) and "API error" in observer_result:
+                logger.warning(
+                    "perception_observer_failed",
+                    extra={"source": source, "error": observer_result},
+                )
+                return {
+                    "status": "error",
+                    "source": source,
+                    "error": observer_result,
+                }
 
             # Step 2: Librarian extracts entities and memories
             librarian_result = await self._call_agent(
                 "librarian",
                 message=f"Process these observations from {source} and extract "
                 f"entities and memories: {observer_result}",
+                user_id=user_id,
                 trace=trace,
+                workspace_id=workspace_id,
             )
 
             # Step 3: Planner evaluates if any action is needed
@@ -654,13 +1119,15 @@ class JarvisOrchestrator:
                 "planner",
                 message=f"Evaluate these observations from {source}. "
                 f"Create plans for anything important: {observer_result}",
+                user_id=user_id,
                 trace=trace,
+                workspace_id=workspace_id,
             )
 
             # Publish perception completed event
             await self._publish_event(
                 "perception_completed",
-                "usr_default",
+                user_id,
                 {"source": source, "trace_id": trace.trace_id},
                 trace_id=trace.trace_id,
             )
@@ -678,22 +1145,41 @@ class JarvisOrchestrator:
             logger.error("perception_cycle failed: %s", e, exc_info=True)
             return {"status": "error", "source": source, "error": str(e)}
         finally:
-            await self._trace_manager.finish_trace(trace.trace_id)
+            await self._trace_manager.finish_trace(
+                trace.trace_id, user_id=user_id, workspace_id=workspace_id
+            )
 
-    async def generate_briefing(self) -> dict:
-        """Generate the daily briefing through the Presenter agent."""
+    async def generate_briefing(self, user_id: str, workspace_id: str = "") -> dict:
+        """Generate the daily briefing through the Presenter agent.
+
+        Uses the get_briefing tool to fetch real data from the intelligence
+        backend (events, plans, approvals, goals) and then formats it through
+        the Presenter agent for user-facing delivery.
+        """
         trace = self._trace_manager.start_trace("scheduled_briefing")
         try:
+            # Step 1: Gather raw briefing data from intelligence server
+            raw_data = await self._execute_tool(
+                "get_briefing", {"date": "today"}, user_id=user_id
+            )
+
+            # Step 2: Let Presenter format it into a user-friendly briefing
             result = await self._call_agent(
                 "presenter",
-                message="Generate the daily briefing. Include top priorities, "
-                "changes since last briefing, pending approvals, and recommended actions.",
+                message=(
+                    "Format the following briefing data into a clear, concise daily briefing "
+                    "for the user. Include: top priorities, recent changes, pending approvals, "
+                    "and recommended next actions.\n\n"
+                    f"Raw briefing data:\n{json.dumps(raw_data, indent=2, default=str)}"
+                ),
+                user_id=user_id,
                 trace=trace,
+                workspace_id=workspace_id,
             )
 
             await self._publish_event(
                 "briefing_generated",
-                "usr_default",
+                user_id,
                 {"trace_id": trace.trace_id},
                 trace_id=trace.trace_id,
             )
@@ -703,7 +1189,9 @@ class JarvisOrchestrator:
             logger.error("generate_briefing failed: %s", e, exc_info=True)
             return {"status": "error", "error": str(e)}
         finally:
-            await self._trace_manager.finish_trace(trace.trace_id)
+            await self._trace_manager.finish_trace(
+                trace.trace_id, user_id=user_id, workspace_id=workspace_id
+            )
 
     async def _publish_event(
         self, event_type: str, user_id: str, payload: dict, trace_id: str | None = None
@@ -726,8 +1214,64 @@ class JarvisOrchestrator:
         except Exception:
             logger.debug("Failed to publish event %s to bus", event_type, exc_info=True)
 
-    async def _assemble_context(self, agent_name: str, message: str) -> str:
-        """Pre-load relevant memories and entities for context-enriched agents.
+    async def _load_conversation_history(
+        self, conversation_id: str | None, max_messages: int = 20, max_chars: int = 8000
+    ) -> str:
+        """Load recent conversation history from DB for multi-turn context.
+
+        Returns a formatted block of prior messages or empty string.
+        Truncates to stay within token budget.
+        """
+        if not conversation_id or not self._db_factory:
+            return ""
+
+        try:
+            from sqlalchemy import select
+
+            from src.models.conversations import Message
+
+            async with self._db_factory() as db:
+                result = await db.execute(
+                    select(Message.role, Message.content)
+                    .where(Message.conversation_id == conversation_id)
+                    .order_by(Message.created_at.desc())
+                    .limit(max_messages + 1)  # +1 for the just-saved user message
+                )
+                rows = result.all()
+
+            if len(rows) <= 1:
+                # Only the current message — no history
+                return ""
+
+            # Reverse to chronological, skip the last (current) user message
+            history = list(reversed(rows[1:]))
+
+            lines: list[str] = []
+            total = 0
+            for role, content in history:
+                label = "User" if role == "user" else "Assistant"
+                # Truncate individual messages to avoid one huge message dominating
+                snippet = content[:1000] if len(content) > 1000 else content
+                line = f"{label}: {snippet}"
+                if total + len(line) > max_chars:
+                    break
+                lines.append(line)
+                total += len(line)
+
+            if not lines:
+                return ""
+
+            return (
+                "--- CONVERSATION HISTORY (most recent messages) ---\n"
+                + "\n".join(lines)
+                + "\n--- END HISTORY ---"
+            )
+        except Exception:
+            logger.debug("Failed to load conversation history", exc_info=True)
+            return ""
+
+    async def _assemble_context(self, agent_name: str, message: str, user_id: str) -> str:
+        """Pre-load relevant context for context-enriched agents using ContextBuilder.
 
         Returns a context block to append to the system prompt, giving the
         agent ambient awareness of the user's world without requiring it to
@@ -736,37 +1280,26 @@ class JarvisOrchestrator:
         if agent_name not in CONTEXT_ENRICHED_AGENTS:
             return ""
 
-        parts = []
         try:
-            memory_svc = self._services.get("memory") or self._services.get("memory_service")
-            if memory_svc:
-                memories = await memory_svc.retrieve(
-                    user_id="usr_default",
-                    query=message[:500],
-                    max_results=5,
-                )
-                if memories:
-                    mem_lines = [f"- [{m['memory_type']}] {m['fact_text']}" for m in memories]
-                    parts.append("RELEVANT MEMORIES:\n" + "\n".join(mem_lines))
+            svc = self._services
+            builder = ContextBuilder(
+                world_model=svc.world_model,
+                memory_service=svc.memory_service,
+                goal_tracker=svc.goal_tracker,
+                procedure_library=svc.procedure_library,
+                artifact_store=svc.artifact_store,
+            )
+            pack: ContextPack = await builder.build(
+                user_id=user_id,
+                query=message[:500],
+            )
+            context_text = ContextBuilder.to_prompt(pack)
+            if context_text:
+                return f"\n\n--- CONTEXT ---\n{context_text}"
         except Exception:
-            logger.debug("Context assembly: memory retrieval failed", exc_info=True)
+            logger.debug("Context assembly via ContextBuilder failed", exc_info=True)
 
-        try:
-            world_model = self._services.get("world_model")
-            if world_model:
-                entities = await world_model.find_entity("usr_default", message[:200])
-                if entities:
-                    ent_lines = [
-                        f"- [{e.get('entity_type', '?')}] {e.get('name', '?')}"
-                        for e in entities[:5]
-                    ]
-                    parts.append("RELEVANT ENTITIES:\n" + "\n".join(ent_lines))
-        except Exception:
-            logger.debug("Context assembly: entity retrieval failed", exc_info=True)
-
-        if not parts:
-            return ""
-        return "\n\n--- CONTEXT ---\n" + "\n\n".join(parts)
+        return ""
 
     def _build_system_prompt(self, agent: SubAgent, context: str = "") -> list[dict]:
         """Build system prompt with cache_control for prompt caching.
@@ -797,15 +1330,17 @@ class JarvisOrchestrator:
         self,
         agent_name: str,
         message: str,
+        user_id: str,
         trace=None,
         max_tool_rounds: int = 10,
+        workspace_id: str = "",
     ) -> str:
         """Call a sub-agent with the Claude API.
 
         Handles tool use loops: the agent may call tools, we execute them
         and feed results back until the agent produces a final text response.
         """
-        agent = AGENTS.get(agent_name)
+        agent = self._agents.get(agent_name)
         if not agent:
             raise ValueError(f"Unknown agent: {agent_name}")
 
@@ -813,32 +1348,76 @@ class JarvisOrchestrator:
         tools = self._apply_cache_control_to_tools(self._get_tools_for_agent(agent))
         span = trace.start_span(agent_name) if trace else None
 
+        # Build typed envelope for this agent call
+        envelope = AgentEnvelope(
+            agent_name=agent_name,
+            message=message,
+            tools_available=[t["name"] for t in tools],
+        )
+        logger.debug(
+            "agent_envelope: %s tools=%d", envelope.agent_name, len(envelope.tools_available)
+        )
+
         # Assemble context (memories + entities) for enriched agents
-        context_block = await self._assemble_context(agent_name, message)
+        context_block = await self._assemble_context(agent_name, message, user_id=user_id)
         system_blocks = self._build_system_prompt(agent, context_block)
 
         messages = [{"role": "user", "content": message}]
 
         total_input = 0
         total_output = 0
-        tools_called = []
+        total_cache_creation = 0
+        total_cache_read = 0
+        tools_called: list[str] = []
+        tool_call_details: list[SpanToolCall] = []
+        thinking_chunks: list[str] = []
         start_time = time.time()
+
+        # Extended thinking — all Claude 4+ models support it
+        thinking_budget = min(8192, max(1024, agent.max_tokens // 2))
+        if thinking_budget >= agent.max_tokens:
+            thinking_budget = agent.max_tokens - 1
 
         try:
             for _round in range(max_tool_rounds):
                 api_kwargs = {
                     "model": model,
                     "max_tokens": agent.max_tokens,
-                    "temperature": agent.temperature,
+                    "temperature": 1,  # required when thinking is enabled
+                    "thinking": {
+                        "type": "enabled",
+                        "budget_tokens": thinking_budget,
+                    },
                     "system": system_blocks,
                     "messages": messages,
                 }
                 if tools:
                     api_kwargs["tools"] = tools
 
-                response = await self._client.messages.create(**api_kwargs)
+                try:
+                    response = await self._client.messages.create(**api_kwargs)
+                except Exception as think_err:
+                    # Fallback: disable thinking if the model/provider rejects it
+                    logger.warning(
+                        "Thinking failed for %s, falling back: %s", agent_name, think_err
+                    )
+                    api_kwargs["temperature"] = agent.temperature
+                    api_kwargs.pop("thinking", None)
+                    response = await self._client.messages.create(**api_kwargs)
+
                 total_input += response.usage.input_tokens
                 total_output += response.usage.output_tokens
+                total_cache_creation += getattr(
+                    response.usage, "cache_creation_input_tokens", 0
+                ) or 0
+                total_cache_read += getattr(
+                    response.usage, "cache_read_input_tokens", 0
+                ) or 0
+
+                # Capture thinking content for persistence
+                for block in response.content:
+                    if block.type == "thinking" and hasattr(block, "thinking"):
+                        thinking_chunks.append(block.thinking)
 
                 # Check if the response contains tool use
                 tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
@@ -860,6 +1439,7 @@ class JarvisOrchestrator:
                         tool_name,
                         tool_input,
                         agent_name,
+                        user_id=user_id,
                         db_factory=self._db_factory,
                         services=self._services,
                     )
@@ -880,11 +1460,17 @@ class JarvisOrchestrator:
                                 ),
                             }
                         )
+                        tool_call_details.append(SpanToolCall(
+                            tool_name=tool_name,
+                            input_data=tool_input if isinstance(tool_input, dict) else {},
+                            status="blocked",
+                            error=pre_result.get("reason", "Blocked by policy"),
+                        ))
                         continue
 
                     # Execute the tool
                     tool_start = time.time()
-                    result = await self._execute_tool(tool_name, tool_input)
+                    result = await self._execute_tool(tool_name, tool_input, user_id=user_id)
                     tool_latency = int((time.time() - tool_start) * 1000)
 
                     tool_results.append(
@@ -896,6 +1482,23 @@ class JarvisOrchestrator:
                             else str(result),
                         }
                     )
+
+                    # Truncate large results for persistence
+                    persisted_output = result
+                    if isinstance(result, str) and len(result) > 2000:
+                        persisted_output = result[:2000] + "...[truncated]"
+                    elif isinstance(result, dict):
+                        result_str = json.dumps(result, default=str)
+                        if len(result_str) > 2000:
+                            persisted_output = {"_truncated": result_str[:2000]}
+
+                    tool_call_details.append(SpanToolCall(
+                        tool_name=tool_name,
+                        input_data=tool_input if isinstance(tool_input, dict) else {},
+                        output_data=persisted_output,
+                        status="success",
+                        duration_ms=tool_latency,
+                    ))
 
                     # Audit post-hook
                     await audit_post_tool_hook(
@@ -909,7 +1512,7 @@ class JarvisOrchestrator:
                         db_factory=self._db_factory,
                     )
 
-                # Add assistant response + tool results to conversation
+                # Preserve thinking blocks for multi-turn tool-use continuity
                 messages.append({"role": "assistant", "content": response.content})
                 messages.append({"role": "user", "content": tool_results})
             else:
@@ -924,18 +1527,30 @@ class JarvisOrchestrator:
 
         latency_ms = int((time.time() - start_time) * 1000)
 
-        # Record token usage
+        # Assemble thinking summary for persistence (truncate to 5000 chars)
+        thinking_summary = "".join(thinking_chunks)
+        if len(thinking_summary) > 5000:
+            thinking_summary = thinking_summary[:5000] + "...[truncated]"
+        thinking_summary = thinking_summary or None
+
+        # Record token usage — must commit or data is lost on session close
+        cost_usd = 0.0
         try:
-            db = self._db_factory()
-            await self._budget.record_usage(
-                db,
-                agent_name=agent_name,
-                model=model,
-                input_tokens=total_input,
-                output_tokens=total_output,
-                trigger=trace.trigger if trace else "unknown",
-                trace_id=trace.trace_id if trace else None,
-            )
+            async with self._db_factory() as db:
+                usage = await self._budget.record_usage(
+                    db,
+                    agent_name=agent_name,
+                    model=model,
+                    input_tokens=total_input,
+                    output_tokens=total_output,
+                    cache_creation_input_tokens=total_cache_creation,
+                    cache_read_input_tokens=total_cache_read,
+                    trigger=trace.trigger if trace else "unknown",
+                    trace_id=trace.trace_id if trace else None,
+                    workspace_id=workspace_id,
+                )
+                cost_usd = usage.cost_usd
+                await db.commit()
         except Exception as e:
             logger.error("Failed to record token usage: %s", e)
 
@@ -945,29 +1560,63 @@ class JarvisOrchestrator:
                 span.span_id,
                 input_tokens=total_input,
                 output_tokens=total_output,
+                cache_creation_input_tokens=total_cache_creation,
+                cache_read_input_tokens=total_cache_read,
                 tools_called=tools_called,
+                tool_call_details=tool_call_details,
+                thinking_summary=thinking_summary,
+                response_text=text,
+                model=model,
+                cost_usd=cost_usd,
             )
+
+        # Build typed result
+        agent_result = AgentResult(
+            agent_name=agent_name,
+            response_text=text,
+            tools_called=tools_called,
+            tokens_used=total_input + total_output,
+        )
 
         logger.info(
             "agent_call_complete",
             extra={
-                "agent": agent_name,
+                "agent": agent_result.agent_name,
                 "model": model,
                 "input_tokens": total_input,
                 "output_tokens": total_output,
-                "tools_called": tools_called,
+                "tools_called": agent_result.tools_called,
                 "latency_ms": latency_ms,
                 "trace_id": trace.trace_id if trace else None,
             },
         )
 
-        return text
+        return agent_result.response_text
 
-    async def _execute_tool(self, tool_name: str, tool_input: dict) -> dict:
-        """Execute an internal tool by name."""
+    async def _execute_tool(self, tool_name: str, tool_input: dict, user_id: str) -> dict:
+        """Execute a tool by name, using ToolRegistry for dispatch.
+
+        Resolution order:
+        0. Pre-dispatch: ToolRegistry blocked/risk/write classification
+        1. Internal intelligence tools (FastMCP handlers)
+        2. MCP bridge (external MCP servers)
+        3. Connector-backed tools (dispatched via connector.execute_action)
+        """
+        # 0. Pre-dispatch: ToolRegistry classification
+        try:
+            from src.services.tool_registry import ToolRegistry
+
+            async with self._db_factory() as db:
+                registry = ToolRegistry(db)
+                if await registry.is_blocked_tool(tool_name):
+                    return {"error": f"Tool '{tool_name}' is disabled", "blocked": True}
+        except Exception:
+            pass  # Fallback: skip pre-checks if registry unavailable
+
         from src.tools import intelligence_server
 
-        tool_map = {
+        # Internal tool handlers — the intelligence server functions
+        internal_handlers = {
             "ingest_event": intelligence_server.ingest_event,
             "search_memory": intelligence_server.search_memory,
             "get_entities": intelligence_server.get_entities,
@@ -982,18 +1631,188 @@ class JarvisOrchestrator:
             "report_observation": intelligence_server.report_observation,
             "update_execution": intelligence_server.update_execution,
             "extract_preferences": intelligence_server.extract_preferences,
+            "create_task": intelligence_server.create_task,
+            "get_task": intelligence_server.get_task,
+            "get_goals": intelligence_server.get_goals,
+            "build_context": intelligence_server.build_context,
+            "verify_run": intelligence_server.verify_run,
         }
 
-        handler = tool_map.get(tool_name)
-        if not handler:
-            return {"error": f"Unknown tool: {tool_name}"}
+        # Emit tool.started event
+        await self._publish_event(
+            "tool.started", user_id, {"tool": tool_name}
+        )
+
+        # 1. Try internal handlers first
+        handler = internal_handlers.get(tool_name)
+        if handler:
+            try:
+                result = await handler(user_id=user_id, **tool_input)
+                await self._publish_event(
+                    "tool.completed", user_id, {"tool": tool_name}
+                )
+                return result
+            except TypeError as e:
+                logger.warning("Tool %s argument error: %s", tool_name, e)
+                await self._publish_event(
+                    "tool.failed",
+                    user_id,
+                    {"tool": tool_name, "error": str(e)[:200]},
+                )
+                return {"error": f"Invalid arguments for {tool_name}: {e}"}
+
+        # 2. Try MCP bridge (external MCP servers: Google Workspace, GitHub, Slack, etc.)
+        from src.connectors.mcp_bridge import call_mcp_tool, is_mcp_tool
+
+        if is_mcp_tool(tool_name):
+            try:
+                result = await call_mcp_tool(tool_name, tool_input)
+                await self._publish_event(
+                    "tool.completed", user_id, {"tool": tool_name}
+                )
+                return result
+            except Exception as e:
+                await self._publish_event(
+                    "tool.failed",
+                    user_id,
+                    {"tool": tool_name, "error": str(e)[:200]},
+                )
+                raise
+
+        # 3. Fall back to ToolRegistry for connector-backed tools
+        try:
+            result = await self._execute_connector_tool(tool_name, tool_input, user_id=user_id)
+            await self._publish_event(
+                "tool.completed", user_id, {"tool": tool_name}
+            )
+            return result
+        except Exception as e:
+            logger.error("Connector tool %s failed: %s", tool_name, e, exc_info=True)
+            await self._publish_event(
+                "tool.failed",
+                user_id,
+                {"tool": tool_name, "error": str(e)[:200]},
+            )
+            return {"error": f"Tool execution failed for {tool_name}: {e}"}
+
+    async def _execute_connector_tool(self, tool_name: str, tool_input: dict, user_id: str) -> dict:
+        """Execute a tool via its connector, resolved from the ToolRegistry."""
+        from src.connectors.base import CONNECTOR_REGISTRY
+        from src.services.tool_registry import ToolRegistry
+
+        async with self._db_factory() as db:
+            registry = ToolRegistry(db)
+            tool_def = await registry.get_tool(tool_name)
+
+            if not tool_def:
+                return {"error": f"Unknown tool: {tool_name}"}
+
+            if not tool_def.enabled:
+                return {"error": f"Tool '{tool_name}' is disabled"}
+
+            connector_type = tool_def.connector_type
+            if not connector_type or connector_type == "internal":
+                return {"error": f"No connector handler for internal tool: {tool_name}"}
+
+            # Map connector_type to CONNECTOR_REGISTRY key
+            connector_cls = CONNECTOR_REGISTRY.get(connector_type)
+            if not connector_cls:
+                return {
+                    "error": f"No connector registered for type: {connector_type}",
+                    "available_connectors": list(CONNECTOR_REGISTRY.keys()),
+                }
+
+            # Get credentials from OAuth manager
+            oauth = self._services.oauth_manager
+            credentials = {}
+            if oauth:
+                try:
+                    credentials = await oauth.get_credentials(user_id, connector_type)
+                except Exception:
+                    logger.warning("No credentials for connector %s", connector_type)
+
+            # Instantiate connector and execute action
+            connector = connector_cls(self._settings)
+            # Derive the action name from the tool name (e.g. gmail_send → send)
+            action = tool_name
+            if tool_name.startswith(f"{connector_type}_"):
+                action = tool_name[len(connector_type) + 1 :]
+
+            return await connector.execute_action(action, tool_input, credentials)
+
+    async def _execute_plan_via_graph(self, plan_id: str, user_id: str, trace=None) -> dict:
+        """Bridge: create a run from a plan and execute it via GraphExecutor.
+
+        This is the critical connection between the orchestrator (agent routing)
+        and the GraphExecutor (DAG execution). Without this bridge, plans generated
+        by the Planner would never actually execute.
+        """
+        from src.services.context_builder import ContextBuilder
+        from src.services.graph_executor import GraphExecutor
+        from src.services.tool_registry import ToolRegistry
 
         try:
-            return await handler(**tool_input)
-        except TypeError as e:
-            # Handle mismatched arguments gracefully
-            logger.warning("Tool %s argument error: %s", tool_name, e)
-            return {"error": f"Invalid arguments for {tool_name}: {e}"}
+            async with self._db_factory() as db:
+                svc = self._services
+                tool_registry = ToolRegistry(db)
+
+                context_builder = ContextBuilder(
+                    world_model=svc.world_model,
+                    memory_service=svc.memory_service,
+                    goal_tracker=svc.goal_tracker,
+                    procedure_library=svc.procedure_library,
+                    artifact_store=svc.artifact_store,
+                )
+
+                async def get_credentials(connector_type: str) -> dict:
+                    if svc.oauth_manager:
+                        return await svc.oauth_manager.get_credentials(user_id, connector_type)
+                    return {}
+
+                executor = GraphExecutor(
+                    settings=self._settings,
+                    db=db,
+                    event_bus=self._event_bus,
+                    notifier=self._notifier,
+                    tool_registry=tool_registry,
+                    context_builder=context_builder,
+                    connector_credentials_fn=get_credentials,
+                    memory_service=svc.memory_service,
+                )
+
+                run = await executor.create_run(plan_id, user_id)
+
+                await self._publish_event(
+                    "execution_started",
+                    user_id,
+                    {"plan_id": plan_id, "run_id": run.run_id},
+                    trace_id=trace.trace_id if trace else None,
+                )
+
+                completed_run = await executor.execute_run(
+                    run.run_id,
+                    trace_id=trace.trace_id if trace else None,
+                )
+
+                await self._publish_event(
+                    "execution_completed",
+                    user_id,
+                    {
+                        "plan_id": plan_id,
+                        "run_id": run.run_id,
+                        "status": completed_run.status,
+                    },
+                    trace_id=trace.trace_id if trace else None,
+                )
+
+                return {
+                    "run_id": run.run_id,
+                    "status": completed_run.status,
+                    "error": completed_run.error,
+                }
+        except Exception as e:
+            logger.error("Plan execution via graph failed: %s", e, exc_info=True)
+            return {"status": "error", "error": str(e)}
 
     def _extract_decision(self, response_text: str) -> dict:
         """Extract structured decision from planner response."""
@@ -1020,3 +1839,28 @@ class JarvisOrchestrator:
             "decision": "acknowledge",
             "reasoning": response_text[:500],
         }
+
+    async def _resolve_pipeline(self, decision: dict) -> list[dict]:
+        """Resolve a planner decision to an agent pipeline via RouteResolver."""
+        try:
+            async with self._db_factory() as db:
+                resolver = RouteResolver(db)
+                return await resolver.resolve(decision)
+        except Exception:
+            logger.debug("Route resolution failed, using empty pipeline", exc_info=True)
+            return []
+
+    @staticmethod
+    def _check_step_condition(condition: dict, decision: dict) -> bool:
+        """Check if a pipeline step's condition is satisfied."""
+        for key, value in condition.items():
+            if key == "has_key":
+                if value not in decision:
+                    return False
+            elif key == "not_has_key":
+                if value in decision:
+                    return False
+            else:
+                if decision.get(key) != value:
+                    return False
+        return True

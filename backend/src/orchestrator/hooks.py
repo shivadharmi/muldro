@@ -13,10 +13,10 @@ from src.models.agent_decision_log import AgentDecisionLog
 
 logger = logging.getLogger(__name__)
 
-# Tools that write to external systems — require Governor approval
-WRITE_TOOLS = frozenset(
+# Fallback sets — used ONLY when ToolRegistry DB is unavailable.
+# The ToolRegistry DB is the source of truth; these ensure graceful degradation.
+_FALLBACK_WRITE_TOOLS = frozenset(
     {
-        # Google Workspace writes
         "gmail_send",
         "gmail_send_email",
         "gmail_draft",
@@ -30,46 +30,21 @@ WRITE_TOOLS = frozenset(
         "drive_create",
         "docs_create",
         "sheets_update",
-        # Slack writes
         "slack_post_message",
         "slack_send_message",
         "slack_react",
         "slack_update_message",
-        # GitHub writes
         "github_create_issue",
         "github_comment",
         "github_create_pr",
         "github_merge_pr",
-        # Telegram writes (via communication server)
         "send_telegram",
         "send_approval_prompt",
+        "approve_action",
     }
 )
 
-# Tools that are always safe (read-only or internal)
-READ_ONLY_TOOLS = frozenset(
-    {
-        "search_memory",
-        "get_entities",
-        "get_active_plans",
-        "get_briefing",
-        "get_observation_cursor",
-        "report_observation",
-        "gmail_list",
-        "gmail_read",
-        "gmail_search",
-        "calendar_list",
-        "calendar_get",
-        "drive_list",
-        "drive_search",
-        "slack_list_channels",
-        "slack_get_messages",
-        "slack_search",
-    }
-)
-
-# Tools that are always blocked
-BLOCKED_TOOLS = frozenset(
+_FALLBACK_BLOCKED_TOOLS = frozenset(
     {
         "gmail_delete",
         "drive_delete",
@@ -78,10 +53,34 @@ BLOCKED_TOOLS = frozenset(
 )
 
 
+async def _classify_via_registry(
+    tool_name: str, db_factory
+) -> tuple[bool, bool, str]:
+    """Classify a tool via ToolRegistry.
+
+    Returns (is_blocked, is_write, risk_level).
+    Raises if DB unavailable so caller can fall back.
+    """
+    from src.services.tool_registry import ToolRegistry
+
+    async with db_factory() as db:
+        registry = ToolRegistry(db)
+        tool_def = await registry.get_tool(tool_name)
+        if not tool_def:
+            return False, False, "low"
+        return (
+            not tool_def.enabled,
+            tool_def.requires_approval,
+            tool_def.risk_level,
+        )
+
+
 async def governor_pre_tool_hook(
     tool_name: str,
     tool_input: dict,
     agent_name: str,
+    *,
+    user_id: str,
     db_factory=None,
     services: dict | None = None,
 ) -> dict:
@@ -92,12 +91,28 @@ async def governor_pre_tool_hook(
         {"allowed": False, "reason": "..."} to block
         {"allowed": False, "approval_required": True, "approval_id": "..."} for approval gate
     """
-    # Read-only tools always pass
-    if tool_name in READ_ONLY_TOOLS:
-        return {"allowed": True}
+    is_blocked = False
+    is_write = False
+    risk_level = "low"
+
+    # Primary: use ToolRegistry (DB-backed)
+    if db_factory:
+        try:
+            is_blocked, is_write, risk_level = await _classify_via_registry(
+                tool_name, db_factory
+            )
+        except Exception:
+            # Fallback to hardcoded sets
+            is_blocked = tool_name in _FALLBACK_BLOCKED_TOOLS
+            is_write = tool_name in _FALLBACK_WRITE_TOOLS
+            risk_level = _classify_risk_fallback(tool_name)
+    else:
+        is_blocked = tool_name in _FALLBACK_BLOCKED_TOOLS
+        is_write = tool_name in _FALLBACK_WRITE_TOOLS
+        risk_level = _classify_risk_fallback(tool_name)
 
     # Blocked tools never pass
-    if tool_name in BLOCKED_TOOLS:
+    if is_blocked:
         logger.warning(
             "governor_blocked_tool",
             extra={"tool": tool_name, "agent": agent_name},
@@ -105,7 +120,7 @@ async def governor_pre_tool_hook(
         return {"allowed": False, "reason": f"Tool '{tool_name}' is blocked by policy"}
 
     # Write tools require approval
-    if tool_name in WRITE_TOOLS:
+    if is_write:
         logger.info(
             "governor_approval_required",
             extra={"tool": tool_name, "agent": agent_name},
@@ -114,29 +129,28 @@ async def governor_pre_tool_hook(
         # Create approval record if we have DB access
         if db_factory and services:
             try:
-                db = db_factory()
                 from src.models.approvals import Approval
 
-                approval = Approval(
-                    approval_id=f"apr_{ULID()}",
-                    user_id="usr_default",
-                    approval_type=f"tool_call:{tool_name}",
-                    title=f"Approve: {tool_name}",
-                    summary=_summarize_tool_input(tool_name, tool_input),
-                    risk_level=_classify_risk(tool_name),
-                    status="pending",
-                    expires_at=None,
-                )
-                db.add(approval)
-                await db.flush()
-                await db.commit()
+                async with db_factory() as db:
+                    approval = Approval(
+                        approval_id=f"apr_{ULID()}",
+                        user_id=user_id,
+                        approval_type=f"tool_call:{tool_name}",
+                        title=f"Approve: {tool_name}",
+                        summary=_summarize_tool_input(tool_name, tool_input),
+                        risk_level=risk_level,
+                        status="pending",
+                        expires_at=None,
+                    )
+                    db.add(approval)
+                    await db.commit()
 
-                return {
-                    "allowed": False,
-                    "approval_required": True,
-                    "approval_id": approval.approval_id,
-                    "reason": f"Approval required for {tool_name}",
-                }
+                    return {
+                        "allowed": False,
+                        "approval_required": True,
+                        "approval_id": approval.approval_id,
+                        "reason": f"Approval required for {tool_name}",
+                    }
             except Exception as e:
                 logger.error("Failed to create approval: %s", e, exc_info=True)
 
@@ -146,7 +160,7 @@ async def governor_pre_tool_hook(
             "reason": f"Approval required for {tool_name}",
         }
 
-    # Internal tools (ingest_event, update_execution, etc.) — allow
+    # Internal/read-only tools — allow
     return {"allowed": True}
 
 
@@ -166,21 +180,20 @@ async def audit_post_tool_hook(
         return
 
     try:
-        db = db_factory()
-        log_entry = AgentDecisionLog(
-            log_id=f"adl_{ULID()}",
-            trace_id=trace_id or "unknown",
-            span_id=span_id,
-            agent_name=agent_name,
-            tool_name=tool_name,
-            input_summary=_truncate(str(tool_input), 500),
-            output_summary=_truncate(str(tool_result), 500),
-            tokens_used=tokens_used,
-            latency_ms=latency_ms,
-        )
-        db.add(log_entry)
-        await db.flush()
-        await db.commit()
+        async with db_factory() as db:
+            log_entry = AgentDecisionLog(
+                log_id=f"adl_{ULID()}",
+                trace_id=trace_id or "unknown",
+                span_id=span_id,
+                agent_name=agent_name,
+                tool_name=tool_name,
+                input_summary=_truncate(str(tool_input), 500),
+                output_summary=_truncate(str(tool_result), 500),
+                tokens_used=tokens_used,
+                latency_ms=latency_ms,
+            )
+            db.add(log_entry)
+            await db.commit()
     except Exception as e:
         logger.error("audit_post_tool_hook failed: %s", e, exc_info=True)
 
@@ -196,14 +209,16 @@ def _summarize_tool_input(tool_name: str, tool_input: dict) -> str:
     return f"{tool_name} with {len(tool_input)} parameters"
 
 
-def _classify_risk(tool_name: str) -> str:
-    """Classify the risk level of a tool call."""
+def _classify_risk_fallback(tool_name: str) -> str:
+    """Classify risk level using hardcoded fallback (when DB unavailable)."""
     high_risk = {"gmail_send", "gmail_send_email", "github_merge_pr", "slack_post_message"}
     if tool_name in high_risk:
         return "high"
-    if tool_name in BLOCKED_TOOLS:
+    if tool_name in _FALLBACK_BLOCKED_TOOLS:
         return "critical"
-    return "medium"
+    if tool_name in _FALLBACK_WRITE_TOOLS:
+        return "medium"
+    return "low"
 
 
 def _truncate(text: str, max_chars: int) -> str:

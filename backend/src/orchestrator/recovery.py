@@ -14,8 +14,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.approvals import Approval
-from src.models.executions import Execution
 from src.models.plans import Plan
+from src.models.task_graph import TaskRun
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ async def run_startup_recovery(db: AsyncSession) -> dict:
     """
     summary = {
         "orphaned_plans": 0,
-        "stale_executions": 0,
+        "stale_task_runs": 0,
         "expired_approvals": 0,
     }
 
@@ -53,28 +53,28 @@ async def run_startup_recovery(db: AsyncSession) -> dict:
     except Exception as e:
         logger.error("Recovery: orphaned plans scan failed: %s", e)
 
-    # 2. Stale executions: executing with no recent update (older than 15 min)
+    # 2. Stale task runs: running with no recent update (older than 15 min)
     try:
         exec_cutoff = now - timedelta(minutes=15)
         result = await db.execute(
-            select(Execution).where(
-                Execution.status == "running",
-                Execution.updated_at < exec_cutoff,
+            select(TaskRun).where(
+                TaskRun.status == "running",
+                TaskRun.updated_at < exec_cutoff,
             )
         )
-        stale = result.scalars().all()
-        for execution in stale:
-            execution.status = "failed"
-            execution.error_message = "stale_on_recovery"
+        stale_runs = result.scalars().all()
+        for run in stale_runs:
+            run.status = "failed"
+            run.error = {"message": "stale_on_recovery"}
             logger.warning(
-                "recovery_stale_execution",
-                extra={"execution_id": execution.execution_id},
+                "recovery_stale_task_run",
+                extra={"run_id": run.run_id, "plan_id": run.plan_id},
             )
-        summary["stale_executions"] = len(stale)
+        summary["stale_task_runs"] = len(stale_runs)
     except Exception as e:
-        logger.error("Recovery: stale executions scan failed: %s", e)
+        logger.error("Recovery: stale task runs scan failed: %s", e)
 
-    # 3. Expired approvals: pending past TTL
+    # 4. Expired approvals: pending past TTL
     try:
         result = await db.execute(
             select(Approval).where(

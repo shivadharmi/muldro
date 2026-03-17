@@ -17,6 +17,7 @@ from src.models.token_usage import TokenUsage
 logger = logging.getLogger(__name__)
 
 # Pricing per million tokens (as of 2026-03)
+# cache_write = 1.25x input, cache_read = 0.1x input, thinking = same as output
 MODEL_PRICING = {
     "claude-opus-4-20250514": {"input": 15.0, "output": 75.0},
     "claude-sonnet-4-20250514": {"input": 3.0, "output": 15.0},
@@ -25,6 +26,8 @@ MODEL_PRICING = {
     "anthropic.claude-opus-4-20250514-v1:0": {"input": 15.0, "output": 75.0},
     "anthropic.claude-sonnet-4-20250514-v1:0": {"input": 3.0, "output": 15.0},
 }
+CACHE_WRITE_MULTIPLIER = 1.25
+CACHE_READ_MULTIPLIER = 0.10
 
 # Default agent model assignments
 AGENT_MODELS = {
@@ -59,14 +62,29 @@ class BudgetTracker:
         self._today_spend: float = 0.0
         self._today_date: str = ""
 
-    def calculate_cost(self, model: str, input_tokens: int, output_tokens: int) -> float:
+    def calculate_cost(
+        self,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        cache_creation_input_tokens: int = 0,
+        cache_read_input_tokens: int = 0,
+        thinking_tokens: int = 0,
+    ) -> float:
         pricing = MODEL_PRICING.get(model)
         if not pricing:
-            # Fallback: assume Sonnet pricing
             pricing = MODEL_PRICING["claude-sonnet-4-20250514"]
-        input_cost = (input_tokens / 1_000_000) * pricing["input"]
-        output_cost = (output_tokens / 1_000_000) * pricing["output"]
-        return input_cost + output_cost
+        per_m = 1_000_000
+        input_cost = (input_tokens / per_m) * pricing["input"]
+        output_cost = (output_tokens / per_m) * pricing["output"]
+        cache_write_cost = (
+            (cache_creation_input_tokens / per_m) * pricing["input"] * CACHE_WRITE_MULTIPLIER
+        )
+        cache_read_cost = (
+            (cache_read_input_tokens / per_m) * pricing["input"] * CACHE_READ_MULTIPLIER
+        )
+        thinking_cost = (thinking_tokens / per_m) * pricing["output"]
+        return input_cost + output_cost + cache_write_cost + cache_read_cost + thinking_cost
 
     async def record_usage(
         self,
@@ -76,11 +94,22 @@ class BudgetTracker:
         model: str,
         input_tokens: int,
         output_tokens: int,
+        cache_creation_input_tokens: int = 0,
+        cache_read_input_tokens: int = 0,
+        thinking_tokens: int = 0,
         trigger: str,
         conversation_id: str | None = None,
         trace_id: str | None = None,
+        workspace_id: str = "",
     ) -> TokenUsage:
-        cost = self.calculate_cost(model, input_tokens, output_tokens)
+        cost = self.calculate_cost(
+            model,
+            input_tokens,
+            output_tokens,
+            cache_creation_input_tokens=cache_creation_input_tokens,
+            cache_read_input_tokens=cache_read_input_tokens,
+            thinking_tokens=thinking_tokens,
+        )
 
         usage = TokenUsage(
             usage_id=f"usage_{ULID()}",
@@ -88,10 +117,14 @@ class BudgetTracker:
             model=model,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            cache_creation_input_tokens=cache_creation_input_tokens,
+            cache_read_input_tokens=cache_read_input_tokens,
+            thinking_tokens=thinking_tokens,
             cost_usd=cost,
             trigger=trigger,
             conversation_id=conversation_id,
             trace_id=trace_id,
+            workspace_id=workspace_id,
         )
         db.add(usage)
         await db.flush()
@@ -110,6 +143,9 @@ class BudgetTracker:
                 "model": model,
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
+                "cache_creation_input_tokens": cache_creation_input_tokens,
+                "cache_read_input_tokens": cache_read_input_tokens,
+                "thinking_tokens": thinking_tokens,
                 "cost_usd": round(cost, 6),
                 "daily_spend": round(self._today_spend, 4),
                 "trace_id": trace_id,

@@ -21,8 +21,10 @@ SOURCE_INTERVALS = {
 class PerceptionCoordinator:
     """Coordinates ambient perception cycles across data sources."""
 
-    def __init__(self, orchestrator):
+    def __init__(self, orchestrator, user_id: str, workspace_id: str = ""):
         self._orchestrator = orchestrator
+        self._user_id = user_id
+        self._workspace_id = workspace_id
         self._last_run: dict[str, datetime] = {}
         self._enabled_sources: set[str] = set()
         self._interval_multiplier: int = 1
@@ -57,17 +59,40 @@ class PerceptionCoordinator:
         for source in due:
             logger.info("perception_cycle_starting", extra={"source": source})
             try:
-                result = await self._orchestrator.run_perception_cycle(source)
+                result = await self._orchestrator.run_perception_cycle(
+                    source, user_id=self._user_id
+                )
                 self._last_run[source] = datetime.now(timezone.utc)
                 results.append(result)
+                # Emit connector.synced domain event
+                await self._publish_event(
+                    "connector.synced",
+                    self._user_id,
+                    {"source": source, "status": result.get("status", "ok")},
+                )
             except Exception as e:
                 logger.error(
                     "perception_cycle_failed",
                     extra={"source": source, "error": str(e)},
                 )
                 results.append({"status": "error", "source": source, "error": str(e)})
+                # Emit connector.error domain event
+                await self._publish_event(
+                    "connector.error",
+                    self._user_id,
+                    {"source": source, "error": str(e)[:500]},
+                )
 
         return results
+
+    async def _publish_event(
+        self, event_type: str, user_id: str, payload: dict
+    ) -> None:
+        """Publish a domain event via the orchestrator's event bus (best-effort)."""
+        try:
+            await self._orchestrator._publish_event(event_type, user_id, payload)
+        except Exception:
+            logger.debug("Failed to publish %s event", event_type, exc_info=True)
 
     async def restore_cursors(self) -> None:
         """Restore last observation times from cursor data on startup."""
@@ -76,19 +101,24 @@ class PerceptionCoordinator:
         from src.models.observation_cursor import ObservationCursor
 
         try:
-            db = self._orchestrator._db_factory()
-            result = await db.execute(
-                select(ObservationCursor).where(ObservationCursor.user_id == "usr_default")
-            )
-            cursors = result.scalars().all()
-            for cursor in cursors:
-                self._last_run[cursor.source] = cursor.last_observation_at
-                logger.info(
-                    "perception_cursor_restored",
-                    extra={
-                        "source": cursor.source,
-                        "last_observation": cursor.last_observation_at.isoformat(),
-                    },
+            async with self._orchestrator._db_factory() as db:
+                conditions = [ObservationCursor.user_id == self._user_id]
+                if self._workspace_id:
+                    conditions.append(
+                        ObservationCursor.workspace_id == self._workspace_id
+                    )
+                result = await db.execute(
+                    select(ObservationCursor).where(*conditions)
                 )
+                cursors = result.scalars().all()
+                for cursor in cursors:
+                    self._last_run[cursor.source] = cursor.last_observation_at
+                    logger.info(
+                        "perception_cursor_restored",
+                        extra={
+                            "source": cursor.source,
+                            "last_observation": cursor.last_observation_at.isoformat(),
+                        },
+                    )
         except Exception as e:
             logger.error("Failed to restore perception cursors: %s", e)

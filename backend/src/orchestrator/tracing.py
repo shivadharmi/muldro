@@ -5,11 +5,15 @@ that cycle gets a span. This provides full observability into the
 agent chain: Observer -> Librarian -> Planner -> Governor -> Presenter.
 """
 
+from __future__ import annotations
+
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from ulid import ULID
+
+from src.orchestrator.contracts import SpanRecord, SpanToolCall
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +27,15 @@ class AgentSpan:
     ended_at: datetime | None = None
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    thinking_tokens: int = 0
+    model: str = "unknown"
+    cost_usd: float = 0.0
     tools_called: list[str] = field(default_factory=list)
+    tool_call_details: list[SpanToolCall] = field(default_factory=list)
+    thinking_summary: str | None = None
+    response_text: str | None = None
     decision: str | None = None
     error: str | None = None
 
@@ -31,6 +43,30 @@ class AgentSpan:
         if self.started_at and self.ended_at:
             return int((self.ended_at - self.started_at).total_seconds() * 1000)
         return 0
+
+    def to_record(self) -> SpanRecord:
+        """Convert to a Pydantic SpanRecord for persistence."""
+        return SpanRecord(
+            span_id=self.span_id,
+            agent_name=self.agent_name,
+            parent_span_id=self.parent_span_id,
+            started_at=self.started_at,
+            ended_at=self.ended_at,
+            duration_ms=self.duration_ms(),
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+            cache_creation_input_tokens=self.cache_creation_input_tokens,
+            cache_read_input_tokens=self.cache_read_input_tokens,
+            thinking_tokens=self.thinking_tokens,
+            model=self.model,
+            cost_usd=self.cost_usd,
+            tools_called=self.tools_called,
+            tool_call_details=self.tool_call_details,
+            thinking_summary=self.thinking_summary,
+            response_text=self.response_text,
+            decision=self.decision,
+            error=self.error,
+        )
 
 
 @dataclass
@@ -59,7 +95,15 @@ class JarvisTrace:
         *,
         input_tokens: int = 0,
         output_tokens: int = 0,
+        cache_creation_input_tokens: int = 0,
+        cache_read_input_tokens: int = 0,
+        thinking_tokens: int = 0,
+        model: str = "unknown",
+        cost_usd: float = 0.0,
         tools_called: list[str] | None = None,
+        tool_call_details: list[SpanToolCall] | None = None,
+        thinking_summary: str | None = None,
+        response_text: str | None = None,
         decision: str | None = None,
         error: str | None = None,
     ) -> AgentSpan | None:
@@ -70,7 +114,15 @@ class JarvisTrace:
         span.ended_at = datetime.now(timezone.utc)
         span.input_tokens = input_tokens
         span.output_tokens = output_tokens
+        span.cache_creation_input_tokens = cache_creation_input_tokens
+        span.cache_read_input_tokens = cache_read_input_tokens
+        span.thinking_tokens = thinking_tokens
+        span.model = model
+        span.cost_usd = cost_usd
         span.tools_called = tools_called or []
+        span.tool_call_details = tool_call_details or []
+        span.thinking_summary = thinking_summary
+        span.response_text = response_text
         span.decision = decision
         span.error = error
         return span
@@ -100,20 +152,7 @@ class JarvisTrace:
             "duration_ms": self.duration_ms(),
             "total_input_tokens": self.total_tokens()[0],
             "total_output_tokens": self.total_tokens()[1],
-            "spans": [
-                {
-                    "span_id": s.span_id,
-                    "agent_name": s.agent_name,
-                    "parent_span_id": s.parent_span_id,
-                    "duration_ms": s.duration_ms(),
-                    "input_tokens": s.input_tokens,
-                    "output_tokens": s.output_tokens,
-                    "tools_called": s.tools_called,
-                    "decision": s.decision,
-                    "error": s.error,
-                }
-                for s in self.spans
-            ],
+            "spans": [s.to_record().model_dump(mode="json") for s in self.spans],
         }
 
 
@@ -136,7 +175,9 @@ class TraceManager:
         )
         return trace
 
-    async def finish_trace(self, trace_id: str) -> JarvisTrace | None:
+    async def finish_trace(
+        self, trace_id: str, *, user_id: str, workspace_id: str
+    ) -> JarvisTrace | None:
         trace = self._active_traces.pop(trace_id, None)
         if trace:
             trace.finish()
@@ -155,7 +196,9 @@ class TraceManager:
             # Persist to TraceStore for search and replay
             if self._trace_store:
                 try:
-                    await self._trace_store.store_trace(trace.to_dict())
+                    await self._trace_store.store_trace(
+                        trace.to_dict(), user_id=user_id, workspace_id=workspace_id
+                    )
                 except Exception:
                     logger.warning("Failed to persist trace %s", trace_id, exc_info=True)
         return trace
