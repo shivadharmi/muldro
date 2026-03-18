@@ -28,12 +28,13 @@ async def run_daily_briefing(
     settings: Settings,
     db: AsyncSession,
     briefing_date: date | None = None,
+    workspace_id: str = "",
 ) -> str:
     """Generate and store the daily briefing. Returns briefing_id."""
     target_date = briefing_date or date.today()
 
     presenter = Presenter(settings=settings, db=db)
-    briefing = await presenter.generate_briefing(user_id, target_date)
+    briefing = await presenter.generate_briefing(user_id, target_date, workspace_id=workspace_id)
 
     logger.info("Daily briefing completed: %s for %s", briefing.briefing_id, target_date)
     return briefing.briefing_id

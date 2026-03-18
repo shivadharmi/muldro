@@ -8,6 +8,9 @@ Registers with SurfaceRegistry for multi-surface coordination.
 import json
 import logging
 
+from src.api.deps import resolve_workspace_id
+from src.models.database import get_session_factory
+
 logger = logging.getLogger(__name__)
 
 
@@ -20,6 +23,22 @@ class TelegramInterface:
         self._surface_registry = surface_registry
         self._notifier = notifier
         self._app = None
+
+    def _resolve_user_id(self) -> str:
+        """Derive a stable user_id from the configured telegram_chat_id."""
+        chat_id = self._settings.telegram_chat_id
+        if not chat_id:
+            raise ValueError("telegram_chat_id not configured — cannot resolve user_id")
+        return f"usr_tg_{chat_id}"
+
+    async def _resolve_workspace(self) -> str:
+        """Resolve workspace_id for the Telegram user."""
+        factory = get_session_factory()
+        async with factory() as db:
+            try:
+                return await resolve_workspace_id(db, self._resolve_user_id())
+            except ValueError:
+                return ""
 
     async def start(self) -> None:
         """Start the Telegram bot (polling mode)."""
@@ -55,7 +74,7 @@ class TelegramInterface:
         # Register Telegram as an active surface
         if self._surface_registry:
             await self._surface_registry.register(
-                "usr_default",
+                self._resolve_user_id(),
                 "telegram",
                 metadata={"chat_id": self._settings.telegram_chat_id},
             )
@@ -65,7 +84,7 @@ class TelegramInterface:
     async def stop(self) -> None:
         """Stop the Telegram bot."""
         if self._surface_registry:
-            await self._surface_registry.unregister("usr_default", "telegram")
+            await self._surface_registry.unregister(self._resolve_user_id(), "telegram")
 
         if self._app:
             await self._app.updater.stop()
@@ -111,7 +130,10 @@ class TelegramInterface:
         """Handle /brief command — generate and send daily briefing."""
         await update.message.reply_text("Generating your briefing...")
         try:
-            result = await self._orchestrator.generate_briefing()
+            workspace_id = await self._resolve_workspace()
+            result = await self._orchestrator.generate_briefing(
+                user_id=self._resolve_user_id(), workspace_id=workspace_id
+            )
             briefing_text = result.get("briefing", "No briefing available.")
             if len(briefing_text) > 4000:
                 briefing_text = briefing_text[:4000] + "\n\n_(truncated)_"
@@ -124,11 +146,16 @@ class TelegramInterface:
         """Handle /status command — show system status."""
         try:
             db = self._orchestrator._db_factory()
-            budget = await self._orchestrator._budget.get_budget_status(db)
+            try:
+                budget = await self._orchestrator._budget.get_budget_status(db)
+            finally:
+                await db.close()
 
             surfaces = []
             if self._surface_registry:
-                surfaces = await self._surface_registry.get_active_surfaces("usr_default")
+                surfaces = await self._surface_registry.get_active_surfaces(
+                    self._resolve_user_id()
+                )
 
             text = (
                 f"*Jarvis Status*\n"
@@ -154,8 +181,11 @@ class TelegramInterface:
         )
 
         try:
+            workspace_id = await self._resolve_workspace()
             result = await self._orchestrator.process_message(
                 message=text,
+                user_id=self._resolve_user_id(),
+                workspace_id=workspace_id,
                 surface="telegram",
                 context={"chat_id": chat_id},
             )
@@ -200,7 +230,9 @@ class TelegramInterface:
 
                 # Notify other surfaces that action was taken
                 if self._notifier:
-                    await self._notifier.on_action_taken("usr_default", approval_id, "telegram")
+                    await self._notifier.on_action_taken(
+                        self._resolve_user_id(), approval_id, "telegram"
+                    )
         except Exception as e:
             logger.error("Callback handling failed: %s", e)
             await query.edit_message_text(f"Error: {e}")

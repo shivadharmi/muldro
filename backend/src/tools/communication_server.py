@@ -90,17 +90,19 @@ async def send_approval_prompt(
 async def push_ui_update(
     surface_id: str,
     payload: str,
+    user_id: str,
 ) -> dict:
     """Push a dynamic UI update to the web frontend via Redis pub/sub.
 
     surface_id: Identifier for the UI surface (e.g., 'daily_brief', 'approval_detail')
     payload: JSON string of the A2UI surface payload
+    user_id: User ID for the pub/sub channel
     """
     if not _redis:
         return {"status": "skipped", "reason": "redis_not_available"}
 
     try:
-        channel = "jarvis:a2ui:usr_default"
+        channel = f"jarvis:a2ui:{user_id}"
         import json
 
         message = json.dumps(

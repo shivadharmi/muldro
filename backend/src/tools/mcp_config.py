@@ -68,7 +68,7 @@ def get_slack_config() -> dict | None:
         "name": "slack",
         "transport": "stdio",
         "command": "npx",
-        "args": ["-y", "@anthropic/slack-mcp"],
+        "args": ["-y", "slack-mcp-server"],
         "env": {"SLACK_BOT_TOKEN": token},
     }
 
@@ -83,7 +83,7 @@ def get_playwright_config() -> dict | None:
         "name": "playwright",
         "transport": "stdio",
         "command": "npx",
-        "args": ["-y", "@anthropic/playwright-mcp"],
+        "args": ["-y", "@playwright/mcp", "--headless"],
     }
 
 
@@ -93,11 +93,13 @@ def get_filesystem_config() -> dict | None:
     Provides: read/write/edit files, directory ops, search.
     Restricted to specific paths for safety.
     """
+    workspace = os.environ.get("JARVIS_WORKSPACE_PATH", "/tmp/jarvis-workspace")
+    os.makedirs(workspace, exist_ok=True)
     return {
         "name": "filesystem",
         "transport": "stdio",
         "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp/jarvis-workspace"],
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", workspace],
     }
 
 
