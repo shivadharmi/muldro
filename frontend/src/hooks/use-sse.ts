@@ -2,7 +2,8 @@
 
 "use client";
 
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef } from "react";
+import { getStoredToken } from "@/lib/auth";
 
 export interface SSEEvent {
   event_type: string;
@@ -23,7 +24,9 @@ export function useSSE(
   useEffect(() => {
     if (!enabled) return;
 
-    const eventSource = new EventSource("/api/realtime/events");
+    const token = getStoredToken() || process.env.NEXT_PUBLIC_API_TOKEN || "";
+    const qs = token ? `?token=${encodeURIComponent(token)}` : "";
+    const eventSource = new EventSource(`/api/realtime/events${qs}`);
 
     eventSource.onmessage = (msg) => {
       try {

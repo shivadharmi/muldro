@@ -2,12 +2,26 @@ import type { SearchResult } from "@/lib/types";
 import { Card, CardBody } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
+import Link from "next/link";
 
 const TYPE_VARIANT: Record<string, "blue" | "green" | "purple"> = {
   memory: "blue",
   entity: "green",
   event: "purple",
 };
+
+function resultHref(r: SearchResult): string | null {
+  switch (r.type) {
+    case "memory":
+      return "/memories";
+    case "entity":
+      return `/entities`;
+    case "event":
+      return null;
+    default:
+      return null;
+  }
+}
 
 export function SearchResults({ results }: { results: SearchResult[] }) {
   if (results.length === 0) {
@@ -16,28 +30,70 @@ export function SearchResults({ results }: { results: SearchResult[] }) {
 
   return (
     <div className="space-y-3">
-      {results.map((r) => (
-        <Card key={r.id}>
-          <CardBody>
-            <div className="flex items-start justify-between">
-              <div className="flex-1">
-                <p className="text-sm font-medium">{r.title}</p>
-                {r.summary && (
-                  <p className="text-xs text-neutral-400 mt-1">{r.summary}</p>
-                )}
+      {results.map((r) => {
+        const href = resultHref(r);
+        const content = (
+          <Card className={href ? "hover:border-neutral-700 transition-colors" : ""}>
+            <CardBody>
+              <div className="flex items-start justify-between">
+                <div className="flex items-start gap-2 flex-1">
+                  <ResultIcon type={r.type} />
+                  <div>
+                    <p className="text-sm font-medium">{r.title}</p>
+                    {r.summary && (
+                      <p className="text-xs text-neutral-400 mt-1">{r.summary}</p>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 ml-3">
+                  <Badge variant={TYPE_VARIANT[r.type] || "default"}>{r.type}</Badge>
+                  {r.score !== null && (
+                    <span className="text-xs text-neutral-600">
+                      {(r.score * 100).toFixed(0)}%
+                    </span>
+                  )}
+                </div>
               </div>
-              <div className="flex items-center gap-2 ml-3">
-                <Badge variant={TYPE_VARIANT[r.type] || "default"}>{r.type}</Badge>
-                {r.score !== null && (
-                  <span className="text-xs text-neutral-600">
-                    {(r.score * 100).toFixed(0)}%
-                  </span>
-                )}
-              </div>
-            </div>
-          </CardBody>
-        </Card>
-      ))}
+            </CardBody>
+          </Card>
+        );
+
+        return href ? (
+          <Link key={r.id} href={href} className="block">
+            {content}
+          </Link>
+        ) : (
+          <div key={r.id}>{content}</div>
+        );
+      })}
     </div>
   );
+}
+
+function ResultIcon({ type }: { type: string }) {
+  const className = "w-4 h-4 mt-0.5 shrink-0";
+  switch (type) {
+    case "memory":
+      return (
+        <svg className={className} viewBox="0 0 16 16" fill="none">
+          <path d="M4 3h8a1 1 0 011 1v8a1 1 0 01-1 1H4a1 1 0 01-1-1V4a1 1 0 011-1z" stroke="currentColor" strokeWidth="1.5" className="text-blue-400" />
+        </svg>
+      );
+    case "entity":
+      return (
+        <svg className={className} viewBox="0 0 16 16" fill="none">
+          <circle cx="8" cy="4" r="2" stroke="currentColor" strokeWidth="1.5" className="text-green-400" />
+          <circle cx="4" cy="12" r="2" stroke="currentColor" strokeWidth="1.5" className="text-green-400" />
+          <circle cx="12" cy="12" r="2" stroke="currentColor" strokeWidth="1.5" className="text-green-400" />
+        </svg>
+      );
+    case "event":
+      return (
+        <svg className={className} viewBox="0 0 16 16" fill="none">
+          <path d="M9 2L5 9h3l-1 5 5-7H9l1-5z" stroke="currentColor" strokeWidth="1.5" className="text-purple-400" />
+        </svg>
+      );
+    default:
+      return null;
+  }
 }

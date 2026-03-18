@@ -12,7 +12,12 @@ import { fetchConversationMessages, type ConversationMessage } from "@/lib/api";
 
 export default function ChatPage() {
   const { user } = useAuth();
-  const userId = user?.user_id || "usr_default";
+
+  if (!user) {
+    return null;
+  }
+
+  const userId = user.user_id;
 
   const { surfaces, upsertSurface } = useSurfaceState();
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);

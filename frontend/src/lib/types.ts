@@ -35,6 +35,8 @@ export interface SystemDashboard {
   queues: QueueInfo;
   observations: Record<string, ObservationSourceInfo>;
   agents: Record<string, AgentUsageInfo>;
+  traces: Record<string, unknown>;
+  runs: Record<string, unknown>;
 }
 
 // ── Canvas Dashboard ────────────────────────────────────────────
@@ -304,6 +306,8 @@ export interface Goal {
   status: string;
   progress: number;
   priority: string;
+  target_date: string | null;
+  success_criteria_json: Record<string, unknown> | null;
   created_at: string | null;
 }
 
@@ -337,6 +341,52 @@ export interface Workflow {
   tags: string[];
 }
 
+// ── Runs ────────────────────────────────────────────────────────
+
+export interface RunStep {
+  step_id: string;
+  task_id: string;
+  name: string | null;
+  step_type: string | null;
+  status: string;
+  depends_on: string[] | null;
+  input_data: Record<string, unknown> | null;
+  output_data: Record<string, unknown> | null;
+  error: Record<string, unknown> | null;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface RunDetail {
+  run_id: string;
+  plan_id: string;
+  user_id: string;
+  status: string;
+  started_at: string | null;
+  completed_at: string | null;
+  error: Record<string, unknown> | null;
+  retry_count: number;
+  step_count: number;
+  steps: RunStep[];
+}
+
+// ── Agent Routes ────────────────────────────────────────────────
+
+export interface AgentRoute {
+  route_id: string;
+  name: string;
+  description: string | null;
+  decision_type: string;
+  agent_pipeline: Record<string, unknown>[];
+  conditions: Record<string, unknown> | null;
+  priority: number;
+  enabled: boolean;
+  keywords: string[] | null;
+  weight: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
 // ── Artifacts ───────────────────────────────────────────────────
 
 export interface Artifact {
@@ -344,5 +394,119 @@ export interface Artifact {
   artifact_type: string;
   title: string;
   content_preview: string | null;
+  mime_type: string | null;
+  size_bytes: number | null;
+  source_ref: string | null;
+  entity_links: string[] | null;
+  metadata_: Record<string, unknown> | null;
   created_at: string | null;
+}
+
+// ── Memories ───────────────────────────────────────────────────
+
+export interface MemoryItem {
+  memory_id: string;
+  memory_type: string;
+  scope: string | null;
+  fact_text: string;
+  confidence: number;
+  status: string;
+  created_at: string | null;
+}
+
+// ── Executions ─────────────────────────────────────────────────
+
+export interface ExecutionItem {
+  execution_id: string;
+  plan_id: string | null;
+  status: string;
+  source: string;
+  execution_mode: string | null;
+  current_step_ids: string[] | null;
+  error: Record<string, unknown> | null;
+  created_at: string | null;
+}
+
+// ── Traces ─────────────────────────────────────────────────────
+
+export interface TraceSummary {
+  trace_id: string;
+  user_id: string;
+  trigger: string;
+  status: string;
+  started_at: string | null;
+  ended_at: string | null;
+  duration_ms: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_cache_creation_tokens: number;
+  total_cache_read_tokens: number;
+  total_thinking_tokens: number;
+  total_cost_usd: number;
+  span_count: number;
+  error_count: number;
+  agents_invoked: string[];
+  tools_called: string[];
+  memory_writes: number;
+}
+
+export interface SpanRecord {
+  span_id: string;
+  agent_name: string;
+  started_at: string | null;
+  ended_at: string | null;
+  duration_ms: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_tokens: number;
+  cache_read_tokens: number;
+  thinking_tokens: number;
+  cost_usd: number;
+  tool_calls: string[];
+  error: string | null;
+}
+
+export interface TraceDetail extends TraceSummary {
+  spans: SpanRecord[];
+}
+
+export interface AgentPerformance {
+  call_count: number;
+  total_duration_ms: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_cache_creation_tokens: number;
+  total_cache_read_tokens: number;
+  total_thinking_tokens: number;
+  total_cost_usd: number;
+  error_count: number;
+  avg_duration_ms: number;
+}
+
+export interface AggregateMetrics {
+  total_traces: number;
+  completed: number;
+  failed: number;
+  success_rate: number;
+  failure_rate: number;
+  avg_duration_ms: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_cost_usd: number;
+  total_errors: number;
+  total_memory_writes: number;
+  time_range_hours: number;
+}
+
+// ── Meeting Prep ───────────────────────────────────────────────
+
+export interface MeetingPrep {
+  meeting_id: string;
+  title: string;
+  starts_at: string | null;
+  attendees: Record<string, unknown>[];
+  agenda: string[];
+  related_threads: Record<string, unknown>[];
+  action_items: Record<string, unknown>[];
+  risks: string[];
 }

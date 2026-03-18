@@ -7,7 +7,8 @@ import { Table, TableHeader, TableBody, Th, Td } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { OAuthPanel } from "@/components/settings/oauth-panel";
 import { AGENT_CONFIGS } from "@/lib/agent-config";
-import { fetchSettings, fetchPolicyMode, setPolicyMode } from "@/lib/api";
+import { fetchSettings, fetchPolicyMode, setPolicyMode, fetchBudget, updateBudgetLimit } from "@/lib/api";
+import { useToast } from "@/components/ui/toast";
 import { useAuth } from "@/lib/auth";
 
 const POLICY_MODES = [
@@ -19,26 +20,50 @@ const POLICY_MODES = [
 
 export default function SettingsPage() {
   const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"agents" | "policy" | "connectors" | "account">("agents");
+  const [activeTab, setActiveTab] = useState<"agents" | "policy" | "budget" | "connectors" | "account">("agents");
   const [policyMode, setPolicyModeState] = useState("approval_required");
+  const [budgetLimit, setBudgetLimit] = useState<number | null>(null);
+  const [editingBudget, setEditingBudget] = useState(false);
+  const [budgetInput, setBudgetInput] = useState("");
   const { user, logout } = useAuth();
+  const { addToast } = useToast();
 
   useEffect(() => {
-    fetchPolicyMode().then((r) => setPolicyModeState(r.mode)).catch(() => {});
-  }, []);
+    fetchPolicyMode().then((r) => setPolicyModeState(r.mode)).catch((err) => {
+      addToast(`Failed to load policy: ${err.message}`, "error");
+    });
+    fetchBudget().then((r) => setBudgetLimit(r.daily_limit_usd)).catch((err) => {
+      addToast(`Failed to load budget: ${err.message}`, "error");
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handlePolicyChange(mode: string) {
     try {
       await setPolicyMode(mode);
       setPolicyModeState(mode);
-    } catch {
-      // ignore
+      addToast("Policy mode updated", "success");
+    } catch (err) {
+      addToast(`Failed to update policy: ${err instanceof Error ? err.message : "Unknown error"}`, "error");
+    }
+  }
+
+  async function handleBudgetSave() {
+    const value = parseFloat(budgetInput);
+    if (isNaN(value) || value <= 0) return;
+    try {
+      const res = await updateBudgetLimit(value);
+      setBudgetLimit(res.daily_limit_usd);
+      setEditingBudget(false);
+      addToast("Budget limit updated", "success");
+    } catch (err) {
+      addToast(`Failed to update budget: ${err instanceof Error ? err.message : "Unknown error"}`, "error");
     }
   }
 
   const tabs = [
     { key: "agents" as const, label: "Agents" },
     { key: "policy" as const, label: "Policy" },
+    { key: "budget" as const, label: "Budget" },
     { key: "connectors" as const, label: "Connectors" },
     { key: "account" as const, label: "Account" },
   ];
@@ -157,6 +182,62 @@ export default function SettingsPage() {
                 </div>
               </label>
             ))}
+          </div>
+        </Card>
+      )}
+
+      {activeTab === "budget" && (
+        <Card>
+          <CardHeader>
+            <span className="text-sm font-medium">Daily Token Budget</span>
+          </CardHeader>
+          <div className="p-4 space-y-4">
+            <div className="flex items-center gap-3">
+              <span className="text-sm text-neutral-400">Daily Limit:</span>
+              {editingBudget ? (
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-neutral-400">$</span>
+                  <input
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    value={budgetInput}
+                    onChange={(e) => setBudgetInput(e.target.value)}
+                    className="w-32 rounded bg-neutral-800 border border-neutral-700 px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                  <button
+                    onClick={handleBudgetSave}
+                    className="px-3 py-1.5 rounded bg-blue-600 text-sm text-white hover:bg-blue-700"
+                  >
+                    Save
+                  </button>
+                  <button
+                    onClick={() => setEditingBudget(false)}
+                    className="px-3 py-1.5 text-sm text-neutral-400 hover:text-white"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <span className="text-white font-medium">
+                    {budgetLimit !== null ? `$${budgetLimit.toFixed(2)}` : "Loading..."}
+                  </span>
+                  <button
+                    onClick={() => {
+                      setBudgetInput(String(budgetLimit ?? 5));
+                      setEditingBudget(true);
+                    }}
+                    className="text-xs text-neutral-400 hover:text-white"
+                  >
+                    Edit
+                  </button>
+                </div>
+              )}
+            </div>
+            <p className="text-xs text-neutral-500">
+              When daily spend exceeds this limit, the system degrades to cheaper models and eventually pauses non-critical operations.
+            </p>
           </div>
         </Card>
       )}

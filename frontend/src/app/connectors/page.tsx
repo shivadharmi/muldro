@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { Suspense, useState, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/layout/page-header";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { fetchConnectors, createConnector, deleteConnector, testConnector } from "@/lib/api";
+import { useToast } from "@/components/ui/toast";
 
 const PROVIDERS = [
   { id: "gmail", name: "Gmail", description: "Email monitoring" },
@@ -15,7 +16,7 @@ const PROVIDERS = [
   { id: "slack", name: "Slack", description: "Messages and mentions" },
 ];
 
-export default function ConnectorsPage() {
+function ConnectorsContent() {
   const queryClient = useQueryClient();
   const searchParams = useSearchParams();
   const [testingId, setTestingId] = useState<string | null>(null);
@@ -43,9 +44,15 @@ export default function ConnectorsPage() {
     queryFn: fetchConnectors,
   });
 
+  const { addToast } = useToast();
+
   const connectMutation = useMutation({
     mutationFn: (provider: string) => createConnector(provider),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["connectors"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["connectors"] });
+      addToast("Connector created", "success");
+    },
+    onError: (err) => addToast(`Failed to connect: ${err.message}`, "error"),
   });
 
   const disconnectMutation = useMutation({
@@ -59,8 +66,9 @@ export default function ConnectorsPage() {
       });
       return { prev };
     },
-    onError: (_err, _id, context) => {
+    onError: (err, _id, context) => {
       if (context?.prev) queryClient.setQueryData(["connectors"], context.prev);
+      addToast(`Failed to disconnect: ${err.message}`, "error");
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["connectors"] }),
   });
@@ -172,5 +180,13 @@ export default function ConnectorsPage() {
         })}
       </div>
     </div>
+  );
+}
+
+export default function ConnectorsPage() {
+  return (
+    <Suspense>
+      <ConnectorsContent />
+    </Suspense>
   );
 }

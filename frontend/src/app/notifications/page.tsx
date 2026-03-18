@@ -5,7 +5,7 @@ import { NotificationCenter } from "@/components/notifications/notification-cent
 import { useNotifications } from "@/hooks/use-notifications";
 
 export default function NotificationsPage() {
-  const { notifications, loading, unreadCount, markRead, dismiss } = useNotifications(15_000);
+  const { notifications, loading, unreadCount, markRead, dismiss } = useNotifications();
 
   return (
     <div className="p-6">

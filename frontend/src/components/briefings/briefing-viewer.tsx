@@ -1,6 +1,7 @@
 "use client";
 
 import type { Briefing } from "@/lib/types";
+import { MarkdownRenderer } from "@/components/jarvis/markdown-renderer";
 import { BriefingSection } from "./briefing-section";
 
 function itemText(item: Record<string, unknown>): string {
@@ -70,7 +71,9 @@ export function BriefingViewer({ briefing }: { briefing: Briefing }) {
 
       {briefing.full_text && (
         <BriefingSection title="Full Text">
-          <p className="text-sm text-neutral-400 whitespace-pre-wrap">{briefing.full_text}</p>
+          <div className="text-sm text-neutral-400">
+            <MarkdownRenderer content={briefing.full_text} />
+          </div>
         </BriefingSection>
       )}
     </div>

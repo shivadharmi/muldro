@@ -10,6 +10,7 @@ import {
   deleteSchedule,
 } from "@/lib/api";
 import type { ScheduleCreateInput } from "@/lib/types";
+import { useToast } from "@/components/ui/toast";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
@@ -18,6 +19,7 @@ import { ScheduleForm } from "@/components/schedules/schedule-form";
 
 export default function SchedulesPage() {
   const queryClient = useQueryClient();
+  const { addToast } = useToast();
   const [showForm, setShowForm] = useState(false);
 
   const { data: schedules = [], isLoading } = useQuery({
@@ -33,22 +35,36 @@ export default function SchedulesPage() {
     onSuccess: () => {
       invalidate();
       setShowForm(false);
+      addToast("Schedule created", "success");
     },
+    onError: (err) => addToast(`Failed to create schedule: ${err.message}`, "error"),
   });
 
   const pauseMut = useMutation({
     mutationFn: pauseSchedule,
-    onSuccess: invalidate,
+    onSuccess: () => {
+      invalidate();
+      addToast("Schedule paused", "success");
+    },
+    onError: (err) => addToast(`Failed to pause schedule: ${err.message}`, "error"),
   });
 
   const resumeMut = useMutation({
     mutationFn: resumeSchedule,
-    onSuccess: invalidate,
+    onSuccess: () => {
+      invalidate();
+      addToast("Schedule resumed", "success");
+    },
+    onError: (err) => addToast(`Failed to resume schedule: ${err.message}`, "error"),
   });
 
   const deleteMut = useMutation({
     mutationFn: deleteSchedule,
-    onSuccess: invalidate,
+    onSuccess: () => {
+      invalidate();
+      addToast("Schedule deleted", "success");
+    },
+    onError: (err) => addToast(`Failed to delete schedule: ${err.message}`, "error"),
   });
 
   return (

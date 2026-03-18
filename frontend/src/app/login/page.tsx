@@ -1,25 +1,61 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useCallback, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { sendMagicLink, verifyMagicLink, getGoogleAuthUrl } from "@/lib/api";
 
-export default function LoginPage() {
+function LoginForm() {
   const [email, setEmail] = useState("");
   const [token, setToken] = useState("");
   const [step, setStep] = useState<"email" | "verify">("email");
   const [error, setError] = useState("");
+  const [devToken, setDevToken] = useState("");
   const [loading, setLoading] = useState(false);
   const { login } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
+
+  const verifyWithToken = useCallback(
+    async (tokenValue: string) => {
+      setError("");
+      setLoading(true);
+      try {
+        const result = await verifyMagicLink(tokenValue);
+        login(result.access_token, {
+          user_id: result.user.user_id,
+          email: result.user.email,
+          display_name: result.user.display_name,
+        });
+        router.push("/chat");
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Invalid or expired token");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [login, router],
+  );
+
+  // Auto-verify when ?token= query param is present (from magic link email)
+  useEffect(() => {
+    const urlToken = searchParams.get("token");
+    if (urlToken) {
+      verifyWithToken(urlToken);
+    }
+  }, [searchParams, verifyWithToken]);
 
   async function handleSendLink(e: React.FormEvent) {
     e.preventDefault();
     setError("");
     setLoading(true);
     try {
-      await sendMagicLink(email);
+      const resp = await sendMagicLink(email);
+      // In dev mode, the API returns the token directly
+      if (resp.token) {
+        setDevToken(resp.token);
+        setToken(resp.token);
+      }
       setStep("verify");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send magic link");
@@ -30,21 +66,7 @@ export default function LoginPage() {
 
   async function handleVerify(e: React.FormEvent) {
     e.preventDefault();
-    setError("");
-    setLoading(true);
-    try {
-      const result = await verifyMagicLink(token);
-      login(result.access_token, {
-        user_id: result.user.user_id,
-        email: result.user.email,
-        display_name: result.user.display_name,
-      });
-      router.push("/chat");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Invalid or expired token");
-    } finally {
-      setLoading(false);
-    }
+    await verifyWithToken(token);
   }
 
   async function handleOAuth(provider: string) {
@@ -99,9 +121,15 @@ export default function LoginPage() {
             </form>
           ) : (
             <form onSubmit={handleVerify} className="space-y-4">
-              <p className="text-sm text-neutral-400">
-                Check your email for the magic link token.
-              </p>
+              {devToken ? (
+                <p className="text-sm text-green-400">
+                  Dev mode: token auto-filled below. Click &quot;Verify &amp; Sign In&quot;.
+                </p>
+              ) : (
+                <p className="text-sm text-neutral-400">
+                  Check your email for the magic link token.
+                </p>
+              )}
               <div>
                 <label htmlFor="token" className="block text-sm font-medium text-neutral-300 mb-1">
                   Verification token
@@ -165,5 +193,13 @@ export default function LoginPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense>
+      <LoginForm />
+    </Suspense>
   );
 }

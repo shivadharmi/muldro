@@ -7,13 +7,13 @@ import {
   fetchMetrics,
   fetchDLQStats,
   fetchObservationStatus,
+  fetchAgentPerformance,
   triggerHeartbeat,
 } from "@/lib/api";
 import { PageHeader } from "@/components/layout/page-header";
 import { Tabs } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
-import { Table, TableHeader, TableBody, Th, Td } from "@/components/ui/table";
 import { HealthOverview } from "@/components/system/health-overview";
 import { ObservationHealth } from "@/components/system/observation-health";
 import { DLQStatsView } from "@/components/system/dlq-stats";
@@ -33,7 +33,7 @@ export default function SystemPage() {
   const { data: dashboard } = useQuery({
     queryKey: ["system-dashboard"],
     queryFn: fetchSystemDashboard,
-    refetchInterval: tab === "overview" ? 30_000 : false,
+    refetchInterval: 30_000,
   });
 
   const { data: observations } = useQuery({
@@ -54,6 +54,12 @@ export default function SystemPage() {
     enabled: tab === "metrics",
   });
 
+  const { data: agentPerf } = useQuery({
+    queryKey: ["agent-perf-system"],
+    queryFn: () => fetchAgentPerformance(24),
+    enabled: tab === "agents",
+  });
+
   const heartbeatMut = useMutation({ mutationFn: triggerHeartbeat });
 
   return (
@@ -62,14 +68,19 @@ export default function SystemPage() {
         title="System Health"
         subtitle="Monitor system status and diagnostics"
         actions={
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() => heartbeatMut.mutate()}
-            disabled={heartbeatMut.isPending}
-          >
-            {heartbeatMut.isPending ? "Running..." : "Trigger Heartbeat"}
-          </Button>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-neutral-600">
+              Last updated: {new Date().toLocaleTimeString()}
+            </span>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => heartbeatMut.mutate()}
+              disabled={heartbeatMut.isPending}
+            >
+              {heartbeatMut.isPending ? "Running..." : "Trigger Heartbeat"}
+            </Button>
+          </div>
         }
       />
 
@@ -77,7 +88,31 @@ export default function SystemPage() {
 
       {tab === "overview" && dashboard && <HealthOverview data={dashboard} />}
 
-      {tab === "agents" && <AgentUsageTable agents={dashboard?.agents} />}
+      {tab === "agents" && (
+        <div className="space-y-4">
+          <AgentUsageTable agents={dashboard?.agents} />
+          {agentPerf && (
+            <div>
+              <h3 className="text-sm font-medium mb-3">Cost Breakdown (24h)</h3>
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                {Object.entries(agentPerf.agents)
+                  .sort(([, a], [, b]) => b.total_cost_usd - a.total_cost_usd)
+                  .map(([name, perf]) => (
+                    <Card key={name}>
+                      <CardBody>
+                        <p className="text-xs text-neutral-500">{name}</p>
+                        <p className="text-sm font-semibold text-white">${perf.total_cost_usd.toFixed(4)}</p>
+                        <p className="text-[10px] text-neutral-600">
+                          {perf.call_count} calls, {perf.error_count} errors
+                        </p>
+                      </CardBody>
+                    </Card>
+                  ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {tab === "observations" && (
         <ObservationHealth observations={observations ?? []} />
@@ -86,20 +121,21 @@ export default function SystemPage() {
       {tab === "dlq" && <DLQStatsView stats={dlqStats} />}
 
       {tab === "metrics" && (
-        <Card>
-          <CardHeader>
-            <span className="text-sm font-medium">Request Metrics</span>
-          </CardHeader>
-          <CardBody>
-            {metrics ? (
-              <pre className="text-xs text-neutral-400 font-mono overflow-x-auto">
-                {JSON.stringify(metrics, null, 2)}
-              </pre>
-            ) : (
-              <p className="text-xs text-neutral-600">Loading metrics...</p>
-            )}
-          </CardBody>
-        </Card>
+        <div>
+          {metrics ? (
+            <MetricsCards metrics={metrics} />
+          ) : (
+            <div className="space-y-2">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <Card key={i}>
+                  <CardBody>
+                    <div className="animate-pulse h-6 w-24 bg-neutral-800 rounded" />
+                  </CardBody>
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
       )}
 
       {heartbeatMut.isSuccess && heartbeatMut.data && (
@@ -108,12 +144,61 @@ export default function SystemPage() {
             <span className="text-sm font-medium text-green-400">Heartbeat Result</span>
           </CardHeader>
           <CardBody>
-            <pre className="text-xs text-neutral-400 font-mono">
-              {JSON.stringify(heartbeatMut.data, null, 2)}
-            </pre>
+            <div className="grid grid-cols-3 gap-3">
+              {Object.entries(heartbeatMut.data).map(([key, value]) => (
+                <div key={key}>
+                  <p className="text-[10px] text-neutral-600 uppercase">{key.replace(/_/g, " ")}</p>
+                  <p className="text-sm text-neutral-300">{String(value)}</p>
+                </div>
+              ))}
+            </div>
           </CardBody>
         </Card>
       )}
+    </div>
+  );
+}
+
+function MetricsCards({ metrics }: { metrics: Record<string, unknown> }) {
+  const entries = Object.entries(metrics);
+
+  // Group into stat cards for numeric values, raw for objects
+  const numericEntries = entries.filter(([, v]) => typeof v === "number" || typeof v === "string");
+  const objectEntries = entries.filter(([, v]) => typeof v === "object" && v !== null);
+
+  return (
+    <div className="space-y-4">
+      {numericEntries.length > 0 && (
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+          {numericEntries.map(([key, value]) => (
+            <Card key={key}>
+              <CardBody>
+                <p className="text-[10px] text-neutral-600 uppercase">{key.replace(/_/g, " ")}</p>
+                <p className="text-lg font-semibold text-white">
+                  {typeof value === "number"
+                    ? value % 1 !== 0
+                      ? value.toFixed(2)
+                      : value.toLocaleString()
+                    : String(value)}
+                </p>
+              </CardBody>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {objectEntries.map(([key, value]) => (
+        <Card key={key}>
+          <CardHeader>
+            <span className="text-sm font-medium">{key.replace(/_/g, " ")}</span>
+          </CardHeader>
+          <CardBody>
+            <pre className="text-xs text-neutral-400 font-mono overflow-x-auto">
+              {JSON.stringify(value, null, 2)}
+            </pre>
+          </CardBody>
+        </Card>
+      ))}
     </div>
   );
 }

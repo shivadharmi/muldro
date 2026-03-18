@@ -1,24 +1,28 @@
 "use client";
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { PageHeader } from "@/components/layout/page-header";
-import { Badge } from "@/components/ui/badge";
-import { Card } from "@/components/ui/card";
+import { Badge, statusVariant } from "@/components/ui/badge";
+import { Card, CardBody } from "@/components/ui/card";
 import { TimeAgo } from "@/components/ui/time-ago";
 import { fetchExecutions } from "@/lib/api";
+import Link from "next/link";
 
-const statusColors: Record<string, "default" | "blue" | "green" | "yellow" | "purple"> = {
-  executing: "blue",
-  completed: "green",
-  failed: "default",
-  approved: "purple",
-  pending_approval: "yellow",
-};
+const STATUS_OPTIONS = ["all", "executing", "completed", "failed", "approved", "pending_approval"];
+const SOURCE_OPTIONS = ["all", "plan", "chat", "schedule", "trigger"];
 
 export default function ExecutionsPage() {
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [sourceFilter, setSourceFilter] = useState("all");
+
   const { data: executions, isLoading } = useQuery({
-    queryKey: ["executions"],
-    queryFn: fetchExecutions,
+    queryKey: ["executions", statusFilter, sourceFilter],
+    queryFn: () =>
+      fetchExecutions({
+        status: statusFilter === "all" ? undefined : statusFilter,
+        source: sourceFilter === "all" ? undefined : sourceFilter,
+      }),
     refetchInterval: 10_000,
   });
 
@@ -26,104 +30,106 @@ export default function ExecutionsPage() {
     <div className="p-6 space-y-6">
       <PageHeader
         title="Executions"
-        subtitle="Track plan executions and their step-by-step progress"
+        subtitle="Track plan executions and their progress"
       />
 
+      <div className="flex gap-3 flex-wrap">
+        <select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          className="rounded bg-neutral-800 border border-neutral-700 px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+        >
+          {STATUS_OPTIONS.map((s) => (
+            <option key={s} value={s}>
+              {s === "all" ? "All statuses" : s.replace("_", " ")}
+            </option>
+          ))}
+        </select>
+        <select
+          value={sourceFilter}
+          onChange={(e) => setSourceFilter(e.target.value)}
+          className="rounded bg-neutral-800 border border-neutral-700 px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+        >
+          {SOURCE_OPTIONS.map((s) => (
+            <option key={s} value={s}>
+              {s === "all" ? "All sources" : s}
+            </option>
+          ))}
+        </select>
+      </div>
+
       {isLoading && (
-        <div className="text-center py-12 text-neutral-500 text-sm">Loading...</div>
+        <div className="space-y-3">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <Card key={i}>
+              <CardBody>
+                <div className="animate-pulse space-y-2">
+                  <div className="h-4 w-48 bg-neutral-800 rounded" />
+                  <div className="h-3 w-32 bg-neutral-800 rounded" />
+                </div>
+              </CardBody>
+            </Card>
+          ))}
+        </div>
       )}
 
       {!isLoading && (!executions || executions.length === 0) && (
-        <div className="text-center py-12 text-neutral-500 text-sm">
-          No executions yet
+        <div className="text-center py-12">
+          <p className="text-neutral-500 text-sm font-medium">No executions yet</p>
+          <p className="text-neutral-600 text-xs mt-1">
+            Executions appear when Jarvis runs approved plans.
+          </p>
         </div>
       )}
 
       <div className="space-y-3">
-        {(executions || []).map((exec: Record<string, unknown>) => {
-          const status = (exec.status as string) || "unknown";
-          const tasks = (exec.task_runs as Array<Record<string, unknown>>) || [];
-          const completedTasks = tasks.filter(
-            (t) => t.status === "completed"
-          ).length;
-
-          return (
-            <Card key={(exec.execution_id as string) || ""}>
-              <div className="p-4">
+        {(executions || []).map((exec) => (
+          <Link
+            key={exec.execution_id}
+            href={`/runs/${exec.execution_id}`}
+            className="block"
+          >
+            <Card className="hover:border-neutral-700 transition-colors">
+              <CardBody>
                 <div className="flex items-start justify-between mb-2">
                   <div>
-                    <p className="text-sm font-medium text-white">
-                      {(exec.execution_id as string) || ""}
+                    <p className="text-sm font-medium text-white font-mono">
+                      {exec.execution_id}
                     </p>
-                    <p className="text-xs text-neutral-500">
-                      Plan: {(exec.plan_id as string) || "N/A"}
+                    <p className="text-xs text-neutral-500 mt-0.5">
+                      Plan: {exec.plan_id || "N/A"}
                     </p>
                   </div>
-                  <Badge variant={statusColors[status] || "default"}>
-                    {status}
+                  <Badge variant={statusVariant(exec.status)}>
+                    {exec.status}
                   </Badge>
                 </div>
 
-                {tasks.length > 0 && (
-                  <div className="mt-3">
-                    <div className="flex justify-between text-xs text-neutral-500 mb-1">
-                      <span>Progress</span>
-                      <span>
-                        {completedTasks}/{tasks.length} steps
-                      </span>
-                    </div>
-                    <div className="h-1.5 rounded-full bg-neutral-800 overflow-hidden">
-                      <div
-                        className="h-full rounded-full bg-blue-500 transition-all"
-                        style={{
-                          width: `${tasks.length > 0 ? (completedTasks / tasks.length) * 100 : 0}%`,
-                        }}
-                      />
-                    </div>
-                  </div>
-                )}
-
-                <div className="mt-3 space-y-1">
-                  {tasks.slice(0, 5).map((task, i) => (
-                    <div
-                      key={i}
-                      className="flex items-center gap-2 text-xs"
-                    >
-                      <span
-                        className={`w-1.5 h-1.5 rounded-full ${
-                          task.status === "completed"
-                            ? "bg-green-500"
-                            : task.status === "failed"
-                              ? "bg-red-500"
-                              : task.status === "running"
-                                ? "bg-blue-500 animate-pulse"
-                                : "bg-neutral-600"
-                        }`}
-                      />
-                      <span className="text-neutral-400">
-                        {(task.task_type as string) || `Step ${i + 1}`}
-                      </span>
-                      <span className="text-neutral-600">
-                        {(task.status as string) || "pending"}
-                      </span>
-                    </div>
-                  ))}
-                  {tasks.length > 5 && (
-                    <p className="text-[10px] text-neutral-600">
-                      +{tasks.length - 5} more steps
-                    </p>
+                <div className="flex items-center gap-4 text-xs text-neutral-400 mt-2">
+                  <span>Source: {exec.source}</span>
+                  {exec.execution_mode && (
+                    <span>Mode: {exec.execution_mode}</span>
+                  )}
+                  {exec.current_step_ids && exec.current_step_ids.length > 0 && (
+                    <span>{exec.current_step_ids.length} active step(s)</span>
                   )}
                 </div>
 
-                {exec.started_at ? (
-                  <p className="text-[10px] text-neutral-600 mt-2">
-                    Started <TimeAgo date={String(exec.started_at)} />
+                {exec.error && (
+                  <p className="text-xs text-red-400 mt-2 truncate">
+                    Error: {typeof exec.error === "object" ? JSON.stringify(exec.error) : String(exec.error)}
                   </p>
-                ) : null}
-              </div>
+                )}
+
+                {exec.created_at && (
+                  <p className="text-[10px] text-neutral-600 mt-2">
+                    Created <TimeAgo date={exec.created_at} />
+                  </p>
+                )}
+              </CardBody>
             </Card>
-          );
-        })}
+          </Link>
+        ))}
       </div>
     </div>
   );

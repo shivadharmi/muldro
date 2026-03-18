@@ -109,7 +109,7 @@ export function SessionSidebar({
             >
               <div className="flex items-start justify-between gap-1">
                 <p className="text-xs text-neutral-300 truncate flex-1">
-                  {convo.preview || "New conversation"}
+                  {convo.title || convo.preview || "New conversation"}
                 </p>
                 <button
                   onClick={(e) => handleDelete(e, convo.conversation_id)}
@@ -123,6 +123,11 @@ export function SessionSidebar({
                 <span className="text-[10px] text-neutral-600">
                   {convo.message_count} msgs
                 </span>
+                {convo.total_cost_usd > 0 && (
+                  <span className="text-[10px] text-neutral-600">
+                    ${convo.total_cost_usd.toFixed(4)}
+                  </span>
+                )}
                 {convo.last_active_at && (
                   <span className="text-[10px] text-neutral-600">
                     {formatRelativeTime(convo.last_active_at)}

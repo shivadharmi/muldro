@@ -6,9 +6,11 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { fetchTriggers, createTrigger, deleteTrigger, toggleTrigger } from "@/lib/api";
+import { useToast } from "@/components/ui/toast";
 
 export default function TriggersPage() {
   const queryClient = useQueryClient();
+  const { addToast } = useToast();
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState("");
   const [eventType, setEventType] = useState("");
@@ -29,18 +31,27 @@ export default function TriggersPage() {
       setShowForm(false);
       setName("");
       setEventType("");
+      addToast("Trigger created", "success");
     },
+    onError: (err) => addToast(`Failed to create trigger: ${err.message}`, "error"),
   });
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => deleteTrigger(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["triggers"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["triggers"] });
+      addToast("Trigger deleted", "success");
+    },
+    onError: (err) => addToast(`Failed to delete trigger: ${err.message}`, "error"),
   });
 
   const toggleMut = useMutation({
     mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
       toggleTrigger(id, enabled),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["triggers"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["triggers"] });
+    },
+    onError: (err) => addToast(`Failed to toggle trigger: ${err.message}`, "error"),
   });
 
   const handleCreate = (e: React.FormEvent) => {

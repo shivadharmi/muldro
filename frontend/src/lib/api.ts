@@ -4,6 +4,9 @@
  */
 
 import type {
+  AgentRoute,
+  AgentPerformance,
+  AggregateMetrics,
   Approval,
   ApprovalDetail,
   Artifact,
@@ -13,11 +16,16 @@ import type {
   CanvasDashboard,
   CommandResponse,
   DLQStats,
+  ExecutionItem,
   Goal,
   GoalCreateInput,
   HeartbeatResult,
+  MeetingPrep,
+  MemoryItem,
   Notification,
   ObservationStatus,
+  RunDetail,
+  RunStep,
   Schedule,
   ScheduleCreateInput,
   ScheduleUpdateInput,
@@ -27,6 +35,8 @@ import type {
   SystemDashboard,
   Task,
   TaskDetail,
+  TraceSummary,
+  TraceDetail,
   Workflow,
 } from "./types";
 
@@ -80,7 +90,7 @@ export function sendCommand(message: string): Promise<CommandResponse> {
 
 // ── Auth ────────────────────────────────────────────────────
 
-export function sendMagicLink(email: string): Promise<{ status: string; message: string }> {
+export function sendMagicLink(email: string): Promise<{ status: string; message: string; token?: string }> {
   return post("/auth/magic-link", { email });
 }
 
@@ -163,6 +173,10 @@ export interface ChatSSEEvent {
   trace_id?: string;
   input_tokens?: number;
   output_tokens?: number;
+  cache_creation_tokens?: number;
+  cache_read_tokens?: number;
+  cost_usd?: number;
+  is_thinking?: boolean;
   conversation_id?: string;
 }
 
@@ -254,8 +268,16 @@ export function fetchObservationStatus(): Promise<ObservationStatus[]> {
 
 // ── Approvals ───────────────────────────────────────────────────
 
-export function fetchApprovals(): Promise<Approval[]> {
-  return api("/approvals");
+export function fetchApprovals(status?: string): Promise<Approval[]> {
+  const qs = status ? `?status=${status}` : "";
+  return api(`/approvals${qs}`);
+}
+
+export function editApproval(
+  id: string,
+  body: { title?: string; summary?: string; risk_level?: string }
+): Promise<ApprovalDetail> {
+  return post(`/approvals/${id}/edit`, body);
 }
 
 export function fetchApproval(id: string): Promise<ApprovalDetail> {
@@ -340,7 +362,7 @@ export function getGoogleAuthUrl(): Promise<{ url: string }> {
 export function fetchMemories(
   memoryType?: string,
   limit?: number
-): Promise<{ memories: Array<Record<string, unknown>> }> {
+): Promise<{ memories: MemoryItem[] }> {
   const params = new URLSearchParams();
   if (memoryType) params.set("memory_type", memoryType);
   if (limit) params.set("limit", String(limit));
@@ -350,11 +372,20 @@ export function fetchMemories(
 
 // ── Executions ─────────────────────────────────────────────────
 
-export function fetchExecutions(): Promise<Array<Record<string, unknown>>> {
-  return api("/executions");
+export function fetchExecutions(params?: {
+  status?: string;
+  source?: string;
+  limit?: number;
+}): Promise<ExecutionItem[]> {
+  const qs = new URLSearchParams();
+  if (params?.status) qs.set("status", params.status);
+  if (params?.source) qs.set("source", params.source);
+  if (params?.limit) qs.set("limit", String(params.limit));
+  const q = qs.toString();
+  return api(`/executions${q ? `?${q}` : ""}`);
 }
 
-export function fetchExecution(id: string): Promise<Record<string, unknown>> {
+export function fetchExecution(id: string): Promise<ExecutionItem> {
   return api(`/executions/${id}`);
 }
 
@@ -363,18 +394,33 @@ export function fetchExecution(id: string): Promise<Record<string, unknown>> {
 export function fetchTraces(
   hours?: number,
   trigger?: string,
+  agentName?: string,
   limit?: number
-): Promise<{ traces: Array<Record<string, unknown>> }> {
+): Promise<{ traces: TraceSummary[]; count: number }> {
   const params = new URLSearchParams();
-  if (hours) params.set("hours", String(hours));
+  if (hours) params.set("time_range_hours", String(hours));
   if (trigger) params.set("trigger", trigger);
+  if (agentName) params.set("agent_name", agentName);
   if (limit) params.set("limit", String(limit));
   const qs = params.toString();
   return api(`/traces${qs ? `?${qs}` : ""}`);
 }
 
-export function fetchAgentPerformance(): Promise<Record<string, Record<string, unknown>>> {
-  return api("/traces/performance");
+export function fetchTraceDetail(traceId: string): Promise<TraceDetail> {
+  return api(`/traces/${traceId}`);
+}
+
+export function fetchAgentPerformance(hours?: number): Promise<{
+  agents: Record<string, AgentPerformance>;
+  time_range_hours: number;
+}> {
+  const qs = hours ? `?time_range_hours=${hours}` : "";
+  return api(`/traces/performance${qs}`);
+}
+
+export function fetchAggregateMetrics(hours?: number): Promise<AggregateMetrics> {
+  const qs = hours ? `?time_range_hours=${hours}` : "";
+  return api(`/traces/metrics${qs}`);
 }
 
 // ── Triggers ───────────────────────────────────────────────────
@@ -412,35 +458,97 @@ export function fetchSurface(userId: string, surfaceId: string) {
 
 export interface ConversationSummary {
   conversation_id: string;
+  title: string | null;
   status: string;
   surface: string;
   last_active_at: string | null;
   message_count: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_cost_usd: number;
   preview: string | null;
   created_at: string | null;
+}
+
+export interface MessageToolCall {
+  tool_name: string;
+  status: "success" | "error" | "blocked";
+  duration_ms: number;
+}
+
+export interface MessageAgentStep {
+  agent: string;
+  model: string | null;
+  status: "done" | "error";
+  response_text: string | null;
+  thinking_preview: string | null;
+  tool_calls: MessageToolCall[];
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_creation_tokens: number | null;
+  cache_read_tokens: number | null;
+  cost_usd: number | null;
+  latency_ms: number | null;
+}
+
+export interface MessageMetadata {
+  trace_id: string | null;
+  decision: string | null;
+  agent_steps: MessageAgentStep[];
 }
 
 export interface ConversationMessage {
   message_id: string;
   role: string;
   content: string;
-  metadata_: Record<string, unknown> | null;
+  metadata_: MessageMetadata | null;
   surface: string;
+  trace_id: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cost_usd: number | null;
   created_at: string | null;
 }
 
-export function fetchConversations(): Promise<ConversationSummary[]> {
-  return api("/conversations");
+export interface ConversationDetailResponse extends ConversationSummary {
+  user_id: string;
+}
+
+export interface MessageListResponse {
+  messages: ConversationMessage[];
+  conversation_id: string;
+  total: number;
+}
+
+export function fetchConversations(status?: string): Promise<ConversationSummary[]> {
+  const params = status ? `?status=${status}` : "";
+  return api(`/conversations${params}`);
+}
+
+export function fetchConversation(id: string): Promise<ConversationDetailResponse> {
+  return api(`/conversations/${id}`);
 }
 
 export function fetchConversationMessages(
-  id: string
-): Promise<{ messages: ConversationMessage[]; conversation_id: string }> {
-  return api(`/conversations/${id}/messages`);
+  id: string,
+  offset = 0,
+  limit = 100
+): Promise<MessageListResponse> {
+  return api(`/conversations/${id}/messages?offset=${offset}&limit=${limit}`);
 }
 
-export function createConversation(): Promise<{ conversation_id: string }> {
-  return post("/conversations", { surface: "web" });
+export function createConversation(
+  surface = "web",
+  title?: string
+): Promise<{ conversation_id: string }> {
+  return post("/conversations", { surface, title });
+}
+
+export function updateConversation(
+  id: string,
+  data: { title?: string; status?: string }
+): Promise<ConversationSummary> {
+  return patch(`/conversations/${id}`, data);
 }
 
 export function deleteConversation(id: string): Promise<void> {
@@ -581,4 +689,99 @@ export function subscribeToEvents(
   if (signal) {
     signal.addEventListener("abort", () => eventSource.close());
   }
+}
+
+// ── Runs ────────────────────────────────────────────────────────
+
+export function fetchRun(runId: string): Promise<RunDetail> {
+  return api(`/runs/${runId}`);
+}
+
+export function fetchRunSteps(runId: string): Promise<RunStep[]> {
+  return api(`/runs/${runId}/steps`);
+}
+
+export function fetchRunTrace(runId: string): Promise<TraceDetail> {
+  return api(`/runs/${runId}/trace`);
+}
+
+export function resumeRun(runId: string): Promise<RunDetail> {
+  return post(`/runs/${runId}/resume`, {});
+}
+
+export function fetchRunArtifacts(runId: string): Promise<Artifact[]> {
+  return api(`/runs/${runId}/artifacts`);
+}
+
+// ── Routes ──────────────────────────────────────────────────────
+
+export function fetchRoutes(): Promise<AgentRoute[]> {
+  return api("/routes");
+}
+
+export function createRoute(input: Partial<AgentRoute>): Promise<AgentRoute> {
+  return post("/routes", input);
+}
+
+export function updateRoute(id: string, data: Partial<AgentRoute>): Promise<AgentRoute> {
+  return patch(`/routes/${id}`, data);
+}
+
+export function deleteRoute(id: string): Promise<void> {
+  return del(`/routes/${id}`);
+}
+
+// ── Budget ──────────────────────────────────────────────────────
+
+export function fetchBudget(): Promise<{ daily_limit_usd: number }> {
+  return api("/settings/budget");
+}
+
+export function updateBudgetLimit(usd: number): Promise<{ daily_limit_usd: number }> {
+  return api("/settings/budget/daily_limit", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ daily_limit_usd: usd }),
+  });
+}
+
+// ── Meeting Prep ────────────────────────────────────────────────────
+
+export function generateMeetingPrep(
+  meetingId?: string,
+  next?: boolean
+): Promise<MeetingPrep> {
+  return post("/meetings/prep", { meeting_id: meetingId, next });
+}
+
+// ── Agents ────────────────────────────────────────────────────────
+
+export interface AgentRecord {
+  agent_id: string;
+  name: string;
+  display_name: string | null;
+  system_prompt: string | null;
+  model_tier: string;
+  tool_scope: string[] | null;
+  max_tokens: number;
+  temperature: number;
+  enabled: boolean;
+}
+
+export function fetchAgents(): Promise<AgentRecord[]> {
+  return api("/agents");
+}
+
+export function updateAgent(
+  agentId: string,
+  data: Partial<AgentRecord>
+): Promise<AgentRecord> {
+  return patch(`/agents/${agentId}`, data);
+}
+
+export function toggleAgent(
+  agentId: string,
+  enabled: boolean
+): Promise<AgentRecord> {
+  return post(`/agents/${agentId}/${enabled ? "enable" : "disable"}`, {});
 }

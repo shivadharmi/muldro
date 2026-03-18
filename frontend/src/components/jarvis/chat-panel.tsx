@@ -10,6 +10,8 @@ interface AgentStep {
   model?: string;
   status: "running" | "done" | "error";
   thinking: string[];
+  realThinking: string[];
+  streamingText: string;
   toolCalls: {
     tool: string;
     input: Record<string, unknown>;
@@ -20,6 +22,9 @@ interface AgentStep {
   text?: string;
   inputTokens?: number;
   outputTokens?: number;
+  cacheCreationTokens?: number;
+  cacheReadTokens?: number;
+  costUsd?: number;
   latencyMs?: number;
 }
 
@@ -44,14 +49,38 @@ interface ChatPanelProps {
 function backendMessagesToChat(messages: ConversationMessage[]): ChatMessage[] {
   return messages
     .filter((m) => m.role === "user" || m.role === "assistant")
-    .map((m) => ({
-      id: m.message_id,
-      role: m.role as "user" | "assistant",
-      content: m.content,
-      timestamp: m.created_at || new Date().toISOString(),
-      traceId: (m.metadata_?.trace_id as string) || undefined,
-      agents: [],
-    }));
+    .map((m) => {
+      // Restore agent steps from persisted metadata
+      const agents: AgentStep[] = (m.metadata_?.agent_steps ?? []).map((step) => ({
+        agent: step.agent,
+        model: step.model ?? undefined,
+        status: step.status === "error" ? ("error" as const) : ("done" as const),
+        thinking: [],
+        realThinking: [],
+        streamingText: "",
+        toolCalls: (step.tool_calls ?? []).map((tc) => ({
+          tool: tc.tool_name,
+          input: {},
+          blocked: tc.status === "blocked",
+        })),
+        text: step.response_text ?? undefined,
+        inputTokens: step.input_tokens ?? undefined,
+        outputTokens: step.output_tokens ?? undefined,
+        cacheCreationTokens: step.cache_creation_tokens ?? undefined,
+        cacheReadTokens: step.cache_read_tokens ?? undefined,
+        costUsd: step.cost_usd ?? undefined,
+        latencyMs: step.latency_ms ?? undefined,
+      }));
+
+      return {
+        id: m.message_id,
+        role: m.role as "user" | "assistant",
+        content: m.content,
+        timestamp: m.created_at || new Date().toISOString(),
+        traceId: m.metadata_?.trace_id ?? undefined,
+        agents,
+      };
+    });
 }
 
 export function ChatPanel({
@@ -150,6 +179,8 @@ export function ChatPanel({
                     model: event.model,
                     status: "running",
                     thinking: [],
+                    realThinking: [],
+                    streamingText: "",
                     toolCalls: [],
                   },
                 ],
@@ -162,7 +193,21 @@ export function ChatPanel({
                 ...m,
                 agents: m.agents.map((a) =>
                   a.agent === event.agent && a.status === "running"
-                    ? { ...a, thinking: [...a.thinking, event.text || ""] }
+                    ? event.is_thinking
+                      ? { ...a, realThinking: [...a.realThinking, event.text || ""] }
+                      : { ...a, thinking: [...a.thinking, event.text || ""] }
+                    : a
+                ),
+              }));
+              scrollToBottom();
+              break;
+
+            case "text_delta":
+              updateAssistant((m) => ({
+                ...m,
+                agents: m.agents.map((a) =>
+                  a.agent === event.agent && a.status === "running"
+                    ? { ...a, streamingText: a.streamingText + (event.text || "") }
                     : a
                 ),
               }));
@@ -228,10 +273,13 @@ export function ChatPanel({
                   a.agent === event.agent && a.status === "running"
                     ? {
                         ...a,
-                        status: "done",
+                        status: "done" as const,
                         text: event.text,
                         inputTokens: event.input_tokens,
                         outputTokens: event.output_tokens,
+                        cacheCreationTokens: event.cache_creation_tokens,
+                        cacheReadTokens: event.cache_read_tokens,
+                        costUsd: event.cost_usd,
                         latencyMs: event.latency_ms,
                       }
                     : a
@@ -434,6 +482,11 @@ function AgentCard({
             {agent.toolCalls.length} tool{agent.toolCalls.length !== 1 ? "s" : ""}
           </span>
         )}
+        {agent.costUsd != null && agent.costUsd > 0 && (
+          <span className="text-emerald-500/70">
+            ${agent.costUsd < 0.01 ? agent.costUsd.toFixed(4) : agent.costUsd.toFixed(3)}
+          </span>
+        )}
         {agent.latencyMs != null && (
           <span className="text-neutral-600 ml-auto">
             {agent.latencyMs > 1000
@@ -448,11 +501,27 @@ function AgentCard({
 
       {expanded && (
         <div className="px-2.5 pb-2 space-y-1.5 border-t border-neutral-800">
-          {/* Thinking */}
+          {/* Extended Thinking (real Claude thinking) */}
+          {agent.realThinking.length > 0 && (
+            <div className="mt-1.5">
+              <p className="text-amber-500/70 text-[10px] uppercase tracking-wider mb-0.5">
+                Extended Thinking
+              </p>
+              <div className="text-amber-200/60 bg-amber-950/20 border border-amber-900/30 rounded px-2 py-1 max-h-40 overflow-y-auto">
+                {agent.realThinking.map((t, i) => (
+                  <span key={i} className="whitespace-pre-wrap">
+                    {t.length > 1000 ? t.slice(0, 1000) + "..." : t}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Agent reasoning (non-thinking text blocks) */}
           {agent.thinking.length > 0 && (
             <div className="mt-1.5">
               <p className="text-neutral-500 text-[10px] uppercase tracking-wider mb-0.5">
-                Thinking
+                Reasoning
               </p>
               <div className="text-neutral-400 bg-neutral-950 rounded px-2 py-1 max-h-32 overflow-y-auto">
                 {agent.thinking.map((t, i) => (
@@ -460,6 +529,18 @@ function AgentCard({
                     {t.length > 500 ? t.slice(0, 500) + "..." : t}
                   </p>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {/* Streaming text (live output) */}
+          {agent.status === "running" && agent.streamingText && (
+            <div className="mt-1.5">
+              <p className="text-blue-500/70 text-[10px] uppercase tracking-wider mb-0.5">
+                Streaming
+              </p>
+              <div className="text-blue-200/70 bg-blue-950/20 border border-blue-900/30 rounded px-2 py-1 max-h-32 overflow-y-auto">
+                <p className="whitespace-pre-wrap">{agent.streamingText}</p>
               </div>
             </div>
           )}
@@ -492,12 +573,26 @@ function AgentCard({
             </div>
           ))}
 
-          {/* Token usage */}
+          {/* Token usage + cost stats */}
           {(agent.inputTokens || agent.outputTokens) && (
-            <p className="text-neutral-600 mt-1">
-              Tokens: {agent.inputTokens?.toLocaleString()} in /{" "}
-              {agent.outputTokens?.toLocaleString()} out
-            </p>
+            <div className="text-neutral-600 mt-1 space-y-0.5">
+              <p>
+                Tokens: {agent.inputTokens?.toLocaleString()} in /{" "}
+                {agent.outputTokens?.toLocaleString()} out
+                {agent.costUsd != null && agent.costUsd > 0 && (
+                  <span className="text-emerald-500/60 ml-2">
+                    ${agent.costUsd < 0.01 ? agent.costUsd.toFixed(4) : agent.costUsd.toFixed(3)}
+                  </span>
+                )}
+              </p>
+              {(agent.cacheCreationTokens != null && agent.cacheCreationTokens > 0 ||
+                agent.cacheReadTokens != null && agent.cacheReadTokens > 0) && (
+                <p className="text-cyan-600/60">
+                  Cache: {agent.cacheCreationTokens?.toLocaleString() || 0} write /{" "}
+                  {agent.cacheReadTokens?.toLocaleString() || 0} read
+                </p>
+              )}
+            </div>
           )}
         </div>
       )}

@@ -1,9 +1,53 @@
 "use client";
 
+import { useState, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
 import { NavItem } from "./nav-item";
 import { useQuery } from "@tanstack/react-query";
 import { fetchSystemDashboard, fetchNotifications } from "@/lib/api";
+
+function NavSection({
+  title,
+  children,
+  defaultOpen = true,
+}: {
+  title: string;
+  children: ReactNode;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+
+  return (
+    <div>
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center justify-between px-2 py-1 group"
+      >
+        <p className="text-[10px] font-semibold text-neutral-600 uppercase tracking-wider">
+          {title}
+        </p>
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 12 12"
+          fill="none"
+          className={`text-neutral-700 group-hover:text-neutral-500 transition-transform duration-150 ${
+            open ? "" : "-rotate-90"
+          }`}
+        >
+          <path
+            d="M3 4.5l3 3 3-3"
+            stroke="currentColor"
+            strokeWidth="1.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </button>
+      {open && <div>{children}</div>}
+    </div>
+  );
+}
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -31,23 +75,17 @@ export function Sidebar() {
         <p className="text-[10px] text-neutral-600 mt-0.5">AI Operating System</p>
       </div>
 
-      <nav className="flex-1 px-2 py-3 space-y-5">
-        <div>
-          <p className="px-2 text-[10px] font-semibold text-neutral-600 uppercase tracking-wider mb-1">
-            Overview
-          </p>
+      <nav className="flex-1 px-2 py-3 space-y-4">
+        <NavSection title="Overview">
           <NavItem
             href="/"
             label="Dashboard"
             active={pathname === "/"}
             icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.5"/><rect x="9" y="2" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.5"/><rect x="2" y="9" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.5"/><rect x="9" y="9" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.5"/></svg>}
           />
-        </div>
+        </NavSection>
 
-        <div>
-          <p className="px-2 text-[10px] font-semibold text-neutral-600 uppercase tracking-wider mb-1">
-            Intelligence
-          </p>
+        <NavSection title="Intelligence">
           <NavItem
             href="/chat"
             label="Chat"
@@ -61,17 +99,20 @@ export function Sidebar() {
             icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 2h8v12H4V2z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/><path d="M6 5h4M6 7.5h4M6 10h2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>}
           />
           <NavItem
+            href="/conversations"
+            label="Conversations"
+            active={pathname === "/conversations"}
+            icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 3h12v7H5l-3 3V3z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/><path d="M6 6h4M6 8h2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>}
+          />
+          <NavItem
             href="/search"
             label="Search"
             active={pathname === "/search"}
             icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="4" stroke="currentColor" strokeWidth="1.5"/><path d="M10 10l3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>}
           />
-        </div>
+        </NavSection>
 
-        <div>
-          <p className="px-2 text-[10px] font-semibold text-neutral-600 uppercase tracking-wider mb-1">
-            Operations
-          </p>
+        <NavSection title="Operations">
           <NavItem
             href="/approvals"
             label="Approvals"
@@ -104,12 +145,9 @@ export function Sidebar() {
             badge={unreadNotifications > 0 ? unreadNotifications : undefined}
             icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 6a4 4 0 018 0v3l1.5 2H2.5L4 9V6z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/><path d="M6 12a2 2 0 004 0" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>}
           />
-        </div>
+        </NavSection>
 
-        <div>
-          <p className="px-2 text-[10px] font-semibold text-neutral-600 uppercase tracking-wider mb-1">
-            Data
-          </p>
+        <NavSection title="Data">
           <NavItem
             href="/connectors"
             label="Connectors"
@@ -128,17 +166,20 @@ export function Sidebar() {
             active={pathname === "/memories"}
             icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 3h8a1 1 0 011 1v8a1 1 0 01-1 1H4a1 1 0 01-1-1V4a1 1 0 011-1z" stroke="currentColor" strokeWidth="1.5"/><path d="M6 6h4M6 8.5h3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>}
           />
-        </div>
+        </NavSection>
 
-        <div>
-          <p className="px-2 text-[10px] font-semibold text-neutral-600 uppercase tracking-wider mb-1">
-            Automation
-          </p>
+        <NavSection title="Automation">
           <NavItem
             href="/executions"
             label="Executions"
             active={pathname.startsWith("/executions")}
             icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 3v10l3-2 3 2 3-2V3L10 5 7 3 4 5z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/></svg>}
+          />
+          <NavItem
+            href="/runs"
+            label="Runs"
+            active={pathname.startsWith("/runs")}
+            icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M5 3l8 5-8 5V3z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/></svg>}
           />
           <NavItem
             href="/triggers"
@@ -152,12 +193,9 @@ export function Sidebar() {
             active={pathname === "/workflows"}
             icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 4h4v3H3V4zM9 4h4v3H9V4zM6 9h4v3H6V9z" stroke="currentColor" strokeWidth="1.5"/><path d="M5 7v1.5a.5.5 0 00.5.5H6M11 7v1.5a.5.5 0 01-.5.5H10" stroke="currentColor" strokeWidth="1.2"/></svg>}
           />
-        </div>
+        </NavSection>
 
-        <div>
-          <p className="px-2 text-[10px] font-semibold text-neutral-600 uppercase tracking-wider mb-1">
-            System
-          </p>
+        <NavSection title="System">
           <NavItem
             href="/system"
             label="Health"
@@ -165,12 +203,30 @@ export function Sidebar() {
             icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 8h3l1.5-4 3 8L11 8h3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
           />
           <NavItem
+            href="/traces"
+            label="Traces"
+            active={pathname === "/traces"}
+            icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M2 8h8M2 12h5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/><circle cx="13" cy="11" r="2" stroke="currentColor" strokeWidth="1.5"/></svg>}
+          />
+          <NavItem
+            href="/agents"
+            label="Agents"
+            active={pathname === "/agents"}
+            icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="5" r="3" stroke="currentColor" strokeWidth="1.5"/><path d="M3 14c0-2.8 2.2-5 5-5s5 2.2 5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>}
+          />
+          <NavItem
+            href="/routes"
+            label="Routes"
+            active={pathname === "/routes"}
+            icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 3v10M13 3v10M3 8h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/><path d="M6 5l2-2 2 2M6 11l2 2 2-2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+          />
+          <NavItem
             href="/settings"
             label="Settings"
             active={pathname === "/settings"}
             icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="2" stroke="currentColor" strokeWidth="1.5"/><path d="M8 2v2M8 12v2M2 8h2M12 8h2M3.8 3.8l1.4 1.4M10.8 10.8l1.4 1.4M3.8 12.2l1.4-1.4M10.8 5.2l1.4-1.4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>}
           />
-        </div>
+        </NavSection>
       </nav>
     </aside>
   );

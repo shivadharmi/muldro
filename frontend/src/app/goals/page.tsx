@@ -6,10 +6,12 @@ import { fetchGoals, createGoal, updateGoal, deleteGoal } from "@/lib/api";
 import { PageHeader } from "@/components/layout/page-header";
 import { GoalCard } from "@/components/goals/goal-card";
 import { EmptyState } from "@/components/ui/empty-state";
+import { useToast } from "@/components/ui/toast";
 import type { GoalCreateInput } from "@/lib/types";
 
 export default function GoalsPage() {
   const queryClient = useQueryClient();
+  const { addToast } = useToast();
   const [showForm, setShowForm] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [title, setTitle] = useState("");
@@ -30,18 +32,28 @@ export default function GoalsPage() {
       setTitle("");
       setDescription("");
       setPriority("medium");
+      addToast("Goal created", "success");
     },
+    onError: (err) => addToast(`Failed to create goal: ${err.message}`, "error"),
   });
 
   const updateMut = useMutation({
     mutationFn: ({ id, input }: { id: string; input: Partial<GoalCreateInput & { status: string; progress: number }> }) =>
       updateGoal(id, input),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["goals"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["goals"] });
+      addToast("Goal updated", "success");
+    },
+    onError: (err) => addToast(`Failed to update goal: ${err.message}`, "error"),
   });
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => deleteGoal(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["goals"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["goals"] });
+      addToast("Goal deleted", "success");
+    },
+    onError: (err) => addToast(`Failed to delete goal: ${err.message}`, "error"),
   });
 
   function handleSubmit(e: React.FormEvent) {

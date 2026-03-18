@@ -22,15 +22,13 @@ function WorkflowCard({
   const [paramsJson, setParamsJson] = useState("{}");
 
   function handleStart() {
+    let params: Record<string, unknown> | undefined;
     try {
-      const params = JSON.parse(paramsJson);
-      onStart(workflow.name);
-      // paramsJson is parsed but startWorkflow in parent handles it
-      void params;
+      params = JSON.parse(paramsJson);
     } catch {
-      // invalid JSON, start without params
-      onStart(workflow.name);
+      // invalid JSON — ignore params
     }
+    onStart(workflow.name);
     setShowParams(false);
     setParamsJson("{}");
   }
