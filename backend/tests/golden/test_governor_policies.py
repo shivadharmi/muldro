@@ -6,6 +6,8 @@ auto_execute, approval_required, or blocked.
 
 import pytest
 
+from tests.conftest import TEST_USER_ID
+
 _W = {"expected_allowed": False, "expected_approval": True}  # Write tool
 _R = {"expected_allowed": True}  # Read-only tool
 _B = {"expected_allowed": False, "expected_approval": False}  # Blocked tool
@@ -51,6 +53,7 @@ async def test_governor_policy(case):
         tool_name=case["tool"],
         tool_input={},
         agent_name=case["agent"],
+        user_id=TEST_USER_ID,
     )
 
     assert result.get("allowed", True) == case["expected_allowed"], (

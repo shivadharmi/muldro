@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from tests.conftest import make_mock_settings
+from tests.conftest import TEST_USER_ID, make_mock_settings
 
 
 @pytest.fixture
@@ -90,7 +90,7 @@ class TestCreateRun:
         mock_db.execute = AsyncMock(side_effect=[result_mock, tasks_result])
 
         executor = GraphExecutor(settings, mock_db)
-        run = await executor.create_run("plan_001", "usr_default")
+        run = await executor.create_run("plan_001", TEST_USER_ID)
 
         assert run.run_id.startswith("run_")
         assert run.plan_id == "plan_001"

@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.services.settings_service import SettingsService
+from tests.conftest import TEST_USER_ID
 
 
 @pytest.fixture
@@ -26,7 +27,7 @@ class TestGetAll:
         result_mock.scalars.return_value.all.return_value = []
         mock_db.execute = AsyncMock(return_value=result_mock)
 
-        settings = await service.get_all("usr_default")
+        settings = await service.get_all(TEST_USER_ID)
 
         assert "policy" in settings
         assert settings["policy"]["mode"] == "approval_required"
@@ -42,7 +43,7 @@ class TestGetAll:
         result_mock.scalars.return_value.all.return_value = [row]
         mock_db.execute = AsyncMock(return_value=result_mock)
 
-        settings = await service.get_all("usr_default")
+        settings = await service.get_all(TEST_USER_ID)
         assert settings["policy"]["mode"] == "full_auto"
 
 
@@ -52,7 +53,7 @@ class TestGet:
         result_mock.scalar_one_or_none.return_value = "lockdown"
         mock_db.execute = AsyncMock(return_value=result_mock)
 
-        val = await service.get("usr_default", "policy", "mode")
+        val = await service.get(TEST_USER_ID, "policy", "mode")
         assert val == "lockdown"
 
     async def test_returns_default_when_not_set(self, service, mock_db):
@@ -60,7 +61,7 @@ class TestGet:
         result_mock.scalar_one_or_none.return_value = None
         mock_db.execute = AsyncMock(return_value=result_mock)
 
-        val = await service.get("usr_default", "policy", "mode")
+        val = await service.get(TEST_USER_ID, "policy", "mode")
         assert val == "approval_required"
 
 
@@ -70,7 +71,7 @@ class TestSet:
         result_mock.scalar_one_or_none.return_value = None
         mock_db.execute = AsyncMock(return_value=result_mock)
 
-        await service.set("usr_default", "policy", "mode", "full_auto")
+        await service.set(TEST_USER_ID, "policy", "mode", "full_auto")
         mock_db.add.assert_called_once()
         mock_db.flush.assert_called_once()
 
@@ -82,7 +83,7 @@ class TestSet:
         result_mock.scalar_one_or_none.return_value = existing
         mock_db.execute = AsyncMock(return_value=result_mock)
 
-        await service.set("usr_default", "policy", "mode", "lockdown")
+        await service.set(TEST_USER_ID, "policy", "mode", "lockdown")
         assert existing.value == "lockdown"
         mock_db.flush.assert_called_once()
 
@@ -93,7 +94,7 @@ class TestPolicyMode:
         result_mock.scalar_one_or_none.return_value = "suggest_only"
         mock_db.execute = AsyncMock(return_value=result_mock)
 
-        mode = await service.get_policy_mode("usr_default")
+        mode = await service.get_policy_mode(TEST_USER_ID)
         assert mode == "suggest_only"
 
 
@@ -103,7 +104,7 @@ class TestBudgetLimit:
         result_mock.scalar_one_or_none.return_value = 10.0
         mock_db.execute = AsyncMock(return_value=result_mock)
 
-        limit = await service.get_budget_limit("usr_default")
+        limit = await service.get_budget_limit(TEST_USER_ID)
         assert limit == 10.0
 
     async def test_returns_default(self, service, mock_db):
@@ -111,7 +112,7 @@ class TestBudgetLimit:
         result_mock.scalar_one_or_none.return_value = None
         mock_db.execute = AsyncMock(return_value=result_mock)
 
-        limit = await service.get_budget_limit("usr_default")
+        limit = await service.get_budget_limit(TEST_USER_ID)
         assert limit == 5.0
 
 
@@ -121,7 +122,7 @@ class TestObservationIntervals:
         result_mock.scalar_one_or_none.return_value = None
         mock_db.execute = AsyncMock(return_value=result_mock)
 
-        intervals = await service.get_observation_intervals("usr_default")
+        intervals = await service.get_observation_intervals(TEST_USER_ID)
         assert "gmail" in intervals
         assert intervals["gmail"] == 30
         assert intervals["slack"] == 15

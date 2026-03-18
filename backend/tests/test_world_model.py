@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.services.world_model import WorldModel
-from tests.conftest import make_mock_settings
+from tests.conftest import TEST_USER_ID, make_mock_settings
 
 
 @pytest.fixture
@@ -36,7 +36,7 @@ async def test_upsert_creates_new_entity(mock_get_client, settings, mock_db):
 
     wm = WorldModel(settings=settings, db=mock_db)
     entity_id = await wm.upsert_entity(
-        user_id="usr_default",
+        user_id=TEST_USER_ID,
         entity_type="person",
         canonical_name="John Doe",
         aliases=["john@fund.com"],
@@ -68,7 +68,7 @@ async def test_upsert_updates_existing_entity(mock_get_client, settings, mock_db
 
     wm = WorldModel(settings=settings, db=mock_db)
     entity_id = await wm.upsert_entity(
-        user_id="usr_default",
+        user_id=TEST_USER_ID,
         entity_type="person",
         canonical_name="John Doe",
         attributes={"company": "BigFund"},
@@ -121,7 +121,7 @@ async def test_extract_from_event_calls_claude(mock_get_client, settings, mock_d
     mock_db.execute = AsyncMock(side_effect=[event_result, no_result, no_result])
 
     wm = WorldModel(settings=settings, db=mock_db)
-    entity_ids = await wm.extract_from_event("evt_001", "usr_default")
+    entity_ids = await wm.extract_from_event("evt_001", TEST_USER_ID)
 
     assert len(entity_ids) == 1
     assert entity_ids[0].startswith("ent_")

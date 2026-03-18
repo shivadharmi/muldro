@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.services.dead_letter import DeadLetterService
+from tests.conftest import TEST_USER_ID
 
 
 @pytest.fixture
@@ -22,7 +23,7 @@ async def test_enqueue(mock_db):
     dlq = DeadLetterService(mock_db)
 
     entry_id = await dlq.enqueue(
-        user_id="usr_default",
+        user_id=TEST_USER_ID,
         operation_type="event_processing",
         error_type="ValueError",
         error_message="Something went wrong",
@@ -42,7 +43,7 @@ async def test_enqueue_truncates_long_message(mock_db):
 
     long_msg = "x" * 5000
     await dlq.enqueue(
-        user_id="usr_default",
+        user_id=TEST_USER_ID,
         operation_type="embedding",
         error_type="RuntimeError",
         error_message=long_msg,
@@ -110,7 +111,7 @@ async def test_get_stats_empty(mock_db):
     mock_db.execute.return_value = result_mock
 
     dlq = DeadLetterService(mock_db)
-    stats = await dlq.get_stats("usr_default")
+    stats = await dlq.get_stats(TEST_USER_ID)
 
     assert stats["total"] == 0
     assert stats["by_status"] == {}
@@ -129,7 +130,7 @@ async def test_get_stats_with_entries(mock_db):
     mock_db.execute.return_value = result_mock
 
     dlq = DeadLetterService(mock_db)
-    stats = await dlq.get_stats("usr_default")
+    stats = await dlq.get_stats(TEST_USER_ID)
 
     assert stats["total"] == 3
     assert stats["by_status"]["pending"] == 2

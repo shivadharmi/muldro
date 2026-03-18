@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.services.memory_service import MemoryService
-from tests.conftest import make_mock_settings
+from tests.conftest import TEST_USER_ID, make_mock_settings
 
 
 @pytest.fixture
@@ -59,7 +59,7 @@ async def test_extract_stores_with_embedding(mock_get_client, mock_embed_cls, se
     mock_db.execute = AsyncMock(return_value=no_result)
 
     service = MemoryService(settings=settings, db=mock_db)
-    ids = await service.extract_and_store("usr_default", "Alice is CFO at Acme", ["evt_001"])
+    ids = await service.extract_and_store(TEST_USER_ID, "Alice is CFO at Acme", ["evt_001"])
 
     assert len(ids) == 1
     assert ids[0].startswith("mem_")
@@ -87,18 +87,22 @@ async def test_semantic_retrieve_with_embedding(mock_get_client, mock_embed_cls,
     mock_row.fact_text = "Alice is CFO at Acme Corp"
     mock_row.confidence = 0.9
     mock_row.scope = "general"
-    mock_row.similarity = 0.95
+    mock_row.relevance = 0.95
+    mock_row.entity_ids = None
+    mock_row.stability_score = 0.0
+    mock_row.recency = 0.8
+    mock_row.entity_overlap = 0.0
 
     mock_result = MagicMock()
     mock_result.all.return_value = [mock_row]
     mock_db.execute = AsyncMock(return_value=mock_result)
 
     service = MemoryService(settings=settings, db=mock_db)
-    results = await service.retrieve("usr_default", "Who is Alice?")
+    results = await service.retrieve(TEST_USER_ID, "Who is Alice?")
 
     assert len(results) == 1
     assert results[0]["memory_id"] == "mem_001"
-    assert results[0]["similarity"] == 0.95
+    assert results[0]["relevance"] == 0.95
 
 
 @patch("src.services.memory_service.EmbeddingService")
@@ -126,7 +130,7 @@ async def test_text_fallback_when_embedding_fails(
     mock_db.execute = AsyncMock(return_value=mock_result)
 
     service = MemoryService(settings=settings, db=mock_db)
-    results = await service.retrieve("usr_default", "Bob")
+    results = await service.retrieve(TEST_USER_ID, "Bob")
 
     assert len(results) == 1
     assert results[0]["memory_id"] == "mem_002"
@@ -164,7 +168,7 @@ async def test_extract_preferences(mock_get_client, mock_embed_cls, settings, mo
 
     service = MemoryService(settings=settings, db=mock_db)
     ids = await service.extract_preferences(
-        "usr_default", "I like short briefings in the morning", ["evt_001"]
+        TEST_USER_ID, "I like short briefings in the morning", ["evt_001"]
     )
 
     assert len(ids) == 1
@@ -194,7 +198,7 @@ async def test_get_user_preferences(mock_get_client, mock_embed_cls, settings, m
     mock_db.execute = AsyncMock(return_value=mock_result)
 
     service = MemoryService(settings=settings, db=mock_db)
-    prefs = await service.get_user_preferences("usr_default", category="communication")
+    prefs = await service.get_user_preferences(TEST_USER_ID, category="communication")
 
     assert len(prefs) == 1
     assert prefs[0]["category"] == "communication"

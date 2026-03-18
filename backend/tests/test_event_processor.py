@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.services.event_processor import DEFAULT_SCORES, EventProcessor
-from tests.conftest import make_mock_settings, make_raw_event
+from tests.conftest import TEST_USER_ID, make_mock_settings, make_raw_event
 
 
 @pytest.fixture
@@ -56,7 +56,7 @@ async def test_process_stores_event(mock_get_client, settings, mock_db):
 
     processor = EventProcessor(settings=settings, db=mock_db)
     raw = make_raw_event()
-    event_id = await processor.process(raw, "usr_default")
+    event_id = await processor.process(raw, TEST_USER_ID)
 
     assert event_id is not None
     assert event_id.startswith("evt_")
@@ -82,7 +82,7 @@ async def test_process_deduplicates(mock_get_client, settings, mock_db):
 
     processor = EventProcessor(settings=settings, db=mock_db)
     raw = make_raw_event()
-    event_id = await processor.process(raw, "usr_default")
+    event_id = await processor.process(raw, TEST_USER_ID)
 
     assert event_id is None
     mock_db.add.assert_not_called()
@@ -98,7 +98,7 @@ async def test_score_fallback_on_error(mock_get_client, settings, mock_db):
 
     processor = EventProcessor(settings=settings, db=mock_db)
     raw = make_raw_event()
-    event_id = await processor.process(raw, "usr_default")
+    event_id = await processor.process(raw, TEST_USER_ID)
 
     assert event_id is not None
     stored_event = mock_db.add.call_args[0][0]

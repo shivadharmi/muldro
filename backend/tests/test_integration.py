@@ -28,19 +28,11 @@ class TestStartupRecovery:
         mock_result = MagicMock()
         mock_result.scalars.return_value.all.return_value = [stale_plan]
 
+        empty = MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[]))))
+
         db = AsyncMock()
-        # Three execute calls: plans, executions, approvals
-        db.execute = AsyncMock(
-            side_effect=[
-                mock_result,  # orphaned plans
-                MagicMock(
-                    scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
-                ),
-                MagicMock(
-                    scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
-                ),
-            ]
-        )
+        # Three execute calls: plans, task_runs, approvals
+        db.execute = AsyncMock(side_effect=[mock_result, empty, empty])
         db.commit = AsyncMock()
 
         summary = await run_startup_recovery(db)
@@ -48,26 +40,30 @@ class TestStartupRecovery:
         assert stale_plan.status == "stale_on_recovery"
 
     @pytest.mark.asyncio
-    async def test_recovery_marks_stale_executions(self):
-        """Running executions older than 15 min get marked failed."""
+    async def test_recovery_marks_stale_task_runs(self):
+        """Running task runs older than 15 min get marked failed."""
         from src.orchestrator.recovery import run_startup_recovery
 
-        stale_exec = MagicMock()
-        stale_exec.execution_id = "exec_stale1"
-        stale_exec.status = "running"
+        stale_run = MagicMock()
+        stale_run.run_id = "run_stale1"
+        stale_run.plan_id = "plan_001"
+        stale_run.status = "running"
 
-        empty = MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[]))))
-        exec_result = MagicMock()
-        exec_result.scalars.return_value.all.return_value = [stale_exec]
+        empty = MagicMock(
+            scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
+        )
+        run_result = MagicMock()
+        run_result.scalars.return_value.all.return_value = [stale_run]
 
         db = AsyncMock()
-        db.execute = AsyncMock(side_effect=[empty, exec_result, empty])
+        # Three execute calls: plans, task_runs, approvals
+        db.execute = AsyncMock(side_effect=[empty, run_result, empty])
         db.commit = AsyncMock()
 
         summary = await run_startup_recovery(db)
-        assert summary["stale_executions"] == 1
-        assert stale_exec.status == "failed"
-        assert stale_exec.error_message == "stale_on_recovery"
+        assert summary["stale_task_runs"] == 1
+        assert stale_run.status == "failed"
+        assert stale_run.error == {"message": "stale_on_recovery"}
 
     @pytest.mark.asyncio
     async def test_recovery_expires_approvals(self):
@@ -84,6 +80,7 @@ class TestStartupRecovery:
         apr_result.scalars.return_value.all.return_value = [expired_approval]
 
         db = AsyncMock()
+        # Three execute calls: plans, task_runs, approvals
         db.execute = AsyncMock(side_effect=[empty, empty, apr_result])
         db.commit = AsyncMock()
 

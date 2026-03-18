@@ -1,10 +1,28 @@
 """Tests for trace API routes."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from src.api.app import app
+from src.api.deps import get_current_user, get_current_user_id, get_current_workspace_id
+from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID
+
+
+@pytest.fixture(autouse=True)
+def _override_auth_deps():
+    """Override auth dependencies so trace routes don't require real auth."""
+    mock_user = MagicMock()
+    mock_user.user_id = TEST_USER_ID
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_current_user_id] = lambda: TEST_USER_ID
+    app.dependency_overrides[get_current_workspace_id] = lambda: TEST_WORKSPACE_ID
+    yield
+    app.dependency_overrides.pop(get_current_user, None)
+    app.dependency_overrides.pop(get_current_user_id, None)
+    app.dependency_overrides.pop(get_current_workspace_id, None)
+
 
 client = TestClient(app)
 

@@ -52,8 +52,8 @@ async def test_delete(cache):
 async def test_get_set_json(cache):
     """JSON get/set round-trips correctly."""
     data = {"headline": "3 priorities", "count": 5}
-    await cache.set_json("brief:usr_default:2026-03-14", data, ttl_seconds=3600)
-    result = await cache.get_json("brief:usr_default:2026-03-14")
+    await cache.set_json("brief:usr_01JTEST00000000000000000000:2026-03-14", data, ttl_seconds=3600)
+    result = await cache.get_json("brief:usr_01JTEST00000000000000000000:2026-03-14")
     assert result == data
 
 

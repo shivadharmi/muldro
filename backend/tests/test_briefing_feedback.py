@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from src.api.app import create_app
 from src.api.deps import get_current_user, get_current_user_id, get_session
+from tests.conftest import TEST_USER_ID
 
 
 @pytest.fixture
@@ -25,10 +26,10 @@ def client(mock_db):
 
     # Mock user object
     mock_user = MagicMock()
-    mock_user.user_id = "usr_default"
+    mock_user.user_id = TEST_USER_ID
 
     app.dependency_overrides[get_current_user] = lambda: mock_user
-    app.dependency_overrides[get_current_user_id] = lambda: "usr_default"
+    app.dependency_overrides[get_current_user_id] = lambda: TEST_USER_ID
     app.dependency_overrides[get_session] = lambda: mock_db
     with TestClient(app) as c:
         yield c

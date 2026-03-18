@@ -127,6 +127,43 @@ def evaluate_case(case: EvalCase) -> EvalResult:
     )
 
 
+async def llm_judge_score(case: EvalCase, actual: dict) -> float:
+    """Score a case using Claude as an LLM judge. Returns 0.0-1.0."""
+    try:
+        import anthropic
+
+        client = anthropic.AsyncAnthropic()
+        prompt = (
+            f"Score the following AI output from 0.0 to 1.0 based on how well it matches "
+            f"the expected behavior.\n\n"
+            f"Input: {json.dumps(case.input_data)}\n"
+            f"Expected: {json.dumps(case.expected)}\n"
+            f"Actual: {json.dumps(actual)}\n\n"
+            f"Respond with ONLY a number between 0.0 and 1.0."
+        )
+        response = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=64,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = response.content[0].text.strip()
+        return _parse_score(text)
+    except Exception as e:
+        logger.warning("LLM judge failed: %s", e)
+        return 0.0
+
+
+def _parse_score(text: str) -> float:
+    """Extract a float score from LLM judge response."""
+    import re
+
+    match = re.search(r"(\d+\.?\d*)", text)
+    if match:
+        score = float(match.group(1))
+        return max(0.0, min(1.0, score))
+    return 0.0
+
+
 def run_suite(suite: str) -> SuiteResult:
     """Run all eval cases in a suite."""
     cases = load_dataset(suite)

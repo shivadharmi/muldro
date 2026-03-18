@@ -5,6 +5,11 @@ from unittest.mock import MagicMock
 
 from src.services.event_processor import RawEvent
 
+# Deterministic test user ID in proper usr_{ULID} format.
+# ULID: 26 chars Crockford base32 (0-9, A-H, J-K, M-N, P-T, V-Z).
+TEST_USER_ID = "usr_01JTEST00000000000000000000"
+TEST_WORKSPACE_ID = "ws_test"
+
 
 def make_raw_event(**overrides) -> RawEvent:
     """Factory for test RawEvent instances."""
@@ -46,6 +51,9 @@ def make_mock_settings(**overrides) -> MagicMock:
         cors_allowed_origins="",
         elasticsearch_url="",
         daily_token_budget_usd=5.0,
+        ses_from_address="",
+        ses_region="ap-south-1",
+        ses_enabled=False,
         bedrock_region="us-east-1",
         use_bedrock=False,
     )

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.services.heartbeat import HeartbeatService
-from tests.conftest import make_mock_settings
+from tests.conftest import TEST_USER_ID, make_mock_settings
 
 
 @pytest.fixture
@@ -46,7 +46,7 @@ async def test_expire_stale_memories(settings, mock_db):
     )
 
     service = HeartbeatService(settings=settings, db=mock_db)
-    result = await service.run("usr_default")
+    result = await service.run(TEST_USER_ID)
 
     assert result["expired_memories"] == 1
     assert old_memory.status == "expired"
@@ -73,7 +73,7 @@ async def test_escalate_stale_plans(settings, mock_db):
     )
 
     service = HeartbeatService(settings=settings, db=mock_db)
-    result = await service.run("usr_default")
+    result = await service.run(TEST_USER_ID)
 
     assert result["stale_plans_found"] == 1
     assert result["plans_escalated"] == 1
@@ -89,7 +89,7 @@ async def test_heartbeat_no_action_needed(settings, mock_db):
     mock_db.execute = AsyncMock(return_value=empty_result)
 
     service = HeartbeatService(settings=settings, db=mock_db)
-    result = await service.run("usr_default")
+    result = await service.run(TEST_USER_ID)
 
     assert result["expired_memories"] == 0
     assert result["stale_plans_found"] == 0
@@ -116,7 +116,7 @@ async def test_critical_plans_not_escalated(settings, mock_db):
     )
 
     service = HeartbeatService(settings=settings, db=mock_db)
-    result = await service.run("usr_default")
+    result = await service.run(TEST_USER_ID)
 
     assert result["plans_escalated"] == 0
     assert critical_plan.priority == "critical"

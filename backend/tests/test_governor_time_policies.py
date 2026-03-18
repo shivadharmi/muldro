@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.services.governor import Governor
+from tests.conftest import TEST_USER_ID
 
 
 @pytest.fixture
@@ -56,7 +57,7 @@ class TestTimeBasedPolicyOverride:
             mock_dt.now.return_value = datetime(2026, 3, 16, 14, 0, tzinfo=timezone.utc)
             mock_dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
 
-            override = await gov._get_time_based_policy_override("usr_default")
+            override = await gov._get_time_based_policy_override(TEST_USER_ID)
             assert override == "full_auto"
 
     @pytest.mark.asyncio
@@ -74,7 +75,7 @@ class TestTimeBasedPolicyOverride:
             mock_dt.now.return_value = datetime(2026, 3, 16, 20, 0, tzinfo=timezone.utc)
             mock_dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
 
-            override = await gov._get_time_based_policy_override("usr_default")
+            override = await gov._get_time_based_policy_override(TEST_USER_ID)
             assert override is None
 
     @pytest.mark.asyncio
@@ -92,7 +93,7 @@ class TestTimeBasedPolicyOverride:
             mock_dt.now.return_value = datetime(2026, 3, 16, 23, 0, tzinfo=timezone.utc)
             mock_dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
 
-            override = await gov._get_time_based_policy_override("usr_default")
+            override = await gov._get_time_based_policy_override(TEST_USER_ID)
             assert override == "lockdown"
 
         # Test during early morning (03:00 - should be in lockdown)
@@ -100,7 +101,7 @@ class TestTimeBasedPolicyOverride:
             mock_dt.now.return_value = datetime(2026, 3, 16, 3, 0, tzinfo=timezone.utc)
             mock_dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
 
-            override = await gov._get_time_based_policy_override("usr_default")
+            override = await gov._get_time_based_policy_override(TEST_USER_ID)
             assert override == "lockdown"
 
         # Test during daytime (12:00 - should NOT be in lockdown)
@@ -108,7 +109,7 @@ class TestTimeBasedPolicyOverride:
             mock_dt.now.return_value = datetime(2026, 3, 16, 12, 0, tzinfo=timezone.utc)
             mock_dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
 
-            override = await gov._get_time_based_policy_override("usr_default")
+            override = await gov._get_time_based_policy_override(TEST_USER_ID)
             assert override is None
 
     @pytest.mark.asyncio
@@ -128,7 +129,7 @@ class TestTimeBasedPolicyOverride:
             mock_dt.now.return_value = datetime(2026, 3, 10, 14, 0, tzinfo=timezone.utc)
             mock_dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
 
-            override = await gov._get_time_based_policy_override("usr_default")
+            override = await gov._get_time_based_policy_override(TEST_USER_ID)
             assert override == "full_auto"
 
         # Test on Sunday (weekday=6) at 14:00 - should NOT match
@@ -137,7 +138,7 @@ class TestTimeBasedPolicyOverride:
             mock_dt.now.return_value = datetime(2026, 3, 15, 14, 0, tzinfo=timezone.utc)
             mock_dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
 
-            override = await gov._get_time_based_policy_override("usr_default")
+            override = await gov._get_time_based_policy_override(TEST_USER_ID)
             assert override is None
 
     @pytest.mark.asyncio
@@ -156,7 +157,7 @@ class TestTimeBasedPolicyOverride:
             mock_dt.now.return_value = datetime(2026, 3, 15, 14, 0, tzinfo=timezone.utc)
             mock_dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
 
-            override = await gov._get_time_based_policy_override("usr_default")
+            override = await gov._get_time_based_policy_override(TEST_USER_ID)
             assert override == "full_auto"
 
     @pytest.mark.asyncio
@@ -164,7 +165,7 @@ class TestTimeBasedPolicyOverride:
         """Should return None when settings_service is None."""
         gov = Governor(mock_db, settings_service=None)
 
-        override = await gov._get_time_based_policy_override("usr_default")
+        override = await gov._get_time_based_policy_override(TEST_USER_ID)
         assert override is None
 
     @pytest.mark.asyncio
@@ -174,7 +175,7 @@ class TestTimeBasedPolicyOverride:
 
         gov = Governor(mock_db, settings_service=mock_settings_svc)
 
-        override = await gov._get_time_based_policy_override("usr_default")
+        override = await gov._get_time_based_policy_override(TEST_USER_ID)
         assert override is None
 
     @pytest.mark.asyncio
@@ -184,12 +185,12 @@ class TestTimeBasedPolicyOverride:
 
         gov = Governor(mock_db, settings_service=mock_settings_svc)
 
-        override = await gov._get_time_based_policy_override("usr_default")
+        override = await gov._get_time_based_policy_override(TEST_USER_ID)
         assert override is None
 
         # Test with empty list
         mock_settings_svc.get = AsyncMock(return_value=[])
-        override = await gov._get_time_based_policy_override("usr_default")
+        override = await gov._get_time_based_policy_override(TEST_USER_ID)
         assert override is None
 
     @pytest.mark.asyncio
@@ -214,7 +215,7 @@ class TestTimeBasedPolicyOverride:
             mock_dt.now.return_value = datetime(2026, 3, 16, 12, 30, tzinfo=timezone.utc)
             mock_dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
 
-            override = await gov._get_time_based_policy_override("usr_default")
+            override = await gov._get_time_based_policy_override(TEST_USER_ID)
             assert override == "lockdown"
 
     @pytest.mark.asyncio
@@ -232,7 +233,7 @@ class TestTimeBasedPolicyOverride:
             mock_dt.now.return_value = datetime(2026, 3, 16, 14, 0, tzinfo=timezone.utc)
             mock_dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
 
-            override = await gov._get_time_based_policy_override("usr_default")
+            override = await gov._get_time_based_policy_override(TEST_USER_ID)
             assert override == "full_auto"  # First policy wins
 
 
@@ -254,7 +255,7 @@ class TestPolicyModeIntegration:
             mock_dt.now.return_value = datetime(2026, 3, 16, 14, 0, tzinfo=timezone.utc)
             mock_dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
 
-            result = await gov._apply_policy(plan, "usr_default")
+            result = await gov._apply_policy(plan, TEST_USER_ID)
             assert result == "auto_execute"
 
     @pytest.mark.asyncio
@@ -274,5 +275,5 @@ class TestPolicyModeIntegration:
             mock_dt.now.return_value = datetime(2026, 3, 16, 20, 0, tzinfo=timezone.utc)
             mock_dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
 
-            result = await gov._apply_policy(plan, "usr_default")
+            result = await gov._apply_policy(plan, TEST_USER_ID)
             assert result == "approval_required"

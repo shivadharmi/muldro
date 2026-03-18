@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from src.api.app import app
 from src.api.deps import get_current_user, get_current_user_id, get_session
 from src.config.settings import get_settings
+from tests.conftest import TEST_USER_ID
 
 
 def _make_mock_db():
@@ -22,7 +23,7 @@ def _make_mock_db():
 def _make_briefing():
     b = MagicMock()
     b.briefing_id = "brief_001"
-    b.user_id = "usr_default"
+    b.user_id = TEST_USER_ID
     b.briefing_date = date.today()
     b.headline = "3 priorities, 2 approvals pending"
     b.recommended_actions = ["Reply to investor email", "Review PR"]
@@ -32,7 +33,7 @@ def _make_briefing():
 def _make_approval(approval_id="apr_001", status="pending"):
     a = MagicMock()
     a.approval_id = approval_id
-    a.user_id = "usr_default"
+    a.user_id = TEST_USER_ID
     a.title = "Send reply to investor"
     a.summary = "Draft email to John Doe about Series B"
     a.approval_type = "send_email"
@@ -49,7 +50,7 @@ def _make_approval(approval_id="apr_001", status="pending"):
 def _make_plan(plan_id="plan_001"):
     p = MagicMock()
     p.plan_id = plan_id
-    p.user_id = "usr_default"
+    p.user_id = TEST_USER_ID
     p.goal = "Draft reply to investor email"
     p.priority = "high"
     p.status = "executing"
@@ -69,24 +70,28 @@ def _make_plan_task(task_id="ptask_001", task_type="draft_email", status="comple
     return pt
 
 
-def _make_execution(execution_id="exec_001", status="completed"):
-    e = MagicMock()
-    e.execution_id = execution_id
-    e.plan_id = "plan_001"
-    e.user_id = "usr_default"
-    e.status = status
-    e.created_at = datetime(2026, 3, 13, 9, 30, tzinfo=timezone.utc)
-    return e
-
-
-def _make_task_run(task_id="ptask_001", status="completed"):
+def _make_task_run(run_id="run_001", status="completed"):
     r = MagicMock()
-    r.task_id = task_id
-    r.execution_id = "exec_001"
+    r.run_id = run_id
+    r.plan_id = "plan_001"
+    r.user_id = TEST_USER_ID
     r.status = status
-    r.result_data = {"summary": "Email drafted successfully"}
-    r.error_message = None
+    r.source = "plan"
+    r.execution_mode = "auto_execute"
+    r.created_at = datetime(2026, 3, 13, 9, 30, tzinfo=timezone.utc)
     return r
+
+
+def _make_task_step(task_id="ptask_001", status="completed"):
+    s = MagicMock()
+    s.step_id = "step_001"
+    s.run_id = "run_001"
+    s.task_id = task_id
+    s.plan_task_id = task_id
+    s.status = status
+    s.output_data = {"summary": "Email drafted successfully"}
+    s.error = None
+    return s
 
 
 def _make_meeting_event():
@@ -105,10 +110,10 @@ def _override_deps():
     mock_settings.backend_token = ""
 
     mock_user = MagicMock()
-    mock_user.user_id = "usr_default"
+    mock_user.user_id = TEST_USER_ID
 
     app.dependency_overrides[get_current_user] = lambda: mock_user
-    app.dependency_overrides[get_current_user_id] = lambda: "usr_default"
+    app.dependency_overrides[get_current_user_id] = lambda: TEST_USER_ID
     app.dependency_overrides[get_settings] = lambda: mock_settings
     yield
     app.dependency_overrides.clear()
@@ -193,7 +198,7 @@ def test_approval_detail():
     """Should return detailed approval info with plan context."""
     db = _make_mock_db()
     approval = _make_approval()
-    execution = _make_execution()
+    run = _make_task_run()
 
     call_count = 0
 
@@ -203,8 +208,8 @@ def test_approval_detail():
         result = MagicMock()
         if call_count == 1:  # approval lookup
             result.scalar_one_or_none.return_value = approval
-        elif call_count == 2:  # execution lookup
-            result.scalar_one_or_none.return_value = execution
+        elif call_count == 2:  # TaskRun lookup
+            result.scalar_one_or_none.return_value = run
         elif call_count == 3:  # plan goal
             result.scalar_one_or_none.return_value = "Draft reply to investor email"
         return result
@@ -248,8 +253,8 @@ def test_task_detail_with_steps():
     db = _make_mock_db()
     plan = _make_plan()
     plan_task = _make_plan_task()
-    execution = _make_execution()
-    task_run = _make_task_run()
+    run = _make_task_run()
+    step = _make_task_step()
 
     call_count = 0
 
@@ -261,10 +266,10 @@ def test_task_detail_with_steps():
             result.scalar_one_or_none.return_value = plan
         elif call_count == 2:  # plan tasks
             result.scalars.return_value.all.return_value = [plan_task]
-        elif call_count == 3:  # execution
-            result.scalar_one_or_none.return_value = execution
-        elif call_count == 4:  # task runs
-            result.scalars.return_value.all.return_value = [task_run]
+        elif call_count == 3:  # TaskRun by plan_id
+            result.scalar_one_or_none.return_value = run
+        elif call_count == 4:  # TaskStep by run_id
+            result.scalars.return_value.all.return_value = [step]
         return result
 
     db.execute = mock_execute

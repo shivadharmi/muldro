@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from src.services.event_bus import BusEvent, EventBus
+from tests.conftest import TEST_USER_ID
 
 
 @pytest.fixture
@@ -29,22 +30,22 @@ def bus(mock_redis):
 class TestPublish:
     async def test_publishes_to_stream(self, bus, mock_redis):
         event_id = await bus.publish(
-            "jarvis:events:usr_default",
+            f"jarvis:events:{TEST_USER_ID}",
             "email_received",
             {"subject": "Test"},
-            user_id="usr_default",
+            user_id=TEST_USER_ID,
         )
         assert event_id.startswith("be_")
         mock_redis.xadd.assert_called_once()
         call_args = mock_redis.xadd.call_args
-        assert call_args[0][0] == "jarvis:events:usr_default"
+        assert call_args[0][0] == f"jarvis:events:{TEST_USER_ID}"
         data = call_args[0][1]
         assert data["event_type"] == "email_received"
         assert json.loads(data["payload"]) == {"subject": "Test"}
 
     async def test_includes_metadata(self, bus, mock_redis):
         await bus.publish(
-            "jarvis:events:usr_default",
+            f"jarvis:events:{TEST_USER_ID}",
             "test",
             {},
             metadata={"trace_id": "tr_123"},
@@ -58,14 +59,14 @@ class TestSubscribe:
         mock_redis.xreadgroup = AsyncMock(
             return_value=[
                 (
-                    "jarvis:events:usr_default",
+                    f"jarvis:events:{TEST_USER_ID}",
                     [
                         (
                             "1-0",
                             {
                                 "event_id": "be_test",
                                 "event_type": "email_received",
-                                "user_id": "usr_default",
+                                "user_id": TEST_USER_ID,
                                 "payload": json.dumps({"key": "val"}),
                                 "metadata": "{}",
                                 "created_at": datetime.now(timezone.utc).isoformat(),
@@ -78,7 +79,7 @@ class TestSubscribe:
         handler = AsyncMock()
 
         count = await bus.subscribe(
-            "jarvis:events:usr_default",
+            f"jarvis:events:{TEST_USER_ID}",
             "test_group",
             "consumer-1",
             handler,

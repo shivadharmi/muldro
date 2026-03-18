@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from src.api.routes_approvals import _get_approval
+from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID
 
 
 @pytest.fixture
@@ -21,7 +22,7 @@ async def test_get_approval_not_found(mock_db):
     mock_db.execute = AsyncMock(return_value=no_result)
 
     with pytest.raises(HTTPException) as exc_info:
-        await _get_approval(mock_db, "apr_missing", "usr_default")
+        await _get_approval(mock_db, "apr_missing", TEST_USER_ID, TEST_WORKSPACE_ID)
     assert exc_info.value.status_code == 404
 
 
@@ -35,7 +36,7 @@ async def test_get_approval_already_decided(mock_db):
     mock_db.execute = AsyncMock(return_value=result_mock)
 
     with pytest.raises(HTTPException) as exc_info:
-        await _get_approval(mock_db, "apr_001", "usr_default")
+        await _get_approval(mock_db, "apr_001", TEST_USER_ID, TEST_WORKSPACE_ID)
     assert exc_info.value.status_code == 400
 
 
@@ -48,5 +49,5 @@ async def test_get_approval_success(mock_db):
     result_mock.scalar_one_or_none.return_value = approval
     mock_db.execute = AsyncMock(return_value=result_mock)
 
-    result = await _get_approval(mock_db, "apr_001", "usr_default")
+    result = await _get_approval(mock_db, "apr_001", TEST_USER_ID, TEST_WORKSPACE_ID)
     assert result.status == "pending"

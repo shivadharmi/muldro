@@ -9,6 +9,7 @@ from src.ui.views import (
     memory_browser_view,
     task_board_view,
 )
+from tests.conftest import TEST_USER_ID
 
 
 class TestRendererNewComponents:
@@ -129,7 +130,7 @@ class TestRendererNewComponents:
 class TestDashboardView:
     def test_generates_surface(self):
         s = dashboard_view(
-            "usr_default",
+            TEST_USER_ID,
             active_tasks=[{"task_id": "t1", "goal": "Test"}],
             pending_approvals=[],
             recent_events=[],
@@ -141,7 +142,7 @@ class TestDashboardView:
 
     def test_includes_metrics(self):
         s = dashboard_view(
-            "usr_default",
+            TEST_USER_ID,
             [{"task_id": "t1"}],
             [],
             [],
@@ -155,7 +156,7 @@ class TestDashboardView:
 class TestTaskBoardView:
     def test_generates_kanban(self):
         s = task_board_view(
-            "usr_default",
+            TEST_USER_ID,
             {
                 "pending": [{"task_id": "t1", "goal": "Research"}],
                 "running": [],
@@ -185,7 +186,7 @@ class TestExecutionTraceView:
 class TestEntityExplorerView:
     def test_with_entities(self):
         s = entity_explorer_view(
-            "usr_default",
+            TEST_USER_ID,
             [
                 {"canonical_name": "Alice", "entity_type": "person"},
             ],
@@ -194,7 +195,7 @@ class TestEntityExplorerView:
         assert len(entity_cards) == 1
 
     def test_empty(self):
-        s = entity_explorer_view("usr_default", [])
+        s = entity_explorer_view(TEST_USER_ID, [])
         texts = [c for c in s.children if c.type == "Text"]
         assert any("No entities" in t.properties.get("text", "") for t in texts)
 
@@ -202,7 +203,7 @@ class TestEntityExplorerView:
 class TestMemoryBrowserView:
     def test_with_memories(self):
         s = memory_browser_view(
-            "usr_default",
+            TEST_USER_ID,
             [
                 {"fact_text": "Prefers email", "memory_type": "preference"},
             ],

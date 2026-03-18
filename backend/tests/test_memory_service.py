@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.services.memory_service import MemoryService
-from tests.conftest import make_mock_settings
+from tests.conftest import TEST_USER_ID, make_mock_settings
 
 
 @pytest.fixture
@@ -27,9 +27,10 @@ def mock_db():
     return db
 
 
+@patch("src.services.memory_service.EmbeddingService")
 @patch("src.services.memory_service.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_extract_stores_memories(mock_get_client, settings, mock_db):
+async def test_extract_stores_memories(mock_get_client, mock_embed_cls, settings, mock_db):
     """Should extract and store memories from text."""
     extraction = {
         "memories": [
@@ -56,9 +57,13 @@ async def test_extract_stores_memories(mock_get_client, settings, mock_db):
     mock_client.messages.create = AsyncMock(return_value=response)
     mock_get_client.return_value = mock_client
 
+    mock_embedder = MagicMock()
+    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    mock_embed_cls.return_value = mock_embedder
+
     service = MemoryService(settings=settings, db=mock_db)
     memory_ids = await service.extract_and_store(
-        "usr_default", "Alice (CFO at Acme) prefers concise updates.", ["evt_001"]
+        TEST_USER_ID, "Alice (CFO at Acme) prefers concise updates.", ["evt_001"]
     )
 
     assert len(memory_ids) == 2
@@ -66,9 +71,10 @@ async def test_extract_stores_memories(mock_get_client, settings, mock_db):
     assert mock_db.add.call_count == 2
 
 
+@patch("src.services.memory_service.EmbeddingService")
 @patch("src.services.memory_service.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_extract_skips_duplicates(mock_get_client, settings, mock_db):
+async def test_extract_skips_duplicates(mock_get_client, mock_embed_cls, settings, mock_db):
     """Should not store duplicate memories."""
     extraction = {
         "memories": [
@@ -86,20 +92,25 @@ async def test_extract_skips_duplicates(mock_get_client, settings, mock_db):
     mock_client.messages.create = AsyncMock(return_value=response)
     mock_get_client.return_value = mock_client
 
+    mock_embedder = MagicMock()
+    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    mock_embed_cls.return_value = mock_embedder
+
     # First execute: extraction call, second: duplicate check returns existing
     no_result = MagicMock()
     no_result.scalar_one_or_none.return_value = "mem_existing"
     mock_db.execute = AsyncMock(return_value=no_result)
 
     service = MemoryService(settings=settings, db=mock_db)
-    memory_ids = await service.extract_and_store("usr_default", "Already known fact", ["evt_002"])
+    memory_ids = await service.extract_and_store(TEST_USER_ID, "Already known fact", ["evt_002"])
 
     assert len(memory_ids) == 0
 
 
+@patch("src.services.memory_service.EmbeddingService")
 @patch("src.services.memory_service.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_retrieve_returns_matching(mock_get_client, settings, mock_db):
+async def test_retrieve_returns_matching(mock_get_client, mock_embed_cls, settings, mock_db):
     """Should return memories matching the query."""
     mock_memory = MagicMock()
     mock_memory.memory_id = "mem_001"
@@ -113,8 +124,13 @@ async def test_retrieve_returns_matching(mock_get_client, settings, mock_db):
     mock_db.execute = AsyncMock(return_value=result_mock)
 
     mock_get_client.return_value = MagicMock()
+    mock_embedder = MagicMock()
+    # Return None to use text-based fallback (matching the mock_db setup)
+    mock_embedder.embed_text = AsyncMock(return_value=None)
+    mock_embed_cls.return_value = mock_embedder
+
     service = MemoryService(settings=settings, db=mock_db)
-    results = await service.retrieve("usr_default", "Alice")
+    results = await service.retrieve(TEST_USER_ID, "Alice")
 
     assert len(results) == 1
     assert results[0]["fact_text"] == "Alice is CFO"

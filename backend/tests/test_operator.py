@@ -1,12 +1,11 @@
-"""Tests for Operator — plan execution and email drafting."""
+"""Tests for Operator — plan execution via GraphExecutor."""
 
-import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.services.operator import Operator
-from tests.conftest import make_mock_settings
+from tests.conftest import TEST_USER_ID, make_mock_settings
 
 
 @pytest.fixture
@@ -23,123 +22,132 @@ def mock_db():
     return db
 
 
-def _make_mock_execution():
-    execution = MagicMock()
-    execution.execution_id = "exec_001"
-    execution.plan_id = "plan_001"
-    execution.user_id = "usr_default"
-    execution.status = "pending"
-    return execution
+def _make_mock_run(run_id="run_001", plan_id="plan_001"):
+    run = MagicMock()
+    run.run_id = run_id
+    run.plan_id = plan_id
+    run.user_id = TEST_USER_ID
+    run.status = "pending"
+    return run
 
 
-def _make_mock_plan(tasks=None):
+def _make_mock_plan():
     plan = MagicMock()
     plan.plan_id = "plan_001"
     plan.goal = "Draft investor reply"
     plan.reasoning_summary = "Investor follow-up needed"
     plan.status = "policy_checked"
-    plan.tasks = tasks or []
     return plan
 
 
-def _make_mock_task(task_type="draft_email", input_data=None):
-    task = MagicMock()
-    task.task_id = "ptask_001"
-    task.task_type = task_type
-    task.input_data = input_data or {"tone": "professional"}
-    task.status = "pending"
-    return task
-
-
-@patch("src.services.operator.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_execute_plan_drafts_email(mock_get_client, settings, mock_db):
-    """Operator should execute a draft_email task via Claude."""
-    draft = {
-        "subject": "Re: Investor Follow-up",
-        "body": "Thank you for your interest. Here is the updated deck.",
-        "tone": "professional",
-    }
-
-    mock_client = MagicMock()
-    response = MagicMock()
-    response.content = [MagicMock(text=json.dumps(draft))]
-    mock_client.messages.create = AsyncMock(return_value=response)
-    mock_get_client.return_value = mock_client
-
-    execution = _make_mock_execution()
-    task = _make_mock_task()
+async def test_execute_plan_delegates_to_graph(settings, mock_db):
+    """Operator should delegate execution to GraphExecutor."""
+    run = _make_mock_run()
     plan = _make_mock_plan()
 
-    # 1st call: get execution, 2nd: get plan, 3rd: get tasks
-    exec_result = MagicMock()
-    exec_result.scalar_one_or_none.return_value = execution
+    run_result = MagicMock()
+    run_result.scalar_one_or_none.return_value = run
     plan_result = MagicMock()
     plan_result.scalar_one_or_none.return_value = plan
-    tasks_result = MagicMock()
-    tasks_result.scalars.return_value.all.return_value = [task]
 
-    mock_db.execute = AsyncMock(side_effect=[exec_result, plan_result, tasks_result])
+    mock_db.execute = AsyncMock(side_effect=[run_result, plan_result])
 
-    operator = Operator(settings=settings, db=mock_db)
-    success = await operator.execute_plan("exec_001", "usr_default")
+    mock_graph = MagicMock()
+    completed_run = MagicMock()
+    completed_run.status = "completed"
+    mock_graph.populate_run_steps = AsyncMock()
+    mock_graph.execute_run = AsyncMock(return_value=completed_run)
+
+    operator = Operator(settings=settings, db=mock_db, graph_executor=mock_graph)
+    success = await operator.execute_plan("run_001", TEST_USER_ID)
 
     assert success is True
-    assert execution.status == "completed"
-    assert task.status == "completed"
-    mock_client.messages.create.assert_called_once()
+    assert plan.status == "completed"
+    mock_graph.populate_run_steps.assert_called_once_with("run_001", "plan_001")
+    mock_graph.execute_run.assert_called_once_with("run_001")
 
 
-@patch("src.services.operator.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_execute_plan_handles_failure(mock_get_client, settings, mock_db):
-    """Operator should mark execution as failed on task error."""
-    mock_client = MagicMock()
-    mock_client.messages.create = AsyncMock(side_effect=RuntimeError("Claude unavailable"))
-    mock_get_client.return_value = mock_client
-
-    execution = _make_mock_execution()
-    task = _make_mock_task()
+async def test_execute_plan_handles_graph_failure(settings, mock_db):
+    """Operator should mark run as failed on GraphExecutor failure."""
+    run = _make_mock_run()
     plan = _make_mock_plan()
 
-    exec_result = MagicMock()
-    exec_result.scalar_one_or_none.return_value = execution
+    run_result = MagicMock()
+    run_result.scalar_one_or_none.return_value = run
     plan_result = MagicMock()
     plan_result.scalar_one_or_none.return_value = plan
-    tasks_result = MagicMock()
-    tasks_result.scalars.return_value.all.return_value = [task]
 
-    mock_db.execute = AsyncMock(side_effect=[exec_result, plan_result, tasks_result])
+    mock_db.execute = AsyncMock(side_effect=[run_result, plan_result])
 
-    operator = Operator(settings=settings, db=mock_db)
-    success = await operator.execute_plan("exec_001", "usr_default")
+    mock_graph = MagicMock()
+    completed_run = MagicMock()
+    completed_run.status = "failed"
+    mock_graph.populate_run_steps = AsyncMock()
+    mock_graph.execute_run = AsyncMock(return_value=completed_run)
+
+    operator = Operator(settings=settings, db=mock_db, graph_executor=mock_graph)
+    success = await operator.execute_plan("run_001", TEST_USER_ID)
 
     assert success is False
-    assert execution.status == "failed"
-    assert task.status == "failed"
+    assert plan.status == "failed"
 
 
-@patch("src.services.operator.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_execute_stub_task(mock_get_client, settings, mock_db):
-    """Stub tasks (fetch_info, acknowledge) should complete without Claude."""
-    mock_get_client.return_value = MagicMock()
-
-    execution = _make_mock_execution()
-    task = _make_mock_task(task_type="fetch_info")
+async def test_execute_plan_fails_without_graph_executor(settings, mock_db):
+    """Operator should fail gracefully when GraphExecutor is not available."""
+    run = _make_mock_run()
     plan = _make_mock_plan()
 
-    exec_result = MagicMock()
-    exec_result.scalar_one_or_none.return_value = execution
+    run_result = MagicMock()
+    run_result.scalar_one_or_none.return_value = run
     plan_result = MagicMock()
     plan_result.scalar_one_or_none.return_value = plan
-    tasks_result = MagicMock()
-    tasks_result.scalars.return_value.all.return_value = [task]
 
-    mock_db.execute = AsyncMock(side_effect=[exec_result, plan_result, tasks_result])
+    mock_db.execute = AsyncMock(side_effect=[run_result, plan_result])
+
+    operator = Operator(settings=settings, db=mock_db, graph_executor=None)
+    success = await operator.execute_plan("run_001", TEST_USER_ID)
+
+    assert success is False
+    assert run.status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_execute_plan_not_found(settings, mock_db):
+    """Operator should return False when run not found."""
+    run_result = MagicMock()
+    run_result.scalar_one_or_none.return_value = None
+    mock_db.execute = AsyncMock(return_value=run_result)
 
     operator = Operator(settings=settings, db=mock_db)
-    success = await operator.execute_plan("exec_001", "usr_default")
+    success = await operator.execute_plan("run_missing", TEST_USER_ID)
 
-    assert success is True
-    assert task.status == "completed"
+    assert success is False
+
+
+@pytest.mark.asyncio
+async def test_execute_plan_graph_exception(settings, mock_db):
+    """Operator should handle GraphExecutor exceptions gracefully."""
+    run = _make_mock_run()
+    plan = _make_mock_plan()
+
+    run_result = MagicMock()
+    run_result.scalar_one_or_none.return_value = run
+    plan_result = MagicMock()
+    plan_result.scalar_one_or_none.return_value = plan
+
+    mock_db.execute = AsyncMock(side_effect=[run_result, plan_result])
+
+    mock_graph = MagicMock()
+    mock_graph.populate_run_steps = AsyncMock(
+        side_effect=RuntimeError("DAG build failed")
+    )
+
+    operator = Operator(settings=settings, db=mock_db, graph_executor=mock_graph)
+    success = await operator.execute_plan("run_001", TEST_USER_ID)
+
+    assert success is False
+    assert run.status == "failed"
+    assert "DAG build failed" in run.error["message"]

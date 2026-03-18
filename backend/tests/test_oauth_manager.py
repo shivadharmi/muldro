@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from cryptography.fernet import Fernet
 
+from tests.conftest import TEST_USER_ID
+
 # Generate a test encryption key
 TEST_KEY = Fernet.generate_key().decode()
 
@@ -14,7 +16,7 @@ class TestOAuthManager:
     """Test OAuth token storage, retrieval, and refresh."""
 
     def _make_mock_db(self):
-        """Create a mock async session factory."""
+        """Create a mock async session factory with context manager support."""
         db = AsyncMock()
         db.add = MagicMock()
         db.flush = AsyncMock()
@@ -22,7 +24,11 @@ class TestOAuthManager:
         db.rollback = AsyncMock()
         db.delete = AsyncMock()
 
-        factory = MagicMock(return_value=db)
+        # Support both factory() and async with factory() as db:
+        ctx = AsyncMock()
+        ctx.__aenter__ = AsyncMock(return_value=db)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        factory = MagicMock(return_value=ctx)
         return factory, db
 
     @patch.dict(os.environ, {"JARVIS_OAUTH_ENCRYPTION_KEY": TEST_KEY})
@@ -38,7 +44,7 @@ class TestOAuthManager:
 
         manager = OAuthManager(factory)
         token_id = await manager.store_token(
-            user_id="usr_default",
+            user_id=TEST_USER_ID,
             provider="google",
             access_token="access_123",
             refresh_token="refresh_456",
@@ -64,7 +70,7 @@ class TestOAuthManager:
 
         manager = OAuthManager(factory)
         token_id = await manager.store_token(
-            user_id="usr_default",
+            user_id=TEST_USER_ID,
             provider="google",
             access_token="new_access",
         )
@@ -90,7 +96,7 @@ class TestOAuthManager:
         from src.services.oauth_manager import OAuthManager
 
         manager = OAuthManager(factory)
-        token = await manager.get_valid_token("usr_default", "google")
+        token = await manager.get_valid_token(TEST_USER_ID, "google")
 
         assert token == "my_access_token"
 
@@ -105,7 +111,7 @@ class TestOAuthManager:
         from src.services.oauth_manager import OAuthManager
 
         manager = OAuthManager(factory)
-        token = await manager.get_valid_token("usr_default", "google")
+        token = await manager.get_valid_token(TEST_USER_ID, "google")
 
         assert token is None
 
@@ -125,7 +131,7 @@ class TestOAuthManager:
         from src.services.oauth_manager import OAuthManager
 
         manager = OAuthManager(factory)
-        token = await manager.get_valid_token("usr_default", "google")
+        token = await manager.get_valid_token(TEST_USER_ID, "google")
 
         assert token is None
 
@@ -141,7 +147,7 @@ class TestOAuthManager:
         from src.services.oauth_manager import OAuthManager
 
         manager = OAuthManager(factory)
-        result = await manager.delete_token("usr_default", "google")
+        result = await manager.delete_token(TEST_USER_ID, "google")
 
         assert result is True
         db.delete.assert_awaited_once_with(existing)
@@ -158,7 +164,7 @@ class TestOAuthManager:
         from src.services.oauth_manager import OAuthManager
 
         manager = OAuthManager(factory)
-        result = await manager.delete_token("usr_default", "google")
+        result = await manager.delete_token(TEST_USER_ID, "google")
 
         assert result is False
 

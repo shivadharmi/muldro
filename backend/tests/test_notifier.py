@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 
 from src.services.notifier import Notifier
 from src.services.surface_registry import SurfaceRegistry
+from tests.conftest import TEST_USER_ID
 
 
 class TestNotifier:
@@ -16,7 +17,7 @@ class TestNotifier:
     ) -> Notifier:
         registry = SurfaceRegistry(redis=None)
         for s in surfaces or []:
-            await registry.register("usr_default", s)
+            await registry.register(TEST_USER_ID, s)
 
         return Notifier(
             surface_registry=registry,
@@ -27,7 +28,7 @@ class TestNotifier:
 
     async def test_no_surfaces_returns_queued(self):
         notifier = await self._make_notifier(surfaces=[])
-        result = await notifier.notify("usr_default", "info_update", "Test", "Body")
+        result = await notifier.notify(TEST_USER_ID, "info_update", "Test", "Body")
         assert result["status"] == "queued"
         assert result["surfaces"] == []
 
@@ -42,7 +43,7 @@ class TestNotifier:
         )
 
         result = await notifier.notify(
-            "usr_default",
+            TEST_USER_ID,
             "approval_request",
             "Send email to investor",
             "Draft reply to Series A follow-up",
@@ -64,7 +65,7 @@ class TestNotifier:
         )
 
         result = await notifier.notify(
-            "usr_default", "info_update", "Status update", "Things are fine"
+            TEST_USER_ID, "info_update", "Status update", "Things are fine"
         )
 
         assert result["status"] == "sent"
@@ -82,7 +83,7 @@ class TestNotifier:
             telegram_sender=tg_sender,
         )
 
-        result = await notifier.notify("usr_default", "info_update", "Update", "Content")
+        result = await notifier.notify(TEST_USER_ID, "info_update", "Update", "Content")
 
         assert result["status"] == "sent"
         assert "telegram" in result["surfaces"]
@@ -97,7 +98,7 @@ class TestNotifier:
         )
 
         result = await notifier.notify(
-            "usr_default",
+            TEST_USER_ID,
             "critical_alert",
             "Budget exhausted",
             "Daily limit reached",
@@ -120,7 +121,7 @@ class TestNotifier:
         )
 
         await notifier.notify(
-            "usr_default",
+            TEST_USER_ID,
             "approval_request",
             "Send email",
             "To investor@fund.com",
@@ -138,7 +139,7 @@ class TestNotifier:
             telegram_sender=tg_sender,
         )
 
-        await notifier.notify("usr_default", "info_update", "Test", "Body")
+        await notifier.notify(TEST_USER_ID, "info_update", "Test", "Body")
 
         # Check that something was marked as delivered
         assert len(notifier._delivered) > 0
@@ -146,14 +147,14 @@ class TestNotifier:
     async def test_on_action_taken_with_redis(self):
         redis = AsyncMock()
         registry = SurfaceRegistry(redis=None)
-        await registry.register("usr_default", "telegram")
+        await registry.register(TEST_USER_ID, "telegram")
 
         notifier = Notifier(
             surface_registry=registry,
             redis=redis,
         )
 
-        await notifier.on_action_taken("usr_default", "apr_01", "telegram")
+        await notifier.on_action_taken(TEST_USER_ID, "apr_01", "telegram")
 
         redis.publish.assert_called_once()
         call_args = redis.publish.call_args
@@ -162,7 +163,7 @@ class TestNotifier:
     async def test_on_action_taken_without_redis(self):
         """Should not raise even without Redis."""
         notifier = await self._make_notifier(surfaces=["telegram"])
-        await notifier.on_action_taken("usr_default", "apr_01", "telegram")
+        await notifier.on_action_taken(TEST_USER_ID, "apr_01", "telegram")
 
     async def test_is_delivered_in_memory(self):
         tg_sender = AsyncMock(return_value={"status": "sent", "message_id": 1})
@@ -176,7 +177,7 @@ class TestNotifier:
         assert await notifier.is_delivered("notif_fake") is False
 
         # After notification to preferred surface (telegram is the only one)
-        await notifier.notify("usr_default", "info_update", "Test", "Body")
+        await notifier.notify(TEST_USER_ID, "info_update", "Test", "Body")
 
         # At least one notification was marked delivered
         assert len(notifier._delivered) > 0
@@ -189,7 +190,7 @@ class TestNotifier:
             telegram_sender=tg_sender,
         )
 
-        result = await notifier.notify("usr_default", "info_update", "Test", "Body")
+        result = await notifier.notify(TEST_USER_ID, "info_update", "Test", "Body")
 
         # Should not raise, error is captured per surface
         assert result["status"] == "sent"

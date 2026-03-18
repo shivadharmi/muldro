@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from src.api.app import app
 from src.api.deps import get_current_user, get_current_user_id
+from tests.conftest import TEST_USER_ID
 
 
 class TestGoogleAuthRoutes:
@@ -13,9 +14,9 @@ class TestGoogleAuthRoutes:
 
     def _client(self):
         _user = MagicMock()
-        _user.user_id = "usr_default"
+        _user.user_id = TEST_USER_ID
         app.dependency_overrides[get_current_user] = lambda: _user
-        app.dependency_overrides[get_current_user_id] = lambda: "usr_default"
+        app.dependency_overrides[get_current_user_id] = lambda: TEST_USER_ID
         return TestClient(app, raise_server_exceptions=False)
 
     def _cleanup(self):
@@ -74,8 +75,12 @@ class TestGoogleAuthRoutes:
         app.dependency_overrides[get_settings] = lambda: mock_settings
         try:
             client = self._client()
-            resp = client.get("/v1/auth/oauth/google/callback?code=test_code")
-            assert resp.status_code in (400, 500)
+            resp = client.get(
+                f"/v1/auth/oauth/google/callback?code=test_code&state={TEST_USER_ID}",
+                follow_redirects=False,
+            )
+            # Missing credentials → _error_redirect (307 to frontend with error)
+            assert resp.status_code in (307, 400, 500)
         finally:
             app.dependency_overrides.pop(get_settings, None)
             self._cleanup()

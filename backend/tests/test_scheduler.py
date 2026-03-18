@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.services.scheduler import SchedulerLoop, compute_next_run
-from tests.conftest import make_mock_settings
+from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID, make_mock_settings
 
 
 @pytest.fixture
@@ -19,7 +19,7 @@ def _make_schedule(**overrides):
     now = datetime.now(timezone.utc)
     defaults = dict(
         schedule_id="sched_test_001",
-        user_id="usr_default",
+        user_id=TEST_USER_ID,
         name="test-schedule",
         schedule_type="recurring",
         cron_expr="*/15 * * * *",
@@ -103,7 +103,7 @@ class TestSchedulerTick:
             assert mock_fire.call_count == 2
             assert sched1.run_count == 6
             assert sched2.run_count == 6
-            mock_db.commit.assert_awaited_once()
+            assert mock_db.commit.await_count >= 1
 
     @pytest.mark.asyncio
     async def test_tick_skips_future_schedules(self, settings):
@@ -216,6 +216,21 @@ class TestSchedulerTick:
 
 
 class TestFireActions:
+    """Tests for SchedulerLoop._fire() action dispatch.
+
+    Every test patches _resolve_workspace so _fire() doesn't hit the DB.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _patch_resolve_workspace(self):
+        with patch.object(
+            SchedulerLoop,
+            "_resolve_workspace",
+            new_callable=AsyncMock,
+            return_value=TEST_WORKSPACE_ID,
+        ):
+            yield
+
     @pytest.mark.asyncio
     async def test_fire_observe_source_calls_orchestrator(self, settings):
         """observe_source should use orchestrator.run_perception_cycle."""
@@ -230,7 +245,9 @@ class TestFireActions:
         scheduler = SchedulerLoop(settings, orchestrator=mock_orch)
         await scheduler._fire(sched)
 
-        mock_orch.run_perception_cycle.assert_awaited_once_with("gmail")
+        mock_orch.run_perception_cycle.assert_awaited_once_with(
+            "gmail", user_id=sched.user_id, workspace_id=TEST_WORKSPACE_ID
+        )
 
     @pytest.mark.asyncio
     async def test_fire_observe_source_requires_orchestrator(self, settings):

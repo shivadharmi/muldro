@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from tests.conftest import make_mock_settings
+from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID, make_mock_settings
 
 # ── Tracing Tests ────────────────────────────────────────────────────────
 
@@ -98,7 +98,9 @@ class TestTracing:
         trace = manager.start_trace("test")
         assert manager.get_trace(trace.trace_id) is not None
 
-        await manager.finish_trace(trace.trace_id)
+        await manager.finish_trace(
+            trace.trace_id, user_id=TEST_USER_ID, workspace_id=TEST_WORKSPACE_ID
+        )
         assert manager.get_trace(trace.trace_id) is None
 
 
@@ -249,27 +251,27 @@ class TestHooks:
     async def test_read_only_tools_allowed(self):
         from src.orchestrator.hooks import governor_pre_tool_hook
 
-        result = await governor_pre_tool_hook("search_memory", {}, "planner")
+        result = await governor_pre_tool_hook("search_memory", {}, "planner", user_id=TEST_USER_ID)
         assert result["allowed"] is True
 
     async def test_blocked_tools_rejected(self):
         from src.orchestrator.hooks import governor_pre_tool_hook
 
-        result = await governor_pre_tool_hook("gmail_delete", {}, "operator")
+        result = await governor_pre_tool_hook("gmail_delete", {}, "operator", user_id=TEST_USER_ID)
         assert result["allowed"] is False
         assert "blocked by policy" in result["reason"].lower()
 
     async def test_write_tools_require_approval(self):
         from src.orchestrator.hooks import governor_pre_tool_hook
 
-        result = await governor_pre_tool_hook("gmail_send", {}, "operator")
+        result = await governor_pre_tool_hook("gmail_send", {}, "operator", user_id=TEST_USER_ID)
         assert result["allowed"] is False
         assert result["approval_required"] is True
 
     async def test_internal_tools_allowed(self):
         from src.orchestrator.hooks import governor_pre_tool_hook
 
-        result = await governor_pre_tool_hook("ingest_event", {}, "observer")
+        result = await governor_pre_tool_hook("ingest_event", {}, "observer", user_id=TEST_USER_ID)
         assert result["allowed"] is True
 
     async def test_audit_hook_logs(self):
@@ -356,7 +358,11 @@ class TestOrchestrator:
             services={},
         )
 
-        result = await orchestrator.process_message("What should I focus on?")
+        result = await orchestrator.process_message(
+            "What should I focus on?",
+            user_id=TEST_USER_ID,
+            workspace_id=TEST_WORKSPACE_ID,
+        )
         assert result["decision"] == "acknowledge"
         assert result["trace_id"].startswith("trace_")
 
@@ -412,7 +418,7 @@ class TestRecovery:
 
         summary = await run_startup_recovery(mock_db)
         assert summary["orphaned_plans"] == 0
-        assert summary["stale_executions"] == 0
+        assert summary["stale_task_runs"] == 0
         assert summary["expired_approvals"] == 0
 
 
@@ -483,7 +489,7 @@ class TestPerception:
     def test_enable_disable_source(self):
         from src.orchestrator.perception import PerceptionCoordinator
 
-        coord = PerceptionCoordinator(orchestrator=MagicMock())
+        coord = PerceptionCoordinator(orchestrator=MagicMock(), user_id=TEST_USER_ID)
         coord.enable_source("gmail")
         assert "gmail" in coord._enabled_sources
 
@@ -493,7 +499,7 @@ class TestPerception:
     def test_get_due_sources_all_due_when_never_run(self):
         from src.orchestrator.perception import PerceptionCoordinator
 
-        coord = PerceptionCoordinator(orchestrator=MagicMock())
+        coord = PerceptionCoordinator(orchestrator=MagicMock(), user_id=TEST_USER_ID)
         coord.enable_source("gmail")
         coord.enable_source("calendar")
 
@@ -505,7 +511,7 @@ class TestPerception:
 
         from src.orchestrator.perception import PerceptionCoordinator
 
-        coord = PerceptionCoordinator(orchestrator=MagicMock())
+        coord = PerceptionCoordinator(orchestrator=MagicMock(), user_id=TEST_USER_ID)
         coord.enable_source("gmail")
         # Simulate recent run (1 minute ago)
         coord._last_run["gmail"] = datetime.now(timezone.utc) - timedelta(minutes=1)

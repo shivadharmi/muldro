@@ -2,14 +2,13 @@
 
 from unittest.mock import AsyncMock, patch
 
-from fastapi.testclient import TestClient
-
-from src.api.app import app
-
-client = TestClient(app)
+from src.api.routes_health import HealthDashboardResponse, system_dashboard
+from tests.conftest import TEST_USER_ID
 
 
 class TestHealthDashboard:
+    @patch("src.api.routes_health._get_run_metrics", new_callable=AsyncMock, return_value={})
+    @patch("src.api.routes_health._get_trace_metrics", new_callable=AsyncMock, return_value={})
     @patch("src.api.routes_health._get_agent_info", new_callable=AsyncMock, return_value={})
     @patch(
         "src.api.routes_health._get_observation_info",
@@ -31,17 +30,20 @@ class TestHealthDashboard:
             "budget_mode": "normal",
         },
     )
-    def test_dashboard_returns_all_sections(self, _bud, _q, _obs, _ag):
-        resp = client.get("/v1/system/dashboard")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["status"] == "ok"
-        assert data["budget"]["daily_spend_usd"] == 1.23
-        assert data["budget"]["budget_mode"] == "normal"
-        assert data["queues"]["dlq_pending"] == 0
-        assert data["observations"] == {}
-        assert data["agents"] == {}
+    async def test_dashboard_returns_all_sections(
+        self, _bud, _q, _obs, _ag, _tr, _run
+    ):
+        result = await system_dashboard(user_id=TEST_USER_ID)
+        assert isinstance(result, HealthDashboardResponse)
+        assert result.status == "ok"
+        assert result.budget["daily_spend_usd"] == 1.23
+        assert result.budget["budget_mode"] == "normal"
+        assert result.queues["dlq_pending"] == 0
+        assert result.observations == {}
+        assert result.agents == {}
 
+    @patch("src.api.routes_health._get_run_metrics", new_callable=AsyncMock, return_value={})
+    @patch("src.api.routes_health._get_trace_metrics", new_callable=AsyncMock, return_value={})
     @patch("src.api.routes_health._get_agent_info", new_callable=AsyncMock, return_value={})
     @patch(
         "src.api.routes_health._get_observation_info",
@@ -63,8 +65,9 @@ class TestHealthDashboard:
             "budget_mode": "paused",
         },
     )
-    def test_dashboard_reflects_high_usage(self, _bud, _q, _obs, _ag):
-        resp = client.get("/v1/system/dashboard")
-        data = resp.json()
-        assert data["budget"]["budget_mode"] == "paused"
-        assert data["queues"]["plans_in_flight"] == 3
+    async def test_dashboard_reflects_high_usage(
+        self, _bud, _q, _obs, _ag, _tr, _run
+    ):
+        result = await system_dashboard(user_id=TEST_USER_ID)
+        assert result.budget["budget_mode"] == "paused"
+        assert result.queues["plans_in_flight"] == 3

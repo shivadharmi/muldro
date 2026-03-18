@@ -1,5 +1,7 @@
 """Tests for the WebSocket route and real-time A2UI delivery."""
 
+from tests.conftest import TEST_USER_ID
+
 
 class TestWebSocketRoute:
     def _get_app(self):
@@ -19,7 +21,7 @@ class TestBroadcast:
     async def test_broadcast_to_user_no_connections(self):
         from src.api.routes_ws import broadcast_to_user
 
-        sent = await broadcast_to_user("usr_default", {"type": "test"})
+        sent = await broadcast_to_user(TEST_USER_ID, {"type": "test"})
         assert sent == 0
 
     def test_get_connected_users_empty(self):

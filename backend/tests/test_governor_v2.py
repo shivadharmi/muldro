@@ -9,6 +9,7 @@ from src.services.governor import (
     BLOCKED_ACTIONS,
     Governor,
 )
+from tests.conftest import TEST_USER_ID
 
 
 @pytest.fixture
@@ -53,7 +54,7 @@ class TestApplyPolicyModes:
         gov = Governor(mock_db, trust_engine=mock_trust, settings_service=mock_settings_svc)
         plan = _make_plan(decision="fetch_info", risk="low")
 
-        result = await gov._apply_policy(plan, "usr_default")
+        result = await gov._apply_policy(plan, TEST_USER_ID)
         assert result == "blocked"
 
     async def test_suggest_only_blocks(self, mock_db, mock_trust, mock_settings_svc):
@@ -61,7 +62,7 @@ class TestApplyPolicyModes:
         gov = Governor(mock_db, trust_engine=mock_trust, settings_service=mock_settings_svc)
         plan = _make_plan(decision="summarize", risk="low")
 
-        result = await gov._apply_policy(plan, "usr_default")
+        result = await gov._apply_policy(plan, TEST_USER_ID)
         assert result == "blocked"
 
     async def test_full_auto_executes_low_risk(self, mock_db, mock_trust, mock_settings_svc):
@@ -69,7 +70,7 @@ class TestApplyPolicyModes:
         gov = Governor(mock_db, trust_engine=mock_trust, settings_service=mock_settings_svc)
         plan = _make_plan(decision="send_email", risk="low")
 
-        result = await gov._apply_policy(plan, "usr_default")
+        result = await gov._apply_policy(plan, TEST_USER_ID)
         assert result == "auto_execute"
 
     async def test_full_auto_requires_approval_high_risk(
@@ -79,7 +80,7 @@ class TestApplyPolicyModes:
         gov = Governor(mock_db, trust_engine=mock_trust, settings_service=mock_settings_svc)
         plan = _make_plan(decision="send_email", risk="high")
 
-        result = await gov._apply_policy(plan, "usr_default")
+        result = await gov._apply_policy(plan, TEST_USER_ID)
         assert result == "approval_required"
 
     async def test_full_auto_still_blocks_dangerous(self, mock_db, mock_trust, mock_settings_svc):
@@ -87,7 +88,7 @@ class TestApplyPolicyModes:
         gov = Governor(mock_db, trust_engine=mock_trust, settings_service=mock_settings_svc)
         plan = _make_plan(decision="delete_data", risk="low")
 
-        result = await gov._apply_policy(plan, "usr_default")
+        result = await gov._apply_policy(plan, TEST_USER_ID)
         assert result == "blocked"
 
 
@@ -97,23 +98,23 @@ class TestTrustIntegration:
         gov = Governor(mock_db, trust_engine=mock_trust, settings_service=mock_settings_svc)
         plan = _make_plan(decision="send_email", risk="low")
 
-        result = await gov._apply_policy(plan, "usr_default")
+        result = await gov._apply_policy(plan, TEST_USER_ID)
         assert result == "auto_execute"
-        mock_trust.should_auto_approve.assert_called_once_with("usr_default", "send_email", "low")
+        mock_trust.should_auto_approve.assert_called_once_with(TEST_USER_ID, "send_email", "low")
 
     async def test_no_trust_requires_approval(self, mock_db, mock_trust, mock_settings_svc):
         mock_trust.should_auto_approve.return_value = False
         gov = Governor(mock_db, trust_engine=mock_trust, settings_service=mock_settings_svc)
         plan = _make_plan(decision="send_email", risk="low")
 
-        result = await gov._apply_policy(plan, "usr_default")
+        result = await gov._apply_policy(plan, TEST_USER_ID)
         assert result == "approval_required"
 
     async def test_no_trust_engine_defaults_to_approval(self, mock_db, mock_settings_svc):
         gov = Governor(mock_db, trust_engine=None, settings_service=mock_settings_svc)
         plan = _make_plan(decision="send_email", risk="low")
 
-        result = await gov._apply_policy(plan, "usr_default")
+        result = await gov._apply_policy(plan, TEST_USER_ID)
         assert result == "approval_required"
 
 
@@ -122,20 +123,20 @@ class TestDefaultPolicyRules:
         gov = Governor(mock_db, settings_service=mock_settings_svc)
         for action in AUTO_EXECUTE_ACTIONS:
             plan = _make_plan(decision=action, risk="low")
-            result = await gov._apply_policy(plan, "usr_default")
+            result = await gov._apply_policy(plan, TEST_USER_ID)
             assert result == "auto_execute", f"Expected auto_execute for {action}"
 
     async def test_blocked_actions(self, mock_db, mock_settings_svc):
         gov = Governor(mock_db, settings_service=mock_settings_svc)
         for action in BLOCKED_ACTIONS:
             plan = _make_plan(decision=action, risk="low")
-            result = await gov._apply_policy(plan, "usr_default")
+            result = await gov._apply_policy(plan, TEST_USER_ID)
             assert result == "blocked", f"Expected blocked for {action}"
 
     async def test_high_risk_always_needs_approval(self, mock_db, mock_settings_svc):
         gov = Governor(mock_db, settings_service=mock_settings_svc)
         plan = _make_plan(decision="summarize", risk="high")
-        result = await gov._apply_policy(plan, "usr_default")
+        result = await gov._apply_policy(plan, TEST_USER_ID)
         assert result == "approval_required"
 
 
@@ -143,12 +144,12 @@ class TestFallbackBehavior:
     async def test_no_settings_service_uses_default(self, mock_db):
         gov = Governor(mock_db)
         plan = _make_plan(decision="send_email", risk="low")
-        result = await gov._apply_policy(plan, "usr_default")
+        result = await gov._apply_policy(plan, TEST_USER_ID)
         assert result == "approval_required"
 
     async def test_settings_service_error_falls_back(self, mock_db, mock_settings_svc):
         mock_settings_svc.get_policy_mode.side_effect = Exception("DB error")
         gov = Governor(mock_db, settings_service=mock_settings_svc)
         plan = _make_plan(decision="send_email", risk="low")
-        result = await gov._apply_policy(plan, "usr_default")
+        result = await gov._apply_policy(plan, TEST_USER_ID)
         assert result == "approval_required"

@@ -10,16 +10,16 @@ from src.api.app import app
 from src.api.deps import get_current_user, get_current_user_id, get_session
 from src.models.observation import ObservationStatus
 from src.services.heartbeat import HeartbeatService
-from tests.conftest import make_mock_settings
+from tests.conftest import TEST_USER_ID, make_mock_settings
 
 
 @pytest.fixture(autouse=True)
 def _override_auth():
     mock_user = MagicMock()
-    mock_user.user_id = "usr_default"
+    mock_user.user_id = TEST_USER_ID
 
     app.dependency_overrides[get_current_user] = lambda: mock_user
-    app.dependency_overrides[get_current_user_id] = lambda: "usr_default"
+    app.dependency_overrides[get_current_user_id] = lambda: TEST_USER_ID
     yield
     app.dependency_overrides.pop(get_current_user, None)
     app.dependency_overrides.pop(get_current_user_id, None)
@@ -247,7 +247,7 @@ async def test_heartbeat_observation_health_flags_stale():
     )
 
     service = HeartbeatService(settings=settings, db=mock_db)
-    result = await service.run("usr_default")
+    result = await service.run(TEST_USER_ID)
 
     health = result["observation_health"]
     assert len(health) == 2
@@ -282,7 +282,7 @@ async def test_heartbeat_observation_health_error_is_stale():
     )
 
     service = HeartbeatService(settings=settings, db=mock_db)
-    result = await service.run("usr_default")
+    result = await service.run(TEST_USER_ID)
 
     health = result["observation_health"]
     assert health[0]["is_stale"] is True

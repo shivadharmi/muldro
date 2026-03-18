@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.services.presenter import Presenter
-from tests.conftest import make_mock_settings
+from tests.conftest import TEST_USER_ID, make_mock_settings
 
 
 @pytest.fixture
@@ -49,7 +49,7 @@ async def test_generate_briefing_creates_new(mock_get_client, settings, mock_db)
     mock_get_client.return_value = mock_client
 
     presenter = Presenter(settings=settings, db=mock_db)
-    briefing = await presenter.generate_briefing("usr_default", date(2026, 3, 13))
+    briefing = await presenter.generate_briefing(TEST_USER_ID, date(2026, 3, 13))
 
     assert briefing.briefing_id.startswith("brief_")
     assert briefing.headline == "2 priorities, 1 follow-up"
@@ -74,7 +74,7 @@ async def test_generate_briefing_returns_cached(mock_get_client, settings, mock_
     mock_get_client.return_value = mock_client
 
     presenter = Presenter(settings=settings, db=mock_db)
-    briefing = await presenter.generate_briefing("usr_default", date(2026, 3, 13))
+    briefing = await presenter.generate_briefing(TEST_USER_ID, date(2026, 3, 13))
 
     assert briefing.briefing_id == "brief_cached"
     # Claude should NOT have been called
@@ -90,7 +90,7 @@ async def test_generate_briefing_handles_claude_failure(mock_get_client, setting
     mock_get_client.return_value = mock_client
 
     presenter = Presenter(settings=settings, db=mock_db)
-    briefing = await presenter.generate_briefing("usr_default", date(2026, 3, 13))
+    briefing = await presenter.generate_briefing(TEST_USER_ID, date(2026, 3, 13))
 
     assert briefing.headline == "Unable to generate briefing"
     assert briefing.briefing_id.startswith("brief_")
@@ -118,10 +118,10 @@ def test_briefing_endpoint_returns_response():
         from src.api.deps import get_current_user, get_current_user_id
 
         mock_user = MagicMock()
-        mock_user.user_id = "usr_default"
+        mock_user.user_id = TEST_USER_ID
 
         app.dependency_overrides[get_current_user] = lambda: mock_user
-        app.dependency_overrides[get_current_user_id] = lambda: "usr_default"
+        app.dependency_overrides[get_current_user_id] = lambda: TEST_USER_ID
         try:
             client = TestClient(app)
             response = client.get("/v1/briefings/2026-03-13")

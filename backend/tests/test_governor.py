@@ -4,7 +4,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from src.orchestrator.contracts import PolicyDecision
 from src.services.governor import Governor
+from tests.conftest import TEST_USER_ID
 
 
 @pytest.fixture
@@ -19,7 +21,7 @@ def mock_db():
 def _make_mock_plan(decision="draft_reply", risk_level="medium", tasks=None):
     plan = MagicMock()
     plan.plan_id = "plan_001"
-    plan.user_id = "usr_default"
+    plan.user_id = TEST_USER_ID
     plan.goal = "Reply to investor email"
     plan.decision = decision
     plan.risk_level = risk_level
@@ -40,9 +42,11 @@ async def test_governor_requires_approval_for_draft(mock_db):
     mock_db.execute = AsyncMock(return_value=result_mock)
 
     governor = Governor(db=mock_db)
-    decision = await governor.evaluate_plan("plan_001", "usr_default")
+    result = await governor.evaluate_plan("plan_001", TEST_USER_ID)
 
-    assert decision == "approval_required"
+    assert isinstance(result, PolicyDecision)
+    assert result.decision == "approval_required"
+    assert result.execution_id is not None
     # Should have added execution + approval + 2 audit entries
     assert mock_db.add.call_count >= 2
 
@@ -57,9 +61,12 @@ async def test_governor_auto_executes_acknowledge(mock_db):
     mock_db.execute = AsyncMock(return_value=result_mock)
 
     governor = Governor(db=mock_db)
-    decision = await governor.evaluate_plan("plan_001", "usr_default")
+    result = await governor.evaluate_plan("plan_001", TEST_USER_ID)
 
-    assert decision == "auto_execute"
+    assert isinstance(result, PolicyDecision)
+    assert result.decision == "auto_execute"
+    assert result.execution_id is not None
+    assert result.approval_id is None
 
 
 @pytest.mark.asyncio
@@ -72,9 +79,10 @@ async def test_governor_blocks_dangerous_actions(mock_db):
     mock_db.execute = AsyncMock(return_value=result_mock)
 
     governor = Governor(db=mock_db)
-    decision = await governor.evaluate_plan("plan_001", "usr_default")
+    result = await governor.evaluate_plan("plan_001", TEST_USER_ID)
 
-    assert decision == "blocked"
+    assert isinstance(result, PolicyDecision)
+    assert result.decision == "blocked"
 
 
 @pytest.mark.asyncio
@@ -89,9 +97,10 @@ async def test_governor_checks_task_types(mock_db):
     mock_db.execute = AsyncMock(return_value=result_mock)
 
     governor = Governor(db=mock_db)
-    decision = await governor.evaluate_plan("plan_001", "usr_default")
+    result = await governor.evaluate_plan("plan_001", TEST_USER_ID)
 
-    assert decision == "approval_required"
+    assert isinstance(result, PolicyDecision)
+    assert result.decision == "approval_required"
 
 
 @pytest.mark.asyncio
@@ -104,6 +113,40 @@ async def test_governor_high_risk_requires_approval(mock_db):
     mock_db.execute = AsyncMock(return_value=result_mock)
 
     governor = Governor(db=mock_db)
-    decision = await governor.evaluate_plan("plan_001", "usr_default")
+    result = await governor.evaluate_plan("plan_001", TEST_USER_ID)
 
-    assert decision == "approval_required"
+    assert isinstance(result, PolicyDecision)
+    assert result.decision == "approval_required"
+    assert result.risk_level == "high"
+
+
+@pytest.mark.asyncio
+async def test_governor_plan_not_found_returns_blocked(mock_db):
+    """Missing plan should return blocked PolicyDecision."""
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = None
+    mock_db.execute = AsyncMock(return_value=result_mock)
+
+    governor = Governor(db=mock_db)
+    result = await governor.evaluate_plan("plan_missing", TEST_USER_ID)
+
+    assert isinstance(result, PolicyDecision)
+    assert result.decision == "blocked"
+    assert "not found" in result.justification.lower()
+
+
+@pytest.mark.asyncio
+async def test_governor_approval_id_set_when_approval_required(mock_db):
+    """Approval ID should be populated when decision is approval_required."""
+    plan = _make_mock_plan(decision="draft_reply")
+
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = plan
+    mock_db.execute = AsyncMock(return_value=result_mock)
+
+    governor = Governor(db=mock_db)
+    result = await governor.evaluate_plan("plan_001", TEST_USER_ID)
+
+    assert result.decision == "approval_required"
+    assert result.approval_id is not None
+    assert result.approval_id.startswith("apr_")

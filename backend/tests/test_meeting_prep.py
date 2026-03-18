@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.services.presenter import Presenter
-from tests.conftest import make_mock_settings
+from tests.conftest import TEST_USER_ID, make_mock_settings
 
 
 @pytest.fixture
@@ -25,7 +25,7 @@ def mock_db():
 def _make_meeting_event():
     event = MagicMock()
     event.event_id = "evt_cal_001"
-    event.user_id = "usr_default"
+    event.user_id = TEST_USER_ID
     event.source = "calendar"
     event.event_type = "calendar_event_created"
     event.entity_type = "calendar_event"
@@ -51,7 +51,7 @@ async def test_meeting_prep_not_found(mock_get_client, settings, mock_db):
     mock_db.execute = AsyncMock(return_value=empty_result)
 
     presenter = Presenter(settings=settings, db=mock_db)
-    result = await presenter.generate_meeting_prep("nonexistent", "usr_default")
+    result = await presenter.generate_meeting_prep("nonexistent", TEST_USER_ID)
 
     assert result["title"] == "Meeting not found"
     assert "Could not find" in result["risks"][0]
@@ -104,7 +104,7 @@ async def test_meeting_prep_generates_content(mock_get_client, settings, mock_db
     )
 
     presenter = Presenter(settings=settings, db=mock_db)
-    result = await presenter.generate_meeting_prep("evt_cal_001", "usr_default")
+    result = await presenter.generate_meeting_prep("evt_cal_001", TEST_USER_ID)
 
     assert result["title"] == "Series B Strategy Meeting"
     assert result["meeting_id"] == "evt_cal_001"
@@ -146,7 +146,7 @@ async def test_meeting_prep_next_meeting(mock_get_client, settings, mock_db):
     )
 
     presenter = Presenter(settings=settings, db=mock_db)
-    result = await presenter.generate_meeting_prep(None, "usr_default", next_meeting=True)
+    result = await presenter.generate_meeting_prep(None, TEST_USER_ID, next_meeting=True)
 
     assert result["title"] == "Series B Strategy Meeting"
 
@@ -172,7 +172,7 @@ async def test_meeting_prep_claude_failure(mock_get_client, settings, mock_db):
     )
 
     presenter = Presenter(settings=settings, db=mock_db)
-    result = await presenter.generate_meeting_prep("evt_cal_001", "usr_default")
+    result = await presenter.generate_meeting_prep("evt_cal_001", TEST_USER_ID)
 
     assert result["title"] == "Series B Strategy Meeting"
     assert "Meeting prep generation failed" in result["risks"][0]

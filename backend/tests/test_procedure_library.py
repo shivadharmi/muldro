@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.services.procedure_library import ProcedureLibrary
+from tests.conftest import TEST_USER_ID
 
 
 @pytest.fixture
@@ -28,7 +29,7 @@ def _make_procedure(
 ):
     p = MagicMock()
     p.procedure_id = procedure_id
-    p.user_id = "usr_default"
+    p.user_id = TEST_USER_ID
     p.name = "Test procedure"
     p.status = status
     p.trigger_pattern = trigger_pattern or {}
@@ -45,7 +46,7 @@ class TestFindMatching:
         result_mock.scalars.return_value.all.return_value = [proc]
         mock_db.execute = AsyncMock(return_value=result_mock)
 
-        matched = await library.find_matching("usr_default", "email_received")
+        matched = await library.find_matching(TEST_USER_ID, "email_received")
         assert len(matched) == 1
 
     async def test_no_match(self, library, mock_db):
@@ -54,7 +55,7 @@ class TestFindMatching:
         result_mock.scalars.return_value.all.return_value = [proc]
         mock_db.execute = AsyncMock(return_value=result_mock)
 
-        matched = await library.find_matching("usr_default", "email_received")
+        matched = await library.find_matching(TEST_USER_ID, "email_received")
         assert len(matched) == 0
 
     async def test_sorted_by_confidence(self, library, mock_db):
@@ -64,7 +65,7 @@ class TestFindMatching:
         result_mock.scalars.return_value.all.return_value = [proc1, proc2]
         mock_db.execute = AsyncMock(return_value=result_mock)
 
-        matched = await library.find_matching("usr_default", "any")
+        matched = await library.find_matching(TEST_USER_ID, "any")
         assert matched[0].confidence == 0.9
 
 
@@ -111,7 +112,7 @@ class TestActivateProcedure:
         result_mock.scalar_one_or_none.return_value = proc
         mock_db.execute = AsyncMock(return_value=result_mock)
 
-        assert await library.activate_procedure("proc_001", "usr_default")
+        assert await library.activate_procedure("proc_001", TEST_USER_ID)
         assert proc.status == "active"
 
     async def test_not_found(self, library, mock_db):
@@ -119,4 +120,4 @@ class TestActivateProcedure:
         result_mock.scalar_one_or_none.return_value = None
         mock_db.execute = AsyncMock(return_value=result_mock)
 
-        assert not await library.activate_procedure("missing", "usr_default")
+        assert not await library.activate_procedure("missing", TEST_USER_ID)

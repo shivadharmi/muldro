@@ -6,6 +6,7 @@ import pytest
 
 from src.services.event_bus import BusEvent
 from src.services.trigger_engine import TriggerEngine
+from tests.conftest import TEST_USER_ID
 
 
 @pytest.fixture
@@ -32,7 +33,7 @@ def _make_trigger(
 ):
     t = MagicMock()
     t.trigger_id = trigger_id
-    t.user_id = "usr_default"
+    t.user_id = TEST_USER_ID
     t.name = "Test trigger"
     t.conditions = conditions or {}
     t.action_type = action_type
@@ -47,11 +48,11 @@ def _make_bus_event(
     event_type="email_received",
     source="gmail",
     importance_score=0.8,
-    user_id="usr_default",
+    user_id=TEST_USER_ID,
 ):
     return BusEvent(
         event_id="be_test",
-        stream="jarvis:events:usr_default",
+        stream=f"jarvis:events:{TEST_USER_ID}",
         event_type=event_type,
         user_id=user_id,
         payload={
@@ -65,7 +66,7 @@ def _make_bus_event(
 class TestCreateTrigger:
     async def test_creates_trigger(self, engine, mock_db):
         await engine.create_trigger(
-            user_id="usr_default",
+            user_id=TEST_USER_ID,
             name="High priority email",
             conditions={"event_type": "email_received", "importance_threshold": 0.9},
             action_type="notify",

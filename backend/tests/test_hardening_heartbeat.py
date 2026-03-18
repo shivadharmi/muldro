@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.services.heartbeat import HeartbeatService
-from tests.conftest import make_mock_settings
+from tests.conftest import TEST_USER_ID, make_mock_settings
 
 
 @pytest.fixture
@@ -65,7 +65,7 @@ async def test_expire_approvals(settings, mock_db):
     )
 
     service = HeartbeatService(settings=settings, db=mock_db)
-    result = await service.run("usr_default")
+    result = await service.run(TEST_USER_ID)
 
     assert result["expired_approvals"] == 1
     assert expired_approval.status == "expired"
@@ -103,7 +103,7 @@ async def test_invalidate_old_plans(settings, mock_db):
     )
 
     service = HeartbeatService(settings=settings, db=mock_db)
-    result = await service.run("usr_default")
+    result = await service.run(TEST_USER_ID)
 
     assert result["invalidated_plans"] == 1
     assert old_plan.status == "failed"
@@ -118,7 +118,7 @@ async def test_heartbeat_no_work(settings, mock_db):
     mock_db.execute = AsyncMock(return_value=empty_result)
 
     service = HeartbeatService(settings=settings, db=mock_db)
-    result = await service.run("usr_default")
+    result = await service.run(TEST_USER_ID)
 
     assert result["expired_memories"] == 0
     assert result["stale_plans_found"] == 0
