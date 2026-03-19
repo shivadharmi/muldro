@@ -65,6 +65,23 @@ BEDROCK_MODEL_TIERS = {
 CONTEXT_ENRICHED_AGENTS = {"planner", "presenter", "researcher", "librarian"}
 
 
+def _sanitize_content_blocks(content) -> list[dict]:
+    """Convert SDK response content blocks to plain dicts for re-submission.
+
+    Anthropic SDK v0.84+ adds fields to response objects (e.g. ``caller`` on
+    ToolUseBlock, ``citations`` on TextBlock) that default to ``None``.  The
+    API rejects ``null`` values for these fields when they appear in *input*
+    messages because the Param types use ``NOT_GIVEN`` (sentinel), not ``None``.
+    Using ``model_dump(exclude_none=True)`` strips these cleanly.
+    """
+    return [
+        block.model_dump(exclude_none=True)
+        if hasattr(block, "model_dump")
+        else {"type": block.type}
+        for block in content
+    ]
+
+
 class JarvisOrchestrator:
     """The Jarvis brain — orchestrates sub-agents via Claude API.
 
@@ -103,6 +120,8 @@ class JarvisOrchestrator:
         try:
             async with self._db_factory() as db:
                 registry = AgentRegistry(db)
+                await registry.seed_defaults()
+                await db.commit()
                 db_agents = await registry.load_as_sub_agents()
                 if db_agents:
                     self._agents = db_agents
@@ -944,7 +963,9 @@ class JarvisOrchestrator:
                         continue
 
                     tool_start = time.time()
-                    result = await self._execute_tool(tool_name, tool_input, user_id=user_id)
+                    result = await self._execute_tool(
+                        tool_name, tool_input, user_id=user_id, workspace_id=workspace_id
+                    )
                     tool_latency = int((time.time() - tool_start) * 1000)
 
                     tool_results.append(
@@ -997,7 +1018,9 @@ class JarvisOrchestrator:
                     )
 
                 # Preserve thinking blocks for multi-turn tool-use continuity
-                messages.append({"role": "assistant", "content": response.content})
+                messages.append(
+                    {"role": "assistant", "content": _sanitize_content_blocks(response.content)}
+                )
                 messages.append({"role": "user", "content": tool_results})
             else:
                 text = f"[Agent {agent_name} hit max tool rounds ({max_tool_rounds})]"
@@ -1164,7 +1187,9 @@ class JarvisOrchestrator:
         trace = self._trace_manager.start_trace("scheduled_briefing")
         try:
             # Step 1: Gather raw briefing data from intelligence server
-            raw_data = await self._execute_tool("get_briefing", {"date": "today"}, user_id=user_id)
+            raw_data = await self._execute_tool(
+                "get_briefing", {"date": "today"}, user_id=user_id, workspace_id=workspace_id
+            )
 
             # Step 2: Let Presenter format it into a user-friendly briefing
             result = await self._call_agent(
@@ -1473,7 +1498,9 @@ class JarvisOrchestrator:
 
                     # Execute the tool
                     tool_start = time.time()
-                    result = await self._execute_tool(tool_name, tool_input, user_id=user_id)
+                    result = await self._execute_tool(
+                        tool_name, tool_input, user_id=user_id, workspace_id=workspace_id
+                    )
                     tool_latency = int((time.time() - tool_start) * 1000)
 
                     tool_results.append(
@@ -1519,7 +1546,9 @@ class JarvisOrchestrator:
                     )
 
                 # Preserve thinking blocks for multi-turn tool-use continuity
-                messages.append({"role": "assistant", "content": response.content})
+                messages.append(
+                    {"role": "assistant", "content": _sanitize_content_blocks(response.content)}
+                )
                 messages.append({"role": "user", "content": tool_results})
             else:
                 text = f"[Agent {agent_name} hit max tool rounds ({max_tool_rounds})]"
@@ -1599,7 +1628,9 @@ class JarvisOrchestrator:
 
         return agent_result.response_text
 
-    async def _execute_tool(self, tool_name: str, tool_input: dict, user_id: str) -> dict:
+    async def _execute_tool(
+        self, tool_name: str, tool_input: dict, user_id: str, workspace_id: str = ""
+    ) -> dict:
         """Execute a tool by name, using ToolRegistry for dispatch.
 
         Resolution order:
@@ -1643,6 +1674,10 @@ class JarvisOrchestrator:
             "build_context": intelligence_server.build_context,
             "verify_run": intelligence_server.verify_run,
         }
+
+        # Inject workspace_id so tools always have it, even if the model omitted it
+        if workspace_id and "workspace_id" not in tool_input:
+            tool_input = {**tool_input, "workspace_id": workspace_id}
 
         # Emit tool.started event
         await self._publish_event("tool.started", user_id, {"tool": tool_name})
