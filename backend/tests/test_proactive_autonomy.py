@@ -299,14 +299,17 @@ class TestPerceptionWiring:
         from src.services.scheduler import SchedulerLoop
 
         orchestrator = MagicMock()
-        orchestrator._db_factory = MagicMock()
-        # Mock the async context for restore_cursors
+        # Mock the async context manager for restore_cursors
         mock_db = MagicMock()
         mock_result = MagicMock()
         mock_result.scalars.return_value.all.return_value = []
         mock_db.execute = AsyncMock(return_value=mock_result)
         mock_db.close = AsyncMock()
-        orchestrator._db_factory.return_value = mock_db
+
+        db_ctx = AsyncMock()
+        db_ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        db_ctx.__aexit__ = AsyncMock(return_value=False)
+        orchestrator._db_factory = MagicMock(return_value=db_ctx)
 
         scheduler = SchedulerLoop(MagicMock(), orchestrator=orchestrator, user_ids=[TEST_USER_ID])
         await scheduler._init_perception()
