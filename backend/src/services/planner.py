@@ -113,7 +113,11 @@ class Planner:
 
         raw_plan = await self._call_claude("\n\n".join(sections))
         plan = await self._store_plan(
-            raw_plan, user_id, trigger_type="command", trigger_ref=None, workspace_id=workspace_id,
+            raw_plan,
+            user_id,
+            trigger_type="command",
+            trigger_ref=None,
+            workspace_id=workspace_id,
         )
         plan._execution_plan = self._to_execution_plan(plan, raw_plan)
         return plan
@@ -154,28 +158,33 @@ class Planner:
             sections.append(f"## Actors\n{json.dumps(event.actor_entities, indent=2)}")
 
         enrichment = await self._gather_context(
-            event.title or event.summary or "", user_id, workspace_id=workspace_id,
+            event.title or event.summary or "",
+            user_id,
+            workspace_id=workspace_id,
         )
         if enrichment:
             sections.append(enrichment)
 
         raw_plan = await self._call_claude("\n\n".join(sections))
         plan = await self._store_plan(
-            raw_plan, user_id, trigger_type="event", trigger_ref=event_id,
+            raw_plan,
+            user_id,
+            trigger_type="event",
+            trigger_ref=event_id,
             workspace_id=workspace_id,
         )
         plan._execution_plan = self._to_execution_plan(plan, raw_plan)
         return plan
 
-    async def _gather_context(
-        self, query: str, user_id: str, workspace_id: str = ""
-    ) -> str | None:
+    async def _gather_context(self, query: str, user_id: str, workspace_id: str = "") -> str | None:
         """Gather entity and memory context for enriched planning."""
         parts = []
 
         if self._world_model:
             entities = await self._world_model.find_entity(
-                user_id, query, workspace_id=workspace_id,
+                user_id,
+                query,
+                workspace_id=workspace_id,
             )
             if entities:
                 entity_lines = [
@@ -185,7 +194,10 @@ class Planner:
 
         if self._memory_service:
             memories = await self._memory_service.retrieve(
-                user_id, query, max_results=5, workspace_id=workspace_id,
+                user_id,
+                query,
+                max_results=5,
+                workspace_id=workspace_id,
             )
             if memories:
                 mem_lines = [f"- {m.get('fact_text', '')}" for m in memories[:5]]

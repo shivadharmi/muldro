@@ -82,5 +82,3 @@ class TestPublishProgress:
         await executor._emit_event("memory.updated", "usr_1", {"memory_id": "mem_001"})
 
         executor._publish_progress.assert_not_called()
-
-

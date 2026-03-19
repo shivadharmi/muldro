@@ -102,9 +102,7 @@ async def gather_attendee_context(context: dict) -> dict:
     world_model = services.get("world_model")
     if world_model and attendee_emails:
         for email in attendee_emails[:10]:
-            entity = await world_model.find_entity(
-                user_id, email, workspace_id=workspace_id
-            )
+            entity = await world_model.find_entity(user_id, email, workspace_id=workspace_id)
             if entity:
                 attendees.append(entity)
 

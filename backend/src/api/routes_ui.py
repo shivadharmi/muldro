@@ -28,9 +28,7 @@ class UISurfaceListResponse(BaseModel):
 
 
 @router.get("/v1/ui/surfaces/{user_id}", response_model=UISurfaceListResponse)
-async def get_user_surfaces(
-    user_id: str, surface_type: str = "", workspace_id: str = ""
-):
+async def get_user_surfaces(user_id: str, surface_type: str = "", workspace_id: str = ""):
     """Get latest A2UI surfaces for a user.
 
     Optionally filter by surface_type (briefing, approval, dashboard).

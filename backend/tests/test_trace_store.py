@@ -51,7 +51,7 @@ async def test_search_by_trigger(store):
                 "started_at": _NOW,
                 "spans": [],
             },
-            user_id=TEST_USER_ID
+            user_id=TEST_USER_ID,
         )
 
     results = await store.search_traces(trigger="briefing")
@@ -68,7 +68,7 @@ async def test_search_by_agent_name(store):
             "started_at": _NOW,
             "spans": [{"agent_name": "planner", "duration_ms": 100}],
         },
-        user_id=TEST_USER_ID
+        user_id=TEST_USER_ID,
     )
     await store.store_trace(
         {
@@ -77,7 +77,7 @@ async def test_search_by_agent_name(store):
             "started_at": _NOW,
             "spans": [{"agent_name": "observer", "duration_ms": 50}],
         },
-        user_id=TEST_USER_ID
+        user_id=TEST_USER_ID,
     )
 
     results = await store.search_traces(agent_name="planner")
@@ -95,7 +95,7 @@ async def test_search_limit(store):
                 "started_at": _NOW,
                 "spans": [],
             },
-            user_id=TEST_USER_ID
+            user_id=TEST_USER_ID,
         )
 
     results = await store.search_traces(limit=3)
@@ -131,7 +131,7 @@ async def test_agent_performance(store):
                 },
             ],
         },
-        user_id=TEST_USER_ID
+        user_id=TEST_USER_ID,
     )
 
     perf = await store.get_agent_performance()
@@ -153,7 +153,7 @@ async def test_ring_buffer_max_size():
                 "started_at": _NOW,
                 "spans": [],
             },
-            user_id=TEST_USER_ID
+            user_id=TEST_USER_ID,
         )
     # Ring buffer maxlen=500, so oldest should be evicted
     assert await store.get_trace("trace_0") is None

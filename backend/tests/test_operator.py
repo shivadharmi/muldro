@@ -141,9 +141,7 @@ async def test_execute_plan_graph_exception(settings, mock_db):
     mock_db.execute = AsyncMock(side_effect=[run_result, plan_result])
 
     mock_graph = MagicMock()
-    mock_graph.populate_run_steps = AsyncMock(
-        side_effect=RuntimeError("DAG build failed")
-    )
+    mock_graph.populate_run_steps = AsyncMock(side_effect=RuntimeError("DAG build failed"))
 
     operator = Operator(settings=settings, db=mock_db, graph_executor=mock_graph)
     success = await operator.execute_plan("run_001", TEST_USER_ID)

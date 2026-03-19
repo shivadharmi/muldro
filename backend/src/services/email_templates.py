@@ -6,9 +6,7 @@ def magic_link_email(verify_url: str, ttl_minutes: int = 15) -> tuple[str, str]:
     bg = "#171717"
     card = "#262626"
     btn = "#2563eb"
-    body_font = (
-        "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif"
-    )
+    body_font = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif"
     html = (
         f'<!DOCTYPE html>\n<html>\n<head><meta charset="utf-8"></head>\n'
         f'<body style="margin:0;padding:0;background-color:{bg};'

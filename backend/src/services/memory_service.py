@@ -216,12 +216,20 @@ class MemoryService:
         query_embedding = await self._embedder.embed_text(query)
         if query_embedding:
             results = await self._composite_retrieve(
-                user_id, query_embedding, memory_types, entity_refs, max_results,
+                user_id,
+                query_embedding,
+                memory_types,
+                entity_refs,
+                max_results,
                 workspace_id=workspace_id,
             )
         else:
             results = await self._text_retrieve(
-                user_id, query, memory_types, max_results, workspace_id=workspace_id,
+                user_id,
+                query,
+                memory_types,
+                max_results,
+                workspace_id=workspace_id,
             )
 
         # Update stability scores sequentially — asyncio.create_task on a shared
@@ -295,12 +303,13 @@ class MemoryService:
             LIMIT 10
         """)
         result = await self._db.execute(
-            sql, {
+            sql,
+            {
                 "user_id": user_id,
                 "workspace_id": workspace_id,
                 "new_id": new_memory_id,
                 "embedding": str(embedding),
-            }
+            },
         )
         candidates = result.all()
 

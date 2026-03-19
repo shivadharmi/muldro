@@ -83,9 +83,7 @@ class WorkingMemoryService:
         ]
         if workspace_id:
             conditions.append(WorkingMemoryEntry.workspace_id == workspace_id)
-        result = await self._db.execute(
-            select(WorkingMemoryEntry).where(*conditions)
-        )
+        result = await self._db.execute(select(WorkingMemoryEntry).where(*conditions))
         entry = result.scalar_one_or_none()
         if not entry:
             return None
@@ -129,9 +127,7 @@ class WorkingMemoryService:
         ]
         if workspace_id:
             conditions.append(WorkingMemoryEntry.workspace_id == workspace_id)
-        result = await self._db.execute(
-            select(WorkingMemoryEntry).where(*conditions)
-        )
+        result = await self._db.execute(select(WorkingMemoryEntry).where(*conditions))
         entries = result.scalars().all()
         return [
             {"key": e.key, "value": e.value}

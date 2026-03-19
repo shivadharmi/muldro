@@ -308,9 +308,7 @@ class TestPerceptionWiring:
         mock_db.close = AsyncMock()
         orchestrator._db_factory.return_value = mock_db
 
-        scheduler = SchedulerLoop(
-            MagicMock(), orchestrator=orchestrator, user_ids=[TEST_USER_ID]
-        )
+        scheduler = SchedulerLoop(MagicMock(), orchestrator=orchestrator, user_ids=[TEST_USER_ID])
         await scheduler._init_perception()
 
         assert len(scheduler._perception) == 1

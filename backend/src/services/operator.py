@@ -46,9 +46,7 @@ class Operator:
 
     async def execute_plan(self, run_id: str, user_id: str) -> bool:
         """Execute all tasks in a plan via GraphExecutor. Returns True on success."""
-        result = await self._db.execute(
-            select(TaskRun).where(TaskRun.run_id == run_id)
-        )
+        result = await self._db.execute(select(TaskRun).where(TaskRun.run_id == run_id))
         run = result.scalar_one_or_none()
         if not run:
             logger.error("TaskRun not found: %s", run_id)

@@ -79,9 +79,7 @@ class ConversationUpdateRequest(BaseModel):
 # ── Helpers ──────────────────────────────────────────────────────
 
 
-def _conversation_to_summary(
-    c: Conversation, preview: str | None = None
-) -> ConversationSummary:
+def _conversation_to_summary(c: Conversation, preview: str | None = None) -> ConversationSummary:
     return ConversationSummary(
         conversation_id=c.conversation_id,
         title=c.title,
@@ -298,9 +296,7 @@ async def get_conversation_messages(
 
     # Total count for pagination
     count_result = await db.execute(
-        select(func.count(Message.message_id)).where(
-            Message.conversation_id == conversation_id
-        )
+        select(func.count(Message.message_id)).where(Message.conversation_id == conversation_id)
     )
     total = count_result.scalar() or 0
 

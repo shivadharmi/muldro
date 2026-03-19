@@ -42,7 +42,7 @@ async def test_event_latency_ok(trace_store):
                 },
             ],
         },
-        user_id=TEST_USER_ID
+        user_id=TEST_USER_ID,
     )
     alerting = AlertingService(trace_store=trace_store)
     checks = await alerting.check_all_slos()
@@ -66,7 +66,7 @@ async def test_event_latency_critical(trace_store):
                 },
             ],
         },
-        user_id=TEST_USER_ID
+        user_id=TEST_USER_ID,
     )
     alerting = AlertingService(trace_store=trace_store)
     checks = await alerting.check_all_slos()
@@ -96,7 +96,7 @@ async def test_error_rate_ok(trace_store):
                 },
             ],
         },
-        user_id=TEST_USER_ID
+        user_id=TEST_USER_ID,
     )
     alerting = AlertingService(trace_store=trace_store)
     checks = await alerting.check_all_slos()
@@ -128,7 +128,7 @@ async def test_error_rate_critical(trace_store):
                 },
             ],
         },
-        user_id=TEST_USER_ID
+        user_id=TEST_USER_ID,
     )
     alerting = AlertingService(trace_store=trace_store)
     checks = await alerting.check_all_slos()
@@ -180,7 +180,7 @@ async def test_alert_cooldown(trace_store):
                 },
             ],
         },
-        user_id=TEST_USER_ID
+        user_id=TEST_USER_ID,
     )
     alerting = AlertingService(notifier=FakeNotifier(), trace_store=trace_store)
 

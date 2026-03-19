@@ -114,10 +114,7 @@ async def cross_reference(context: dict) -> dict:
         all_findings = [
             {"finding": m.get("fact", ""), "sources": ["memory"], "confidence": 0.7}
             for m in memory_results[:3]
-        ] + [
-            {"finding": str(w), "sources": ["web"], "confidence": 0.5}
-            for w in web_results[:3]
-        ]
+        ] + [{"finding": str(w), "sources": ["web"], "confidence": 0.5} for w in web_results[:3]]
         return {"cross_referenced": all_findings, "confidence": 0.5}
 
 
@@ -182,11 +179,13 @@ async def push_view(context: dict) -> dict:
             try:
                 await r.publish(
                     f"jarvis:realtime:{user_id}",
-                    json.dumps({
-                        "event_type": "surface.updated",
-                        "surface_type": "research_report",
-                        "preview": report[:200],
-                    }),
+                    json.dumps(
+                        {
+                            "event_type": "surface.updated",
+                            "surface_type": "research_report",
+                            "preview": report[:200],
+                        }
+                    ),
                 )
             finally:
                 await r.aclose()

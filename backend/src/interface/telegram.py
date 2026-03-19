@@ -153,9 +153,7 @@ class TelegramInterface:
 
             surfaces = []
             if self._surface_registry:
-                surfaces = await self._surface_registry.get_active_surfaces(
-                    self._resolve_user_id()
-                )
+                surfaces = await self._surface_registry.get_active_surfaces(self._resolve_user_id())
 
             text = (
                 f"*Jarvis Status*\n"

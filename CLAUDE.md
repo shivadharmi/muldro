@@ -140,6 +140,11 @@ All 49 data tables are scoped by `workspace_id` (NOT NULL FK to `workspaces`). O
 - Background services: resolve via `resolve_workspace_id(db, user_id)` helper (queries WorkspaceMember)
 - No default users — every function requires explicit `user_id` from auth context
 
+## Git
+
+- Do NOT add `Co-Authored-By` lines to commit messages
+- Follow conventional commits: `<type>: <description>`
+
 ## Common Mistakes
 
 - Do not let the planner output free-form text — always structured JSON

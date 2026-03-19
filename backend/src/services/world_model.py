@@ -269,9 +269,7 @@ class WorldModel:
         await self._db.commit()
         return relation_id
 
-    async def find_entity(
-        self, user_id: str, query: str, workspace_id: str = ""
-    ) -> list[dict]:
+    async def find_entity(self, user_id: str, query: str, workspace_id: str = "") -> list[dict]:
         """Search entities by name or alias. Ordered by importance."""
         pattern = f"%{query}%"
         result = await self._db.execute(
