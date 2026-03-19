@@ -1,12 +1,49 @@
-"""Structured JSON logging configuration.
+"""Structured logging configuration.
 
-Provides a JSON formatter that includes trace context (correlation_id)
-from the request middleware and any extra fields passed via logger.info(..., extra={}).
+Provides a JSON formatter for production and a colored formatter for local
+development that matches Uvicorn's default log style.
 """
 
 import json
 import logging
+import re
+import sys
+import warnings
 from datetime import datetime, timezone
+
+# Third-party loggers that are too noisy at INFO level
+_NOISY_LOGGERS = (
+    "sqlalchemy",
+    "sqlalchemy.engine",
+    "sqlalchemy.pool",
+    "httpcore",
+    "httpx",
+    "aiosqlite",
+    "asyncpg",
+    "watchfiles",
+    "multipart",
+    "hpack",
+    "h2",
+)
+
+# Regex to find sensitive query params in log messages
+_SENSITIVE_QS_RE = re.compile(
+    r"([\?&])(token|key|secret|password|auth)=([^\s&\"']+)", re.IGNORECASE
+)
+
+
+class _RedactFilter(logging.Filter):
+    """Redact sensitive query parameters (token, key, secret, etc.) from log messages."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.args:
+            # Uvicorn access logs pass args as a tuple; redact each string arg
+            record.args = tuple(
+                _SENSITIVE_QS_RE.sub(r"\1\2=[REDACTED]", str(a)) if isinstance(a, str) else a
+                for a in record.args
+            )
+        record.msg = _SENSITIVE_QS_RE.sub(r"\1\2=[REDACTED]", str(record.msg))
+        return True
 
 
 class JSONFormatter(logging.Formatter):
@@ -56,15 +93,30 @@ class JSONFormatter(logging.Formatter):
 def configure_logging(*, json_output: bool = False, level: int = logging.INFO) -> None:
     """Configure root logging.
 
+    Local dev uses Uvicorn's DefaultFormatter so all output looks identical.
+    Production uses JSONFormatter for structured log aggregation.
+
     Args:
-        json_output: If True, use JSON formatter. Otherwise use human-readable format.
-        level: Log level.
+        json_output: If True, use JSON formatter (production). Otherwise Uvicorn-style colored.
+        level: Log level for application loggers.
     """
-    handler = logging.StreamHandler()
+    # Suppress websockets 16.x deprecation warning (uvicorn hasn't adapted yet)
+    warnings.filterwarnings("ignore", message="remove second argument of ws_handler")
+
+    handler = logging.StreamHandler(sys.stderr)
+    handler.addFilter(_RedactFilter())
 
     if json_output:
         handler.setFormatter(JSONFormatter())
     else:
-        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        from uvicorn.logging import DefaultFormatter
+
+        handler.setFormatter(
+            DefaultFormatter("%(levelprefix)s %(name)s: %(message)s", use_colors=True)
+        )
 
     logging.basicConfig(level=level, handlers=[handler], force=True)
+
+    # Suppress noisy third-party loggers
+    for name in _NOISY_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
