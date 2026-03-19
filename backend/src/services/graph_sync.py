@@ -49,25 +49,62 @@ class GraphSyncService:
     async def on_relationship_change(self, event: BusEvent) -> None:
         """Handle relationship created/updated events."""
         payload = event.payload
-        rel_id = payload.get("relationship_id", "")
+        rel_id = payload.get("relationship_id", payload.get("relation_id", ""))
         if not rel_id:
             return
 
         result = await self._db.execute(
-            select(EntityRelationship).where(EntityRelationship.id == int(rel_id))
+            select(EntityRelationship).where(EntityRelationship.relation_id == rel_id)
         )
         rel = result.scalar_one_or_none()
         if not rel:
             return
 
         await self._graph.sync_relationship(
+            relation_id=rel.relation_id,
             from_entity_id=rel.from_entity_id,
             to_entity_id=rel.to_entity_id,
             relation_type=rel.relation_type,
             user_id=rel.user_id,
-            properties=rel.attributes,
         )
         logger.debug("Synced relationship %s to Neo4j", rel_id)
+
+    async def sync_entity_by_id(self, entity_id: str) -> None:
+        """Directly sync a single entity to Neo4j by ID."""
+        result = await self._db.execute(select(Entity).where(Entity.entity_id == entity_id))
+        entity = result.scalar_one_or_none()
+        if not entity:
+            return
+
+        await self._graph.sync_entity(
+            entity_id=entity.entity_id,
+            entity_type=entity.entity_type,
+            name=entity.canonical_name,
+            user_id=entity.user_id,
+            attributes=entity.attributes,
+        )
+
+    async def sync_relationships_for_entity(self, entity_id: str) -> None:
+        """Sync all relationships involving an entity to Neo4j."""
+        from sqlalchemy import or_
+
+        result = await self._db.execute(
+            select(EntityRelationship).where(
+                or_(
+                    EntityRelationship.from_entity_id == entity_id,
+                    EntityRelationship.to_entity_id == entity_id,
+                )
+            )
+        )
+        rels = result.scalars().all()
+        for rel in rels:
+            await self._graph.sync_relationship(
+                relation_id=rel.relation_id,
+                from_entity_id=rel.from_entity_id,
+                to_entity_id=rel.to_entity_id,
+                relation_type=rel.relation_type,
+                user_id=rel.user_id,
+            )
 
     async def full_reconciliation(self, user_id: str) -> dict:
         """Full sync of all entities and relationships for a user."""
@@ -101,17 +138,17 @@ class GraphSyncService:
         for rel in rels:
             try:
                 await self._graph.sync_relationship(
+                    relation_id=rel.relation_id,
                     from_entity_id=rel.from_entity_id,
                     to_entity_id=rel.to_entity_id,
                     relation_type=rel.relation_type,
                     user_id=rel.user_id,
-                    properties=rel.attributes,
                 )
                 rel_count += 1
             except Exception:
                 logger.warning(
                     "Failed to sync relationship %s",
-                    rel.id,
+                    rel.relation_id,
                     exc_info=True,
                 )
 

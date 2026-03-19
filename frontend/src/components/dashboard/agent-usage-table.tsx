@@ -31,7 +31,7 @@ export function AgentUsageTable({
           <TableBody>
             {entries.map(([name, info]) => (
               <tr key={name}>
-                <Td className="font-medium text-white capitalize">{name}</Td>
+                <Td className="font-medium text-t-primary capitalize">{name}</Td>
                 <Td>{info.calls_today}</Td>
                 <Td>{info.total_input_tokens.toLocaleString()}</Td>
                 <Td>{info.total_output_tokens.toLocaleString()}</Td>

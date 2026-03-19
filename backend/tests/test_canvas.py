@@ -44,6 +44,7 @@ def _make_approval(approval_id="apr_001", status="pending"):
     a.decided_at = None
     a.decision_reason = None
     a.artifact_refs = None
+    a.trace_id = None
     return a
 
 
@@ -79,6 +80,7 @@ def _make_task_run(run_id="run_001", status="completed"):
     r.source = "plan"
     r.execution_mode = "auto_execute"
     r.created_at = datetime(2026, 3, 13, 9, 30, tzinfo=timezone.utc)
+    r.trace_id = None
     return r
 
 
@@ -142,10 +144,11 @@ def test_dashboard_returns_all_sections():
             result.scalars.return_value.all.return_value = [approval]
         elif call_count == 3:  # plans
             result.scalars.return_value.all.return_value = [plan]
-        elif call_count == 5:  # meetings
+        elif call_count == 4:  # meetings
             result.scalars.return_value.all.return_value = [meeting]
-        else:
+        else:  # traces, goals, events, etc.
             result.scalars.return_value.all.return_value = []
+            result.scalar_one_or_none.return_value = None
         return result
 
     db.execute = mock_execute

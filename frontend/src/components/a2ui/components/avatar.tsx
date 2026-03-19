@@ -30,7 +30,7 @@ export function A2UIAvatar({ component }: Props) {
   }
 
   return (
-    <div className={`${cls} rounded-full bg-blue-600 flex items-center justify-center font-medium text-white`}>
+    <div className={`${cls} rounded-full bg-j-primary flex items-center justify-center font-medium text-j-primary-fg`}>
       {initials}
     </div>
   );

@@ -47,19 +47,19 @@ export function GoalCard({
               type="text"
               value={editTitle}
               onChange={(e) => setEditTitle(e.target.value)}
-              className="w-full bg-neutral-800 border border-neutral-700 rounded px-3 py-1.5 text-sm text-neutral-200"
+              className="w-full bg-surface-2 border border-b-primary rounded px-3 py-1.5 text-sm text-t-primary"
             />
             <textarea
               value={editDescription}
               onChange={(e) => setEditDescription(e.target.value)}
               rows={2}
-              className="w-full bg-neutral-800 border border-neutral-700 rounded px-3 py-1.5 text-sm text-neutral-200 resize-none"
+              className="w-full bg-surface-2 border border-b-primary rounded px-3 py-1.5 text-sm text-t-primary resize-none"
             />
             <div className="flex items-center gap-3">
               <select
                 value={editPriority}
                 onChange={(e) => setEditPriority(e.target.value)}
-                className="bg-neutral-800 border border-neutral-700 rounded px-3 py-1.5 text-sm text-neutral-200"
+                className="bg-surface-2 border border-b-primary rounded px-3 py-1.5 text-sm text-t-primary"
               >
                 <option value="low">Low</option>
                 <option value="medium">Medium</option>
@@ -69,13 +69,13 @@ export function GoalCard({
               <div className="flex-1" />
               <button
                 onClick={() => setEditing(false)}
-                className="text-neutral-400 hover:text-neutral-200 text-xs px-3 py-1 rounded transition-colors"
+                className="text-t-secondary hover:text-t-primary text-xs px-3 py-1 rounded transition-colors"
               >
                 Cancel
               </button>
               <button
                 onClick={handleSave}
-                className="bg-blue-600 hover:bg-blue-700 text-white text-xs px-3 py-1.5 rounded transition-colors"
+                className="bg-j-primary hover:bg-j-primary-hover text-j-primary-fg text-xs px-3 py-1.5 rounded transition-colors"
               >
                 Save
               </button>
@@ -97,26 +97,26 @@ export function GoalCard({
               <Badge variant={priorityVariant(goal.priority)}>{goal.priority}</Badge>
             </div>
             {goal.description && (
-              <p className="text-xs text-neutral-500 mt-1">{goal.description}</p>
+              <p className="text-xs text-t-tertiary mt-1">{goal.description}</p>
             )}
           </div>
           <div className="flex items-center gap-2 ml-3">
             <button
               onClick={cycleStatus}
-              className="text-neutral-500 hover:text-neutral-300 text-xs transition-colors"
+              className="text-t-tertiary hover:text-t-primary text-xs transition-colors"
               title={goal.status === "active" ? "Pause" : "Resume"}
             >
               {goal.status === "active" ? "Pause" : goal.status === "paused" ? "Resume" : ""}
             </button>
             <button
               onClick={() => setEditing(true)}
-              className="text-neutral-500 hover:text-neutral-300 text-xs transition-colors"
+              className="text-t-tertiary hover:text-t-primary text-xs transition-colors"
             >
               Edit
             </button>
             <button
               onClick={() => onDelete(goal.goal_id)}
-              className="text-neutral-500 hover:text-red-400 text-xs transition-colors"
+              className="text-t-tertiary hover:text-j-error text-xs transition-colors"
             >
               Delete
             </button>
@@ -124,21 +124,20 @@ export function GoalCard({
         </div>
 
         <div className="mt-3">
-          <div className="flex items-center justify-between text-xs text-neutral-500 mb-1">
-            <span>Progress</span>
-            <span>{progressPercent}%</span>
-          </div>
-          <div className="w-full bg-neutral-800 rounded-full h-1.5">
-            <div
-              className={`h-1.5 rounded-full transition-all ${
-                progressPercent >= 100
-                  ? "bg-green-500"
-                  : progressPercent >= 50
-                    ? "bg-blue-500"
-                    : "bg-yellow-500"
-              }`}
-              style={{ width: `${progressPercent}%` }}
-            />
+          <div className="flex items-center gap-2">
+            <div className="flex-1 bg-surface-2 rounded-full h-2.5">
+              <div
+                className={`h-2.5 rounded-full transition-all ${
+                  progressPercent > 80
+                    ? "bg-j-success"
+                    : progressPercent >= 40
+                      ? "bg-j-primary"
+                      : "bg-j-warning"
+                }`}
+                style={{ width: `${progressPercent}%` }}
+              />
+            </div>
+            <span className="text-xs text-t-tertiary shrink-0">{progressPercent}%</span>
           </div>
         </div>
 

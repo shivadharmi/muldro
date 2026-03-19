@@ -7,9 +7,9 @@ import { TimeAgo } from "@/components/ui/time-ago";
 import { EmptyState } from "@/components/ui/empty-state";
 
 function priorityLabel(score: number): string {
-  if (score >= 80) return "critical";
-  if (score >= 60) return "high";
-  if (score >= 40) return "medium";
+  if (score >= 0.8) return "critical";
+  if (score >= 0.6) return "high";
+  if (score >= 0.4) return "medium";
   return "low";
 }
 
@@ -26,36 +26,36 @@ function NotificationItem({
   const pLabel = priorityLabel(notification.priority_score);
 
   return (
-    <Card className={isUnread ? "border-blue-800/50" : ""}>
+    <Card className={isUnread ? "border-j-primary/50" : ""}>
       <CardBody>
         <div className="flex items-start justify-between">
           <div className="flex-1">
             <div className="flex items-center gap-2">
               {isUnread && (
-                <span className="w-2 h-2 bg-blue-500 rounded-full flex-shrink-0" />
+                <span className="w-2 h-2 bg-j-primary rounded-full flex-shrink-0" />
               )}
-              <p className={`text-sm ${isUnread ? "font-medium" : "text-neutral-400"}`}>
+              <p className={`text-sm ${isUnread ? "font-medium" : "text-t-secondary"}`}>
                 {notification.title}
               </p>
               <Badge variant={priorityVariant(pLabel)}>{pLabel}</Badge>
               <Badge variant="default">{notification.channel}</Badge>
             </div>
             {notification.body && (
-              <p className="text-xs text-neutral-500 mt-1 ml-4">{notification.body}</p>
+              <p className="text-xs text-t-tertiary mt-1 ml-4">{notification.body}</p>
             )}
           </div>
           <div className="flex items-center gap-2 ml-3 flex-shrink-0">
             {isUnread && (
               <button
                 onClick={() => onMarkRead(notification.notification_id)}
-                className="text-neutral-500 hover:text-neutral-300 text-xs transition-colors"
+                className="text-t-tertiary hover:text-t-primary text-xs transition-colors"
               >
                 Mark read
               </button>
             )}
             <button
               onClick={() => onDismiss(notification.notification_id)}
-              className="text-neutral-500 hover:text-red-400 text-xs transition-colors"
+              className="text-t-tertiary hover:text-j-error text-xs transition-colors"
             >
               Dismiss
             </button>

@@ -15,11 +15,22 @@ function formatTimeAgo(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString();
 }
 
-export function TimeAgo({ date, className = "" }: { date: string | null; className?: string }) {
-  if (!date) return <span className={`text-neutral-600 ${className}`}>--</span>;
+export function TimeAgo({
+  date,
+  className = "",
+}: {
+  date: string | null;
+  className?: string;
+}) {
+  if (!date)
+    return <span className={`text-t-muted ${className}`}>--</span>;
   return (
-    <span className={`text-neutral-500 ${className}`} title={new Date(date).toLocaleString()}>
+    <time
+      dateTime={date}
+      className={`text-t-tertiary ${className}`}
+      title={new Date(date).toLocaleString()}
+    >
       {formatTimeAgo(date)}
-    </span>
+    </time>
   );
 }

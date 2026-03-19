@@ -186,6 +186,30 @@ class DashboardMeeting(BaseModel):
     location: str | None = None
 
 
+class DashboardTrace(BaseModel):
+    trace_id: str
+    trigger: str
+    agents_invoked: list[str] = []
+    duration_ms: int | None = None
+    total_cost_usd: float = 0.0
+
+
+class DashboardGoal(BaseModel):
+    goal_id: str
+    title: str
+    progress: float = 0.0
+    priority: str = "medium"
+    task_count: int = 0
+    completed_task_count: int = 0
+
+
+class DashboardEvent(BaseModel):
+    source: str
+    event_type: str
+    title: str | None = None
+    occurred_at: datetime | None = None
+
+
 class DashboardResponse(BaseModel):
     headline: str | None = None
     date: date
@@ -194,6 +218,9 @@ class DashboardResponse(BaseModel):
     upcoming_meetings: list[DashboardMeeting] = []
     recommended_actions: list[str] = []
     briefing_id: str | None = None
+    recent_traces: list[DashboardTrace] = []
+    active_goals: list[DashboardGoal] = []
+    recent_events: list[DashboardEvent] = []
 
 
 # ── Approval Detail ──────────────────────────────────────────────
@@ -212,6 +239,7 @@ class ApprovalDetailResponse(BaseModel):
     execution_id: str | None = None
     plan_goal: str | None = None
     artifact_refs: dict | None = None
+    trace_id: str | None = None
 
 
 # ── Task Detail ──────────────────────────────────────────────────

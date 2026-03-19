@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
-from src.api.deps import get_current_user_id, get_session
+from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
 from src.api.schemas import (
     BriefingFeedbackRequest,
     BriefingFeedbackResponse,
@@ -29,6 +29,7 @@ async def submit_briefing_feedback(
     briefing_id: str,
     req: BriefingFeedbackRequest,
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
     """Record user feedback on a briefing or briefing item."""
@@ -37,6 +38,7 @@ async def submit_briefing_feedback(
         select(Briefing.briefing_id).where(
             Briefing.briefing_id == briefing_id,
             Briefing.user_id == user_id,
+            Briefing.workspace_id == workspace_id,
         )
     )
     if not result.scalar_one_or_none():
@@ -64,6 +66,7 @@ async def submit_briefing_feedback(
         feedback_id=feedback_id,
         briefing_id=briefing_id,
         user_id=user_id,
+        workspace_id=workspace_id,
         feedback_type=req.feedback_type,
         rating=req.rating,
         item_section=req.item_section,

@@ -13,17 +13,17 @@ export function A2UIChart({ component }: Props) {
   const maxVal = Math.max(...values, 1);
 
   return (
-    <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
-      {title && <p className="text-sm font-medium text-white mb-3">{title}</p>}
+    <div className="rounded-lg border border-b-primary bg-surface-1 p-4">
+      {title && <p className="text-sm font-medium text-t-primary mb-3">{title}</p>}
       {chartType === "bar" && (
         <div className="flex items-end gap-1 h-32">
           {values.map((v, i) => (
             <div key={i} className="flex-1 flex flex-col items-center gap-1">
               <div
-                className="w-full bg-blue-500/70 rounded-t transition-all"
+                className="w-full bg-j-primary/70 rounded-t transition-all"
                 style={{ height: `${(v / maxVal) * 100}%` }}
               />
-              <span className="text-[10px] text-neutral-500 truncate max-w-full">
+              <span className="text-[10px] text-t-tertiary truncate max-w-full">
                 {labels[i] || ""}
               </span>
             </div>
@@ -31,7 +31,7 @@ export function A2UIChart({ component }: Props) {
         </div>
       )}
       {chartType !== "bar" && (
-        <p className="text-xs text-neutral-500">Chart type: {chartType}</p>
+        <p className="text-xs text-t-tertiary">Chart type: {chartType}</p>
       )}
     </div>
   );

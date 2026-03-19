@@ -1,12 +1,14 @@
 """Agent management endpoints — CRUD for dynamic agent configuration."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import get_current_user_id, get_session
+from src.models.traces import ModelCall
 from src.services.agent_registry import AgentRegistry
 
 router = APIRouter()
@@ -26,6 +28,10 @@ class AgentResponse(BaseModel):
     max_tokens: int
     temperature: float
     enabled: bool
+    calls_today: int = 0
+    success_rate: float = 0.0
+    avg_latency_ms: int = 0
+    last_invoked_at: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -61,10 +67,34 @@ async def list_agents(
     _user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_session),
 ):
-    """List all agent definitions."""
+    """List all agent definitions with performance stats."""
     registry = AgentRegistry(db)
     agents = await registry.list_agents(include_disabled=include_disabled)
-    return [_agent_response(a) for a in agents]
+
+    # Build performance stats from model_calls
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    stats_result = await db.execute(
+        select(
+            ModelCall.agent_name,
+            func.count().label("calls_today"),
+            func.avg(ModelCall.duration_ms).label("avg_latency_ms"),
+            func.max(ModelCall.created_at).label("last_invoked_at"),
+            func.count().filter(ModelCall.error.is_(None)).label("success_count"),
+        )
+        .where(ModelCall.created_at >= today_start)
+        .group_by(ModelCall.agent_name)
+    )
+    stats_map: dict[str, dict] = {}
+    for row in stats_result.all():
+        total = row.calls_today or 1
+        stats_map[row.agent_name] = {
+            "calls_today": row.calls_today or 0,
+            "avg_latency_ms": int(row.avg_latency_ms or 0),
+            "last_invoked_at": (row.last_invoked_at.isoformat() if row.last_invoked_at else None),
+            "success_rate": round((row.success_count or 0) / total, 2),
+        }
+
+    return [_agent_response(a, stats_map.get(a.name, {})) for a in agents]
 
 
 @router.get("/v1/agents/{agent_id}", response_model=AgentResponse)
@@ -158,7 +188,8 @@ async def disable_agent(
     return _agent_response(agent)
 
 
-def _agent_response(agent) -> AgentResponse:
+def _agent_response(agent, stats: dict | None = None) -> AgentResponse:
+    s = stats or {}
     return AgentResponse(
         agent_id=agent.agent_id,
         name=agent.name,
@@ -170,6 +201,10 @@ def _agent_response(agent) -> AgentResponse:
         max_tokens=agent.max_tokens,
         temperature=agent.temperature,
         enabled=agent.enabled,
+        calls_today=s.get("calls_today", 0),
+        success_rate=s.get("success_rate", 0.0),
+        avg_latency_ms=s.get("avg_latency_ms", 0),
+        last_invoked_at=s.get("last_invoked_at"),
         created_at=agent.created_at,
         updated_at=agent.updated_at,
     )

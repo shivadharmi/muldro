@@ -66,7 +66,7 @@ export default function TriggersPage() {
   };
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-6">
       <div className="flex items-start justify-between">
         <PageHeader
           title="Triggers"
@@ -74,7 +74,7 @@ export default function TriggersPage() {
         />
         <button
           onClick={() => setShowForm(!showForm)}
-          className="px-3 py-1.5 rounded-lg bg-blue-600 text-sm font-medium text-white hover:bg-blue-700"
+          className="px-3 py-1.5 rounded-lg bg-j-primary text-sm font-medium text-j-primary-fg hover:bg-j-primary-hover"
         >
           {showForm ? "Cancel" : "New Trigger"}
         </button>
@@ -84,31 +84,31 @@ export default function TriggersPage() {
         <Card>
           <form onSubmit={handleCreate} className="p-4 space-y-3">
             <div className="space-y-1">
-              <label className="text-xs text-neutral-400">Name</label>
+              <label className="text-xs text-t-secondary">Name</label>
               <input
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="e.g., Notify on PR reviews"
-                className="w-full rounded bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm text-white placeholder-neutral-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                className="w-full rounded bg-surface-2 border border-b-primary px-3 py-2 text-sm text-t-primary placeholder-t-tertiary focus:outline-none focus:ring-1 focus:ring-j-ring"
               />
             </div>
             <div className="space-y-1">
-              <label className="text-xs text-neutral-400">Event Type</label>
+              <label className="text-xs text-t-secondary">Event Type</label>
               <input
                 type="text"
                 value={eventType}
                 onChange={(e) => setEventType(e.target.value)}
                 placeholder="e.g., pr_reviewed, email_received"
-                className="w-full rounded bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm text-white placeholder-neutral-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                className="w-full rounded bg-surface-2 border border-b-primary px-3 py-2 text-sm text-t-primary placeholder-t-tertiary focus:outline-none focus:ring-1 focus:ring-j-ring"
               />
             </div>
             <div className="space-y-1">
-              <label className="text-xs text-neutral-400">Action</label>
+              <label className="text-xs text-t-secondary">Action</label>
               <select
                 value={actionType}
                 onChange={(e) => setActionType(e.target.value)}
-                className="w-full rounded bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                className="w-full rounded bg-surface-2 border border-b-primary px-3 py-2 text-sm text-t-primary focus:outline-none focus:ring-1 focus:ring-j-ring"
               >
                 <option value="notify">Notify</option>
                 <option value="plan">Create Plan</option>
@@ -119,7 +119,7 @@ export default function TriggersPage() {
             <button
               type="submit"
               disabled={createMut.isPending}
-              className="px-4 py-2 rounded-lg bg-blue-600 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              className="px-4 py-2 rounded-lg bg-j-primary text-sm font-medium text-j-primary-fg hover:bg-j-primary-hover disabled:opacity-50"
             >
               {createMut.isPending ? "Creating..." : "Create Trigger"}
             </button>
@@ -128,11 +128,11 @@ export default function TriggersPage() {
       )}
 
       {isLoading && (
-        <div className="text-center py-12 text-neutral-500 text-sm">Loading...</div>
+        <div className="text-center py-12 text-t-tertiary text-sm">Loading...</div>
       )}
 
       {!isLoading && triggers.length === 0 && !showForm && (
-        <div className="text-center py-12 text-neutral-500 text-sm">
+        <div className="text-center py-12 text-t-tertiary text-sm">
           No triggers configured yet
         </div>
       )}
@@ -148,7 +148,7 @@ export default function TriggersPage() {
               <div className="p-4 flex items-start justify-between">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
-                    <p className="text-sm font-medium text-white">
+                    <p className="text-sm font-medium text-t-primary">
                       {(trigger.name as string) || "Untitled"}
                     </p>
                     <Badge variant={enabled ? "green" : "default"}>
@@ -159,13 +159,13 @@ export default function TriggersPage() {
                     </Badge>
                   </div>
                   {conditions && (
-                    <p className="text-xs text-neutral-500">
+                    <p className="text-xs text-t-tertiary">
                       When: {conditions.event_type as string || "any"}
                       {conditions.source ? ` from ${conditions.source}` : ""}
                     </p>
                   )}
                   {trigger.fire_count !== undefined && (
-                    <p className="text-[10px] text-neutral-600 mt-1">
+                    <p className="text-[10px] text-t-muted mt-1">
                       Fired {trigger.fire_count as number} times
                     </p>
                   )}
@@ -175,7 +175,7 @@ export default function TriggersPage() {
                     onClick={() =>
                       toggleMut.mutate({ id, enabled: !enabled })
                     }
-                    className="text-xs text-neutral-400 hover:text-white"
+                    className="text-xs text-t-secondary hover:text-t-primary"
                   >
                     {enabled ? "Disable" : "Enable"}
                   </button>
@@ -185,7 +185,7 @@ export default function TriggersPage() {
                         deleteMut.mutate(id);
                       }
                     }}
-                    className="text-xs text-red-400 hover:text-red-300"
+                    className="text-xs text-j-error hover:text-j-error"
                   >
                     Delete
                   </button>

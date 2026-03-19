@@ -69,10 +69,12 @@ export default function TracesPage() {
   });
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-6">
       <PageHeader
         title="Traces"
         subtitle="Observe agent activity, performance, and costs"
+        variant="monitor"
+        live
       />
 
       <div className="flex items-center justify-between">
@@ -84,8 +86,8 @@ export default function TracesPage() {
               onClick={() => setTimeRange(r.value)}
               className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
                 timeRange === r.value
-                  ? "bg-blue-600 text-white"
-                  : "bg-neutral-800 text-neutral-400 hover:text-white"
+                  ? "bg-j-primary text-j-primary-fg"
+                  : "bg-surface-2 text-t-secondary hover:text-t-primary"
               }`}
             >
               {r.label}
@@ -147,17 +149,17 @@ function TracesTab({
           value={triggerFilter}
           onChange={(e) => onTriggerChange(e.target.value)}
           placeholder="Filter by trigger..."
-          className="rounded bg-neutral-800 border border-neutral-700 px-3 py-1.5 text-sm text-white placeholder-neutral-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          className="rounded bg-surface-2 border border-b-primary px-3 py-1.5 text-sm text-t-primary placeholder-t-tertiary focus:outline-none focus:ring-1 focus:ring-j-ring"
         />
-        <span className="text-xs text-neutral-500 self-center">{count} traces</span>
+        <span className="text-xs text-t-tertiary self-center">{count} traces</span>
       </div>
 
       {isLoading && (
         <div className="space-y-2">
           {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 animate-pulse">
-              <div className="h-4 w-48 bg-neutral-800 rounded mb-1" />
-              <div className="h-3 w-32 bg-neutral-800 rounded" />
+            <div key={i} className="rounded-lg border border-b-primary bg-surface-1 p-3 animate-pulse">
+              <div className="h-4 w-48 bg-surface-2 rounded mb-1" />
+              <div className="h-3 w-32 bg-surface-2 rounded" />
             </div>
           ))}
         </div>
@@ -165,8 +167,8 @@ function TracesTab({
 
       {!isLoading && traces.length === 0 && (
         <div className="text-center py-12">
-          <p className="text-neutral-500 text-sm font-medium">No traces found</p>
-          <p className="text-neutral-600 text-xs mt-1">
+          <p className="text-t-tertiary text-sm font-medium">No traces found</p>
+          <p className="text-t-muted text-xs mt-1">
             Traces appear after Jarvis processes a command.
           </p>
         </div>
@@ -177,27 +179,27 @@ function TracesTab({
           <button
             key={trace.trace_id}
             onClick={() => onSelect(trace.trace_id)}
-            className="w-full text-left rounded-lg border border-neutral-800 bg-neutral-900 p-3 hover:border-neutral-700 transition-colors"
+            className="w-full text-left rounded-lg border border-b-primary bg-surface-1 p-3 hover:border-b-primary transition-colors"
           >
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <span className="text-xs font-mono text-neutral-300">
+                <span className="text-xs font-mono text-t-primary">
                   {trace.trace_id.slice(0, 12)}...
                 </span>
                 <Badge variant={statusVariant(trace.status)}>{trace.status}</Badge>
                 {trace.trigger && (
-                  <span className="text-xs text-neutral-500">{trace.trigger}</span>
+                  <span className="text-xs text-t-tertiary">{trace.trigger}</span>
                 )}
               </div>
-              <span className="text-xs text-neutral-500">
+              <span className="text-xs text-t-tertiary">
                 ${trace.total_cost_usd.toFixed(4)}
               </span>
             </div>
-            <div className="flex items-center gap-4 mt-1 text-[10px] text-neutral-600">
+            <div className="flex items-center gap-4 mt-1 text-[10px] text-t-muted">
               <span>{(trace.duration_ms / 1000).toFixed(1)}s</span>
               <span>{trace.agents_invoked.join(", ") || "no agents"}</span>
               {trace.error_count > 0 && (
-                <span className="text-red-400">{trace.error_count} error(s)</span>
+                <span className="text-j-error">{trace.error_count} error(s)</span>
               )}
               {trace.started_at && (
                 <span>{new Date(trace.started_at).toLocaleString()}</span>
@@ -221,46 +223,46 @@ function PerformanceTab({
 
   if (entries.length === 0) {
     return (
-      <div className="text-center py-12 text-neutral-500 text-sm">
+      <div className="text-center py-12 text-t-tertiary text-sm">
         No agent performance data
       </div>
     );
   }
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
       {entries.map(([name, perf]) => (
         <Card key={name}>
           <CardHeader>
-            <span className="text-sm font-medium text-white">{name}</span>
+            <span className="text-sm font-medium text-t-primary">{name}</span>
           </CardHeader>
           <CardBody>
             <div className="grid grid-cols-2 gap-2 text-xs">
               <div>
-                <p className="text-neutral-600">Calls</p>
-                <p className="text-neutral-300">{perf.call_count}</p>
+                <p className="text-t-muted">Calls</p>
+                <p className="text-t-primary">{perf.call_count}</p>
               </div>
               <div>
-                <p className="text-neutral-600">Avg duration</p>
-                <p className="text-neutral-300">{(perf.avg_duration_ms / 1000).toFixed(1)}s</p>
+                <p className="text-t-muted">Avg duration</p>
+                <p className="text-t-primary">{(perf.avg_duration_ms / 1000).toFixed(1)}s</p>
               </div>
               <div>
-                <p className="text-neutral-600">Total cost</p>
-                <p className="text-neutral-300">${perf.total_cost_usd.toFixed(4)}</p>
+                <p className="text-t-muted">Total cost</p>
+                <p className="text-t-primary">${perf.total_cost_usd.toFixed(4)}</p>
               </div>
               <div>
-                <p className="text-neutral-600">Errors</p>
-                <p className={perf.error_count > 0 ? "text-red-400" : "text-neutral-300"}>
+                <p className="text-t-muted">Errors</p>
+                <p className={perf.error_count > 0 ? "text-j-error" : "text-t-primary"}>
                   {perf.error_count}
                 </p>
               </div>
               <div>
-                <p className="text-neutral-600">Input tokens</p>
-                <p className="text-neutral-300">{perf.total_input_tokens.toLocaleString()}</p>
+                <p className="text-t-muted">Input tokens</p>
+                <p className="text-t-primary">{perf.total_input_tokens.toLocaleString()}</p>
               </div>
               <div>
-                <p className="text-neutral-600">Output tokens</p>
-                <p className="text-neutral-300">{perf.total_output_tokens.toLocaleString()}</p>
+                <p className="text-t-muted">Output tokens</p>
+                <p className="text-t-primary">{perf.total_output_tokens.toLocaleString()}</p>
               </div>
             </div>
           </CardBody>
@@ -285,12 +287,12 @@ function MetricsTab({ metrics }: { metrics: import("@/lib/types").AggregateMetri
   ];
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
       {stats.map((s) => (
         <Card key={s.label}>
           <CardBody>
-            <p className="text-[10px] uppercase text-neutral-600 mb-1">{s.label}</p>
-            <p className="text-lg font-semibold text-white">{s.value}</p>
+            <p className="text-[10px] uppercase text-t-muted mb-1">{s.label}</p>
+            <p className="text-lg font-semibold text-t-primary">{s.value}</p>
           </CardBody>
         </Card>
       ))}

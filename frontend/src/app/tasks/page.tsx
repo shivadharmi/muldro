@@ -88,9 +88,9 @@ export default function TasksPage() {
   });
 
   return (
-    <div className="p-6 space-y-4">
+    <div className="p-4 sm:p-6 space-y-4">
       <div className="flex items-center justify-between">
-        <PageHeader title="Tasks" subtitle="Manage standalone tasks" />
+        <PageHeader title="Tasks" subtitle="Manage standalone tasks" variant="collection" />
         <Button onClick={() => setShowCreate(!showCreate)}>
           {showCreate ? "Cancel" : "New Task"}
         </Button>
@@ -104,20 +104,20 @@ export default function TasksPage() {
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="Task title"
-              className="w-full rounded bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm text-white placeholder-neutral-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="w-full rounded bg-surface-2 border border-b-primary px-3 py-2 text-sm text-t-primary placeholder-t-tertiary focus:outline-none focus:ring-1 focus:ring-j-ring"
             />
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Description (optional)"
               rows={2}
-              className="w-full rounded bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm text-white placeholder-neutral-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="w-full rounded bg-surface-2 border border-b-primary px-3 py-2 text-sm text-t-primary placeholder-t-tertiary focus:outline-none focus:ring-1 focus:ring-j-ring"
             />
             <div className="flex items-center gap-3 flex-wrap">
               <select
                 value={priority}
                 onChange={(e) => setPriority(e.target.value)}
-                className="rounded bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm text-white"
+                className="rounded bg-surface-2 border border-b-primary px-3 py-2 text-sm text-t-primary"
               >
                 <option value="low">Low</option>
                 <option value="medium">Medium</option>
@@ -128,13 +128,13 @@ export default function TasksPage() {
                 type="datetime-local"
                 value={dueAt}
                 onChange={(e) => setDueAt(e.target.value)}
-                className="rounded bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm text-white"
+                className="rounded bg-surface-2 border border-b-primary px-3 py-2 text-sm text-t-primary"
               />
               {goals.length > 0 && (
                 <select
                   value={goalId}
                   onChange={(e) => setGoalId(e.target.value)}
-                  className="rounded bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm text-white"
+                  className="rounded bg-surface-2 border border-b-primary px-3 py-2 text-sm text-t-primary"
                 >
                   <option value="">No goal</option>
                   {goals.map((g) => (
@@ -160,7 +160,7 @@ export default function TasksPage() {
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
-          className="rounded bg-neutral-800 border border-neutral-700 px-3 py-1.5 text-sm text-white"
+          className="rounded bg-surface-2 border border-b-primary px-3 py-1.5 text-sm text-t-primary"
         >
           {STATUS_OPTIONS.map((s) => (
             <option key={s} value={s}>
@@ -175,8 +175,8 @@ export default function TasksPage() {
               onClick={() => setPriorityFilter(p)}
               className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
                 priorityFilter === p
-                  ? "bg-blue-600 text-white"
-                  : "bg-neutral-800 text-neutral-400 hover:text-white"
+                  ? "bg-j-primary text-j-primary-fg"
+                  : "bg-surface-2 text-t-secondary hover:text-t-primary"
               }`}
             >
               {p === "all" ? "All" : p}
@@ -186,7 +186,7 @@ export default function TasksPage() {
         <select
           value={typeFilter}
           onChange={(e) => setTypeFilter(e.target.value)}
-          className="rounded bg-neutral-800 border border-neutral-700 px-3 py-1.5 text-sm text-white"
+          className="rounded bg-surface-2 border border-b-primary px-3 py-1.5 text-sm text-t-primary"
         >
           {TASK_TYPE_OPTIONS.map((t) => (
             <option key={t} value={t}>
@@ -202,8 +202,8 @@ export default function TasksPage() {
             <Card key={i}>
               <CardBody>
                 <div className="animate-pulse space-y-2">
-                  <div className="h-4 w-48 bg-neutral-800 rounded" />
-                  <div className="h-3 w-32 bg-neutral-800 rounded" />
+                  <div className="h-4 w-48 bg-surface-2 rounded" />
+                  <div className="h-3 w-32 bg-surface-2 rounded" />
                 </div>
               </CardBody>
             </Card>
@@ -249,14 +249,14 @@ function TaskRow({
         <div className="flex items-start justify-between">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <h3 className="text-sm font-medium text-white truncate">{task.title}</h3>
+              <h3 className="text-sm font-medium text-t-primary truncate">{task.title}</h3>
               <Badge variant={statusVariant(task.status)}>{task.status}</Badge>
               <Badge variant={priorityVariant(task.priority)}>{task.priority}</Badge>
             </div>
             {task.description && (
-              <p className="text-xs text-neutral-400 mt-0.5 truncate">{task.description}</p>
+              <p className="text-xs text-t-secondary mt-0.5 truncate">{task.description}</p>
             )}
-            <div className="flex items-center gap-3 mt-1 text-[10px] text-neutral-600">
+            <div className="flex items-center gap-3 mt-1 text-[10px] text-t-muted">
               <span>{task.task_type}</span>
               <span>{task.source}</span>
               {task.assigned_agent && <span>Agent: {task.assigned_agent}</span>}

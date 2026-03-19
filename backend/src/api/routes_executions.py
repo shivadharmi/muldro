@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import get_current_user_id, get_session
+from src.models.plans import Plan
 from src.models.task_graph import TaskRun
 
 router = APIRouter()
@@ -22,9 +23,35 @@ class ExecutionItem(BaseModel):
     execution_mode: str | None = None
     current_step_ids: list[str] | None = None
     error: dict | None = None
+    goal: str | None = None
+    priority: str | None = None
     created_at: str | None = None
 
     model_config = {"from_attributes": True}
+
+
+async def _build_execution_item(run: TaskRun, db: AsyncSession) -> ExecutionItem:
+    goal = None
+    priority = None
+    if run.plan_id:
+        plan_result = await db.execute(
+            select(Plan.goal, Plan.priority).where(Plan.plan_id == run.plan_id)
+        )
+        row = plan_result.one_or_none()
+        if row:
+            goal, priority = row
+    return ExecutionItem(
+        execution_id=run.run_id,
+        plan_id=run.plan_id,
+        status=run.status,
+        source=run.source or "plan",
+        execution_mode=run.execution_mode,
+        current_step_ids=run.current_step_ids,
+        error=run.error,
+        goal=goal,
+        priority=priority,
+        created_at=run.created_at.isoformat() if run.created_at else None,
+    )
 
 
 @router.get("/v1/executions", response_model=list[ExecutionItem])
@@ -48,6 +75,16 @@ async def list_executions(
     result = await db.execute(stmt)
     rows = result.scalars().all()
 
+    # Batch-fetch plan goals for efficiency
+    plan_ids = [r.plan_id for r in rows if r.plan_id]
+    plan_map: dict[str, tuple[str | None, str | None]] = {}
+    if plan_ids:
+        plans_result = await db.execute(
+            select(Plan.plan_id, Plan.goal, Plan.priority).where(Plan.plan_id.in_(plan_ids))
+        )
+        for pid, pgoal, ppriority in plans_result.all():
+            plan_map[pid] = (pgoal, ppriority)
+
     return [
         ExecutionItem(
             execution_id=r.run_id,
@@ -57,6 +94,8 @@ async def list_executions(
             execution_mode=r.execution_mode,
             current_step_ids=r.current_step_ids,
             error=r.error,
+            goal=plan_map.get(r.plan_id, (None, None))[0] if r.plan_id else None,
+            priority=plan_map.get(r.plan_id, (None, None))[1] if r.plan_id else None,
             created_at=r.created_at.isoformat() if r.created_at else None,
         )
         for r in rows
@@ -77,13 +116,4 @@ async def get_execution(
     if not run:
         raise HTTPException(status_code=404, detail="Execution not found")
 
-    return ExecutionItem(
-        execution_id=run.run_id,
-        plan_id=run.plan_id,
-        status=run.status,
-        source=run.source or "plan",
-        execution_mode=run.execution_mode,
-        current_step_ids=run.current_step_ids,
-        error=run.error,
-        created_at=run.created_at.isoformat() if run.created_at else None,
-    )
+    return await _build_execution_item(run, db)

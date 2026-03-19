@@ -68,7 +68,7 @@ export default function SchedulesPage() {
   });
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <PageHeader
         title="Schedules"
         subtitle="Manage recurring and one-shot tasks"
@@ -80,7 +80,7 @@ export default function SchedulesPage() {
       />
 
       {isLoading ? (
-        <p className="text-neutral-500 text-sm">Loading...</p>
+        <p className="text-t-tertiary text-sm">Loading...</p>
       ) : (
         <ScheduleList
           schedules={schedules}

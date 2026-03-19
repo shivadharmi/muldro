@@ -124,7 +124,7 @@ function renderComponent(
 
     default:
       return (
-        <div key={component.id} className="p-2 text-sm text-neutral-500">
+        <div key={component.id} className="p-2 text-sm text-t-tertiary">
           [Unknown: {component.type}]
         </div>
       );

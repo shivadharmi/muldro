@@ -23,11 +23,11 @@ export function A2UISelect({ component, onAction }: Props) {
 
   return (
     <div className="space-y-1">
-      {label && <label className="text-xs text-neutral-400">{label}</label>}
+      {label && <label className="text-xs text-t-secondary">{label}</label>}
       <select
         value={value}
         onChange={(e) => handleChange(e.target.value)}
-        className="w-full rounded bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+        className="w-full rounded bg-surface-2 border border-b-primary px-3 py-2 text-sm text-t-primary focus:outline-none focus:ring-1 focus:ring-j-ring"
       >
         <option value="">Select...</option>
         {options.map((opt) => (

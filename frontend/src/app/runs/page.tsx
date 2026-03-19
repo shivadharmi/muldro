@@ -17,10 +17,11 @@ export default function RunsListPage() {
   });
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-6">
       <PageHeader
         title="Runs"
         subtitle="View execution runs and their step-by-step progress"
+        variant="monitor"
       />
 
       {isLoading && (
@@ -29,8 +30,8 @@ export default function RunsListPage() {
             <Card key={i}>
               <CardBody>
                 <div className="animate-pulse space-y-2">
-                  <div className="h-4 w-48 bg-neutral-800 rounded" />
-                  <div className="h-3 w-32 bg-neutral-800 rounded" />
+                  <div className="h-4 w-48 bg-surface-2 rounded" />
+                  <div className="h-3 w-32 bg-surface-2 rounded" />
                 </div>
               </CardBody>
             </Card>
@@ -50,23 +51,31 @@ export default function RunsListPage() {
           const isActive = exec.status === "executing" || exec.status === "approved";
           return (
             <Link key={exec.execution_id} href={`/runs/${exec.execution_id}`} className="block">
-              <Card className="hover:border-neutral-700 transition-colors">
+              <Card className="hover:border-b-primary transition-colors">
                 <CardBody>
                   <div className="flex items-center justify-between">
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <span className="text-sm font-mono text-white truncate">
-                          {exec.execution_id}
+                        <span className="text-sm font-medium text-t-primary truncate">
+                          {exec.goal
+                            ? String(exec.goal)
+                            : `Run ...${exec.execution_id.slice(-8)}`}
                         </span>
                         <Badge variant={statusVariant(exec.status)}>
                           {exec.status}
                         </Badge>
+                        {exec.priority && (
+                          <span className="text-[10px] text-t-muted">
+                            {String(exec.priority)}
+                          </span>
+                        )}
                         {isActive && (
-                          <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
+                          <span className="w-1.5 h-1.5 rounded-full bg-j-primary animate-pulse" />
                         )}
                       </div>
-                      <div className="flex items-center gap-3 mt-1 text-xs text-neutral-500">
-                        {exec.plan_id && <span>Plan: {exec.plan_id}</span>}
+                      <div className="flex items-center gap-3 mt-1 text-xs text-t-tertiary">
+                        <span className="font-mono text-[10px]">...{exec.execution_id.slice(-8)}</span>
+                        {exec.plan_id && <span>Plan: ...{exec.plan_id.slice(-8)}</span>}
                         <span>Source: {exec.source}</span>
                         {exec.execution_mode && <span>Mode: {exec.execution_mode}</span>}
                         {exec.created_at && <TimeAgo date={exec.created_at} />}
@@ -77,7 +86,7 @@ export default function RunsListPage() {
                       height="16"
                       viewBox="0 0 16 16"
                       fill="none"
-                      className="text-neutral-600 shrink-0 ml-2"
+                      className="text-t-muted shrink-0 ml-2"
                     >
                       <path
                         d="M6 4l4 4-4 4"
@@ -89,8 +98,12 @@ export default function RunsListPage() {
                     </svg>
                   </div>
                   {exec.error && (
-                    <p className="text-xs text-red-400 mt-1.5 truncate">
-                      {typeof exec.error === "object" ? JSON.stringify(exec.error) : String(exec.error)}
+                    <p className="text-xs text-j-error mt-1.5 truncate">
+                      {typeof exec.error === "object" && exec.error !== null
+                        ? (exec.error as Record<string, unknown>).message
+                          ? String((exec.error as Record<string, unknown>).message)
+                          : JSON.stringify(exec.error)
+                        : String(exec.error)}
                     </p>
                   )}
                 </CardBody>

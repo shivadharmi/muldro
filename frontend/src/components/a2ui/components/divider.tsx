@@ -5,5 +5,5 @@ interface Props {
 }
 
 export function A2UIDivider({}: Props) {
-  return <hr className="my-3 border-neutral-700" />;
+  return <hr className="my-3 border-b-primary" />;
 }

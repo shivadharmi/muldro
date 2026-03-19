@@ -29,7 +29,7 @@ export function ObservationHealth({
       <TableBody>
         {observations.map((obs) => (
           <tr key={obs.source}>
-            <Td className="font-medium text-white">{obs.source}</Td>
+            <Td className="font-medium text-t-primary">{obs.source}</Td>
             <Td>
               <Badge variant={statusVariant(obs.status)}>{obs.status}</Badge>
             </Td>
@@ -47,9 +47,9 @@ export function ObservationHealth({
             <Td>{obs.items_ingested}</Td>
             <Td>
               {obs.error_message ? (
-                <span className="text-xs text-red-400">{obs.error_message}</span>
+                <span className="text-xs text-j-error">{obs.error_message}</span>
               ) : (
-                <span className="text-neutral-600">--</span>
+                <span className="text-t-muted">--</span>
               )}
             </Td>
           </tr>

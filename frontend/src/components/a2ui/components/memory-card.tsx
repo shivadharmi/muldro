@@ -19,20 +19,20 @@ export function A2UIMemoryCard({ component }: Props) {
   const pct = Math.round(confidence * 100);
 
   return (
-    <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-3">
+    <div className="rounded-lg border border-b-primary bg-surface-1 p-3">
       <div className="flex items-start justify-between mb-1">
-        <span className="text-[10px] font-medium text-blue-400 uppercase">
+        <span className="text-[10px] font-medium text-j-primary uppercase">
           {typeLabels[memoryType] || memoryType}
         </span>
-        <span className="text-[10px] text-neutral-500">{pct}%</span>
+        <span className="text-[10px] text-t-tertiary">{pct}%</span>
       </div>
-      <p className="text-sm text-neutral-300">{factText}</p>
+      <p className="text-sm text-t-primary">{factText}</p>
       {source && (
-        <p className="text-[10px] text-neutral-600 mt-1 font-mono">{source}</p>
+        <p className="text-[10px] text-t-muted mt-1 font-mono">{source}</p>
       )}
-      <div className="mt-2 h-1 rounded-full bg-neutral-800 overflow-hidden">
+      <div className="mt-2 h-1 rounded-full bg-surface-2 overflow-hidden">
         <div
-          className="h-full rounded-full bg-blue-500/50"
+          className="h-full rounded-full bg-j-primary/50"
           style={{ width: `${pct}%` }}
         />
       </div>

@@ -6,10 +6,20 @@ operations (dedup detection, transaction semantics).
 """
 
 import logging
+import uuid
 
 from src.config.settings import Settings
 
 logger = logging.getLogger(__name__)
+
+# Namespace UUID for converting string IDs to UUID5 (Qdrant requires UUID or int IDs)
+_QDRANT_NS = uuid.UUID("a3f1b2c4-d5e6-4f78-9a0b-1c2d3e4f5a6b")
+
+
+def _to_qdrant_id(string_id: str) -> str:
+    """Convert a string ID (e.g. evt_01KM...) to a UUID5 string for Qdrant."""
+    return str(uuid.uuid5(_QDRANT_NS, string_id))
+
 
 # Collection names
 COLLECTION_MEMORIES = "memories"
@@ -79,9 +89,11 @@ class VectorStore:
         from qdrant_client.models import PointStruct
 
         payload["user_id"] = user_id
+        payload["_original_id"] = id
+        qdrant_id = _to_qdrant_id(id)
         await client.upsert(
             collection_name=collection,
-            points=[PointStruct(id=id, vector=vector, payload=payload)],
+            points=[PointStruct(id=qdrant_id, vector=vector, payload=payload)],
         )
 
     async def search(
@@ -104,20 +116,21 @@ class VectorStore:
             for key, value in filters.items():
                 conditions.append(FieldCondition(key=key, match=MatchValue(value=value)))
 
-        results = await client.search(
+        response = await client.query_points(
             collection_name=collection,
-            query_vector=query_vector,
+            query=query_vector,
             query_filter=Filter(must=conditions),
             limit=limit,
+            with_payload=True,
         )
 
         return [
             {
-                "id": str(r.id),
+                "id": (r.payload or {}).get("_original_id", str(r.id)),
                 "score": r.score,
                 "payload": r.payload,
             }
-            for r in results
+            for r in response.points
         ]
 
     async def delete(self, collection: str, id: str) -> None:
@@ -126,11 +139,10 @@ class VectorStore:
         if not client:
             return
 
-        from qdrant_client.models import PointIdsList
-
+        qdrant_id = _to_qdrant_id(id)
         await client.delete(
             collection_name=collection,
-            points_selector=PointIdsList(points=[id]),
+            points_selector=[qdrant_id],
         )
 
     async def hybrid_search(

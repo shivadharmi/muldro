@@ -5,12 +5,13 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
 from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
 from src.models.goals import Goal
+from src.models.tasks import Task
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -25,6 +26,8 @@ class GoalItem(BaseModel):
     status: str = "active"
     progress: float = 0.0
     success_criteria_json: dict | None = None
+    task_count: int = 0
+    completed_task_count: int = 0
     created_at: str | None = None
 
     model_config = {"from_attributes": True}
@@ -52,7 +55,19 @@ class GoalPatchRequest(BaseModel):
     success_criteria_json: dict | None = None
 
 
-def _to_item(g: Goal) -> GoalItem:
+async def _to_item(g: Goal, db: AsyncSession) -> GoalItem:
+    task_count = (
+        await db.scalar(select(func.count()).select_from(Task).where(Task.goal_id == g.goal_id))
+        or 0
+    )
+    completed_task_count = (
+        await db.scalar(
+            select(func.count())
+            .select_from(Task)
+            .where(Task.goal_id == g.goal_id, Task.status == "completed")
+        )
+        or 0
+    )
     return GoalItem(
         goal_id=g.goal_id,
         title=g.title,
@@ -62,6 +77,8 @@ def _to_item(g: Goal) -> GoalItem:
         status=g.status,
         progress=g.progress,
         success_criteria_json=g.success_criteria_json,
+        task_count=task_count,
+        completed_task_count=completed_task_count,
         created_at=g.created_at.isoformat() if g.created_at else None,
     )
 
@@ -87,7 +104,7 @@ async def create_goal(
     db.add(goal)
     await db.commit()
     await db.refresh(goal)
-    return _to_item(goal)
+    return await _to_item(goal, db)
 
 
 @router.get("/v1/goals", response_model=GoalListResponse)
@@ -108,7 +125,7 @@ async def list_goals(
 
     result = await db.execute(stmt)
     rows = result.scalars().all()
-    return GoalListResponse(goals=[_to_item(g) for g in rows])
+    return GoalListResponse(goals=[await _to_item(g, db) for g in rows])
 
 
 @router.get("/v1/goals/{goal_id}", response_model=GoalItem)
@@ -127,7 +144,7 @@ async def get_goal(
     goal = result.scalar_one_or_none()
     if not goal:
         raise HTTPException(status_code=404, detail=f"Goal {goal_id} not found")
-    return _to_item(goal)
+    return await _to_item(goal, db)
 
 
 @router.patch("/v1/goals/{goal_id}", response_model=GoalItem)
@@ -153,7 +170,7 @@ async def patch_goal(
 
     await db.commit()
     await db.refresh(goal)
-    return _to_item(goal)
+    return await _to_item(goal, db)
 
 
 @router.delete("/v1/goals/{goal_id}", status_code=204)

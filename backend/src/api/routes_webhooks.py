@@ -45,7 +45,8 @@ async def generic_webhook(
         raw_payload=body,
     )
 
-    processor = _make_event_processor(settings, db)
+    redis = getattr(request.app.state, "redis", None)
+    processor = await _make_event_processor(settings, db, redis=redis)
     event_id = await processor.process(raw, user_id, workspace_id)
 
     if event_id is None:

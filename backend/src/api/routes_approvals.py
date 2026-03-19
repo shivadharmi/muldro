@@ -41,16 +41,19 @@ async def get_approval_detail(
     if not approval:
         raise HTTPException(status_code=404, detail=f"Approval {approval_id} not found")
 
-    # Get plan goal via TaskRun
+    # Get plan goal and trace_id via TaskRun
     plan_goal = None
+    trace_id = None
     if approval.execution_id:
         run_result = await db.execute(
             select(TaskRun).where(TaskRun.run_id == approval.execution_id)
         )
         run = run_result.scalar_one_or_none()
-        if run and run.plan_id:
-            plan_result = await db.execute(select(Plan.goal).where(Plan.plan_id == run.plan_id))
-            plan_goal = plan_result.scalar_one_or_none()
+        if run:
+            trace_id = run.trace_id
+            if run.plan_id:
+                plan_result = await db.execute(select(Plan.goal).where(Plan.plan_id == run.plan_id))
+                plan_goal = plan_result.scalar_one_or_none()
 
     return ApprovalDetailResponse(
         approval_id=approval.approval_id,
@@ -65,6 +68,7 @@ async def get_approval_detail(
         execution_id=approval.execution_id,
         plan_goal=plan_goal,
         artifact_refs=approval.artifact_refs,
+        trace_id=trace_id,
     )
 
 

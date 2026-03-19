@@ -16,7 +16,7 @@ function StatCard({
   return (
     <Card>
       <CardBody>
-        <p className="text-xs text-neutral-500 mb-1">{label}</p>
+        <p className="text-xs text-t-tertiary mb-1">{label}</p>
         <p className="text-2xl font-semibold">{value}</p>
         {sub && <div className="mt-1">{sub}</div>}
       </CardBody>
@@ -32,7 +32,7 @@ export function OverviewStats({
   queues: QueueInfo | undefined;
 }) {
   return (
-    <div className="grid grid-cols-4 gap-4">
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
       <StatCard
         label="Budget Used"
         value={`${budget?.percent_used?.toFixed(1) ?? 0}%`}

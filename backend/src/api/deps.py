@@ -1,6 +1,6 @@
 """FastAPI dependency injection."""
 
-from fastapi import Depends, Header, HTTPException, Query
+from fastapi import Depends, Header, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config.settings import Settings, get_settings
@@ -10,20 +10,15 @@ from src.models.users import User
 
 async def get_current_user(
     authorization: str | None = Header(None),
-    token: str | None = Query(None, description="Auth token (for SSE/EventSource)"),
     settings: Settings = Depends(get_settings),
     db: AsyncSession = Depends(get_db),
 ) -> User:
     """Validate the request and return the authenticated User.
 
-    Supports two modes:
-    1. Session token: Bearer <session_token> (primary auth)
-    2. Query param token: ?token=<token> (for SSE/EventSource which can't set headers)
+    Auth via Authorization: Bearer <session_token> header only.
+    No query param token fallback — SSE uses fetch with headers,
+    WebSocket uses auth-message-after-connect.
     """
-    # If no Authorization header, check query param (for SSE)
-    if (not authorization or not authorization.startswith("Bearer ")) and token:
-        authorization = f"Bearer {token}"
-
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing authorization")
 

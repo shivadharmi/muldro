@@ -97,15 +97,15 @@ function ConnectorsContent() {
   }
 
   return (
-    <div className="p-6 space-y-6">
-      <PageHeader title="Connectors" subtitle="Manage data source connections" />
+    <div className="p-4 sm:p-6 space-y-6">
+      <PageHeader title="Connectors" subtitle="Manage data source connections" variant="config" />
 
       {flash && (
         <div
           className={`rounded-lg p-3 text-sm ${
             flash.startsWith("Error")
-              ? "bg-red-900/20 border border-red-800 text-red-400"
-              : "bg-green-900/20 border border-green-800 text-green-400"
+              ? "bg-j-error-soft border border-j-error/30 text-j-error"
+              : "bg-j-success-soft border border-j-success/30 text-j-success"
           }`}
         >
           {flash}
@@ -118,7 +118,7 @@ function ConnectorsContent() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         {PROVIDERS.map((provider) => {
           const connector = connectors.find((c) => c.provider === provider.id);
           const isConnected = !!connector;
@@ -128,8 +128,8 @@ function ConnectorsContent() {
               <div className="p-4">
                 <div className="flex items-center justify-between mb-2">
                   <div>
-                    <h3 className="text-sm font-medium text-white">{provider.name}</h3>
-                    <p className="text-xs text-neutral-400">{provider.description}</p>
+                    <h3 className="text-sm font-medium text-t-primary">{provider.name}</h3>
+                    <p className="text-xs text-t-secondary">{provider.description}</p>
                   </div>
                   <Badge variant={isConnected ? "green" : "default"}>
                     {isConnected ? "Connected" : "Not connected"}
@@ -142,13 +142,13 @@ function ConnectorsContent() {
                       <button
                         onClick={() => handleTest(connector.connector_id)}
                         disabled={testingId === connector.connector_id}
-                        className="text-xs px-3 py-1.5 rounded-md border border-neutral-700 text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
+                        className="text-xs px-3 py-1.5 rounded-md border border-b-primary text-t-primary hover:bg-surface-2 disabled:opacity-50"
                       >
                         {testingId === connector.connector_id ? "Testing..." : "Test"}
                       </button>
                       <button
                         onClick={() => disconnectMutation.mutate(connector.connector_id)}
-                        className="text-xs px-3 py-1.5 rounded-md border border-red-800 text-red-400 hover:bg-red-900/20"
+                        className="text-xs px-3 py-1.5 rounded-md border border-j-error/30 text-j-error hover:bg-j-error-soft"
                       >
                         Disconnect
                       </button>
@@ -156,8 +156,8 @@ function ConnectorsContent() {
                         <span
                           className={`text-xs py-1.5 ${
                             testResult[connector.connector_id] === "healthy"
-                              ? "text-green-400"
-                              : "text-red-400"
+                              ? "text-j-success"
+                              : "text-j-error"
                           }`}
                         >
                           {testResult[connector.connector_id]}
@@ -168,7 +168,7 @@ function ConnectorsContent() {
                     <button
                       onClick={() => connectMutation.mutate(provider.id)}
                       disabled={connectMutation.isPending}
-                      className="text-xs px-3 py-1.5 rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+                      className="text-xs px-3 py-1.5 rounded-md bg-j-primary text-j-primary-fg hover:bg-j-primary-hover disabled:opacity-50"
                     >
                       Connect
                     </button>

@@ -6,9 +6,9 @@ interface Props {
 }
 
 const variantClasses: Record<string, string> = {
-  primary: "bg-blue-600 hover:bg-blue-700 text-white",
-  secondary: "bg-neutral-700 hover:bg-neutral-600 text-neutral-200",
-  danger: "bg-red-600 hover:bg-red-700 text-white",
+  primary: "bg-j-primary hover:bg-j-primary-hover text-j-primary-fg",
+  secondary: "bg-surface-3 hover:bg-surface-2 text-t-primary",
+  danger: "bg-j-error hover:opacity-90 text-j-primary-fg",
 };
 
 export function A2UIButton({ component, onAction }: Props) {

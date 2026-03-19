@@ -5,18 +5,18 @@ interface Props {
 }
 
 const variantClasses: Record<string, string> = {
-  default: "bg-neutral-700 text-neutral-300",
-  primary: "bg-blue-900/50 text-blue-300",
-  success: "bg-green-900/50 text-green-300",
-  warning: "bg-yellow-900/50 text-yellow-300",
-  danger: "bg-red-900/50 text-red-300",
-  low: "bg-green-900/50 text-green-300",
-  medium: "bg-yellow-900/50 text-yellow-300",
-  high: "bg-red-900/50 text-red-300",
-  running: "bg-blue-900/50 text-blue-300",
-  completed: "bg-green-900/50 text-green-300",
-  failed: "bg-red-900/50 text-red-300",
-  pending: "bg-yellow-900/50 text-yellow-300",
+  default: "bg-surface-3 text-t-primary",
+  primary: "bg-j-primary-soft text-j-primary",
+  success: "bg-j-success-soft text-j-success",
+  warning: "bg-j-warning-soft text-j-warning",
+  danger: "bg-j-error-soft text-j-error",
+  low: "bg-j-success-soft text-j-success",
+  medium: "bg-j-warning-soft text-j-warning",
+  high: "bg-j-error-soft text-j-error",
+  running: "bg-j-primary-soft text-j-primary",
+  completed: "bg-j-success-soft text-j-success",
+  failed: "bg-j-error-soft text-j-error",
+  pending: "bg-j-warning-soft text-j-warning",
 };
 
 export function A2UIBadge({ component }: Props) {

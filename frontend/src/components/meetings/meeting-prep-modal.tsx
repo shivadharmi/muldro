@@ -7,9 +7,9 @@ export function MeetingPrepView({ prep }: { prep: MeetingPrep }) {
   return (
     <div className="space-y-4 max-h-[60vh] overflow-y-auto">
       <div>
-        <h3 className="text-sm font-medium text-white">{prep.title}</h3>
+        <h3 className="text-sm font-medium text-t-primary">{prep.title}</h3>
         {prep.starts_at && (
-          <p className="text-xs text-neutral-500 mt-0.5">
+          <p className="text-xs text-t-tertiary mt-0.5">
             {new Date(prep.starts_at).toLocaleString()}
           </p>
         )}
@@ -31,7 +31,7 @@ export function MeetingPrepView({ prep }: { prep: MeetingPrep }) {
         <Section title="Agenda">
           <ol className="list-decimal list-inside space-y-1">
             {prep.agenda.map((item, i) => (
-              <li key={i} className="text-xs text-neutral-300">{item}</li>
+              <li key={i} className="text-xs text-t-primary">{item}</li>
             ))}
           </ol>
         </Section>
@@ -41,7 +41,7 @@ export function MeetingPrepView({ prep }: { prep: MeetingPrep }) {
         <Section title="Related Threads">
           <div className="space-y-1.5">
             {prep.related_threads.map((thread, i) => (
-              <div key={i} className="text-xs text-neutral-400">
+              <div key={i} className="text-xs text-t-secondary">
                 {(thread as Record<string, unknown>).subject as string ||
                   (thread as Record<string, unknown>).title as string ||
                   `Thread ${i + 1}`}
@@ -55,8 +55,8 @@ export function MeetingPrepView({ prep }: { prep: MeetingPrep }) {
         <Section title="Action Items">
           <ul className="space-y-1">
             {prep.action_items.map((item, i) => (
-              <li key={i} className="flex items-start gap-2 text-xs text-neutral-300">
-                <span className="text-yellow-400 mt-0.5 shrink-0">&#x25CB;</span>
+              <li key={i} className="flex items-start gap-2 text-xs text-t-primary">
+                <span className="text-j-warning mt-0.5 shrink-0">&#x25CB;</span>
                 <span>
                   {(item as Record<string, unknown>).description as string ||
                     (item as Record<string, unknown>).title as string ||
@@ -72,8 +72,8 @@ export function MeetingPrepView({ prep }: { prep: MeetingPrep }) {
         <Section title="Risks">
           <ul className="space-y-1">
             {prep.risks.map((risk, i) => (
-              <li key={i} className="flex items-start gap-2 text-xs text-red-300">
-                <span className="text-red-400 mt-0.5 shrink-0">!</span>
+              <li key={i} className="flex items-start gap-2 text-xs text-j-error">
+                <span className="text-j-error mt-0.5 shrink-0">!</span>
                 <span>{risk}</span>
               </li>
             ))}
@@ -87,7 +87,7 @@ export function MeetingPrepView({ prep }: { prep: MeetingPrep }) {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div>
-      <p className="text-[10px] uppercase text-neutral-600 mb-1.5 font-semibold tracking-wider">
+      <p className="text-[10px] uppercase text-t-muted mb-1.5 font-semibold tracking-wider">
         {title}
       </p>
       {children}

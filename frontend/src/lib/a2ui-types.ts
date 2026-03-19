@@ -26,4 +26,6 @@ export type JarvisMessage =
   | { type: "notification"; notification_id: string; notification_type: string; title: string; body: string; data: Record<string, unknown> }
   | { type: "notification_resolved"; notification_id: string; resolved_on: string }
   | { type: "action_result"; action: string; result: Record<string, unknown> }
-  | { type: "heartbeat" };
+  | { type: "heartbeat" }
+  | { type: "auth_ok" }
+  | { type: "auth_error"; message: string };

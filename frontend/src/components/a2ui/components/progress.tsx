@@ -13,14 +13,14 @@ export function A2UIProgress({ component }: Props) {
   return (
     <div className="space-y-1">
       {label && (
-        <div className="flex justify-between text-xs text-neutral-400">
+        <div className="flex justify-between text-xs text-t-secondary">
           <span>{label}</span>
           <span>{Math.round(pct)}%</span>
         </div>
       )}
-      <div className="h-2 rounded-full bg-neutral-800 overflow-hidden">
+      <div className="h-2 rounded-full bg-surface-2 overflow-hidden">
         <div
-          className="h-full rounded-full bg-blue-500 transition-all duration-300"
+          className="h-full rounded-full bg-j-primary transition-all duration-300"
           style={{ width: `${pct}%` }}
         />
       </div>

@@ -19,7 +19,7 @@ export function ScheduleRow({
 }) {
   return (
     <tr>
-      <Td className="font-medium text-white">{schedule.name}</Td>
+      <Td className="font-medium text-t-primary">{schedule.name}</Td>
       <Td>{schedule.action_type}</Td>
       <Td className="font-mono text-xs">{schedule.cron_expr || "--"}</Td>
       <Td>
@@ -33,7 +33,7 @@ export function ScheduleRow({
         {schedule.consecutive_failures > 0 && (
           <Badge variant="red">{schedule.consecutive_failures}</Badge>
         )}
-        {schedule.consecutive_failures === 0 && <span className="text-neutral-600">0</span>}
+        {schedule.consecutive_failures === 0 && <span className="text-t-muted">0</span>}
       </Td>
       <Td>
         <Badge variant={priorityVariant(schedule.priority)}>{schedule.priority}</Badge>

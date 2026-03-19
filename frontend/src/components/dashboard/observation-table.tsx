@@ -33,7 +33,7 @@ export function ObservationTable({
           <TableBody>
             {entries.map(([source, info]) => (
               <tr key={source}>
-                <Td className="font-medium text-white">{source}</Td>
+                <Td className="font-medium text-t-primary">{source}</Td>
                 <Td>
                   <Badge variant={statusVariant(info.status)}>{info.status}</Badge>
                 </Td>

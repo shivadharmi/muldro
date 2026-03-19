@@ -5,11 +5,11 @@ interface Props {
 }
 
 const typeColors: Record<string, string> = {
-  person: "border-blue-800 bg-blue-950/20",
-  organization: "border-purple-800 bg-purple-950/20",
-  project: "border-green-800 bg-green-950/20",
-  meeting: "border-yellow-800 bg-yellow-950/20",
-  goal: "border-orange-800 bg-orange-950/20",
+  person: "border-j-primary/30 bg-j-primary-soft",
+  organization: "border-j-secondary/30 bg-j-secondary-soft",
+  project: "border-j-success/30 bg-j-success-soft",
+  meeting: "border-j-warning/30 bg-j-warning-soft",
+  goal: "border-j-accent/30 bg-j-accent-soft",
 };
 
 export function A2UIEntityCard({ component }: Props) {
@@ -17,20 +17,20 @@ export function A2UIEntityCard({ component }: Props) {
   const entityType = (component.properties.entity_type as string) || "";
   const entityId = (component.properties.entity_id as string) || "";
   const attributes = component.properties.attributes as Record<string, unknown> | undefined;
-  const cls = typeColors[entityType] || "border-neutral-800 bg-neutral-900";
+  const cls = typeColors[entityType] || "border-b-primary bg-surface-1";
 
   return (
     <div className={`rounded-lg border p-3 ${cls}`}>
       <div className="flex items-start justify-between mb-1">
-        <p className="text-sm font-medium text-white">{name}</p>
-        <span className="text-[10px] text-neutral-500 uppercase">{entityType}</span>
+        <p className="text-sm font-medium text-t-primary">{name}</p>
+        <span className="text-[10px] text-t-tertiary uppercase">{entityType}</span>
       </div>
-      {entityId && <p className="text-[10px] text-neutral-600 font-mono mb-2">{entityId}</p>}
+      {entityId && <p className="text-[10px] text-t-muted font-mono mb-2">{entityId}</p>}
       {attributes && Object.keys(attributes).length > 0 && (
         <div className="space-y-0.5">
           {Object.entries(attributes).slice(0, 4).map(([k, v]) => (
-            <div key={k} className="text-xs text-neutral-400">
-              <span className="text-neutral-500">{k}:</span> {String(v)}
+            <div key={k} className="text-xs text-t-secondary">
+              <span className="text-t-tertiary">{k}:</span> {String(v)}
             </div>
           ))}
         </div>

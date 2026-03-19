@@ -34,12 +34,12 @@ function CallbackHandler() {
   if (error) {
     return (
       <div className="flex min-h-screen items-center justify-center p-4">
-        <div className="w-full max-w-md rounded-xl border border-red-800 bg-neutral-900 p-6 text-center space-y-4">
-          <h2 className="text-lg font-semibold text-red-400">Login Failed</h2>
-          <p className="text-sm text-neutral-400">{error}</p>
+        <div className="w-full max-w-md rounded-xl border border-j-error/30 bg-surface-1 p-6 text-center space-y-4">
+          <h2 className="text-lg font-semibold text-j-error">Login Failed</h2>
+          <p className="text-sm text-t-secondary">{error}</p>
           <button
             onClick={() => router.push("/login")}
-            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+            className="rounded-lg bg-j-primary px-4 py-2 text-sm font-medium text-j-primary-fg hover:bg-j-primary-hover"
           >
             Back to Login
           </button>
@@ -50,7 +50,7 @@ function CallbackHandler() {
 
   return (
     <div className="flex min-h-screen items-center justify-center">
-      <p className="text-neutral-400">Signing you in...</p>
+      <p className="text-t-secondary">Signing you in...</p>
     </div>
   );
 }
@@ -60,7 +60,7 @@ export default function AuthCallbackPage() {
     <Suspense
       fallback={
         <div className="flex min-h-screen items-center justify-center">
-          <p className="text-neutral-400">Loading...</p>
+          <p className="text-t-secondary">Loading...</p>
         </div>
       }
     >

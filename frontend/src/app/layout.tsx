@@ -18,15 +18,24 @@ export const metadata: Metadata = {
   description: "Personal AI Operating System",
 };
 
+// Inline script to set theme before paint — prevents FOUC.
+// Content is a hardcoded string literal (no user input), safe for dangerouslySetInnerHTML.
+const THEME_INIT_SCRIPT = `(function(){try{var t=localStorage.getItem('jarvis_theme');var r=t==='light'?'light':t==='dark'?'dark':window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';document.documentElement.setAttribute('data-theme',r)}catch(e){}})()`;
+
 export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark">
+    <html lang="en" data-theme="dark" suppressHydrationWarning>
+      <head>
+        <script
+          dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }}
+        />
+      </head>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-neutral-950 text-white min-h-screen`}
+        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-surface-0 text-t-primary min-h-screen`}
       >
         <AppShell>{children}</AppShell>
       </body>

@@ -58,11 +58,11 @@ export default function RunViewerPage() {
 
   if (runLoading) {
     return (
-      <div className="p-6 space-y-4">
+      <div className="p-4 sm:p-6 space-y-4">
         <PageHeader title="Run Viewer" />
         <div className="animate-pulse space-y-3">
-          <div className="h-6 w-48 bg-neutral-800 rounded" />
-          <div className="h-4 w-32 bg-neutral-800 rounded" />
+          <div className="h-6 w-48 bg-surface-2 rounded" />
+          <div className="h-4 w-32 bg-surface-2 rounded" />
         </div>
       </div>
     );
@@ -70,9 +70,9 @@ export default function RunViewerPage() {
 
   if (!run) {
     return (
-      <div className="p-6">
+      <div className="p-4 sm:p-6">
         <PageHeader title="Run Viewer" />
-        <p className="text-neutral-500 text-sm">Run not found</p>
+        <p className="text-t-tertiary text-sm">Run not found</p>
       </div>
     );
   }
@@ -84,15 +84,15 @@ export default function RunViewerPage() {
       : null;
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-6">
       <div className="flex items-start justify-between">
         <div>
           <PageHeader title="Run Viewer" />
           <div className="flex items-center gap-3 mt-1">
-            <span className="text-xs text-neutral-500 font-mono">{run.run_id}</span>
+            <span className="text-xs text-t-tertiary font-mono">{run.run_id}</span>
             <Badge variant={statusVariant(run.status)}>{run.status}</Badge>
           </div>
-          <div className="flex items-center gap-4 text-xs text-neutral-500 mt-1">
+          <div className="flex items-center gap-4 text-xs text-t-tertiary mt-1">
             <span>Plan: {run.plan_id}</span>
             {durationMs != null && <span>{(durationMs / 1000).toFixed(1)}s</span>}
             {run.started_at && <TimeAgo date={run.started_at} />}
@@ -109,14 +109,14 @@ export default function RunViewerPage() {
         )}
       </div>
 
-      <div className="grid grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Steps Timeline - 2 columns */}
         <div className="col-span-2 space-y-4">
           <Card>
             <CardHeader>
               <span className="text-sm font-medium">
                 Steps ({steps.length})
-                {isLive && <span className="ml-2 text-blue-400 text-xs animate-pulse">Live</span>}
+                {isLive && <span className="ml-2 text-j-primary text-xs animate-pulse">Live</span>}
               </span>
             </CardHeader>
             <CardBody>
@@ -127,10 +127,10 @@ export default function RunViewerPage() {
           {run.error && (
             <Card>
               <CardHeader>
-                <span className="text-sm font-medium text-red-400">Error</span>
+                <span className="text-sm font-medium text-j-error">Error</span>
               </CardHeader>
               <CardBody>
-                <pre className="text-xs text-red-300 font-mono overflow-x-auto">
+                <pre className="text-xs text-j-error font-mono overflow-x-auto">
                   {JSON.stringify(run.error, null, 2)}
                 </pre>
               </CardBody>
@@ -144,12 +144,12 @@ export default function RunViewerPage() {
               </CardHeader>
               <CardBody className="space-y-2">
                 {artifacts.map((a) => (
-                  <div key={a.artifact_id} className="flex items-center justify-between py-1 border-b border-neutral-800/50 last:border-0">
+                  <div key={a.artifact_id} className="flex items-center justify-between py-1 border-b border-b-secondary last:border-0">
                     <div>
-                      <p className="text-sm text-white">{a.title}</p>
-                      <p className="text-xs text-neutral-500">{a.artifact_type}</p>
+                      <p className="text-sm text-t-primary">{a.title}</p>
+                      <p className="text-xs text-t-tertiary">{a.artifact_type}</p>
                     </div>
-                    <Link href={`/artifacts/${a.artifact_id}`} className="text-xs text-blue-400">
+                    <Link href={`/artifacts/${a.artifact_id}`} className="text-xs text-j-primary">
                       View
                     </Link>
                   </div>

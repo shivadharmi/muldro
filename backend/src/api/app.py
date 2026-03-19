@@ -21,6 +21,7 @@ from src.api.routes_events import router as events_router
 from src.api.routes_executions import router as executions_router
 from src.api.routes_feedback import router as feedback_router
 from src.api.routes_goals import router as goals_router
+from src.api.routes_graph import router as graph_router
 from src.api.routes_health import router as health_router
 from src.api.routes_meetings import router as meetings_router
 from src.api.routes_memories import router as memories_router
@@ -116,6 +117,24 @@ def create_app() -> FastAPI:
                 "Registry seed skipped (DB not ready)",
                 exc_info=True,
             )
+
+        # Ensure Elasticsearch indices exist
+        try:
+            from src.services.search_service import SearchService
+
+            search_svc = SearchService(settings)
+            await search_svc.ensure_indices()
+        except Exception:
+            logger.debug("ES index init skipped", exc_info=True)
+
+        # Ensure Qdrant collections exist
+        try:
+            from src.services.vector_store import VectorStore
+
+            vector_store = VectorStore(settings)
+            await vector_store.ensure_collections()
+        except Exception:
+            logger.debug("Qdrant collection init skipped", exc_info=True)
 
         # Initialize MCP bridge to external servers (Google Workspace, GitHub, Slack, etc.)
         try:
@@ -270,6 +289,9 @@ def create_app() -> FastAPI:
     # Agent management
     app.include_router(agents_router, tags=["agents"])
     app.include_router(agent_routes_router, tags=["agent-routes"])
+
+    # Knowledge graph (Neo4j)
+    app.include_router(graph_router, tags=["graph"])
 
     return app
 

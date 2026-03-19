@@ -87,12 +87,12 @@ export function OAuthPanel() {
           return (
             <div key={provider.id} className="flex items-center justify-between py-3">
               <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded bg-neutral-800 flex items-center justify-center">
+                <div className="w-8 h-8 rounded bg-surface-2 flex items-center justify-center">
                   {provider.icon}
                 </div>
                 <div>
                   <p className="text-sm font-medium">{provider.name}</p>
-                  <p className="text-xs text-neutral-500">{provider.description}</p>
+                  <p className="text-xs text-t-tertiary">{provider.description}</p>
                   {isConnected && (
                     <div className="flex gap-1 mt-1">
                       {linked.map((c) => (
@@ -126,7 +126,7 @@ export function OAuthPanel() {
             </div>
           );
         })}
-        {error && <p className="text-xs text-red-400 mt-2">{error}</p>}
+        {error && <p className="text-xs text-j-error mt-2">{error}</p>}
       </CardBody>
     </Card>
   );

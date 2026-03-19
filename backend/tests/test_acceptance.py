@@ -43,13 +43,10 @@ client = TestClient(app)
 # ---------------------------------------------------------------------------
 
 
-@patch("src.api.routes_events.Planner")
 @patch("src.api.routes_events.MemoryService")
 @patch("src.api.routes_events.WorldModel")
 @patch("src.api.routes_events.EventProcessor")
-def test_high_priority_email_creates_event_and_plan(
-    mock_ep_cls, mock_wm_cls, mock_mem_cls, mock_planner_cls
-):
+def test_high_priority_email_creates_event_and_plan(mock_ep_cls, mock_wm_cls, mock_mem_cls):
     """A high-priority email ingested via /v1/events/ingest should produce
     exactly one normalized event. The callback pipeline fires entity extraction,
     memory extraction, and proactive planning."""
@@ -84,13 +81,10 @@ def test_high_priority_email_creates_event_and_plan(
     assert raw_arg.actor["email"] == "partner@vc.com"
 
 
-@patch("src.api.routes_events.Planner")
 @patch("src.api.routes_events.MemoryService")
 @patch("src.api.routes_events.WorldModel")
 @patch("src.api.routes_events.EventProcessor")
-def test_duplicate_event_returns_duplicate_status(
-    mock_ep_cls, mock_wm_cls, mock_mem_cls, mock_planner_cls
-):
+def test_duplicate_event_returns_duplicate_status(mock_ep_cls, mock_wm_cls, mock_mem_cls):
     """Ingesting the same event twice should return duplicate status (idempotency)."""
     mock_ep = MagicMock()
     mock_ep.process = AsyncMock(return_value=None)  # None = duplicate

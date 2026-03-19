@@ -1,10 +1,17 @@
 const VARIANTS: Record<string, string> = {
-  default: "bg-neutral-700 text-neutral-300",
-  blue: "bg-blue-900/50 text-blue-400 border border-blue-800",
-  green: "bg-green-900/50 text-green-400 border border-green-800",
-  yellow: "bg-yellow-900/50 text-yellow-400 border border-yellow-800",
-  red: "bg-red-900/50 text-red-400 border border-red-800",
-  purple: "bg-purple-900/50 text-purple-400 border border-purple-800",
+  default: "bg-surface-3 text-t-secondary border border-b-secondary",
+  live: "bg-j-primary-soft text-j-primary border border-j-primary/30",
+  success: "bg-j-success-soft text-j-success border border-j-success/30",
+  warning: "bg-j-warning-soft text-j-warning border border-j-warning/30",
+  error: "bg-j-error-soft text-j-error border border-j-error/30",
+  info: "bg-j-info-soft text-j-info border border-j-info/30",
+  secondary: "bg-j-secondary-soft text-j-secondary border border-j-secondary/30",
+  // Legacy compat aliases
+  blue: "bg-j-info-soft text-j-info border border-j-info/30",
+  green: "bg-j-success-soft text-j-success border border-j-success/30",
+  yellow: "bg-j-warning-soft text-j-warning border border-j-warning/30",
+  red: "bg-j-error-soft text-j-error border border-j-error/30",
+  purple: "bg-j-secondary-soft text-j-secondary border border-j-secondary/30",
 };
 
 export function Badge({
@@ -18,7 +25,7 @@ export function Badge({
 }) {
   return (
     <span
-      className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${VARIANTS[variant] || VARIANTS.default} ${className}`}
+      className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${VARIANTS[variant] || VARIANTS.default} ${className}`}
     >
       {children}
     </span>
@@ -30,20 +37,22 @@ export function statusVariant(status: string): keyof typeof VARIANTS {
     case "pending":
     case "created":
     case "detecting":
-      return "yellow";
+      return "warning";
     case "approved":
     case "completed":
     case "ok":
     case "normal":
-      return "green";
+      return "success";
     case "rejected":
     case "failed":
     case "paused":
-      return "red";
+      return "error";
     case "executing":
     case "in_progress":
+    case "running":
+      return "live";
     case "degraded":
-      return "blue";
+      return "warning";
     default:
       return "default";
   }
@@ -53,11 +62,11 @@ export function priorityVariant(priority: string): keyof typeof VARIANTS {
   switch (priority) {
     case "high":
     case "critical":
-      return "red";
+      return "error";
     case "medium":
-      return "yellow";
+      return "warning";
     case "low":
-      return "green";
+      return "success";
     default:
       return "default";
   }
@@ -67,11 +76,11 @@ export function riskVariant(risk: string): keyof typeof VARIANTS {
   switch (risk) {
     case "high":
     case "critical":
-      return "red";
+      return "error";
     case "medium":
-      return "yellow";
+      return "warning";
     case "low":
-      return "green";
+      return "success";
     default:
       return "default";
   }

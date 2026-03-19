@@ -17,15 +17,15 @@ export function A2UITabs({ component, renderChild }: Props) {
 
   return (
     <div>
-      <div className="flex border-b border-neutral-800 mb-3">
+      <div className="flex border-b border-b-primary mb-3">
         {labels.map((label, i) => (
           <button
             key={i}
             onClick={() => setActive(i)}
             className={`px-3 py-2 text-sm font-medium transition-colors ${
               active === i
-                ? "text-blue-400 border-b-2 border-blue-400"
-                : "text-neutral-500 hover:text-neutral-300"
+                ? "text-j-primary border-b-2 border-j-primary"
+                : "text-t-tertiary hover:text-t-primary"
             }`}
           >
             {label}

@@ -23,12 +23,12 @@ export function SearchBar({
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         placeholder="Search memories, entities, events..."
-        className="flex-1 bg-neutral-800 border border-neutral-700 rounded-lg px-4 py-2 text-sm text-neutral-200 placeholder:text-neutral-600"
+        className="flex-1 bg-surface-2 border border-b-primary rounded-lg px-4 py-2 text-sm text-t-primary placeholder:text-t-muted"
       />
       <select
         value={scope}
         onChange={(e) => setScope(e.target.value)}
-        className="bg-neutral-800 border border-neutral-700 rounded px-3 py-2 text-sm text-neutral-200"
+        className="bg-surface-2 border border-b-primary rounded px-3 py-2 text-sm text-t-primary"
       >
         <option value="all">All</option>
         <option value="memory">Memory</option>

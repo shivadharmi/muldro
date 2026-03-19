@@ -38,7 +38,7 @@ function WorkflowCard({
         <div className="flex items-start justify-between">
           <div className="flex-1">
             <p className="text-sm font-medium">{workflow.name}</p>
-            <p className="text-xs text-neutral-500 mt-1">{workflow.description}</p>
+            <p className="text-xs text-t-tertiary mt-1">{workflow.description}</p>
             <div className="flex items-center gap-1.5 mt-2 flex-wrap">
               <Badge variant="default">{workflow.step_count} steps</Badge>
               {workflow.tags.map((tag, i) => (
@@ -49,7 +49,7 @@ function WorkflowCard({
           <div className="ml-3 flex flex-col items-end gap-2">
             <button
               onClick={() => setShowParams(!showParams)}
-              className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs px-3 py-1.5 rounded transition-colors"
+              className="bg-j-primary hover:bg-j-primary-hover disabled:opacity-50 text-j-primary-fg text-xs px-3 py-1.5 rounded transition-colors"
               disabled={isStarting}
             >
               {isStarting ? "Starting..." : "Start"}
@@ -57,25 +57,25 @@ function WorkflowCard({
           </div>
         </div>
         {showParams && (
-          <div className="mt-3 pt-3 border-t border-neutral-800 space-y-2">
-            <label className="block text-xs text-neutral-400">Parameters (JSON)</label>
+          <div className="mt-3 pt-3 border-t border-b-primary space-y-2">
+            <label className="block text-xs text-t-secondary">Parameters (JSON)</label>
             <textarea
               value={paramsJson}
               onChange={(e) => setParamsJson(e.target.value)}
               rows={3}
-              className="w-full bg-neutral-800 border border-neutral-700 rounded px-3 py-1.5 text-xs text-neutral-200 font-mono resize-none"
+              className="w-full bg-surface-2 border border-b-primary rounded px-3 py-1.5 text-xs text-t-primary font-mono resize-none"
             />
             <div className="flex justify-end gap-2">
               <button
                 onClick={() => setShowParams(false)}
-                className="text-neutral-400 hover:text-neutral-200 text-xs px-3 py-1 rounded transition-colors"
+                className="text-t-secondary hover:text-t-primary text-xs px-3 py-1 rounded transition-colors"
               >
                 Cancel
               </button>
               <button
                 onClick={handleStart}
                 disabled={isStarting}
-                className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs px-3 py-1.5 rounded transition-colors"
+                className="bg-j-primary hover:bg-j-primary-hover disabled:opacity-50 text-j-primary-fg text-xs px-3 py-1.5 rounded transition-colors"
               >
                 Start with Params
               </button>
@@ -112,15 +112,15 @@ export default function WorkflowsPage() {
   }
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <PageHeader title="Workflows" subtitle="Available workflows and launcher" />
 
       {lastResult && (
         <div
           className={`mb-4 px-4 py-2 rounded text-sm ${
             lastResult.success
-              ? "bg-green-900/30 border border-green-800 text-green-400"
-              : "bg-red-900/30 border border-red-800 text-red-400"
+              ? "bg-j-success/10 border border-j-success text-j-success"
+              : "bg-j-error/10 border border-j-error text-j-error"
           }`}
         >
           {lastResult.message}
@@ -134,7 +134,7 @@ export default function WorkflowsPage() {
       )}
 
       {isLoading ? (
-        <p className="text-neutral-500 text-sm">Loading...</p>
+        <p className="text-t-tertiary text-sm">Loading...</p>
       ) : workflows.length === 0 ? (
         <EmptyState title="No workflows" description="No workflows are registered yet" />
       ) : (

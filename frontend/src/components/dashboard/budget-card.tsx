@@ -9,7 +9,7 @@ export function BudgetCard({ budget }: { budget: BudgetInfo | undefined }) {
 
   const pct = Math.min(budget.percent_used, 100);
   const barColor =
-    pct >= 95 ? "bg-red-500" : pct >= 80 ? "bg-yellow-500" : "bg-blue-500";
+    pct >= 95 ? "bg-j-error" : pct >= 80 ? "bg-j-warning" : "bg-j-primary";
 
   return (
     <Card>
@@ -22,17 +22,17 @@ export function BudgetCard({ budget }: { budget: BudgetInfo | undefined }) {
         </div>
       </CardHeader>
       <CardBody>
-        <div className="flex items-center justify-between text-xs text-neutral-400 mb-2">
+        <div className="flex items-center justify-between text-xs text-t-secondary mb-2">
           <span>${budget.daily_spend_usd.toFixed(2)} spent</span>
           <span>${budget.daily_limit_usd.toFixed(2)} limit</span>
         </div>
-        <div className="h-2 bg-neutral-800 rounded-full overflow-hidden">
+        <div className="h-2 bg-surface-2 rounded-full overflow-hidden">
           <div
             className={`h-full rounded-full transition-all ${barColor}`}
             style={{ width: `${pct}%` }}
           />
         </div>
-        <p className="text-xs text-neutral-500 mt-1">{budget.percent_used.toFixed(1)}% used</p>
+        <p className="text-xs text-t-tertiary mt-1">{budget.percent_used.toFixed(1)}% used</p>
       </CardBody>
     </Card>
   );

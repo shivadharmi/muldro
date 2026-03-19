@@ -27,7 +27,7 @@ export default function ExecutionsPage() {
   });
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-6">
       <PageHeader
         title="Executions"
         subtitle="Track plan executions and their progress"
@@ -37,7 +37,7 @@ export default function ExecutionsPage() {
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
-          className="rounded bg-neutral-800 border border-neutral-700 px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+          className="rounded bg-surface-2 border border-b-primary px-3 py-1.5 text-sm text-t-primary focus:outline-none focus:ring-1 focus:ring-j-ring"
         >
           {STATUS_OPTIONS.map((s) => (
             <option key={s} value={s}>
@@ -48,7 +48,7 @@ export default function ExecutionsPage() {
         <select
           value={sourceFilter}
           onChange={(e) => setSourceFilter(e.target.value)}
-          className="rounded bg-neutral-800 border border-neutral-700 px-3 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+          className="rounded bg-surface-2 border border-b-primary px-3 py-1.5 text-sm text-t-primary focus:outline-none focus:ring-1 focus:ring-j-ring"
         >
           {SOURCE_OPTIONS.map((s) => (
             <option key={s} value={s}>
@@ -64,8 +64,8 @@ export default function ExecutionsPage() {
             <Card key={i}>
               <CardBody>
                 <div className="animate-pulse space-y-2">
-                  <div className="h-4 w-48 bg-neutral-800 rounded" />
-                  <div className="h-3 w-32 bg-neutral-800 rounded" />
+                  <div className="h-4 w-48 bg-surface-2 rounded" />
+                  <div className="h-3 w-32 bg-surface-2 rounded" />
                 </div>
               </CardBody>
             </Card>
@@ -75,8 +75,8 @@ export default function ExecutionsPage() {
 
       {!isLoading && (!executions || executions.length === 0) && (
         <div className="text-center py-12">
-          <p className="text-neutral-500 text-sm font-medium">No executions yet</p>
-          <p className="text-neutral-600 text-xs mt-1">
+          <p className="text-t-tertiary text-sm font-medium">No executions yet</p>
+          <p className="text-t-muted text-xs mt-1">
             Executions appear when Jarvis runs approved plans.
           </p>
         </div>
@@ -89,14 +89,14 @@ export default function ExecutionsPage() {
             href={`/runs/${exec.execution_id}`}
             className="block"
           >
-            <Card className="hover:border-neutral-700 transition-colors">
+            <Card className="hover:border-b-primary transition-colors">
               <CardBody>
                 <div className="flex items-start justify-between mb-2">
                   <div>
-                    <p className="text-sm font-medium text-white font-mono">
+                    <p className="text-sm font-medium text-t-primary font-mono">
                       {exec.execution_id}
                     </p>
-                    <p className="text-xs text-neutral-500 mt-0.5">
+                    <p className="text-xs text-t-tertiary mt-0.5">
                       Plan: {exec.plan_id || "N/A"}
                     </p>
                   </div>
@@ -105,7 +105,7 @@ export default function ExecutionsPage() {
                   </Badge>
                 </div>
 
-                <div className="flex items-center gap-4 text-xs text-neutral-400 mt-2">
+                <div className="flex items-center gap-4 text-xs text-t-secondary mt-2">
                   <span>Source: {exec.source}</span>
                   {exec.execution_mode && (
                     <span>Mode: {exec.execution_mode}</span>
@@ -116,13 +116,13 @@ export default function ExecutionsPage() {
                 </div>
 
                 {exec.error && (
-                  <p className="text-xs text-red-400 mt-2 truncate">
+                  <p className="text-xs text-j-error mt-2 truncate">
                     Error: {typeof exec.error === "object" ? JSON.stringify(exec.error) : String(exec.error)}
                   </p>
                 )}
 
                 {exec.created_at && (
-                  <p className="text-[10px] text-neutral-600 mt-2">
+                  <p className="text-[10px] text-t-muted mt-2">
                     Created <TimeAgo date={exec.created_at} />
                   </p>
                 )}

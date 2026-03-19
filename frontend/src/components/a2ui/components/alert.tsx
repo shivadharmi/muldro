@@ -5,10 +5,10 @@ interface Props {
 }
 
 const severityClasses: Record<string, string> = {
-  info: "border-blue-800 bg-blue-950/40 text-blue-300",
-  success: "border-green-800 bg-green-950/40 text-green-300",
-  warning: "border-yellow-800 bg-yellow-950/40 text-yellow-300",
-  error: "border-red-800 bg-red-950/40 text-red-300",
+  info: "border-j-info/30 bg-j-info-soft text-j-info",
+  success: "border-j-success/30 bg-j-success-soft text-j-success",
+  warning: "border-j-warning/30 bg-j-warning-soft text-j-warning",
+  error: "border-j-error/30 bg-j-error-soft text-j-error",
 };
 
 export function A2UIAlert({ component }: Props) {

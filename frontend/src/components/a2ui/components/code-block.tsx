@@ -9,11 +9,11 @@ export function A2UICodeBlock({ component }: Props) {
   const language = (component.properties.language as string) || "text";
 
   return (
-    <div className="rounded-lg bg-neutral-900 border border-neutral-800 overflow-hidden">
-      <div className="flex items-center justify-between px-3 py-1.5 bg-neutral-800/50 border-b border-neutral-800">
-        <span className="text-[10px] text-neutral-500 uppercase">{language}</span>
+    <div className="rounded-lg bg-surface-1 border border-b-primary overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-1.5 bg-surface-2 border-b border-b-primary">
+        <span className="text-[10px] text-t-tertiary uppercase">{language}</span>
       </div>
-      <pre className="p-3 overflow-x-auto text-sm text-neutral-300 font-mono">
+      <pre className="p-3 overflow-x-auto text-sm text-t-primary font-mono">
         <code>{code}</code>
       </pre>
     </div>

@@ -91,14 +91,14 @@ function LoginForm() {
       <div className="w-full max-w-md space-y-8">
         <div className="text-center">
           <h1 className="text-3xl font-bold">Jarvis</h1>
-          <p className="mt-2 text-neutral-400">Personal AI Operating System</p>
+          <p className="mt-2 text-t-secondary">Personal AI Operating System</p>
         </div>
 
-        <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-6 space-y-6">
+        <div className="rounded-xl border border-b-primary bg-surface-1 p-6 space-y-6">
           {step === "email" ? (
             <form onSubmit={handleSendLink} className="space-y-4">
               <div>
-                <label htmlFor="email" className="block text-sm font-medium text-neutral-300 mb-1">
+                <label htmlFor="email" className="block text-sm font-medium text-t-primary mb-1">
                   Email address
                 </label>
                 <input
@@ -107,14 +107,14 @@ function LoginForm() {
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="w-full rounded-lg border border-neutral-700 bg-neutral-800 px-3 py-2 text-white placeholder-neutral-500 focus:border-blue-500 focus:outline-none"
+                  className="w-full rounded-lg border border-b-primary bg-surface-2 px-3 py-2 text-t-primary placeholder-t-tertiary focus:border-j-primary focus:outline-none"
                   placeholder="you@company.com"
                 />
               </div>
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full rounded-lg bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                className="w-full rounded-lg bg-j-primary px-4 py-2 font-medium text-j-primary-fg hover:bg-j-primary-hover disabled:opacity-50"
               >
                 {loading ? "Sending..." : "Send Magic Link"}
               </button>
@@ -122,16 +122,16 @@ function LoginForm() {
           ) : (
             <form onSubmit={handleVerify} className="space-y-4">
               {devToken ? (
-                <p className="text-sm text-green-400">
+                <p className="text-sm text-j-success">
                   Dev mode: token auto-filled below. Click &quot;Verify &amp; Sign In&quot;.
                 </p>
               ) : (
-                <p className="text-sm text-neutral-400">
+                <p className="text-sm text-t-secondary">
                   Check your email for the magic link token.
                 </p>
               )}
               <div>
-                <label htmlFor="token" className="block text-sm font-medium text-neutral-300 mb-1">
+                <label htmlFor="token" className="block text-sm font-medium text-t-primary mb-1">
                   Verification token
                 </label>
                 <input
@@ -140,21 +140,21 @@ function LoginForm() {
                   required
                   value={token}
                   onChange={(e) => setToken(e.target.value)}
-                  className="w-full rounded-lg border border-neutral-700 bg-neutral-800 px-3 py-2 text-white placeholder-neutral-500 focus:border-blue-500 focus:outline-none"
+                  className="w-full rounded-lg border border-b-primary bg-surface-2 px-3 py-2 text-t-primary placeholder-t-tertiary focus:border-j-primary focus:outline-none"
                   placeholder="Paste your token here"
                 />
               </div>
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full rounded-lg bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                className="w-full rounded-lg bg-j-primary px-4 py-2 font-medium text-j-primary-fg hover:bg-j-primary-hover disabled:opacity-50"
               >
                 {loading ? "Verifying..." : "Verify & Sign In"}
               </button>
               <button
                 type="button"
                 onClick={() => setStep("email")}
-                className="w-full text-sm text-neutral-400 hover:text-white"
+                className="w-full text-sm text-t-secondary hover:text-t-primary"
               >
                 Back to email
               </button>
@@ -163,32 +163,60 @@ function LoginForm() {
 
           <div className="relative">
             <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-neutral-700" />
+              <div className="w-full border-t border-b-primary" />
             </div>
             <div className="relative flex justify-center text-sm">
-              <span className="bg-neutral-900 px-2 text-neutral-500">Or continue with</span>
+              <span className="bg-surface-1 px-2 text-t-tertiary">Or continue with</span>
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <button
               onClick={() => handleOAuth("google")}
-              className="flex items-center justify-center gap-2 rounded-lg border border-neutral-700 px-4 py-2 text-sm font-medium text-neutral-300 hover:bg-neutral-800"
+              className="flex items-center justify-center gap-2 rounded-lg border border-b-primary px-4 py-2 text-sm font-medium text-t-primary hover:bg-surface-2"
             >
               Google
             </button>
             <button
               onClick={() => handleOAuth("github")}
-              className="flex items-center justify-center gap-2 rounded-lg border border-neutral-700 px-4 py-2 text-sm font-medium text-neutral-300 hover:bg-neutral-800"
+              className="flex items-center justify-center gap-2 rounded-lg border border-b-primary px-4 py-2 text-sm font-medium text-t-primary hover:bg-surface-2"
             >
               GitHub
             </button>
           </div>
 
           {error && (
-            <div className="rounded-lg bg-red-900/20 border border-red-800 p-3 text-sm text-red-400">
+            <div className="rounded-lg bg-j-error-soft border border-j-error/30 p-3 text-sm text-j-error">
               {error}
             </div>
+          )}
+
+          {/* Demo Login — seeds the session directly */}
+          {process.env.NODE_ENV === "development" && (
+            <>
+              <div className="relative">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-b-primary" />
+                </div>
+                <div className="relative flex justify-center text-sm">
+                  <span className="bg-surface-1 px-2 text-t-tertiary">Dev mode</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  login("demo-session-token-for-jarvis-ui-dev", {
+                    user_id: "usr_01KM2EMPNB8WYN2E2S286DJ52J",
+                    email: "founder@jarvis.dev",
+                    display_name: "Demo Founder",
+                  });
+                  router.push("/");
+                }}
+                className="w-full rounded-lg border border-j-primary/30 bg-j-primary-soft px-4 py-2 text-sm font-medium text-j-primary hover:bg-j-primary/20 transition-colors"
+              >
+                Demo Login (seeded data)
+              </button>
+            </>
           )}
         </div>
       </div>

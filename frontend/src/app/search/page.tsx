@@ -17,14 +17,14 @@ export default function SearchPage() {
   });
 
   return (
-    <div className="p-6">
-      <PageHeader title="Search" subtitle="Search memories, entities, and events" />
+    <div className="p-4 sm:p-6">
+      <PageHeader title="Search" subtitle="Search memories, entities, and events" variant="collection" />
 
       <div className="mb-6">
         <SearchBar onSearch={(query, scope) => setSearchParams({ query, scope })} />
       </div>
 
-      {isLoading && <p className="text-neutral-500 text-sm">Searching...</p>}
+      {isLoading && <p className="text-t-tertiary text-sm">Searching...</p>}
       {data && <SearchResults results={data.results} />}
     </div>
   );

@@ -5,9 +5,9 @@ interface Props {
 }
 
 const variantClasses: Record<string, string> = {
-  heading: "text-lg font-semibold text-white",
-  body: "text-sm text-neutral-300",
-  caption: "text-xs text-neutral-500",
+  heading: "text-lg font-semibold text-t-primary",
+  body: "text-sm text-t-primary",
+  caption: "text-xs text-t-tertiary",
 };
 
 export function A2UIText({ component }: Props) {

@@ -3,7 +3,7 @@ import { Badge, statusVariant } from "@/components/ui/badge";
 
 export function StepList({ steps }: { steps: TaskStep[] }) {
   if (steps.length === 0) {
-    return <p className="text-xs text-neutral-600">No steps defined</p>;
+    return <p className="text-xs text-t-muted">No steps defined</p>;
   }
 
   return (
@@ -11,9 +11,9 @@ export function StepList({ steps }: { steps: TaskStep[] }) {
       {steps.map((step, i) => (
         <div
           key={`${step.task_id}-${i}`}
-          className="flex items-start gap-3 p-3 bg-neutral-800/50 rounded-lg"
+          className="flex items-start gap-3 p-3 bg-surface-2 rounded-lg"
         >
-          <div className="flex-shrink-0 w-6 h-6 rounded-full bg-neutral-700 flex items-center justify-center text-xs font-medium">
+          <div className="flex-shrink-0 w-6 h-6 rounded-full bg-surface-3 flex items-center justify-center text-xs font-medium">
             {i + 1}
           </div>
           <div className="flex-1 min-w-0">
@@ -22,7 +22,7 @@ export function StepList({ steps }: { steps: TaskStep[] }) {
               <Badge variant={statusVariant(step.status)}>{step.status}</Badge>
             </div>
             {step.result_summary && (
-              <p className="text-xs text-neutral-400 mt-1">{step.result_summary}</p>
+              <p className="text-xs text-t-secondary mt-1">{step.result_summary}</p>
             )}
           </div>
         </div>

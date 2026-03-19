@@ -63,16 +63,17 @@ export default function GoalsPage() {
   }
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <PageHeader
         title="Goals"
         subtitle="Track and manage your goals"
+        variant="collection"
         actions={
           <div className="flex items-center gap-2">
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className="bg-neutral-800 border border-neutral-700 rounded px-3 py-1.5 text-sm text-neutral-200"
+              className="bg-surface-2 border border-b-primary rounded px-3 py-1.5 text-sm text-t-primary"
             >
               <option value="">All</option>
               <option value="active">Active</option>
@@ -81,7 +82,7 @@ export default function GoalsPage() {
             </select>
             <button
               onClick={() => setShowForm(!showForm)}
-              className="bg-blue-600 hover:bg-blue-700 text-white text-sm px-3 py-1.5 rounded transition-colors"
+              className="bg-j-primary hover:bg-j-primary-hover text-j-primary-fg text-sm px-3 py-1.5 rounded transition-colors"
             >
               {showForm ? "Cancel" : "New Goal"}
             </button>
@@ -90,35 +91,35 @@ export default function GoalsPage() {
       />
 
       {showForm && (
-        <form onSubmit={handleSubmit} className="bg-neutral-900 border border-neutral-800 rounded-lg p-4 mb-6 space-y-3">
+        <form onSubmit={handleSubmit} className="bg-surface-1 border border-b-primary rounded-lg p-4 mb-6 space-y-3">
           <div>
-            <label className="block text-xs text-neutral-400 mb-1">Title</label>
+            <label className="block text-xs text-t-secondary mb-1">Title</label>
             <input
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="Goal title"
-              className="w-full bg-neutral-800 border border-neutral-700 rounded px-3 py-1.5 text-sm text-neutral-200 placeholder:text-neutral-600"
+              className="w-full bg-surface-2 border border-b-primary rounded px-3 py-1.5 text-sm text-t-primary placeholder:text-t-muted"
               required
             />
           </div>
           <div>
-            <label className="block text-xs text-neutral-400 mb-1">Description</label>
+            <label className="block text-xs text-t-secondary mb-1">Description</label>
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Optional description"
               rows={2}
-              className="w-full bg-neutral-800 border border-neutral-700 rounded px-3 py-1.5 text-sm text-neutral-200 placeholder:text-neutral-600 resize-none"
+              className="w-full bg-surface-2 border border-b-primary rounded px-3 py-1.5 text-sm text-t-primary placeholder:text-t-muted resize-none"
             />
           </div>
           <div className="flex items-center gap-3">
             <div>
-              <label className="block text-xs text-neutral-400 mb-1">Priority</label>
+              <label className="block text-xs text-t-secondary mb-1">Priority</label>
               <select
                 value={priority}
                 onChange={(e) => setPriority(e.target.value)}
-                className="bg-neutral-800 border border-neutral-700 rounded px-3 py-1.5 text-sm text-neutral-200"
+                className="bg-surface-2 border border-b-primary rounded px-3 py-1.5 text-sm text-t-primary"
               >
                 <option value="low">Low</option>
                 <option value="medium">Medium</option>
@@ -130,7 +131,7 @@ export default function GoalsPage() {
             <button
               type="submit"
               disabled={createMut.isPending}
-              className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm px-4 py-1.5 rounded transition-colors mt-4"
+              className="bg-j-primary hover:bg-j-primary-hover disabled:opacity-50 text-j-primary-fg text-sm px-4 py-1.5 rounded transition-colors mt-4"
             >
               {createMut.isPending ? "Creating..." : "Create Goal"}
             </button>
@@ -139,7 +140,7 @@ export default function GoalsPage() {
       )}
 
       {isLoading ? (
-        <p className="text-neutral-500 text-sm">Loading...</p>
+        <p className="text-t-tertiary text-sm">Loading...</p>
       ) : goals.length === 0 ? (
         <EmptyState title="No goals" description="Create a goal to start tracking progress" />
       ) : (

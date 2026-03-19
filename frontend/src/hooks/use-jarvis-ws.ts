@@ -5,19 +5,15 @@ import type { A2UISurface, JarvisMessage } from "@/lib/a2ui-types";
 import { getStoredToken } from "@/lib/auth";
 
 function getWsUrl(userId: string): string {
-  // Use explicit env var if set (e.g. for local dev pointing at a different backend)
+  // No token in URL — auth via message after connect
   if (process.env.NEXT_PUBLIC_WS_URL) {
-    const base = process.env.NEXT_PUBLIC_WS_URL;
-    const token = getStoredToken();
-    const qs = token ? `?token=${encodeURIComponent(token)}` : "";
-    return `${base}/ws/${userId}${qs}`;
+    return `${process.env.NEXT_PUBLIC_WS_URL}/ws/${userId}`;
   }
-  // Derive from backend URL so protocol (ws/wss) matches the backend, not the frontend
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || `${window.location.protocol}//${window.location.host}`;
+  const backendUrl =
+    process.env.NEXT_PUBLIC_BACKEND_URL ||
+    `${window.location.protocol}//${window.location.host}`;
   const wsBase = new URL(backendUrl.replace(/^http/, "ws"));
-  const token = getStoredToken();
-  const qs = token ? `?token=${encodeURIComponent(token)}` : "";
-  return `${wsBase.protocol}//${wsBase.host}/ws/${userId}${qs}`;
+  return `${wsBase.protocol}//${wsBase.host}/ws/${userId}`;
 }
 
 interface UseJarvisWsOptions {
@@ -27,7 +23,12 @@ interface UseJarvisWsOptions {
   enabled?: boolean;
 }
 
-export function useJarvisWs({ userId, onSurface, onNotification, enabled = true }: UseJarvisWsOptions) {
+export function useJarvisWs({
+  userId,
+  onSurface,
+  onNotification,
+  enabled = true,
+}: UseJarvisWsOptions) {
   const wsRef = useRef<WebSocket | null>(null);
   const [connected, setConnected] = useState(false);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -41,8 +42,12 @@ export function useJarvisWs({ userId, onSurface, onNotification, enabled = true 
       wsRef.current = ws;
 
       ws.onopen = () => {
+        // Send auth message immediately after connect
+        const token = getStoredToken();
+        if (token) {
+          ws.send(JSON.stringify({ type: "auth", token }));
+        }
         setConnected(true);
-        console.log("[jarvis-ws] connected");
       };
 
       ws.onmessage = (event) => {
@@ -52,18 +57,22 @@ export function useJarvisWs({ userId, onSurface, onNotification, enabled = true 
             onSurface(msg.surface);
           } else if (msg.type === "heartbeat") {
             // no-op
+          } else if (msg.type === "auth_error") {
+            ws.close();
           } else if (onNotification) {
             onNotification(msg);
           }
         } catch {
-          console.warn("[jarvis-ws] failed to parse message", event.data);
+          // skip malformed
         }
       };
 
       ws.onclose = () => {
         setConnected(false);
-        console.log("[jarvis-ws] disconnected, reconnecting in 3s...");
-        reconnectTimer.current = setTimeout(() => connectRef.current?.(), 3000);
+        reconnectTimer.current = setTimeout(
+          () => connectRef.current?.(),
+          3000
+        );
       };
 
       ws.onerror = () => {
@@ -81,11 +90,16 @@ export function useJarvisWs({ userId, onSurface, onNotification, enabled = true 
     };
   }, [userId, onSurface, onNotification, enabled]);
 
-  const sendAction = useCallback((action: string, payload: Record<string, unknown>) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: "action", payload: { action, ...payload } }));
-    }
-  }, []);
+  const sendAction = useCallback(
+    (action: string, payload: Record<string, unknown>) => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(
+          JSON.stringify({ type: "action", payload: { action, ...payload } })
+        );
+      }
+    },
+    []
+  );
 
   return { connected, sendAction };
 }

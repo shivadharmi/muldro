@@ -9,15 +9,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
 from src.api.schemas import (
     DashboardApproval,
+    DashboardEvent,
+    DashboardGoal,
     DashboardMeeting,
     DashboardResponse,
     DashboardTask,
+    DashboardTrace,
 )
 from src.config.settings import Settings, get_settings
 from src.models.approvals import Approval
 from src.models.briefings import Briefing
 from src.models.events import NormalizedEvent
+from src.models.goals import Goal
 from src.models.plans import Plan, PlanTask
+from src.models.tasks import Task
+from src.models.traces import Trace
 
 router = APIRouter()
 
@@ -113,6 +119,81 @@ async def get_dashboard(
             )
         )
 
+    # Recent traces (last 5 completed today)
+    today_start = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
+    traces_result = await db.execute(
+        select(Trace)
+        .where(
+            Trace.workspace_id == workspace_id,
+            Trace.status == "completed",
+            Trace.started_at >= today_start,
+        )
+        .order_by(Trace.started_at.desc())
+        .limit(5)
+    )
+    traces = traces_result.scalars().all()
+    dashboard_traces = [
+        DashboardTrace(
+            trace_id=t.trace_id,
+            trigger=t.trigger,
+            agents_invoked=t.agents_invoked or [],
+            duration_ms=t.duration_ms,
+            total_cost_usd=t.total_cost_usd,
+        )
+        for t in traces
+    ]
+
+    # Active goals (top 3)
+    goals_result = await db.execute(
+        select(Goal)
+        .where(Goal.workspace_id == workspace_id, Goal.status == "active")
+        .order_by(Goal.priority.desc(), Goal.created_at.desc())
+        .limit(3)
+    )
+    goals = goals_result.scalars().all()
+    dashboard_goals = []
+    for g in goals:
+        task_count = (
+            await db.scalar(select(func.count()).select_from(Task).where(Task.goal_id == g.goal_id))
+            or 0
+        )
+        completed_task_count = (
+            await db.scalar(
+                select(func.count())
+                .select_from(Task)
+                .where(Task.goal_id == g.goal_id, Task.status == "completed")
+            )
+            or 0
+        )
+        dashboard_goals.append(
+            DashboardGoal(
+                goal_id=g.goal_id,
+                title=g.title,
+                progress=g.progress,
+                priority=g.priority,
+                task_count=task_count,
+                completed_task_count=completed_task_count,
+            )
+        )
+
+    # Recent events (last 8)
+    events_result = await db.execute(
+        select(NormalizedEvent)
+        .where(NormalizedEvent.workspace_id == workspace_id)
+        .order_by(NormalizedEvent.occurred_at.desc())
+        .limit(8)
+    )
+    events = events_result.scalars().all()
+    dashboard_events = [
+        DashboardEvent(
+            source=e.source,
+            event_type=e.event_type,
+            title=e.title,
+            occurred_at=e.occurred_at,
+        )
+        for e in events
+    ]
+
     return DashboardResponse(
         headline=briefing.headline if briefing else None,
         date=today,
@@ -133,4 +214,7 @@ async def get_dashboard(
             briefing.recommended_actions if briefing and briefing.recommended_actions else []
         ),
         briefing_id=briefing.briefing_id if briefing else None,
+        recent_traces=dashboard_traces,
+        active_goals=dashboard_goals,
+        recent_events=dashboard_events,
     )

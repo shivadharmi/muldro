@@ -74,8 +74,8 @@ export default function EntitiesPage() {
       : entities.filter((e) => e.entity_type === typeFilter);
 
   return (
-    <div className="p-6 space-y-6">
-      <PageHeader title="Entities" subtitle="Browse the world model entity graph" />
+    <div className="p-4 sm:p-6 space-y-6">
+      <PageHeader title="Entities" subtitle="Browse the world model entity graph" variant="collection" />
 
       <form onSubmit={handleSearch} className="flex gap-2">
         <input
@@ -83,12 +83,12 @@ export default function EntitiesPage() {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search entities..."
-          className="flex-1 rounded-lg border border-neutral-700 bg-neutral-800 px-3 py-2 text-white placeholder-neutral-500 focus:border-blue-500 focus:outline-none"
+          className="flex-1 rounded-lg border border-b-primary bg-surface-2 px-3 py-2 text-t-primary placeholder-t-tertiary focus:border-j-primary focus:outline-none"
         />
         <button
           type="submit"
           disabled={loading}
-          className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+          className="rounded-lg bg-j-primary px-4 py-2 text-sm font-medium text-j-primary-fg hover:bg-j-primary-hover disabled:opacity-50"
         >
           {loading ? "..." : "Search"}
         </button>
@@ -104,8 +104,8 @@ export default function EntitiesPage() {
               onClick={() => setTypeFilter(t)}
               className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
                 typeFilter === t
-                  ? "bg-blue-600 text-white"
-                  : "bg-neutral-800 text-neutral-400 hover:text-white"
+                  ? "bg-j-primary text-j-primary-fg"
+                  : "bg-surface-2 text-t-secondary hover:text-t-primary"
               }`}
             >
               {t === "all" ? "All" : t}
@@ -121,8 +121,8 @@ export default function EntitiesPage() {
             <Card key={i}>
               <CardBody>
                 <div className="animate-pulse space-y-2">
-                  <div className="h-4 w-32 bg-neutral-800 rounded" />
-                  <div className="h-3 w-24 bg-neutral-800 rounded" />
+                  <div className="h-4 w-32 bg-surface-2 rounded" />
+                  <div className="h-3 w-24 bg-surface-2 rounded" />
                 </div>
               </CardBody>
             </Card>
@@ -136,7 +136,7 @@ export default function EntitiesPage() {
             <Card key={entity.entity_id}>
               <CardBody>
                 <div className="flex items-start justify-between mb-2">
-                  <h3 className="text-sm font-medium text-white">
+                  <h3 className="text-sm font-medium text-t-primary">
                     {entity.canonical_name}
                   </h3>
                   <Badge variant={typeColors[entity.entity_type] || "default"}>
@@ -144,9 +144,9 @@ export default function EntitiesPage() {
                   </Badge>
                 </div>
                 {entity.summary && (
-                  <p className="text-xs text-neutral-400 mb-2">{entity.summary}</p>
+                  <p className="text-xs text-t-secondary mb-2">{entity.summary}</p>
                 )}
-                <p className="text-[10px] text-neutral-600 font-mono">{entity.entity_id}</p>
+                <p className="text-[10px] text-t-muted font-mono">{entity.entity_id}</p>
               </CardBody>
             </Card>
           ))}
@@ -155,8 +155,8 @@ export default function EntitiesPage() {
 
       {!loading && filtered.length === 0 && hasSearched && (
         <div className="text-center py-12">
-          <p className="text-neutral-500 text-sm font-medium">No entities found</p>
-          <p className="text-neutral-600 text-xs mt-1">
+          <p className="text-t-tertiary text-sm font-medium">No entities found</p>
+          <p className="text-t-muted text-xs mt-1">
             Try a different search term or entity type.
           </p>
         </div>
@@ -164,7 +164,7 @@ export default function EntitiesPage() {
 
       {!loading && !hasSearched && entities.length === 0 && (
         <div className="text-center py-12">
-          <p className="text-neutral-500 text-sm font-medium">
+          <p className="text-t-tertiary text-sm font-medium">
             Search for entities in the world model
           </p>
         </div>

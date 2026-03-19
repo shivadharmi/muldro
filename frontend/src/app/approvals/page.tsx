@@ -51,17 +51,17 @@ export default function ApprovalsPage() {
   });
 
   return (
-    <div className="p-6 space-y-4">
-      <PageHeader title="Approvals" subtitle="Review and approve pending actions" />
+    <div className="p-4 sm:p-6 space-y-4">
+      <PageHeader title="Approvals" subtitle="Review and approve pending actions" variant="action" badge={approvals.filter((a) => a.status === "pending").length} />
 
       <Tabs tabs={FILTER_TABS} active={filter} onChange={setFilter} />
 
       {isLoading ? (
         <div className="space-y-3">
           {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="rounded-lg border border-neutral-800 bg-neutral-900 p-4 animate-pulse">
-              <div className="h-4 w-48 bg-neutral-800 rounded mb-2" />
-              <div className="h-3 w-32 bg-neutral-800 rounded" />
+            <div key={i} className="rounded-lg border border-b-primary bg-surface-1 p-4 animate-pulse">
+              <div className="h-4 w-48 bg-surface-2 rounded mb-2" />
+              <div className="h-3 w-32 bg-surface-2 rounded" />
             </div>
           ))}
         </div>
@@ -107,23 +107,23 @@ function ApprovalDetailView({ detail }: { detail: ApprovalDetail }) {
       </div>
 
       <div>
-        <h4 className="text-sm font-medium text-white">{detail.title}</h4>
+        <h4 className="text-sm font-medium text-t-primary">{detail.title}</h4>
         {detail.summary && (
-          <p className="text-xs text-neutral-400 mt-1">{detail.summary}</p>
+          <p className="text-xs text-t-secondary mt-1">{detail.summary}</p>
         )}
       </div>
 
       {detail.plan_goal && (
         <div>
-          <p className="text-[10px] uppercase text-neutral-600 mb-0.5">Plan Goal</p>
-          <p className="text-xs text-neutral-300">{detail.plan_goal}</p>
+          <p className="text-[10px] uppercase text-t-muted mb-0.5">Plan Goal</p>
+          <p className="text-xs text-t-primary">{detail.plan_goal}</p>
         </div>
       )}
 
       {detail.execution_id && (
         <div>
-          <p className="text-[10px] uppercase text-neutral-600 mb-0.5">Execution</p>
-          <Link href={`/runs/${detail.execution_id}`} className="text-xs text-blue-400 hover:text-blue-300">
+          <p className="text-[10px] uppercase text-t-muted mb-0.5">Execution</p>
+          <Link href={`/runs/${detail.execution_id}`} className="text-xs text-j-primary hover:text-j-primary">
             {detail.execution_id}
           </Link>
         </div>
@@ -131,12 +131,12 @@ function ApprovalDetailView({ detail }: { detail: ApprovalDetail }) {
 
       {detail.decision_reason && (
         <div>
-          <p className="text-[10px] uppercase text-neutral-600 mb-0.5">Decision Reason</p>
-          <p className="text-xs text-neutral-300">{detail.decision_reason}</p>
+          <p className="text-[10px] uppercase text-t-muted mb-0.5">Decision Reason</p>
+          <p className="text-xs text-t-primary">{detail.decision_reason}</p>
         </div>
       )}
 
-      <div className="flex gap-4 text-[10px] text-neutral-600">
+      <div className="flex gap-4 text-[10px] text-t-muted">
         {detail.created_at && <span>Created <TimeAgo date={detail.created_at} /></span>}
         {detail.decided_at && <span>Decided <TimeAgo date={detail.decided_at} /></span>}
       </div>

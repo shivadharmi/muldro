@@ -3,21 +3,47 @@ import type { ReactNode } from "react";
 export function Card({
   children,
   className = "",
+  variant = "default",
 }: {
   children: ReactNode;
   className?: string;
+  variant?: "default" | "live" | "warning" | "error";
 }) {
+  const base = "rounded-[var(--radius-lg)] shadow-[var(--shadow-sm)]";
+  const variants: Record<string, string> = {
+    default: "bg-surface-2 border border-b-secondary",
+    live: "bg-surface-2 border border-j-primary/30 shadow-[var(--shadow-glow)]",
+    warning: "bg-j-warning-soft border border-j-warning/30",
+    error: "bg-j-error-soft border border-j-error/30",
+  };
+
   return (
-    <div className={`bg-neutral-900 border border-neutral-800 rounded-lg ${className}`}>
+    <div className={`${base} ${variants[variant] || variants.default} ${className}`}>
       {children}
     </div>
   );
 }
 
-export function CardHeader({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <div className={`px-4 py-3 border-b border-neutral-800 ${className}`}>{children}</div>;
+export function CardHeader({
+  children,
+  className = "",
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={`px-4 py-3 border-b border-b-secondary ${className}`}>
+      {children}
+    </div>
+  );
 }
 
-export function CardBody({ children, className = "" }: { children: ReactNode; className?: string }) {
+export function CardBody({
+  children,
+  className = "",
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
   return <div className={`px-4 py-3 ${className}`}>{children}</div>;
 }

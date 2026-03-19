@@ -11,7 +11,7 @@ import {
 export interface Toast {
   id: string;
   message: string;
-  variant: "success" | "error" | "info";
+  variant: "success" | "error" | "info" | "warning";
 }
 
 interface ToastContextType {
@@ -64,18 +64,23 @@ function ToastContainer({
   if (toasts.length === 0) return null;
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 space-y-2 max-w-sm">
+    <div
+      className="fixed bottom-4 right-4 z-50 space-y-2 max-w-sm"
+      role="status"
+      aria-live="polite"
+    >
       {toasts.map((toast) => (
         <div
           key={toast.id}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm shadow-lg border animate-in slide-in-from-right ${variantStyles[toast.variant]}`}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-[var(--radius-lg)] text-sm shadow-[var(--shadow-md)] border animate-slide-in-right ${variantStyles[toast.variant]}`}
         >
           <span className="flex-1">{toast.message}</span>
           <button
             onClick={() => onDismiss(toast.id)}
-            className="opacity-60 hover:opacity-100 text-xs ml-2"
+            className="opacity-60 hover:opacity-100 text-xs ml-2 cursor-pointer"
+            aria-label="Dismiss"
           >
-            ✕
+            &times;
           </button>
         </div>
       ))}
@@ -84,7 +89,8 @@ function ToastContainer({
 }
 
 const variantStyles: Record<Toast["variant"], string> = {
-  success: "bg-green-900/90 border-green-800 text-green-200",
-  error: "bg-red-900/90 border-red-800 text-red-200",
-  info: "bg-neutral-800/90 border-neutral-700 text-neutral-200",
+  success: "bg-j-success-soft border-j-success/30 text-j-success",
+  error: "bg-j-error-soft border-j-error/30 text-j-error",
+  warning: "bg-j-warning-soft border-j-warning/30 text-j-warning",
+  info: "bg-surface-2 border-b-secondary text-t-secondary",
 };

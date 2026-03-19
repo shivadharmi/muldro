@@ -43,22 +43,22 @@ export function ScheduleForm({
   return (
     <form onSubmit={handleSubmit} className="space-y-3">
       <div>
-        <label className="block text-xs text-neutral-500 mb-1">Name</label>
+        <label className="block text-xs text-t-tertiary mb-1">Name</label>
         <input
           required
           value={name}
           onChange={(e) => setName(e.target.value)}
-          className="w-full bg-neutral-800 border border-neutral-700 rounded px-3 py-1.5 text-sm text-neutral-200"
+          className="w-full bg-surface-2 border border-b-primary rounded px-3 py-1.5 text-sm text-t-primary"
         />
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
-          <label className="block text-xs text-neutral-500 mb-1">Schedule Type</label>
+          <label className="block text-xs text-t-tertiary mb-1">Schedule Type</label>
           <select
             value={scheduleType}
             onChange={(e) => setScheduleType(e.target.value)}
-            className="w-full bg-neutral-800 border border-neutral-700 rounded px-3 py-1.5 text-sm text-neutral-200"
+            className="w-full bg-surface-2 border border-b-primary rounded px-3 py-1.5 text-sm text-t-primary"
           >
             <option value="recurring">Recurring</option>
             <option value="one_shot">One Shot</option>
@@ -67,35 +67,35 @@ export function ScheduleForm({
         <div>
           {scheduleType === "recurring" ? (
             <>
-              <label className="block text-xs text-neutral-500 mb-1">Cron Expression</label>
+              <label className="block text-xs text-t-tertiary mb-1">Cron Expression</label>
               <input
                 value={cronExpr}
                 onChange={(e) => setCronExpr(e.target.value)}
                 placeholder="0 8 * * *"
-                className="w-full bg-neutral-800 border border-neutral-700 rounded px-3 py-1.5 text-sm text-neutral-200 font-mono placeholder:text-neutral-600"
+                className="w-full bg-surface-2 border border-b-primary rounded px-3 py-1.5 text-sm text-t-primary font-mono placeholder:text-t-muted"
               />
             </>
           ) : (
             <>
-              <label className="block text-xs text-neutral-500 mb-1">Run At (ISO)</label>
+              <label className="block text-xs text-t-tertiary mb-1">Run At (ISO)</label>
               <input
                 type="datetime-local"
                 value={runAt}
                 onChange={(e) => setRunAt(e.target.value)}
-                className="w-full bg-neutral-800 border border-neutral-700 rounded px-3 py-1.5 text-sm text-neutral-200"
+                className="w-full bg-surface-2 border border-b-primary rounded px-3 py-1.5 text-sm text-t-primary"
               />
             </>
           )}
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
-          <label className="block text-xs text-neutral-500 mb-1">Action Type</label>
+          <label className="block text-xs text-t-tertiary mb-1">Action Type</label>
           <select
             value={actionType}
             onChange={(e) => setActionType(e.target.value)}
-            className="w-full bg-neutral-800 border border-neutral-700 rounded px-3 py-1.5 text-sm text-neutral-200"
+            className="w-full bg-surface-2 border border-b-primary rounded px-3 py-1.5 text-sm text-t-primary"
           >
             <option value="daily_briefing">Daily Briefing</option>
             <option value="observe_sources">Observe Sources</option>
@@ -104,11 +104,11 @@ export function ScheduleForm({
           </select>
         </div>
         <div>
-          <label className="block text-xs text-neutral-500 mb-1">Priority</label>
+          <label className="block text-xs text-t-tertiary mb-1">Priority</label>
           <select
             value={priority}
             onChange={(e) => setPriority(e.target.value)}
-            className="w-full bg-neutral-800 border border-neutral-700 rounded px-3 py-1.5 text-sm text-neutral-200"
+            className="w-full bg-surface-2 border border-b-primary rounded px-3 py-1.5 text-sm text-t-primary"
           >
             <option value="low">Low</option>
             <option value="medium">Medium</option>
@@ -118,12 +118,12 @@ export function ScheduleForm({
       </div>
 
       <div>
-        <label className="block text-xs text-neutral-500 mb-1">Action Config (JSON)</label>
+        <label className="block text-xs text-t-tertiary mb-1">Action Config (JSON)</label>
         <textarea
           value={actionConfig}
           onChange={(e) => setActionConfig(e.target.value)}
           rows={3}
-          className="w-full bg-neutral-800 border border-neutral-700 rounded px-3 py-1.5 text-sm text-neutral-200 font-mono"
+          className="w-full bg-surface-2 border border-b-primary rounded px-3 py-1.5 text-sm text-t-primary font-mono"
         />
       </div>
 
@@ -135,7 +135,7 @@ export function ScheduleForm({
           onChange={(e) => setEnabled(e.target.checked)}
           className="rounded"
         />
-        <label htmlFor="enabled" className="text-xs text-neutral-400">
+        <label htmlFor="enabled" className="text-xs text-t-secondary">
           Enabled
         </label>
       </div>

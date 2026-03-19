@@ -12,21 +12,28 @@ export function ApprovalCard({
   onApprove,
   onReject,
 }: {
-  approval: Approval;
+  approval: Approval & { plan_goal?: string; trace_id?: string };
   onApprove: (id: string, reason?: string) => void;
   onReject: (id: string, reason?: string) => void;
 }) {
   const [reason, setReason] = useState("");
   const isPending = approval.status === "pending";
 
+  const isHighRisk = approval.risk_level === "high" || approval.risk_level === "critical";
+
   return (
-    <Card>
+    <Card className={isHighRisk ? "glow-error border-j-error/30" : ""}>
       <CardBody>
         <div className="flex items-start justify-between mb-2">
           <div className="flex-1">
             <p className="text-sm font-medium">{approval.title}</p>
+            {approval.plan_goal && (
+              <p className="text-xs text-j-primary mt-1 font-medium">
+                Goal: {String(approval.plan_goal)}
+              </p>
+            )}
             {approval.summary && (
-              <p className="text-xs text-neutral-400 mt-1">{approval.summary}</p>
+              <p className="text-xs text-t-secondary mt-1">{approval.summary}</p>
             )}
           </div>
           <div className="flex items-center gap-2 ml-3">
@@ -36,7 +43,18 @@ export function ApprovalCard({
         </div>
 
         <div className="flex items-center justify-between mt-3">
-          <TimeAgo date={approval.created_at} className="text-xs" />
+          <div className="flex items-center gap-3">
+            <TimeAgo date={approval.created_at} className="text-xs" />
+            {approval.trace_id && (
+              <a
+                href={`/traces?id=${String(approval.trace_id)}`}
+                className="text-xs text-j-primary hover:text-j-primary"
+                onClick={(e) => e.stopPropagation()}
+              >
+                View reasoning
+              </a>
+            )}
+          </div>
 
           {isPending && (
             <div className="flex items-center gap-2">
@@ -45,7 +63,7 @@ export function ApprovalCard({
                 placeholder="Reason (optional)"
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
-                className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-neutral-300 w-40 placeholder:text-neutral-600"
+                className="bg-surface-2 border border-b-primary rounded px-2 py-1 text-xs text-t-primary w-40 placeholder:text-t-muted"
               />
               <Button
                 size="sm"

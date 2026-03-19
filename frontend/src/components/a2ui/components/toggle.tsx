@@ -28,13 +28,13 @@ export function A2UIToggle({ component, onAction }: Props) {
         role="switch"
         aria-checked={checked}
         onClick={handleToggle}
-        className={`relative w-9 h-5 rounded-full transition-colors ${checked ? "bg-blue-600" : "bg-neutral-700"}`}
+        className={`relative w-9 h-5 rounded-full transition-colors ${checked ? "bg-j-primary" : "bg-b-primary"}`}
       >
         <span
           className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${checked ? "translate-x-4" : ""}`}
         />
       </button>
-      <span className="text-sm text-neutral-300">{label}</span>
+      <span className="text-sm text-t-primary">{label}</span>
     </label>
   );
 }

@@ -42,6 +42,31 @@ import type {
 
 import { getStoredToken } from "./auth";
 
+// ── Typed API Error ─────────────────────────────────────────────
+
+export class ApiError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly statusText: string,
+    public readonly body: string
+  ) {
+    super(`API ${status}: ${body || statusText}`);
+    this.name = "ApiError";
+  }
+
+  get isUnauthorized(): boolean {
+    return this.status === 401;
+  }
+  get isForbidden(): boolean {
+    return this.status === 403;
+  }
+  get isNotFound(): boolean {
+    return this.status === 404;
+  }
+}
+
+// ── Helpers ─────────────────────────────────────────────────────
+
 function authHeaders(): Record<string, string> {
   const headers: Record<string, string> = {};
   const token = getStoredToken() || process.env.NEXT_PUBLIC_API_TOKEN || "";
@@ -56,7 +81,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`API ${res.status}: ${text || res.statusText}`);
+    throw new ApiError(res.status, res.statusText, text);
   }
   if (res.status === 204) return undefined as T;
   return res.json();
@@ -201,7 +226,7 @@ export async function streamChat(
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`Chat API ${res.status}: ${text || res.statusText}`);
+    throw new ApiError(res.status, res.statusText, text);
   }
 
   const reader = res.body?.getReader();
@@ -236,6 +261,21 @@ export async function streamChat(
       }
     }
   }
+}
+
+// ── Events ──────────────────────────────────────────────────────
+
+export function fetchRecentEvents(
+  hours?: number,
+  source?: string,
+  limit?: number
+): Promise<import("./types").NormalizedEventSummary[]> {
+  const params = new URLSearchParams();
+  if (hours) params.set("time_range_hours", String(hours));
+  if (source) params.set("source", source);
+  if (limit) params.set("limit", String(limit));
+  const qs = params.toString();
+  return api(`/events${qs ? `?${qs}` : ""}`);
 }
 
 // ── System Dashboard ────────────────────────────────────────────
@@ -679,27 +719,44 @@ export function fetchArtifact(id: string): Promise<Artifact> {
   return api(`/artifacts/${id}`);
 }
 
-// ── Realtime SSE ────────────────────────────────────────────────
+// ── Realtime SSE (fetch-based, sends Authorization header) ──────
 
 export function subscribeToEvents(
   onEvent: (event: { event_type: string; data: Record<string, unknown> }) => void,
   signal?: AbortSignal
 ): void {
-  const url = `/api/realtime/events`;
-  const eventSource = new EventSource(url);
+  const headers = authHeaders();
 
-  eventSource.onmessage = (msg) => {
-    try {
-      const parsed = JSON.parse(msg.data);
-      onEvent(parsed);
-    } catch {
-      // skip malformed
-    }
-  };
+  fetch("/api/realtime/events", {
+    headers: { Accept: "text/event-stream", ...headers },
+    signal,
+  })
+    .then(async (res) => {
+      if (!res.ok || !res.body) return;
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
 
-  if (signal) {
-    signal.addEventListener("abort", () => eventSource.close());
-  }
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              onEvent(JSON.parse(line.slice(6)));
+            } catch {
+              // skip malformed
+            }
+          }
+        }
+      }
+    })
+    .catch(() => {
+      // connection closed or aborted
+    });
 }
 
 // ── Runs ────────────────────────────────────────────────────────
@@ -771,12 +828,17 @@ export interface AgentRecord {
   agent_id: string;
   name: string;
   display_name: string | null;
+  description: string | null;
   system_prompt: string | null;
   model_tier: string;
   tool_scope: string[] | null;
   max_tokens: number;
   temperature: number;
   enabled: boolean;
+  calls_today: number;
+  success_rate: number;
+  avg_latency_ms: number;
+  last_invoked_at: string | null;
 }
 
 export function fetchAgents(): Promise<AgentRecord[]> {

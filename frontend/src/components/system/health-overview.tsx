@@ -8,7 +8,7 @@ import { Badge, statusVariant } from "@/components/ui/badge";
 export function HealthOverview({ data }: { data: SystemDashboard }) {
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         <BudgetCard budget={data.budget} />
 
         <Card>
@@ -17,15 +17,15 @@ export function HealthOverview({ data }: { data: SystemDashboard }) {
           </CardHeader>
           <CardBody className="space-y-2">
             <div className="flex items-center justify-between text-sm">
-              <span className="text-neutral-400">DLQ Pending</span>
+              <span className="text-t-secondary">DLQ Pending</span>
               <span>{data.queues.dlq_pending}</span>
             </div>
             <div className="flex items-center justify-between text-sm">
-              <span className="text-neutral-400">Approvals Pending</span>
+              <span className="text-t-secondary">Approvals Pending</span>
               <span>{data.queues.approvals_pending}</span>
             </div>
             <div className="flex items-center justify-between text-sm">
-              <span className="text-neutral-400">Plans In Flight</span>
+              <span className="text-t-secondary">Plans In Flight</span>
               <span>{data.queues.plans_in_flight}</span>
             </div>
           </CardBody>

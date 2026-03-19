@@ -18,7 +18,7 @@ export default function TaskDetailPage() {
   });
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <PageHeader
         title="Task Detail"
         subtitle={id}
@@ -31,9 +31,9 @@ export default function TaskDetailPage() {
         }
       />
 
-      {isLoading && <p className="text-neutral-500 text-sm">Loading...</p>}
+      {isLoading && <p className="text-t-tertiary text-sm">Loading...</p>}
       {error && (
-        <p className="text-red-400 text-sm">
+        <p className="text-j-error text-sm">
           Failed to load task: {error instanceof Error ? error.message : "Unknown error"}
         </p>
       )}

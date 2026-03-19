@@ -63,13 +63,15 @@ export default function SystemPage() {
   const heartbeatMut = useMutation({ mutationFn: triggerHeartbeat });
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <PageHeader
         title="System Health"
         subtitle="Monitor system status and diagnostics"
+        variant="monitor"
+        live
         actions={
           <div className="flex items-center gap-2">
-            <span className="text-[10px] text-neutral-600">
+            <span className="text-[10px] text-t-muted">
               Last updated: {new Date().toLocaleTimeString()}
             </span>
             <Button
@@ -94,15 +96,15 @@ export default function SystemPage() {
           {agentPerf && (
             <div>
               <h3 className="text-sm font-medium mb-3">Cost Breakdown (24h)</h3>
-              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                 {Object.entries(agentPerf.agents)
                   .sort(([, a], [, b]) => b.total_cost_usd - a.total_cost_usd)
                   .map(([name, perf]) => (
                     <Card key={name}>
                       <CardBody>
-                        <p className="text-xs text-neutral-500">{name}</p>
-                        <p className="text-sm font-semibold text-white">${perf.total_cost_usd.toFixed(4)}</p>
-                        <p className="text-[10px] text-neutral-600">
+                        <p className="text-xs text-t-tertiary">{name}</p>
+                        <p className="text-sm font-semibold text-t-primary">${perf.total_cost_usd.toFixed(4)}</p>
+                        <p className="text-[10px] text-t-muted">
                           {perf.call_count} calls, {perf.error_count} errors
                         </p>
                       </CardBody>
@@ -129,7 +131,7 @@ export default function SystemPage() {
               {Array.from({ length: 4 }).map((_, i) => (
                 <Card key={i}>
                   <CardBody>
-                    <div className="animate-pulse h-6 w-24 bg-neutral-800 rounded" />
+                    <div className="animate-pulse h-6 w-24 bg-surface-2 rounded" />
                   </CardBody>
                 </Card>
               ))}
@@ -141,14 +143,14 @@ export default function SystemPage() {
       {heartbeatMut.isSuccess && heartbeatMut.data && (
         <Card className="mt-4">
           <CardHeader>
-            <span className="text-sm font-medium text-green-400">Heartbeat Result</span>
+            <span className="text-sm font-medium text-j-success">Heartbeat Result</span>
           </CardHeader>
           <CardBody>
             <div className="grid grid-cols-3 gap-3">
               {Object.entries(heartbeatMut.data).map(([key, value]) => (
                 <div key={key}>
-                  <p className="text-[10px] text-neutral-600 uppercase">{key.replace(/_/g, " ")}</p>
-                  <p className="text-sm text-neutral-300">{String(value)}</p>
+                  <p className="text-[10px] text-t-muted uppercase">{key.replace(/_/g, " ")}</p>
+                  <p className="text-sm text-t-primary">{String(value)}</p>
                 </div>
               ))}
             </div>
@@ -169,12 +171,12 @@ function MetricsCards({ metrics }: { metrics: Record<string, unknown> }) {
   return (
     <div className="space-y-4">
       {numericEntries.length > 0 && (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {numericEntries.map(([key, value]) => (
             <Card key={key}>
               <CardBody>
-                <p className="text-[10px] text-neutral-600 uppercase">{key.replace(/_/g, " ")}</p>
-                <p className="text-lg font-semibold text-white">
+                <p className="text-[10px] text-t-muted uppercase">{key.replace(/_/g, " ")}</p>
+                <p className="text-lg font-semibold text-t-primary">
                   {typeof value === "number"
                     ? value % 1 !== 0
                       ? value.toFixed(2)
@@ -193,7 +195,7 @@ function MetricsCards({ metrics }: { metrics: Record<string, unknown> }) {
             <span className="text-sm font-medium">{key.replace(/_/g, " ")}</span>
           </CardHeader>
           <CardBody>
-            <pre className="text-xs text-neutral-400 font-mono overflow-x-auto">
+            <pre className="text-xs text-t-secondary font-mono overflow-x-auto">
               {JSON.stringify(value, null, 2)}
             </pre>
           </CardBody>

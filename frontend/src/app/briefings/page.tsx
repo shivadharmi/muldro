@@ -37,28 +37,29 @@ export default function BriefingsPage() {
   });
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <PageHeader
         title="Briefings"
         subtitle="Daily briefing viewer"
+        variant="content"
         actions={
           <input
             type="date"
             value={date}
             onChange={(e) => setDate(e.target.value)}
-            className="bg-neutral-800 border border-neutral-700 rounded px-3 py-1.5 text-sm text-neutral-200"
+            className="bg-surface-2 border border-b-primary rounded px-3 py-1.5 text-sm text-t-primary"
           />
         }
       />
 
-      {isLoading && <p className="text-neutral-500 text-sm">Loading briefing...</p>}
+      {isLoading && <p className="text-t-tertiary text-sm">Loading briefing...</p>}
 
       {error && (
         <EmptyState title="No briefing found" description={`No briefing available for ${date}`} />
       )}
 
       {briefing && (
-        <div className="grid grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
           <div className="col-span-2">
             <BriefingViewer briefing={briefing} />
           </div>

@@ -61,18 +61,18 @@ export default function RoutesPage() {
   };
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-6">
       <PageHeader
         title="Routes"
         subtitle="Dynamic routing rules that map decisions to agent pipelines"
       />
 
       {isLoading && (
-        <div className="text-center py-12 text-neutral-500 text-sm">Loading...</div>
+        <div className="text-center py-12 text-t-tertiary text-sm">Loading...</div>
       )}
 
       {!isLoading && routes.length === 0 && (
-        <div className="text-center py-12 text-neutral-500 text-sm">
+        <div className="text-center py-12 text-t-tertiary text-sm">
           No routes found. Routes are seeded on first startup.
         </div>
       )}
@@ -84,16 +84,16 @@ export default function RoutesPage() {
               <div className="flex items-start justify-between">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
-                    <p className="text-sm font-medium text-white">{route.name}</p>
+                    <p className="text-sm font-medium text-t-primary">{route.name}</p>
                     <Badge variant={route.enabled ? "green" : "default"}>
                       {route.enabled ? "Active" : "Disabled"}
                     </Badge>
                     <Badge variant="blue">{route.decision_type}</Badge>
                   </div>
                   {route.description && (
-                    <p className="text-xs text-neutral-400 mb-1">{route.description}</p>
+                    <p className="text-xs text-t-secondary mb-1">{route.description}</p>
                   )}
-                  <p className="text-xs text-neutral-500">
+                  <p className="text-xs text-t-tertiary">
                     Priority {route.priority} &middot; Weight {route.weight}
                   </p>
                   {route.agent_pipeline.length > 0 && (
@@ -106,7 +106,7 @@ export default function RoutesPage() {
                     </div>
                   )}
                   {route.keywords && route.keywords.length > 0 && (
-                    <p className="text-[10px] text-neutral-600 mt-1">
+                    <p className="text-[10px] text-t-muted mt-1">
                       Keywords: {route.keywords.join(", ")}
                     </p>
                   )}
@@ -118,7 +118,7 @@ export default function RoutesPage() {
                         ? setEditingId(null)
                         : startEdit(route)
                     }
-                    className="text-xs text-neutral-400 hover:text-white"
+                    className="text-xs text-t-secondary hover:text-t-primary"
                   >
                     {editingId === route.route_id ? "Cancel" : "Edit"}
                   </button>
@@ -128,7 +128,7 @@ export default function RoutesPage() {
                         deleteMut.mutate(route.route_id);
                       }
                     }}
-                    className="text-xs text-red-400 hover:text-red-300"
+                    className="text-xs text-j-error hover:text-j-error"
                   >
                     Delete
                   </button>
@@ -136,21 +136,21 @@ export default function RoutesPage() {
               </div>
 
               {editingId === route.route_id && (
-                <div className="mt-3 space-y-2 border-t border-neutral-800 pt-3">
+                <div className="mt-3 space-y-2 border-t border-b-primary pt-3">
                   <div className="flex gap-4">
                     <div className="space-y-1">
-                      <label className="text-xs text-neutral-400">Priority</label>
+                      <label className="text-xs text-t-secondary">Priority</label>
                       <input
                         type="number"
                         min="1"
                         max="1000"
                         value={editPriority}
                         onChange={(e) => setEditPriority(e.target.value)}
-                        className="w-24 rounded bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        className="w-24 rounded bg-surface-2 border border-b-primary px-3 py-2 text-sm text-t-primary focus:outline-none focus:ring-1 focus:ring-j-ring"
                       />
                     </div>
                     <div className="space-y-1">
-                      <label className="text-xs text-neutral-400">Enabled</label>
+                      <label className="text-xs text-t-secondary">Enabled</label>
                       <div className="pt-1">
                         <input
                           type="checkbox"
@@ -164,7 +164,7 @@ export default function RoutesPage() {
                   <button
                     onClick={() => handleSave(route.route_id)}
                     disabled={updateMut.isPending}
-                    className="px-4 py-2 rounded-lg bg-blue-600 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                    className="px-4 py-2 rounded-lg bg-j-primary text-sm font-medium text-j-primary-fg hover:bg-j-primary-hover disabled:opacity-50"
                   >
                     {updateMut.isPending ? "Saving..." : "Save"}
                   </button>

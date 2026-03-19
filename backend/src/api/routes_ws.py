@@ -1,6 +1,9 @@
 """WebSocket endpoint for streaming A2UI surfaces and notifications.
 
-Clients connect to /ws/{user_id} and receive real-time updates:
+Clients connect to /ws/{user_id} and authenticate via an auth message:
+  { "type": "auth", "token": "<session_token>" }
+
+After authentication, clients receive real-time updates:
 - A2UI surface payloads (briefings, approvals, dashboards)
 - Notification events
 - Surface sync events (action taken on another surface)
@@ -21,34 +24,48 @@ _connections: dict[str, list[WebSocket]] = {}
 
 
 @router.websocket("/ws/{user_id}")
-async def jarvis_ws(websocket: WebSocket, user_id: str, token: str | None = None):
+async def jarvis_ws(websocket: WebSocket, user_id: str):
     """WebSocket endpoint for real-time A2UI surface updates.
 
-    Subscribes to Redis pub/sub channels for the user and forwards
-    messages to the WebSocket client. Also handles incoming actions
-    from the client (button clicks, form submissions).
-
-    Accepts optional ?token= query param for auth validation.
+    Auth via message after connect: client sends { type: "auth", token: "..." }
+    as the first message. No token in URL query params.
     """
-    # Validate token if provided
-    if token:
-        try:
-            from src.config.settings import get_settings
-            from src.models.database import get_session_factory
-            from src.services.auth_service import AuthService
+    await websocket.accept()
 
-            settings = get_settings()
-            async with get_session_factory()() as db:
-                auth = AuthService(settings, db)
-                user = await auth.validate_session(token)
-                if not user or user.user_id != user_id:
-                    await websocket.close(code=4003, reason="Invalid token")
-                    return
-        except Exception:
-            await websocket.close(code=4003, reason="Auth validation failed")
+    # Wait for auth message (5 second timeout)
+    try:
+        raw = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
+        message = json.loads(raw)
+        if message.get("type") != "auth" or not message.get("token"):
+            await websocket.send_json({"type": "auth_error", "message": "Expected auth message"})
+            await websocket.close(code=4001, reason="Auth required")
             return
 
-    await websocket.accept()
+        token = message["token"]
+        from src.config.settings import get_settings
+        from src.models.database import get_session_factory
+        from src.services.auth_service import AuthService
+
+        settings = get_settings()
+        async with get_session_factory()() as db:
+            auth = AuthService(settings, db)
+            user = await auth.validate_session(token)
+            if not user or user.user_id != user_id:
+                await websocket.send_json({"type": "auth_error", "message": "Invalid token"})
+                await websocket.close(code=4003, reason="Invalid token")
+                return
+
+    except asyncio.TimeoutError:
+        await websocket.close(code=4001, reason="Auth timeout")
+        return
+    except (json.JSONDecodeError, WebSocketDisconnect):
+        return
+    except Exception:
+        await websocket.close(code=4003, reason="Auth validation failed")
+        return
+
+    # Auth succeeded
+    await websocket.send_json({"type": "auth_ok"})
 
     # Track connection
     _connections.setdefault(user_id, []).append(websocket)
@@ -126,7 +143,9 @@ async def jarvis_ws(websocket: WebSocket, user_id: str, token: str | None = None
         logger.error("ws_error", extra={"user_id": user_id, "error": str(e)})
     finally:
         # Cleanup
-        _connections.get(user_id, []).remove(websocket)
+        conns = _connections.get(user_id, [])
+        if websocket in conns:
+            conns.remove(websocket)
         if not _connections.get(user_id):
             _connections.pop(user_id, None)
 

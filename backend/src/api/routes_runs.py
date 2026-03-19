@@ -28,7 +28,7 @@ class StepResponse(BaseModel):
 
 class RunResponse(BaseModel):
     run_id: str
-    plan_id: str
+    plan_id: str | None = None
     user_id: str
     status: str
     started_at: str | None = None

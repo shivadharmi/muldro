@@ -1,16 +1,19 @@
-"""Event ingestion endpoint — generic entry point for all event sources."""
+"""Event ingestion and listing endpoints."""
 
 import logging
+from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query, Request
+from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
 from src.api.schemas import EventIngestRequest, EventIngestResponse
 from src.config.settings import Settings, get_settings
+from src.models.events import NormalizedEvent
 from src.services.event_processor import EventProcessor, RawEvent
 from src.services.memory_service import MemoryService
-from src.services.planner import Planner
 from src.services.world_model import WorldModel
 
 logger = logging.getLogger(__name__)
@@ -18,53 +21,82 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _make_event_processor(settings: Settings, db: AsyncSession) -> EventProcessor:
-    """Build an EventProcessor with the full callback pipeline.
+class NormalizedEventSummary(BaseModel):
+    event_id: str
+    source: str
+    event_type: str
+    title: str | None = None
+    summary: str | None = None
+    occurred_at: str | None = None
+    status: str = "pending"
 
-    Callbacks (in order):
-    1. Entity extraction (WorldModel)
-    2. Memory extraction (MemoryService)
-    3. Proactive planning (Planner — for high-importance events)
+    model_config = {"from_attributes": True}
+
+
+@router.get("/v1/events", response_model=list[NormalizedEventSummary])
+async def list_events(
+    time_range_hours: int = Query(24, ge=1, le=168),
+    source: str | None = Query(None),
+    limit: int = Query(20, ge=1, le=100),
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+    db: AsyncSession = Depends(get_session),
+):
+    """List recent normalized events for the current workspace."""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=time_range_hours)
+    stmt = select(NormalizedEvent).where(
+        NormalizedEvent.workspace_id == workspace_id,
+        NormalizedEvent.occurred_at > cutoff,
+    )
+    if source:
+        stmt = stmt.where(NormalizedEvent.source == source)
+    stmt = stmt.order_by(NormalizedEvent.occurred_at.desc()).limit(limit)
+
+    result = await db.execute(stmt)
+    rows = result.scalars().all()
+    return [
+        NormalizedEventSummary(
+            event_id=e.event_id,
+            source=e.source,
+            event_type=e.event_type,
+            title=e.title,
+            summary=e.summary,
+            occurred_at=e.occurred_at.isoformat() if e.occurred_at else None,
+            status=e.status,
+        )
+        for e in rows
+    ]
+
+
+async def _make_event_processor(settings: Settings, db: AsyncSession, redis=None) -> EventProcessor:
+    """Build an EventProcessor wired to the event bus.
+
+    Downstream processing (entity extraction, memory extraction, planning,
+    event indexing) is handled by the StreamConsumerManager worker via Redis
+    consumer groups — not inline callbacks. This avoids workspace_id issues
+    and ensures all stores (ES, Qdrant, Neo4j) get updated.
     """
+    from src.services.event_bus import EventBus
+
+    event_bus = None
+    if redis:
+        event_bus = EventBus(redis)
+    else:
+        try:
+            import redis.asyncio as aioredis
+
+            r = aioredis.from_url(settings.redis_url, decode_responses=True)
+            event_bus = EventBus(r)
+        except Exception:
+            logger.warning("Could not create EventBus for event processor")
+
     world_model = WorldModel(settings=settings, db=db)
     memory_service = MemoryService(settings=settings, db=db)
-    planner = Planner(
-        settings=settings,
-        db=db,
-        world_model=world_model,
-        memory_service=memory_service,
-    )
-
-    async def _extract_entities(event_id: str, user_id: str) -> None:
-        await world_model.extract_from_event(event_id, user_id)
-
-    async def _extract_memories(event_id: str, user_id: str) -> None:
-        from sqlalchemy import select as sa_select
-
-        from src.models.events import NormalizedEvent
-
-        result = await db.execute(
-            sa_select(NormalizedEvent).where(NormalizedEvent.event_id == event_id)
-        )
-        event = result.scalar_one_or_none()
-        if event and event.summary:
-            await memory_service.extract_and_store(user_id, event.summary, [event_id])
-
-    async def _proactive_plan(event_id: str, user_id: str) -> None:
-        """Auto-trigger planning for high-importance events."""
-        plan = await planner.plan_for_event(event_id, user_id)
-        if plan:
-            logger.info(
-                "Proactive plan created: %s decision=%s for event %s",
-                plan.plan_id,
-                plan.decision,
-                event_id,
-            )
 
     return EventProcessor(
         settings=settings,
         db=db,
-        on_event_processed=[_extract_entities, _extract_memories, _proactive_plan],
+        event_bus=event_bus,
         world_model=world_model,
         memory_service=memory_service,
     )
@@ -73,6 +105,7 @@ def _make_event_processor(settings: Settings, db: AsyncSession) -> EventProcesso
 @router.post("/v1/events/ingest", response_model=EventIngestResponse)
 async def ingest_event(
     req: EventIngestRequest,
+    request: Request,
     user_id: str = Depends(get_current_user_id),
     workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
@@ -97,7 +130,8 @@ async def ingest_event(
         raw_payload=req.raw_payload,
     )
 
-    processor = _make_event_processor(settings, db)
+    redis = getattr(request.app.state, "redis", None)
+    processor = await _make_event_processor(settings, db, redis=redis)
     event_id = await processor.process(raw, user_id, workspace_id=workspace_id)
 
     if event_id is None:

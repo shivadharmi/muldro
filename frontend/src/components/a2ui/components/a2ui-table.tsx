@@ -33,15 +33,15 @@ export function A2UITable({ component }: Props) {
   };
 
   return (
-    <div className="overflow-x-auto rounded-lg border border-neutral-800">
+    <div className="overflow-x-auto rounded-lg border border-b-primary">
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b border-neutral-800 bg-neutral-900/50">
+          <tr className="border-b border-b-primary bg-surface-1">
             {columns.map((col) => (
               <th
                 key={col.key}
                 onClick={() => handleSort(col.key)}
-                className={`px-3 py-2 text-left text-xs font-medium text-neutral-400 ${sortable ? "cursor-pointer hover:text-white" : ""}`}
+                className={`px-3 py-2 text-left text-xs font-medium text-t-secondary ${sortable ? "cursor-pointer hover:text-t-primary" : ""}`}
               >
                 {col.label}
                 {sortKey === col.key && (
@@ -53,9 +53,9 @@ export function A2UITable({ component }: Props) {
         </thead>
         <tbody>
           {sortedRows.map((row, i) => (
-            <tr key={i} className="border-b border-neutral-800/50 hover:bg-neutral-800/30">
+            <tr key={i} className="border-b border-b-primary/50 hover:bg-surface-2">
               {columns.map((col) => (
-                <td key={col.key} className="px-3 py-2 text-neutral-300">
+                <td key={col.key} className="px-3 py-2 text-t-primary">
                   {String(row[col.key] ?? "")}
                 </td>
               ))}

@@ -18,12 +18,12 @@ export function A2UIDataGrid({ component }: Props) {
 
   return (
     <div className="space-y-2">
-      <div className="overflow-x-auto rounded-lg border border-neutral-800">
+      <div className="overflow-x-auto rounded-lg border border-b-primary">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-neutral-800 bg-neutral-900/50">
+            <tr className="border-b border-b-primary bg-surface-1">
               {columns.map((col) => (
-                <th key={col.key} className="px-3 py-2 text-left text-xs font-medium text-neutral-400">
+                <th key={col.key} className="px-3 py-2 text-left text-xs font-medium text-t-secondary">
                   {col.label}
                 </th>
               ))}
@@ -31,9 +31,9 @@ export function A2UIDataGrid({ component }: Props) {
           </thead>
           <tbody>
             {pagedRows.map((row, i) => (
-              <tr key={i} className="border-b border-neutral-800/50 hover:bg-neutral-800/30">
+              <tr key={i} className="border-b border-b-primary/50 hover:bg-surface-2">
                 {columns.map((col) => (
-                  <td key={col.key} className="px-3 py-2 text-neutral-300">
+                  <td key={col.key} className="px-3 py-2 text-t-primary">
                     {String(row[col.key] ?? "")}
                   </td>
                 ))}
@@ -43,20 +43,20 @@ export function A2UIDataGrid({ component }: Props) {
         </table>
       </div>
       {totalPages > 1 && (
-        <div className="flex items-center justify-between text-xs text-neutral-500">
+        <div className="flex items-center justify-between text-xs text-t-tertiary">
           <span>Page {page + 1} of {totalPages}</span>
           <div className="flex gap-1">
             <button
               onClick={() => setPage(Math.max(0, page - 1))}
               disabled={page === 0}
-              className="px-2 py-1 rounded bg-neutral-800 hover:bg-neutral-700 disabled:opacity-30"
+              className="px-2 py-1 rounded bg-surface-2 hover:bg-surface-3 disabled:opacity-30"
             >
               Prev
             </button>
             <button
               onClick={() => setPage(Math.min(totalPages - 1, page + 1))}
               disabled={page >= totalPages - 1}
-              className="px-2 py-1 rounded bg-neutral-800 hover:bg-neutral-700 disabled:opacity-30"
+              className="px-2 py-1 rounded bg-surface-2 hover:bg-surface-3 disabled:opacity-30"
             >
               Next
             </button>

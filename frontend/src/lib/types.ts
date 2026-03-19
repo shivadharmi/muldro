@@ -69,6 +69,30 @@ export interface DashboardMeeting {
   location: string | null;
 }
 
+export interface DashboardTrace {
+  trace_id: string;
+  trigger: string;
+  agents_invoked: string[];
+  duration_ms: number | null;
+  total_cost_usd: number;
+}
+
+export interface DashboardGoal {
+  goal_id: string;
+  title: string;
+  progress: number;
+  priority: string;
+  task_count: number;
+  completed_task_count: number;
+}
+
+export interface DashboardEvent {
+  source: string;
+  event_type: string;
+  title: string | null;
+  occurred_at: string | null;
+}
+
 export interface CanvasDashboard {
   headline: string | null;
   date: string;
@@ -77,6 +101,9 @@ export interface CanvasDashboard {
   upcoming_meetings: DashboardMeeting[];
   recommended_actions: string[];
   briefing_id: string | null;
+  recent_traces: DashboardTrace[];
+  active_goals: DashboardGoal[];
+  recent_events: DashboardEvent[];
 }
 
 // ── Approvals ───────────────────────────────────────────────────
@@ -103,6 +130,7 @@ export interface ApprovalDetail {
   execution_id: string | null;
   plan_goal: string | null;
   artifact_refs: Record<string, unknown> | null;
+  trace_id: string | null;
 }
 
 // ── Tasks ───────────────────────────────────────────────────────
@@ -308,6 +336,8 @@ export interface Goal {
   priority: string;
   target_date: string | null;
   success_criteria_json: Record<string, unknown> | null;
+  task_count: number;
+  completed_task_count: number;
   created_at: string | null;
 }
 
@@ -411,6 +441,10 @@ export interface MemoryItem {
   fact_text: string;
   confidence: number;
   status: string;
+  last_accessed_at: string | null;
+  is_stale: boolean;
+  entity_ids: string[];
+  access_count: number;
   created_at: string | null;
 }
 
@@ -424,7 +458,21 @@ export interface ExecutionItem {
   execution_mode: string | null;
   current_step_ids: string[] | null;
   error: Record<string, unknown> | null;
+  goal: string | null;
+  priority: string | null;
   created_at: string | null;
+}
+
+// ── Normalized Events ─────────────────────────────────────────
+
+export interface NormalizedEventSummary {
+  event_id: string;
+  source: string;
+  event_type: string;
+  title: string | null;
+  summary: string | null;
+  occurred_at: string | null;
+  status: string;
 }
 
 // ── Traces ─────────────────────────────────────────────────────

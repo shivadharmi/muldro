@@ -66,6 +66,19 @@ class SearchService:
                     "confidence": {"type": "float"},
                 }
             },
+            "jarvis-audit": {
+                "properties": {
+                    "user_id": {"type": "keyword"},
+                    "action_type": {"type": "keyword"},
+                    "summary": {"type": "text"},
+                    "policy_decision": {"type": "keyword"},
+                    "created_at": {"type": "date"},
+                    "event_id": {"type": "keyword"},
+                    "plan_id": {"type": "keyword"},
+                    "execution_id": {"type": "keyword"},
+                    "approval_id": {"type": "keyword"},
+                }
+            },
         }
 
         for index_name, mapping in indices.items():
@@ -121,6 +134,15 @@ class SearchService:
                 id=memory_id,
                 body={"user_id": user_id, **data},
             )
+
+        if self._vector_store:
+            text = data.get("fact_text", "")
+            if text:
+                embedding = await self._embedder.embed_text(text)
+                if embedding:
+                    await self._vector_store.upsert(
+                        "memories", memory_id, embedding, {"user_id": user_id, **data}, user_id
+                    )
 
     async def index_artifact(self, artifact_id: str, user_id: str, data: dict) -> None:
         """Index an artifact to ES and Qdrant."""

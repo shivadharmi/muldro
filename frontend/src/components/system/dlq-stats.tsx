@@ -12,19 +12,19 @@ export function DLQStatsView({ stats }: { stats: DLQStats | undefined }) {
     <div className="space-y-4">
       <Card>
         <CardBody>
-          <p className="text-xs text-neutral-500">Total DLQ Entries</p>
+          <p className="text-xs text-t-tertiary">Total DLQ Entries</p>
           <p className="text-2xl font-semibold">{stats.total}</p>
         </CardBody>
       </Card>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <Card>
           <CardHeader>
             <span className="text-sm font-medium">By Status</span>
           </CardHeader>
           {Object.keys(stats.by_status).length === 0 ? (
             <CardBody>
-              <p className="text-xs text-neutral-600">No entries</p>
+              <p className="text-xs text-t-muted">No entries</p>
             </CardBody>
           ) : (
             <Table>
@@ -35,7 +35,7 @@ export function DLQStatsView({ stats }: { stats: DLQStats | undefined }) {
               <TableBody>
                 {Object.entries(stats.by_status).map(([status, count]) => (
                   <tr key={status}>
-                    <Td className="text-white">{status}</Td>
+                    <Td className="text-t-primary">{status}</Td>
                     <Td>{count}</Td>
                   </tr>
                 ))}
@@ -50,7 +50,7 @@ export function DLQStatsView({ stats }: { stats: DLQStats | undefined }) {
           </CardHeader>
           {Object.keys(stats.by_operation).length === 0 ? (
             <CardBody>
-              <p className="text-xs text-neutral-600">No entries</p>
+              <p className="text-xs text-t-muted">No entries</p>
             </CardBody>
           ) : (
             <Table>
@@ -61,7 +61,7 @@ export function DLQStatsView({ stats }: { stats: DLQStats | undefined }) {
               <TableBody>
                 {Object.entries(stats.by_operation).map(([op, count]) => (
                   <tr key={op}>
-                    <Td className="text-white">{op}</Td>
+                    <Td className="text-t-primary">{op}</Td>
                     <Td>{count}</Td>
                   </tr>
                 ))}

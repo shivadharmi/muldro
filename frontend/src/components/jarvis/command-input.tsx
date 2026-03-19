@@ -116,10 +116,10 @@ export function CommandInput({ onSubmit, disabled }: Props) {
           cmdKOpen
             ? "fixed top-1/4 left-1/2 -translate-x-1/2 w-[480px] z-50"
             : "absolute bottom-full left-0 right-0 mb-1 z-10"
-        } rounded-lg bg-neutral-800 border border-neutral-700 shadow-lg overflow-hidden`}>
+        } rounded-lg bg-surface-2 border border-b-primary shadow-lg overflow-hidden`}>
           {cmdKOpen && (
-            <div className="px-4 py-2 border-b border-neutral-700 flex items-center gap-2">
-              <span className="text-neutral-500 text-xs">⌘K</span>
+            <div className="px-4 py-2 border-b border-b-primary flex items-center gap-2">
+              <span className="text-t-tertiary text-xs">⌘K</span>
               <input
                 ref={cmdKOpen ? inputRef : undefined}
                 type="text"
@@ -128,7 +128,7 @@ export function CommandInput({ onSubmit, disabled }: Props) {
                 onKeyDown={handleKeyDown}
                 placeholder="Type a command..."
                 autoFocus
-                className="flex-1 bg-transparent text-sm text-white placeholder-neutral-500 focus:outline-none"
+                className="flex-1 bg-transparent text-sm text-t-primary placeholder-t-tertiary focus:outline-none"
               />
             </div>
           )}
@@ -140,16 +140,16 @@ export function CommandInput({ onSubmit, disabled }: Props) {
                 onClick={() => executeCommand(cmd)}
                 className={`w-full text-left px-4 py-2 text-sm flex justify-between items-center cursor-pointer ${
                   i === selectedIndex
-                    ? "bg-blue-600/30 text-white"
-                    : "text-neutral-300 hover:bg-neutral-700"
+                    ? "bg-j-primary-soft text-t-primary"
+                    : "text-t-primary hover:bg-surface-3"
                 }`}
               >
                 <span className="font-mono">{cmd.name}</span>
-                <span className="text-neutral-500 text-xs">{cmd.description}</span>
+                <span className="text-t-tertiary text-xs">{cmd.description}</span>
               </button>
             ))}
             {filtered.length === 0 && cmdKOpen && (
-              <div className="px-4 py-3 text-sm text-neutral-500">No matching commands</div>
+              <div className="px-4 py-3 text-sm text-t-tertiary">No matching commands</div>
             )}
           </div>
         </div>
@@ -163,12 +163,12 @@ export function CommandInput({ onSubmit, disabled }: Props) {
           onKeyDown={cmdKOpen ? undefined : handleKeyDown}
           placeholder="Ask Jarvis anything... (⌘K for commands, / for slash)"
           disabled={disabled}
-          className="flex-1 rounded-lg bg-neutral-800 border border-neutral-700 px-4 py-3 text-sm text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+          className="flex-1 rounded-lg bg-surface-2 border border-b-primary px-4 py-3 text-sm text-t-primary placeholder-t-tertiary focus:outline-none focus:ring-2 focus:ring-j-ring disabled:opacity-50"
         />
         <button
           type="submit"
           disabled={disabled || !value.trim() || cmdKOpen}
-          className="rounded-lg bg-blue-600 px-4 py-3 text-sm font-medium text-white hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+          className="rounded-lg bg-j-primary px-4 py-3 text-sm font-medium text-j-primary-fg hover:bg-j-primary-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
         >
           Send
         </button>

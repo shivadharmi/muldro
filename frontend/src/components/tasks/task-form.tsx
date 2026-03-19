@@ -44,37 +44,37 @@ export function TaskForm({ onClose }: { onClose?: () => void }) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="bg-neutral-900 border border-neutral-800 rounded-lg p-4 space-y-3">
+    <form onSubmit={handleSubmit} className="bg-surface-1 border border-b-primary rounded-lg p-4 space-y-3">
       <div>
-        <label className="block text-xs text-neutral-400 mb-1">Title</label>
+        <label className="block text-xs text-t-secondary mb-1">Title</label>
         <input
           type="text"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           placeholder="Task title"
-          className="w-full bg-neutral-800 border border-neutral-700 rounded px-3 py-1.5 text-sm text-neutral-200 placeholder:text-neutral-600"
+          className="w-full bg-surface-2 border border-b-primary rounded px-3 py-1.5 text-sm text-t-primary placeholder:text-t-muted"
           required
         />
       </div>
 
       <div>
-        <label className="block text-xs text-neutral-400 mb-1">Description</label>
+        <label className="block text-xs text-t-secondary mb-1">Description</label>
         <textarea
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           placeholder="Optional description"
           rows={2}
-          className="w-full bg-neutral-800 border border-neutral-700 rounded px-3 py-1.5 text-sm text-neutral-200 placeholder:text-neutral-600 resize-none"
+          className="w-full bg-surface-2 border border-b-primary rounded px-3 py-1.5 text-sm text-t-primary placeholder:text-t-muted resize-none"
         />
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
         <div>
-          <label className="block text-xs text-neutral-400 mb-1">Type</label>
+          <label className="block text-xs text-t-secondary mb-1">Type</label>
           <select
             value={taskType}
             onChange={(e) => setTaskType(e.target.value)}
-            className="w-full bg-neutral-800 border border-neutral-700 rounded px-3 py-1.5 text-sm text-neutral-200"
+            className="w-full bg-surface-2 border border-b-primary rounded px-3 py-1.5 text-sm text-t-primary"
           >
             <option value="general">General</option>
             <option value="research">Research</option>
@@ -85,11 +85,11 @@ export function TaskForm({ onClose }: { onClose?: () => void }) {
         </div>
 
         <div>
-          <label className="block text-xs text-neutral-400 mb-1">Priority</label>
+          <label className="block text-xs text-t-secondary mb-1">Priority</label>
           <select
             value={priority}
             onChange={(e) => setPriority(e.target.value)}
-            className="w-full bg-neutral-800 border border-neutral-700 rounded px-3 py-1.5 text-sm text-neutral-200"
+            className="w-full bg-surface-2 border border-b-primary rounded px-3 py-1.5 text-sm text-t-primary"
           >
             <option value="low">Low</option>
             <option value="medium">Medium</option>
@@ -99,11 +99,11 @@ export function TaskForm({ onClose }: { onClose?: () => void }) {
         </div>
 
         <div>
-          <label className="block text-xs text-neutral-400 mb-1">Goal</label>
+          <label className="block text-xs text-t-secondary mb-1">Goal</label>
           <select
             value={goalId}
             onChange={(e) => setGoalId(e.target.value)}
-            className="w-full bg-neutral-800 border border-neutral-700 rounded px-3 py-1.5 text-sm text-neutral-200"
+            className="w-full bg-surface-2 border border-b-primary rounded px-3 py-1.5 text-sm text-t-primary"
           >
             <option value="">None</option>
             {goals.map((g) => (
@@ -120,7 +120,7 @@ export function TaskForm({ onClose }: { onClose?: () => void }) {
           <button
             type="button"
             onClick={onClose}
-            className="text-neutral-400 hover:text-neutral-200 text-sm px-3 py-1.5 rounded transition-colors"
+            className="text-t-secondary hover:text-t-primary text-sm px-3 py-1.5 rounded transition-colors"
           >
             Cancel
           </button>
@@ -128,7 +128,7 @@ export function TaskForm({ onClose }: { onClose?: () => void }) {
         <button
           type="submit"
           disabled={createMut.isPending}
-          className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm px-4 py-1.5 rounded transition-colors"
+          className="bg-j-primary hover:bg-j-primary-hover disabled:opacity-50 text-j-primary-fg text-sm px-4 py-1.5 rounded transition-colors"
         >
           {createMut.isPending ? "Creating..." : "Create Task"}
         </button>

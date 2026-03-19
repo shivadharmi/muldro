@@ -21,25 +21,25 @@ export function TaskDetailView({ task }: { task: TaskDetailType }) {
           </div>
         </CardHeader>
         <CardBody>
-          <div className="grid grid-cols-3 gap-4 text-xs mb-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-xs mb-3">
             <div>
-              <span className="text-neutral-500">Decision</span>
-              <p className="text-neutral-300 mt-0.5">{task.decision}</p>
+              <span className="text-t-tertiary">Decision</span>
+              <p className="text-t-primary mt-0.5">{task.decision}</p>
             </div>
             <div>
-              <span className="text-neutral-500">Execution</span>
-              <p className="text-neutral-300 mt-0.5">{task.execution_status || "N/A"}</p>
+              <span className="text-t-tertiary">Execution</span>
+              <p className="text-t-primary mt-0.5">{task.execution_status || "N/A"}</p>
             </div>
             <div>
-              <span className="text-neutral-500">Created</span>
+              <span className="text-t-tertiary">Created</span>
               <div className="mt-0.5">
                 <TimeAgo date={task.created_at} />
               </div>
             </div>
           </div>
           {task.reasoning_summary && (
-            <div className="bg-neutral-800/50 rounded p-3 text-xs text-neutral-400">
-              <p className="text-neutral-500 font-medium mb-1">Reasoning</p>
+            <div className="bg-surface-2 rounded p-3 text-xs text-t-secondary">
+              <p className="text-t-tertiary font-medium mb-1">Reasoning</p>
               <p>{task.reasoning_summary}</p>
             </div>
           )}

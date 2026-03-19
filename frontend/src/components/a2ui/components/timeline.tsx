@@ -12,16 +12,16 @@ export function A2UITimeline({ component }: Props) {
       {events.map((evt, i) => (
         <div key={i} className="flex gap-3 relative">
           <div className="flex flex-col items-center">
-            <div className="w-2 h-2 rounded-full bg-blue-500 mt-2 z-10" />
+            <div className="w-2 h-2 rounded-full bg-j-primary mt-2 z-10" />
             {i < events.length - 1 && (
-              <div className="w-px flex-1 bg-neutral-700" />
+              <div className="w-px flex-1 bg-b-primary" />
             )}
           </div>
           <div className="pb-4 min-w-0">
-            <p className="text-xs text-neutral-500">{evt.time || ""}</p>
-            <p className="text-sm text-white">{evt.title || ""}</p>
+            <p className="text-xs text-t-tertiary">{evt.time || ""}</p>
+            <p className="text-sm text-t-primary">{evt.title || ""}</p>
             {evt.source && (
-              <p className="text-xs text-neutral-500">{evt.source}</p>
+              <p className="text-xs text-t-tertiary">{evt.source}</p>
             )}
           </div>
         </div>

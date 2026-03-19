@@ -74,7 +74,7 @@ export default function ConversationsPage() {
   }
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-6">
       <PageHeader
         title="Conversations"
         subtitle="Manage chat conversations"
@@ -84,7 +84,7 @@ export default function ConversationsPage() {
         <Tabs tabs={STATUS_TABS} active={statusFilter} onChange={setStatusFilter} />
         {selected.size > 0 && (
           <div className="flex items-center gap-2">
-            <span className="text-xs text-neutral-500">{selected.size} selected</span>
+            <span className="text-xs text-t-tertiary">{selected.size} selected</span>
             <Button size="sm" variant="secondary" onClick={bulkArchive}>
               Archive
             </Button>
@@ -101,8 +101,8 @@ export default function ConversationsPage() {
             <Card key={i}>
               <CardBody>
                 <div className="animate-pulse space-y-2">
-                  <div className="h-4 w-48 bg-neutral-800 rounded" />
-                  <div className="h-3 w-64 bg-neutral-800 rounded" />
+                  <div className="h-4 w-48 bg-surface-2 rounded" />
+                  <div className="h-3 w-64 bg-surface-2 rounded" />
                 </div>
               </CardBody>
             </Card>
@@ -112,8 +112,8 @@ export default function ConversationsPage() {
 
       {!isLoading && conversations.length === 0 && (
         <div className="text-center py-12">
-          <p className="text-neutral-500 text-sm font-medium">No conversations</p>
-          <p className="text-neutral-600 text-xs mt-1">
+          <p className="text-t-tertiary text-sm font-medium">No conversations</p>
+          <p className="text-t-muted text-xs mt-1">
             Start a chat to create your first conversation.
           </p>
         </div>
@@ -121,21 +121,21 @@ export default function ConversationsPage() {
 
       <div className="space-y-2">
         {conversations.map((conv: ConversationSummary) => (
-          <Card key={conv.conversation_id} className={selected.has(conv.conversation_id) ? "border-blue-700" : ""}>
+          <Card key={conv.conversation_id} className={selected.has(conv.conversation_id) ? "border-j-primary" : ""}>
             <CardBody>
               <div className="flex items-start gap-3">
                 <input
                   type="checkbox"
                   checked={selected.has(conv.conversation_id)}
                   onChange={() => toggleSelect(conv.conversation_id)}
-                  className="mt-1 accent-blue-600"
+                  className="mt-1 accent-[var(--jarvis-primary)]"
                 />
                 <Link
                   href={`/chat?conversation=${conv.conversation_id}`}
                   className="flex-1 min-w-0"
                 >
                   <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-medium text-white truncate">
+                    <h3 className="text-sm font-medium text-t-primary truncate">
                       {conv.title || "Untitled"}
                     </h3>
                     <div className="flex items-center gap-2 ml-2 shrink-0">
@@ -144,9 +144,9 @@ export default function ConversationsPage() {
                     </div>
                   </div>
                   {conv.preview && (
-                    <p className="text-xs text-neutral-400 mt-0.5 truncate">{conv.preview}</p>
+                    <p className="text-xs text-t-secondary mt-0.5 truncate">{conv.preview}</p>
                   )}
-                  <div className="flex items-center gap-4 mt-1 text-[10px] text-neutral-600">
+                  <div className="flex items-center gap-4 mt-1 text-[10px] text-t-muted">
                     <span>{conv.message_count} messages</span>
                     {conv.total_cost_usd > 0 && (
                       <span>${conv.total_cost_usd.toFixed(4)}</span>

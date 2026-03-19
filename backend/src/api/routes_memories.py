@@ -1,6 +1,7 @@
 """Memory listing and retrieval routes."""
 
 import logging
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
@@ -21,6 +22,10 @@ class MemoryItem(BaseModel):
     fact_text: str
     confidence: float
     status: str
+    last_accessed_at: str | None = None
+    is_stale: bool = False
+    entity_ids: list[str] = []
+    access_count: int = 0
     created_at: str | None = None
 
     model_config = {"from_attributes": True}
@@ -28,6 +33,12 @@ class MemoryItem(BaseModel):
 
 class MemoryListResponse(BaseModel):
     memories: list[MemoryItem]
+
+
+def _is_stale(last_accessed_at: datetime | None) -> bool:
+    if last_accessed_at is None:
+        return True
+    return last_accessed_at < datetime.now(timezone.utc) - timedelta(days=7)
 
 
 @router.get("/v1/memories", response_model=MemoryListResponse)
@@ -60,6 +71,10 @@ async def list_memories(
                 fact_text=m.fact_text,
                 confidence=m.confidence,
                 status=m.status,
+                last_accessed_at=(m.last_accessed_at.isoformat() if m.last_accessed_at else None),
+                is_stale=_is_stale(m.last_accessed_at),
+                entity_ids=m.entity_ids or [],
+                access_count=getattr(m, "access_count", 0) or 0,
                 created_at=m.created_at.isoformat() if m.created_at else None,
             )
             for m in rows

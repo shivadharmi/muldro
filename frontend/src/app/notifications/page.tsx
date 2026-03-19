@@ -8,14 +8,16 @@ export default function NotificationsPage() {
   const { notifications, loading, unreadCount, markRead, dismiss } = useNotifications();
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <PageHeader
         title="Notifications"
         subtitle={`${unreadCount} unread notification${unreadCount !== 1 ? "s" : ""}`}
+        variant="action"
+        badge={unreadCount}
       />
 
       {loading ? (
-        <p className="text-neutral-500 text-sm">Loading...</p>
+        <p className="text-t-tertiary text-sm">Loading...</p>
       ) : (
         <NotificationCenter
           notifications={notifications}

@@ -33,7 +33,7 @@ export function SearchResults({ results }: { results: SearchResult[] }) {
       {results.map((r) => {
         const href = resultHref(r);
         const content = (
-          <Card className={href ? "hover:border-neutral-700 transition-colors" : ""}>
+          <Card className={href ? "hover:border-b-primary transition-colors" : ""}>
             <CardBody>
               <div className="flex items-start justify-between">
                 <div className="flex items-start gap-2 flex-1">
@@ -41,14 +41,14 @@ export function SearchResults({ results }: { results: SearchResult[] }) {
                   <div>
                     <p className="text-sm font-medium">{r.title}</p>
                     {r.summary && (
-                      <p className="text-xs text-neutral-400 mt-1">{r.summary}</p>
+                      <p className="text-xs text-t-secondary mt-1">{r.summary}</p>
                     )}
                   </div>
                 </div>
                 <div className="flex items-center gap-2 ml-3">
                   <Badge variant={TYPE_VARIANT[r.type] || "default"}>{r.type}</Badge>
                   {r.score !== null && (
-                    <span className="text-xs text-neutral-600">
+                    <span className="text-xs text-t-muted">
                       {(r.score * 100).toFixed(0)}%
                     </span>
                   )}
@@ -76,21 +76,21 @@ function ResultIcon({ type }: { type: string }) {
     case "memory":
       return (
         <svg className={className} viewBox="0 0 16 16" fill="none">
-          <path d="M4 3h8a1 1 0 011 1v8a1 1 0 01-1 1H4a1 1 0 01-1-1V4a1 1 0 011-1z" stroke="currentColor" strokeWidth="1.5" className="text-blue-400" />
+          <path d="M4 3h8a1 1 0 011 1v8a1 1 0 01-1 1H4a1 1 0 01-1-1V4a1 1 0 011-1z" stroke="currentColor" strokeWidth="1.5" className="text-j-primary" />
         </svg>
       );
     case "entity":
       return (
         <svg className={className} viewBox="0 0 16 16" fill="none">
-          <circle cx="8" cy="4" r="2" stroke="currentColor" strokeWidth="1.5" className="text-green-400" />
-          <circle cx="4" cy="12" r="2" stroke="currentColor" strokeWidth="1.5" className="text-green-400" />
-          <circle cx="12" cy="12" r="2" stroke="currentColor" strokeWidth="1.5" className="text-green-400" />
+          <circle cx="8" cy="4" r="2" stroke="currentColor" strokeWidth="1.5" className="text-j-success" />
+          <circle cx="4" cy="12" r="2" stroke="currentColor" strokeWidth="1.5" className="text-j-success" />
+          <circle cx="12" cy="12" r="2" stroke="currentColor" strokeWidth="1.5" className="text-j-success" />
         </svg>
       );
     case "event":
       return (
         <svg className={className} viewBox="0 0 16 16" fill="none">
-          <path d="M9 2L5 9h3l-1 5 5-7H9l1-5z" stroke="currentColor" strokeWidth="1.5" className="text-purple-400" />
+          <path d="M9 2L5 9h3l-1 5 5-7H9l1-5z" stroke="currentColor" strokeWidth="1.5" className="text-j-secondary" />
         </svg>
       );
     default:
