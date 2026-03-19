@@ -39,7 +39,7 @@ function ConnectorsContent() {
     }
   }, [searchParams, queryClient]);
 
-  const { data, isLoading } = useQuery({
+  const { data } = useQuery({
     queryKey: ["connectors"],
     queryFn: fetchConnectors,
   });

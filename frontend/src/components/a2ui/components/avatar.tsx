@@ -1,3 +1,4 @@
+import Image from "next/image";
 import type { A2UIComponent } from "@/lib/a2ui-types";
 
 interface Props {
@@ -24,7 +25,7 @@ export function A2UIAvatar({ component }: Props) {
 
   if (url) {
     return (
-      <img src={url} alt={name} className={`${cls} rounded-full object-cover`} />
+      <Image src={url} alt={name} width={40} height={40} className={`${cls} rounded-full object-cover`} />
     );
   }
 
