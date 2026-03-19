@@ -390,11 +390,11 @@ class TestOrchestrator:
         )
         orchestrator = JarvisOrchestrator(settings=settings, db_factory=MagicMock(), services={})
 
-        # Test JSON extraction
+        # Test JSON extraction — returns PlannerOutput
         text = 'Here is my analysis:\n{"decision": "create_task", "priority": "high"}\nDone.'
         result = orchestrator._extract_decision(text)
-        assert result["decision"] == "create_task"
-        assert result["priority"] == "high"
+        assert result.decision == "create_task"
+        assert result.priority == "high"
 
     @patch("src.orchestrator.jarvis.get_anthropic_client")
     async def test_extract_decision_fallback(self, mock_get_client):
@@ -408,9 +408,10 @@ class TestOrchestrator:
         )
         orchestrator = JarvisOrchestrator(settings=settings, db_factory=MagicMock(), services={})
 
-        # No JSON in response — fallback
+        # No JSON in response — fallback to PlannerOutput defaults
         result = orchestrator._extract_decision("Just some plain text response")
-        assert result["decision"] == "acknowledge"
+        assert result.decision == "acknowledge"
+        assert result.reasoning == "Just some plain text response"[:500]
 
 
 # ── Recovery Tests ───────────────────────────────────────────────────────

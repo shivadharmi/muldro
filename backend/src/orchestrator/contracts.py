@@ -22,7 +22,17 @@ class PlannerTask(BaseModel):
 
 
 class PlannerOutput(BaseModel):
-    """Validated planner decision — replaces raw JSON dict from Claude."""
+    """Validated planner decision — replaces raw JSON dict from Claude.
+
+    Sources of truth for decision types:
+    - Planner prompt (prompts.py): ignore, acknowledge, summarize, ask_user,
+      recommend, create_task, draft_reply, schedule_reminder
+    - Route resolver (route_resolver.py): research, observe, remember,
+      watcher_create, goal_update
+    - Orchestrator direct handling: answer_directly, search_memory, add_to_brief
+
+    Add new decision types here FIRST, then to the planner prompt and routes.
+    """
 
     model_config = ConfigDict(extra="ignore")
 
@@ -36,12 +46,20 @@ class PlannerOutput(BaseModel):
         "ignore",
         "watcher_create",
         "goal_update",
-    ]
+        "research",
+        "observe",
+        "remember",
+        "ask_user",
+        "recommend",
+        "summarize",
+        "schedule_reminder",
+    ] = "acknowledge"
     goal: str = ""
-    reasoning_summary: str = ""
+    reasoning: str = ""
     priority: Literal["low", "medium", "high", "critical"] = "medium"
     risk_level: Literal["none", "low", "medium", "high"] = "low"
     execution_mode: Literal["auto_execute", "approval_required", "draft_only"] = "approval_required"
+    plan_id: str | None = None
     tasks: list[PlannerTask] = Field(default_factory=list)
 
 
@@ -175,7 +193,7 @@ class MessageMetadata(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     trace_id: str | None = None
-    decision: str | None = None
+    decision: PlannerOutput | None = None
     agent_steps: list[MessageAgentStep] = Field(default_factory=list)
 
 

@@ -18,7 +18,7 @@ from src.config.settings import Settings, get_anthropic_client
 from src.models.task_graph import TaskRun, TaskStep
 from src.orchestrator.agents import AGENTS, SubAgent
 from src.orchestrator.budget import BudgetTracker
-from src.orchestrator.contracts import AgentEnvelope, AgentResult, SpanToolCall
+from src.orchestrator.contracts import AgentEnvelope, AgentResult, PlannerOutput, SpanToolCall
 from src.orchestrator.hooks import (
     audit_post_tool_hook,
     governor_pre_tool_hook,
@@ -118,7 +118,7 @@ class JarvisOrchestrator:
         self,
         user_id: str,
         workspace_id: str,
-        decision: dict,
+        decision: PlannerOutput,
         trace_id: str,
         conversation_id: str | None = None,
     ) -> str | None:
@@ -129,7 +129,6 @@ class JarvisOrchestrator:
         Returns the run_id on success, None if DB unavailable.
         """
         run_id = f"run_{ULID()}"
-        decision_type = decision.get("decision", "acknowledge")
 
         try:
             async with self._db_factory() as db:
@@ -137,11 +136,11 @@ class JarvisOrchestrator:
                     run_id=run_id,
                     user_id=user_id,
                     workspace_id=workspace_id,
-                    plan_id=None,
+                    plan_id=decision.plan_id,
                     status="running",
                     source="user_message",
-                    execution_mode="auto_execute",
-                    policy_decision={"decision": decision_type},
+                    execution_mode=decision.execution_mode,
+                    policy_decision={"decision": decision.decision},
                     conversation_id=conversation_id,
                     trace_id=trace_id,
                 )
@@ -153,9 +152,9 @@ class JarvisOrchestrator:
                     workspace_id=workspace_id,
                     task_id=f"task_{ULID()}",
                     plan_task_id=None,
-                    step_type=decision_type,
+                    step_type=decision.decision,
                     status="running",
-                    input_data={"decision": decision},
+                    input_data=decision.model_dump(mode="json"),
                 )
                 db.add(step)
                 await db.commit()
@@ -493,7 +492,8 @@ class JarvisOrchestrator:
             )
 
             decision = self._extract_decision(plan_result)
-            decision_json = json.dumps(decision)
+            decision_dict = decision.model_dump(mode="json")
+            decision_json = json.dumps(decision_dict)
 
             # Create a lightweight TaskRun for tracking
             run_id = await self._create_lightweight_run(
@@ -508,20 +508,20 @@ class JarvisOrchestrator:
             result = {
                 "trace_id": trace.trace_id,
                 "run_id": run_id,
-                "decision": decision.get("decision", "acknowledge"),
-                "summary": decision.get("reasoning", plan_result),
+                "decision": decision.decision,
+                "summary": decision.reasoning or plan_result,
             }
 
             # Publish plan event
             await self._publish_event(
                 "plan_generated",
                 user_id,
-                {"decision": decision, "trace_id": trace.trace_id},
+                {"decision": decision_dict, "trace_id": trace.trace_id},
                 trace_id=trace.trace_id,
             )
 
             # Resolve agent pipeline from routes
-            pipeline = await self._resolve_pipeline(decision)
+            pipeline = await self._resolve_pipeline(decision_dict)
 
             for step in pipeline:
                 agent_name = step.get("agent", "")
@@ -530,15 +530,16 @@ class JarvisOrchestrator:
 
                 # Check step-level condition
                 step_cond = step.get("condition")
-                if step_cond and not self._check_step_condition(step_cond, decision):
+                if step_cond and not self._check_step_condition(step_cond, decision_dict):
                     continue
 
                 # Handle special actions
                 action = step.get("action")
                 if action == "execute_plan":
-                    plan_id = decision.get("plan_id")
-                    if plan_id:
-                        exec_result = await self._execute_plan_via_graph(plan_id, user_id, trace)
+                    if decision.plan_id:
+                        exec_result = await self._execute_plan_via_graph(
+                            decision.plan_id, user_id, trace
+                        )
                         result["execution"] = exec_result
                     continue
 
@@ -577,7 +578,7 @@ class JarvisOrchestrator:
                     "persona",
                     message=f"Observe this user interaction on {surface}:\n"
                     f"User said: {message}\n"
-                    f"Decision: {decision.get('decision', 'unknown')}\n"
+                    f"Decision: {decision.decision}\n"
                     f"Extract any preference signals.",
                     user_id=user_id,
                     trace=trace,
@@ -648,7 +649,8 @@ class JarvisOrchestrator:
                     plan_text = evt.get("text", "")
 
             decision = self._extract_decision(plan_text)
-            decision_json = json.dumps(decision)
+            decision_dict = decision.model_dump(mode="json")
+            decision_json = json.dumps(decision_dict)
 
             # Create a lightweight TaskRun for tracking
             run_id = await self._create_lightweight_run(
@@ -659,10 +661,14 @@ class JarvisOrchestrator:
                 conversation_id=conversation_id,
             )
 
-            yield {"event": "decision", "decision": decision, "run_id": run_id}
+            yield {
+                "event": "decision",
+                "decision": decision_dict,
+                "run_id": run_id,
+            }
 
             # Step 2: Resolve route dynamically from DB
-            pipeline = await self._resolve_pipeline(decision)
+            pipeline = await self._resolve_pipeline(decision_dict)
 
             for step in pipeline:
                 agent_name = step.get("agent", "")
@@ -671,16 +677,17 @@ class JarvisOrchestrator:
 
                 # Check step-level condition
                 step_cond = step.get("condition")
-                if step_cond and not self._check_step_condition(step_cond, decision):
+                if step_cond and not self._check_step_condition(step_cond, decision_dict):
                     continue
 
                 # Handle special actions
                 action = step.get("action")
                 if action == "execute_plan":
-                    plan_id = decision.get("plan_id")
-                    if plan_id:
-                        yield {"event": "execution_start", "plan_id": plan_id}
-                        exec_result = await self._execute_plan_via_graph(plan_id, user_id, trace)
+                    if decision.plan_id:
+                        yield {"event": "execution_start", "plan_id": decision.plan_id}
+                        exec_result = await self._execute_plan_via_graph(
+                            decision.plan_id, user_id, trace
+                        )
                         yield {
                             "event": "execution_result",
                             "run_id": exec_result.get("run_id"),
@@ -732,7 +739,7 @@ class JarvisOrchestrator:
                     "persona",
                     message=f"Observe this user interaction on {surface}:\n"
                     f"User said: {message}\n"
-                    f"Decision: {decision.get('decision', 'unknown')}\n"
+                    f"Decision: {decision.decision}\n"
                     f"Extract any preference signals.",
                     user_id=user_id,
                     trace=trace,
@@ -745,7 +752,7 @@ class JarvisOrchestrator:
             if run_id:
                 await self._complete_lightweight_run(
                     run_id,
-                    {"decision": decision.get("decision"), "summary": presenter_text},
+                    {"decision": decision.decision, "summary": presenter_text},
                     success=True,
                 )
 
@@ -986,6 +993,7 @@ class JarvisOrchestrator:
                         span_id=span.span_id if span else None,
                         latency_ms=tool_latency,
                         db_factory=self._db_factory,
+                        workspace_id=workspace_id,
                     )
 
                 # Preserve thinking blocks for multi-turn tool-use continuity
@@ -1507,6 +1515,7 @@ class JarvisOrchestrator:
                         span_id=span.span_id if span else None,
                         latency_ms=tool_latency,
                         db_factory=self._db_factory,
+                        workspace_id=workspace_id,
                     )
 
                 # Preserve thinking blocks for multi-turn tool-use continuity
@@ -1803,14 +1812,12 @@ class JarvisOrchestrator:
             logger.error("Plan execution via graph failed: %s", e, exc_info=True)
             return {"status": "error", "error": str(e)}
 
-    def _extract_decision(self, response_text: str) -> dict:
-        """Extract structured decision from planner response."""
-        # Try to parse JSON from the response
+    def _extract_decision(self, response_text: str) -> PlannerOutput:
+        """Extract and validate structured decision from planner response."""
+        raw: dict[str, Any] = {}
         try:
-            # Look for JSON block in the response
             if "{" in response_text:
                 start = response_text.index("{")
-                # Find matching closing brace
                 depth = 0
                 for i, ch in enumerate(response_text[start:], start):
                     if ch == "{":
@@ -1819,15 +1826,15 @@ class JarvisOrchestrator:
                         depth -= 1
                         if depth == 0:
                             json_str = response_text[start : i + 1]
-                            return json.loads(json_str)
+                            raw = json.loads(json_str)
+                            break
         except (json.JSONDecodeError, ValueError):
             pass
 
-        # Fallback: extract what we can
-        return {
-            "decision": "acknowledge",
-            "reasoning": response_text[:500],
-        }
+        if not raw:
+            raw = {"decision": "acknowledge", "reasoning": response_text[:500]}
+
+        return PlannerOutput.model_validate(raw)
 
     async def _resolve_pipeline(self, decision: dict) -> list[dict]:
         """Resolve a planner decision to an agent pipeline via RouteResolver."""

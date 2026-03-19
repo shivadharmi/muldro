@@ -169,7 +169,7 @@ export interface ChatSSEEvent {
   blocked?: boolean;
   latency_ms?: number;
   message?: string;
-  decision?: Record<string, unknown>;
+  decision?: PlannerOutput;
   trace_id?: string;
   input_tokens?: number;
   output_tokens?: number;
@@ -491,9 +491,20 @@ export interface MessageAgentStep {
   latency_ms: number | null;
 }
 
+export interface PlannerOutput {
+  decision: string;
+  goal: string;
+  reasoning: string;
+  priority: "low" | "medium" | "high" | "critical";
+  risk_level: "none" | "low" | "medium" | "high";
+  execution_mode: "auto_execute" | "approval_required" | "draft_only";
+  plan_id: string | null;
+  tasks: { task_type: string; input_data: Record<string, unknown> }[];
+}
+
 export interface MessageMetadata {
   trace_id: string | null;
-  decision: string | null;
+  decision: PlannerOutput | null;
   agent_steps: MessageAgentStep[];
 }
 

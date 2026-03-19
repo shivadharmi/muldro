@@ -170,6 +170,7 @@ async def audit_post_tool_hook(
     tokens_used: int = 0,
     latency_ms: int = 0,
     db_factory=None,
+    workspace_id: str = "",
 ) -> None:
     """Post-tool-use hook: log every tool call to the agent decision log."""
     if db_factory is None:
@@ -179,6 +180,7 @@ async def audit_post_tool_hook(
         async with db_factory() as db:
             log_entry = AgentDecisionLog(
                 log_id=f"adl_{ULID()}",
+                workspace_id=workspace_id,
                 trace_id=trace_id or "unknown",
                 span_id=span_id,
                 agent_name=agent_name,

@@ -172,18 +172,18 @@ async def test_planner_golden(mock_get_client, case):
     # Extract decision from mock response
     decision = orchestrator._extract_decision(case["mock_response"])
 
-    # Verify decision matches expected
-    assert decision["decision"] == case["expected_decision"], (
-        f"Expected decision '{case['expected_decision']}' but got '{decision['decision']}'"
+    # Verify decision matches expected — _extract_decision returns PlannerOutput
+    assert decision.decision == case["expected_decision"], (
+        f"Expected decision '{case['expected_decision']}' but got '{decision.decision}'"
     )
 
     # Check priority if specified
     if "expected_priority" in case:
-        assert decision.get("priority") == case["expected_priority"]
+        assert decision.priority == case["expected_priority"]
 
     # Check task types if specified
     if "expected_task_types" in case:
-        actual_types = [t.get("task_type") for t in decision.get("tasks", [])]
+        actual_types = [t.task_type for t in decision.tasks]
         for expected_type in case["expected_task_types"]:
             assert expected_type in actual_types, (
                 f"Expected task type '{expected_type}' not found in {actual_types}"
@@ -192,6 +192,6 @@ async def test_planner_golden(mock_get_client, case):
     # Check must_not_decide
     if "must_not_decide" in case:
         for forbidden in case["must_not_decide"]:
-            assert decision["decision"] != forbidden, (
+            assert decision.decision != forbidden, (
                 f"Decision should not be '{forbidden}' for case '{case['name']}'"
             )

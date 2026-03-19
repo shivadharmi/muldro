@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { streamChat, type ChatSSEEvent, type ConversationMessage } from "@/lib/api";
+import { streamChat, type ChatSSEEvent, type ConversationMessage, type PlannerOutput } from "@/lib/api";
 import { CommandInput } from "./command-input";
 import { MarkdownRenderer } from "./markdown-renderer";
 
@@ -34,7 +34,7 @@ interface ChatMessage {
   content: string;
   timestamp: string;
   traceId?: string;
-  decision?: Record<string, unknown>;
+  decision?: PlannerOutput;
   agents: AgentStep[];
   streaming?: boolean;
 }
@@ -407,7 +407,7 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
               Decision
             </span>
             <span className="text-xs px-2 py-0.5 rounded bg-blue-900/50 text-blue-300 border border-blue-800">
-              {String(msg.decision.decision || "unknown")}
+              {msg.decision.decision}
             </span>
           </div>
         )}

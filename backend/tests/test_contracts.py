@@ -45,7 +45,7 @@ class TestPlannerOutput:
         p = PlannerOutput(
             decision="create_task",
             goal="Draft an email",
-            reasoning_summary="User asked to draft",
+            reasoning="User asked to draft",
             priority="high",
             risk_level="medium",
             execution_mode="approval_required",
@@ -67,9 +67,9 @@ class TestPlannerOutput:
         with pytest.raises(ValidationError):
             PlannerOutput(decision="fly_to_moon")
 
-    def test_missing_decision_rejected(self):
-        with pytest.raises(ValidationError):
-            PlannerOutput(goal="no decision")
+    def test_missing_decision_defaults_to_acknowledge(self):
+        p = PlannerOutput(goal="no decision")
+        assert p.decision == "acknowledge"
 
     def test_defaults(self):
         p = PlannerOutput(decision="ignore")
@@ -90,7 +90,7 @@ class TestPlannerOutput:
         raw = {
             "decision": "create_task",
             "goal": "Send report",
-            "reasoning_summary": "User wants a report",
+            "reasoning": "User wants a report",
             "priority": "high",
             "risk_level": "medium",
             "execution_mode": "auto_execute",
@@ -120,6 +120,13 @@ class TestPlannerOutput:
             "ignore",
             "watcher_create",
             "goal_update",
+            "research",
+            "observe",
+            "remember",
+            "ask_user",
+            "recommend",
+            "summarize",
+            "schedule_reminder",
         ]
         for d in decisions:
             p = PlannerOutput(decision=d)
