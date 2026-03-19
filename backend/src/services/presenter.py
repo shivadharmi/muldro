@@ -145,7 +145,9 @@ class Presenter:
             return cached
 
         context = await self._gather_briefing_data(
-            user_id, briefing_date, workspace_id=workspace_id,
+            user_id,
+            briefing_date,
+            workspace_id=workspace_id,
         )
         briefing_content = await self._call_claude(context)
 
@@ -200,7 +202,10 @@ class Presenter:
         Otherwise, looks up by meeting_id (which is the calendar_event entity_id).
         """
         meeting_event = await self._find_meeting_event(
-            user_id, meeting_id, next_meeting, workspace_id=workspace_id,
+            user_id,
+            meeting_id,
+            next_meeting,
+            workspace_id=workspace_id,
         )
         if not meeting_event:
             return {
@@ -214,7 +219,9 @@ class Presenter:
             }
 
         context = await self._gather_meeting_context(
-            user_id, meeting_event, workspace_id=workspace_id,
+            user_id,
+            meeting_event,
+            workspace_id=workspace_id,
         )
         prep = await self._call_meeting_prep(context)
 
@@ -414,7 +421,9 @@ class Presenter:
 
         # Get attendee info from entities
         attendee_info = await self._get_attendee_entities(
-            user_id, attendee_emails, workspace_id=workspace_id,
+            user_id,
+            attendee_emails,
+            workspace_id=workspace_id,
         )
         if attendee_info:
             att_lines = []
@@ -431,7 +440,10 @@ class Presenter:
 
         # Find related events (same attendees, recent)
         related = await self._get_related_events(
-            user_id, attendee_emails, meeting.event_id, workspace_id=workspace_id,
+            user_id,
+            attendee_emails,
+            meeting.event_id,
+            workspace_id=workspace_id,
         )
         if related:
             rel_lines = [
@@ -442,7 +454,9 @@ class Presenter:
 
         # Find relevant memories about attendees
         memories = await self._get_attendee_memories(
-            user_id, attendee_emails, workspace_id=workspace_id,
+            user_id,
+            attendee_emails,
+            workspace_id=workspace_id,
         )
         if memories:
             mem_lines = [f"- {m.fact_text}" for m in memories]

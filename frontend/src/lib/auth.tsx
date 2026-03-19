@@ -4,7 +4,6 @@ import {
   createContext,
   useContext,
   useState,
-  useEffect,
   useCallback,
   type ReactNode,
 } from "react";
@@ -36,26 +35,26 @@ const AuthContext = createContext<AuthContextType>({
 const TOKEN_KEY = "jarvis_auth_token";
 const USER_KEY = "jarvis_auth_user";
 
-export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(null);
-  const [token, setToken] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    // Restore session from localStorage
+function getInitialAuth(): { token: string | null; user: AuthUser | null } {
+  if (typeof window === "undefined") return { token: null, user: null };
+  try {
     const storedToken = localStorage.getItem(TOKEN_KEY);
     const storedUser = localStorage.getItem(USER_KEY);
     if (storedToken && storedUser) {
-      try {
-        setToken(storedToken);
-        setUser(JSON.parse(storedUser));
-      } catch {
-        localStorage.removeItem(TOKEN_KEY);
-        localStorage.removeItem(USER_KEY);
-      }
+      return { token: storedToken, user: JSON.parse(storedUser) };
     }
-    setIsLoading(false);
-  }, []);
+  } catch {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(USER_KEY);
+  }
+  return { token: null, user: null };
+}
+
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const [{ user: initialUser, token: initialToken }] = useState(getInitialAuth);
+  const [user, setUser] = useState<AuthUser | null>(initialUser);
+  const [token, setToken] = useState<string | null>(initialToken);
+  const isLoading = false;
 
   const login = useCallback((newToken: string, newUser: AuthUser) => {
     setToken(newToken);

@@ -57,9 +57,7 @@ class TrustEngine:
         ]
         if workspace_id:
             conditions.append(TrustScore.workspace_id == workspace_id)
-        result = await self._db.execute(
-            select(TrustScore).where(*conditions)
-        )
+        result = await self._db.execute(select(TrustScore).where(*conditions))
         score = result.scalar_one_or_none()
         return score.trust_score if score else 0.0
 
@@ -73,9 +71,7 @@ class TrustEngine:
         ]
         if workspace_id:
             conditions.append(TrustScore.workspace_id == workspace_id)
-        result = await self._db.execute(
-            select(TrustScore).where(*conditions)
-        )
+        result = await self._db.execute(select(TrustScore).where(*conditions))
         score = result.scalar_one_or_none()
         if not score:
             return False
@@ -122,9 +118,7 @@ class TrustEngine:
             ]
             if workspace_id:
                 conditions.append(TrustScore.workspace_id == workspace_id)
-            result = await self._db.execute(
-                select(TrustScore).where(*conditions)
-            )
+            result = await self._db.execute(select(TrustScore).where(*conditions))
             score = result.scalar_one_or_none()
             if score:
                 score.approved_count = 0
@@ -151,9 +145,7 @@ class TrustEngine:
         ]
         if workspace_id:
             conditions.append(TrustScore.workspace_id == workspace_id)
-        result = await self._db.execute(
-            select(TrustScore).where(*conditions)
-        )
+        result = await self._db.execute(select(TrustScore).where(*conditions))
         score = result.scalar_one_or_none()
         if score:
             return score

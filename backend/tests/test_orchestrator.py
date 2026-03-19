@@ -350,7 +350,19 @@ class TestOrchestrator:
             use_bedrock=False,
             telegram_bot_token="",
         )
-        db_factory = MagicMock()
+
+        # Build a mock db session where sync methods (add) are MagicMock
+        # and async methods (flush, commit, etc.) are AsyncMock
+        mock_db = MagicMock()
+        mock_db.add = MagicMock()
+        mock_db.flush = AsyncMock()
+        mock_db.commit = AsyncMock()
+
+        # db_factory() returns an async context manager yielding mock_db
+        db_ctx = AsyncMock()
+        db_ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        db_ctx.__aexit__ = AsyncMock(return_value=False)
+        db_factory = MagicMock(return_value=db_ctx)
 
         orchestrator = JarvisOrchestrator(
             settings=settings,

@@ -176,22 +176,16 @@ class JarvisOrchestrator:
             async with self._db_factory() as db:
                 from sqlalchemy import select
 
-                res = await db.execute(
-                    select(TaskRun).where(TaskRun.run_id == run_id)
-                )
+                res = await db.execute(select(TaskRun).where(TaskRun.run_id == run_id))
                 run = res.scalar_one_or_none()
                 if not run:
                     return
 
                 run.status = "completed" if success else "failed"
                 if not success:
-                    run.error = {
-                        "message": result.get("summary", "unknown error")[:500]
-                    }
+                    run.error = {"message": result.get("summary", "unknown error")[:500]}
 
-                step_res = await db.execute(
-                    select(TaskStep).where(TaskStep.run_id == run_id)
-                )
+                step_res = await db.execute(select(TaskStep).where(TaskStep.run_id == run_id))
                 for step in step_res.scalars().all():
                     step.status = "completed" if success else "failed"
                     if success:
@@ -544,9 +538,7 @@ class JarvisOrchestrator:
                 if action == "execute_plan":
                     plan_id = decision.get("plan_id")
                     if plan_id:
-                        exec_result = await self._execute_plan_via_graph(
-                            plan_id, user_id, trace
-                        )
+                        exec_result = await self._execute_plan_via_graph(plan_id, user_id, trace)
                         result["execution"] = exec_result
                     continue
 
@@ -557,7 +549,10 @@ class JarvisOrchestrator:
                 )
 
                 agent_result = await self._call_agent(
-                    agent_name, message=agent_message, user_id=user_id, trace=trace,
+                    agent_name,
+                    message=agent_message,
+                    user_id=user_id,
+                    trace=trace,
                     workspace_id=workspace_id,
                 )
                 result[agent_name] = agent_result
@@ -685,9 +680,7 @@ class JarvisOrchestrator:
                     plan_id = decision.get("plan_id")
                     if plan_id:
                         yield {"event": "execution_start", "plan_id": plan_id}
-                        exec_result = await self._execute_plan_via_graph(
-                            plan_id, user_id, trace
-                        )
+                        exec_result = await self._execute_plan_via_graph(plan_id, user_id, trace)
                         yield {
                             "event": "execution_result",
                             "run_id": exec_result.get("run_id"),
@@ -702,7 +695,10 @@ class JarvisOrchestrator:
                 )
 
                 async for evt in self._call_agent_stream(
-                    agent_name, message=agent_message, user_id=user_id, trace=trace,
+                    agent_name,
+                    message=agent_message,
+                    user_id=user_id,
+                    trace=trace,
                     workspace_id=workspace_id,
                 ):
                     yield evt
@@ -758,9 +754,7 @@ class JarvisOrchestrator:
         except Exception as e:
             logger.error("process_message_stream failed: %s", e, exc_info=True)
             if run_id:
-                await self._complete_lightweight_run(
-                    run_id, {"summary": str(e)}, success=False
-                )
+                await self._complete_lightweight_run(run_id, {"summary": str(e)}, success=False)
             yield {"event": "error", "message": str(e)}
         finally:
             await self._trace_manager.finish_trace(
@@ -852,7 +846,8 @@ class JarvisOrchestrator:
                         # Fallback to non-streaming if stream() fails
                         logger.warning(
                             "Streaming failed for %s, falling back: %s",
-                            agent_name, stream_err,
+                            agent_name,
+                            stream_err,
                         )
                         api_kwargs["temperature"] = agent.temperature
                         api_kwargs.pop("thinking", None)
@@ -860,12 +855,10 @@ class JarvisOrchestrator:
 
                 total_input += response.usage.input_tokens
                 total_output += response.usage.output_tokens
-                total_cache_creation += getattr(
-                    response.usage, "cache_creation_input_tokens", 0
-                ) or 0
-                total_cache_read += getattr(
-                    response.usage, "cache_read_input_tokens", 0
-                ) or 0
+                total_cache_creation += (
+                    getattr(response.usage, "cache_creation_input_tokens", 0) or 0
+                )
+                total_cache_read += getattr(response.usage, "cache_read_input_tokens", 0) or 0
 
                 # Capture thinking text from final message for persistence
                 for block in response.content:
@@ -925,13 +918,15 @@ class JarvisOrchestrator:
                                 "content": json.dumps(blocked_msg),
                             }
                         )
-                        tool_call_details.append(SpanToolCall(
-                            tool_name=tool_name,
-                            input_data=tool_input if isinstance(tool_input, dict) else {},
-                            output_data=blocked_msg,
-                            status="blocked",
-                            error=pre_result.get("reason", "Blocked by policy"),
-                        ))
+                        tool_call_details.append(
+                            SpanToolCall(
+                                tool_name=tool_name,
+                                input_data=tool_input if isinstance(tool_input, dict) else {},
+                                output_data=blocked_msg,
+                                status="blocked",
+                                error=pre_result.get("reason", "Blocked by policy"),
+                            )
+                        )
                         yield {
                             "event": "tool_result",
                             "agent": agent_name,
@@ -964,13 +959,15 @@ class JarvisOrchestrator:
                         if len(result_str) > 2000:
                             persisted_output = {"_truncated": result_str[:2000]}
 
-                    tool_call_details.append(SpanToolCall(
-                        tool_name=tool_name,
-                        input_data=tool_input if isinstance(tool_input, dict) else {},
-                        output_data=persisted_output,
-                        status="success",
-                        duration_ms=tool_latency,
-                    ))
+                    tool_call_details.append(
+                        SpanToolCall(
+                            tool_name=tool_name,
+                            input_data=tool_input if isinstance(tool_input, dict) else {},
+                            output_data=persisted_output,
+                            status="success",
+                            duration_ms=tool_latency,
+                        )
+                    )
 
                     yield {
                         "event": "tool_result",
@@ -1159,9 +1156,7 @@ class JarvisOrchestrator:
         trace = self._trace_manager.start_trace("scheduled_briefing")
         try:
             # Step 1: Gather raw briefing data from intelligence server
-            raw_data = await self._execute_tool(
-                "get_briefing", {"date": "today"}, user_id=user_id
-            )
+            raw_data = await self._execute_tool("get_briefing", {"date": "today"}, user_id=user_id)
 
             # Step 2: Let Presenter format it into a user-friendly briefing
             result = await self._call_agent(
@@ -1407,12 +1402,10 @@ class JarvisOrchestrator:
 
                 total_input += response.usage.input_tokens
                 total_output += response.usage.output_tokens
-                total_cache_creation += getattr(
-                    response.usage, "cache_creation_input_tokens", 0
-                ) or 0
-                total_cache_read += getattr(
-                    response.usage, "cache_read_input_tokens", 0
-                ) or 0
+                total_cache_creation += (
+                    getattr(response.usage, "cache_creation_input_tokens", 0) or 0
+                )
+                total_cache_read += getattr(response.usage, "cache_read_input_tokens", 0) or 0
 
                 # Capture thinking content for persistence
                 for block in response.content:
@@ -1460,12 +1453,14 @@ class JarvisOrchestrator:
                                 ),
                             }
                         )
-                        tool_call_details.append(SpanToolCall(
-                            tool_name=tool_name,
-                            input_data=tool_input if isinstance(tool_input, dict) else {},
-                            status="blocked",
-                            error=pre_result.get("reason", "Blocked by policy"),
-                        ))
+                        tool_call_details.append(
+                            SpanToolCall(
+                                tool_name=tool_name,
+                                input_data=tool_input if isinstance(tool_input, dict) else {},
+                                status="blocked",
+                                error=pre_result.get("reason", "Blocked by policy"),
+                            )
+                        )
                         continue
 
                     # Execute the tool
@@ -1492,13 +1487,15 @@ class JarvisOrchestrator:
                         if len(result_str) > 2000:
                             persisted_output = {"_truncated": result_str[:2000]}
 
-                    tool_call_details.append(SpanToolCall(
-                        tool_name=tool_name,
-                        input_data=tool_input if isinstance(tool_input, dict) else {},
-                        output_data=persisted_output,
-                        status="success",
-                        duration_ms=tool_latency,
-                    ))
+                    tool_call_details.append(
+                        SpanToolCall(
+                            tool_name=tool_name,
+                            input_data=tool_input if isinstance(tool_input, dict) else {},
+                            output_data=persisted_output,
+                            status="success",
+                            duration_ms=tool_latency,
+                        )
+                    )
 
                     # Audit post-hook
                     await audit_post_tool_hook(
@@ -1639,18 +1636,14 @@ class JarvisOrchestrator:
         }
 
         # Emit tool.started event
-        await self._publish_event(
-            "tool.started", user_id, {"tool": tool_name}
-        )
+        await self._publish_event("tool.started", user_id, {"tool": tool_name})
 
         # 1. Try internal handlers first
         handler = internal_handlers.get(tool_name)
         if handler:
             try:
                 result = await handler(user_id=user_id, **tool_input)
-                await self._publish_event(
-                    "tool.completed", user_id, {"tool": tool_name}
-                )
+                await self._publish_event("tool.completed", user_id, {"tool": tool_name})
                 return result
             except TypeError as e:
                 logger.warning("Tool %s argument error: %s", tool_name, e)
@@ -1667,9 +1660,7 @@ class JarvisOrchestrator:
         if is_mcp_tool(tool_name):
             try:
                 result = await call_mcp_tool(tool_name, tool_input)
-                await self._publish_event(
-                    "tool.completed", user_id, {"tool": tool_name}
-                )
+                await self._publish_event("tool.completed", user_id, {"tool": tool_name})
                 return result
             except Exception as e:
                 await self._publish_event(
@@ -1682,9 +1673,7 @@ class JarvisOrchestrator:
         # 3. Fall back to ToolRegistry for connector-backed tools
         try:
             result = await self._execute_connector_tool(tool_name, tool_input, user_id=user_id)
-            await self._publish_event(
-                "tool.completed", user_id, {"tool": tool_name}
-            )
+            await self._publish_event("tool.completed", user_id, {"tool": tool_name})
             return result
         except Exception as e:
             logger.error("Connector tool %s failed: %s", tool_name, e, exc_info=True)

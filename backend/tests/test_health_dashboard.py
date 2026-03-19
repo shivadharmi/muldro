@@ -30,9 +30,7 @@ class TestHealthDashboard:
             "budget_mode": "normal",
         },
     )
-    async def test_dashboard_returns_all_sections(
-        self, _bud, _q, _obs, _ag, _tr, _run
-    ):
+    async def test_dashboard_returns_all_sections(self, _bud, _q, _obs, _ag, _tr, _run):
         result = await system_dashboard(user_id=TEST_USER_ID)
         assert isinstance(result, HealthDashboardResponse)
         assert result.status == "ok"
@@ -65,9 +63,7 @@ class TestHealthDashboard:
             "budget_mode": "paused",
         },
     )
-    async def test_dashboard_reflects_high_usage(
-        self, _bud, _q, _obs, _ag, _tr, _run
-    ):
+    async def test_dashboard_reflects_high_usage(self, _bud, _q, _obs, _ag, _tr, _run):
         result = await system_dashboard(user_id=TEST_USER_ID)
         assert result.budget["budget_mode"] == "paused"
         assert result.queues["plans_in_flight"] == 3

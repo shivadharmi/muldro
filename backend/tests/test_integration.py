@@ -49,9 +49,7 @@ class TestStartupRecovery:
         stale_run.plan_id = "plan_001"
         stale_run.status = "running"
 
-        empty = MagicMock(
-            scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
-        )
+        empty = MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[]))))
         run_result = MagicMock()
         run_result.scalars.return_value.all.return_value = [stale_run]
 

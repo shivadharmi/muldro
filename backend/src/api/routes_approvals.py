@@ -49,9 +49,7 @@ async def get_approval_detail(
         )
         run = run_result.scalar_one_or_none()
         if run and run.plan_id:
-            plan_result = await db.execute(
-                select(Plan.goal).where(Plan.plan_id == run.plan_id)
-            )
+            plan_result = await db.execute(select(Plan.goal).where(Plan.plan_id == run.plan_id))
             plan_goal = plan_result.scalar_one_or_none()
 
     return ApprovalDetailResponse(
@@ -122,9 +120,7 @@ async def approve_action(
     approval.decision_reason = req.reason if req else None
 
     # Update run status
-    run_result = await db.execute(
-        select(TaskRun).where(TaskRun.run_id == approval.execution_id)
-    )
+    run_result = await db.execute(select(TaskRun).where(TaskRun.run_id == approval.execution_id))
     run = run_result.scalar_one_or_none()
     if run:
         run.status = "pending"
@@ -219,9 +215,7 @@ async def reject_action(
     approval.decision_reason = req.reason if req else None
 
     # Cancel the run
-    run_result = await db.execute(
-        select(TaskRun).where(TaskRun.run_id == approval.execution_id)
-    )
+    run_result = await db.execute(select(TaskRun).where(TaskRun.run_id == approval.execution_id))
     run = run_result.scalar_one_or_none()
     if run:
         run.status = "cancelled"

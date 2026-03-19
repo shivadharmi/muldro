@@ -11,7 +11,9 @@ from src.services.working_memory import WorkingMemoryService
 @pytest.fixture
 def mock_db():
     """Mock AsyncSession."""
-    return AsyncMock()
+    db = AsyncMock()
+    db.add = MagicMock()
+    return db
 
 
 @pytest.fixture

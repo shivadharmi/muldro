@@ -179,9 +179,7 @@ async def get_task_detail(
     steps = []
     step_map: dict[str, TaskStep] = {}
     if task_run:
-        steps_result = await db.execute(
-            select(TaskStep).where(TaskStep.run_id == task_run.run_id)
-        )
+        steps_result = await db.execute(select(TaskStep).where(TaskStep.run_id == task_run.run_id))
         for step in steps_result.scalars().all():
             if step.plan_task_id:
                 step_map[step.plan_task_id] = step

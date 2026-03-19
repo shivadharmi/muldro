@@ -100,9 +100,7 @@ class ProcedureLibrary:
         ]
         if workspace_id:
             conditions.append(Procedure.workspace_id == workspace_id)
-        result = await self._db.execute(
-            select(Procedure).where(*conditions)
-        )
+        result = await self._db.execute(select(Procedure).where(*conditions))
         procedures = result.scalars().all()
 
         matched = []

@@ -188,12 +188,14 @@ class WatcherService:
                         deadline = datetime.fromisoformat(deadline_str)
                         hours_remaining = (deadline - now).total_seconds() / 3600
                         if 0 < hours_remaining < 24:
-                            insights.append({
-                                "type": "time_trigger",
-                                "title": f"Approaching deadline: {trigger.name}",
-                                "description": f"{hours_remaining:.0f} hours remaining",
-                                "trigger_id": trigger.trigger_id,
-                            })
+                            insights.append(
+                                {
+                                    "type": "time_trigger",
+                                    "title": f"Approaching deadline: {trigger.name}",
+                                    "description": f"{hours_remaining:.0f} hours remaining",
+                                    "trigger_id": trigger.trigger_id,
+                                }
+                            )
                             trigger.fire_count += 1
                             trigger.last_fired_at = now
                             trigger.cooldown_until = now + timedelta(hours=6)
@@ -211,15 +213,17 @@ class WatcherService:
                         cron = croniter(cron_expr, last_eval)
                         next_fire = cron.get_next(datetime)
                         if next_fire <= now:
-                            insights.append({
-                                "type": "time_trigger",
-                                "title": trigger.name,
-                                "description": conditions.get(
+                            insights.append(
+                                {
+                                    "type": "time_trigger",
+                                    "title": trigger.name,
+                                    "description": conditions.get(
                                         "description", "Scheduled trigger fired"
                                     ),
-                                "trigger_id": trigger.trigger_id,
-                                "action_type": trigger.action_type,
-                            })
+                                    "trigger_id": trigger.trigger_id,
+                                    "action_type": trigger.action_type,
+                                }
+                            )
                             trigger.fire_count += 1
                             trigger.last_fired_at = now
                             trigger.last_evaluated_at = now

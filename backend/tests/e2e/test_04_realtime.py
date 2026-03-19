@@ -76,9 +76,7 @@ class TestSSE:
         """SSE run progress endpoint opens successfully."""
         headers = {"Authorization": f"Bearer {auth_token}"}
         async with httpx.AsyncClient(base_url=BASE_URL, headers=headers) as client:
-            async with client.stream(
-                "GET", "/v1/realtime/runs/run_fake", timeout=3.0
-            ) as resp:
+            async with client.stream("GET", "/v1/realtime/runs/run_fake", timeout=3.0) as resp:
                 # 200 if Redis is available, 503 if not
                 assert resp.status_code in (200, 503)
 

@@ -7,7 +7,7 @@ import { Table, TableHeader, TableBody, Th, Td } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { OAuthPanel } from "@/components/settings/oauth-panel";
 import { AGENT_CONFIGS } from "@/lib/agent-config";
-import { fetchSettings, fetchPolicyMode, setPolicyMode, fetchBudget, updateBudgetLimit } from "@/lib/api";
+import { fetchPolicyMode, setPolicyMode, fetchBudget, updateBudgetLimit } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { useAuth } from "@/lib/auth";
 

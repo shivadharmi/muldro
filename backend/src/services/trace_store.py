@@ -44,9 +44,7 @@ class TraceStore:
             except ImportError:
                 logger.warning("elasticsearch package not installed, using DB only")
 
-    async def store_trace(
-        self, trace_dict: dict, user_id: str, workspace_id: str = ""
-    ) -> str:
+    async def store_trace(self, trace_dict: dict, user_id: str, workspace_id: str = "") -> str:
         """Persist a completed trace. Returns trace_id."""
         trace_id = trace_dict.get("trace_id", "")
 
@@ -215,8 +213,7 @@ class TraceStore:
         if self._db_factory:
             try:
                 return await self._search_db(
-                    user_id, trigger, agent_name,
-                    time_range_hours, limit, workspace_id
+                    user_id, trigger, agent_name, time_range_hours, limit, workspace_id
                 )
             except Exception:
                 logger.debug("DB trace search failed", exc_info=True)
@@ -328,7 +325,8 @@ class TraceStore:
         return results
 
     async def get_agent_performance(
-        self, time_range_hours: int = 24,
+        self,
+        time_range_hours: int = 24,
         user_id: str | None = None,
         workspace_id: str | None = None,
     ) -> dict[str, dict]:
@@ -342,7 +340,8 @@ class TraceStore:
         return await self._agent_performance_fallback(time_range_hours)
 
     async def _agent_performance_db(
-        self, time_range_hours: int,
+        self,
+        time_range_hours: int,
         user_id: str | None = None,
         workspace_id: str | None = None,
     ) -> dict[str, dict]:
@@ -363,9 +362,7 @@ class TraceStore:
                 func.sum(ModelCall.cache_creation_input_tokens).label(
                     "total_cache_creation_tokens"
                 ),
-                func.sum(ModelCall.cache_read_input_tokens).label(
-                    "total_cache_read_tokens"
-                ),
+                func.sum(ModelCall.cache_read_input_tokens).label("total_cache_read_tokens"),
                 func.sum(ModelCall.thinking_tokens).label("total_thinking_tokens"),
                 func.sum(ModelCall.cost_usd).label("total_cost_usd"),
                 func.count(ModelCall.error).label("error_count"),
@@ -421,7 +418,8 @@ class TraceStore:
         return agents
 
     async def get_aggregate_metrics(
-        self, user_id: str | None = None,
+        self,
+        user_id: str | None = None,
         time_range_hours: int = 24,
         workspace_id: str | None = None,
     ) -> dict:
@@ -435,7 +433,8 @@ class TraceStore:
         return self._aggregate_metrics_fallback(time_range_hours)
 
     async def _aggregate_metrics_db(
-        self, user_id: str | None,
+        self,
+        user_id: str | None,
         time_range_hours: int,
         workspace_id: str | None = None,
     ) -> dict:
@@ -454,9 +453,7 @@ class TraceStore:
                 func.avg(Trace.duration_ms).label("avg_duration_ms"),
                 func.sum(Trace.total_input_tokens).label("total_input_tokens"),
                 func.sum(Trace.total_output_tokens).label("total_output_tokens"),
-                func.sum(Trace.total_cache_creation_tokens).label(
-                    "total_cache_creation_tokens"
-                ),
+                func.sum(Trace.total_cache_creation_tokens).label("total_cache_creation_tokens"),
                 func.sum(Trace.total_cache_read_tokens).label("total_cache_read_tokens"),
                 func.sum(Trace.total_thinking_tokens).label("total_thinking_tokens"),
                 func.sum(Trace.total_cost_usd).label("total_cost_usd"),

@@ -96,11 +96,11 @@ class TestTraceStoreInMemory:
         now = datetime.now(timezone.utc).isoformat()
         await store.store_trace(
             {"trace_id": "t1", "trigger": "user_message", "started_at": now, "spans": []},
-            user_id=TEST_USER_ID
+            user_id=TEST_USER_ID,
         )
         await store.store_trace(
             {"trace_id": "t2", "trigger": "scheduled", "started_at": now, "spans": []},
-            user_id=TEST_USER_ID
+            user_id=TEST_USER_ID,
         )
 
         results = await store.search_traces(trigger="user_message")
@@ -134,7 +134,7 @@ class TestTraceStoreInMemory:
                     },
                 ],
             },
-            user_id=TEST_USER_ID
+            user_id=TEST_USER_ID,
         )
 
         perf = await store.get_agent_performance()
@@ -158,7 +158,7 @@ class TestTraceStoreInMemory:
                 "duration_ms": 500,
                 "spans": [],
             },
-            user_id=TEST_USER_ID
+            user_id=TEST_USER_ID,
         )
         await store.store_trace(
             {
@@ -167,7 +167,7 @@ class TestTraceStoreInMemory:
                 "started_at": now,
                 "spans": [],
             },
-            user_id=TEST_USER_ID
+            user_id=TEST_USER_ID,
         )
 
         metrics = await store.get_aggregate_metrics()

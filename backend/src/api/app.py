@@ -98,7 +98,9 @@ def create_app() -> FastAPI:
                 sched_count = 0
                 for uid in user_ids:
                     sched_count += await seed_default_schedules(
-                        db, user_id=uid, workspace_id=user_workspace.get(uid, ""),
+                        db,
+                        user_id=uid,
+                        workspace_id=user_workspace.get(uid, ""),
                     )
 
                 if tool_count or agent_count or route_count or sched_count:

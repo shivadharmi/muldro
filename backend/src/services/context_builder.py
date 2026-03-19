@@ -108,7 +108,9 @@ class ContextBuilder:
         if self._world_model and query:
             try:
                 entities = await self._world_model.find_entity(
-                    user_id, query, workspace_id=workspace_id,
+                    user_id,
+                    query,
+                    workspace_id=workspace_id,
                 )
                 # Cross-source ranking: score entities by composite signal
                 entities = _rank_entities(entities)
@@ -177,7 +179,8 @@ class ContextBuilder:
         if self._db:
             try:
                 pack.related_runs = await self._fetch_related_runs(
-                    user_id, workspace_id=workspace_id,
+                    user_id,
+                    workspace_id=workspace_id,
                 )
             except Exception:
                 logger.debug("Related runs fetch failed", exc_info=True)

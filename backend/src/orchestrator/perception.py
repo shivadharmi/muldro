@@ -85,9 +85,7 @@ class PerceptionCoordinator:
 
         return results
 
-    async def _publish_event(
-        self, event_type: str, user_id: str, payload: dict
-    ) -> None:
+    async def _publish_event(self, event_type: str, user_id: str, payload: dict) -> None:
         """Publish a domain event via the orchestrator's event bus (best-effort)."""
         try:
             await self._orchestrator._publish_event(event_type, user_id, payload)
@@ -104,12 +102,8 @@ class PerceptionCoordinator:
             async with self._orchestrator._db_factory() as db:
                 conditions = [ObservationCursor.user_id == self._user_id]
                 if self._workspace_id:
-                    conditions.append(
-                        ObservationCursor.workspace_id == self._workspace_id
-                    )
-                result = await db.execute(
-                    select(ObservationCursor).where(*conditions)
-                )
+                    conditions.append(ObservationCursor.workspace_id == self._workspace_id)
+                result = await db.execute(select(ObservationCursor).where(*conditions))
                 cursors = result.scalars().all()
                 for cursor in cursors:
                     self._last_run[cursor.source] = cursor.last_observation_at

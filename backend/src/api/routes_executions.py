@@ -71,9 +71,7 @@ async def get_execution(
 ):
     """Get a single execution by ID."""
     result = await db.execute(
-        select(TaskRun).where(
-            TaskRun.run_id == execution_id, TaskRun.user_id == user_id
-        )
+        select(TaskRun).where(TaskRun.run_id == execution_id, TaskRun.user_id == user_id)
     )
     run = result.scalar_one_or_none()
     if not run:

@@ -13,11 +13,7 @@ import { fetchConversationMessages, type ConversationMessage } from "@/lib/api";
 export default function ChatPage() {
   const { user } = useAuth();
 
-  if (!user) {
-    return null;
-  }
-
-  const userId = user.user_id;
+  const userId = user?.user_id ?? "";
 
   const { surfaces, upsertSurface } = useSurfaceState();
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
@@ -27,6 +23,7 @@ export default function ChatPage() {
   const { connected, sendAction } = useJarvisWs({
     userId,
     onSurface: upsertSurface,
+    enabled: !!user,
   });
 
   const handleAction = useCallback(
@@ -59,6 +56,10 @@ export default function ChatPage() {
   const handleMessageSent = useCallback(() => {
     setSidebarRefreshKey((k) => k + 1);
   }, []);
+
+  if (!user) {
+    return null;
+  }
 
   return (
     <div className="flex h-screen">

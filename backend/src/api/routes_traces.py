@@ -132,7 +132,9 @@ async def agent_performance(
     """Get aggregated per-agent performance metrics."""
     store = _get_trace_store()
     agents_raw = await store.get_agent_performance(
-        time_range_hours=time_range_hours, user_id=user_id, workspace_id=workspace_id,
+        time_range_hours=time_range_hours,
+        user_id=user_id,
+        workspace_id=workspace_id,
     )
     agents = {name: AgentPerformanceEntry(**data) for name, data in agents_raw.items()}
     return AgentPerformanceResponse(agents=agents, time_range_hours=time_range_hours)
@@ -147,7 +149,9 @@ async def aggregate_metrics(
     """Get aggregate observability metrics from traces."""
     store = _get_trace_store()
     metrics = await store.get_aggregate_metrics(
-        time_range_hours=time_range_hours, user_id=user_id, workspace_id=workspace_id,
+        time_range_hours=time_range_hours,
+        user_id=user_id,
+        workspace_id=workspace_id,
     )
     return AggregateMetricsResponse(**metrics)
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, type ReactNode } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { QueryProvider } from "@/lib/query-provider";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { ToastProvider } from "@/components/ui/toast";
@@ -12,21 +12,32 @@ const PUBLIC_ROUTES = ["/login", "/auth/callback"];
 function AuthGate({ children }: { children: ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
   const pathname = usePathname();
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const router = useRouter();
+  const [sidebarOpenFor, setSidebarOpenFor] = useState<string | null>(null);
 
-  // Close sidebar on navigation (mobile)
+  const isPublic = PUBLIC_ROUTES.some((r) => pathname.startsWith(r));
+  const hasAccess = isLoading || isAuthenticated || !process.env.NEXT_PUBLIC_REQUIRE_AUTH;
+
+  // Sidebar auto-closes on navigation: only open when pathname matches
+  const sidebarOpen = sidebarOpenFor === pathname;
+  const setSidebarOpen = (open: boolean) =>
+    setSidebarOpenFor(open ? pathname : null);
+
+  // Redirect to login when not authenticated
   useEffect(() => {
-    setSidebarOpen(false);
-  }, [pathname]);
+    if (!isPublic && !hasAccess) {
+      router.replace("/login");
+    }
+  }, [isPublic, hasAccess, router]);
 
   // Public routes don't need auth
-  if (PUBLIC_ROUTES.some((r) => pathname.startsWith(r))) {
+  if (isPublic) {
     return <>{children}</>;
   }
 
   // Allow access if loading (prevents flash) or authenticated
   // In dev mode without auth configured, always allow
-  if (isLoading || isAuthenticated || !process.env.NEXT_PUBLIC_REQUIRE_AUTH) {
+  if (hasAccess) {
     return (
       <div className="flex h-screen relative">
         {/* Mobile hamburger button */}
@@ -66,10 +77,7 @@ function AuthGate({ children }: { children: ReactNode }) {
     );
   }
 
-  // Redirect to login
-  if (typeof window !== "undefined") {
-    window.location.href = "/login";
-  }
+  // Waiting for redirect
   return null;
 }
 

@@ -30,7 +30,10 @@ class EventCorrelator:
 
         # Same entity (e.g., same email thread, same PR)
         entity_events = await self._find_by_entity(
-            user_id, event.entity_id, event_id, workspace_id=workspace_id,
+            user_id,
+            event.entity_id,
+            event_id,
+            workspace_id=workspace_id,
         )
         if entity_events:
             correlations.append(
@@ -44,7 +47,10 @@ class EventCorrelator:
         # Same actor within time window
         if event.actor_entities:
             actor_events = await self._find_by_actor(
-                user_id, event.actor_entities, event_id, hours=48,
+                user_id,
+                event.actor_entities,
+                event_id,
+                hours=48,
                 workspace_id=workspace_id,
             )
             if actor_events:
@@ -57,7 +63,11 @@ class EventCorrelator:
 
         # Same source + type within time window (burst detection)
         burst = await self._detect_burst(
-            user_id, event.source, event.event_type, hours=1, workspace_id=workspace_id,
+            user_id,
+            event.source,
+            event.event_type,
+            hours=1,
+            workspace_id=workspace_id,
         )
         if burst and len(burst) > 3:
             correlations.append(
@@ -97,9 +107,7 @@ class EventCorrelator:
             "sources": list({e.source for e in events}),
         }
 
-    async def get_event_context(
-        self, event_id: str, user_id: str, workspace_id: str = ""
-    ) -> dict:
+    async def get_event_context(self, event_id: str, user_id: str, workspace_id: str = "") -> dict:
         """Get full context for an event: related events, entities, thread."""
         correlations = await self.correlate(event_id, user_id, workspace_id=workspace_id)
 
@@ -111,7 +119,9 @@ class EventCorrelator:
         thread = None
         if event:
             thread = await self.detect_thread(
-                user_id, event.entity_id, workspace_id=workspace_id,
+                user_id,
+                event.entity_id,
+                workspace_id=workspace_id,
             )
 
         return {
@@ -207,7 +217,11 @@ class EventCorrelator:
         ]
 
     async def _find_by_actor(
-        self, user_id: str, actor_entities: list, exclude_event_id: str, hours: int,
+        self,
+        user_id: str,
+        actor_entities: list,
+        exclude_event_id: str,
+        hours: int,
         workspace_id: str = "",
     ) -> list[dict]:
         cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
@@ -241,7 +255,11 @@ class EventCorrelator:
         return matched[:5]
 
     async def _detect_burst(
-        self, user_id: str, source: str, event_type: str, hours: int,
+        self,
+        user_id: str,
+        source: str,
+        event_type: str,
+        hours: int,
         workspace_id: str = "",
     ) -> list[str]:
         cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)

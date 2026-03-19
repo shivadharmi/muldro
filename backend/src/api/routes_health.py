@@ -227,7 +227,8 @@ async def _get_trace_metrics(workspace_id: str) -> dict:
 
         store = TraceStore(db_factory=get_session_factory())
         return await store.get_aggregate_metrics(
-            time_range_hours=24, workspace_id=workspace_id,
+            time_range_hours=24,
+            workspace_id=workspace_id,
         )
     except Exception as e:
         logger.error("Failed to get trace metrics: %s", e)

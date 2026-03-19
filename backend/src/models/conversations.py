@@ -52,9 +52,7 @@ class Message(Base, TimestampMixin):
         nullable=False,
         index=True,
     )
-    role: Mapped[str] = mapped_column(
-        String(16), nullable=False
-    )  # user, assistant, system
+    role: Mapped[str] = mapped_column(String(16), nullable=False)  # user, assistant, system
     content: Mapped[str] = mapped_column(Text, nullable=False)
     # Typed via contracts.MessageMetadata — validated at write time, stored as JSONB
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB)
@@ -64,6 +62,4 @@ class Message(Base, TimestampMixin):
     output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cost_usd: Mapped[float | None] = mapped_column(Numeric(10, 6), nullable=True)
 
-    __table_args__ = (
-        Index("ix_messages_conversation_created", "conversation_id", "created_at"),
-    )
+    __table_args__ = (Index("ix_messages_conversation_created", "conversation_id", "created_at"),)

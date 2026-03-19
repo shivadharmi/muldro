@@ -22,9 +22,8 @@ function WorkflowCard({
   const [paramsJson, setParamsJson] = useState("{}");
 
   function handleStart() {
-    let params: Record<string, unknown> | undefined;
     try {
-      params = JSON.parse(paramsJson);
+      JSON.parse(paramsJson);
     } catch {
       // invalid JSON — ignore params
     }

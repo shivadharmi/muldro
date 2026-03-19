@@ -176,9 +176,7 @@ async def get_entities(
         try:
             world_model = _services["world_model"]
             if query:
-                entities = await world_model.find_entity(
-                    user_id, query, workspace_id=workspace_id
-                )
+                entities = await world_model.find_entity(user_id, query, workspace_id=workspace_id)
                 return {
                     "entities": [entities] if entities else [],
                     "count": 1 if entities else 0,
@@ -337,9 +335,7 @@ async def evaluate_policy(
     async with _get_db():
         try:
             governor = _services["governor"]
-            result = await governor.evaluate_plan(
-                plan_id, user_id, workspace_id=workspace_id
-            )
+            result = await governor.evaluate_plan(plan_id, user_id, workspace_id=workspace_id)
             return result.model_dump()
         except Exception as e:
             logger.error("evaluate_policy failed: %s", e, exc_info=True)
@@ -713,9 +709,7 @@ async def get_goals(
                     "goals": [],
                     "error": "Goal tracker not available",
                 }
-            goals = await goal_tracker.list_goals(
-                user_id, status=status, workspace_id=workspace_id
-            )
+            goals = await goal_tracker.list_goals(user_id, status=status, workspace_id=workspace_id)
             return {
                 "goals": [
                     {

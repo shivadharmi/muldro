@@ -93,6 +93,14 @@ All backend settings via env vars with `JARVIS_` prefix (pydantic-settings in `s
 - **Errors**: `HTTPException` for HTTP errors. Always use Pydantic response models, never bare dicts.
 - **Tests**: pytest + pytest-asyncio (asyncio_mode = "auto"). Test files mirror `src/` structure. Use `make_mock_settings()` from `tests/conftest.py`. Mock Anthropic client via `@patch("src.orchestrator.jarvis.get_anthropic_client")`.
 
+### Frontend (React/Next.js)
+
+- **Hooks order**: NEVER place hooks after conditional returns (`if (!x) return`). All `useState`, `useEffect`, `useCallback`, etc. must be called unconditionally at the top of the component. Move early returns below all hook calls.
+- **No side effects during render**: Never assign `window.location.href` or mutate refs (`ref.current = ...`) directly in the component body. Use `useEffect` for side effects like navigation and ref updates.
+- **No synchronous setState in effects**: Avoid calling `setState` synchronously in `useEffect` bodies. Instead, derive state from props/params (compute during render) or use lazy `useState` initializers for values from `localStorage`/URL params.
+- **Lazy state initialization**: For state derived from `localStorage` or other sync browser APIs, use `useState(() => getValueFromStorage())` instead of `useState(null)` + `useEffect(() => setState(...))`.
+- **Router navigation**: Use Next.js `useRouter().replace()` inside `useEffect` for redirects, never `window.location.href`.
+
 ### Database
 
 - Always use Alembic for migrations. String IDs with type prefix + ULID. JSONB for flexible data; proper typed columns for indexed fields.
@@ -139,6 +147,11 @@ All 49 data tables are scoped by `workspace_id` (NOT NULL FK to `workspaces`). O
 - API routes: resolve workspace via `get_current_workspace_id()` dependency (reads from session, zero queries)
 - Background services: resolve via `resolve_workspace_id(db, user_id)` helper (queries WorkspaceMember)
 - No default users — every function requires explicit `user_id` from auth context
+
+## Git
+
+- Do NOT add `Co-Authored-By` lines to commit messages
+- Follow conventional commits: `<type>: <description>`
 
 ## Common Mistakes
 

@@ -51,10 +51,12 @@ class TriggerEngine:
     async def get_triggers(self, user_id: str, workspace_id: str = "") -> list[Trigger]:
         """Get all triggers for a user."""
         result = await self._db.execute(
-            select(Trigger).where(
+            select(Trigger)
+            .where(
                 Trigger.user_id == user_id,
                 Trigger.workspace_id == workspace_id,
-            ).order_by(Trigger.created_at.desc())
+            )
+            .order_by(Trigger.created_at.desc())
         )
         return list(result.scalars().all())
 

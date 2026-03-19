@@ -80,7 +80,8 @@ async def get_run(
 
     result = await db.execute(
         select(TaskRun).where(
-            TaskRun.run_id == run_id, TaskRun.user_id == user_id,
+            TaskRun.run_id == run_id,
+            TaskRun.user_id == user_id,
             TaskRun.workspace_id == workspace_id,
         )
     )
@@ -135,7 +136,8 @@ async def get_run_steps(
     # Verify run exists and belongs to user/workspace
     exists = await db.execute(
         select(TaskRun.run_id).where(
-            TaskRun.run_id == run_id, TaskRun.user_id == user_id,
+            TaskRun.run_id == run_id,
+            TaskRun.user_id == user_id,
             TaskRun.workspace_id == workspace_id,
         )
     )
@@ -177,7 +179,8 @@ async def get_run_trace(
 
     result = await db.execute(
         select(TaskRun.trace_id).where(
-            TaskRun.run_id == run_id, TaskRun.user_id == user_id,
+            TaskRun.run_id == run_id,
+            TaskRun.user_id == user_id,
             TaskRun.workspace_id == workspace_id,
         )
     )
@@ -223,7 +226,8 @@ async def get_run_artifacts(
     # Verify run belongs to user/workspace
     exists = await db.execute(
         select(TaskRun.run_id).where(
-            TaskRun.run_id == run_id, TaskRun.user_id == user_id,
+            TaskRun.run_id == run_id,
+            TaskRun.user_id == user_id,
             TaskRun.workspace_id == workspace_id,
         )
     )
@@ -261,7 +265,8 @@ async def resume_run(
 
     result = await db.execute(
         select(TaskRun).where(
-            TaskRun.run_id == run_id, TaskRun.workspace_id == workspace_id,
+            TaskRun.run_id == run_id,
+            TaskRun.workspace_id == workspace_id,
         )
     )
     run = result.scalar_one_or_none()

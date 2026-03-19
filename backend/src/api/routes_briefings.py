@@ -48,9 +48,7 @@ async def get_goal_briefing(
         raise HTTPException(status_code=404, detail="Goal not found")
 
     # Find tasks linked to this goal → their task_ids → runs referencing them
-    tasks_result = await db.execute(
-        select(Task.task_id).where(Task.goal_id == goal_id).limit(50)
-    )
+    tasks_result = await db.execute(select(Task.task_id).where(Task.goal_id == goal_id).limit(50))
     task_ids = list(tasks_result.scalars().all())
 
     # Recent runs for tasks under this goal

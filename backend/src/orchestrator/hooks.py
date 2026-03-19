@@ -53,9 +53,7 @@ _FALLBACK_BLOCKED_TOOLS = frozenset(
 )
 
 
-async def _classify_via_registry(
-    tool_name: str, db_factory
-) -> tuple[bool, bool, str]:
+async def _classify_via_registry(tool_name: str, db_factory) -> tuple[bool, bool, str]:
     """Classify a tool via ToolRegistry.
 
     Returns (is_blocked, is_write, risk_level).
@@ -98,9 +96,7 @@ async def governor_pre_tool_hook(
     # Primary: use ToolRegistry (DB-backed)
     if db_factory:
         try:
-            is_blocked, is_write, risk_level = await _classify_via_registry(
-                tool_name, db_factory
-            )
+            is_blocked, is_write, risk_level = await _classify_via_registry(tool_name, db_factory)
         except Exception:
             # Fallback to hardcoded sets
             is_blocked = tool_name in _FALLBACK_BLOCKED_TOOLS

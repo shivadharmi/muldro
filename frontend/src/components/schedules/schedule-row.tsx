@@ -1,7 +1,7 @@
 "use client";
 
 import type { Schedule } from "@/lib/types";
-import { Badge, statusVariant, priorityVariant } from "@/components/ui/badge";
+import { Badge, priorityVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Td } from "@/components/ui/table";
 import { TimeAgo } from "@/components/ui/time-ago";
