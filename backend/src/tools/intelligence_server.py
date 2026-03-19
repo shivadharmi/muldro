@@ -433,9 +433,24 @@ async def get_briefing(user_id: str, date: str = "today", workspace_id: str = ""
     """
     async with _get_db():
         try:
+            from datetime import date as date_type
+
+            briefing_date = date_type.today() if date == "today" else date_type.fromisoformat(date)
             presenter = _services["presenter"]
-            result = await presenter.generate_briefing(user_id, workspace_id=workspace_id)
-            return result
+            briefing = await presenter.generate_briefing(
+                user_id, briefing_date, workspace_id=workspace_id
+            )
+            return {
+                "status": "ok",
+                "briefing_id": briefing.briefing_id,
+                "briefing_date": str(briefing.briefing_date),
+                "headline": briefing.headline,
+                "top_priorities": briefing.top_priorities,
+                "changes_since_last": briefing.changes_since_last,
+                "pending_approvals": briefing.pending_approvals,
+                "recommended_actions": briefing.recommended_actions,
+                "full_text": briefing.full_text,
+            }
         except Exception as e:
             logger.error("get_briefing failed: %s", e, exc_info=True)
             return {"status": "error", "error": str(e)}
