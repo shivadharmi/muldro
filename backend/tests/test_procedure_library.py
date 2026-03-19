@@ -10,9 +10,10 @@ from tests.conftest import TEST_USER_ID
 
 @pytest.fixture
 def mock_db():
-    db = AsyncMock()
-    db.add = MagicMock()
+    db = MagicMock()
+    db.execute = AsyncMock()
     db.flush = AsyncMock()
+    db.commit = AsyncMock()
     return db
 
 
