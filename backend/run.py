@@ -26,7 +26,7 @@ def main():
         import threading
 
         from src.services.scheduler import SchedulerLoop
-        from src.services.worker import CallbackWorker, StreamConsumerManager
+        from src.services.worker import StreamConsumerManager
 
         logger = logging.getLogger("jarvis.worker_thread")
 
@@ -53,18 +53,34 @@ def main():
             except Exception:
                 logger.warning("Orchestrator not available, scheduled actions will fail")
 
-            callback_worker = CallbackWorker(settings)
+            # Query active user IDs for worker + scheduler
+            user_ids = []
+            try:
+                from sqlalchemy import select as sa_select
+
+                from src.models.users import User
+
+                db_factory = get_session_factory()
+
+                async def _get_user_ids():
+                    async with db_factory() as db:
+                        result = await db.execute(sa_select(User.user_id))
+                        return [row[0] for row in result.all()]
+
+                user_ids = loop.run_until_complete(_get_user_ids())
+                logger.info("Worker serving %d user(s): %s", len(user_ids), user_ids)
+            except Exception:
+                logger.warning("Could not load user IDs — worker will have no users")
+
             stream_consumer = StreamConsumerManager(settings)
-            scheduler = SchedulerLoop(settings, orchestrator=orchestrator)
+            scheduler = SchedulerLoop(settings, orchestrator=orchestrator, user_ids=user_ids)
             logger.info(
-                "Worker thread starting "
-                "(CallbackWorker + StreamConsumerManager + SchedulerLoop)"
+                "Worker thread starting (StreamConsumerManager + SchedulerLoop)"
             )
             try:
                 loop.run_until_complete(
                     asyncio.gather(
-                        callback_worker.run(),
-                        stream_consumer.run(),
+                        stream_consumer.run(user_ids=user_ids),
                         scheduler.run(),
                         return_exceptions=True,
                     )

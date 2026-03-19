@@ -69,6 +69,11 @@ class Settings(BaseSettings):
     magic_link_ttl_minutes: int = 15
     session_ttl_hours: int = 720  # 30 days
 
+    # SES Email
+    ses_from_address: str = ""  # e.g. "jarvis@yourdomain.com"
+    ses_region: str = "ap-south-1"
+    ses_enabled: bool = False  # Must be explicitly enabled for production
+
     # Frontend
     frontend_url: str = "http://localhost:3000"
 
@@ -99,6 +104,41 @@ class Settings(BaseSettings):
     neo4j_url: str = ""
     neo4j_user: str = "neo4j"
     neo4j_password: str = ""
+
+    @property
+    def resolved_model(self) -> str:
+        """Return the model ID appropriate for the configured backend (direct API or Bedrock)."""
+        if self.use_bedrock:
+            return _to_bedrock_model_id(self.anthropic_model)
+        return self.anthropic_model
+
+
+# Mapping from direct API model IDs to Bedrock inference profile IDs
+# Uses cross-region profiles (apac/global) that work in ap-south-1
+_BEDROCK_MODEL_MAP = {
+    # Claude 4
+    "claude-opus-4-20250514": "global.anthropic.claude-opus-4-5-20251101-v1:0",
+    "claude-sonnet-4-20250514": "apac.anthropic.claude-sonnet-4-20250514-v1:0",
+    "claude-haiku-4-20250514": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+    # Claude 4.5
+    "claude-sonnet-4-5-20250929": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "claude-haiku-4-5-20251001": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "claude-opus-4-5-20251101": "global.anthropic.claude-opus-4-5-20251101-v1:0",
+    # Claude 4.6
+    "claude-sonnet-4-6": "global.anthropic.claude-sonnet-4-6",
+    "claude-opus-4-6": "global.anthropic.claude-opus-4-6-v1",
+}
+
+
+def _to_bedrock_model_id(model: str) -> str:
+    """Convert a direct API model ID to its Bedrock equivalent."""
+    if model in _BEDROCK_MODEL_MAP:
+        return _BEDROCK_MODEL_MAP[model]
+    # Already a Bedrock model ID
+    if model.startswith("anthropic."):
+        return model
+    # Fallback: wrap with Bedrock convention
+    return f"anthropic.{model}-v1:0"
 
 
 @lru_cache

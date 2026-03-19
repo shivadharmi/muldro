@@ -55,3 +55,6 @@ select = ["E", "F", "I", "N", "W"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "e2e: End-to-end tests requiring a live backend (deselect with -m 'not e2e')",
+]
