@@ -1,31 +1,40 @@
 ---
-description: Create a new durable workflow (daily brief, meeting prep, etc.)
+description: Create a new durable workflow (daily brief, meeting prep, inbox triage, etc.)
 user-invocable: true
 ---
 
 # Add a new Jarvis workflow
 
-The user wants to add a new durable workflow (e.g., daily briefing, meeting prep, email follow-up).
+Workflows are multi-step compositions in `backend/src/workflows/`. They use the `WorkflowRegistry` pattern from `backend/src/workflows/workflow_registry.py`.
 
-1. **Read CLAUDE.md** and **docs/ARCHITECTURE.md** for the agent role boundaries
-2. **Ask the user** what triggers the workflow and what it produces
+## Steps
+
+1. **Ask the user**: What triggers this workflow? What does it produce? Does any step need approval?
+2. **Read existing workflows** for patterns:
+   - `backend/src/workflows/daily_briefing.py` — scheduler-triggered, produces briefing
+   - `backend/src/workflows/inbox_triage.py` — email classification + draft responses (approval-gated)
+   - `backend/src/workflows/research_agent.py` — search + cross-reference + report
 3. **Design the workflow steps**:
-   - What events/data does it read?
-   - What entities does it update?
-   - What does the planner decide?
-   - Does it need approval?
-   - What does the presenter output?
+   - What events/data does it read? (Observer scope)
+   - What entities does it update? (Librarian scope)
+   - What does the Planner decide? (structured task graph, never free-form)
+   - Does any step require approval? (Governor gate)
+   - What does the Presenter output?
 4. **Create the workflow** at `backend/src/workflows/{name}.py`:
-   - Top-level async function as entry point
-   - Clear step-by-step comments
-   - Respect agent boundaries: only Planner decides intent, only Operator calls tools
-   - Use correlation IDs throughout
-5. **Add a trigger mechanism**:
-   - If cron-triggered: add a schedule entry via the scheduler API
-   - If event-triggered: wire from EventProcessor
-   - If user-triggered: add API endpoint + MCP tool
-6. **Add presenter output**:
-   - Define the output schema in `backend/src/api/schemas.py`
-   - The Presenter turns internal state into user-facing content
-7. **Write tests** for the workflow logic
-8. **Run lint and tests**: `ruff check src/ && pytest tests/ -v`
+   - Define step handler functions (async, accept context dict, return result dict)
+   - Create `WorkflowStep` instances with `requires_approval` flag for external writes
+   - Register a `Workflow` with the `WorkflowRegistry`
+   - Use correlation IDs throughout for traceability
+5. **Add a trigger**:
+   - **Cron-triggered**: Add action to `backend/src/services/scheduler.py` schedule entries
+   - **Event-triggered**: Wire from EventProcessor or TriggerEngine
+   - **User-triggered**: Add API endpoint in `backend/src/api/routes_workflows.py`
+6. **Add presenter output**: Define output schema, use Presenter to format user-facing content
+7. **Write tests** for each step handler
+8. **Run**: `cd backend && ruff check src/ tests/ && pytest tests/ -v`
+
+## Agent boundary rules for workflows
+- Only Planner decides intent (structured JSON task graphs)
+- Only Operator executes external actions (Gmail send, Calendar create, etc.)
+- Only Presenter generates user-facing output
+- Governor sits before every external write

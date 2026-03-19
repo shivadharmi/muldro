@@ -1,0 +1,223 @@
+# Startup, Scheduling & Recovery
+
+## Startup Sequence
+
+```mermaid
+sequenceDiagram
+    participant R as run.py
+    participant W as Worker Thread
+    participant B as Bot Thread
+    participant UV as Uvicorn
+    participant APP as FastAPI Lifespan
+    participant DB as Postgres
+    participant RD as Redis
+    participant MCP as MCP Bridge
+    participant REC as Recovery
+
+    R->>R: Parse args (--worker, --bot)
+    R->>DB: Query user IDs from DB
+
+    opt --worker flag
+        R->>W: Spawn daemon thread (user_ids)
+        W->>W: StreamConsumerManager
+        W->>W: SchedulerLoop (per-user PerceptionCoordinators)
+        Note over W: All run via asyncio.gather()
+    end
+
+    opt --bot flag
+        R->>B: Spawn daemon thread
+        B->>B: TelegramInterface
+        B->>B: SurfaceRegistry
+        B->>B: Notifier
+    end
+
+    R->>UV: Start uvicorn (host:port)
+    UV->>APP: FastAPI lifespan startup
+
+    APP->>RD: Connect Redis (fallback to in-memory)
+    APP->>APP: Initialize SurfaceRegistry
+
+    Note over APP,DB: Seed Configuration
+    APP->>DB: ToolRegistry.seed_defaults() (tool definitions)
+    APP->>DB: AgentRegistry.seed_defaults() (8 agents)
+    APP->>DB: RouteResolver.seed_defaults() (10 routes)
+    APP->>DB: ScheduleSeeder.seed_default_schedules() (7 schedules)
+
+    Note over APP,MCP: Connect External Tools
+    APP->>MCP: initialize_mcp_bridge()
+    MCP->>MCP: Connect to Google/GitHub/Slack/Playwright/FS
+    MCP->>MCP: list_tools() on each server
+    MCP-->>APP: Tools discovered
+
+    Note over APP,REC: Recover In-Flight State
+    APP->>REC: run_startup_recovery()
+    REC->>DB: Mark orphaned plans as stale
+    REC->>DB: Mark stale TaskRuns as failed (running > 15min)
+    REC->>DB: Mark expired approvals as expired
+    REC-->>APP: {orphaned_plans, stale_task_runs, expired_approvals}
+
+    APP-->>UV: Ready to serve
+```
+
+## Entry Point (run.py)
+
+```
+python run.py                # API only
+python run.py --worker       # API + background workers
+python run.py --bot          # API + Telegram bot
+python run.py --worker --bot # Full system
+```
+
+| Flag | Components Started |
+|------|-------------------|
+| (none) | FastAPI/Uvicorn only |
+| `--worker` | + StreamConsumerManager + SchedulerLoop (requires user_ids from DB) |
+| `--bot` | + TelegramInterface + Notifier + SurfaceRegistry |
+| `--worker --bot` | All components |
+
+## Scheduling System
+
+### Scheduler Loop
+
+The scheduler polls every **30 seconds**, querying for due schedules:
+
+```mermaid
+graph TD
+    S[Scheduler.run] -->|every 30s| Q[Query due schedules<br/>next_run_at <= now, enabled=true]
+    Q --> F{For each due schedule}
+    F --> A[Execute action]
+    A --> U[Advance next_run_at<br/>via croniter]
+    U --> S
+
+    A -->|observe_source| OBS[Orchestrator.run_perception_cycle]
+    A -->|generate_briefing| BR[Orchestrator.generate_briefing]
+    A -->|meeting_prep| MP[Calendar check + prep doc]
+    A -->|heartbeat| HB[Health check]
+    A -->|consolidate_memories| CM[MemoryService.consolidate]
+    A -->|check_slos| SLO[AlertingService.check_slos]
+```
+
+### Default Schedules (7)
+
+| Name | Cron | Action | Purpose |
+|------|------|--------|---------|
+| `morning_briefing` | `0 7 * * *` | generate_briefing | Daily briefing at 7 AM |
+| `observe_gmail` | `*/5 * * * *` | observe_source | Poll Gmail every 5 min |
+| `observe_calendar` | `*/15 * * * *` | observe_source | Poll Calendar every 15 min |
+| `observe_slack` | `*/5 * * * *` | observe_source | Poll Slack every 5 min |
+| `observe_github` | `*/10 * * * *` | observe_source | Poll GitHub every 10 min |
+| `memory_consolidation` | `0 2 * * *` | consolidate_memories | Merge duplicates at 2 AM |
+| `slo_health_check` | `0 */6 * * *` | check_slos | SLO evaluation every 6 hours |
+
+### Follow-Up Notifications
+
+The scheduler also checks for notifications with `follow_up_at` in the past and re-queues them for delivery.
+
+## Worker System
+
+The worker's `run()` function requires a `user_ids: list[str]` parameter -- there is no default user. At startup, `run.py` queries all user IDs from the database and passes them to the worker.
+
+### Redis Stream Consumer Groups
+
+Background workers consume events from per-user Redis streams:
+
+```mermaid
+graph LR
+    EB[EventBus<br/>Redis Stream] --> EE[entity_extractor]
+    EB --> ME[memory_extractor]
+    EB --> PL[planner]
+    EB --> TE[trigger_evaluator]
+
+    EE --> WM[WorldModel.extract_from_event]
+    ME --> MS[MemoryService.extract_and_store]
+    PL --> P[Planner.plan_for_event]
+    TE --> T[TriggerEngine.evaluate]
+```
+
+| Consumer Group | Handler | Triggers On |
+|---------------|---------|-------------|
+| `entity_extractor` | WorldModel.extract_from_event() | All events |
+| `memory_extractor` | MemoryService.extract_and_store() | All events (with entity linking) |
+| `planner` | Planner.plan_for_event() | Events with importance >= 0.7 |
+| `trigger_evaluator` | TriggerEngine.evaluate() | All events |
+
+### Stream Architecture
+
+- Stream name: `jarvis:events:{user_id}`
+- Each consumer group reads independently
+- Consumer groups enable exactly-once processing per handler
+- Failed messages go to DLQ (Dead Letter Queue)
+
+## Startup Recovery
+
+On every boot, `run_startup_recovery()` reconciles in-flight state:
+
+### Recovery Operations
+
+| Operation | Condition | Action |
+|-----------|-----------|--------|
+| **Orphaned Plans** | status=planned, created > 1 hour ago | Mark as `stale_on_recovery` |
+| **Stale TaskRuns** | status=running, updated > 15 min ago | Mark as `failed` |
+| **Expired Approvals** | status=pending, expires_at < now | Mark as `expired` |
+
+### Recovery Rationale
+
+- The 15-minute stale threshold assumes no legitimate operation takes that long without a heartbeat
+- Recovery runs before accepting any requests, ensuring clean state
+- Individual operation failures don't cascade (logged but don't block startup)
+- The final DB commit includes all successful recoveries
+
+## Perception Coordinator Initialization
+
+When the scheduler starts, it accepts a `user_ids` list and creates per-user PerceptionCoordinators:
+
+1. **For each user_id**, create a coordinator with orchestrator reference
+2. **Enable default sources**: gmail, calendar, slack, github
+3. **Restore cursors** from `observation_cursors` table
+4. **Set interval multiplier** based on current budget status
+
+This ensures perception cycles resume from where they left off, with no observation gaps. Each user gets independent observation state.
+
+## Lazy Service Initialization
+
+Services are initialized lazily on first chat request (not at startup):
+
+```
+First POST /v1/jarvis/chat
+    → _build_orchestrator()
+    → Create long-lived DB session
+    → Build: EventProcessor, WorldModel, MemoryService, Planner,
+             Governor, Presenter, Audit, VectorStore, SearchService
+    → Configure intelligence server with services
+    → load_agents_from_db()
+    → Cache orchestrator for subsequent requests
+```
+
+This avoids startup overhead when only serving health checks or API endpoints that don't need the full orchestrator.
+
+## Infrastructure Dependencies
+
+| Component | Version | Required | Fallback if Unavailable |
+|-----------|---------|----------|------------------------|
+| **PostgreSQL** | 17 (pgvector) | Yes | None (system won't start) |
+| **Redis** | 7 | Yes* | In-memory cache/locks, no event streaming, no surface tracking |
+| **Elasticsearch** | 8.16 | No | Postgres-only search, in-memory trace fallback (maxlen=500) |
+| **Qdrant** | 1.12 | No | pgvector for dedup; no cross-collection semantic search |
+| **Neo4j** | 5 Community | No | No graph traversal; Postgres entity tables still provide flat queries |
+| **MinIO / S3** | - | No | No artifact file storage (metadata still tracked in Postgres) |
+| **MCP servers** | - | No | Tools unavailable; connector fallback used |
+| **Telegram** | - | No | Web-only operation |
+
+*Redis is technically optional but strongly recommended. Without it, event streaming, distributed locking, task queuing, and real-time features are degraded or disabled.
+
+### Docker Compose Services
+
+```yaml
+# docker-compose.yml provides all 6 infrastructure services:
+postgres:      pgvector/pgvector:pg17  (port 5432)
+redis:         redis:7-alpine          (port 6379)
+elasticsearch: elasticsearch:8.16.0    (port 9200)
+qdrant:        qdrant/qdrant:v1.12.0   (ports 6333, 6334)
+neo4j:         neo4j:5-community       (ports 7474, 7687)
+minio:         minio/minio             (ports 9000, 9001)
+```
