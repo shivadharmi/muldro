@@ -4,6 +4,7 @@ import {
   createContext,
   useContext,
   useState,
+  useEffect,
   useCallback,
   type ReactNode,
 } from "react";
@@ -51,10 +52,18 @@ function getInitialAuth(): { token: string | null; user: AuthUser | null } {
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [{ user: initialUser, token: initialToken }] = useState(getInitialAuth);
-  const [user, setUser] = useState<AuthUser | null>(initialUser);
-  const [token, setToken] = useState<string | null>(initialToken);
-  const isLoading = false;
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    const { token: storedToken, user: storedUser } = getInitialAuth();
+    if (storedToken) setToken(storedToken);
+    if (storedUser) setUser(storedUser);
+    setMounted(true);
+  }, []);
+
+  const isLoading = !mounted;
 
   const login = useCallback((newToken: string, newUser: AuthUser) => {
     setToken(newToken);

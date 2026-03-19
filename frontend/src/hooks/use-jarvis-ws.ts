@@ -12,13 +12,12 @@ function getWsUrl(userId: string): string {
     const qs = token ? `?token=${encodeURIComponent(token)}` : "";
     return `${base}/ws/${userId}${qs}`;
   }
-  // Derive from current page origin so it works in any deployment
-  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  // Derive from backend URL so protocol (ws/wss) matches the backend, not the frontend
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || `${window.location.protocol}//${window.location.host}`;
-  const wsBase = backendUrl.replace(/^http/, "ws");
+  const wsBase = new URL(backendUrl.replace(/^http/, "ws"));
   const token = getStoredToken();
   const qs = token ? `?token=${encodeURIComponent(token)}` : "";
-  return `${proto}//${new URL(wsBase).host}/ws/${userId}${qs}`;
+  return `${wsBase.protocol}//${wsBase.host}/ws/${userId}${qs}`;
 }
 
 interface UseJarvisWsOptions {
