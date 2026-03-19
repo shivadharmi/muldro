@@ -17,6 +17,19 @@ export default defineConfig({
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
     },
+    {
+      name: "comprehensive",
+      testDir: "./tests/e2e/comprehensive/specs",
+      fullyParallel: false,
+      timeout: 120_000,
+      use: {
+        ...devices["Desktop Chrome"],
+        baseURL: "http://localhost:3000",
+        trace: "retain-on-failure",
+        screenshot: "on",
+        video: "retain-on-failure",
+      },
+    },
   ],
   webServer: {
     command: "npm run dev",
