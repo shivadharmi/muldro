@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 
@@ -8,26 +8,28 @@ function CallbackHandler() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const { login } = useAuth();
-  const [error, setError] = useState("");
+
+  const token = searchParams.get("token");
+  const userId = searchParams.get("user_id");
+  const email = searchParams.get("email");
+  const displayName = searchParams.get("display_name");
+  const errorParam = searchParams.get("error");
+
+  const hasCredentials = !!(token && userId && email);
+  const error = hasCredentials
+    ? ""
+    : errorParam || "Authentication failed — missing token or user info.";
 
   useEffect(() => {
-    const token = searchParams.get("token");
-    const userId = searchParams.get("user_id");
-    const email = searchParams.get("email");
-    const displayName = searchParams.get("display_name");
-
-    if (token && userId && email) {
+    if (hasCredentials) {
       login(token, {
         user_id: userId,
         email,
         display_name: displayName,
       });
       router.replace("/chat");
-    } else {
-      const err = searchParams.get("error");
-      setError(err || "Authentication failed — missing token or user info.");
     }
-  }, [searchParams, login, router]);
+  }, [hasCredentials, token, userId, email, displayName, login, router]);
 
   if (error) {
     return (

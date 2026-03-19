@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   fetchConversations,
   deleteConversation,
@@ -23,18 +23,13 @@ export function SessionSidebar({
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [collapsed, setCollapsed] = useState(false);
 
-  const loadConversations = useCallback(async () => {
-    try {
-      const data = await fetchConversations();
-      setConversations(data);
-    } catch {
-      // silently fail — sidebar is non-critical
-    }
-  }, []);
-
   useEffect(() => {
-    loadConversations();
-  }, [loadConversations, refreshKey]);
+    let cancelled = false;
+    fetchConversations()
+      .then((data) => { if (!cancelled) setConversations(data); })
+      .catch(() => { /* silently fail — sidebar is non-critical */ });
+    return () => { cancelled = true; };
+  }, [refreshKey]);
 
   const handleDelete = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();

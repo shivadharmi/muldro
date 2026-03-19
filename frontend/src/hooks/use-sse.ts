@@ -19,7 +19,9 @@ export function useSSE(
   enabled = true
 ) {
   const onEventRef = useRef(onEvent);
-  onEventRef.current = onEvent;
+  useEffect(() => {
+    onEventRef.current = onEvent;
+  });
 
   useEffect(() => {
     if (!enabled) return;
@@ -55,7 +57,9 @@ export function useRunSSE(
   onEvent: (event: SSEEvent) => void
 ) {
   const onEventRef = useRef(onEvent);
-  onEventRef.current = onEvent;
+  useEffect(() => {
+    onEventRef.current = onEvent;
+  });
 
   useEffect(() => {
     if (!runId) return;

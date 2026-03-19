@@ -20,7 +20,7 @@ const COMMANDS = [
 
 export function CommandInput({ onSubmit, disabled }: Props) {
   const [value, setValue] = useState("");
-  const [showPalette, setShowPalette] = useState(false);
+  const [paletteHidden, setPaletteHidden] = useState(false);
   const [cmdKOpen, setCmdKOpen] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -32,15 +32,8 @@ export function CommandInput({ onSubmit, disabled }: Props) {
       })
     : [];
 
-  useEffect(() => {
-    if (cmdKOpen) {
-      setShowPalette(true);
-      setSelectedIndex(0);
-    } else {
-      setShowPalette(value.startsWith("/") && filtered.length > 0);
-      setSelectedIndex(0);
-    }
-  }, [value, filtered.length, cmdKOpen]);
+  // Derive showPalette from state — no effect needed
+  const showPalette = !paletteHidden && (cmdKOpen || (value.startsWith("/") && filtered.length > 0));
 
   // Global Cmd+K / Ctrl+K listener
   useEffect(() => {
@@ -55,7 +48,7 @@ export function CommandInput({ onSubmit, disabled }: Props) {
       }
       if (e.key === "Escape" && cmdKOpen) {
         setCmdKOpen(false);
-        setShowPalette(false);
+        setPaletteHidden(true);
       }
     };
     window.addEventListener("keydown", handleGlobalKeyDown);
@@ -69,7 +62,7 @@ export function CommandInput({ onSubmit, disabled }: Props) {
 
       if (cmd.params && cmd.params.length > 0 && !args) {
         setValue(cmd.name + " ");
-        setShowPalette(false);
+        setPaletteHidden(true);
         setCmdKOpen(false);
         inputRef.current?.focus();
         return;
@@ -77,7 +70,6 @@ export function CommandInput({ onSubmit, disabled }: Props) {
 
       onSubmit(args ? `${cmd.name} ${args}` : cmd.name);
       setValue("");
-      setShowPalette(false);
       setCmdKOpen(false);
     },
     [value, onSubmit, cmdKOpen],
@@ -96,7 +88,7 @@ export function CommandInput({ onSubmit, disabled }: Props) {
       e.preventDefault();
       executeCommand(filtered[selectedIndex]);
     } else if (e.key === "Escape") {
-      setShowPalette(false);
+      setPaletteHidden(true);
       setCmdKOpen(false);
     }
   };
@@ -106,7 +98,6 @@ export function CommandInput({ onSubmit, disabled }: Props) {
     if (value.trim() && !disabled) {
       onSubmit(value.trim());
       setValue("");
-      setShowPalette(false);
       setCmdKOpen(false);
     }
   };
@@ -117,7 +108,7 @@ export function CommandInput({ onSubmit, disabled }: Props) {
       {cmdKOpen && (
         <div
           className="fixed inset-0 bg-black/50 z-40"
-          onClick={() => { setCmdKOpen(false); setShowPalette(false); }}
+          onClick={() => { setCmdKOpen(false); setPaletteHidden(true); }}
         />
       )}
       {showPalette && (
@@ -133,7 +124,7 @@ export function CommandInput({ onSubmit, disabled }: Props) {
                 ref={cmdKOpen ? inputRef : undefined}
                 type="text"
                 value={value}
-                onChange={(e) => setValue(e.target.value)}
+                onChange={(e) => { setValue(e.target.value); setPaletteHidden(false); }}
                 onKeyDown={handleKeyDown}
                 placeholder="Type a command..."
                 autoFocus
@@ -168,7 +159,7 @@ export function CommandInput({ onSubmit, disabled }: Props) {
           ref={cmdKOpen ? undefined : inputRef}
           type="text"
           value={cmdKOpen ? "" : value}
-          onChange={(e) => !cmdKOpen && setValue(e.target.value)}
+          onChange={(e) => { if (!cmdKOpen) { setValue(e.target.value); setPaletteHidden(false); } }}
           onKeyDown={cmdKOpen ? undefined : handleKeyDown}
           placeholder="Ask Jarvis anything... (⌘K for commands, / for slash)"
           disabled={disabled}
