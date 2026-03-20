@@ -146,6 +146,14 @@ def create_app() -> FastAPI:
 
         yield
 
+        # Shutdown: close shared Anthropic client
+        try:
+            from src.config.settings import close_anthropic_client
+
+            await close_anthropic_client()
+        except Exception:
+            pass
+
         # Shutdown: close MCP bridge
         try:
             from src.connectors.mcp_bridge import shutdown_mcp_bridge

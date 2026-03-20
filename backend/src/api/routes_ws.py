@@ -37,6 +37,7 @@ async def jarvis_ws(websocket: WebSocket, user_id: str):
         raw = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
         message = json.loads(raw)
         if message.get("type") != "auth" or not message.get("token"):
+            logger.warning("ws_auth_rejected: no auth message from %s", user_id)
             await websocket.send_json({"type": "auth_error", "message": "Expected auth message"})
             await websocket.close(code=4001, reason="Auth required")
             return
@@ -50,17 +51,33 @@ async def jarvis_ws(websocket: WebSocket, user_id: str):
         async with get_session_factory()() as db:
             auth = AuthService(settings, db)
             user = await auth.validate_session(token)
-            if not user or user.user_id != user_id:
+            if not user:
+                logger.warning("ws_auth_rejected: invalid/expired token for %s", user_id)
                 await websocket.send_json({"type": "auth_error", "message": "Invalid token"})
                 await websocket.close(code=4003, reason="Invalid token")
                 return
+            if user.user_id != user_id:
+                logger.warning(
+                    "ws_auth_rejected: token user %s != path user %s",
+                    user.user_id,
+                    user_id,
+                )
+                await websocket.send_json({"type": "auth_error", "message": "User mismatch"})
+                await websocket.close(code=4003, reason="User mismatch")
+                return
 
     except asyncio.TimeoutError:
+        logger.warning("ws_auth_timeout: no auth message within 5s from %s", user_id)
         await websocket.close(code=4001, reason="Auth timeout")
         return
-    except (json.JSONDecodeError, WebSocketDisconnect):
+    except WebSocketDisconnect:
+        logger.debug("ws_auth_disconnect: client disconnected during auth for %s", user_id)
+        return
+    except json.JSONDecodeError:
+        logger.warning("ws_auth_rejected: malformed JSON from %s", user_id)
         return
     except Exception:
+        logger.exception("ws_auth_error: unexpected failure for %s", user_id)
         await websocket.close(code=4003, reason="Auth validation failed")
         return
 
@@ -178,6 +195,7 @@ async def _handle_client_message(user_id: str, raw: str, app) -> None:
             from src.tools.intelligence_server import approve_action
 
             result = await approve_action(
+                user_id=user_id,
                 approval_id=payload["id"],
                 decision="approved",
                 reason="Approved via web dashboard",
@@ -195,6 +213,7 @@ async def _handle_client_message(user_id: str, raw: str, app) -> None:
             from src.tools.intelligence_server import approve_action
 
             result = await approve_action(
+                user_id=user_id,
                 approval_id=payload["id"],
                 decision="rejected",
                 reason="Rejected via web dashboard",

@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     observation_stale_gmail_minutes: int = 30
     observation_stale_calendar_minutes: int = 180
     observation_stale_github_minutes: int = 60
+    observation_stale_linear_minutes: int = 30
+    observation_stale_notion_minutes: int = 60
+    observation_stale_jira_minutes: int = 30
+    observation_stale_linkedin_minutes: int = 120
+    observation_stale_twitter_minutes: int = 15
 
     # Hardening
     plan_ttl_hours: int = 72  # Plans older than this are invalidated
@@ -87,6 +92,51 @@ class Settings(BaseSettings):
     github_oauth_client_id: str = ""
     github_oauth_client_secret: str = ""
     github_oauth_redirect_uri: str = "http://localhost:8000/v1/auth/github/callback"
+
+    # Linear OAuth
+    linear_oauth_client_id: str = ""
+    linear_oauth_client_secret: str = ""
+    linear_oauth_redirect_uri: str = "http://localhost:8000/v1/auth/linear/callback"
+    linear_access_token: str = ""  # For MCP server (mcp-server-linear)
+    linear_api_key: str = ""  # Legacy alias
+
+    # Notion OAuth
+    notion_oauth_client_id: str = ""
+    notion_oauth_client_secret: str = ""
+    notion_oauth_redirect_uri: str = "http://localhost:8000/v1/auth/notion/callback"
+    notion_token: str = ""  # For MCP server (@notionhq/notion-mcp-server)
+    notion_api_key: str = ""  # Legacy alias
+
+    # Jira (Atlassian) OAuth
+    jira_oauth_client_id: str = ""
+    jira_oauth_client_secret: str = ""
+    jira_oauth_redirect_uri: str = "http://localhost:8000/v1/auth/jira/callback"
+    jira_cloud_id: str = ""
+    jira_url: str = ""
+    jira_email: str = ""
+    jira_api_token: str = ""
+    atlassian_mcp_enabled: bool = False  # Enable Atlassian Rovo MCP (requires interactive OAuth)
+
+    # LinkedIn OAuth
+    linkedin_oauth_client_id: str = ""
+    linkedin_oauth_client_secret: str = ""
+    linkedin_oauth_redirect_uri: str = "http://localhost:8000/v1/auth/linkedin/callback"
+
+    # Twitter/X OAuth (PKCE)
+    twitter_oauth_client_id: str = ""
+    twitter_oauth_client_secret: str = ""
+    twitter_oauth_redirect_uri: str = "http://localhost:8000/v1/auth/twitter/callback"
+
+    # WhatsApp (Meta Business API — no OAuth)
+    whatsapp_phone_number_id: str = ""
+    whatsapp_access_token: str = ""
+    whatsapp_verify_token: str = ""
+    whatsapp_app_secret: str = ""
+
+    # Twilio SMS
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_from_number: str = ""
 
     # S3 / artifact storage
     s3_bucket: str = ""
@@ -146,10 +196,29 @@ def get_settings() -> Settings:
     return Settings()
 
 
-def get_anthropic_client(settings: Settings) -> anthropic.AsyncAnthropic:
-    """Create the appropriate Anthropic client based on config."""
-    if settings.use_bedrock:
-        from anthropic import AsyncAnthropicBedrock
+_anthropic_client: anthropic.AsyncAnthropic | None = None
 
-        return AsyncAnthropicBedrock(aws_region=settings.bedrock_region)  # type: ignore[return-value]
-    return anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+
+def get_anthropic_client(settings: Settings) -> anthropic.AsyncAnthropic:
+    """Return a shared Anthropic client (singleton).
+
+    Reusing a single client avoids leaking aiohttp/httpx sessions that each
+    new AsyncAnthropic() instance creates internally.
+    """
+    global _anthropic_client
+    if _anthropic_client is None:
+        if settings.use_bedrock:
+            from anthropic import AsyncAnthropicBedrock
+
+            _anthropic_client = AsyncAnthropicBedrock(aws_region=settings.bedrock_region)  # type: ignore[assignment]
+        else:
+            _anthropic_client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    return _anthropic_client
+
+
+async def close_anthropic_client() -> None:
+    """Close the shared Anthropic client. Call at app shutdown."""
+    global _anthropic_client
+    if _anthropic_client is not None:
+        await _anthropic_client.close()
+        _anthropic_client = None

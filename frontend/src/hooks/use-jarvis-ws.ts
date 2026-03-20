@@ -32,11 +32,32 @@ export function useJarvisWs({
   const wsRef = useRef<WebSocket | null>(null);
   const [connected, setConnected] = useState(false);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const connectRef = useRef<() => void>(undefined);
+
+  // Store callbacks in refs so the WebSocket effect doesn't re-run when they change
+  const onSurfaceRef = useRef(onSurface);
+  const onNotificationRef = useRef(onNotification);
+  useEffect(() => {
+    onSurfaceRef.current = onSurface;
+  }, [onSurface]);
+  useEffect(() => {
+    onNotificationRef.current = onNotification;
+  }, [onNotification]);
 
   useEffect(() => {
-    connectRef.current = () => {
-      if (wsRef.current?.readyState === WebSocket.OPEN) return;
+    if (!enabled) return;
+
+    // Prevent duplicate connections
+    if (
+      wsRef.current?.readyState === WebSocket.OPEN ||
+      wsRef.current?.readyState === WebSocket.CONNECTING
+    ) {
+      return;
+    }
+
+    let intentionallyClosed = false;
+
+    const connect = () => {
+      if (intentionallyClosed) return;
 
       const ws = new WebSocket(getWsUrl(userId));
       wsRef.current = ws;
@@ -46,21 +67,25 @@ export function useJarvisWs({
         const token = getStoredToken();
         if (token) {
           ws.send(JSON.stringify({ type: "auth", token }));
+        } else {
+          // No token — close immediately
+          ws.close();
         }
-        setConnected(true);
       };
 
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data) as JarvisMessage;
-          if (msg.type === "surface" && onSurface) {
-            onSurface(msg.surface);
-          } else if (msg.type === "heartbeat") {
-            // no-op
+          if (msg.type === "auth_ok") {
+            setConnected(true);
           } else if (msg.type === "auth_error") {
             ws.close();
-          } else if (onNotification) {
-            onNotification(msg);
+          } else if (msg.type === "surface" && onSurfaceRef.current) {
+            onSurfaceRef.current(msg.surface);
+          } else if (msg.type === "heartbeat") {
+            // no-op
+          } else if (onNotificationRef.current) {
+            onNotificationRef.current(msg);
           }
         } catch {
           // skip malformed
@@ -69,26 +94,25 @@ export function useJarvisWs({
 
       ws.onclose = () => {
         setConnected(false);
-        reconnectTimer.current = setTimeout(
-          () => connectRef.current?.(),
-          3000
-        );
+        if (!intentionallyClosed) {
+          reconnectTimer.current = setTimeout(connect, 3000);
+        }
       };
 
       ws.onerror = () => {
         ws.close();
       };
     };
-  });
 
-  useEffect(() => {
-    if (!enabled) return;
-    connectRef.current?.();
+    connect();
+
     return () => {
+      intentionallyClosed = true;
       clearTimeout(reconnectTimer.current);
       wsRef.current?.close();
+      wsRef.current = null;
     };
-  }, [userId, onSurface, onNotification, enabled]);
+  }, [userId, enabled]);
 
   const sendAction = useCallback(
     (action: string, payload: Record<string, unknown>) => {
