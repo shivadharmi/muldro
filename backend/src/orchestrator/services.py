@@ -11,9 +11,11 @@ if TYPE_CHECKING:
     from src.services.event_processor import EventProcessor
     from src.services.goal_tracker import GoalTracker
     from src.services.governor import Governor
+    from src.services.graph_executor import GraphExecutor
     from src.services.memory_service import MemoryService
     from src.services.notifier import Notifier
     from src.services.oauth_manager import OAuthManager
+    from src.services.operator import Operator
     from src.services.planner import Planner
     from src.services.presenter import Presenter
     from src.services.procedure_library import ProcedureLibrary
@@ -47,6 +49,8 @@ class ServiceContainer:
     artifact_store: ArtifactStore | None = None
     oauth_manager: OAuthManager | None = None
     notifier: Notifier | None = None
+    graph_executor: GraphExecutor | None = None
+    operator: Operator | None = None
 
     # Catch-all for services not yet promoted to a typed field.
     extras: dict[str, Any] = field(default_factory=dict)

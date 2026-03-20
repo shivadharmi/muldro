@@ -38,12 +38,10 @@ def _build_orchestrator(settings: Settings):
     """Build orchestrator with all services for the API process."""
     from src.models.database import get_session_factory
     from src.orchestrator.jarvis import JarvisOrchestrator
-    from src.orchestrator.services import ServiceContainer
+    from src.runtime import build as build_runtime
     from src.tools import intelligence_server
 
     db_factory = get_session_factory()
-
-    svc = ServiceContainer()
 
     # Long-lived session for services that hold a db reference.
     # These persist for the orchestrator lifetime (one per API process).
@@ -51,72 +49,7 @@ def _build_orchestrator(settings: Settings):
     svc_db = db_factory()
     _module_svc_db_ref.append(svc_db)
 
-    try:
-        from src.services.event_processor import EventProcessor
-
-        svc.event_processor = EventProcessor(settings)
-    except Exception:
-        pass
-    try:
-        from src.services.world_model import WorldModel
-
-        svc.world_model = WorldModel(settings, svc_db)
-    except Exception:
-        pass
-    try:
-        from src.services.memory_service import MemoryService
-
-        svc.memory_service = MemoryService(settings, svc_db)
-    except Exception:
-        pass
-    try:
-        from src.services.planner import Planner
-
-        svc.planner = Planner(
-            settings,
-            svc_db,
-            world_model=svc.world_model,
-            memory_service=svc.memory_service,
-        )
-    except Exception:
-        pass
-    try:
-        from src.services.governor import Governor
-
-        svc.governor = Governor(svc_db)
-    except Exception:
-        pass
-    try:
-        from src.services.presenter import Presenter
-
-        svc.presenter = Presenter(settings, svc_db)
-    except Exception:
-        pass
-    try:
-        from src.services.audit import AuditService
-
-        svc.audit = AuditService()
-    except Exception:
-        pass
-    try:
-        from src.services.vector_store import VectorStore
-
-        svc.vector_store = VectorStore(settings)
-    except Exception:
-        pass
-    try:
-        from src.services.search_service import SearchService
-
-        svc.search_service = SearchService(settings, vector_store=svc.vector_store)
-    except Exception:
-        pass
-    try:
-        from src.services.working_memory import WorkingMemoryService
-
-        svc.working_memory = WorkingMemoryService(svc_db)
-    except Exception:
-        pass
-
+    svc = build_runtime(settings, svc_db)
     intelligence_server.configure(db_factory, settings, svc)
 
     return JarvisOrchestrator(
@@ -267,13 +200,28 @@ async def chat_stream(
                             step.latency_ms = event.get("latency_ms")
                             step.status = "done"
                             break
-                elif event_type == "thinking" and agent_steps and event.get("is_thinking"):
-                    # Capture first thinking snippet as preview
+                elif event_type == "thinking" and agent_steps:
                     agent_name = event.get("agent")
+                    is_thinking = event.get("is_thinking", False)
+                    text = event.get("text", "")
                     for step in reversed(agent_steps):
-                        if step.agent == agent_name and not step.thinking_preview:
-                            text = event.get("text", "")
-                            step.thinking_preview = text[:500] if len(text) > 500 else text
+                        if step.agent == agent_name:
+                            if is_thinking:
+                                # Extended thinking — accumulate preview
+                                if not step.thinking_preview:
+                                    step.thinking_preview = ""
+                                if len(step.thinking_preview) < 2000:
+                                    step.thinking_preview += text
+                                    if len(step.thinking_preview) > 2000:
+                                        step.thinking_preview = step.thinking_preview[:2000]
+                            else:
+                                # Agent reasoning text — accumulate
+                                if not step.reasoning_text:
+                                    step.reasoning_text = ""
+                                if len(step.reasoning_text) < 2000:
+                                    step.reasoning_text += text
+                                    if len(step.reasoning_text) > 2000:
+                                        step.reasoning_text = step.reasoning_text[:2000]
                             break
                 elif event_type == "tool_call" and agent_steps:
                     agent_name = event.get("agent")
@@ -282,22 +230,30 @@ async def chat_stream(
                             step.tool_calls.append(
                                 MessageToolCall(
                                     tool_name=event.get("tool", ""),
+                                    tool_input=event.get("input", {}),
                                     status="success",
                                 )
                             )
                             break
                 elif event_type == "tool_result" and agent_steps:
-                    # Update last tool call status if it was blocked/errored
                     agent_name = event.get("agent")
-                    blocked = event.get("blocked", False)
-                    if blocked:
-                        for step in reversed(agent_steps):
-                            if step.agent == agent_name and step.tool_calls:
-                                step.tool_calls[-1].status = "blocked"
-                                break
+                    for step in reversed(agent_steps):
+                        if step.agent == agent_name and step.tool_calls:
+                            tc = step.tool_calls[-1]
+                            if event.get("blocked", False):
+                                tc.status = "blocked"
+                            tc.duration_ms = event.get("latency_ms", 0)
+                            # Store result preview (truncated)
+                            raw_result = event.get("result")
+                            if raw_result is not None:
+                                preview = json.dumps(raw_result, default=str)
+                                tc.result_preview = preview[:500] if len(preview) > 500 else preview
+                            break
 
-                data = json.dumps(event, default=str)
-                yield f"event: {event_type}\ndata: {data}\n\n"
+                # Tool events are persisted to DB above but not streamed to client
+                if event_type not in ("tool_call", "tool_result"):
+                    data = json.dumps(event, default=str)
+                    yield f"event: {event_type}\ndata: {data}\n\n"
         except Exception as e:
             logger.error("Chat stream error: %s", e, exc_info=True)
             error_data = json.dumps({"event": "error", "message": str(e)})
@@ -362,7 +318,7 @@ async def chat_stream(
         event_generator(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control": "no-cache",
+            "Cache-Control": "no-cache, no-transform",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },

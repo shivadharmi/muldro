@@ -39,19 +39,25 @@ def main():
             try:
                 from src.models.database import get_session_factory
                 from src.orchestrator.jarvis import JarvisOrchestrator
+                from src.runtime import build as build_runtime
                 from src.tools import intelligence_server
 
                 db_factory = get_session_factory()
-                services = _build_services(settings, db_factory)
-                intelligence_server.configure(db_factory, settings, services)
-                orchestrator = JarvisOrchestrator(
-                    settings=settings,
-                    db_factory=db_factory,
-                    services=services,
-                )
+
+                async def _build():
+                    svc_db = db_factory()
+                    services = build_runtime(settings, svc_db)
+                    intelligence_server.configure(db_factory, settings, services)
+                    return JarvisOrchestrator(
+                        settings=settings,
+                        db_factory=db_factory,
+                        services=services,
+                    )
+
+                orchestrator = loop.run_until_complete(_build())
                 logger.info("Orchestrator initialized for scheduler")
             except Exception:
-                logger.warning("Orchestrator not available, scheduled actions will fail")
+                logger.exception("Orchestrator not available, scheduled actions will fail")
 
             # Query active user IDs for worker + scheduler
             user_ids = []
@@ -106,13 +112,15 @@ def main():
                 from src.interface.telegram import TelegramInterface
                 from src.models.database import get_session_factory
                 from src.orchestrator.jarvis import JarvisOrchestrator
+                from src.runtime import build as build_runtime
                 from src.services.notifier import Notifier
                 from src.services.surface_registry import SurfaceRegistry
                 from src.tools import intelligence_server
 
                 # Build service dependencies for the orchestrator
                 db_factory = get_session_factory()
-                services = _build_services(settings, db_factory)
+                svc_db = db_factory()
+                services = build_runtime(settings, svc_db)
                 intelligence_server.configure(db_factory, settings, services)
 
                 orchestrator = JarvisOrchestrator(
@@ -149,100 +157,6 @@ def main():
         reload=settings.debug,
     )
 
-
-def _build_services(settings, db_factory) -> dict:
-    """Build service instances for orchestrator.
-
-    Returns a dict of service name -> service instance.
-    Services are initialized lazily to avoid import issues.
-    """
-    services = {}
-
-    try:
-        from src.services.event_processor import EventProcessor
-
-        services["event_processor"] = EventProcessor(settings)
-    except Exception:
-        pass
-
-    try:
-        from src.services.planner import Planner
-
-        services["planner"] = Planner(settings)
-    except Exception:
-        pass
-
-    try:
-        from src.services.governor import Governor
-
-        services["governor"] = Governor(settings)
-    except Exception:
-        pass
-
-    try:
-        from src.services.presenter import Presenter
-
-        services["presenter"] = Presenter(settings)
-    except Exception:
-        pass
-
-    try:
-        from src.services.world_model import WorldModel
-
-        db = db_factory()
-        services["world_model"] = WorldModel(settings, db)
-    except Exception:
-        pass
-
-    try:
-        from src.services.memory_service import MemoryService
-
-        db = db_factory()
-        services["memory_service"] = MemoryService(settings, db)
-        services["memory"] = services["memory_service"]  # alias for context assembler
-    except Exception:
-        pass
-
-    try:
-        from src.services.audit import AuditService
-
-        services["audit"] = AuditService()
-    except Exception:
-        pass
-
-    try:
-        from src.services.vector_store import VectorStore
-
-        services["vector_store"] = VectorStore(settings)
-    except Exception:
-        pass
-
-    try:
-        from src.services.search_service import SearchService
-
-        services["search_service"] = SearchService(
-            settings, vector_store=services.get("vector_store")
-        )
-    except Exception:
-        pass
-
-    try:
-        from src.services.working_memory import WorkingMemoryService
-
-        db = db_factory()
-        services["working_memory"] = WorkingMemoryService(settings, db)
-    except Exception:
-        pass
-
-    try:
-        from src.services.event_correlator import EventCorrelator
-
-        db = db_factory()
-        services["event_correlator"] = EventCorrelator(db)
-    except Exception:
-        pass
-
-    return services
 
 
 if __name__ == "__main__":
