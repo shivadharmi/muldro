@@ -1,7 +1,10 @@
 """Connector lifecycle management — register, poll, health check."""
 
+from __future__ import annotations
+
 import logging
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,18 +13,44 @@ from ulid import ULID
 from src.connectors.base import CONNECTOR_REGISTRY
 from src.models.connectors import Connector
 from src.models.observation_cursor import ObservationCursor
-from src.models.users import OAuthConnection
 from src.services.event_bus import EventBus
 
+if TYPE_CHECKING:
+    from src.config.settings import Settings
+    from src.services.oauth_manager import OAuthManager
+
 logger = logging.getLogger(__name__)
+
+# Connector provider → OAuthManager provider mapping
+# Multiple connectors (gmail, calendar, drive) share a single Google OAuth token
+_PROVIDER_TO_OAUTH: dict[str, str] = {
+    "gmail": "google",
+    "calendar": "google",
+    "drive": "google",
+    "github": "github",
+    "slack": "slack",
+    "linear": "linear",
+    "notion": "notion",
+    "jira": "jira",
+    "linkedin": "linkedin",
+    "twitter": "twitter",
+}
 
 
 class ConnectorManager:
     """Manages connector lifecycle: registration, polling, health checks."""
 
-    def __init__(self, db: AsyncSession, event_bus: EventBus | None = None):
+    def __init__(
+        self,
+        db: AsyncSession,
+        event_bus: EventBus | None = None,
+        oauth_manager: OAuthManager | None = None,
+        settings: Settings | None = None,
+    ):
         self._db = db
         self._event_bus = event_bus
+        self._oauth_manager = oauth_manager
+        self._settings = settings
 
     async def get_user_connectors(self, user_id: str) -> list[dict]:
         """List all connectors for a user with status."""
@@ -99,7 +128,7 @@ class ConnectorManager:
         cursor = await self._get_cursor(user_id, provider)
 
         # Poll
-        instance = connector_cls()
+        instance = connector_cls(settings=self._settings)
         events, new_cursor = await instance.poll(user_id, cursor, creds)
 
         # Update cursor
@@ -148,7 +177,7 @@ class ConnectorManager:
         if not creds:
             return {"status": "error", "error": "No credentials"}
 
-        instance = connector_cls()
+        instance = connector_cls(settings=self._settings)
         health = await instance.test(creds)
         return {
             "status": health.status,
@@ -156,8 +185,68 @@ class ConnectorManager:
             "provider": health.provider,
         }
 
+    async def check_credential_health(self, user_id: str, provider: str) -> str:
+        """Check credential status for a provider.
+
+        Returns: 'valid', 'expired_refreshable', 'expired_no_refresh', 'missing'
+        """
+        oauth_provider = _PROVIDER_TO_OAUTH.get(provider, provider)
+
+        if not self._oauth_manager:
+            # Without OAuthManager, check legacy OAuthConnection
+            from src.models.users import OAuthConnection
+
+            result = await self._db.execute(
+                select(OAuthConnection).where(
+                    OAuthConnection.user_id == user_id,
+                    OAuthConnection.provider == provider,
+                )
+            )
+            conn = result.scalar_one_or_none()
+            return "valid" if conn else "missing"
+
+        from src.models.oauth_token import OAuthToken
+
+        async with self._oauth_manager._db_factory() as db:
+            result = await db.execute(
+                select(OAuthToken).where(
+                    OAuthToken.user_id == user_id,
+                    OAuthToken.provider == oauth_provider,
+                )
+            )
+            token = result.scalar_one_or_none()
+
+        if not token:
+            return "missing"
+
+        from datetime import datetime, timedelta, timezone
+
+        if token.expires_at and token.expires_at < datetime.now(timezone.utc) + timedelta(
+            minutes=5
+        ):
+            if token.refresh_token_encrypted:
+                return "expired_refreshable"
+            return "expired_no_refresh"
+
+        return "valid"
+
     async def _get_credentials(self, user_id: str, provider: str) -> dict | None:
-        """Get OAuth credentials for a provider."""
+        """Get decrypted, auto-refreshed OAuth credentials for a provider.
+
+        Uses OAuthManager for proper decryption and automatic token refresh.
+        Falls back to the (legacy) OAuthConnection table if OAuthManager is not available.
+        """
+        oauth_provider = _PROVIDER_TO_OAUTH.get(provider, provider)
+
+        if self._oauth_manager:
+            access_token = await self._oauth_manager.get_valid_token(user_id, oauth_provider)
+            if access_token:
+                return {"access_token": access_token}
+            return None
+
+        # Legacy fallback: read from OAuthConnection (no decryption)
+        from src.models.users import OAuthConnection
+
         result = await self._db.execute(
             select(OAuthConnection).where(
                 OAuthConnection.user_id == user_id,
@@ -167,10 +256,7 @@ class ConnectorManager:
         conn = result.scalar_one_or_none()
         if not conn:
             return None
-        return {
-            "access_token": conn.access_token_encrypted,  # TODO: decrypt
-            "refresh_token": conn.refresh_token_encrypted,
-        }
+        return {"access_token": conn.access_token_encrypted}
 
     async def _get_cursor(self, user_id: str, provider: str) -> str | None:
         """Get the observation cursor for a provider."""

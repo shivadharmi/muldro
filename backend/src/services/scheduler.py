@@ -162,7 +162,8 @@ class SchedulerLoop:
 
             for uid in self._user_ids:
                 coord = PerceptionCoordinator(self._orchestrator, user_id=uid)
-                for source in ("gmail", "calendar", "slack", "github"):
+                sources = await self._get_observation_sources(uid)
+                for source in sources:
                     coord.enable_source(source)
                 await coord.restore_cursors()
                 self._perception[uid] = coord
@@ -173,6 +174,20 @@ class SchedulerLoop:
         except Exception:
             logger.warning("Perception coordinator init failed", exc_info=True)
             self._perception = {}
+
+    async def _get_observation_sources(self, user_id: str) -> list[str]:
+        """Get observation source names for a user from settings."""
+        try:
+            from src.services.settings_service import SettingsService
+
+            factory = get_session_factory()
+            async with factory() as db:
+                svc = SettingsService(db)
+                sources = await svc.get_observation_sources(user_id)
+                return [s["provider"] for s in sources if s.get("enabled", True)]
+        except Exception:
+            logger.debug("Failed to load observation sources, using defaults", exc_info=True)
+            return ["gmail", "calendar", "slack", "github"]
 
     async def _resolve_workspace(self, user_id: str) -> str:
         """Resolve workspace_id for a user in background context."""
