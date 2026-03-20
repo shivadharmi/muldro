@@ -83,12 +83,42 @@ async def _connect_and_discover(config: dict) -> None:
         }
         for tool in tools
     }
+
+    # Register discovered MCP tools in ToolRegistry (best-effort)
+    await _register_discovered_tools()
+
     logger.info(
         "MCP bridge initialized: %d tools from %d servers",
         len(_available_tools),
         len(config["mcpServers"]),
     )
     logger.debug("MCP tools: %s", list(_available_tools.keys()))
+
+
+async def _register_discovered_tools() -> None:
+    """Auto-register MCP-discovered tools in ToolRegistry if not already present."""
+    try:
+        from src.models.database import get_session_factory
+        from src.services.tool_registry import ToolRegistry
+
+        async with get_session_factory()() as db:
+            registry = ToolRegistry(db)
+            registered = 0
+            for tool_name, meta in _available_tools.items():
+                existing = await registry.get_tool(tool_name)
+                if not existing:
+                    await registry.register_tool(
+                        name=tool_name,
+                        risk_level="low",
+                        requires_approval=False,
+                        description=meta.get("description", ""),
+                    )
+                    registered += 1
+            if registered:
+                await db.commit()
+                logger.info("Auto-registered %d MCP tools in ToolRegistry", registered)
+    except Exception:
+        logger.debug("MCP tool auto-registration skipped", exc_info=True)
 
 
 async def shutdown_mcp_bridge() -> None:
