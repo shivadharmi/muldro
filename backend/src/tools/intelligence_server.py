@@ -46,11 +46,8 @@ def configure(db_factory, settings, services: dict):
 async def _get_db() -> AsyncGenerator[AsyncSession, None]:
     if _db_factory is None:
         raise RuntimeError("Intelligence server not configured. Call configure() first.")
-    session = _db_factory()
-    try:
+    async with _db_factory() as session:
         yield session
-    finally:
-        await session.close()
 
 
 # ── Event Ingestion ──────────────────────────────────────────────────────
@@ -276,10 +273,18 @@ async def plan_command(
     async with _get_db():
         try:
             planner = _services["planner"]
-            result = await planner.plan_for_command(
-                user_id, command, context=context, workspace_id=workspace_id
+            plan = await planner.plan_for_command(
+                command, user_id, context=context, workspace_id=workspace_id
             )
-            return result
+            # Serialize Plan ORM object to dict
+            return {
+                "status": "ok",
+                "plan_id": plan.plan_id,
+                "goal": plan.goal or "",
+                "priority": plan.priority or "medium",
+                "status_": plan.status or "planned",
+                "task_count": len(plan.tasks) if hasattr(plan, "tasks") else 0,
+            }
         except Exception as e:
             logger.error("plan_command failed: %s", e, exc_info=True)
             return {"status": "error", "decision": "error", "error": str(e)}
@@ -460,7 +465,7 @@ async def get_briefing(user_id: str, date: str = "today", workspace_id: str = ""
 
 
 @intelligence.tool()
-async def get_observation_cursor(user_id: str, source: str) -> dict:
+async def get_observation_cursor(user_id: str, source: str, workspace_id: str = "") -> dict:
     """Get the last observation checkpoint for a data source.
 
     source: gmail, calendar, slack, github
@@ -548,6 +553,7 @@ async def report_observation(
     items_ingested: int = 0,
     status: str = "ok",
     error_message: str = "",
+    workspace_id: str = "",
 ) -> dict:
     """Report the results of an observation cycle for health tracking."""
     async with _get_db() as db:
@@ -620,7 +626,12 @@ async def update_execution(
             if not run:
                 return {"status": "not_found"}
 
-            run.status = status
+            from src.services.execution_state import InvalidTransitionError, transition_run
+
+            try:
+                transition_run(run, status)
+            except InvalidTransitionError as e:
+                return {"status": "error", "error": str(e)}
             if status == "completed":
                 run.completed_at = datetime.now(timezone.utc)
             if error_message:
