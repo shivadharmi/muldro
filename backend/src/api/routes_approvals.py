@@ -119,15 +119,18 @@ async def approve_action(
     """Approve a pending action and trigger execution."""
     approval = await _get_approval(db, approval_id, user_id, workspace_id)
 
+    from src.services.execution_state import transition_run
+
     approval.status = "approved"
     approval.decided_at = datetime.now(timezone.utc)
     approval.decision_reason = req.reason if req else None
+    approval.approved_by = user_id
 
-    # Update run status
+    # Update run status via state machine (awaiting_approval -> running)
     run_result = await db.execute(select(TaskRun).where(TaskRun.run_id == approval.execution_id))
     run = run_result.scalar_one_or_none()
     if run:
-        run.status = "pending"
+        transition_run(run, "running")
 
     audit = AuditService(db)
     await audit.log(
@@ -174,9 +177,11 @@ async def approve_action(
                     TaskStep.run_id == approval.run_id,
                 )
             )
+            from src.services.execution_state import transition_step
+
             step = step_result.scalar_one_or_none()
             if step and step.status == "waiting_approval":
-                step.status = "pending"
+                transition_step(step, "running")
                 await db.flush()
             await executor.resume_run(approval.run_id)
         except Exception:
@@ -214,15 +219,18 @@ async def reject_action(
     """Reject a pending action."""
     approval = await _get_approval(db, approval_id, user_id, workspace_id)
 
+    from src.services.execution_state import transition_run
+
     approval.status = "rejected"
     approval.decided_at = datetime.now(timezone.utc)
     approval.decision_reason = req.reason if req else None
+    approval.approved_by = user_id
 
-    # Cancel the run
+    # Cancel the run via state machine
     run_result = await db.execute(select(TaskRun).where(TaskRun.run_id == approval.execution_id))
     run = run_result.scalar_one_or_none()
     if run:
-        run.status = "cancelled"
+        transition_run(run, "cancelled")
 
     # If approval has a run_id, cancel the run
     if approval.run_id:

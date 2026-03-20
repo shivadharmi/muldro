@@ -6,9 +6,11 @@ when WebSocket is not available or on initial page load.
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
+
+from src.api.deps import get_current_user_id, get_current_workspace_id
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -27,9 +29,13 @@ class UISurfaceListResponse(BaseModel):
     count: int
 
 
-@router.get("/v1/ui/surfaces/{user_id}", response_model=UISurfaceListResponse)
-async def get_user_surfaces(user_id: str, surface_type: str = "", workspace_id: str = ""):
-    """Get latest A2UI surfaces for a user.
+@router.get("/v1/ui/surfaces", response_model=UISurfaceListResponse)
+async def get_user_surfaces(
+    surface_type: str = "",
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+):
+    """Get latest A2UI surfaces for the authenticated user.
 
     Optionally filter by surface_type (briefing, approval, dashboard).
     """
@@ -37,9 +43,10 @@ async def get_user_surfaces(user_id: str, surface_type: str = "", workspace_id: 
     from src.models.ui_state import UISurface
 
     async with get_session_factory()() as db:
-        stmt = select(UISurface).where(UISurface.user_id == user_id)
-        if workspace_id:
-            stmt = stmt.where(UISurface.workspace_id == workspace_id)
+        stmt = select(UISurface).where(
+            UISurface.user_id == user_id,
+            UISurface.workspace_id == workspace_id,
+        )
         if surface_type:
             stmt = stmt.where(UISurface.surface_type == surface_type)
         stmt = stmt.order_by(UISurface.updated_at.desc()).limit(20)
@@ -62,8 +69,12 @@ async def get_user_surfaces(user_id: str, surface_type: str = "", workspace_id: 
         )
 
 
-@router.get("/v1/ui/surfaces/{user_id}/{surface_id}", response_model=UISurfaceResponse)
-async def get_surface(user_id: str, surface_id: str):
+@router.get("/v1/ui/surfaces/{surface_id}", response_model=UISurfaceResponse)
+async def get_surface(
+    surface_id: str,
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+):
     """Get a specific A2UI surface by ID."""
     from src.models.database import get_session_factory
     from src.models.ui_state import UISurface
@@ -72,6 +83,7 @@ async def get_surface(user_id: str, surface_id: str):
         result = await db.execute(
             select(UISurface).where(
                 UISurface.user_id == user_id,
+                UISurface.workspace_id == workspace_id,
                 UISurface.surface_id == surface_id,
             )
         )

@@ -4,11 +4,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.orchestrator.hooks import (
-    _FALLBACK_BLOCKED_TOOLS,
-    _FALLBACK_WRITE_TOOLS,
-    governor_pre_tool_hook,
-)
+from src.orchestrator.hooks import governor_pre_tool_hook
+from src.orchestrator.tool_policy import FALLBACK_BLOCKED_TOOLS, FALLBACK_WRITE_TOOLS
 from tests.conftest import TEST_USER_ID
 
 # ── Hooks: governor_pre_tool_hook ────────────────────────────────────────────
@@ -134,14 +131,14 @@ class TestHookConstants:
     """Verify hook constant sets are coherent."""
 
     def test_no_overlap_write_and_blocked(self):
-        overlap = _FALLBACK_WRITE_TOOLS & _FALLBACK_BLOCKED_TOOLS
+        overlap = FALLBACK_WRITE_TOOLS & FALLBACK_BLOCKED_TOOLS
         assert not overlap, f"Overlap: {overlap}"
 
     def test_write_tools_not_empty(self):
-        assert len(_FALLBACK_WRITE_TOOLS) > 0
+        assert len(FALLBACK_WRITE_TOOLS) > 0
 
     def test_blocked_tools_not_empty(self):
-        assert len(_FALLBACK_BLOCKED_TOOLS) > 0
+        assert len(FALLBACK_BLOCKED_TOOLS) > 0
 
 
 # ── Orchestrator _execute_tool pre-dispatch ──────────────────────────────────

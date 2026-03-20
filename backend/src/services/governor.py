@@ -21,14 +21,13 @@ Policy Modes:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
-from src.models.approvals import Approval
 from src.models.plans import Plan
 from src.models.task_graph import TaskRun
 from src.orchestrator.contracts import PolicyDecision
@@ -211,38 +210,36 @@ class Governor:
         self, plan: Plan, execution_id: str, user_id: str, workspace_id: str = ""
     ) -> str:
         """Create an approval record for a plan requiring user consent."""
-        approval_id = f"apr_{ULID()}"
+        from src.services.approval_service import create_approval
 
         task_types = []
         if plan.tasks:
             task_types = [t.task_type for t in plan.tasks]
 
-        approval = Approval(
-            approval_id=approval_id,
+        approval = await create_approval(
+            self._db,
             user_id=user_id,
             workspace_id=workspace_id,
-            execution_id=execution_id,
             approval_type=task_types[0] if task_types else plan.decision,
             title=f"Approve: {plan.goal}",
             summary=plan.reasoning_summary,
-            artifact_refs={"plan_id": plan.plan_id, "task_types": task_types},
             risk_level=plan.risk_level or "medium",
-            status="pending",
-            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+            execution_id=execution_id,
+            requested_by=user_id,
+            artifact_refs={"plan_id": plan.plan_id, "task_types": task_types},
         )
-        self._db.add(approval)
 
         await self._audit.log(
             user_id=user_id,
             action_type="approval_requested",
             plan_id=plan.plan_id,
             execution_id=execution_id,
-            approval_id=approval_id,
+            approval_id=approval.approval_id,
             summary=f"Approval requested: {plan.goal}",
             workspace_id=workspace_id,
         )
 
-        return approval_id
+        return approval.approval_id
 
     async def _get_time_based_policy_override(self, user_id: str) -> str | None:
         """Check if a time-based policy override applies for the current time.

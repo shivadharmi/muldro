@@ -19,7 +19,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
 from src.config.settings import Settings, get_anthropic_client
-from src.models.approvals import Approval
 from src.models.plans import Plan, PlanTask
 from src.models.task_graph import TaskCheckpoint, TaskRun, TaskStep
 from src.orchestrator.contracts import StepResult, ToolCallRequest, ToolCallResult
@@ -334,20 +333,21 @@ class GraphExecutor:
             tool = await self._tool_registry.get_tool(task_type)
             if tool and tool.requires_approval:
                 # Create approval record and pause
-                approval = Approval(
-                    approval_id=f"apr_{ULID()}",
+                from src.services.approval_service import create_approval
+
+                approval = await create_approval(
+                    self._db,
                     user_id=run.user_id,
                     workspace_id=run.workspace_id,
-                    execution_id=run.run_id,
                     approval_type=f"step:{task_type}",
                     title=f"Approve step: {step.name or task_type}",
                     summary=f"Step in run {run.run_id} requires approval",
                     risk_level=tool.risk_level,
-                    status="pending",
-                    step_id=step.step_id,
+                    execution_id=run.run_id,
                     run_id=run.run_id,
+                    step_id=step.step_id,
+                    requested_by=run.user_id,
                 )
-                self._db.add(approval)
                 transition_step(step, "waiting_approval")
                 transition_run(run, "awaiting_approval")
                 await self._checkpoint(run, step.step_id, "approval_gate")
