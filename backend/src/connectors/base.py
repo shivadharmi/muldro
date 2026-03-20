@@ -26,6 +26,9 @@ class BaseConnector(ABC):
     supports_actions: bool = False
     available_actions: list[str] = []
 
+    def __init__(self, settings=None):
+        self._settings = settings
+
     @abstractmethod
     async def poll(
         self, user_id: str, cursor: str | None, credentials: dict

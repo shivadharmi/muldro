@@ -32,9 +32,10 @@ def _get_fernet(key: str = "") -> Fernet:
 class OAuthManager:
     """Manage encrypted OAuth tokens with auto-refresh."""
 
-    def __init__(self, db_factory, encryption_key: str = ""):
+    def __init__(self, db_factory, encryption_key: str = "", settings=None):
         self._db_factory = db_factory
         self._encryption_key = encryption_key
+        self._settings = settings
 
     async def store_token(
         self,
@@ -162,6 +163,34 @@ class OAuthManager:
                 return True
             return False
 
+    def _get_client_credentials(self, provider: str) -> tuple[str, str]:
+        """Resolve client_id and client_secret for a provider.
+
+        Uses Settings attributes first, falls back to env vars.
+        """
+        # Provider → settings attribute mapping
+        settings_map: dict[str, tuple[str, str]] = {
+            "google": ("google_oauth_client_id", "google_oauth_client_secret"),
+            "github": ("github_oauth_client_id", "github_oauth_client_secret"),
+            "linear": ("linear_oauth_client_id", "linear_oauth_client_secret"),
+            "notion": ("notion_oauth_client_id", "notion_oauth_client_secret"),
+            "jira": ("jira_oauth_client_id", "jira_oauth_client_secret"),
+            "linkedin": ("linkedin_oauth_client_id", "linkedin_oauth_client_secret"),
+            "twitter": ("twitter_oauth_client_id", "twitter_oauth_client_secret"),
+        }
+
+        if self._settings and provider in settings_map:
+            id_attr, secret_attr = settings_map[provider]
+            client_id = getattr(self._settings, id_attr, "")
+            client_secret = getattr(self._settings, secret_attr, "")
+            if client_id and client_secret:
+                return client_id, client_secret
+
+        # Fallback: env vars (slack uses bot token, not standard OAuth client)
+        client_id = os.environ.get(f"JARVIS_{provider.upper()}_OAUTH_CLIENT_ID", "")
+        client_secret = os.environ.get(f"JARVIS_{provider.upper()}_OAUTH_CLIENT_SECRET", "")
+        return client_id, client_secret
+
     async def _refresh_token(self, provider: str, refresh_token: str) -> dict | None:
         """Attempt to refresh an OAuth token via the provider's token endpoint."""
         import httpx
@@ -170,14 +199,17 @@ class OAuthManager:
             "google": "https://oauth2.googleapis.com/token",
             "github": "https://github.com/login/oauth/access_token",
             "slack": "https://slack.com/api/oauth.v2.access",
+            "linear": "https://api.linear.app/oauth/token",
+            "jira": "https://auth.atlassian.com/oauth/token",
+            "linkedin": "https://www.linkedin.com/oauth/v2/accessToken",
+            "twitter": "https://api.twitter.com/2/oauth2/token",
         }
         endpoint = endpoints.get(provider)
         if not endpoint:
             logger.warning("No refresh endpoint for provider %s", provider)
             return None
 
-        client_id = os.environ.get(f"JARVIS_{provider.upper()}_CLIENT_ID", "")
-        client_secret = os.environ.get(f"JARVIS_{provider.upper()}_CLIENT_SECRET", "")
+        client_id, client_secret = self._get_client_credentials(provider)
         if not client_id or not client_secret:
             logger.warning("Missing client credentials for %s", provider)
             return None

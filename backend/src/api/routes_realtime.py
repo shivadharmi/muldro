@@ -42,7 +42,6 @@ async def stream_global_events(
                     data = message["data"]
                     if isinstance(data, bytes):
                         data = data.decode("utf-8")
-                    # Parse to extract event type if JSON
                     event_type = "message"
                     try:
                         parsed = json.loads(data)
@@ -51,7 +50,7 @@ async def stream_global_events(
                         pass
                     yield f"event: {event_type}\ndata: {data}\n\n"
                 else:
-                    # Send keepalive comment every second to detect disconnects
+                    # Keepalive comment to detect disconnects
                     yield ": keepalive\n\n"
                     await asyncio.sleep(1)
         except asyncio.CancelledError:
@@ -64,7 +63,7 @@ async def stream_global_events(
         event_generator(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control": "no-cache",
+            "Cache-Control": "no-cache, no-transform",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },
@@ -101,12 +100,10 @@ async def stream_run_progress(
                     data = message["data"]
                     if isinstance(data, bytes):
                         data = data.decode("utf-8")
-                    # Parse to extract event type if JSON
                     event_type = "progress"
                     try:
                         parsed = json.loads(data)
                         event_type = parsed.get("event_type", "progress")
-                        # If run completed, send final event and close
                         if parsed.get("status") in ("completed", "failed", "cancelled"):
                             yield f"event: {event_type}\ndata: {data}\n\n"
                             break
@@ -126,7 +123,7 @@ async def stream_run_progress(
         event_generator(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control": "no-cache",
+            "Cache-Control": "no-cache, no-transform",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },

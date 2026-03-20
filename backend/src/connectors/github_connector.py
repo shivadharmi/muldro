@@ -83,6 +83,123 @@ class GitHubConnector(BaseConnector):
                 provider="github", status="down", last_poll_at=None, error=str(e)
             )
 
+    supports_actions: bool = True
+    available_actions: list[str] = ["create_issue", "comment", "create_pr"]
+
+    async def execute_action(self, action: str, params: dict, credentials: dict) -> dict:
+        """Execute a GitHub write action."""
+        if action not in self.available_actions:
+            return {"status": "error", "error": f"Unknown action: {action}"}
+
+        access_token = credentials.get("access_token", "")
+        if not access_token:
+            return {"status": "error", "error": "No access token"}
+
+        dispatch = {
+            "create_issue": self._action_create_issue,
+            "comment": self._action_comment,
+            "create_pr": self._action_create_pr,
+        }
+        return await dispatch[action](params, access_token)
+
+    async def _action_create_issue(self, params: dict, access_token: str) -> dict:
+        """Create a GitHub issue."""
+        import httpx
+
+        owner = params.get("owner", "")
+        repo = params.get("repo", "")
+        if not owner or not repo:
+            return {"status": "error", "error": "owner and repo required"}
+
+        body = {"title": params.get("title", ""), "body": params.get("body", "")}
+        if params.get("labels"):
+            body["labels"] = params["labels"]
+        if params.get("assignees"):
+            body["assignees"] = params["assignees"]
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"https://api.github.com/repos/{owner}/{repo}/issues",
+                json=body,
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Accept": "application/vnd.github+json",
+                },
+                timeout=15,
+            )
+            if resp.status_code in (200, 201):
+                data = resp.json()
+                return {
+                    "status": "ok",
+                    "issue_number": data.get("number"),
+                    "html_url": data.get("html_url"),
+                }
+            return {"status": "error", "error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+
+    async def _action_comment(self, params: dict, access_token: str) -> dict:
+        """Add a comment to an issue or PR."""
+        import httpx
+
+        owner = params.get("owner", "")
+        repo = params.get("repo", "")
+        number = params.get("number")
+        if not owner or not repo or not number:
+            return {"status": "error", "error": "owner, repo, and number required"}
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"https://api.github.com/repos/{owner}/{repo}/issues/{number}/comments",
+                json={"body": params.get("body", "")},
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Accept": "application/vnd.github+json",
+                },
+                timeout=15,
+            )
+            if resp.status_code in (200, 201):
+                data = resp.json()
+                return {
+                    "status": "ok",
+                    "comment_id": data.get("id"),
+                    "html_url": data.get("html_url"),
+                }
+            return {"status": "error", "error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+
+    async def _action_create_pr(self, params: dict, access_token: str) -> dict:
+        """Create a pull request."""
+        import httpx
+
+        owner = params.get("owner", "")
+        repo = params.get("repo", "")
+        if not owner or not repo:
+            return {"status": "error", "error": "owner and repo required"}
+
+        body = {
+            "title": params.get("title", ""),
+            "body": params.get("body", ""),
+            "head": params.get("head", ""),
+            "base": params.get("base", "main"),
+        }
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"https://api.github.com/repos/{owner}/{repo}/pulls",
+                json=body,
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Accept": "application/vnd.github+json",
+                },
+                timeout=15,
+            )
+            if resp.status_code in (200, 201):
+                data = resp.json()
+                return {
+                    "status": "ok",
+                    "pr_number": data.get("number"),
+                    "html_url": data.get("html_url"),
+                }
+            return {"status": "error", "error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+
     async def get_auth_url(self, scopes: list[str] | None = None) -> str:
         return "/v1/auth/oauth/github/authorize"
 

@@ -7,24 +7,29 @@ This is the main entry point for all Jarvis interactions.
 
 import json
 import logging
-import time
 from collections.abc import AsyncGenerator
 from typing import Any
 
-import anthropic
 from ulid import ULID
 
 from src.config.settings import Settings, get_anthropic_client
 from src.models.task_graph import TaskRun, TaskStep
+from src.orchestrator.agent_loop import (
+    LoopAgentStart,
+    LoopDone,
+    LoopError,
+    LoopTextDelta,
+    LoopThinking,
+    LoopToolCall,
+    LoopToolResult,
+    agent_loop,
+)
 from src.orchestrator.agents import AGENTS, SubAgent
 from src.orchestrator.budget import BudgetTracker
-from src.orchestrator.contracts import AgentEnvelope, AgentResult, PlannerOutput, SpanToolCall
-from src.orchestrator.hooks import (
-    audit_post_tool_hook,
-    governor_pre_tool_hook,
-)
+from src.orchestrator.contracts import PlannerOutput
 from src.orchestrator.prompts import JARVIS_SOUL
 from src.orchestrator.services import ServiceContainer
+from src.orchestrator.tool_schemas import build_tool_definitions
 from src.orchestrator.tracing import TraceManager
 from src.services.agent_registry import AgentRegistry
 from src.services.context_builder import ContextBuilder, ContextPack
@@ -64,22 +69,54 @@ BEDROCK_MODEL_TIERS = {
 # Agents that benefit from context enrichment (read-heavy agents)
 CONTEXT_ENRICHED_AGENTS = {"planner", "presenter", "researcher", "librarian"}
 
+# Intent classifier prompt — used with Haiku for fast, cheap classification
+INTENT_CLASSIFIER_PROMPT = """\
+<role>
+You classify user messages for a personal AI assistant called Jarvis.
+Output ONLY a JSON object, nothing else.
+</role>
 
-def _sanitize_content_blocks(content) -> list[dict]:
-    """Convert SDK response content blocks to plain dicts for re-submission.
+<intents>
+- greeting: Greetings, pleasantries, "hey", "hi", "good morning", "thanks"
+- chitchat: Casual conversation, "how are you", jokes, small talk
+- simple_question: Direct factual question answerable from context/memory
+- data_fetch: Read from external source (check email, show calendar, read slack)
+- status_query: Asking about goals, plans, briefing, pending items, tasks
+- approval_response: Approving/rejecting a pending action
+- command: Actionable WRITE request needing planning (send email, schedule, create)
+- complex: Multi-step, ambiguous, or high-stakes requests needing deep planning
+</intents>
 
-    Anthropic SDK v0.84+ adds fields to response objects (e.g. ``caller`` on
-    ToolUseBlock, ``citations`` on TextBlock) that default to ``None``.  The
-    API rejects ``null`` values for these fields when they appear in *input*
-    messages because the Param types use ``NOT_GIVEN`` (sentinel), not ``None``.
-    Using ``model_dump(exclude_none=True)`` strips these cleanly.
-    """
-    return [
-        block.model_dump(exclude_none=True)
-        if hasattr(block, "model_dump")
-        else {"type": block.type}
-        for block in content
-    ]
+<output_format>
+{"intent": "<one of above>", "confidence": 0.0-1.0}
+</output_format>
+
+<examples>
+"Hey Jarvis" -> {"intent": "greeting", "confidence": 0.99}
+"What's John's email?" -> {"intent": "simple_question", "confidence": 0.9}
+"Check my gmail" -> {"intent": "data_fetch", "confidence": 0.95}
+"Show my latest emails" -> {"intent": "data_fetch", "confidence": 0.95}
+"What's on my calendar today" -> {"intent": "data_fetch", "confidence": 0.95}
+"Any new Slack messages?" -> {"intent": "data_fetch", "confidence": 0.9}
+"Show my goals" -> {"intent": "status_query", "confidence": 0.95}
+"Approve that email" -> {"intent": "approval_response", "confidence": 0.9}
+"Send a follow-up to the investor" -> {"intent": "command", "confidence": 0.95}
+"Analyze our Q3 pipeline and create action items" -> {"intent": "complex", "confidence": 0.9}
+</examples>
+"""
+
+# Intents that skip the Planner entirely
+FAST_INTENTS = {
+    "greeting",
+    "chitchat",
+    "simple_question",
+    "data_fetch",
+    "status_query",
+    "approval_response",
+}
+
+# Confidence threshold — below this, fall back to Planner
+INTENT_CONFIDENCE_THRESHOLD = 0.7
 
 
 class JarvisOrchestrator:
@@ -237,234 +274,8 @@ class JarvisOrchestrator:
         return tools
 
     def _build_internal_tool_definitions(self) -> list[dict]:
-        """Build Claude tool definitions for internal intelligence tools."""
-        return [
-            {
-                "name": "ingest_event",
-                "description": "Ingest an event into the Jarvis intelligence pipeline.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "source": {"type": "string"},
-                        "event_type": {"type": "string"},
-                        "entity_type": {"type": "string"},
-                        "entity_id": {"type": "string"},
-                        "title": {"type": "string"},
-                        "summary": {"type": "string", "default": ""},
-                        "actor_email": {"type": "string", "default": ""},
-                        "actor_name": {"type": "string", "default": ""},
-                        "occurred_at": {"type": "string", "default": ""},
-                    },
-                    "required": ["source", "event_type", "entity_type", "entity_id", "title"],
-                },
-            },
-            {
-                "name": "search_memory",
-                "description": "Search Jarvis knowledge: memories, entities, events.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string"},
-                        "scope": {"type": "string", "default": "all"},
-                        "limit": {"type": "integer", "default": 10},
-                    },
-                    "required": ["query"],
-                },
-            },
-            {
-                "name": "get_entities",
-                "description": "Get entities from the world model.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string", "default": ""},
-                        "entity_type": {"type": "string", "default": ""},
-                        "limit": {"type": "integer", "default": 20},
-                    },
-                },
-            },
-            {
-                "name": "plan_command",
-                "description": "Process a command through the Jarvis planner.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "command": {"type": "string"},
-                        "context": {"type": "string", "default": ""},
-                    },
-                    "required": ["command"],
-                },
-            },
-            {
-                "name": "evaluate_policy",
-                "description": "Evaluate governance policy for a plan.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {"plan_id": {"type": "string"}},
-                    "required": ["plan_id"],
-                },
-            },
-            {
-                "name": "get_briefing",
-                "description": "Generate or fetch the daily briefing.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {"date": {"type": "string", "default": "today"}},
-                },
-            },
-            {
-                "name": "get_observation_cursor",
-                "description": "Get the last observation checkpoint for a source.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {"source": {"type": "string"}},
-                    "required": ["source"],
-                },
-            },
-            {
-                "name": "update_observation_cursor",
-                "description": "Update observation checkpoint after successful observation.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "source": {"type": "string"},
-                        "cursor_type": {"type": "string"},
-                        "cursor_value": {"type": "string"},
-                    },
-                    "required": ["source", "cursor_type", "cursor_value"],
-                },
-            },
-            {
-                "name": "report_observation",
-                "description": "Report observation cycle results for health tracking.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "source": {"type": "string"},
-                        "items_found": {"type": "integer", "default": 0},
-                        "items_ingested": {"type": "integer", "default": 0},
-                        "status": {"type": "string", "default": "ok"},
-                        "error_message": {"type": "string", "default": ""},
-                    },
-                    "required": ["source"],
-                },
-            },
-            {
-                "name": "approve_action",
-                "description": "Approve or reject a pending action.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "approval_id": {"type": "string"},
-                        "decision": {"type": "string", "enum": ["approved", "rejected"]},
-                        "reason": {"type": "string", "default": ""},
-                    },
-                    "required": ["approval_id", "decision"],
-                },
-            },
-            {
-                "name": "update_execution",
-                "description": "Update the status of an execution.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "execution_id": {"type": "string"},
-                        "status": {"type": "string"},
-                        "result_summary": {"type": "string", "default": ""},
-                        "error_message": {"type": "string", "default": ""},
-                    },
-                    "required": ["execution_id", "status"],
-                },
-            },
-            {
-                "name": "update_entity",
-                "description": "Update an entity's attributes or add an alias.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "entity_id": {"type": "string"},
-                        "attributes": {"type": "string", "default": ""},
-                        "add_alias": {"type": "string", "default": ""},
-                    },
-                    "required": ["entity_id"],
-                },
-            },
-            {
-                "name": "get_active_plans",
-                "description": "Get currently active plans.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {"limit": {"type": "integer", "default": 10}},
-                },
-            },
-            {
-                "name": "extract_preferences",
-                "description": "Extract and store user preferences from interaction text.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "source_text": {"type": "string"},
-                    },
-                    "required": ["source_text"],
-                },
-            },
-            {
-                "name": "create_task",
-                "description": "Create a standalone task in the task system.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "title": {"type": "string"},
-                        "description": {"type": "string", "default": ""},
-                        "task_type": {"type": "string", "default": "general"},
-                        "priority": {"type": "string", "default": "medium"},
-                        "goal_id": {"type": "string", "default": ""},
-                    },
-                    "required": ["title"],
-                },
-            },
-            {
-                "name": "get_task",
-                "description": "Get details of a task by ID.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {"task_id": {"type": "string"}},
-                    "required": ["task_id"],
-                },
-            },
-            {
-                "name": "get_goals",
-                "description": "Get user goals, optionally filtered by status.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "status": {"type": "string", "default": "active"},
-                        "limit": {"type": "integer", "default": 10},
-                    },
-                },
-            },
-            {
-                "name": "build_context",
-                "description": "Build a rich context pack for a query/task.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string"},
-                        "task_type": {"type": "string", "default": ""},
-                    },
-                    "required": ["query"],
-                },
-            },
-            {
-                "name": "verify_run",
-                "description": "Verify a completed run against success conditions.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {"run_id": {"type": "string"}},
-                    "required": ["run_id"],
-                },
-            },
-        ]
+        """Build Claude tool definitions from Pydantic models in tool_schemas."""
+        return build_tool_definitions()
 
     def _get_tools_for_agent(self, agent: SubAgent) -> list[dict]:
         """Filter tool definitions to only those the agent can use."""
@@ -497,20 +308,26 @@ class JarvisOrchestrator:
             # Load conversation history for multi-turn context
             history_block = await self._load_conversation_history(conversation_id)
 
-            # Step 1: Route to Planner for intent determination
-            planner_message = f"User message: {message}\n\nContext: {json.dumps(context or {})}"
-            if history_block:
-                planner_message = f"{history_block}\n\n{planner_message}"
+            # Step 0: Fast intent classification
+            intent, confidence = await self._classify_intent(message, history_block)
+            use_planner = intent not in FAST_INTENTS or confidence < INTENT_CONFIDENCE_THRESHOLD
 
-            plan_result = await self._call_agent(
-                "planner",
-                message=planner_message,
-                user_id=user_id,
-                trace=trace,
-                workspace_id=workspace_id,
-            )
+            if use_planner:
+                planner_message = f"User message: {message}\n\nContext: {json.dumps(context or {})}"
+                if history_block:
+                    planner_message = f"{history_block}\n\n{planner_message}"
 
-            decision = self._extract_decision(plan_result)
+                plan_result = await self._call_agent(
+                    "planner",
+                    message=planner_message,
+                    user_id=user_id,
+                    trace=trace,
+                    workspace_id=workspace_id,
+                )
+                decision = self._extract_decision(plan_result)
+            else:
+                decision = self._intent_to_decision(intent, message)
+
             decision_dict = decision.model_dump(mode="json")
             decision_json = json.dumps(decision_dict)
 
@@ -650,24 +467,38 @@ class JarvisOrchestrator:
             # Load conversation history for multi-turn context
             history_block = await self._load_conversation_history(conversation_id)
 
-            # Step 1: Planner determines intent
-            planner_message = f"User message: {message}\n\nContext: {json.dumps(context or {})}"
-            if history_block:
-                planner_message = f"{history_block}\n\n{planner_message}"
+            # Step 0: Fast intent classification (Haiku — <200ms)
+            intent, confidence = await self._classify_intent(message, history_block)
+            yield {"event": "intent", "intent": intent, "confidence": confidence}
 
+            # Decide routing based on intent
+            use_planner = intent not in FAST_INTENTS or confidence < INTENT_CONFIDENCE_THRESHOLD
+
+            decision: PlannerOutput
             plan_text = ""
-            async for evt in self._call_agent_stream(
-                "planner",
-                message=planner_message,
-                user_id=user_id,
-                trace=trace,
-                workspace_id=workspace_id,
-            ):
-                yield evt
-                if evt.get("event") == "agent_done":
-                    plan_text = evt.get("text", "")
 
-            decision = self._extract_decision(plan_text)
+            if use_planner:
+                # Full Planner path for commands/complex intents
+                planner_message = f"User message: {message}\n\nContext: {json.dumps(context or {})}"
+                if history_block:
+                    planner_message = f"{history_block}\n\n{planner_message}"
+
+                async for evt in self._call_agent_stream(
+                    "planner",
+                    message=planner_message,
+                    user_id=user_id,
+                    trace=trace,
+                    workspace_id=workspace_id,
+                ):
+                    yield evt
+                    if evt.get("event") == "agent_done":
+                        plan_text = evt.get("text", "")
+
+                decision = self._extract_decision(plan_text)
+            else:
+                # Fast path — synthesize a lightweight decision from intent
+                decision = self._intent_to_decision(intent, message)
+
             decision_dict = decision.model_dump(mode="json")
             decision_json = json.dumps(decision_dict)
 
@@ -686,56 +517,111 @@ class JarvisOrchestrator:
                 "run_id": run_id,
             }
 
-            # Step 2: Resolve route dynamically from DB
-            pipeline = await self._resolve_pipeline(decision_dict)
+            # Step 2: Route based on intent
+            if use_planner:
+                # Planner path: resolve pipeline from DB routes
+                pipeline = await self._resolve_pipeline(decision_dict)
 
-            for step in pipeline:
-                agent_name = step.get("agent", "")
-                if not agent_name or agent_name not in self._agents:
-                    continue
+                for step in pipeline:
+                    agent_name = step.get("agent", "")
+                    if not agent_name or agent_name not in self._agents:
+                        continue
 
-                # Check step-level condition
-                step_cond = step.get("condition")
-                if step_cond and not self._check_step_condition(step_cond, decision_dict):
-                    continue
+                    step_cond = step.get("condition")
+                    if step_cond and not self._check_step_condition(step_cond, decision_dict):
+                        continue
 
-                # Handle special actions
-                action = step.get("action")
-                if action == "execute_plan":
-                    if decision.plan_id:
-                        yield {"event": "execution_start", "plan_id": decision.plan_id}
-                        exec_result = await self._execute_plan_via_graph(
-                            decision.plan_id, user_id, trace
-                        )
-                        yield {
-                            "event": "execution_result",
-                            "run_id": exec_result.get("run_id"),
-                            "status": exec_result.get("status"),
-                        }
-                    continue
+                    action = step.get("action")
+                    if action == "execute_plan":
+                        if decision.plan_id:
+                            yield {
+                                "event": "execution_start",
+                                "plan_id": decision.plan_id,
+                            }
+                            exec_result = await self._execute_plan_via_graph(
+                                decision.plan_id, user_id, trace
+                            )
+                            yield {
+                                "event": "execution_result",
+                                "run_id": exec_result.get("run_id"),
+                                "status": exec_result.get("status"),
+                            }
+                        continue
 
-                # Format message from template
-                template = step.get("message_template", "Process this: {decision_json}")
-                agent_message = template.format(
-                    decision_json=decision_json, surface=surface, message=message
-                )
+                    template = step.get("message_template", "Process this: {decision_json}")
+                    agent_message = template.format(
+                        decision_json=decision_json,
+                        surface=surface,
+                        message=message,
+                    )
 
+                    async for evt in self._call_agent_stream(
+                        agent_name,
+                        message=agent_message,
+                        user_id=user_id,
+                        trace=trace,
+                        workspace_id=workspace_id,
+                    ):
+                        yield evt
+
+            elif intent == "simple_question":
+                # Researcher gathers context, then Presenter responds
                 async for evt in self._call_agent_stream(
-                    agent_name,
-                    message=agent_message,
+                    "researcher",
+                    message=f"Research this question for the user: {message}",
                     user_id=user_id,
                     trace=trace,
                     workspace_id=workspace_id,
                 ):
                     yield evt
 
-            # Always route through presenter for user-facing response
+            elif intent == "data_fetch":
+                # Observer reads from external sources (Gmail, Calendar, Slack)
+                observer_text = ""
+                async for evt in self._call_agent_stream(
+                    "observer",
+                    message=(
+                        f"The user wants to check an external source. "
+                        f"Read the relevant data and report what you find.\n\n"
+                        f"User request: {message}"
+                    ),
+                    user_id=user_id,
+                    trace=trace,
+                    workspace_id=workspace_id,
+                ):
+                    yield evt
+                    if evt.get("event") == "agent_done":
+                        observer_text = evt.get("text", "")
+
+                # Feed observer results to presenter context
+                if observer_text:
+                    plan_text = f"Observer findings:\n{observer_text}"
+
+            elif intent == "status_query":
+                # Fetch status data via tools, then let Presenter format
+                pass  # Presenter will handle with context enrichment below
+
+            elif intent == "approval_response":
+                # Governor handles approval directly
+                async for evt in self._call_agent_stream(
+                    "governor",
+                    message=f"The user wants to approve/reject an action: {message}",
+                    user_id=user_id,
+                    trace=trace,
+                    workspace_id=workspace_id,
+                ):
+                    yield evt
+
+            # Step 3: Presenter formats the response (always)
             presenter_msg = (
-                f"Format this for the user ({surface}). Be conversational and helpful.\n\n"
-                f"Original user message: {message}\n"
-                f"Planner decision: {decision_json}\n"
-                f"Planner analysis: {plan_text[:2000]}"
+                f"Respond to the user ({surface}). Be conversational and helpful.\n\n"
+                f"User message: {message}\n"
+                f"Intent: {intent}\n"
             )
+            if plan_text:
+                presenter_msg += (
+                    f"Planner decision: {decision_json}\nPlanner analysis: {plan_text[:2000]}\n"
+                )
             if history_block:
                 presenter_msg = f"{history_block}\n\n{presenter_msg}"
 
@@ -752,20 +638,21 @@ class JarvisOrchestrator:
                     presenter_text = evt.get("text", "")
                     yield {"event": "response", "text": presenter_text}
 
-            # Fire-and-forget persona learning (no streaming needed)
-            try:
-                await self._call_agent(
-                    "persona",
-                    message=f"Observe this user interaction on {surface}:\n"
-                    f"User said: {message}\n"
-                    f"Decision: {decision.decision}\n"
-                    f"Extract any preference signals.",
-                    user_id=user_id,
-                    trace=trace,
-                    workspace_id=workspace_id,
-                )
-            except Exception:
-                pass
+            # Persona learning — only for meaningful interactions
+            if intent in ("command", "complex"):
+                try:
+                    await self._call_agent(
+                        "persona",
+                        message=f"Observe this user interaction on {surface}:\n"
+                        f"User said: {message}\n"
+                        f"Decision: {decision.decision}\n"
+                        f"Extract any preference signals.",
+                        user_id=user_id,
+                        trace=trace,
+                        workspace_id=workspace_id,
+                    )
+                except Exception:
+                    pass
 
             # Complete the lightweight run
             if run_id:
@@ -796,7 +683,7 @@ class JarvisOrchestrator:
         max_tool_rounds: int = 10,
         workspace_id: str = "",
     ) -> AsyncGenerator[dict[str, Any], None]:
-        """Call a sub-agent, yielding events as it thinks, calls tools, etc."""
+        """Call a sub-agent with streaming, yielding SSE-compatible dicts."""
         agent = self._agents.get(agent_name)
         if not agent:
             yield {"event": "error", "message": f"Unknown agent: {agent_name}"}
@@ -804,292 +691,68 @@ class JarvisOrchestrator:
 
         model = self._get_model_for_agent(agent)
         tools = self._apply_cache_control_to_tools(self._get_tools_for_agent(agent))
-        span = trace.start_span(agent_name) if trace else None
-
-        yield {"event": "agent_start", "agent": agent_name, "model": model}
-
-        # Assemble context (memories + entities) for enriched agents
         context_block = await self._assemble_context(agent_name, message, user_id=user_id)
         system_blocks = self._build_system_prompt(agent, context_block)
 
-        messages = [{"role": "user", "content": message}]
-
-        total_input = 0
-        total_output = 0
-        total_cache_creation = 0
-        total_cache_read = 0
-        tools_called: list[str] = []
-        tool_call_details: list[SpanToolCall] = []
-        thinking_chunks: list[str] = []
-        text = ""
-        start_time = time.time()
-
-        # Extended thinking — all Claude 4+ models support it
-        thinking_budget = min(8192, max(1024, agent.max_tokens // 2))
-        if thinking_budget >= agent.max_tokens:
-            thinking_budget = agent.max_tokens - 1
-
-        try:
-            for _round in range(max_tool_rounds):
-                api_kwargs = {
-                    "model": model,
-                    "max_tokens": agent.max_tokens,
-                    "temperature": 1,  # required when thinking is enabled
-                    "thinking": {
-                        "type": "enabled",
-                        "budget_tokens": thinking_budget,
-                    },
-                    "system": system_blocks,
-                    "messages": messages,
+        async for evt in agent_loop(
+            client=self._client,
+            agent=agent,
+            model=model,
+            system_blocks=system_blocks,
+            tools=tools,
+            message=message,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            db_factory=self._db_factory,
+            services=self._services,
+            budget=self._budget,
+            trace=trace,
+            execute_tool_fn=self._execute_tool,
+            max_tool_rounds=max_tool_rounds,
+            stream=True,
+        ):
+            if isinstance(evt, LoopAgentStart):
+                yield {"event": "agent_start", "agent": evt.agent, "model": evt.model}
+            elif isinstance(evt, LoopThinking):
+                yield {
+                    "event": "thinking",
+                    "agent": evt.agent,
+                    "text": evt.text,
+                    "is_thinking": evt.is_thinking,
                 }
-                if tools:
-                    api_kwargs["tools"] = tools
-
-                # Stream for real token-by-token output
-                response = None
-                try:
-                    async with self._client.messages.stream(**api_kwargs) as stream:
-                        async for event in stream:
-                            if event.type == "content_block_delta":
-                                delta = event.delta
-                                if delta.type == "thinking_delta":
-                                    thinking_chunks.append(delta.thinking)
-                                    yield {
-                                        "event": "thinking",
-                                        "agent": agent_name,
-                                        "text": delta.thinking,
-                                        "is_thinking": True,
-                                    }
-                                elif delta.type == "text_delta":
-                                    yield {
-                                        "event": "text_delta",
-                                        "agent": agent_name,
-                                        "text": delta.text,
-                                    }
-                        response = await stream.get_final_message()
-                except Exception as stream_err:
-                    if response is None:
-                        # Fallback to non-streaming if stream() fails
-                        logger.warning(
-                            "Streaming failed for %s, falling back: %s",
-                            agent_name,
-                            stream_err,
-                        )
-                        api_kwargs["temperature"] = agent.temperature
-                        api_kwargs.pop("thinking", None)
-                        response = await self._client.messages.create(**api_kwargs)
-
-                total_input += response.usage.input_tokens
-                total_output += response.usage.output_tokens
-                total_cache_creation += (
-                    getattr(response.usage, "cache_creation_input_tokens", 0) or 0
-                )
-                total_cache_read += getattr(response.usage, "cache_read_input_tokens", 0) or 0
-
-                # Capture thinking text from final message for persistence
-                for block in response.content:
-                    if block.type == "thinking" and hasattr(block, "thinking"):
-                        thinking_chunks.append(block.thinking)
-
-                text_blocks = [b for b in response.content if b.type == "text"]
-                tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
-
-                # Emit text blocks as intermediate reasoning (non-streamed fallback)
-                for tb in text_blocks:
-                    if tb.text.strip():
-                        yield {
-                            "event": "thinking",
-                            "agent": agent_name,
-                            "text": tb.text,
-                        }
-
-                if not tool_use_blocks:
-                    text = "".join(b.text for b in text_blocks)
-                    break
-
-                # Process tool calls
-                tool_results = []
-                for tool_block in tool_use_blocks:
-                    tool_name = tool_block.name
-                    tool_input = tool_block.input
-                    tools_called.append(tool_name)
-
-                    yield {
-                        "event": "tool_call",
-                        "agent": agent_name,
-                        "tool": tool_name,
-                        "input": tool_input,
-                    }
-
-                    # Governor pre-hook
-                    pre_result = await governor_pre_tool_hook(
-                        tool_name,
-                        tool_input,
-                        agent_name,
-                        user_id=user_id,
-                        db_factory=self._db_factory,
-                        services=self._services,
-                    )
-
-                    if not pre_result.get("allowed", True):
-                        blocked_msg = {
-                            "error": pre_result.get("reason", "Blocked by policy"),
-                            "approval_required": pre_result.get("approval_required", False),
-                            "approval_id": pre_result.get("approval_id"),
-                        }
-                        tool_results.append(
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": tool_block.id,
-                                "content": json.dumps(blocked_msg),
-                            }
-                        )
-                        tool_call_details.append(
-                            SpanToolCall(
-                                tool_name=tool_name,
-                                input_data=tool_input if isinstance(tool_input, dict) else {},
-                                output_data=blocked_msg,
-                                status="blocked",
-                                error=pre_result.get("reason", "Blocked by policy"),
-                            )
-                        )
-                        yield {
-                            "event": "tool_result",
-                            "agent": agent_name,
-                            "tool": tool_name,
-                            "result": blocked_msg,
-                            "blocked": True,
-                        }
-                        continue
-
-                    tool_start = time.time()
-                    result = await self._execute_tool(
-                        tool_name, tool_input, user_id=user_id, workspace_id=workspace_id
-                    )
-                    tool_latency = int((time.time() - tool_start) * 1000)
-
-                    tool_results.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": tool_block.id,
-                            "content": json.dumps(result)
-                            if isinstance(result, dict)
-                            else str(result),
-                        }
-                    )
-
-                    # Truncate large results for persistence (keep first 2000 chars)
-                    persisted_output = result
-                    if isinstance(result, str) and len(result) > 2000:
-                        persisted_output = result[:2000] + "...[truncated]"
-                    elif isinstance(result, dict):
-                        result_str = json.dumps(result, default=str)
-                        if len(result_str) > 2000:
-                            persisted_output = {"_truncated": result_str[:2000]}
-
-                    tool_call_details.append(
-                        SpanToolCall(
-                            tool_name=tool_name,
-                            input_data=tool_input if isinstance(tool_input, dict) else {},
-                            output_data=persisted_output,
-                            status="success",
-                            duration_ms=tool_latency,
-                        )
-                    )
-
-                    yield {
-                        "event": "tool_result",
-                        "agent": agent_name,
-                        "tool": tool_name,
-                        "result": result,
-                        "latency_ms": tool_latency,
-                    }
-
-                    await audit_post_tool_hook(
-                        tool_name,
-                        tool_input,
-                        result,
-                        agent_name,
-                        trace_id=trace.trace_id if trace else None,
-                        span_id=span.span_id if span else None,
-                        latency_ms=tool_latency,
-                        db_factory=self._db_factory,
-                        workspace_id=workspace_id,
-                    )
-
-                # Preserve thinking blocks for multi-turn tool-use continuity
-                messages.append(
-                    {"role": "assistant", "content": _sanitize_content_blocks(response.content)}
-                )
-                messages.append({"role": "user", "content": tool_results})
-            else:
-                text = f"[Agent {agent_name} hit max tool rounds ({max_tool_rounds})]"
-
-        except anthropic.APIError as e:
-            logger.error("Claude API error in %s: %s", agent_name, e)
-            text = f"[Agent {agent_name} API error: {e}]"
-            yield {"event": "error", "agent": agent_name, "message": str(e)}
-        except Exception as e:
-            logger.error("Agent %s failed: %s", agent_name, e, exc_info=True)
-            text = f"[Agent {agent_name} error: {e}]"
-            yield {"event": "error", "agent": agent_name, "message": str(e)}
-
-        latency_ms = int((time.time() - start_time) * 1000)
-
-        # Assemble thinking summary for persistence (truncate to 5000 chars)
-        thinking_summary = "".join(thinking_chunks)
-        if len(thinking_summary) > 5000:
-            thinking_summary = thinking_summary[:5000] + "...[truncated]"
-        thinking_summary = thinking_summary or None
-
-        # Record usage — must commit or data is lost on session close
-        cost_usd = 0.0
-        try:
-            async with self._db_factory() as db:
-                usage = await self._budget.record_usage(
-                    db,
-                    agent_name=agent_name,
-                    model=model,
-                    input_tokens=total_input,
-                    output_tokens=total_output,
-                    cache_creation_input_tokens=total_cache_creation,
-                    cache_read_input_tokens=total_cache_read,
-                    trigger=trace.trigger if trace else "unknown",
-                    trace_id=trace.trace_id if trace else None,
-                    workspace_id=workspace_id,
-                )
-                cost_usd = usage.cost_usd
-                await db.commit()
-        except Exception as e:
-            logger.error("Failed to record token usage: %s", e)
-
-        if span and trace:
-            trace.end_span(
-                span.span_id,
-                input_tokens=total_input,
-                output_tokens=total_output,
-                cache_creation_input_tokens=total_cache_creation,
-                cache_read_input_tokens=total_cache_read,
-                tools_called=tools_called,
-                tool_call_details=tool_call_details,
-                thinking_summary=thinking_summary,
-                response_text=text,
-                model=model,
-                cost_usd=cost_usd,
-            )
-
-        yield {
-            "event": "agent_done",
-            "agent": agent_name,
-            "text": text,
-            "input_tokens": total_input,
-            "output_tokens": total_output,
-            "cache_creation_tokens": total_cache_creation,
-            "cache_read_tokens": total_cache_read,
-            "tools_called": tools_called,
-            "latency_ms": latency_ms,
-            "cost_usd": round(cost_usd, 6),
-        }
+            elif isinstance(evt, LoopTextDelta):
+                yield {"event": "text_delta", "agent": evt.agent, "text": evt.text}
+            elif isinstance(evt, LoopToolCall):
+                yield {
+                    "event": "tool_call",
+                    "agent": evt.agent,
+                    "tool": evt.tool_name,
+                    "input": evt.tool_input,
+                }
+            elif isinstance(evt, LoopToolResult):
+                yield {
+                    "event": "tool_result",
+                    "agent": evt.agent,
+                    "tool": evt.tool_name,
+                    "result": evt.result,
+                    "blocked": evt.blocked,
+                    "latency_ms": evt.latency_ms,
+                }
+            elif isinstance(evt, LoopError):
+                yield {"event": "error", "agent": evt.agent, "message": evt.message}
+            elif isinstance(evt, LoopDone):
+                yield {
+                    "event": "agent_done",
+                    "agent": evt.agent,
+                    "text": evt.text,
+                    "input_tokens": evt.input_tokens,
+                    "output_tokens": evt.output_tokens,
+                    "cache_creation_tokens": evt.cache_creation_tokens,
+                    "cache_read_tokens": evt.cache_read_tokens,
+                    "tools_called": evt.tools_called,
+                    "latency_ms": evt.latency_ms,
+                    "cost_usd": round(evt.cost_usd, 6),
+                }
 
     async def run_perception_cycle(self, source: str, user_id: str, workspace_id: str = "") -> dict:
         """Run a perception cycle for a specific data source.
@@ -1329,6 +992,71 @@ class JarvisOrchestrator:
 
         return ""
 
+    async def _classify_intent(
+        self,
+        message: str,
+        history_block: str = "",
+    ) -> tuple[str, float]:
+        """Classify user message intent using Haiku — fast and cheap.
+
+        Returns (intent, confidence). Falls back to "command" on error.
+        """
+        classifier_input = message
+        if history_block:
+            classifier_input = f"{history_block}\n\nUser: {message}"
+
+        if self._settings.use_bedrock:
+            model = BEDROCK_MODEL_TIERS["haiku"]
+        else:
+            model = MODEL_TIERS["haiku"]
+
+        try:
+            response = await self._client.messages.create(
+                model=model,
+                max_tokens=100,
+                temperature=0,
+                system=[{"type": "text", "text": INTENT_CLASSIFIER_PROMPT}],
+                messages=[{"role": "user", "content": classifier_input}],
+            )
+
+            text = "".join(b.text for b in response.content if b.type == "text")
+
+            # Parse JSON from response
+            if "{" in text:
+                start = text.index("{")
+                end = text.rindex("}") + 1
+                parsed = json.loads(text[start:end])
+                intent = parsed.get("intent", "command")
+                confidence = float(parsed.get("confidence", 0.5))
+
+                valid_intents = {
+                    "greeting",
+                    "chitchat",
+                    "simple_question",
+                    "data_fetch",
+                    "status_query",
+                    "approval_response",
+                    "command",
+                    "complex",
+                }
+                if intent not in valid_intents:
+                    intent = "command"
+
+                logger.info(
+                    "intent_classified",
+                    extra={
+                        "intent": intent,
+                        "confidence": confidence,
+                        "message_preview": message[:80],
+                    },
+                )
+                return intent, confidence
+
+        except Exception as e:
+            logger.warning("Intent classification failed, defaulting to command: %s", e)
+
+        return "command", 0.5
+
     def _build_system_prompt(self, agent: SubAgent, context: str = "") -> list[dict]:
         """Build system prompt with cache_control for prompt caching.
 
@@ -1363,270 +1091,50 @@ class JarvisOrchestrator:
         max_tool_rounds: int = 10,
         workspace_id: str = "",
     ) -> str:
-        """Call a sub-agent with the Claude API.
-
-        Handles tool use loops: the agent may call tools, we execute them
-        and feed results back until the agent produces a final text response.
-        """
+        """Call a sub-agent (non-streaming). Returns final text response."""
         agent = self._agents.get(agent_name)
         if not agent:
             raise ValueError(f"Unknown agent: {agent_name}")
 
         model = self._get_model_for_agent(agent)
         tools = self._apply_cache_control_to_tools(self._get_tools_for_agent(agent))
-        span = trace.start_span(agent_name) if trace else None
-
-        # Build typed envelope for this agent call
-        envelope = AgentEnvelope(
-            agent_name=agent_name,
-            message=message,
-            tools_available=[t["name"] for t in tools],
-        )
-        logger.debug(
-            "agent_envelope: %s tools=%d", envelope.agent_name, len(envelope.tools_available)
-        )
-
-        # Assemble context (memories + entities) for enriched agents
         context_block = await self._assemble_context(agent_name, message, user_id=user_id)
         system_blocks = self._build_system_prompt(agent, context_block)
 
-        messages = [{"role": "user", "content": message}]
-
-        total_input = 0
-        total_output = 0
-        total_cache_creation = 0
-        total_cache_read = 0
-        tools_called: list[str] = []
-        tool_call_details: list[SpanToolCall] = []
-        thinking_chunks: list[str] = []
-        start_time = time.time()
-
-        # Extended thinking — all Claude 4+ models support it
-        thinking_budget = min(8192, max(1024, agent.max_tokens // 2))
-        if thinking_budget >= agent.max_tokens:
-            thinking_budget = agent.max_tokens - 1
-
-        try:
-            for _round in range(max_tool_rounds):
-                api_kwargs = {
-                    "model": model,
-                    "max_tokens": agent.max_tokens,
-                    "temperature": 1,  # required when thinking is enabled
-                    "thinking": {
-                        "type": "enabled",
-                        "budget_tokens": thinking_budget,
+        text = ""
+        async for evt in agent_loop(
+            client=self._client,
+            agent=agent,
+            model=model,
+            system_blocks=system_blocks,
+            tools=tools,
+            message=message,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            db_factory=self._db_factory,
+            services=self._services,
+            budget=self._budget,
+            trace=trace,
+            execute_tool_fn=self._execute_tool,
+            max_tool_rounds=max_tool_rounds,
+            stream=False,
+        ):
+            if isinstance(evt, LoopDone):
+                text = evt.text
+                logger.info(
+                    "agent_call_complete",
+                    extra={
+                        "agent": agent_name,
+                        "model": model,
+                        "input_tokens": evt.input_tokens,
+                        "output_tokens": evt.output_tokens,
+                        "tools_called": evt.tools_called,
+                        "latency_ms": evt.latency_ms,
+                        "trace_id": trace.trace_id if trace else None,
                     },
-                    "system": system_blocks,
-                    "messages": messages,
-                }
-                if tools:
-                    api_kwargs["tools"] = tools
-
-                try:
-                    response = await self._client.messages.create(**api_kwargs)
-                except Exception as think_err:
-                    # Fallback: disable thinking if the model/provider rejects it
-                    logger.warning(
-                        "Thinking failed for %s, falling back: %s", agent_name, think_err
-                    )
-                    api_kwargs["temperature"] = agent.temperature
-                    api_kwargs.pop("thinking", None)
-                    response = await self._client.messages.create(**api_kwargs)
-
-                total_input += response.usage.input_tokens
-                total_output += response.usage.output_tokens
-                total_cache_creation += (
-                    getattr(response.usage, "cache_creation_input_tokens", 0) or 0
                 )
-                total_cache_read += getattr(response.usage, "cache_read_input_tokens", 0) or 0
 
-                # Capture thinking content for persistence
-                for block in response.content:
-                    if block.type == "thinking" and hasattr(block, "thinking"):
-                        thinking_chunks.append(block.thinking)
-
-                # Check if the response contains tool use
-                tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
-
-                if not tool_use_blocks:
-                    # Final text response
-                    text = "".join(b.text for b in response.content if b.type == "text")
-                    break
-
-                # Process tool calls
-                tool_results = []
-                for tool_block in tool_use_blocks:
-                    tool_name = tool_block.name
-                    tool_input = tool_block.input
-                    tools_called.append(tool_name)
-
-                    # Governor pre-hook for write tools
-                    pre_result = await governor_pre_tool_hook(
-                        tool_name,
-                        tool_input,
-                        agent_name,
-                        user_id=user_id,
-                        db_factory=self._db_factory,
-                        services=self._services,
-                    )
-
-                    if not pre_result.get("allowed", True):
-                        tool_results.append(
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": tool_block.id,
-                                "content": json.dumps(
-                                    {
-                                        "error": pre_result.get("reason", "Blocked by policy"),
-                                        "approval_required": pre_result.get(
-                                            "approval_required", False
-                                        ),
-                                        "approval_id": pre_result.get("approval_id"),
-                                    }
-                                ),
-                            }
-                        )
-                        tool_call_details.append(
-                            SpanToolCall(
-                                tool_name=tool_name,
-                                input_data=tool_input if isinstance(tool_input, dict) else {},
-                                status="blocked",
-                                error=pre_result.get("reason", "Blocked by policy"),
-                            )
-                        )
-                        continue
-
-                    # Execute the tool
-                    tool_start = time.time()
-                    result = await self._execute_tool(
-                        tool_name, tool_input, user_id=user_id, workspace_id=workspace_id
-                    )
-                    tool_latency = int((time.time() - tool_start) * 1000)
-
-                    tool_results.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": tool_block.id,
-                            "content": json.dumps(result)
-                            if isinstance(result, dict)
-                            else str(result),
-                        }
-                    )
-
-                    # Truncate large results for persistence
-                    persisted_output = result
-                    if isinstance(result, str) and len(result) > 2000:
-                        persisted_output = result[:2000] + "...[truncated]"
-                    elif isinstance(result, dict):
-                        result_str = json.dumps(result, default=str)
-                        if len(result_str) > 2000:
-                            persisted_output = {"_truncated": result_str[:2000]}
-
-                    tool_call_details.append(
-                        SpanToolCall(
-                            tool_name=tool_name,
-                            input_data=tool_input if isinstance(tool_input, dict) else {},
-                            output_data=persisted_output,
-                            status="success",
-                            duration_ms=tool_latency,
-                        )
-                    )
-
-                    # Audit post-hook
-                    await audit_post_tool_hook(
-                        tool_name,
-                        tool_input,
-                        result,
-                        agent_name,
-                        trace_id=trace.trace_id if trace else None,
-                        span_id=span.span_id if span else None,
-                        latency_ms=tool_latency,
-                        db_factory=self._db_factory,
-                        workspace_id=workspace_id,
-                    )
-
-                # Preserve thinking blocks for multi-turn tool-use continuity
-                messages.append(
-                    {"role": "assistant", "content": _sanitize_content_blocks(response.content)}
-                )
-                messages.append({"role": "user", "content": tool_results})
-            else:
-                text = f"[Agent {agent_name} hit max tool rounds ({max_tool_rounds})]"
-
-        except anthropic.APIError as e:
-            logger.error("Claude API error in %s: %s", agent_name, e)
-            text = f"[Agent {agent_name} API error: {e}]"
-        except Exception as e:
-            logger.error("Agent %s failed: %s", agent_name, e, exc_info=True)
-            text = f"[Agent {agent_name} error: {e}]"
-
-        latency_ms = int((time.time() - start_time) * 1000)
-
-        # Assemble thinking summary for persistence (truncate to 5000 chars)
-        thinking_summary = "".join(thinking_chunks)
-        if len(thinking_summary) > 5000:
-            thinking_summary = thinking_summary[:5000] + "...[truncated]"
-        thinking_summary = thinking_summary or None
-
-        # Record token usage — must commit or data is lost on session close
-        cost_usd = 0.0
-        try:
-            async with self._db_factory() as db:
-                usage = await self._budget.record_usage(
-                    db,
-                    agent_name=agent_name,
-                    model=model,
-                    input_tokens=total_input,
-                    output_tokens=total_output,
-                    cache_creation_input_tokens=total_cache_creation,
-                    cache_read_input_tokens=total_cache_read,
-                    trigger=trace.trigger if trace else "unknown",
-                    trace_id=trace.trace_id if trace else None,
-                    workspace_id=workspace_id,
-                )
-                cost_usd = usage.cost_usd
-                await db.commit()
-        except Exception as e:
-            logger.error("Failed to record token usage: %s", e)
-
-        # End span
-        if span and trace:
-            trace.end_span(
-                span.span_id,
-                input_tokens=total_input,
-                output_tokens=total_output,
-                cache_creation_input_tokens=total_cache_creation,
-                cache_read_input_tokens=total_cache_read,
-                tools_called=tools_called,
-                tool_call_details=tool_call_details,
-                thinking_summary=thinking_summary,
-                response_text=text,
-                model=model,
-                cost_usd=cost_usd,
-            )
-
-        # Build typed result
-        agent_result = AgentResult(
-            agent_name=agent_name,
-            response_text=text,
-            tools_called=tools_called,
-            tokens_used=total_input + total_output,
-        )
-
-        logger.info(
-            "agent_call_complete",
-            extra={
-                "agent": agent_result.agent_name,
-                "model": model,
-                "input_tokens": total_input,
-                "output_tokens": total_output,
-                "tools_called": agent_result.tools_called,
-                "latency_ms": latency_ms,
-                "trace_id": trace.trace_id if trace else None,
-            },
-        )
-
-        return agent_result.response_text
+        return text
 
     async def _execute_tool(
         self, tool_name: str, tool_input: dict, user_id: str, workspace_id: str = ""
@@ -1649,6 +1157,10 @@ class JarvisOrchestrator:
                     return {"error": f"Tool '{tool_name}' is disabled", "blocked": True}
         except Exception:
             pass  # Fallback: skip pre-checks if registry unavailable
+
+        # Governor structured output: reporting tool returns input as-is
+        if tool_name == "report_governor_verdict":
+            return tool_input
 
         from src.tools import intelligence_server
 
@@ -1846,6 +1358,26 @@ class JarvisOrchestrator:
         except Exception as e:
             logger.error("Plan execution via graph failed: %s", e, exc_info=True)
             return {"status": "error", "error": str(e)}
+
+    @staticmethod
+    def _intent_to_decision(intent: str, message: str) -> PlannerOutput:
+        """Synthesize a lightweight PlannerOutput from a fast intent classification."""
+        intent_map = {
+            "greeting": "acknowledge",
+            "chitchat": "acknowledge",
+            "simple_question": "answer_directly",
+            "data_fetch": "observe",
+            "status_query": "answer_directly",
+            "approval_response": "acknowledge",
+        }
+        return PlannerOutput(
+            decision=intent_map.get(intent, "acknowledge"),
+            reasoning=f"Fast-classified as {intent}",
+            priority="low" if intent in ("greeting", "chitchat") else "medium",
+            risk_level="none" if intent in ("greeting", "chitchat") else "low",
+            execution_mode="auto_execute",
+            goal=message[:200],
+        )
 
     def _extract_decision(self, response_text: str) -> PlannerOutput:
         """Extract and validate structured decision from planner response."""

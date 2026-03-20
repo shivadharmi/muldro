@@ -512,6 +512,8 @@ export interface ConversationSummary {
 
 export interface MessageToolCall {
   tool_name: string;
+  tool_input: Record<string, unknown>;
+  result_preview: string | null;
   status: "success" | "error" | "blocked";
   duration_ms: number;
 }
@@ -522,6 +524,7 @@ export interface MessageAgentStep {
   status: "done" | "error";
   response_text: string | null;
   thinking_preview: string | null;
+  reasoning_text: string | null;
   tool_calls: MessageToolCall[];
   input_tokens: number | null;
   output_tokens: number | null;

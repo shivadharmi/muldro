@@ -107,6 +107,94 @@ class SlackConnector(BaseConnector):
         except Exception as e:
             return ConnectorHealth(provider="slack", status="down", last_poll_at=None, error=str(e))
 
+    supports_actions: bool = True
+    available_actions: list[str] = ["post_message", "update_message", "react"]
+
+    async def execute_action(self, action: str, params: dict, credentials: dict) -> dict:
+        """Execute a Slack write action."""
+        if action not in self.available_actions:
+            return {"status": "error", "error": f"Unknown action: {action}"}
+
+        access_token = credentials.get("access_token", "")
+        if not access_token:
+            return {"status": "error", "error": "No access token"}
+
+        dispatch = {
+            "post_message": self._action_post_message,
+            "update_message": self._action_update_message,
+            "react": self._action_react,
+        }
+        return await dispatch[action](params, access_token)
+
+    async def _action_post_message(self, params: dict, access_token: str) -> dict:
+        """Post a message to a Slack channel."""
+        import httpx
+
+        channel = params.get("channel", "")
+        text = params.get("text", "")
+        if not channel or not text:
+            return {"status": "error", "error": "channel and text required"}
+
+        body = {"channel": channel, "text": text}
+        if params.get("thread_ts"):
+            body["thread_ts"] = params["thread_ts"]
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://slack.com/api/chat.postMessage",
+                json=body,
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=15,
+            )
+            data = resp.json()
+            if data.get("ok"):
+                return {"status": "ok", "ts": data.get("ts"), "channel": data.get("channel")}
+            return {"status": "error", "error": data.get("error", "unknown")}
+
+    async def _action_update_message(self, params: dict, access_token: str) -> dict:
+        """Update a Slack message."""
+        import httpx
+
+        channel = params.get("channel", "")
+        ts = params.get("ts", "")
+        text = params.get("text", "")
+        if not channel or not ts or not text:
+            return {"status": "error", "error": "channel, ts, and text required"}
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://slack.com/api/chat.update",
+                json={"channel": channel, "ts": ts, "text": text},
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=15,
+            )
+            data = resp.json()
+            if data.get("ok"):
+                return {"status": "ok", "ts": data.get("ts")}
+            return {"status": "error", "error": data.get("error", "unknown")}
+
+    async def _action_react(self, params: dict, access_token: str) -> dict:
+        """Add a reaction to a Slack message."""
+        import httpx
+
+        channel = params.get("channel", "")
+        ts = params.get("timestamp", "")
+        name = params.get("name", "")
+        if not channel or not ts or not name:
+            return {"status": "error", "error": "channel, timestamp, and name required"}
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://slack.com/api/reactions.add",
+                json={"channel": channel, "timestamp": ts, "name": name},
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=10,
+            )
+            data = resp.json()
+            if data.get("ok"):
+                return {"status": "ok"}
+            return {"status": "error", "error": data.get("error", "unknown")}
+
     async def get_auth_url(self, scopes: list[str] | None = None) -> str:
         return "/v1/auth/oauth/slack/authorize"
 

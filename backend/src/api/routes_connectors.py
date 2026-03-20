@@ -9,11 +9,26 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
+from src.config.settings import Settings, get_settings
 from src.models.events import NormalizedEvent
 from src.services.connector_manager import ConnectorManager
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _make_connector_manager(db: AsyncSession, settings: Settings) -> ConnectorManager:
+    """Create a ConnectorManager wired to OAuthManager for proper token handling."""
+    from src.models.database import get_session_factory
+    from src.services.oauth_manager import OAuthManager
+
+    db_factory = get_session_factory()
+    oauth_mgr = OAuthManager(
+        db_factory,
+        encryption_key=settings.oauth_encryption_key,
+        settings=settings,
+    )
+    return ConnectorManager(db, oauth_manager=oauth_mgr, settings=settings)
 
 
 class ConnectorCreateRequest(BaseModel):
@@ -30,9 +45,10 @@ async def list_connectors(
     user_id: str = Depends(get_current_user_id),
     workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ):
     """List all connectors for the current user with event counts."""
-    mgr = ConnectorManager(db)
+    mgr = _make_connector_manager(db, settings)
     connectors = await mgr.get_user_connectors(user_id)
 
     # Enrich with event counts
@@ -74,14 +90,29 @@ async def create_connector(
     user_id: str = Depends(get_current_user_id),
     workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ):
     """Register a new connector."""
-    valid_providers = {"gmail", "calendar", "github", "slack"}
+    valid_providers = {
+        "gmail",
+        "calendar",
+        "github",
+        "slack",
+        "drive",
+        "web_search",
+        "linear",
+        "notion",
+        "jira",
+        "whatsapp",
+        "sms",
+        "linkedin",
+        "twitter",
+    }
     if req.provider not in valid_providers:
         raise HTTPException(
             status_code=400, detail=f"Unknown provider. Must be one of: {valid_providers}"
         )
-    mgr = ConnectorManager(db)
+    mgr = _make_connector_manager(db, settings)
     result = await mgr.register_connector(user_id, req.provider, req.config, workspace_id)
     return result
 
@@ -91,9 +122,10 @@ async def delete_connector(
     connector_id: str,
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ):
     """Disconnect a connector."""
-    mgr = ConnectorManager(db)
+    mgr = _make_connector_manager(db, settings)
     await mgr.disconnect(connector_id, user_id)
     return {"status": "disconnected"}
 
@@ -103,9 +135,10 @@ async def test_connector(
     connector_id: str,
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ):
     """Test a connector's connection."""
-    mgr = ConnectorManager(db)
+    mgr = _make_connector_manager(db, settings)
     result = await mgr.test_connector(connector_id, user_id)
     return result
 
@@ -115,8 +148,9 @@ async def poll_connector(
     connector_id: str,
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ):
     """Manually trigger a poll for a connector."""
-    mgr = ConnectorManager(db)
+    mgr = _make_connector_manager(db, settings)
     result = await mgr.poll_connector(connector_id, user_id)
     return result

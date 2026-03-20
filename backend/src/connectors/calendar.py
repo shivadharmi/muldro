@@ -86,6 +86,83 @@ class CalendarConnector(BaseConnector):
                 provider="calendar", status="down", last_poll_at=None, error=str(e)
             )
 
+    supports_actions: bool = True
+    available_actions: list[str] = ["create_event", "update_event"]
+
+    async def execute_action(self, action: str, params: dict, credentials: dict) -> dict:
+        """Execute a Calendar write action."""
+        if action not in self.available_actions:
+            return {"status": "error", "error": f"Unknown action: {action}"}
+
+        access_token = credentials.get("access_token", "")
+        if not access_token:
+            return {"status": "error", "error": "No access token"}
+
+        dispatch = {
+            "create_event": self._action_create_event,
+            "update_event": self._action_update_event,
+        }
+        return await dispatch[action](params, access_token)
+
+    async def _action_create_event(self, params: dict, access_token: str) -> dict:
+        """Create a calendar event."""
+        import httpx
+
+        body = {
+            "summary": params.get("summary", ""),
+            "start": params.get("start", {}),
+            "end": params.get("end", {}),
+        }
+        if params.get("description"):
+            body["description"] = params["description"]
+        if params.get("location"):
+            body["location"] = params["location"]
+        if params.get("attendees"):
+            body["attendees"] = [{"email": e} for e in params["attendees"]]
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+                json=body,
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=15,
+            )
+            if resp.status_code in (200, 201):
+                data = resp.json()
+                return {
+                    "status": "ok",
+                    "event_id": data.get("id"),
+                    "html_link": data.get("htmlLink"),
+                }
+            return {"status": "error", "error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+
+    async def _action_update_event(self, params: dict, access_token: str) -> dict:
+        """Update a calendar event."""
+        import httpx
+
+        event_id = params.get("event_id", "")
+        if not event_id:
+            return {"status": "error", "error": "event_id required"}
+
+        body = {}
+        for key in ("summary", "description", "location", "start", "end"):
+            if params.get(key):
+                body[key] = params[key]
+        if params.get("attendees"):
+            body["attendees"] = [{"email": e} for e in params["attendees"]]
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.patch(
+                f"https://www.googleapis.com/calendar/v3/calendars/primary/events/{event_id}",
+                json=body,
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return {"status": "ok", "event_id": data.get("id")}
+            return {"status": "error", "error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+
     async def get_auth_url(self, scopes: list[str] | None = None) -> str:
         return "/v1/auth/oauth/google/authorize"
 

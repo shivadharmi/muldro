@@ -164,6 +164,8 @@ class MessageToolCall(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     tool_name: str
+    tool_input: dict[str, Any] = Field(default_factory=dict)
+    result_preview: str | None = None
     status: Literal["success", "error", "blocked"] = "success"
     duration_ms: int = 0
 
@@ -178,6 +180,7 @@ class MessageAgentStep(BaseModel):
     status: Literal["done", "error"] = "done"
     response_text: str | None = None
     thinking_preview: str | None = None
+    reasoning_text: str | None = None
     tool_calls: list[MessageToolCall] = Field(default_factory=list)
     input_tokens: int | None = None
     output_tokens: int | None = None

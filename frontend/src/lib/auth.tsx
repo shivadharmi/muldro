@@ -3,9 +3,9 @@
 import {
   createContext,
   useContext,
-  useState,
-  useEffect,
   useCallback,
+  useEffect,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 
@@ -50,28 +50,60 @@ function clearStoredAuth(): void {
   localStorage.removeItem(EXPIRES_KEY);
 }
 
-function getInitialAuth(): { token: string | null; user: AuthUser | null } {
-  if (typeof window === "undefined") return { token: null, user: null };
+// ── External store for auth state (hydration-safe) ─────────────────
+// useSyncExternalStore returns the server snapshot during SSR and hydration,
+// then switches to the client snapshot. React handles this transition
+// without hydration mismatch errors.
+
+type AuthSnapshot = { token: string | null; user: AuthUser | null; hydrated: boolean };
+
+let listeners: Array<() => void> = [];
+let cachedSnapshot: AuthSnapshot | null = null;
+
+const SERVER_SNAPSHOT: AuthSnapshot = { token: null, user: null, hydrated: false };
+
+function readFromStorage(): AuthSnapshot {
   try {
     if (isTokenExpired()) {
       clearStoredAuth();
-      return { token: null, user: null };
+      return { token: null, user: null, hydrated: true };
     }
     const storedToken = localStorage.getItem(TOKEN_KEY);
     const storedUser = localStorage.getItem(USER_KEY);
     if (storedToken && storedUser) {
-      return { token: storedToken, user: JSON.parse(storedUser) };
+      return { token: storedToken, user: JSON.parse(storedUser), hydrated: true };
     }
   } catch {
     clearStoredAuth();
   }
-  return { token: null, user: null };
+  return { token: null, user: null, hydrated: true };
+}
+
+function getSnapshot(): AuthSnapshot {
+  if (cachedSnapshot === null) {
+    cachedSnapshot = readFromStorage();
+  }
+  return cachedSnapshot;
+}
+
+function getServerSnapshot(): AuthSnapshot {
+  return SERVER_SNAPSHOT;
+}
+
+function subscribe(callback: () => void) {
+  listeners.push(callback);
+  return () => {
+    listeners = listeners.filter((l) => l !== callback);
+  };
+}
+
+function emitChange() {
+  cachedSnapshot = readFromStorage();
+  for (const listener of listeners) listener();
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  // Lazy initializers — no useEffect + setState needed
-  const [user, setUser] = useState<AuthUser | null>(() => getInitialAuth().user);
-  const [token, setToken] = useState<string | null>(() => getInitialAuth().token);
+  const { token, user, hydrated } = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 
   // Check token expiration periodically
   useEffect(() => {
@@ -79,8 +111,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const interval = setInterval(() => {
       if (isTokenExpired()) {
         clearStoredAuth();
-        setToken(null);
-        setUser(null);
+        emitChange();
       }
     }, 60_000);
     return () => clearInterval(interval);
@@ -88,21 +119,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(
     (newToken: string, newUser: AuthUser, expiresAt?: string) => {
-      setToken(newToken);
-      setUser(newUser);
       localStorage.setItem(TOKEN_KEY, newToken);
       localStorage.setItem(USER_KEY, JSON.stringify(newUser));
       if (expiresAt) {
         localStorage.setItem(EXPIRES_KEY, expiresAt);
       }
+      emitChange();
     },
     []
   );
 
   const logout = useCallback(() => {
-    setToken(null);
-    setUser(null);
     clearStoredAuth();
+    emitChange();
   }, []);
 
   return (
@@ -111,7 +140,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user,
         token,
         isAuthenticated: !!token && !!user,
-        isLoading: false,
+        isLoading: !hydrated,
         login,
         logout,
       }}

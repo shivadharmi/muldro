@@ -55,13 +55,15 @@ function backendMessagesToChat(messages: ConversationMessage[]): ChatMessage[] {
         agent: step.agent,
         model: step.model ?? undefined,
         status: step.status === "error" ? ("error" as const) : ("done" as const),
-        thinking: [],
-        realThinking: [],
+        thinking: step.reasoning_text ? [step.reasoning_text] : [],
+        realThinking: step.thinking_preview ? [step.thinking_preview] : [],
         streamingText: "",
         toolCalls: (step.tool_calls ?? []).map((tc) => ({
           tool: tc.tool_name,
-          input: {},
+          input: tc.tool_input ?? {},
+          result: tc.result_preview ? tryParseJson(tc.result_preview) : undefined,
           blocked: tc.status === "blocked",
+          latencyMs: tc.duration_ms || undefined,
         })),
         text: step.response_text ?? undefined,
         inputTokens: step.input_tokens ?? undefined,
@@ -78,9 +80,18 @@ function backendMessagesToChat(messages: ConversationMessage[]): ChatMessage[] {
         content: m.content,
         timestamp: m.created_at || new Date().toISOString(),
         traceId: m.metadata_?.trace_id ?? undefined,
+        decision: m.metadata_?.decision ?? undefined,
         agents,
       };
     });
+}
+
+function tryParseJson(s: string): unknown {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return s;
+  }
 }
 
 export function ChatPanel({
@@ -214,51 +225,6 @@ export function ChatPanel({
               scrollToBottom();
               break;
 
-            case "tool_call":
-              updateAssistant((m) => ({
-                ...m,
-                agents: m.agents.map((a) =>
-                  a.agent === event.agent && a.status === "running"
-                    ? {
-                        ...a,
-                        toolCalls: [
-                          ...a.toolCalls,
-                          {
-                            tool: event.tool || "unknown",
-                            input: event.input || {},
-                          },
-                        ],
-                      }
-                    : a
-                ),
-              }));
-              scrollToBottom();
-              break;
-
-            case "tool_result":
-              updateAssistant((m) => ({
-                ...m,
-                agents: m.agents.map((a) =>
-                  a.agent === event.agent && a.status === "running"
-                    ? {
-                        ...a,
-                        toolCalls: a.toolCalls.map((tc, i) =>
-                          i === a.toolCalls.length - 1 && tc.tool === event.tool
-                            ? {
-                                ...tc,
-                                result: event.result,
-                                blocked: event.blocked,
-                                latencyMs: event.latency_ms,
-                              }
-                            : tc
-                        ),
-                      }
-                    : a
-                ),
-              }));
-              scrollToBottom();
-              break;
-
             case "decision":
               updateAssistant((m) => ({
                 ...m,
@@ -372,10 +338,22 @@ function UserBubble({ content }: { content: string }) {
 }
 
 function AssistantMessage({ msg }: { msg: ChatMessage }) {
-  const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
+  // Auto-expand running agents by computing expanded set from state + running agents
+  const [manualExpanded, setManualExpanded] = useState<Set<string>>(new Set());
+
+  // Derive expandedAgents: manual toggles + auto-expand running agents during streaming
+  const expandedAgents = (() => {
+    const expanded = new Set(manualExpanded);
+    if (msg.streaming) {
+      msg.agents.forEach((a, i) => {
+        if (a.status === "running") expanded.add(`${a.agent}-${i}`);
+      });
+    }
+    return expanded;
+  })();
 
   const toggleAgent = (agent: string) => {
-    setExpandedAgents((prev) => {
+    setManualExpanded((prev) => {
       const next = new Set(prev);
       if (next.has(agent)) next.delete(agent);
       else next.add(agent);
@@ -419,10 +397,21 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
           </div>
         ) : msg.streaming ? (
           <div className="rounded-[var(--radius-lg)] px-3.5 py-2.5 text-sm bg-surface-2 text-t-tertiary border-l-2 border-l-j-primary">
-            <span className="inline-flex items-center gap-1">
-              <span>Processing</span>
-              <span className="w-1.5 h-4 bg-j-primary animate-caret rounded-sm" />
-            </span>
+            {/* Show presenter streaming text as live response */}
+            {(() => {
+              const presenterAgent = msg.agents.find(
+                (a) => a.agent === "presenter" && a.status === "running" && a.streamingText
+              );
+              if (presenterAgent?.streamingText) {
+                return <MarkdownRenderer content={presenterAgent.streamingText} />;
+              }
+              return (
+                <span className="inline-flex items-center gap-1">
+                  <span>{msg.agents.length > 0 ? "Thinking" : "Connecting to Jarvis"}</span>
+                  <span className="w-1.5 h-4 bg-j-primary animate-caret rounded-sm" />
+                </span>
+              );
+            })()}
           </div>
         ) : null}
 
@@ -473,11 +462,6 @@ function AgentCard({
         {agent.model && (
           <span className="text-t-muted">
             {agent.model.replace("claude-", "").replace(/-\d+$/, "")}
-          </span>
-        )}
-        {agent.toolCalls.length > 0 && (
-          <span className="text-t-tertiary">
-            {agent.toolCalls.length} tool{agent.toolCalls.length !== 1 ? "s" : ""}
           </span>
         )}
         {agent.costUsd != null && agent.costUsd > 0 && (
@@ -542,34 +526,6 @@ function AgentCard({
               </div>
             </div>
           )}
-
-          {/* Tool calls */}
-          {agent.toolCalls.map((tc, i) => (
-            <div key={i} className="mt-1">
-              <div className="flex items-center gap-1.5">
-                <span className="text-j-secondary">{"\u2192"}</span>
-                <span className="text-j-secondary font-mono">{tc.tool}</span>
-                {tc.blocked && (
-                  <span className="text-j-error text-[10px]">BLOCKED</span>
-                )}
-                {tc.latencyMs != null && (
-                  <span className="text-t-muted">{tc.latencyMs}ms</span>
-                )}
-              </div>
-              {Object.keys(tc.input).length > 0 && (
-                <pre className="text-t-tertiary bg-surface-0 rounded px-2 py-0.5 mt-0.5 overflow-x-auto max-h-20 overflow-y-auto">
-                  {JSON.stringify(tc.input, null, 2)}
-                </pre>
-              )}
-              {tc.result !== undefined && (
-                <pre className="text-t-secondary bg-surface-0 rounded px-2 py-0.5 mt-0.5 overflow-x-auto max-h-20 overflow-y-auto">
-                  {typeof tc.result === "string"
-                    ? tc.result.slice(0, 300)
-                    : JSON.stringify(tc.result, null, 2)?.slice(0, 300)}
-                </pre>
-              )}
-            </div>
-          ))}
 
           {/* Token usage + cost stats */}
           {(agent.inputTokens || agent.outputTokens) && (
