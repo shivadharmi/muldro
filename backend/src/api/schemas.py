@@ -1,8 +1,17 @@
 """Pydantic schemas for API request/response contracts."""
 
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel
+
+# ── Shared Type Literals ─────────────────────────────────────────
+
+MemoryType = Literal[
+    "episodic", "semantic", "preference", "relationship", "task_context", "procedural"
+]
+MemoryScope = Literal["presentation", "planning", "general"]
+BriefingStyle = Literal["founder", "personal", "academic", "general"]
 
 # ── Command ───────────────────────────────────────────────────────
 

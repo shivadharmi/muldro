@@ -37,12 +37,12 @@ def mock_db():
 
 class TestEntityRelationTypes:
     def test_entity_types_expanded(self):
-        """Should have 15 entity types."""
-        assert len(ENTITY_TYPES) == 15
+        """Should have 24 entity types (15 work + 9 personal)."""
+        assert len(ENTITY_TYPES) == 24
         # Original 4
         for t in ("person", "organization", "project", "meeting"):
             assert t in ENTITY_TYPES
-        # Phase 5 types
+        # Work-domain types
         for t in (
             "goal",
             "task",
@@ -52,19 +52,32 @@ class TestEntityRelationTypes:
             "channel",
             "product",
             "investment",
+            "website",
+            "tool",
+            "watcher",
         ):
             assert t in ENTITY_TYPES
-        # Phase C types
-        for t in ("website", "tool", "watcher"):
+        # Personal-domain types
+        for t in (
+            "location",
+            "health_record",
+            "hobby",
+            "family_member",
+            "financial_account",
+            "media_item",
+            "recipe",
+            "course",
+            "contact_group",
+        ):
             assert t in ENTITY_TYPES
 
     def test_relation_types_expanded(self):
-        """Should have 17 relation types."""
-        assert len(RELATION_TYPES) == 17
+        """Should have 24 relation types (17 work + 7 personal)."""
+        assert len(RELATION_TYPES) == 24
         # Original 5
         for r in ("works_on", "related_to", "scheduled_with", "reports_to", "owns"):
             assert r in RELATION_TYPES
-        # Phase 5 types
+        # Work-domain types
         for r in (
             "member_of",
             "assigned_to",
@@ -73,10 +86,23 @@ class TestEntityRelationTypes:
             "attends",
             "authored",
             "invested_in",
+            "blocked_by",
+            "sent_by",
+            "attached_to",
+            "derived_from",
+            "monitors",
         ):
             assert r in RELATION_TYPES
-        # Phase C types
-        for r in ("blocked_by", "sent_by", "attached_to", "derived_from", "monitors"):
+        # Personal-domain types
+        for r in (
+            "lives_at",
+            "prescribed_by",
+            "enrolled_in",
+            "follows",
+            "subscribes_to",
+            "shares_with",
+            "cares_for",
+        ):
             assert r in RELATION_TYPES
 
 

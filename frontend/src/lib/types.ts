@@ -1,5 +1,71 @@
 /** TypeScript interfaces mirroring backend Pydantic schemas. */
 
+// ── Domain Types ────────────────────────────────────────────────
+
+export type EntityType =
+  | "person"
+  | "organization"
+  | "project"
+  | "meeting"
+  | "goal"
+  | "task"
+  | "document"
+  | "message_thread"
+  | "repository"
+  | "channel"
+  | "product"
+  | "investment"
+  | "website"
+  | "tool"
+  | "watcher"
+  | "location"
+  | "health_record"
+  | "hobby"
+  | "family_member"
+  | "financial_account"
+  | "media_item"
+  | "recipe"
+  | "course"
+  | "contact_group";
+
+export type RelationType =
+  | "works_on"
+  | "related_to"
+  | "scheduled_with"
+  | "reports_to"
+  | "owns"
+  | "member_of"
+  | "assigned_to"
+  | "mentioned_in"
+  | "depends_on"
+  | "attends"
+  | "authored"
+  | "invested_in"
+  | "blocked_by"
+  | "sent_by"
+  | "attached_to"
+  | "derived_from"
+  | "monitors"
+  | "lives_at"
+  | "prescribed_by"
+  | "enrolled_in"
+  | "follows"
+  | "subscribes_to"
+  | "shares_with"
+  | "cares_for";
+
+export type MemoryType =
+  | "episodic"
+  | "semantic"
+  | "preference"
+  | "relationship"
+  | "task_context"
+  | "procedural";
+
+export type MemoryScope = "presentation" | "planning" | "general";
+
+export type BriefingStyle = "founder" | "personal" | "academic" | "general";
+
 // ── System Dashboard ────────────────────────────────────────────
 
 export interface BudgetInfo {

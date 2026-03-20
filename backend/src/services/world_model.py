@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 ENTITY_TYPES = frozenset(
     {
+        # Work domain
         "person",
         "organization",
         "project",
@@ -42,11 +43,22 @@ ENTITY_TYPES = frozenset(
         "website",
         "tool",
         "watcher",
+        # Personal domain
+        "location",
+        "health_record",
+        "hobby",
+        "family_member",
+        "financial_account",
+        "media_item",
+        "recipe",
+        "course",
+        "contact_group",
     }
 )
 
 RELATION_TYPES = frozenset(
     {
+        # Work domain
         "works_on",
         "related_to",
         "scheduled_with",
@@ -64,6 +76,14 @@ RELATION_TYPES = frozenset(
         "attached_to",
         "derived_from",
         "monitors",
+        # Personal domain
+        "lives_at",
+        "prescribed_by",
+        "enrolled_in",
+        "follows",
+        "subscribes_to",
+        "shares_with",
+        "cares_for",
     }
 )
 
@@ -92,11 +112,14 @@ You MUST respond with valid JSON matching this schema:
 }
 
 Entity types: person, organization, project, meeting, goal, task, document, \
-message_thread, repository, channel, product, investment, website, tool, watcher
+message_thread, repository, channel, product, investment, website, tool, watcher, \
+location, health_record, hobby, family_member, financial_account, media_item, \
+recipe, course, contact_group
 
 Relation types: works_on, related_to, scheduled_with, reports_to, owns, \
 member_of, assigned_to, mentioned_in, depends_on, attends, authored, invested_in, \
-blocked_by, sent_by, attached_to, derived_from, monitors
+blocked_by, sent_by, attached_to, derived_from, monitors, lives_at, prescribed_by, \
+enrolled_in, follows, subscribes_to, shares_with, cares_for
 
 Rules:
 - Always extract the sender/actor as a person entity

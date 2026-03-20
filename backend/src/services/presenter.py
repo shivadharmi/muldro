@@ -30,10 +30,7 @@ from src.models.plans import Plan
 
 logger = logging.getLogger(__name__)
 
-BRIEFING_SYSTEM_PROMPT = """\
-You are Jarvis's briefing generator. Given structured data about recent events, \
-pending approvals, and active plans, produce a concise daily briefing for a busy founder.
-
+BRIEFING_JSON_SCHEMA = """\
 You MUST respond with valid JSON matching this schema:
 {
   "headline": "One-line summary (e.g. '3 priorities, 2 follow-ups, 1 meeting risk')",
@@ -55,6 +52,35 @@ Rules:
 - full_text should be scannable — use bold, bullets, short paragraphs
 - If there are no events, say so briefly
 """
+
+BRIEFING_STYLE_PROMPTS: dict[str, str] = {
+    "founder": (
+        "You are Jarvis's briefing generator. Given structured data about recent events, "
+        "pending approvals, and active plans, produce a concise daily briefing for a busy founder. "
+        "Prioritize revenue-impacting items, investor relations, and team blockers.\n\n"
+        + BRIEFING_JSON_SCHEMA
+    ),
+    "personal": (
+        "You are Jarvis's briefing generator. Given structured data about recent events "
+        "and plans, produce a friendly daily briefing for personal life management. "
+        "Prioritize health, family, finances, and personal goals. "
+        "Keep the tone warm and supportive.\n\n" + BRIEFING_JSON_SCHEMA
+    ),
+    "academic": (
+        "You are Jarvis's briefing generator. Given structured data about recent events "
+        "and plans, produce a daily briefing for an academic or researcher. "
+        "Prioritize deadlines, publications, collaborations, and research milestones.\n\n"
+        + BRIEFING_JSON_SCHEMA
+    ),
+    "general": (
+        "You are Jarvis's briefing generator. Given structured data about recent events, "
+        "pending approvals, and active plans, produce a concise daily briefing. "
+        "Adapt priority grouping to whatever matters most in the data.\n\n" + BRIEFING_JSON_SCHEMA
+    ),
+}
+
+# Default used when no style preference is set
+BRIEFING_SYSTEM_PROMPT = BRIEFING_STYLE_PROMPTS["general"]
 
 
 MEETING_PREP_SYSTEM_PROMPT = """\
@@ -130,6 +156,19 @@ class Presenter:
             return "approval_panel"
         return "detail_card"
 
+    async def _get_briefing_style(self, user_id: str) -> str:
+        """Look up user's preferred briefing style from settings."""
+        try:
+            from src.services.settings_service import SettingsService
+
+            svc = SettingsService(self._db)
+            style = await svc.get(user_id, "presentation", "briefing_style")
+            if style and style in BRIEFING_STYLE_PROMPTS:
+                return style
+        except Exception:
+            logger.debug("Failed to load briefing style preference", exc_info=True)
+        return "general"
+
     async def generate_briefing(
         self, user_id: str, briefing_date: date, workspace_id: str = ""
     ) -> Briefing:
@@ -149,7 +188,8 @@ class Presenter:
             briefing_date,
             workspace_id=workspace_id,
         )
-        briefing_content = await self._call_claude(context)
+        style = await self._get_briefing_style(user_id)
+        briefing_content = await self._call_claude(context, style=style)
 
         briefing_id = f"brief_{ULID()}"
         briefing = Briefing(
@@ -572,13 +612,14 @@ class Presenter:
                 "talking_points": [],
             }
 
-    async def _call_claude(self, context: str) -> dict:
+    async def _call_claude(self, context: str, style: str = "general") -> dict:
         """Call Claude to generate briefing content."""
+        system_prompt = BRIEFING_STYLE_PROMPTS.get(style, BRIEFING_SYSTEM_PROMPT)
         try:
             response = await self._client.messages.create(
                 model=self._settings.resolved_model,
                 max_tokens=2048,
-                system=BRIEFING_SYSTEM_PROMPT,
+                system=system_prompt,
                 messages=[{"role": "user", "content": context}],
             )
             text = response.content[0].text

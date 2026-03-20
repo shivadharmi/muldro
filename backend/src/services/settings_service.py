@@ -22,6 +22,9 @@ SETTING_DEFAULTS = {
     ("observation", "slack_interval_minutes"): 15,
     ("display", "theme"): "dark",
     ("display", "density"): "comfortable",
+    ("presentation", "briefing_style"): "general",
+    ("privacy", "auto_share_level"): "none",
+    ("autonomy", "initiative_level"): "suggest",
 }
 
 
@@ -108,14 +111,36 @@ class SettingsService:
 
     async def get_observation_intervals(self, user_id: str) -> dict[str, int]:
         """Get per-source observation polling intervals in minutes."""
-        intervals = {}
-        for source in ("gmail", "calendar", "github", "slack"):
-            key = f"{source}_interval_minutes"
+        sources = await self.get_observation_sources(user_id)
+        return {s["provider"]: s["interval_minutes"] for s in sources if s["enabled"]}
+
+    async def get_observation_sources(self, user_id: str) -> list[dict]:
+        """Get configurable observation source list.
+
+        Returns list of {provider, interval_minutes, enabled} dicts.
+        Users can add/remove sources via settings API.
+        """
+        # Check for user-customized sources
+        custom = await self.get(user_id, "observation", "sources")
+        if isinstance(custom, list) and custom:
+            return custom
+
+        # Default sources
+        defaults = [
+            {"provider": "gmail", "interval_minutes": 30, "enabled": True},
+            {"provider": "calendar", "interval_minutes": 180, "enabled": True},
+            {"provider": "github", "interval_minutes": 60, "enabled": True},
+            {"provider": "slack", "interval_minutes": 15, "enabled": True},
+        ]
+
+        # Apply per-source interval overrides from individual settings
+        for source in defaults:
+            key = f"{source['provider']}_interval_minutes"
             val = await self.get(user_id, "observation", key)
-            intervals[source] = (
-                int(val) if val is not None else SETTING_DEFAULTS.get(("observation", key), 60)
-            )
-        return intervals
+            if val is not None:
+                source["interval_minutes"] = int(val)
+
+        return defaults
 
     async def get_notification_prefs(self, user_id: str) -> dict:
         """Get notification preferences."""
