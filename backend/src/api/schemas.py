@@ -159,11 +159,6 @@ class EventIngestResponse(BaseModel):
     importance_score: float | None = None
 
 
-# ── Webhook (legacy alias) ──────────────────────────────────────
-
-WebhookResponse = EventIngestResponse
-
-
 # ── Canvas Dashboard ─────────────────────────────────────────────
 
 
