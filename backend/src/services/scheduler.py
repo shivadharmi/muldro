@@ -176,18 +176,83 @@ class SchedulerLoop:
             self._perception = {}
 
     async def _get_observation_sources(self, user_id: str) -> list[str]:
-        """Get observation source names for a user from settings."""
-        try:
-            from src.services.settings_service import SettingsService
+        """Get observation sources that are both configured AND authorized.
 
-            factory = get_session_factory()
-            async with factory() as db:
+        Only returns sources where the user has an active connector (OAuth
+        completed) or an active workspace installation. Sources without valid
+        auth are skipped to avoid wasting API calls and money.
+        """
+        factory = get_session_factory()
+        async with factory() as db:
+            authorized = await self._get_authorized_providers(db, user_id)
+            if not authorized:
+                return []
+
+            # Intersect with user-configured observation sources
+            try:
+                from src.services.settings_service import SettingsService
+
                 svc = SettingsService(db)
-                sources = await svc.get_observation_sources(user_id)
-                return [s["provider"] for s in sources if s.get("enabled", True)]
+                configured = await svc.get_observation_sources(user_id)
+                wanted = {
+                    s["provider"]
+                    for s in configured
+                    if s.get("enabled", True)
+                }
+                return sorted(wanted & authorized)
+            except Exception:
+                logger.debug(
+                    "Failed to load observation settings, using authorized set",
+                    exc_info=True,
+                )
+                return sorted(authorized)
+
+    @staticmethod
+    async def _get_authorized_providers(db, user_id: str) -> set[str]:
+        """Return provider names that have active auth for this user."""
+        from sqlalchemy import select
+
+        authorized: set[str] = set()
+
+        # 1. Legacy Connector table (OAuth-based: gmail, calendar, slack, github)
+        try:
+            from src.models.connectors import Connector
+
+            result = await db.execute(
+                select(Connector.provider).where(
+                    Connector.user_id == user_id,
+                    Connector.status == "active",
+                )
+            )
+            authorized.update(row[0] for row in result.all())
         except Exception:
-            logger.debug("Failed to load observation sources, using defaults", exc_info=True)
-            return ["gmail", "calendar", "slack", "github"]
+            logger.debug("Connector table lookup failed", exc_info=True)
+
+        # 2. ConnectorInstallation table (workspace MCP installs)
+        try:
+            from src.models.connector_installation import ConnectorInstallation
+            from src.models.users import WorkspaceMember
+
+            # Resolve workspace(s) for this user
+            ws_result = await db.execute(
+                select(WorkspaceMember.workspace_id).where(
+                    WorkspaceMember.user_id == user_id
+                )
+            )
+            ws_ids = [row[0] for row in ws_result.all()]
+            if ws_ids:
+                inst_result = await db.execute(
+                    select(ConnectorInstallation.server_name).where(
+                        ConnectorInstallation.workspace_id.in_(ws_ids),
+                        ConnectorInstallation.status == "active",
+                        ConnectorInstallation.enabled.is_(True),
+                    )
+                )
+                authorized.update(row[0] for row in inst_result.all())
+        except Exception:
+            logger.debug("ConnectorInstallation lookup failed", exc_info=True)
+
+        return authorized
 
     async def _resolve_workspace(self, user_id: str) -> str:
         """Resolve workspace_id for a user in background context."""
@@ -208,12 +273,23 @@ class SchedulerLoop:
 
         if action == "observe_source":
             source = config["source"]
-            if self._orchestrator:
-                await self._orchestrator.run_perception_cycle(
-                    source, user_id=sched.user_id, workspace_id=workspace_id
-                )
-            else:
+            if not self._orchestrator:
                 raise RuntimeError("Orchestrator required for observe_source")
+
+            # Gate: skip sources without active auth to avoid wasted API calls
+            factory = get_session_factory()
+            async with factory() as db:
+                authorized = await self._get_authorized_providers(db, sched.user_id)
+            if source not in authorized:
+                logger.info(
+                    "Skipping observe_source for %s — no active connector",
+                    source,
+                )
+                return
+
+            await self._orchestrator.run_perception_cycle(
+                source, user_id=sched.user_id, workspace_id=workspace_id
+            )
         elif action == "generate_briefing":
             if self._orchestrator:
                 await self._orchestrator.generate_briefing(

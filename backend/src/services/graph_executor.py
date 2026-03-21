@@ -186,6 +186,7 @@ class GraphExecutor:
                 "run_id": run_id,
                 "plan_id": run.plan_id,
             },
+            workspace_id=run.workspace_id,
         )
 
         try:
@@ -202,6 +203,7 @@ class GraphExecutor:
                     "run_id": run_id,
                     "error": str(exc)[:500],
                 },
+                workspace_id=run.workspace_id,
             )
 
         # Record Prometheus metrics
@@ -273,10 +275,14 @@ class GraphExecutor:
                 "step.skipped",
                 run.user_id,
                 {"run_id": run_id, "step_id": step.step_id},
+                workspace_id=run.workspace_id,
             )
 
         await self._db.commit()
-        await self._emit_event("run.cancelled", run.user_id, {"run_id": run_id})
+        await self._emit_event(
+            "run.cancelled", run.user_id, {"run_id": run_id},
+            workspace_id=run.workspace_id,
+        )
         return run
 
     async def _execute_dag(self, run: TaskRun) -> None:
@@ -381,6 +387,7 @@ class GraphExecutor:
                 "run_id": run.run_id,
                 "step_id": step.step_id,
             },
+            workspace_id=run.workspace_id,
         )
 
         t0 = time.monotonic()
@@ -425,6 +432,7 @@ class GraphExecutor:
                             "surface_type": "step_output",
                             "preview": str(output.get("result", output.get("summary", "")))[:200],
                         },
+                        workspace_id=run.workspace_id,
                     )
 
         except Exception as exc:
@@ -461,6 +469,7 @@ class GraphExecutor:
                         "error": str(exc)[:500],
                         "duration_ms": elapsed_ms,
                     },
+                    workspace_id=run.workspace_id,
                 )
 
         await self._db.flush()
@@ -488,7 +497,26 @@ class GraphExecutor:
 
         t0 = time.monotonic()
 
-        # 1. Try MCP bridge first (external MCP servers)
+        # 1. Try capability resolver (routes to best backend)
+        try:
+            from src.integrations.capabilities import get_capability_for_tool
+            from src.integrations.capability_resolver import CapabilityResolver
+
+            capability = get_capability_for_tool(task_type)
+            if capability:
+                resolver = CapabilityResolver(self._db, None, run.workspace_id)
+                raw = await resolver.execute(task_type, input_data, user_id=run.user_id)
+                ToolCallResult(
+                    tool_name=request.tool_name,
+                    status="success",
+                    result=raw,
+                    duration_ms=int((time.monotonic() - t0) * 1000),
+                )
+                return raw
+        except Exception:
+            logger.debug("Capability resolver failed for %s, falling back", task_type)
+
+        # 2. Try MCP bridge (external MCP servers)
         from src.connectors.mcp_bridge import call_mcp_tool, is_mcp_tool
 
         if is_mcp_tool(task_type):
@@ -501,7 +529,7 @@ class GraphExecutor:
             )
             return raw
 
-        # 2. Try connector dispatch via ToolRegistry
+        # 3. Try connector dispatch via ToolRegistry
         if self._tool_registry:
             tool_def = await self._tool_registry.get_tool(task_type)
             if tool_def:
@@ -518,19 +546,19 @@ class GraphExecutor:
                     )
                     return raw
 
-        # 3. Built-in Claude handlers for specific types
+        # 4. Built-in Claude handlers for specific types
         if task_type in ("draft_email", "draft_reply"):
             return await self._draft_action(input_data, run, context_prompt)
         if task_type == "summarize":
             return await self._summarize_action(input_data, context_prompt)
 
-        # 4. Generic Claude handler — any task with a goal/context gets
+        # 5. Generic Claude handler — any task with a goal/context gets
         #    routed to Claude for intelligent handling
         goal = input_data.get("goal", input_data.get("context", ""))
         if goal:
             return await self._generic_claude_action(task_type, input_data, context_prompt)
 
-        # 5. Stub — log so we know what's unhandled
+        # 6. Stub — log so we know what's unhandled
         logger.info("Step %s: no handler for task_type '%s', stub", step.step_id, task_type)
         return {"status": "completed", "note": f"Task type '{task_type}' executed"}
 
@@ -760,19 +788,44 @@ class GraphExecutor:
         except Exception:
             logger.warning("Verification failed for run %s", run.run_id, exc_info=True)
 
-    async def _emit_event(self, event_type: str, user_id: str, payload: dict) -> None:
-        """Publish a domain event (best-effort) + Redis progress for run tracking."""
-        if not self._event_bus:
-            return
-        try:
-            stream = self._event_bus.agent_stream(user_id)
-            await self._event_bus.publish(stream, event_type, payload, user_id)
-        except Exception:
-            logger.debug("Failed to emit %s event", event_type, exc_info=True)
+    async def _emit_event(
+        self,
+        event_type: str,
+        user_id: str,
+        payload: dict,
+        workspace_id: str | None = None,
+    ) -> None:
+        """Publish a domain event (best-effort) + Redis progress + DB persistence."""
+        if self._event_bus:
+            try:
+                stream = self._event_bus.agent_stream(user_id)
+                await self._event_bus.publish(stream, event_type, payload, user_id)
+            except Exception:
+                logger.debug("Failed to emit %s event", event_type, exc_info=True)
+
+        # Persist to runtime_events table for home feed / runtime activity
+        run_id = payload.get("run_id")
+        step_id = payload.get("step_id")
+        if workspace_id:
+            try:
+                from src.models.runtime_event import RuntimeEvent
+
+                self._db.add(
+                    RuntimeEvent(
+                        workspace_id=workspace_id,
+                        run_id=run_id,
+                        step_id=step_id,
+                        event_type=event_type.replace(".", "_"),
+                        payload=payload,
+                    )
+                )
+                await self._db.flush()
+            except Exception:
+                logger.debug("Failed to persist runtime event %s", event_type, exc_info=True)
 
         # Publish to Redis for WebSocket progress streaming
-        if "run_id" in payload:
-            await self._publish_progress(payload["run_id"], {"event_type": event_type, **payload})
+        if run_id:
+            await self._publish_progress(run_id, {"event_type": event_type, **payload})
 
     async def _publish_progress(self, run_id: str, data: dict) -> None:
         """Publish step progress to Redis pubsub for WebSocket consumers."""

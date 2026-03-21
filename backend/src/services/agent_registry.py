@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
 from src.models.agents import Agent
-from src.orchestrator.agents import AGENT_MODEL_TIERS, AGENT_TOOL_SCOPES, SubAgent
+from src.orchestrator.agents import AGENT_CAPABILITY_SCOPES, AGENT_MODEL_TIERS, SubAgent
 from src.orchestrator.prompts import AGENT_PROMPTS
 
 logger = logging.getLogger(__name__)
@@ -65,7 +65,7 @@ class AgentRegistry:
                 description=_DEFAULT_DESCRIPTIONS.get(name),
                 system_prompt=prompt,
                 model_tier=AGENT_MODEL_TIERS.get(name, "sonnet"),
-                tool_scope=sorted(AGENT_TOOL_SCOPES.get(name, set())),
+                capability_scope=sorted(AGENT_CAPABILITY_SCOPES.get(name, set())),
                 max_tokens=8192 if name == "planner" else 4096,
                 temperature=0.1 if name == "governor" else 0.3,
                 enabled=True,
@@ -105,7 +105,7 @@ class AgentRegistry:
         *,
         description: str | None = None,
         model_tier: str = "sonnet",
-        tool_scope: list[str] | None = None,
+        capability_scope: list[str] | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.3,
     ) -> Agent:
@@ -117,7 +117,7 @@ class AgentRegistry:
             description=description,
             system_prompt=system_prompt,
             model_tier=model_tier,
-            tool_scope=sorted(tool_scope or []),
+            capability_scope=sorted(capability_scope or []),
             max_tokens=max_tokens,
             temperature=temperature,
             enabled=True,
@@ -137,15 +137,15 @@ class AgentRegistry:
             "description",
             "system_prompt",
             "model_tier",
-            "tool_scope",
+            "capability_scope",
             "max_tokens",
             "temperature",
             "enabled",
         }
         filtered = {k: v for k, v in updates.items() if k in allowed_fields}
 
-        if "tool_scope" in filtered and isinstance(filtered["tool_scope"], list):
-            filtered["tool_scope"] = sorted(filtered["tool_scope"])
+        if "capability_scope" in filtered and isinstance(filtered["capability_scope"], list):
+            filtered["capability_scope"] = sorted(filtered["capability_scope"])
 
         if filtered:
             await self._db.execute(
@@ -170,7 +170,7 @@ class AgentRegistry:
                 name=agent.name,
                 prompt=agent.system_prompt,
                 model_tier=agent.model_tier,
-                tool_scope=set(agent.tool_scope) if agent.tool_scope else set(),
+                capability_scope=set(agent.capability_scope) if agent.capability_scope else set(),
                 max_tokens=agent.max_tokens,
                 temperature=agent.temperature,
             )

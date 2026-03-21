@@ -225,6 +225,13 @@ class AuthService:
                 joined_at=datetime.now(timezone.utc),
             )
         )
+        await self._db.flush()
+
+        # Provision workspace with default schedules, trust records, installations
+        from src.services.workspace_provisioner import provision_workspace
+
+        await provision_workspace(self._db, user_id, ws_id)
+
         logger.info("User created: %s (%s)", user_id, email)
         return user
 

@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
+from src.integrations.capabilities import TOOL_TO_CAPABILITY
 from src.models.tool_definitions import ToolDefinition
 
 logger = logging.getLogger(__name__)
@@ -18,6 +19,7 @@ def _t(
     connector: str | None = None,
     enabled: bool = True,
     canonical: str | None = None,
+    capability: str | None = None,
 ) -> dict:
     return {
         "name": name,
@@ -26,6 +28,7 @@ def _t(
         "connector_type": connector,
         "enabled": enabled,
         "canonical_name": canonical,
+        "capability": capability,
     }
 
 
@@ -246,6 +249,7 @@ class ToolRegistry:
             )
             if existing.scalar_one_or_none():
                 continue
+            capability = tool_data.get("capability") or TOOL_TO_CAPABILITY.get(tool_data["name"])
             tool = ToolDefinition(
                 tool_id=f"tool_{ULID()}",
                 workspace_id=workspace_id,
@@ -255,6 +259,7 @@ class ToolRegistry:
                 connector_type=tool_data.get("connector_type"),
                 enabled=tool_data.get("enabled", True),
                 canonical_name=tool_data.get("canonical_name"),
+                capability=capability,
             )
             self._db.add(tool)
             added += 1

@@ -1,10 +1,14 @@
 """Schedule seeder — creates default proactive schedules on first startup.
 
-Seeds:
-- Morning briefing (7:00 AM daily)
-- Perception cycles for each connector (gmail, calendar, slack, github)
-- Memory consolidation (nightly at 2:00 AM)
-- SLO health check (every 6 hours)
+All schedules are seeded as **disabled**. They are enabled when the
+corresponding connector is authorized via OAuth (see routes_auth.py).
+
+Mapping (connector → schedules enabled):
+  Any connector  → morning_briefing, memory_consolidation, slo_health_check
+  gmail          → observe_gmail
+  calendar       → observe_calendar
+  slack          → observe_slack
+  github         → observe_github
 """
 
 import logging
@@ -92,9 +96,20 @@ DEFAULT_SCHEDULES: list[dict] = [
     },
 ]
 
+# Schedules enabled when the *first* connector of any kind is authorized.
+GLOBAL_SCHEDULES = {"morning_briefing", "memory_consolidation", "slo_health_check"}
+
+# Per-connector schedule mapping.
+CONNECTOR_SCHEDULES: dict[str, list[str]] = {
+    "gmail": ["observe_gmail"],
+    "calendar": ["observe_calendar"],
+    "slack": ["observe_slack"],
+    "github": ["observe_github"],
+}
+
 
 async def seed_default_schedules(db: AsyncSession, user_id: str, workspace_id: str = "") -> int:
-    """Seed default schedules if they don't already exist. Returns count seeded."""
+    """Seed default schedules as disabled. Returns count seeded."""
     result = await db.execute(select(Schedule.name))
     existing = {row[0] for row in result.all()}
 
@@ -120,7 +135,7 @@ async def seed_default_schedules(db: AsyncSession, user_id: str, workspace_id: s
             cron_expr=cron_expr,
             action_type=sched_def["action_type"],
             action_config=sched_def.get("action_config"),
-            enabled=True,
+            enabled=False,
             source=sched_def.get("source", "system"),
             priority=sched_def.get("priority", "medium"),
             next_run_at=next_run,
@@ -130,6 +145,54 @@ async def seed_default_schedules(db: AsyncSession, user_id: str, workspace_id: s
 
     if seeded:
         await db.flush()
-        logger.info("Seeded %d default schedules", seeded)
+        logger.info("Seeded %d default schedules (all disabled)", seeded)
 
     return seeded
+
+
+async def enable_schedules_for_connector(db: AsyncSession, provider: str) -> list[str]:
+    """Enable schedules associated with a newly-authorized connector.
+
+    Returns the list of schedule names that were enabled.
+    """
+    now = datetime.now(timezone.utc)
+    names_to_enable: set[str] = set()
+
+    # 1. Always enable the connector-specific schedule
+    for name in CONNECTOR_SCHEDULES.get(provider, []):
+        names_to_enable.add(name)
+
+    # 2. Enable global schedules (briefing, consolidation, SLO) on first connector
+    #    Check if any observe_* schedule is already enabled — if so, globals are already on.
+    result = await db.execute(
+        select(Schedule.name).where(
+            Schedule.name.like("observe_%"),
+            Schedule.enabled.is_(True),
+        )
+    )
+    has_existing_connector = bool(result.first())
+    if not has_existing_connector:
+        names_to_enable.update(GLOBAL_SCHEDULES)
+
+    if not names_to_enable:
+        return []
+
+    # Fetch and enable
+    result = await db.execute(
+        select(Schedule).where(
+            Schedule.name.in_(names_to_enable),
+            Schedule.enabled.is_(False),
+        )
+    )
+    enabled: list[str] = []
+    for sched in result.scalars().all():
+        sched.enabled = True
+        if not sched.next_run_at and sched.cron_expr:
+            sched.next_run_at = croniter(sched.cron_expr, now).get_next(datetime)
+        enabled.append(sched.name)
+
+    if enabled:
+        await db.flush()
+        logger.info("Enabled schedules for connector %s: %s", provider, enabled)
+
+    return enabled

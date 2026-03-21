@@ -193,17 +193,7 @@ class ConnectorManager:
         oauth_provider = _PROVIDER_TO_OAUTH.get(provider, provider)
 
         if not self._oauth_manager:
-            # Without OAuthManager, check legacy OAuthConnection
-            from src.models.users import OAuthConnection
-
-            result = await self._db.execute(
-                select(OAuthConnection).where(
-                    OAuthConnection.user_id == user_id,
-                    OAuthConnection.provider == provider,
-                )
-            )
-            conn = result.scalar_one_or_none()
-            return "valid" if conn else "missing"
+            return "missing"
 
         from src.models.oauth_token import OAuthToken
 
@@ -231,32 +221,15 @@ class ConnectorManager:
         return "valid"
 
     async def _get_credentials(self, user_id: str, provider: str) -> dict | None:
-        """Get decrypted, auto-refreshed OAuth credentials for a provider.
+        """Get decrypted, auto-refreshed OAuth credentials for a provider."""
+        if not self._oauth_manager:
+            return None
 
-        Uses OAuthManager for proper decryption and automatic token refresh.
-        Falls back to the (legacy) OAuthConnection table if OAuthManager is not available.
-        """
         oauth_provider = _PROVIDER_TO_OAUTH.get(provider, provider)
-
-        if self._oauth_manager:
-            access_token = await self._oauth_manager.get_valid_token(user_id, oauth_provider)
-            if access_token:
-                return {"access_token": access_token}
-            return None
-
-        # Legacy fallback: read from OAuthConnection (no decryption)
-        from src.models.users import OAuthConnection
-
-        result = await self._db.execute(
-            select(OAuthConnection).where(
-                OAuthConnection.user_id == user_id,
-                OAuthConnection.provider == provider,
-            )
-        )
-        conn = result.scalar_one_or_none()
-        if not conn:
-            return None
-        return {"access_token": conn.access_token_encrypted}
+        access_token = await self._oauth_manager.get_valid_token(user_id, oauth_provider)
+        if access_token:
+            return {"access_token": access_token}
+        return None
 
     async def _get_cursor(self, user_id: str, provider: str) -> str | None:
         """Get the observation cursor for a provider."""
