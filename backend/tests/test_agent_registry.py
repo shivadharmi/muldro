@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.models.agents import Agent
-from src.orchestrator.agents import AGENT_MODEL_TIERS, AGENT_TOOL_SCOPES, SubAgent
+from src.orchestrator.agents import AGENT_CAPABILITY_SCOPES, AGENT_MODEL_TIERS, SubAgent
 from src.orchestrator.prompts import AGENT_PROMPTS
 from src.services.agent_registry import AgentRegistry
 
@@ -89,8 +89,8 @@ async def test_seed_defaults_model_tiers(mock_db):
 
 
 @pytest.mark.asyncio
-async def test_seed_defaults_tool_scopes(mock_db):
-    """seed_defaults should assign correct tool scopes."""
+async def test_seed_defaults_capability_scopes(mock_db):
+    """seed_defaults should assign correct capability scopes."""
     mock_db.execute = AsyncMock(return_value=FakeResult(rows=[]))
 
     registry = AgentRegistry(mock_db)
@@ -98,8 +98,8 @@ async def test_seed_defaults_tool_scopes(mock_db):
 
     for call in mock_db.add.call_args_list:
         agent = call[0][0]
-        expected = sorted(AGENT_TOOL_SCOPES.get(agent.name, set()))
-        assert agent.tool_scope == expected, f"{agent.name} tool scope mismatch"
+        expected = sorted(AGENT_CAPABILITY_SCOPES.get(agent.name, set()))
+        assert agent.capability_scope == expected, f"{agent.name} capability scope mismatch"
 
 
 @pytest.mark.asyncio
@@ -113,7 +113,7 @@ async def test_create_agent(mock_db):
         display_name="Custom Agent",
         system_prompt="You are a custom agent.",
         model_tier="haiku",
-        tool_scope=["search_memory", "get_entities"],
+        capability_scope=["internal.search_memory", "internal.get_entities"],
         max_tokens=2048,
         temperature=0.5,
     )
@@ -122,7 +122,7 @@ async def test_create_agent(mock_db):
     assert agent.name == "custom_agent"
     assert agent.display_name == "Custom Agent"
     assert agent.model_tier == "haiku"
-    assert agent.tool_scope == ["get_entities", "search_memory"]  # sorted
+    assert agent.capability_scope == ["internal.get_entities", "internal.search_memory"]  # sorted
     assert agent.max_tokens == 2048
     assert agent.temperature == 0.5
     assert agent.enabled is True
@@ -135,7 +135,7 @@ async def test_load_as_sub_agents(mock_db):
     mock_agent.name = "planner"
     mock_agent.system_prompt = "Plan things"
     mock_agent.model_tier = "opus"
-    mock_agent.tool_scope = ["plan_command", "search_memory"]
+    mock_agent.capability_scope = ["internal.plan_command", "internal.search_memory"]
     mock_agent.max_tokens = 8192
     mock_agent.temperature = 0.3
     mock_agent.enabled = True
@@ -150,7 +150,7 @@ async def test_load_as_sub_agents(mock_db):
     assert "planner" in agents
     assert isinstance(agents["planner"], SubAgent)
     assert agents["planner"].model_tier == "opus"
-    assert agents["planner"].tool_scope == {"plan_command", "search_memory"}
+    assert agents["planner"].capability_scope == {"internal.plan_command", "internal.search_memory"}
     assert agents["planner"].max_tokens == 8192
 
 

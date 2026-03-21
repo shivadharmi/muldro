@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.orchestrator.services import ServiceContainer
 from tests.conftest import make_mock_settings
 
 GOLDEN_CASES = [
@@ -166,7 +167,7 @@ async def test_planner_golden(mock_get_client, case):
     orchestrator = JarvisOrchestrator(
         settings=settings,
         db_factory=MagicMock(),
-        services={},
+        services=ServiceContainer(),
     )
 
     # Extract decision from mock response

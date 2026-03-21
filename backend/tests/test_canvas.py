@@ -251,58 +251,69 @@ def test_approval_detail_not_found():
 # ── Task detail tests ────────────────────────────────────────────
 
 
-def test_task_detail_with_steps():
-    """Should return task detail with execution steps and progress."""
+def _make_standalone_task(task_id="task_001"):
+    t = MagicMock()
+    t.task_id = task_id
+    t.title = "Draft reply to investor email"
+    t.description = "Follow up on Series B discussion"
+    t.task_type = "email"
+    t.source = "user"
+    t.priority = "high"
+    t.status = "in_progress"
+    t.goal_id = None
+    t.parent_task_id = None
+    t.due_at = None
+    t.assigned_agent = "operator"
+    t.created_at = datetime(2026, 3, 13, 9, 0, tzinfo=timezone.utc)
+    return t
+
+
+def _make_task_dependency():
+    d = MagicMock()
+    d.depends_on_task_id = "task_002"
+    d.dependency_type = "blocks"
+    return d
+
+
+def test_task_detail_with_dependencies():
+    """Should return standalone task detail with dependencies."""
+    from unittest.mock import patch
+
+    task = _make_standalone_task()
+    dep = _make_task_dependency()
+
     db = _make_mock_db()
-    plan = _make_plan()
-    plan_task = _make_plan_task()
-    run = _make_task_run()
-    step = _make_task_step()
-
-    call_count = 0
-
-    async def mock_execute(stmt):
-        nonlocal call_count
-        call_count += 1
-        result = MagicMock()
-        if call_count == 1:  # plan lookup
-            result.scalar_one_or_none.return_value = plan
-        elif call_count == 2:  # plan tasks
-            result.scalars.return_value.all.return_value = [plan_task]
-        elif call_count == 3:  # TaskRun by plan_id
-            result.scalar_one_or_none.return_value = run
-        elif call_count == 4:  # TaskStep by run_id
-            result.scalars.return_value.all.return_value = [step]
-        return result
-
-    db.execute = mock_execute
     app.dependency_overrides[get_session] = lambda: db
 
-    client = TestClient(app)
-    resp = client.get("/v1/tasks/plan_001")
+    with patch("src.api.routes_tasks.TaskService") as mock_svc_cls:
+        svc = mock_svc_cls.return_value
+        svc.get_task = AsyncMock(return_value=task)
+        svc.get_dependencies = AsyncMock(return_value=[dep])
+
+        client = TestClient(app)
+        resp = client.get("/v1/tasks/task_001")
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["task_id"] == "plan_001"
-    assert data["goal"] == "Draft reply to investor email"
-    assert data["execution_status"] == "completed"
-    assert len(data["steps"]) == 1
-    assert data["steps"][0]["status"] == "completed"
-    assert data["steps"][0]["result_summary"] == "Email drafted successfully"
+    assert data["task_id"] == "task_001"
+    assert data["title"] == "Draft reply to investor email"
+    assert data["status"] == "in_progress"
+    assert len(data["dependencies"]) == 1
+    assert data["dependencies"][0]["depends_on_task_id"] == "task_002"
 
 
 def test_task_detail_not_found():
     """Should return 404 for unknown task."""
+    from unittest.mock import patch
+
     db = _make_mock_db()
-
-    async def mock_execute(stmt):
-        result = MagicMock()
-        result.scalar_one_or_none.return_value = None
-        return result
-
-    db.execute = mock_execute
     app.dependency_overrides[get_session] = lambda: db
 
-    client = TestClient(app)
-    resp = client.get("/v1/tasks/plan_nonexistent")
+    with patch("src.api.routes_tasks.TaskService") as mock_svc_cls:
+        svc = mock_svc_cls.return_value
+        svc.get_task = AsyncMock(return_value=None)
+
+        client = TestClient(app)
+        resp = client.get("/v1/tasks/task_nonexistent")
+
     assert resp.status_code == 404

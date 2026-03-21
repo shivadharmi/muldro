@@ -55,7 +55,7 @@ class TestIngestEvent:
         ctx = configure_intelligence_server
         processor = AsyncMock()
         processor.process = AsyncMock(return_value={"event_id": "evt_123", "importance_score": 0.8})
-        ctx["services"].__getitem__ = MagicMock(return_value=processor)
+        ctx["services"].event_processor = processor
 
         result = await intelligence_server.ingest_event(
             user_id="usr_1",
@@ -140,7 +140,7 @@ class TestGetBriefing:
         mock_briefing.recommended_actions = []
         mock_briefing.full_text = "text"
         presenter.generate_briefing = AsyncMock(return_value=mock_briefing)
-        ctx["services"].__getitem__ = MagicMock(return_value=presenter)
+        ctx["services"].presenter = presenter
 
         result = await intelligence_server.get_briefing(
             user_id="usr_1", date="2025-06-15", workspace_id="ws_1"
@@ -170,7 +170,7 @@ class TestSearchMemory:
         ctx = configure_intelligence_server
         memory_svc = AsyncMock()
         memory_svc.retrieve = AsyncMock(return_value=[{"fact": "test"}])
-        ctx["services"].__getitem__ = MagicMock(return_value=memory_svc)
+        ctx["services"].memory_service = memory_svc
 
         result = await intelligence_server.search_memory(
             user_id="usr_1", query="test query", workspace_id="ws_1"

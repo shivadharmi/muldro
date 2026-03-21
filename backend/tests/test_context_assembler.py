@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.orchestrator.services import ServiceContainer
 from tests.conftest import TEST_USER_ID, make_mock_settings
 
 
@@ -22,7 +23,9 @@ class TestContextAssembly:
         )
         db_factory = MagicMock()
 
-        orchestrator = JarvisOrchestrator(settings=settings, db_factory=db_factory, services={})
+        orchestrator = JarvisOrchestrator(
+            settings=settings, db_factory=db_factory, services=ServiceContainer()
+        )
 
         # Observer is not in CONTEXT_ENRICHED_AGENTS
         context = await orchestrator._assemble_context(
@@ -78,7 +81,7 @@ class TestContextAssembly:
         orchestrator = JarvisOrchestrator(
             settings=settings,
             db_factory=db_factory,
-            services={"memory": mock_memory_svc, "world_model": mock_world_model},
+            services=ServiceContainer(memory_service=mock_memory_svc, world_model=mock_world_model),
         )
 
         # Planner is enriched
@@ -112,7 +115,7 @@ class TestContextAssembly:
         orchestrator = JarvisOrchestrator(
             settings=settings,
             db_factory=db_factory,
-            services={"world_model": mock_world_model},
+            services=ServiceContainer(world_model=mock_world_model),
         )
 
         context = await orchestrator._assemble_context("planner", "test", user_id=TEST_USER_ID)
@@ -142,7 +145,7 @@ class TestContextAssembly:
         orchestrator = JarvisOrchestrator(
             settings=settings,
             db_factory=db_factory,
-            services={"memory": mock_memory_svc, "world_model": mock_world_model},
+            services=ServiceContainer(memory_service=mock_memory_svc, world_model=mock_world_model),
         )
 
         # ContextBuilder always includes task_summary, so context may not be empty
@@ -177,7 +180,7 @@ class TestContextAssembly:
         orchestrator = JarvisOrchestrator(
             settings=settings,
             db_factory=db_factory,
-            services={"memory": mock_memory_svc, "world_model": mock_world_model},
+            services=ServiceContainer(memory_service=mock_memory_svc, world_model=mock_world_model),
         )
 
         # ContextBuilder catches internal errors per-service, so partial context may work.
@@ -201,7 +204,9 @@ class TestSystemPromptBuilding:
             daily_token_budget_usd=5.0, use_bedrock=False, telegram_bot_token=""
         )
 
-        orchestrator = JarvisOrchestrator(settings=settings, db_factory=MagicMock(), services={})
+        orchestrator = JarvisOrchestrator(
+            settings=settings, db_factory=MagicMock(), services=ServiceContainer()
+        )
 
         agent = AGENTS["planner"]
         blocks = orchestrator._build_system_prompt(agent, context="")
@@ -225,7 +230,9 @@ class TestSystemPromptBuilding:
             daily_token_budget_usd=5.0, use_bedrock=False, telegram_bot_token=""
         )
 
-        orchestrator = JarvisOrchestrator(settings=settings, db_factory=MagicMock(), services={})
+        orchestrator = JarvisOrchestrator(
+            settings=settings, db_factory=MagicMock(), services=ServiceContainer()
+        )
 
         agent = AGENTS["planner"]
         context = "--- CONTEXT ---\nRELEVANT MEMORIES:\n- User prefers email"
@@ -253,7 +260,9 @@ class TestToolCacheControl:
             daily_token_budget_usd=5.0, use_bedrock=False, telegram_bot_token=""
         )
 
-        orchestrator = JarvisOrchestrator(settings=settings, db_factory=MagicMock(), services={})
+        orchestrator = JarvisOrchestrator(
+            settings=settings, db_factory=MagicMock(), services=ServiceContainer()
+        )
 
         tools = [
             {"name": "tool_a", "description": "First tool"},
@@ -286,7 +295,9 @@ class TestToolCacheControl:
             daily_token_budget_usd=5.0, use_bedrock=False, telegram_bot_token=""
         )
 
-        orchestrator = JarvisOrchestrator(settings=settings, db_factory=MagicMock(), services={})
+        orchestrator = JarvisOrchestrator(
+            settings=settings, db_factory=MagicMock(), services=ServiceContainer()
+        )
 
         result = orchestrator._apply_cache_control_to_tools([])
         assert result == []
@@ -301,7 +312,9 @@ class TestToolCacheControl:
             daily_token_budget_usd=5.0, use_bedrock=False, telegram_bot_token=""
         )
 
-        orchestrator = JarvisOrchestrator(settings=settings, db_factory=MagicMock(), services={})
+        orchestrator = JarvisOrchestrator(
+            settings=settings, db_factory=MagicMock(), services=ServiceContainer()
+        )
 
         tools = [{"name": "only_tool", "description": "The only tool"}]
         result = orchestrator._apply_cache_control_to_tools(tools)

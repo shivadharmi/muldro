@@ -38,30 +38,25 @@ class TestResolveCanonical:
 
 
 class TestAgentScopeDeduplication:
-    def test_operator_scope_has_no_duplicates(self):
-        from src.orchestrator.agents import AGENT_TOOL_SCOPES
+    def test_operator_capability_scope_has_no_duplicates(self):
+        from src.orchestrator.agents import AGENT_CAPABILITY_SCOPES
 
-        operator_scope = AGENT_TOOL_SCOPES["operator"]
+        operator_scope = AGENT_CAPABILITY_SCOPES["operator"]
         # Sets inherently have no dupes — verify it's actually a set
         assert isinstance(operator_scope, set)
 
-    def test_operator_scope_uses_canonical_names(self):
-        """Operator scope should prefer canonical over alias names."""
-        from src.orchestrator.agents import AGENT_TOOL_SCOPES
+    def test_operator_capability_scope_has_expected_capabilities(self):
+        """Operator scope should have write capabilities."""
+        from src.orchestrator.agents import AGENT_CAPABILITY_SCOPES
 
-        scope = AGENT_TOOL_SCOPES["operator"]
+        scope = AGENT_CAPABILITY_SCOPES["operator"]
 
-        # Canonical names should be present
-        assert "gmail_send" in scope
-        assert "gmail_create_draft" in scope
-        assert "calendar_create_event" in scope
-        assert "slack_send_message" in scope
-
-        # Alias names should NOT be present
-        assert "gmail_send_email" not in scope
-        assert "gmail_draft" not in scope
-        assert "calendar_create" not in scope
-        assert "slack_post_message" not in scope
+        assert "email.send" in scope
+        assert "email.draft" in scope
+        assert "calendar.create" in scope
+        assert "messaging.send" in scope
+        assert "issue.create" in scope
+        assert "doc.create" in scope
 
 
 class TestDefaultToolsCanonicalNames:

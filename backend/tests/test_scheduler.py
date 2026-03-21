@@ -232,8 +232,12 @@ class TestFireActions:
             yield
 
     @pytest.mark.asyncio
-    async def test_fire_observe_source_calls_orchestrator(self, settings):
-        """observe_source should use orchestrator.run_perception_cycle."""
+    @patch.object(
+        SchedulerLoop, "_get_authorized_providers",
+        new_callable=AsyncMock, return_value={"gmail"},
+    )
+    async def test_fire_observe_source_calls_orchestrator(self, mock_auth, settings):
+        """observe_source should use orchestrator.run_perception_cycle when authorized."""
         sched = _make_schedule(
             action_type="observe_source",
             action_config={"source": "gmail"},
@@ -248,6 +252,26 @@ class TestFireActions:
         mock_orch.run_perception_cycle.assert_awaited_once_with(
             "gmail", user_id=sched.user_id, workspace_id=TEST_WORKSPACE_ID
         )
+
+    @pytest.mark.asyncio
+    @patch.object(
+        SchedulerLoop, "_get_authorized_providers",
+        new_callable=AsyncMock, return_value=set(),
+    )
+    async def test_fire_observe_source_skips_unauthorized(self, mock_auth, settings):
+        """observe_source should skip when source is not authorized."""
+        sched = _make_schedule(
+            action_type="observe_source",
+            action_config={"source": "gmail"},
+        )
+
+        mock_orch = MagicMock()
+        mock_orch.run_perception_cycle = AsyncMock()
+
+        scheduler = SchedulerLoop(settings, orchestrator=mock_orch)
+        await scheduler._fire(sched)
+
+        mock_orch.run_perception_cycle.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_fire_observe_source_requires_orchestrator(self, settings):

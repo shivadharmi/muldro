@@ -79,11 +79,10 @@ class TestRuntimeBuild:
         assert svc.graph_executor is not None
         assert svc.operator is not None
 
-    def test_service_container_dict_compat(self, settings, mock_db):
-        """ServiceContainer should still support dict-style access."""
+    def test_service_container_attribute_access(self, settings, mock_db):
+        """ServiceContainer should support typed attribute access."""
         from src.runtime import build
 
         svc = build(settings, mock_db)
-        assert svc["world_model"] is svc.world_model
-        assert svc["memory_service"] is svc.memory_service
-        assert svc.get("nonexistent") is None
+        assert svc.world_model is not None
+        assert svc.memory_service is not None

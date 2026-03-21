@@ -288,27 +288,51 @@ class TestScheduleSeeder:
         first_added = db.add.call_args_list[0][0][0]
         assert first_added.next_run_at is not None
 
+    @pytest.mark.asyncio
+    async def test_all_seeded_schedules_disabled(self):
+        """All seeded schedules should be disabled by default."""
+        db = MagicMock()
+        result_mock = MagicMock()
+        result_mock.all.return_value = []
+        db.execute = AsyncMock(return_value=result_mock)
+        db.add = MagicMock()
+        db.flush = AsyncMock()
+
+        await seed_default_schedules(db, user_id=TEST_USER_ID)
+
+        for call in db.add.call_args_list:
+            schedule = call[0][0]
+            assert schedule.enabled is False, f"{schedule.name} should be disabled"
+
 
 # ── Perception Coordinator Wiring ─────────────────────────────
 
 
 class TestPerceptionWiring:
     @pytest.mark.asyncio
-    async def test_scheduler_inits_perception(self):
-        """Scheduler should initialize perception coordinator on startup."""
+    @patch("src.services.scheduler.get_session_factory")
+    async def test_scheduler_inits_perception(self, mock_factory):
+        """Scheduler should initialize perception only for authorized connectors."""
         from src.services.scheduler import SchedulerLoop
 
         orchestrator = MagicMock()
-        # Mock the async context manager for restore_cursors
+
+        # Set up mock DB used by _get_observation_sources (via get_session_factory)
         mock_db = MagicMock()
-        mock_result = MagicMock()
-        mock_result.scalars.return_value.all.return_value = []
-        mock_db.execute = AsyncMock(return_value=mock_result)
-        mock_db.close = AsyncMock()
+        connector_result = MagicMock()
+        connector_result.all.return_value = [("gmail",), ("calendar",)]
+        empty_result = MagicMock()
+        empty_result.all.return_value = []
+        empty_result.scalars.return_value.all.return_value = []
+        mock_db.execute = AsyncMock(side_effect=[connector_result, empty_result, empty_result])
+        mock_db.commit = AsyncMock()
 
         db_ctx = AsyncMock()
         db_ctx.__aenter__ = AsyncMock(return_value=mock_db)
         db_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_factory.return_value = MagicMock(return_value=db_ctx)
+
+        # Also set orchestrator._db_factory for restore_cursors
         orchestrator._db_factory = MagicMock(return_value=db_ctx)
 
         scheduler = SchedulerLoop(MagicMock(), orchestrator=orchestrator, user_ids=[TEST_USER_ID])
@@ -318,6 +342,34 @@ class TestPerceptionWiring:
         coord = scheduler._perception[TEST_USER_ID]
         assert "gmail" in coord._enabled_sources
         assert "calendar" in coord._enabled_sources
+
+    @pytest.mark.asyncio
+    @patch("src.services.scheduler.get_session_factory")
+    async def test_scheduler_skips_unauthorized_sources(self, mock_factory):
+        """Without authorized connectors, no sources should be enabled."""
+        from src.services.scheduler import SchedulerLoop
+
+        orchestrator = MagicMock()
+
+        mock_db = MagicMock()
+        empty_result = MagicMock()
+        empty_result.all.return_value = []
+        empty_result.scalars.return_value.all.return_value = []
+        mock_db.execute = AsyncMock(return_value=empty_result)
+        mock_db.commit = AsyncMock()
+
+        db_ctx = AsyncMock()
+        db_ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        db_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_factory.return_value = MagicMock(return_value=db_ctx)
+        orchestrator._db_factory = MagicMock(return_value=db_ctx)
+
+        scheduler = SchedulerLoop(MagicMock(), orchestrator=orchestrator, user_ids=[TEST_USER_ID])
+        await scheduler._init_perception()
+
+        assert len(scheduler._perception) == 1
+        coord = scheduler._perception[TEST_USER_ID]
+        assert len(coord._enabled_sources) == 0
 
     @pytest.mark.asyncio
     async def test_scheduler_no_orchestrator_no_perception(self):

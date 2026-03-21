@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.orchestrator.services import ServiceContainer
 from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID, make_mock_settings
 
 # ── Tracing Tests ────────────────────────────────────────────────────────
@@ -367,7 +368,7 @@ class TestOrchestrator:
         orchestrator = JarvisOrchestrator(
             settings=settings,
             db_factory=db_factory,
-            services={},
+            services=ServiceContainer(),
         )
 
         result = await orchestrator.process_message(
@@ -388,7 +389,9 @@ class TestOrchestrator:
             use_bedrock=False,
             telegram_bot_token="",
         )
-        orchestrator = JarvisOrchestrator(settings=settings, db_factory=MagicMock(), services={})
+        orchestrator = JarvisOrchestrator(
+            settings=settings, db_factory=MagicMock(), services=ServiceContainer()
+        )
 
         # Test JSON extraction — returns PlannerOutput
         text = 'Here is my analysis:\n{"decision": "create_task", "priority": "high"}\nDone.'
@@ -406,7 +409,9 @@ class TestOrchestrator:
             use_bedrock=False,
             telegram_bot_token="",
         )
-        orchestrator = JarvisOrchestrator(settings=settings, db_factory=MagicMock(), services={})
+        orchestrator = JarvisOrchestrator(
+            settings=settings, db_factory=MagicMock(), services=ServiceContainer()
+        )
 
         # No JSON in response — fallback to PlannerOutput defaults
         result = orchestrator._extract_decision("Just some plain text response")
