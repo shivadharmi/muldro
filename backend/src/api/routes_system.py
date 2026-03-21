@@ -1,10 +1,10 @@
-"""System endpoints — heartbeat, maintenance, diagnostics, metrics."""
+"""System endpoints — heartbeat, maintenance, diagnostics, metrics, capabilities."""
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_current_user_id, get_session
+from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
 from src.config.settings import Settings, get_settings
 from src.middleware.observability import RequestMetrics
 from src.services.dead_letter import DeadLetterService
@@ -57,3 +57,38 @@ async def get_dlq_stats(
     dlq = DeadLetterService(db)
     stats = await dlq.get_stats(user_id)
     return DeadLetterStats(**stats)
+
+
+@router.get("/v1/system/capabilities")
+async def get_capability_health(
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+    db: AsyncSession = Depends(get_session),
+):
+    """Get capability health status for the workspace."""
+    from src.services.capability_health import CapabilityHealthService
+
+    svc = CapabilityHealthService(db, workspace_id)
+    report = await svc.get_health_report()
+
+    return {
+        "healthy_count": report.healthy_count,
+        "degraded_count": report.degraded_count,
+        "unavailable_count": report.unavailable_count,
+        "unconfigured_count": report.unconfigured_count,
+        "families": [
+            {
+                "family": f.family,
+                "status": f.status,
+                "provider": f.provider,
+                "last_activity_at": (
+                    f.last_activity_at.isoformat() if f.last_activity_at else None
+                ),
+                "capabilities_available": f.capabilities_available,
+                "capabilities_total": f.capabilities_total,
+                "message": f.message,
+            }
+            for f in report.families
+        ],
+        "last_updated_at": report.last_updated_at.isoformat(),
+    }

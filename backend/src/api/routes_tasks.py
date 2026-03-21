@@ -1,16 +1,12 @@
-"""Task endpoints — standalone tasks and legacy plan-based tasks."""
+"""Task endpoints — standalone task management."""
 
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
-from src.api.schemas import TaskDetailResponse, TaskResponse, TaskStepResponse
-from src.models.plans import Plan, PlanTask
-from src.models.task_graph import TaskRun, TaskStep
 from src.models.tasks import Task
 from src.services.task_service import TaskService
 
@@ -79,7 +75,7 @@ async def create_task(
     return _task_response(task)
 
 
-@router.get("/v1/tasks", response_model=list[StandaloneTaskResponse | TaskResponse])
+@router.get("/v1/tasks", response_model=list[StandaloneTaskResponse])
 async def list_tasks(
     status: str | None = None,
     goal_id: str | None = None,
@@ -90,10 +86,7 @@ async def list_tasks(
     workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
-    """List tasks — returns both standalone tasks and legacy plan-based tasks."""
-    results: list = []
-
-    # Standalone tasks
+    """List standalone tasks."""
     svc = TaskService(db)
     tasks = await svc.list_tasks(
         user_id=user_id,
@@ -104,27 +97,7 @@ async def list_tasks(
         priority=priority,
         limit=limit,
     )
-    results.extend([_task_response(t) for t in tasks])
-
-    # Legacy plan-based tasks (for backward compat)
-    stmt = select(Plan).where(Plan.user_id == user_id, Plan.workspace_id == workspace_id)
-    if status:
-        stmt = stmt.where(Plan.status == status)
-    stmt = stmt.order_by(Plan.created_at.desc()).limit(limit)
-    plan_result = await db.execute(stmt)
-    for p in plan_result.scalars().all():
-        results.append(
-            TaskResponse(
-                task_id=p.plan_id,
-                goal=p.goal,
-                priority=p.priority,
-                status=p.status,
-                decision=p.decision,
-                created_at=p.created_at,
-            )
-        )
-
-    return results[:limit]
+    return [_task_response(t) for t in tasks]
 
 
 @router.get("/v1/tasks/{task_id}")
@@ -134,88 +107,23 @@ async def get_task_detail(
     workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
-    """Get detailed info for a task (standalone or plan-based)."""
-    # Route standalone tasks by prefix
-    if task_id.startswith("task_"):
-        svc = TaskService(db)
-        task = await svc.get_task(task_id, user_id)
-        if not task:
-            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
-        deps = await svc.get_dependencies(task_id)
-        resp = _task_response(task)
-        return {
-            **resp.model_dump(),
-            "dependencies": [
-                {
-                    "depends_on_task_id": d.depends_on_task_id,
-                    "dependency_type": d.dependency_type,
-                }
-                for d in deps
-            ],
-        }
-
-    # Fall back to legacy plan-based task
-    result = await db.execute(
-        select(Plan).where(
-            Plan.plan_id == task_id, Plan.user_id == user_id, Plan.workspace_id == workspace_id
-        )
-    )
-    plan = result.scalar_one_or_none()
-    if not plan:
+    """Get detailed info for a standalone task."""
+    svc = TaskService(db)
+    task = await svc.get_task(task_id, user_id)
+    if not task:
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
-
-    steps_result = await db.execute(select(PlanTask).where(PlanTask.plan_id == plan.plan_id))
-    plan_tasks = steps_result.scalars().all()
-
-    # Look up the latest TaskRun for this plan
-    run_result = await db.execute(
-        select(TaskRun)
-        .where(TaskRun.plan_id == plan.plan_id)
-        .order_by(TaskRun.created_at.desc())
-        .limit(1)
-    )
-    task_run = run_result.scalar_one_or_none()
-
-    steps = []
-    step_map: dict[str, TaskStep] = {}
-    if task_run:
-        steps_result = await db.execute(select(TaskStep).where(TaskStep.run_id == task_run.run_id))
-        for step in steps_result.scalars().all():
-            if step.plan_task_id:
-                step_map[step.plan_task_id] = step
-            step_map[step.task_id] = step
-
-    for pt in plan_tasks:
-        step = step_map.get(pt.task_id)
-        result_summary = None
-        task_status = pt.status
-        if step:
-            task_status = step.status
-            if step.output_data and isinstance(step.output_data, dict):
-                result_summary = step.output_data.get("summary")
-            if step.error and isinstance(step.error, dict):
-                result_summary = f"Error: {step.error.get('message', '')}"
-        steps.append(
-            TaskStepResponse(
-                task_id=pt.task_id,
-                task_type=pt.task_type,
-                status=task_status,
-                result_summary=result_summary,
-            )
-        )
-
-    return TaskDetailResponse(
-        task_id=plan.plan_id,
-        goal=plan.goal,
-        priority=plan.priority,
-        status=plan.status,
-        decision=plan.decision,
-        risk_level=plan.risk_level,
-        reasoning_summary=plan.reasoning_summary,
-        steps=steps,
-        execution_status=task_run.status if task_run else None,
-        created_at=plan.created_at,
-    )
+    deps = await svc.get_dependencies(task_id)
+    resp = _task_response(task)
+    return {
+        **resp.model_dump(),
+        "dependencies": [
+            {
+                "depends_on_task_id": d.depends_on_task_id,
+                "dependency_type": d.dependency_type,
+            }
+            for d in deps
+        ],
+    }
 
 
 @router.post("/v1/tasks/{task_id}/start", response_model=StandaloneTaskResponse)

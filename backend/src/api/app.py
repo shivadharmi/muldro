@@ -23,6 +23,9 @@ from src.api.routes_feedback import router as feedback_router
 from src.api.routes_goals import router as goals_router
 from src.api.routes_graph import router as graph_router
 from src.api.routes_health import router as health_router
+from src.api.routes_home import router as home_router
+from src.api.routes_integrations import router as integrations_router
+from src.api.routes_mcp import router as mcp_router
 from src.api.routes_meetings import router as meetings_router
 from src.api.routes_memories import router as memories_router
 from src.api.routes_metrics import router as metrics_router
@@ -30,6 +33,7 @@ from src.api.routes_notifications import router as notifications_router
 from src.api.routes_observation import router as observation_router
 from src.api.routes_realtime import router as realtime_router
 from src.api.routes_runs import router as runs_router
+from src.api.routes_runtime import router as runtime_router
 from src.api.routes_schedules import router as schedules_router
 from src.api.routes_search import router as search_router
 from src.api.routes_settings import router as settings_router
@@ -70,7 +74,9 @@ def create_app() -> FastAPI:
 
         app.state.surface_registry = SurfaceRegistry(redis=app.state.redis)
 
-        # Seed default tool definitions and agent configurations
+        # Seed global defaults (tools, agents, routes) — not per-user.
+        # Per-user defaults (schedules, trust records, installations) are
+        # provisioned at signup via workspace_provisioner.provision_workspace().
         try:
             from src.models.database import get_session_factory
             from src.services.agent_registry import AgentRegistry
@@ -82,36 +88,14 @@ def create_app() -> FastAPI:
                 agent_count = await AgentRegistry(db).seed_defaults()
                 route_count = await RouteResolver(db).seed_defaults()
 
-                from sqlalchemy import select as sa_select
-
-                from src.models.users import User, WorkspaceMember
-                from src.services.schedule_seeder import seed_default_schedules
-
-                user_rows = await db.execute(sa_select(User.user_id))
-                user_ids = [row[0] for row in user_rows.all()]
-
-                # Build user → workspace mapping for schedule seeding
-                wm_rows = await db.execute(
-                    sa_select(WorkspaceMember.user_id, WorkspaceMember.workspace_id)
-                )
-                user_workspace = {r[0]: r[1] for r in wm_rows.all()}
-
-                sched_count = 0
-                for uid in user_ids:
-                    sched_count += await seed_default_schedules(
-                        db,
-                        user_id=uid,
-                        workspace_id=user_workspace.get(uid, ""),
-                    )
-
-                if tool_count or agent_count or route_count or sched_count:
+                if tool_count or agent_count or route_count:
                     await db.commit()
                     if tool_count:
                         logger.info("Seeded %d tool definitions", tool_count)
                     if agent_count:
                         logger.info("Seeded %d agent definitions", agent_count)
-                    if sched_count:
-                        logger.info("Seeded %d default schedules", sched_count)
+                    if route_count:
+                        logger.info("Seeded %d agent routes", route_count)
         except Exception:
             logger.debug(
                 "Registry seed skipped (DB not ready)",
@@ -229,7 +213,7 @@ def create_app() -> FastAPI:
     # Event ingestion
     app.include_router(events_router, tags=["events"])
 
-    # Legacy webhook route (backwards compat)
+    # Webhook ingestion
     app.include_router(webhooks_router, tags=["webhooks"])
 
     # Observation health tracking
@@ -300,6 +284,16 @@ def create_app() -> FastAPI:
 
     # Knowledge graph (Neo4j)
     app.include_router(graph_router, tags=["graph"])
+
+    # Integration platform
+    app.include_router(integrations_router, tags=["integrations"])
+    app.include_router(mcp_router, tags=["mcp"])
+
+    # Home feed
+    app.include_router(home_router, tags=["home"])
+
+    # Runtime projections
+    app.include_router(runtime_router, tags=["runtime"])
 
     return app
 

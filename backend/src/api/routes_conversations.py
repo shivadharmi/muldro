@@ -350,3 +350,24 @@ async def get_message(
         raise HTTPException(status_code=404, detail="Message not found")
 
     return _message_to_response(msg)
+
+
+@router.get("/v1/conversations/{conversation_id}/messages/{message_id}/context")
+async def get_message_context(
+    conversation_id: str,
+    message_id: str,
+    workspace_id: str = Depends(get_current_workspace_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get context sidebar data for a specific message (evidence, entities, sources)."""
+    from src.api.schemas.command_context import ContextSidebarData
+    from src.services.evidence_bundle import EvidenceBundleService
+
+    svc = EvidenceBundleService(db, workspace_id)
+    evidence = await svc.build_for_message(conversation_id, message_id)
+
+    return ContextSidebarData(
+        message_id=message_id,
+        conversation_id=conversation_id,
+        evidence=evidence,
+    ).model_dump()

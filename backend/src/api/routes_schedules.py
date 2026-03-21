@@ -21,11 +21,168 @@ VALID_ACTION_TYPES = {
     "heartbeat",
     "custom_agent_task",
     "wake_agent",
+    "consolidate_memories",
+    "check_slos",
 }
 
 VALID_SCHEDULE_TYPES = {"recurring", "one_shot"}
 VALID_PRIORITIES = {"low", "medium", "high"}
 VALID_SOURCES = {"system", "user", "reflection"}
+
+# Schema definitions for frontend form generation
+ACTION_TYPE_SCHEMAS: list[dict] = [
+    {
+        "action_type": "observe_source",
+        "label": "Observe Source",
+        "description": "Poll a connected source for new activity",
+        "config_fields": [
+            {
+                "name": "source",
+                "type": "select",
+                "label": "Source",
+                "required": True,
+                "options": [
+                    {"value": "gmail", "label": "Gmail"},
+                    {"value": "calendar", "label": "Google Calendar"},
+                    {"value": "slack", "label": "Slack"},
+                    {"value": "github", "label": "GitHub"},
+                    {"value": "linear", "label": "Linear"},
+                    {"value": "notion", "label": "Notion"},
+                    {"value": "jira", "label": "Jira"},
+                    {"value": "drive", "label": "Google Drive"},
+                ],
+            },
+        ],
+        "suggested_cron": "*/5 * * * *",
+    },
+    {
+        "action_type": "generate_briefing",
+        "label": "Generate Briefing",
+        "description": "Generate a daily briefing summarizing recent activity",
+        "config_fields": [],
+        "suggested_cron": "0 7 * * *",
+    },
+    {
+        "action_type": "meeting_prep",
+        "label": "Meeting Prep",
+        "description": "Check calendar and prepare meeting briefs",
+        "config_fields": [
+            {
+                "name": "lookahead_minutes",
+                "type": "number",
+                "label": "Lookahead (minutes)",
+                "required": False,
+                "default": 30,
+            },
+        ],
+        "suggested_cron": "*/30 * * * *",
+    },
+    {
+        "action_type": "heartbeat",
+        "label": "Heartbeat",
+        "description": "System health check and status update",
+        "config_fields": [],
+        "suggested_cron": "0 */6 * * *",
+    },
+    {
+        "action_type": "custom_agent_task",
+        "label": "Custom Agent Task",
+        "description": "Run a custom command through the orchestrator",
+        "config_fields": [
+            {
+                "name": "message",
+                "type": "text",
+                "label": "Task Message",
+                "required": True,
+                "placeholder": "e.g., Summarize unread emails from this week",
+            },
+        ],
+        "suggested_cron": "0 9 * * 1",
+    },
+    {
+        "action_type": "wake_agent",
+        "label": "Wake Agent",
+        "description": "Invoke a specific agent with a message",
+        "config_fields": [
+            {
+                "name": "agent",
+                "type": "select",
+                "label": "Agent",
+                "required": True,
+                "options": [
+                    {"value": "observer", "label": "Observer"},
+                    {"value": "librarian", "label": "Librarian"},
+                    {"value": "planner", "label": "Planner"},
+                    {"value": "presenter", "label": "Presenter"},
+                    {"value": "researcher", "label": "Researcher"},
+                    {"value": "persona", "label": "Persona"},
+                ],
+            },
+            {
+                "name": "message",
+                "type": "text",
+                "label": "Message",
+                "required": True,
+                "placeholder": "Instructions for the agent",
+            },
+        ],
+        "suggested_cron": "0 8 * * *",
+    },
+    {
+        "action_type": "consolidate_memories",
+        "label": "Consolidate Memories",
+        "description": "Merge and consolidate related memories",
+        "config_fields": [],
+        "suggested_cron": "0 2 * * *",
+    },
+    {
+        "action_type": "check_slos",
+        "label": "Check SLOs",
+        "description": "Run SLO health checks across the system",
+        "config_fields": [],
+        "suggested_cron": "0 */6 * * *",
+    },
+]
+
+CRON_PRESETS = [
+    {"label": "Every 5 minutes", "value": "*/5 * * * *"},
+    {"label": "Every 15 minutes", "value": "*/15 * * * *"},
+    {"label": "Every 30 minutes", "value": "*/30 * * * *"},
+    {"label": "Every hour", "value": "0 * * * *"},
+    {"label": "Every 6 hours", "value": "0 */6 * * *"},
+    {"label": "Daily at 7 AM", "value": "0 7 * * *"},
+    {"label": "Daily at 9 AM", "value": "0 9 * * *"},
+    {"label": "Daily at 2 AM", "value": "0 2 * * *"},
+    {"label": "Weekdays at 8 AM", "value": "0 8 * * 1-5"},
+    {"label": "Weekly on Monday", "value": "0 9 * * 1"},
+]
+
+
+@router.get("/v1/schedules/schema")
+async def get_schedule_schema():
+    """Return schema info for creating schedules.
+
+    Includes valid action types with their config field definitions,
+    schedule types, priorities, cron presets, and sources.
+    """
+    return {
+        "action_types": ACTION_TYPE_SCHEMAS,
+        "schedule_types": [
+            {"value": "recurring", "label": "Recurring", "requires": "cron_expr"},
+            {"value": "one_shot", "label": "One Shot", "requires": "run_at"},
+        ],
+        "priorities": [
+            {"value": "low", "label": "Low"},
+            {"value": "medium", "label": "Medium"},
+            {"value": "high", "label": "High"},
+        ],
+        "sources": [
+            {"value": "user", "label": "User Created"},
+            {"value": "system", "label": "System"},
+            {"value": "reflection", "label": "AI Reflection"},
+        ],
+        "cron_presets": CRON_PRESETS,
+    }
 
 
 def _compute_next_run(cron_expr: str, after: datetime) -> datetime:

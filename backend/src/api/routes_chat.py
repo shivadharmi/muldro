@@ -250,10 +250,8 @@ async def chat_stream(
                                 tc.result_preview = preview[:500] if len(preview) > 500 else preview
                             break
 
-                # Tool events are persisted to DB above but not streamed to client
-                if event_type not in ("tool_call", "tool_result"):
-                    data = json.dumps(event, default=str)
-                    yield f"event: {event_type}\ndata: {data}\n\n"
+                data = json.dumps(event, default=str)
+                yield f"event: {event_type}\ndata: {data}\n\n"
         except Exception as e:
             logger.error("Chat stream error: %s", e, exc_info=True)
             error_data = json.dumps({"event": "error", "message": str(e)})

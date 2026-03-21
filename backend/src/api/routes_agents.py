@@ -24,7 +24,7 @@ class AgentResponse(BaseModel):
     description: str | None = None
     system_prompt: str
     model_tier: str
-    tool_scope: list[str]
+    capability_scope: list[str]
     max_tokens: int
     temperature: float
     enabled: bool
@@ -42,7 +42,7 @@ class AgentCreateRequest(BaseModel):
     system_prompt: str = Field(..., min_length=1)
     description: str | None = None
     model_tier: str = Field(default="sonnet", pattern=r"^(opus|sonnet|haiku)$")
-    tool_scope: list[str] = Field(default_factory=list)
+    capability_scope: list[str] = Field(default_factory=list)
     max_tokens: int = Field(default=4096, ge=256, le=32768)
     temperature: float = Field(default=0.3, ge=0.0, le=1.0)
 
@@ -52,7 +52,7 @@ class AgentUpdateRequest(BaseModel):
     description: str | None = None
     system_prompt: str | None = Field(default=None, min_length=1)
     model_tier: str | None = Field(default=None, pattern=r"^(opus|sonnet|haiku)$")
-    tool_scope: list[str] | None = None
+    capability_scope: list[str] | None = None
     max_tokens: int | None = Field(default=None, ge=256, le=32768)
     temperature: float | None = Field(default=None, ge=0.0, le=1.0)
     enabled: bool | None = None
@@ -130,7 +130,7 @@ async def create_agent(
         system_prompt=req.system_prompt,
         description=req.description,
         model_tier=req.model_tier,
-        tool_scope=req.tool_scope,
+        capability_scope=req.capability_scope,
         max_tokens=req.max_tokens,
         temperature=req.temperature,
     )
@@ -197,7 +197,7 @@ def _agent_response(agent, stats: dict | None = None) -> AgentResponse:
         description=agent.description,
         system_prompt=agent.system_prompt,
         model_tier=agent.model_tier,
-        tool_scope=agent.tool_scope or [],
+        capability_scope=agent.capability_scope or [],
         max_tokens=agent.max_tokens,
         temperature=agent.temperature,
         enabled=agent.enabled,

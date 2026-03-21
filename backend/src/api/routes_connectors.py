@@ -143,6 +143,55 @@ async def test_connector(
     return result
 
 
+@router.get("/v1/connectors/{connector_id}/insights")
+async def get_connector_insights(
+    connector_id: str,
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+    db: AsyncSession = Depends(get_session),
+):
+    """Get sync health, downstream impact, and dependency analysis for a connector."""
+    from src.services.connector_insight import ConnectorInsightService
+
+    # connector_id here is the provider name (e.g., "gmail", "github")
+    svc = ConnectorInsightService(db, workspace_id)
+    report = await svc.get_insight(connector_id)
+
+    return {
+        "provider": report.provider,
+        "sync_health": {
+            "status": report.sync_health.status,
+            "events_last_24h": report.sync_health.events_last_24h,
+            "events_last_7d": report.sync_health.events_last_7d,
+            "last_event_at": (
+                report.sync_health.last_event_at.isoformat()
+                if report.sync_health.last_event_at
+                else None
+            ),
+            "avg_events_per_day": report.sync_health.avg_events_per_day,
+            "latency_trend": report.sync_health.latency_trend,
+        },
+        "downstream_impact": {
+            "entities_created": report.downstream_impact.entities_created,
+            "memories_influenced": report.downstream_impact.memories_influenced,
+            "plans_triggered": report.downstream_impact.plans_triggered,
+            "briefings_contributed": report.downstream_impact.briefings_contributed,
+            "active_webhook_count": report.downstream_impact.active_webhook_count,
+        },
+        "dependencies": [
+            {
+                "source_provider": d.source_provider,
+                "target_provider": d.target_provider,
+                "relationship": d.relationship,
+                "description": d.description,
+            }
+            for d in report.dependencies
+        ],
+        "recent_events": report.recent_events,
+        "recommendations": report.recommendations,
+    }
+
+
 @router.post("/v1/connectors/{connector_id}/poll")
 async def poll_connector(
     connector_id: str,

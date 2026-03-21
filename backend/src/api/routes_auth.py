@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote, urlencode
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -287,6 +287,7 @@ async def oauth_authorize(
 @router.get("/v1/auth/oauth/{provider}/callback")
 async def oauth_callback(
     provider: str,
+    background_tasks: BackgroundTasks,
     code: str = Query(...),
     state: str = Query(""),
     settings: Settings = Depends(get_settings),
@@ -376,6 +377,9 @@ async def oauth_callback(
             user_id,
             userinfo.get("email", "unknown"),
         )
+        background_tasks.add_task(
+            _trigger_initial_observation, user_id, ["gmail", "calendar"], workspace_id
+        )
 
     elif provider == "github":
         client_id = settings.github_oauth_client_id
@@ -421,6 +425,9 @@ async def oauth_callback(
         await _ensure_connector(db_factory, user_id, "github", workspace_id=workspace_id)
 
         logger.info("GitHub connector linked for %s", user_id)
+        background_tasks.add_task(
+            _trigger_initial_observation, user_id, ["github"], workspace_id
+        )
 
     elif provider == "linear":
         client_id = settings.linear_oauth_client_id
@@ -472,6 +479,9 @@ async def oauth_callback(
         )
         await _ensure_connector(db_factory, user_id, "linear", workspace_id=workspace_id)
         logger.info("Linear connector linked for %s", user_id)
+        background_tasks.add_task(
+            _trigger_initial_observation, user_id, ["linear"], workspace_id
+        )
 
     elif provider == "notion":
         client_id = settings.notion_oauth_client_id
@@ -524,6 +534,9 @@ async def oauth_callback(
         )
         await _ensure_connector(db_factory, user_id, "notion", workspace_id=workspace_id)
         logger.info("Notion connector linked for %s", user_id)
+        background_tasks.add_task(
+            _trigger_initial_observation, user_id, ["notion"], workspace_id
+        )
 
     elif provider == "jira":
         client_id = settings.jira_oauth_client_id
@@ -611,6 +624,9 @@ async def oauth_callback(
                     await _db.commit()
 
         logger.info("Jira connector linked for %s (cloudId=%s)", user_id, cloud_id)
+        background_tasks.add_task(
+            _trigger_initial_observation, user_id, ["jira"], workspace_id
+        )
 
     elif provider == "linkedin":
         client_id = settings.linkedin_oauth_client_id
@@ -748,6 +764,49 @@ async def oauth_callback(
     return RedirectResponse(url=f"{frontend_url}/connectors?{params}")
 
 
+async def _trigger_initial_observation(
+    user_id: str, sources: list[str], workspace_id: str
+) -> None:
+    """Run initial perception cycle for newly connected sources (background)."""
+    try:
+        from src.config.settings import get_settings
+        from src.models.database import get_session_factory
+        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.runtime import build as build_runtime
+        from src.tools import intelligence_server
+
+        settings = get_settings()
+        db_factory = get_session_factory()
+
+        # Build a short-lived ServiceContainer for this background task
+        svc_db = db_factory()
+        try:
+            svc = build_runtime(settings, svc_db)
+            intelligence_server.configure(db_factory, settings, svc)
+            orchestrator = JarvisOrchestrator(
+                settings=settings,
+                db_factory=db_factory,
+                services=svc,
+            )
+            for source in sources:
+                try:
+                    await orchestrator.run_perception_cycle(
+                        source, user_id=user_id, workspace_id=workspace_id
+                    )
+                    logger.info("Initial observation completed for %s/%s", user_id, source)
+                except Exception:
+                    logger.warning(
+                        "Initial observation failed for %s/%s",
+                        user_id,
+                        source,
+                        exc_info=True,
+                    )
+        finally:
+            await svc_db.close()
+    except Exception:
+        logger.warning("Initial observation dispatch failed", exc_info=True)
+
+
 async def _ensure_connector(
     db_factory,
     user_id: str,
@@ -783,8 +842,24 @@ async def _ensure_connector(
                     )
                 )
             await db.commit()
+
+        # Enable schedules tied to this connector (observation + globals on first)
+        await _enable_connector_schedules(db_factory, provider)
     except Exception:
         logger.warning("Failed to ensure connector %s for %s", provider, user_id, exc_info=True)
+
+
+async def _enable_connector_schedules(db_factory, provider: str) -> None:
+    """Enable seeded schedules when a connector is authorized."""
+    try:
+        from src.services.schedule_seeder import enable_schedules_for_connector
+
+        async with db_factory() as db:
+            enabled = await enable_schedules_for_connector(db, provider)
+            if enabled:
+                await db.commit()
+    except Exception:
+        logger.debug("Failed to enable schedules for %s", provider, exc_info=True)
 
 
 def _error_redirect(settings: Settings, message: str) -> RedirectResponse:

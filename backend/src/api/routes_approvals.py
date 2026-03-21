@@ -336,6 +336,39 @@ async def edit_approval(
     )
 
 
+@router.get("/v1/approvals/{approval_id}/impact")
+async def get_approval_impact(
+    approval_id: str,
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+    db: AsyncSession = Depends(get_session),
+):
+    """Get impact analysis for a pending approval."""
+    from src.services.approval_impact import ApprovalImpactService
+
+    svc = ApprovalImpactService(db, workspace_id)
+    impact = await svc.get_impact(approval_id)
+    affected = await svc.get_affected_entities(approval_id)
+
+    return {
+        "approval_id": approval_id,
+        "risk_level": impact.risk_level,
+        "reversibility": impact.reversibility,
+        "reversibility_detail": impact.reversibility_detail,
+        "policy_explanation": impact.policy_explanation,
+        "downstream_effects": impact.downstream_effects,
+        "affected_entities": [
+            {
+                "entity_id": e.entity_id,
+                "name": e.name,
+                "entity_type": e.entity_type,
+                "impact_type": e.impact_type,
+            }
+            for e in affected
+        ],
+    }
+
+
 async def _get_approval(
     db: AsyncSession, approval_id: str, user_id: str, workspace_id: str
 ) -> Approval:
