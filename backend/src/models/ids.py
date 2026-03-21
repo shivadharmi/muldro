@@ -43,6 +43,15 @@ ID_PREFIXES = {
     "proc": "procedure",
     "ts": "trust_score",
     "watcher": "watcher",
+    "trs": "server_trust",
+    "capb": "capability_binding",
+    "inst": "connector_installation",
+    "revt": "runtime_event",
+    "apol": "approval_policy",
+    "whsub": "webhook_subscription",
+    "mcat": "mcp_server_catalog",
+    "oal": "org_allowlist",
+    "iaud": "integration_audit",
 }
 
 

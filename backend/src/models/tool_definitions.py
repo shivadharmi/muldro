@@ -28,6 +28,7 @@ class ToolDefinition(Base, TimestampMixin):
     # gmail, calendar, slack, github, drive, browser, internal
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     canonical_name: Mapped[str | None] = mapped_column(String(128))
+    capability: Mapped[str | None] = mapped_column(String(128))
 
     __table_args__ = (
         Index("ix_tool_defs_connector", "connector_type"),
@@ -39,4 +40,5 @@ class ToolDefinition(Base, TimestampMixin):
             unique=True,
             postgresql_where="canonical_name IS NOT NULL",
         ),
+        Index("ix_tool_defs_capability", "workspace_id", "capability"),
     )
