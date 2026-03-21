@@ -132,15 +132,11 @@ class JarvisOrchestrator:
         self,
         settings: Settings,
         db_factory,
-        services: dict | ServiceContainer,
+        services: ServiceContainer,
     ):
         self._settings = settings
         self._db_factory = db_factory
-        # Accept both dict (legacy callers / tests) and ServiceContainer
-        if isinstance(services, ServiceContainer):
-            self._services = services
-        else:
-            self._services = ServiceContainer.from_dict(services)
+        self._services = services
         self._client = get_anthropic_client(settings)
         self._trace_store = TraceStore(
             elasticsearch_url=settings.elasticsearch_url,
@@ -148,8 +144,8 @@ class JarvisOrchestrator:
         )
         self._trace_manager = TraceManager(trace_store=self._trace_store)
         self._budget = BudgetTracker(daily_limit_usd=settings.daily_token_budget_usd)
-        self._tools = self._build_tool_definitions()
         self._agents: dict[str, SubAgent] = dict(AGENTS)  # Start with hardcoded defaults
+        self._tools = self._build_tool_definitions()
         self._event_bus = None  # Lazy-init when Redis available
 
     async def load_agents_from_db(self) -> None:
@@ -276,6 +272,13 @@ class JarvisOrchestrator:
     def _build_internal_tool_definitions(self) -> list[dict]:
         """Build Claude tool definitions from Pydantic models in tool_schemas."""
         return build_tool_definitions()
+
+    @staticmethod
+    def _internal_tool_names() -> set[str]:
+        """Return the set of internal (non-MCP) tool names."""
+        from src.orchestrator.tool_schemas import TOOL_INPUT_MODELS
+
+        return set(TOOL_INPUT_MODELS.keys())
 
     def _get_tools_for_agent(self, agent: SubAgent) -> list[dict]:
         """Filter tool definitions to only those the agent can use."""
@@ -757,13 +760,14 @@ class JarvisOrchestrator:
     async def run_perception_cycle(self, source: str, user_id: str, workspace_id: str = "") -> dict:
         """Run a perception cycle for a specific data source.
 
-        Observer reads new data -> Librarian extracts entities/memories ->
-        Planner evaluates importance -> Presenter notifies if needed.
+        Step 1: Poll the connector directly (no Claude call — just API fetch).
+        Step 2: If new events found, Librarian extracts entities/memories.
+        Step 3: Planner evaluates importance and creates plans if needed.
         """
         trace = self._trace_manager.start_trace(f"perception_{source}")
 
         try:
-            # Check budget
+            # Check budget (only for Librarian + Planner calls, polling is cheap)
             async with self._db_factory() as db:
                 budget_status = await self._budget.get_budget_status(db)
             if not self._budget.should_allow_perception(budget_status):
@@ -773,33 +777,43 @@ class JarvisOrchestrator:
                 )
                 return {"status": "skipped", "reason": "budget_exhausted"}
 
-            # Step 1: Observer reads new data from source
-            observer_result = await self._call_agent(
-                "observer",
-                message=f"Observe {source} for new activity. Use get_observation_cursor "
-                f"to find where we left off, then fetch only new data.",
-                user_id=user_id,
-                trace=trace,
-                workspace_id=workspace_id,
+            # Step 1: Poll the connector directly for new events
+            raw_events, new_cursor, poll_error = await self._poll_connector(
+                source, user_id, workspace_id
             )
 
-            # Bail early if observer failed (e.g. API error, no credits)
-            if isinstance(observer_result, str) and "API error" in observer_result:
+            if poll_error:
                 logger.warning(
-                    "perception_observer_failed",
-                    extra={"source": source, "error": observer_result},
+                    "perception_poll_failed",
+                    extra={"source": source, "error": poll_error},
                 )
-                return {
-                    "status": "error",
-                    "source": source,
-                    "error": observer_result,
-                }
+                return {"status": "error", "source": source, "error": poll_error}
+
+            if not raw_events:
+                logger.info(
+                    "perception_no_new_events",
+                    extra={"source": source},
+                )
+                return {"status": "completed", "source": source, "events": 0}
+
+            # Ingest raw events into normalized_events table
+            event_summaries = await self._ingest_raw_events(
+                raw_events, user_id, workspace_id
+            )
+
+            # Update the observation cursor
+            await self._update_cursor(source, user_id, workspace_id, new_cursor)
+
+            observer_summary = (
+                f"Polled {source}: {len(raw_events)} new event(s).\n"
+                + "\n".join(f"- {s}" for s in event_summaries[:20])
+            )
 
             # Step 2: Librarian extracts entities and memories
             librarian_result = await self._call_agent(
                 "librarian",
                 message=f"Process these observations from {source} and extract "
-                f"entities and memories: {observer_result}",
+                f"entities and memories:\n{observer_summary}",
                 user_id=user_id,
                 trace=trace,
                 workspace_id=workspace_id,
@@ -809,7 +823,7 @@ class JarvisOrchestrator:
             planner_result = await self._call_agent(
                 "planner",
                 message=f"Evaluate these observations from {source}. "
-                f"Create plans for anything important: {observer_result}",
+                f"Create plans for anything important:\n{observer_summary}",
                 user_id=user_id,
                 trace=trace,
                 workspace_id=workspace_id,
@@ -819,7 +833,11 @@ class JarvisOrchestrator:
             await self._publish_event(
                 "perception_completed",
                 user_id,
-                {"source": source, "trace_id": trace.trace_id},
+                {
+                    "source": source,
+                    "trace_id": trace.trace_id,
+                    "event_count": len(raw_events),
+                },
                 trace_id=trace.trace_id,
             )
 
@@ -827,7 +845,7 @@ class JarvisOrchestrator:
                 "status": "completed",
                 "source": source,
                 "trace_id": trace.trace_id,
-                "observer": observer_result,
+                "events": len(raw_events),
                 "librarian": librarian_result,
                 "planner": planner_result,
             }
@@ -839,6 +857,116 @@ class JarvisOrchestrator:
             await self._trace_manager.finish_trace(
                 trace.trace_id, user_id=user_id, workspace_id=workspace_id
             )
+
+    async def _poll_connector(
+        self, source: str, user_id: str, workspace_id: str
+    ) -> tuple[list, str | None, str | None]:
+        """Poll a connector for new events. Returns (events, new_cursor, error)."""
+        from src.connectors.base import CONNECTOR_REGISTRY
+        from src.services.oauth_manager import OAuthManager
+
+        connector_cls = CONNECTOR_REGISTRY.get(source)
+        if not connector_cls:
+            return [], None, f"No connector registered for source: {source}"
+
+        connector = connector_cls(settings=self._settings)
+
+        # Get OAuth credentials
+        oauth_mgr = OAuthManager(
+            self._db_factory,
+            encryption_key=self._settings.oauth_encryption_key,
+        )
+        # Map source to OAuth provider (gmail/calendar share "google" provider)
+        oauth_provider = "google" if source in ("gmail", "calendar") else source
+        access_token = await oauth_mgr.get_valid_token(user_id, oauth_provider)
+        if not access_token:
+            return [], None, f"No valid credentials for {source} — user may need to re-authorize"
+
+        # Get current cursor
+        cursor = None
+        async with self._db_factory() as db:
+            from sqlalchemy import select
+
+            from src.models.observation_cursor import ObservationCursor
+
+            result = await db.execute(
+                select(ObservationCursor.cursor_value).where(
+                    ObservationCursor.user_id == user_id,
+                    ObservationCursor.source == source,
+                )
+            )
+            row = result.first()
+            if row:
+                cursor = row[0]
+
+        try:
+            events, new_cursor = await connector.poll(
+                user_id, cursor, {"access_token": access_token}
+            )
+            return events, new_cursor, None
+        except Exception as e:
+            return [], None, f"Poll failed for {source}: {e}"
+
+    async def _ingest_raw_events(
+        self, raw_events: list, user_id: str, workspace_id: str
+    ) -> list[str]:
+        """Ingest raw events into the event processor. Returns summary strings."""
+        summaries = []
+        async with self._db_factory() as db:
+            from src.services.event_processor import EventProcessor
+
+            processor = EventProcessor(db, user_id=user_id, workspace_id=workspace_id)
+            for raw in raw_events:
+                try:
+                    normalized = await processor.process_raw_event(raw)
+                    title = raw.title or raw.raw_data.get("subject", "")
+                    summary = f"[{raw.source}] {raw.event_type}: {title}"
+                    if normalized:
+                        summary += f" (priority={normalized.priority_score})"
+                    summaries.append(summary)
+                except Exception as e:
+                    logger.debug("Failed to ingest raw event: %s", e)
+                    summaries.append(f"[{raw.source}] {raw.event_type} (ingest error)")
+            await db.commit()
+        return summaries
+
+    async def _update_cursor(
+        self, source: str, user_id: str, workspace_id: str, new_cursor: str | None
+    ) -> None:
+        """Update the observation cursor after a successful poll."""
+        if not new_cursor:
+            return
+        async with self._db_factory() as db:
+            from datetime import datetime, timezone
+
+            from sqlalchemy import select
+
+            from src.models.observation_cursor import ObservationCursor
+
+            result = await db.execute(
+                select(ObservationCursor).where(
+                    ObservationCursor.user_id == user_id,
+                    ObservationCursor.source == source,
+                )
+            )
+            existing = result.scalar_one_or_none()
+            if existing:
+                existing.cursor_value = new_cursor
+                existing.last_observation_at = datetime.now(timezone.utc)
+            else:
+                from ulid import ULID
+
+                db.add(
+                    ObservationCursor(
+                        cursor_id=f"cur_{ULID()}",
+                        user_id=user_id,
+                        workspace_id=workspace_id,
+                        source=source,
+                        cursor_value=new_cursor,
+                        last_observation_at=datetime.now(timezone.utc),
+                    )
+                )
+            await db.commit()
 
     async def generate_briefing(self, user_id: str, workspace_id: str = "") -> dict:
         """Generate the daily briefing through the Presenter agent.
@@ -1210,7 +1338,22 @@ class JarvisOrchestrator:
                 )
                 return {"error": f"Invalid arguments for {tool_name}: {e}"}
 
-        # 2. Try MCP bridge (external MCP servers: Google Workspace, GitHub, Slack, etc.)
+        # 2. Try capability resolver (routes to best backend: native, MCP official, user MCP)
+        try:
+            from src.integrations.capability_resolver import CapabilityResolver
+
+            async with self._db_factory() as db:
+                gateway = getattr(self, "_gateway", None)
+                resolver = CapabilityResolver(db, gateway, workspace_id)
+                capability = resolver.resolve_tool_to_capability(tool_name)
+                if capability:
+                    result = await resolver.execute(tool_name, tool_input, user_id=user_id)
+                    await self._publish_event("tool.completed", user_id, {"tool": tool_name})
+                    return result
+        except Exception as e:
+            logger.debug("Capability resolver failed for %s: %s", tool_name, e)
+
+        # 3. Try MCP bridge directly (fallback for unmapped tools)
         from src.connectors.mcp_bridge import call_mcp_tool, is_mcp_tool
 
         if is_mcp_tool(tool_name):
@@ -1226,7 +1369,7 @@ class JarvisOrchestrator:
                 )
                 raise
 
-        # 3. Fall back to ToolRegistry for connector-backed tools
+        # 4. Fall back to ToolRegistry for connector-backed tools
         try:
             result = await self._execute_connector_tool(tool_name, tool_input, user_id=user_id)
             await self._publish_event("tool.completed", user_id, {"tool": tool_name})

@@ -25,15 +25,20 @@ async def governor_pre_tool_hook(
     workspace_id: str = "",
     db_factory=None,
     services: dict | None = None,
+    trust_tier: str | None = None,
 ) -> dict:
     """Pre-tool-use hook: enforce Governor policy before external writes.
+
+    Args:
+        trust_tier: Trust tier of the MCP server (T0-T3). Passed from
+            the capability resolver for trust-aware classification.
 
     Returns:
         {"allowed": True} to proceed
         {"allowed": False, "reason": "..."} to block
         {"allowed": False, "approval_required": True, "approval_id": "..."} for approval gate
     """
-    classification = await _policy.classify(tool_name, db_factory=db_factory)
+    classification = await _policy.classify(tool_name, db_factory=db_factory, trust_tier=trust_tier)
 
     # Blocked tools never pass
     if classification.is_blocked:

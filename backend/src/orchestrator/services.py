@@ -1,4 +1,4 @@
-"""ServiceContainer — typed container replacing untyped services dict."""
+"""ServiceContainer — typed container for all Jarvis services."""
 
 from __future__ import annotations
 
@@ -29,7 +29,6 @@ if TYPE_CHECKING:
 class ServiceContainer:
     """Typed container for all Jarvis services.
 
-    Replaces the untyped ``services: dict`` that was passed around.
     All fields are optional so the orchestrator degrades gracefully
     when a service fails to initialise.
     """
@@ -52,40 +51,5 @@ class ServiceContainer:
     graph_executor: GraphExecutor | None = None
     operator: Operator | None = None
 
-    # Catch-all for services not yet promoted to a typed field.
+    # Services not yet promoted to a typed field
     extras: dict[str, Any] = field(default_factory=dict)
-
-    @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "ServiceContainer":
-        """Build a ServiceContainer from a legacy services dict."""
-        known_fields = {f.name for f in cls.__dataclass_fields__.values() if f.name != "extras"}
-        kwargs: dict[str, Any] = {}
-        extras: dict[str, Any] = {}
-        for key, val in d.items():
-            if key in known_fields:
-                kwargs[key] = val
-            elif key == "memory":
-                # Legacy alias — map to memory_service if not already set
-                kwargs.setdefault("memory_service", val)
-            else:
-                extras[key] = val
-        kwargs["extras"] = extras
-        return cls(**kwargs)
-
-    # ── dict compatibility layer (for intelligence_server.py) ──────────
-    def __getitem__(self, key: str) -> Any:
-        val = getattr(self, key, None)
-        if val is not None:
-            return val
-        if key in self.extras:
-            return self.extras[key]
-        # Legacy alias
-        if key == "memory":
-            return self.memory_service
-        raise KeyError(key)
-
-    def get(self, key: str, default: Any = None) -> Any:
-        try:
-            return self[key]
-        except KeyError:
-            return default

@@ -30,11 +30,10 @@ _settings = None
 _services = None
 
 
-def configure(db_factory, settings, services: dict):
+def configure(db_factory, settings, services):
     """Configure the intelligence server with runtime dependencies.
 
-    Called once during orchestrator startup. Services dict should contain:
-    event_processor, world_model, memory_service, planner, governor, presenter, audit
+    Called once during orchestrator startup. Services should be a ServiceContainer.
     """
     global _db_factory, _settings, _services
     _db_factory = db_factory
@@ -101,7 +100,7 @@ async def ingest_event(
                 raw_payload=None,
             )
 
-            processor = _services["event_processor"]
+            processor = _services.event_processor
             result = await processor.process(user_id, raw, workspace_id=workspace_id)
             await db.commit()
 
@@ -136,7 +135,7 @@ async def search_memory(
     """
     async with _get_db():
         try:
-            memory_svc = _services["memory_service"]
+            memory_svc = _services.memory_service
             memory_types = [memory_type] if memory_type else None
             results = await memory_svc.retrieve(
                 user_id,
@@ -171,7 +170,7 @@ async def get_entities(
     """
     async with _get_db() as db:
         try:
-            world_model = _services["world_model"]
+            world_model = _services.world_model
             if query:
                 entities = await world_model.find_entity(user_id, query, workspace_id=workspace_id)
                 return {
@@ -210,6 +209,7 @@ async def get_entities(
 @intelligence.tool()
 async def update_entity(
     entity_id: str,
+    user_id: str = "",
     attributes: str = "",
     add_alias: str = "",
     workspace_id: str = "",
@@ -272,7 +272,7 @@ async def plan_command(
     """
     async with _get_db():
         try:
-            planner = _services["planner"]
+            planner = _services.planner
             plan = await planner.plan_for_command(
                 command, user_id, context=context, workspace_id=workspace_id
             )
@@ -339,7 +339,7 @@ async def evaluate_policy(
     """
     async with _get_db():
         try:
-            governor = _services["governor"]
+            governor = _services.governor
             result = await governor.evaluate_plan(plan_id, user_id, workspace_id=workspace_id)
             return result.model_dump()
         except Exception as e:
@@ -378,7 +378,7 @@ async def approve_action(
             await db.commit()
 
             # Log to audit
-            audit = _services.get("audit")
+            audit = _services.audit
             if audit:
                 await audit.log(
                     user_id=user_id,
@@ -407,7 +407,7 @@ async def extract_preferences(user_id: str, source_text: str, workspace_id: str 
     """
     async with _get_db():
         try:
-            memory_service = _services.get("memory_service")
+            memory_service = _services.memory_service
             if not memory_service:
                 return {"status": "error", "error": "Memory service not available"}
 
@@ -441,7 +441,7 @@ async def get_briefing(user_id: str, date: str = "today", workspace_id: str = ""
             from datetime import date as date_type
 
             briefing_date = date_type.today() if date == "today" else date_type.fromisoformat(date)
-            presenter = _services["presenter"]
+            presenter = _services.presenter
             briefing = await presenter.generate_briefing(
                 user_id, briefing_date, workspace_id=workspace_id
             )
@@ -577,8 +577,8 @@ async def report_observation(
                 obs.error_message = error_message if error_message else None
             else:
                 obs = ObservationStatus(
-                    observation_id=f"obs_{ULID()}",
                     user_id=user_id,
+                    workspace_id=workspace_id,
                     source=source,
                     last_observed_at=now,
                     items_found=items_found,
@@ -604,6 +604,7 @@ async def report_observation(
 async def update_execution(
     execution_id: str,
     status: str,
+    user_id: str = "",
     result_summary: str = "",
     error_message: str = "",
     workspace_id: str = "",
@@ -729,7 +730,7 @@ async def get_goals(
     """Get user goals, optionally filtered by status."""
     async with _get_db():
         try:
-            goal_tracker = _services.get("goal_tracker")
+            goal_tracker = _services.goal_tracker
             if not goal_tracker:
                 return {
                     "goals": [],
@@ -771,11 +772,11 @@ async def build_context(
             from src.services.context_builder import ContextBuilder
 
             builder = ContextBuilder(
-                world_model=_services.get("world_model"),
-                memory_service=_services.get("memory_service"),
-                goal_tracker=_services.get("goal_tracker"),
-                procedure_library=_services.get("procedure_library"),
-                artifact_store=_services.get("artifact_store"),
+                world_model=_services.world_model,
+                memory_service=_services.memory_service,
+                goal_tracker=_services.goal_tracker,
+                procedure_library=_services.procedure_library,
+                artifact_store=_services.artifact_store,
             )
             pack = await builder.build(
                 user_id,
@@ -798,6 +799,7 @@ async def build_context(
 @intelligence.tool()
 async def verify_run(
     run_id: str,
+    user_id: str = "",
     workspace_id: str = "",
 ) -> dict:
     """Verify a completed run against success conditions.

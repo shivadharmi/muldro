@@ -1,6 +1,9 @@
 """Ambient perception cycle coordinator.
 
 Manages scheduled observation cycles across data sources.
+Push-first: if a source has active webhook subscriptions, skip polling.
+Falls back to polling for sources without push delivery.
+
 Each cycle: Observer -> Librarian -> Planner -> (Governor -> Presenter if needed).
 """
 
@@ -27,6 +30,7 @@ class PerceptionCoordinator:
         self._workspace_id = workspace_id
         self._last_run: dict[str, datetime] = {}
         self._enabled_sources: set[str] = set()
+        self._push_sources: set[str] = set()
         self._interval_multiplier: int = 1
 
     def enable_source(self, source: str) -> None:
@@ -35,15 +39,31 @@ class PerceptionCoordinator:
     def disable_source(self, source: str) -> None:
         self._enabled_sources.discard(source)
 
+    def mark_push_active(self, source: str) -> None:
+        """Mark a source as having active push delivery (skip polling)."""
+        self._push_sources.add(source)
+
+    def mark_push_inactive(self, source: str) -> None:
+        """Mark a source as no longer receiving push delivery."""
+        self._push_sources.discard(source)
+
+    def set_push_sources(self, sources: set[str]) -> None:
+        """Bulk-set which sources have active push subscriptions."""
+        self._push_sources = sources
+
     def set_interval_multiplier(self, multiplier: int) -> None:
         """Increase intervals when budget is tight (e.g., 3x = degraded mode)."""
         self._interval_multiplier = max(1, multiplier)
 
     def get_due_sources(self) -> list[str]:
-        """Return sources that are due for observation."""
+        """Return sources that are due for observation (polling only, not push)."""
         now = datetime.now(timezone.utc)
         due = []
         for source in self._enabled_sources:
+            # Skip sources with active push delivery
+            if source in self._push_sources:
+                continue
+
             base_interval = SOURCE_INTERVALS.get(source, 600)
             interval = base_interval * self._interval_multiplier
             last = self._last_run.get(source)
@@ -51,8 +71,52 @@ class PerceptionCoordinator:
                 due.append(source)
         return due
 
+    def get_push_sources(self) -> set[str]:
+        """Return sources that are receiving push delivery."""
+        return self._push_sources & self._enabled_sources
+
+    async def sync_push_sources(self) -> None:
+        """Sync push source set from webhook subscriptions in the database."""
+        try:
+            from src.integrations.sync.webhook_manager import WebhookManager
+
+            async with self._orchestrator._db_factory() as db:
+                mgr = WebhookManager(db, self._workspace_id, callback_base_url="")
+                active = await mgr.get_sources_with_push()
+                self._push_sources = active
+                logger.info(
+                    "push_sources_synced",
+                    extra={"sources": list(active)},
+                )
+        except Exception as e:
+            logger.debug("Failed to sync push sources: %s", e)
+
+    async def refresh_enabled_sources(self) -> None:
+        """Re-check connector auth and disable sources that lost authorization."""
+        try:
+            from src.services.scheduler import Scheduler
+
+            async with self._orchestrator._db_factory() as db:
+                authorized = await Scheduler._get_authorized_providers(
+                    db, self._user_id
+                )
+        except Exception:
+            logger.debug("Failed to refresh authorized sources", exc_info=True)
+            return
+
+        stale = self._enabled_sources - authorized
+        if stale:
+            logger.info(
+                "perception_disabling_unauthorized",
+                extra={"sources": list(stale)},
+            )
+            self._enabled_sources -= stale
+
     async def run_due_cycles(self) -> list[dict]:
         """Run perception cycles for all due sources."""
+        # Re-validate authorization before pulling
+        await self.refresh_enabled_sources()
+
         due = self.get_due_sources()
         results = []
 
@@ -116,3 +180,6 @@ class PerceptionCoordinator:
                     )
         except Exception as e:
             logger.error("Failed to restore perception cursors: %s", e)
+
+        # Also sync push sources
+        await self.sync_push_sources()

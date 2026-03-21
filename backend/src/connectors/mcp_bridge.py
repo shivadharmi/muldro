@@ -26,15 +26,20 @@ _circuit_breaker = MCPCircuitBreaker()
 _available_tools: dict[str, dict] = {}  # tool_name -> {server, schema}
 
 
-def get_mcp_config() -> dict:
-    """Build the mcpServers config dict from mcp_config.py."""
-    from src.tools.mcp_config import get_available_mcp_configs
+async def get_mcp_config() -> dict:
+    """Build the mcpServers config dict from DB-backed control plane."""
+    from src.models.database import get_session_factory
 
-    servers = {}
-    for cfg in get_available_mcp_configs():
-        name = cfg["name"]
-        servers[name] = {k: v for k, v in cfg.items() if k != "name"}
-    return {"mcpServers": servers}
+    try:
+        from src.integrations.control_plane import IntegrationControlPlane
+
+        async with get_session_factory()() as db:
+            # Use a default workspace for the bridge-level config
+            cp = IntegrationControlPlane(db, workspace_id="")
+            return await cp.get_mcp_server_configs()
+    except Exception:
+        logger.debug("Control plane unavailable, returning empty config")
+        return {"mcpServers": {}}
 
 
 async def initialize_mcp_bridge(timeout_seconds: float = 30) -> None:
@@ -51,7 +56,7 @@ async def initialize_mcp_bridge(timeout_seconds: float = 30) -> None:
         logger.debug("MCP bridge skipped (test environment)")
         return
 
-    config = get_mcp_config()
+    config = await get_mcp_config()
     if not config["mcpServers"]:
         logger.info("No external MCP servers configured — MCP bridge inactive")
         return
@@ -96,8 +101,14 @@ async def _connect_and_discover(config: dict) -> None:
 
 
 async def _register_discovered_tools() -> None:
-    """Auto-register MCP-discovered tools in ToolRegistry if not already present."""
+    """Auto-register MCP-discovered tools in ToolRegistry if not already present.
+
+    Known tools (in TOOL_TO_CAPABILITY) keep their cataloged risk/approval settings.
+    Unknown tools are registered as disabled with requires_approval=True to prevent
+    unvetted MCP tools from executing without review.
+    """
     try:
+        from src.integrations.capabilities import TOOL_TO_CAPABILITY
         from src.models.database import get_session_factory
         from src.services.tool_registry import ToolRegistry
 
@@ -107,12 +118,19 @@ async def _register_discovered_tools() -> None:
             for tool_name, meta in _available_tools.items():
                 existing = await registry.get_tool(tool_name)
                 if not existing:
+                    is_known = tool_name in TOOL_TO_CAPABILITY
                     await registry.register_tool(
                         name=tool_name,
-                        risk_level="low",
-                        requires_approval=False,
+                        risk_level="low" if is_known else "unknown",
+                        requires_approval=not is_known,
                         description=meta.get("description", ""),
                     )
+                    if not is_known:
+                        # Disable unknown tools — admin must explicitly enable
+                        tool = await registry.get_tool(tool_name)
+                        if tool:
+                            tool.enabled = False
+                            await db.flush()
                     registered += 1
             if registered:
                 await db.commit()
@@ -198,11 +216,4 @@ def _derive_server_name(tool_name: str) -> str:
 
     FastMCP namespaces tools as `servername_toolname` when using multi-server config.
     """
-    # Check known server prefixes
-    config = get_mcp_config()
-    for server_name in config.get("mcpServers", {}):
-        prefix = server_name.replace("-", "_") + "_"
-        if tool_name.startswith(prefix):
-            return server_name
-    # Fallback: use the tool name itself
     return tool_name.split("_")[0]

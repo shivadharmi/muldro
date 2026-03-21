@@ -1,8 +1,13 @@
 """Workflow Registry — register and manage reusable workflows."""
 
+from __future__ import annotations
+
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Callable, Coroutine
+from typing import TYPE_CHECKING, Any, Callable, Coroutine
+
+if TYPE_CHECKING:
+    from src.workflows.context import WorkflowContext
 
 logger = logging.getLogger(__name__)
 
@@ -10,7 +15,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class WorkflowStep:
     name: str
-    handler: Callable[..., Coroutine[Any, Any, dict]]
+    handler: Callable[[WorkflowContext], Coroutine[Any, Any, dict]]
     requires_approval: bool = False
     timeout_seconds: int = 300
 
