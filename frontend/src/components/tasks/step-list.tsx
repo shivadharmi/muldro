@@ -1,5 +1,6 @@
 import type { TaskStep } from "@/lib/types";
 import { Badge, statusVariant } from "@/components/ui/badge";
+import { InlineMarkdown } from "@/components/jarvis/markdown-renderer";
 
 export function StepList({ steps }: { steps: TaskStep[] }) {
   if (steps.length === 0) {
@@ -22,7 +23,9 @@ export function StepList({ steps }: { steps: TaskStep[] }) {
               <Badge variant={statusVariant(step.status)}>{step.status}</Badge>
             </div>
             {step.result_summary && (
-              <p className="text-xs text-t-secondary mt-1">{step.result_summary}</p>
+              <div className="text-xs text-t-secondary mt-1">
+                <InlineMarkdown content={step.result_summary} />
+              </div>
             )}
           </div>
         </div>

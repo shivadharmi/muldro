@@ -4,6 +4,7 @@ import type { TaskDetail as TaskDetailType } from "@/lib/types";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Badge, statusVariant, priorityVariant, riskVariant } from "@/components/ui/badge";
 import { TimeAgo } from "@/components/ui/time-ago";
+import { InlineMarkdown } from "@/components/jarvis/markdown-renderer";
 import { StepList } from "./step-list";
 
 export function TaskDetailView({ task }: { task: TaskDetailType }) {
@@ -40,7 +41,7 @@ export function TaskDetailView({ task }: { task: TaskDetailType }) {
           {task.reasoning_summary && (
             <div className="bg-surface-2 rounded p-3 text-xs text-t-secondary">
               <p className="text-t-tertiary font-medium mb-1">Reasoning</p>
-              <p>{task.reasoning_summary}</p>
+              <InlineMarkdown content={task.reasoning_summary} />
             </div>
           )}
         </CardBody>

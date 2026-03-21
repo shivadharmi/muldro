@@ -8,6 +8,10 @@ import { ThemeProvider } from "@/lib/theme";
 import { ToastProvider } from "@/components/ui/toast";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { Sidebar } from "@/components/layout/sidebar";
+import { TopBar } from "@/components/shell/top-bar";
+import { ContextSidebar } from "@/components/shell/context-sidebar";
+import { ActivityStrip } from "@/components/shell/activity-strip";
+import { useShellStore } from "@/stores/shell-store";
 
 const PUBLIC_ROUTES = ["/login", "/auth/callback"];
 
@@ -29,6 +33,19 @@ function AuthGate({ children }: { children: ReactNode }) {
       router.replace("/login");
     }
   }, [isPublic, hasAccess, router]);
+
+  const toggleCommandLauncher = useShellStore((s) => s.toggleCommandLauncher);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        toggleCommandLauncher();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [toggleCommandLauncher]);
 
   const toggleSidebar = useCallback(() => {
     if (window.innerWidth < 768) {
@@ -92,9 +109,16 @@ function AuthGate({ children }: { children: ReactNode }) {
           <Sidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
         </div>
 
-        <main className="flex-1 overflow-y-auto pl-14 md:pl-0">
-          <ErrorBoundary>{children}</ErrorBoundary>
-        </main>
+        <div className="flex-1 flex flex-col min-w-0">
+          <ErrorBoundary><TopBar /></ErrorBoundary>
+          <ErrorBoundary><ActivityStrip /></ErrorBoundary>
+          <div className="flex flex-1 min-h-0">
+            <main className="flex-1 overflow-y-auto">
+              <ErrorBoundary>{children}</ErrorBoundary>
+            </main>
+            <ErrorBoundary><ContextSidebar /></ErrorBoundary>
+          </div>
+        </div>
       </div>
     );
   }

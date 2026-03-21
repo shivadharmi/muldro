@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import type { Briefing } from "@/lib/types";
-import { MarkdownRenderer } from "@/components/jarvis/markdown-renderer";
+import { MarkdownRenderer, InlineMarkdown } from "@/components/jarvis/markdown-renderer";
 import { BriefingSection } from "./briefing-section";
 
 function itemText(item: Record<string, unknown>): string {
@@ -77,7 +77,9 @@ export function BriefingViewer({ briefing }: { briefing: Briefing }) {
                     {priorityBadge(item.priority)}
                   </div>
                   {itemDetail(item) && (
-                    <p className="text-xs text-t-tertiary mt-0.5">{itemDetail(item)}</p>
+                    <div className="text-xs text-t-tertiary mt-0.5">
+                      <InlineMarkdown content={itemDetail(item)!} />
+                    </div>
                   )}
                 </div>
                 <Link

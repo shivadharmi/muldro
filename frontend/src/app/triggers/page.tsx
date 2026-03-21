@@ -1,20 +1,61 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/layout/page-header";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { fetchTriggers, createTrigger, deleteTrigger, toggleTrigger } from "@/lib/api";
+import {
+  fetchTriggers,
+  fetchTriggerSchema,
+  createTrigger,
+  deleteTrigger,
+  toggleTrigger,
+} from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
+
+interface ConfigField {
+  name: string;
+  type: string;
+  label: string;
+  required?: boolean;
+  default?: unknown;
+  placeholder?: string;
+  options?: { value: string; label: string }[];
+}
+
+interface ActionTypeSchema {
+  value: string;
+  label: string;
+  description: string;
+  config_fields: ConfigField[];
+}
+
+interface EventType {
+  value: string;
+  label: string;
+  source: string;
+}
 
 export default function TriggersPage() {
   const queryClient = useQueryClient();
   const { addToast } = useToast();
   const [showForm, setShowForm] = useState(false);
+
+  // Form state
   const [name, setName] = useState("");
   const [eventType, setEventType] = useState("");
+  const [sourceFilter, setSourceFilter] = useState("");
+  const [importance, setImportance] = useState("");
+  const [entityMatch, setEntityMatch] = useState("");
   const [actionType, setActionType] = useState("notify");
+  const [actionConfigValues, setActionConfigValues] = useState<Record<string, unknown>>({});
+
+  const { data: schema } = useQuery({
+    queryKey: ["trigger-schema"],
+    queryFn: fetchTriggerSchema,
+    staleTime: 5 * 60_000,
+  });
 
   const { data, isLoading } = useQuery({
     queryKey: ["triggers"],
@@ -24,13 +65,42 @@ export default function TriggersPage() {
 
   const triggers = data?.triggers || [];
 
+  const eventTypes = (schema?.event_types as EventType[]) ?? [];
+  const eventTypesBySource = (schema?.event_types_by_source as Record<string, EventType[]>) ?? {};
+  const actionTypes = (schema?.action_types as ActionTypeSchema[]) ?? [];
+
+  const sources = useMemo(() => Object.keys(eventTypesBySource).sort(), [eventTypesBySource]);
+
+  const filteredEventTypes = useMemo(() => {
+    if (!sourceFilter) return eventTypes;
+    return eventTypes.filter((e) => e.source === sourceFilter);
+  }, [eventTypes, sourceFilter]);
+
+  const selectedActionSchema = useMemo(
+    () => actionTypes.find((a) => a.value === actionType),
+    [actionTypes, actionType]
+  );
+
+  const handleActionConfigChange = (fieldName: string, value: unknown) => {
+    setActionConfigValues((prev) => ({ ...prev, [fieldName]: value }));
+  };
+
+  const resetForm = () => {
+    setName("");
+    setEventType("");
+    setSourceFilter("");
+    setImportance("");
+    setEntityMatch("");
+    setActionType("notify");
+    setActionConfigValues({});
+  };
+
   const createMut = useMutation({
     mutationFn: (input: Record<string, unknown>) => createTrigger(input),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["triggers"] });
       setShowForm(false);
-      setName("");
-      setEventType("");
+      resetForm();
       addToast("Trigger created", "success");
     },
     onError: (err) => addToast(`Failed to create trigger: ${err.message}`, "error"),
@@ -56,14 +126,31 @@ export default function TriggersPage() {
 
   const handleCreate = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim() || !eventType.trim()) return;
+    if (!name.trim() || !eventType) return;
+
+    const conditions: Record<string, unknown> = { event_type: eventType };
+    if (sourceFilter) conditions.source = sourceFilter;
+    if (importance) conditions.importance_threshold = importance;
+    if (entityMatch.trim()) conditions.entity_match = entityMatch.trim();
+
+    const actionConfig: Record<string, unknown> = {};
+    for (const field of selectedActionSchema?.config_fields ?? []) {
+      const val = actionConfigValues[field.name];
+      if (val !== undefined && val !== "") {
+        actionConfig[field.name] = val;
+      }
+    }
+
     createMut.mutate({
       name,
-      conditions: { event_type: eventType },
+      conditions,
       action_type: actionType,
-      action_config: {},
+      action_config: actionConfig,
     });
   };
+
+  const inputClass =
+    "w-full rounded bg-surface-2 border border-b-primary px-3 py-2 text-sm text-t-primary placeholder-t-tertiary focus:outline-none focus:ring-1 focus:ring-j-ring";
 
   return (
     <div className="p-4 sm:p-6 space-y-6">
@@ -83,42 +170,158 @@ export default function TriggersPage() {
       {showForm && (
         <Card>
           <form onSubmit={handleCreate} className="p-4 space-y-3">
+            {/* Name */}
             <div className="space-y-1">
               <label className="text-xs text-t-secondary">Name</label>
               <input
                 type="text"
+                required
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="e.g., Notify on PR reviews"
-                className="w-full rounded bg-surface-2 border border-b-primary px-3 py-2 text-sm text-t-primary placeholder-t-tertiary focus:outline-none focus:ring-1 focus:ring-j-ring"
+                className={inputClass}
               />
             </div>
-            <div className="space-y-1">
-              <label className="text-xs text-t-secondary">Event Type</label>
-              <input
-                type="text"
-                value={eventType}
-                onChange={(e) => setEventType(e.target.value)}
-                placeholder="e.g., pr_reviewed, email_received"
-                className="w-full rounded bg-surface-2 border border-b-primary px-3 py-2 text-sm text-t-primary placeholder-t-tertiary focus:outline-none focus:ring-1 focus:ring-j-ring"
-              />
+
+            {/* Event Type with source filter */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-xs text-t-secondary">Source (optional filter)</label>
+                <select
+                  value={sourceFilter}
+                  onChange={(e) => {
+                    setSourceFilter(e.target.value);
+                    setEventType("");
+                  }}
+                  className={inputClass}
+                >
+                  <option value="">All Sources</option>
+                  {sources.map((s) => (
+                    <option key={s} value={s}>
+                      {s.charAt(0).toUpperCase() + s.slice(1)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-t-secondary">
+                  Event Type <span className="text-j-error">*</span>
+                </label>
+                <select
+                  required
+                  value={eventType}
+                  onChange={(e) => setEventType(e.target.value)}
+                  className={inputClass}
+                >
+                  <option value="">Select event...</option>
+                  {filteredEventTypes.map((evt) => (
+                    <option key={evt.value} value={evt.value}>
+                      {evt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
+
+            {/* Additional conditions */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-xs text-t-secondary">Minimum Importance</label>
+                <select
+                  value={importance}
+                  onChange={(e) => setImportance(e.target.value)}
+                  className={inputClass}
+                >
+                  <option value="">Any</option>
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                  <option value="critical">Critical</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-t-secondary">Entity Match</label>
+                <input
+                  type="text"
+                  value={entityMatch}
+                  onChange={(e) => setEntityMatch(e.target.value)}
+                  placeholder="e.g., john@example.com"
+                  className={inputClass}
+                />
+              </div>
+            </div>
+
+            {/* Action Type */}
             <div className="space-y-1">
               <label className="text-xs text-t-secondary">Action</label>
               <select
                 value={actionType}
-                onChange={(e) => setActionType(e.target.value)}
-                className="w-full rounded bg-surface-2 border border-b-primary px-3 py-2 text-sm text-t-primary focus:outline-none focus:ring-1 focus:ring-j-ring"
+                onChange={(e) => {
+                  setActionType(e.target.value);
+                  setActionConfigValues({});
+                }}
+                className={inputClass}
               >
-                <option value="notify">Notify</option>
-                <option value="plan">Create Plan</option>
-                <option value="escalate">Escalate</option>
-                <option value="procedure">Run Procedure</option>
+                {actionTypes.map((a) => (
+                  <option key={a.value} value={a.value}>
+                    {a.label}
+                  </option>
+                ))}
               </select>
+              {selectedActionSchema && (
+                <p className="text-[10px] text-t-muted">{selectedActionSchema.description}</p>
+              )}
             </div>
+
+            {/* Dynamic action config fields */}
+            {selectedActionSchema?.config_fields.map((field) => (
+              <div key={field.name} className="space-y-1">
+                <label className="text-xs text-t-secondary">
+                  {field.label}
+                  {field.required && <span className="text-j-error ml-0.5">*</span>}
+                </label>
+                {field.type === "select" && field.options ? (
+                  <select
+                    required={field.required}
+                    value={
+                      (actionConfigValues[field.name] as string) ??
+                      (field.default as string) ??
+                      ""
+                    }
+                    onChange={(e) => handleActionConfigChange(field.name, e.target.value)}
+                    className={inputClass}
+                  >
+                    <option value="">Select...</option>
+                    {field.options.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : field.type === "json" ? (
+                  <textarea
+                    value={(actionConfigValues[field.name] as string) ?? ""}
+                    onChange={(e) => handleActionConfigChange(field.name, e.target.value)}
+                    placeholder={field.placeholder}
+                    rows={2}
+                    className={`${inputClass} font-mono`}
+                  />
+                ) : (
+                  <input
+                    type="text"
+                    required={field.required}
+                    value={(actionConfigValues[field.name] as string) ?? ""}
+                    onChange={(e) => handleActionConfigChange(field.name, e.target.value)}
+                    placeholder={field.placeholder}
+                    className={inputClass}
+                  />
+                )}
+              </div>
+            ))}
+
             <button
               type="submit"
-              disabled={createMut.isPending}
+              disabled={createMut.isPending || !name || !eventType}
               className="px-4 py-2 rounded-lg bg-j-primary text-sm font-medium text-j-primary-fg hover:bg-j-primary-hover disabled:opacity-50"
             >
               {createMut.isPending ? "Creating..." : "Create Trigger"}
@@ -162,8 +365,16 @@ export default function TriggersPage() {
                     <p className="text-xs text-t-tertiary">
                       When: {conditions.event_type as string || "any"}
                       {conditions.source ? ` from ${conditions.source}` : ""}
+                      {conditions.importance_threshold
+                        ? ` (≥${conditions.importance_threshold})`
+                        : ""}
                     </p>
                   )}
+                  {trigger.description ? (
+                    <p className="text-[10px] text-t-muted mt-0.5">
+                      {String(trigger.description)}
+                    </p>
+                  ) : null}
                   {trigger.fire_count !== undefined && (
                     <p className="text-[10px] text-t-muted mt-1">
                       Fired {trigger.fire_count as number} times

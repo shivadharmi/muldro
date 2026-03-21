@@ -6,6 +6,7 @@ import { Card, CardBody } from "@/components/ui/card";
 import { Badge, riskVariant, statusVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { TimeAgo } from "@/components/ui/time-ago";
+import { InlineMarkdown } from "@/components/jarvis/markdown-renderer";
 
 export function ApprovalCard({
   approval,
@@ -33,7 +34,9 @@ export function ApprovalCard({
               </p>
             )}
             {approval.summary && (
-              <p className="text-xs text-t-secondary mt-1">{approval.summary}</p>
+              <div className="text-xs text-t-secondary mt-1">
+                <InlineMarkdown content={approval.summary} />
+              </div>
             )}
           </div>
           <div className="flex items-center gap-2 ml-3">

@@ -344,6 +344,10 @@ export function fetchTask(id: string): Promise<TaskDetail> {
 
 // ── Schedules ───────────────────────────────────────────────────
 
+export function fetchScheduleSchema(): Promise<Record<string, unknown>> {
+  return api("/schedules/schema");
+}
+
 export function fetchSchedules(): Promise<Schedule[]> {
   return api("/schedules");
 }
@@ -370,6 +374,60 @@ export function resumeSchedule(id: string): Promise<Schedule> {
 
 // ── Briefings ───────────────────────────────────────────────────
 
+export interface HomeFeedData {
+  since_last_visit: string | null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  priority_items: any[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  live_activity: any[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  recommended_actions: any[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  recent_intelligence: any[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  capability_health: any[];
+}
+
+export function fetchHomeFeed(): Promise<HomeFeedData> {
+  return api("/home");
+}
+
+export interface BriefingListItem {
+  briefing_id: string;
+  headline: string | null;
+  date: string | null;
+  status: string | null;
+  domain: string | null;
+  confidence: number | null;
+  created_at: string | null;
+}
+
+export interface BriefingDetailData {
+  briefing_id: string;
+  headline: string | null;
+  full_text: string | null;
+  date: string | null;
+  confidence: number | null;
+  evidence: import("./types/context").EvidenceBundle | undefined;
+  related_items: Array<{ item_type: string; item_id: string; title: string; status: string }>;
+  actions: Array<{ action: string; label: string }>;
+}
+
+export function fetchBriefingList(limit = 50): Promise<BriefingListItem[]> {
+  return api(`/briefings?limit=${limit}`);
+}
+
+export function fetchBriefingDetail(briefingId: string): Promise<BriefingDetailData | null> {
+  return api(`/briefings/detail/${briefingId}`);
+}
+
+export function briefingAction(
+  briefingId: string,
+  action: string
+): Promise<{ status: string }> {
+  return post(`/briefings/${briefingId}/${action}`, {});
+}
+
 export function fetchBriefing(date: string): Promise<Briefing> {
   return api(`/briefings/${date}`);
 }
@@ -389,6 +447,16 @@ export function fetchBriefingFeedback(briefingId: string): Promise<BriefingFeedb
 
 export function searchKnowledge(query: string, scope?: string): Promise<SearchResponse> {
   return post("/search", { query, scope: scope || "all" });
+}
+
+export interface UnifiedSearchResponse {
+  total_count: number;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  groups: Record<string, any[]>;
+}
+
+export function searchUnified(query: string, limit = 20): Promise<UnifiedSearchResponse> {
+  return post("/search/unified", { query, limit });
 }
 
 // ── Auth ────────────────────────────────────────────────────────
@@ -464,6 +532,10 @@ export function fetchAggregateMetrics(hours?: number): Promise<AggregateMetrics>
 }
 
 // ── Triggers ───────────────────────────────────────────────────
+
+export function fetchTriggerSchema(): Promise<Record<string, unknown>> {
+  return api("/triggers/schema");
+}
 
 export function fetchTriggers(): Promise<{ triggers: Array<Record<string, unknown>> }> {
   return api("/triggers");
@@ -800,6 +872,44 @@ export function updateRoute(id: string, data: Partial<AgentRoute>): Promise<Agen
 
 export function deleteRoute(id: string): Promise<void> {
   return del(`/routes/${id}`);
+}
+
+// ── Runtime ─────────────────────────────────────────────────────
+
+export function fetchRuntimeSummary(): Promise<import("./types/runtime").RuntimeSummary> {
+  return api("/runtime/summary");
+}
+
+export function fetchRuntimeActivity(
+  eventType?: string,
+  limit?: number
+): Promise<import("./types/runtime").RuntimeEvent[]> {
+  const params = new URLSearchParams();
+  if (eventType) params.set("event_type", eventType);
+  if (limit) params.set("limit", String(limit));
+  const qs = params.toString();
+  return api(`/runtime/activity${qs ? `?${qs}` : ""}`);
+}
+
+export function fetchRuntimeRuns(
+  limit?: number
+): Promise<import("./types/runtime").RuntimeRun[]> {
+  const qs = limit ? `?limit=${limit}` : "";
+  return api(`/runtime/runs${qs}`);
+}
+
+export function fetchRuntimeBlocked(): Promise<
+  Array<{
+    run_id: string;
+    status: string;
+    blocking_steps: Array<{ step_id: string; status: string; action: string | null }>;
+  }>
+> {
+  return api("/runtime/blocked");
+}
+
+export function fetchAgentWorkload(): Promise<import("./types/runtime").AgentWorkload[]> {
+  return api("/runtime/agents");
 }
 
 // ── Budget ──────────────────────────────────────────────────────

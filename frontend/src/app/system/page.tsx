@@ -18,9 +18,11 @@ import { HealthOverview } from "@/components/system/health-overview";
 import { ObservationHealth } from "@/components/system/observation-health";
 import { DLQStatsView } from "@/components/system/dlq-stats";
 import { AgentUsageTable } from "@/components/dashboard/agent-usage-table";
+import { CapabilityHealthGrid } from "@/components/feature/system/capability-health-grid";
 
 const TABS = [
   { key: "overview", label: "Overview" },
+  { key: "capabilities", label: "Capabilities" },
   { key: "agents", label: "Agents" },
   { key: "observations", label: "Observations" },
   { key: "dlq", label: "DLQ" },
@@ -89,6 +91,12 @@ export default function SystemPage() {
       <Tabs tabs={TABS} active={tab} onChange={setTab} />
 
       {tab === "overview" && dashboard && <HealthOverview data={dashboard} />}
+
+      {tab === "capabilities" && (
+        <div className="mt-4">
+          <CapabilityHealthGrid />
+        </div>
+      )}
 
       {tab === "agents" && (
         <div className="space-y-4">
