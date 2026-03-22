@@ -3,6 +3,18 @@
 import type { TraceDetail } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 
+function fmt(n: number | undefined | null): string {
+  return (n ?? 0).toLocaleString();
+}
+
+function fmtUsd(n: number | undefined | null): string {
+  return `$${(n ?? 0).toFixed(4)}`;
+}
+
+function fmtSec(ms: number | undefined | null): string {
+  return `${((ms ?? 0) / 1000).toFixed(1)}s`;
+}
+
 export function TracePanel({ trace }: { trace: TraceDetail | null }) {
   if (!trace) {
     return <p className="text-xs text-t-muted">No trace data</p>;
@@ -13,38 +25,38 @@ export function TracePanel({ trace }: { trace: TraceDetail | null }) {
       <div>
         <p className="text-[10px] uppercase text-t-muted mb-1">Cost</p>
         <p className="text-lg font-semibold text-t-primary">
-          ${trace.total_cost_usd.toFixed(4)}
+          {fmtUsd(trace.total_cost_usd)}
         </p>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
         <div>
           <p className="text-t-muted">Input tokens</p>
-          <p className="text-t-primary">{trace.total_input_tokens.toLocaleString()}</p>
+          <p className="text-t-primary">{fmt(trace.total_input_tokens)}</p>
         </div>
         <div>
           <p className="text-t-muted">Output tokens</p>
-          <p className="text-t-primary">{trace.total_output_tokens.toLocaleString()}</p>
+          <p className="text-t-primary">{fmt(trace.total_output_tokens)}</p>
         </div>
         <div>
           <p className="text-t-muted">Cache creation</p>
-          <p className="text-t-primary">{trace.total_cache_creation_tokens.toLocaleString()}</p>
+          <p className="text-t-primary">{fmt(trace.total_cache_creation_tokens)}</p>
         </div>
         <div>
           <p className="text-t-muted">Cache read</p>
-          <p className="text-t-primary">{trace.total_cache_read_tokens.toLocaleString()}</p>
+          <p className="text-t-primary">{fmt(trace.total_cache_read_tokens)}</p>
         </div>
         <div>
           <p className="text-t-muted">Thinking</p>
-          <p className="text-t-primary">{trace.total_thinking_tokens.toLocaleString()}</p>
+          <p className="text-t-primary">{fmt(trace.total_thinking_tokens)}</p>
         </div>
         <div>
           <p className="text-t-muted">Duration</p>
-          <p className="text-t-primary">{(trace.duration_ms / 1000).toFixed(1)}s</p>
+          <p className="text-t-primary">{fmtSec(trace.duration_ms)}</p>
         </div>
       </div>
 
-      {trace.agents_invoked.length > 0 && (
+      {trace.agents_invoked && trace.agents_invoked.length > 0 && (
         <div>
           <p className="text-[10px] uppercase text-t-muted mb-1">Agents</p>
           <div className="flex flex-wrap gap-1">
@@ -55,7 +67,7 @@ export function TracePanel({ trace }: { trace: TraceDetail | null }) {
         </div>
       )}
 
-      {trace.tools_called.length > 0 && (
+      {trace.tools_called && trace.tools_called.length > 0 && (
         <div>
           <p className="text-[10px] uppercase text-t-muted mb-1">Tools</p>
           <div className="flex flex-wrap gap-1">
@@ -74,10 +86,10 @@ export function TracePanel({ trace }: { trace: TraceDetail | null }) {
               <div key={span.span_id} className="rounded bg-surface-2 p-2">
                 <div className="flex items-center justify-between">
                   <span className="text-xs text-t-primary font-medium">{span.agent_name}</span>
-                  <span className="text-[10px] text-t-tertiary">{(span.duration_ms / 1000).toFixed(1)}s</span>
+                  <span className="text-[10px] text-t-tertiary">{fmtSec(span.duration_ms)}</span>
                 </div>
                 <div className="flex items-center gap-2 mt-0.5 text-[10px] text-t-tertiary">
-                  <span>${span.cost_usd.toFixed(4)}</span>
+                  <span>{fmtUsd(span.cost_usd)}</span>
                   {span.error && <span className="text-j-error">error</span>}
                 </div>
               </div>

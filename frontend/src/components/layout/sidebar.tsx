@@ -121,13 +121,13 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     if (pathname === "/") return "home";
     if (["/chat", "/briefings"].some((p) => pathname.startsWith(p))) return "jarvis";
     if (
-      ["/tasks", "/goals", "/approvals", "/notifications"].some((p) =>
+      ["/tasks", "/runs", "/goals", "/approvals", "/notifications"].some((p) =>
         pathname.startsWith(p)
       )
     )
       return "work";
     if (
-      ["/connectors", "/entities", "/memories", "/search"].some((p) =>
+      ["/connectors", "/integrations", "/entities", "/memories", "/search"].some((p) =>
         pathname.startsWith(p)
       )
     )
@@ -283,6 +283,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           onToggle={toggleSection}
         >
           <NavItem href="/tasks" label="Tasks" active={pathname.startsWith("/tasks")} collapsed={collapsed} icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 4h10M3 8h10M3 12h6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>} />
+          <NavItem href="/runs" label="Runs" active={pathname.startsWith("/runs")} collapsed={collapsed} icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M5 3l6 5-6 5V3z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/></svg>} />
           <NavItem href="/goals" label="Goals" active={pathname === "/goals"} collapsed={collapsed} icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.5"/><circle cx="8" cy="8" r="3" stroke="currentColor" strokeWidth="1.5"/><circle cx="8" cy="8" r="1" fill="currentColor"/></svg>} />
           <NavItem href="/approvals" label="Approvals" active={pathname === "/approvals"} badge={pendingApprovals > 0 ? pendingApprovals : undefined} collapsed={collapsed} icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3 3 7-7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>} />
           <NavItem href="/notifications" label="Notifications" active={pathname === "/notifications"} badge={unreadNotifications > 0 ? unreadNotifications : undefined} collapsed={collapsed} icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 6a4 4 0 018 0v3l1.5 2H2.5L4 9V6z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/><path d="M6 12a2 2 0 004 0" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>} />
@@ -298,7 +299,8 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           onToggle={toggleSection}
           badge={hasObservationError ? { count: 1, color: "amber" } : null}
         >
-          <NavItem href="/connectors" label="Connectors" active={pathname === "/connectors"} collapsed={collapsed} icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4h3v3H4V4zM9 4h3v3H9V4zM4 9h3v3H4V9z" stroke="currentColor" strokeWidth="1.5"/><path d="M11 10.5v-2h-2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>} />
+          <NavItem href="/integrations" label="Integrations" active={pathname === "/integrations"} collapsed={collapsed} icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4h3v3H4V4zM9 4h3v3H9V4zM4 9h3v3H4V9z" stroke="currentColor" strokeWidth="1.5"/><path d="M11 10.5v-2h-2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>} />
+          <NavItem href="/connectors" label="Connectors" active={pathname === "/connectors"} collapsed={collapsed} icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5" stroke="currentColor" strokeWidth="1.5"/><path d="M8 5v3l2 1" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>} />
           <NavItem href="/entities" label="Entities" active={pathname.startsWith("/entities")} collapsed={collapsed} icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="4" r="2" stroke="currentColor" strokeWidth="1.5"/><circle cx="4" cy="12" r="2" stroke="currentColor" strokeWidth="1.5"/><circle cx="12" cy="12" r="2" stroke="currentColor" strokeWidth="1.5"/><path d="M8 6v2M6 10l-1.5 1M10 10l1.5 1" stroke="currentColor" strokeWidth="1.2"/></svg>} />
           <NavItem href="/memories" label="Memories" active={pathname === "/memories"} collapsed={collapsed} icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 3h8a1 1 0 011 1v8a1 1 0 01-1 1H4a1 1 0 01-1-1V4a1 1 0 011-1z" stroke="currentColor" strokeWidth="1.5"/><path d="M6 6h4M6 8.5h3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>} />
           <NavItem href="/search" label="Search" active={pathname === "/search"} collapsed={collapsed} icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="4" stroke="currentColor" strokeWidth="1.5"/><path d="M10 10l3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>} />
