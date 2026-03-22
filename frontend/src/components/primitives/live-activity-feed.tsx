@@ -12,7 +12,16 @@ export function LiveActivityFeed() {
 
   if (events.length === 0) {
     return (
-      <div className="text-sm text-t-tertiary">No recent activity.</div>
+      <div className="flex flex-col items-center text-center py-6">
+        <div className="w-8 h-8 rounded-full bg-surface-2 flex items-center justify-center mb-2">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="text-t-tertiary">
+            <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.5" strokeDasharray="3 3"/>
+            <circle cx="8" cy="8" r="1.5" fill="currentColor"/>
+          </svg>
+        </div>
+        <p className="text-xs text-t-tertiary">Waiting for activity</p>
+        <p className="text-[10px] text-t-tertiary mt-0.5">Events appear here as Jarvis works</p>
+      </div>
     );
   }
 

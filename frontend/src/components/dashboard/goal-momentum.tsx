@@ -20,8 +20,24 @@ export function GoalMomentum({ goals }: { goals: DashboardGoal[] }) {
   if (goals.length === 0) {
     return (
       <div className="rounded-[var(--radius-lg)] bg-surface-1 border border-b-secondary p-5">
-        <h3 className="text-sm font-semibold text-t-primary mb-3">Goal Momentum</h3>
-        <p className="text-xs text-t-muted">No active goals yet.</p>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold text-t-primary">Goal Momentum</h3>
+          <Link href="/goals" className="text-[11px] text-j-primary hover:underline">
+            Create goal
+          </Link>
+        </div>
+        <div className="flex items-center gap-3 py-3">
+          <div className="w-8 h-8 rounded-full bg-surface-2 flex items-center justify-center shrink-0">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="text-t-tertiary">
+              <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.5"/>
+              <circle cx="8" cy="8" r="2" stroke="currentColor" strokeWidth="1.5"/>
+            </svg>
+          </div>
+          <div>
+            <p className="text-xs text-t-secondary">No active goals yet</p>
+            <p className="text-[10px] text-t-tertiary">Set goals to track progress on what matters most</p>
+          </div>
+        </div>
       </div>
     );
   }
