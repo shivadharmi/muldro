@@ -11,6 +11,8 @@ export type SurfaceKind =
   | "timeline"
   | "table";
 
+export type SurfacePosition = "inline" | "right-pane" | "center-pane";
+
 export interface GeneratedSurface {
   id: string;
   kind: SurfaceKind;
@@ -18,7 +20,11 @@ export interface GeneratedSurface {
   data: Record<string, unknown>;
   created_at: string;
   pinned: boolean;
+  position: SurfacePosition;
+  schema_version: number;
   source_message_id: string | null;
+  source_run_id: string | null;
+  source_artifact_id: string | null;
 }
 
 export interface SummaryData {
