@@ -463,6 +463,25 @@ export function searchUnified(query: string, limit = 20): Promise<UnifiedSearchR
 
 // ── Auth ────────────────────────────────────────────────────────
 
+export interface AuthProvider {
+  name: string;
+  display_name: string;
+  type: string;
+  configured: boolean;
+  connected: boolean;
+  scopes: string[];
+}
+
+export function fetchAuthProviders(): Promise<{ providers: AuthProvider[] }> {
+  return api("/auth/providers");
+}
+
+export function getAuthUrl(
+  provider: string,
+): Promise<{ url: string; provider: string }> {
+  return api(`/auth/${provider}/authorize`);
+}
+
 export function getGoogleAuthUrl(): Promise<{ url: string }> {
   return api("/auth/google/authorize");
 }

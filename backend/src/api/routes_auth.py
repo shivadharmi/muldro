@@ -9,7 +9,12 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_current_user, get_current_user_id, get_session
+from src.api.deps import (
+    get_current_user,
+    get_current_user_id,
+    get_current_workspace_id,
+    get_session,
+)
 from src.config.settings import Settings, get_settings
 from src.models.users import User
 from src.services.auth_service import AuthService
@@ -132,6 +137,64 @@ async def verify_magic_link(
 
 
 # ── OAuth ────────────────────────────────────────────────────
+
+
+@router.get("/v1/auth/providers")
+async def list_auth_providers(
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+    settings: Settings = Depends(get_settings),
+):
+    """List all supported OAuth providers with configuration and connection status."""
+    from src.integrations.auth_providers import SUPPORTED_PROVIDERS
+    from src.models.database import get_session_factory
+    from src.services.oauth_manager import OAuthManager
+
+    db_factory = get_session_factory()
+
+    # Check which providers have active tokens
+    connected_providers: dict[str, dict] = {}
+    try:
+        oauth_mgr = OAuthManager(
+            db_factory, encryption_key=settings.oauth_encryption_key,
+        )
+        for provider_name in SUPPORTED_PROVIDERS:
+            # Map sub-providers to their OAuth parent
+            oauth_name = _oauth_provider_name(provider_name)
+            try:
+                token = await oauth_mgr.get_valid_token(user_id, oauth_name)
+                if token:
+                    connected_providers[provider_name] = {"connected": True}
+            except Exception:
+                pass
+    except Exception:
+        pass  # OAuthManager not available (no encryption key)
+
+    providers = []
+    for name, meta in SUPPORTED_PROVIDERS.items():
+        client_id = getattr(settings, f"{name}_oauth_client_id", "")
+        is_connected = name in connected_providers
+        # gmail and calendar share google OAuth
+        if name in ("gmail", "calendar", "drive"):
+            is_connected = "google" in connected_providers
+
+        providers.append({
+            "name": name,
+            "display_name": meta.display_name,
+            "type": meta.provider_type,
+            "configured": bool(client_id),
+            "connected": is_connected,
+            "scopes": meta.default_scopes,
+        })
+
+    return {"providers": providers}
+
+
+def _oauth_provider_name(provider: str) -> str:
+    """Map provider name to OAuth provider name (gmail/calendar/drive share google)."""
+    if provider in ("gmail", "calendar", "drive"):
+        return "google"
+    return provider
 
 
 @router.get("/v1/auth/{provider}/authorize", response_model=OAuthUrlResponse)
@@ -752,6 +815,26 @@ async def oauth_callback(
     else:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
 
+    # Refresh MCP session for this provider so new token is used immediately
+    try:
+        from src.connectors.mcp_bridge import refresh_server_auth
+
+        # Map provider to MCP server names that use it
+        _provider_servers = {
+            "google": ["google-workspace"],
+            "github": ["github"],
+            "slack": ["slack"],
+            "linear": ["linear"],
+            "notion": ["notion"],
+            "jira": ["jira", "atlassian-rovo"],
+            "linkedin": [],
+            "twitter": [],
+        }
+        for server_name in _provider_servers.get(provider, []):
+            background_tasks.add_task(refresh_server_auth, server_name, user_id)
+    except Exception:
+        logger.debug("MCP session refresh skipped", exc_info=True)
+
     # Redirect to frontend connectors page with success status
     frontend_url = settings.frontend_url.rstrip("/")
     params = urlencode({"provider": provider, "status": "connected"})
@@ -779,7 +862,6 @@ async def _trigger_initial_observation(user_id: str, sources: list[str], workspa
                 settings=settings,
                 db_factory=db_factory,
                 services=svc,
-                gateway=None,  # perception cycles don't need MCP gateway
             )
             for source in sources:
                 try:

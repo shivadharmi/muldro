@@ -12,6 +12,19 @@ import pytest
 from src.tools import intelligence_server
 
 
+def _mock_ctx():
+    """Create a mock FastMCP Context for tool invocation."""
+    ctx = AsyncMock()
+    ctx.info = AsyncMock()
+    ctx.error = AsyncMock()
+    ctx.warning = AsyncMock()
+    ctx.debug = AsyncMock()
+    ctx.report_progress = AsyncMock()
+    ctx.get_state = AsyncMock(return_value=None)
+    ctx.set_state = AsyncMock()
+    return ctx
+
+
 @pytest.fixture(autouse=True)
 def configure_intelligence_server():
     """Configure the intelligence server with mocked dependencies."""
@@ -64,6 +77,7 @@ class TestIngestEvent:
             entity_type="message_thread",
             entity_id="thread_1",
             title="Test email",
+            ctx=_mock_ctx(),
             workspace_id="ws_1",
         )
 
@@ -92,6 +106,7 @@ class TestUpdateExecution:
             result = await intelligence_server.update_execution(
                 execution_id="run_123",
                 status="completed",
+                ctx=_mock_ctx(),
                 workspace_id="ws_1",
             )
 
@@ -118,10 +133,11 @@ class TestUpdateExecution:
             result = await intelligence_server.update_execution(
                 execution_id="run_123",
                 status="running",
+                ctx=_mock_ctx(),
                 workspace_id="ws_1",
             )
             assert result["status"] == "error"
-            assert "Invalid" in result["error"]
+            assert "Invalid" in result.get("message", result.get("error", ""))
 
 
 class TestGetBriefing:
@@ -143,7 +159,7 @@ class TestGetBriefing:
         ctx["services"].presenter = presenter
 
         result = await intelligence_server.get_briefing(
-            user_id="usr_1", date="2025-06-15", workspace_id="ws_1"
+            user_id="usr_1", ctx=_mock_ctx(), date="2025-06-15", workspace_id="ws_1"
         )
 
         assert result["status"] == "ok"
@@ -173,7 +189,7 @@ class TestSearchMemory:
         ctx["services"].memory_service = memory_svc
 
         result = await intelligence_server.search_memory(
-            user_id="usr_1", query="test query", workspace_id="ws_1"
+            user_id="usr_1", query="test query", ctx=_mock_ctx(), workspace_id="ws_1"
         )
 
         assert result["count"] == 1

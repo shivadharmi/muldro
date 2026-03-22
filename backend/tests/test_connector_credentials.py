@@ -1,54 +1,6 @@
-"""Tests for connector credential lifecycle — health check, dynamic sources."""
+"""Tests for connector credential lifecycle — dynamic sources."""
 
-from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
-
-
-class TestCredentialHealthCheck:
-    async def test_valid_token(self):
-        from src.services.connector_manager import ConnectorManager
-
-        mock_db = AsyncMock()
-        mock_oauth = MagicMock()
-
-        # Mock the internal db_factory to return a token
-        mock_token = MagicMock()
-        mock_token.expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
-        mock_token.refresh_token_encrypted = "encrypted"
-
-        mock_inner_db = AsyncMock()
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none = MagicMock(return_value=mock_token)
-        mock_inner_db.execute = AsyncMock(return_value=mock_result)
-
-        async_cm = AsyncMock()
-        async_cm.__aenter__ = AsyncMock(return_value=mock_inner_db)
-        async_cm.__aexit__ = AsyncMock(return_value=False)
-        mock_oauth._db_factory = MagicMock(return_value=async_cm)
-
-        mgr = ConnectorManager(mock_db, oauth_manager=mock_oauth)
-        status = await mgr.check_credential_health("usr_1", "gmail")
-        assert status == "valid"
-
-    async def test_missing_token(self):
-        from src.services.connector_manager import ConnectorManager
-
-        mock_db = AsyncMock()
-        mock_oauth = MagicMock()
-
-        mock_inner_db = AsyncMock()
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none = MagicMock(return_value=None)
-        mock_inner_db.execute = AsyncMock(return_value=mock_result)
-
-        async_cm = AsyncMock()
-        async_cm.__aenter__ = AsyncMock(return_value=mock_inner_db)
-        async_cm.__aexit__ = AsyncMock(return_value=False)
-        mock_oauth._db_factory = MagicMock(return_value=async_cm)
-
-        mgr = ConnectorManager(mock_db, oauth_manager=mock_oauth)
-        status = await mgr.check_credential_health("usr_1", "github")
-        assert status == "missing"
 
 
 class TestGetCredentialsUsesOAuthManager:

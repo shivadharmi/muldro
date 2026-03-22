@@ -25,6 +25,10 @@ class CircuitStatus:
     last_failure_at: float = 0.0
     last_success_at: float = 0.0
     opened_at: float = 0.0
+    # Health metrics
+    total_calls: int = 0
+    total_failures: int = 0
+    latencies_ms: list[float] = field(default_factory=list)  # recent latencies
 
 
 @dataclass
@@ -55,7 +59,7 @@ class MCPCircuitBreaker:
         state = self.get_state(server)
         return state in (CircuitState.CLOSED, CircuitState.HALF_OPEN)
 
-    def record_success(self, server: str) -> None:
+    def record_success(self, server: str, latency_ms: float = 0.0) -> None:
         """Record a successful call — resets failure count, closes circuit."""
         circuit = self._get_circuit(server)
         if circuit.state == CircuitState.HALF_OPEN:
@@ -63,11 +67,19 @@ class MCPCircuitBreaker:
         circuit.state = CircuitState.CLOSED
         circuit.failure_count = 0
         circuit.last_success_at = time.monotonic()
+        circuit.total_calls += 1
+        if latency_ms > 0:
+            circuit.latencies_ms.append(latency_ms)
+            # Keep only last 100 latencies for percentile calculation
+            if len(circuit.latencies_ms) > 100:
+                circuit.latencies_ms = circuit.latencies_ms[-100:]
 
     def record_failure(self, server: str) -> None:
         """Record a failed call — may open the circuit."""
         circuit = self._get_circuit(server)
         circuit.failure_count += 1
+        circuit.total_failures += 1
+        circuit.total_calls += 1
         circuit.last_failure_at = time.monotonic()
 
         if circuit.state == CircuitState.HALF_OPEN:
@@ -94,3 +106,38 @@ class MCPCircuitBreaker:
     def reset(self, server: str) -> None:
         """Manually reset a circuit to closed state."""
         self._circuits.pop(server, None)
+
+    def get_health_report(self) -> dict[str, dict]:
+        """Get comprehensive health report for all tracked servers.
+
+        Returns per-server:
+        - circuit_state, failure_count, total_calls, total_failures
+        - error_rate, p50_latency_ms, p95_latency_ms
+        """
+        report: dict[str, dict] = {}
+        for server in self._circuits:
+            state = self.get_state(server)
+            circuit = self._circuits[server]
+            latencies = sorted(circuit.latencies_ms) if circuit.latencies_ms else []
+
+            error_rate = 0.0
+            if circuit.total_calls > 0:
+                error_rate = round(circuit.total_failures / circuit.total_calls, 3)
+
+            entry: dict = {
+                "circuit_state": state.value,
+                "failure_count": circuit.failure_count,
+                "total_calls": circuit.total_calls,
+                "total_failures": circuit.total_failures,
+                "error_rate": error_rate,
+            }
+
+            if latencies:
+                entry["p50_latency_ms"] = round(
+                    latencies[len(latencies) // 2], 1,
+                )
+                p95_idx = min(int(len(latencies) * 0.95), len(latencies) - 1)
+                entry["p95_latency_ms"] = round(latencies[p95_idx], 1)
+
+            report[server] = entry
+        return report
