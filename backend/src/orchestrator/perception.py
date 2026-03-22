@@ -10,6 +10,8 @@ Each cycle: Observer -> Librarian -> Planner -> (Governor -> Presenter if needed
 import logging
 from datetime import datetime, timezone
 
+from src.services.mcp_resilience import MCPCircuitBreaker
+
 logger = logging.getLogger(__name__)
 
 # Default observation intervals (seconds)
@@ -32,6 +34,10 @@ class PerceptionCoordinator:
         self._enabled_sources: set[str] = set()
         self._push_sources: set[str] = set()
         self._interval_multiplier: int = 1
+        self._circuit_breaker = MCPCircuitBreaker(
+            failure_threshold=3, cooldown_seconds=300.0
+        )
+        self._consecutive_failures: dict[str, int] = {}
 
     def enable_source(self, source: str) -> None:
         self._enabled_sources.add(source)
@@ -65,7 +71,10 @@ class PerceptionCoordinator:
                 continue
 
             base_interval = SOURCE_INTERVALS.get(source, 600)
-            interval = base_interval * self._interval_multiplier
+            # Adaptive backoff: double interval per consecutive failure, cap at 8x
+            failure_count = self._consecutive_failures.get(source, 0)
+            backoff = min(2 ** failure_count, 8) if failure_count > 0 else 1
+            interval = base_interval * self._interval_multiplier * backoff
             last = self._last_run.get(source)
             if last is None or (now - last).total_seconds() >= interval:
                 due.append(source)
@@ -119,13 +128,29 @@ class PerceptionCoordinator:
         results = []
 
         for source in due:
+            # Circuit breaker: skip sources that have failed repeatedly
+            if not self._circuit_breaker.is_available(source):
+                logger.info("perception_circuit_open", extra={"source": source})
+                results.append({"status": "circuit_open", "source": source})
+                continue
+
             logger.info("perception_cycle_starting", extra={"source": source})
             try:
                 result = await self._orchestrator.run_perception_cycle(
-                    source, user_id=self._user_id
+                    source, user_id=self._user_id, workspace_id=self._workspace_id
                 )
                 self._last_run[source] = datetime.now(timezone.utc)
                 results.append(result)
+
+                if result.get("status") == "error":
+                    self._circuit_breaker.record_failure(source)
+                    self._consecutive_failures[source] = (
+                        self._consecutive_failures.get(source, 0) + 1
+                    )
+                else:
+                    self._circuit_breaker.record_success(source)
+                    self._consecutive_failures[source] = 0
+
                 # Emit connector.synced domain event
                 await self._publish_event(
                     "connector.synced",
@@ -138,6 +163,10 @@ class PerceptionCoordinator:
                     extra={"source": source, "error": str(e)},
                 )
                 results.append({"status": "error", "source": source, "error": str(e)})
+                self._circuit_breaker.record_failure(source)
+                self._consecutive_failures[source] = (
+                    self._consecutive_failures.get(source, 0) + 1
+                )
                 # Emit connector.error domain event
                 await self._publish_event(
                     "connector.error",

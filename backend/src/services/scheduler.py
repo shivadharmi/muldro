@@ -161,7 +161,11 @@ class SchedulerLoop:
             from src.orchestrator.perception import PerceptionCoordinator
 
             for uid in self._user_ids:
-                coord = PerceptionCoordinator(self._orchestrator, user_id=uid)
+                try:
+                    ws_id = await self._resolve_workspace(uid)
+                except ValueError:
+                    ws_id = ""
+                coord = PerceptionCoordinator(self._orchestrator, user_id=uid, workspace_id=ws_id)
                 sources = await self._get_observation_sources(uid)
                 for source in sources:
                     coord.enable_source(source)
