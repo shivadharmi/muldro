@@ -240,7 +240,7 @@ class ToolRegistry:
         self._db = db
         self._cache: dict[str, ToolDefinition] = {}
 
-    async def seed_defaults(self, workspace_id: str = "") -> int:
+    async def seed_defaults(self, workspace_id: str | None = None) -> int:
         """Seed default tool definitions if they don't exist. Returns count added."""
         added = 0
         for tool_data in _DEFAULT_TOOLS:

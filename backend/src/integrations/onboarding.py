@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class OnboardingResult:
-    status: Literal["registered", "inspected", "activated", "blocked", "failed"]
+    status: Literal["registered", "inspected", "activated", "revoked", "blocked", "failed"]
     catalog_id: str | None = None
     install_id: str | None = None
     trust_id: str | None = None
@@ -303,6 +303,6 @@ class MCPOnboardingService:
         catalog_entry.status = "revoked"
 
         return OnboardingResult(
-            status="activated",  # completed revocation
+            status="revoked",
             catalog_id=catalog_id,
         )

@@ -77,6 +77,7 @@ def create_app() -> FastAPI:
         # Seed global defaults (tools, agents, routes) — not per-user.
         # Per-user defaults (schedules, trust records, installations) are
         # provisioned at signup via workspace_provisioner.provision_workspace().
+        # Each seed runs independently so one failure doesn't block the others.
         try:
             from src.models.database import get_session_factory
             from src.services.agent_registry import AgentRegistry
@@ -84,18 +85,34 @@ def create_app() -> FastAPI:
             from src.services.tool_registry import ToolRegistry
 
             async with get_session_factory()() as db:
-                tool_count = await ToolRegistry(db).seed_defaults()
-                agent_count = await AgentRegistry(db).seed_defaults()
-                route_count = await RouteResolver(db).seed_defaults()
+                needs_commit = False
 
-                if tool_count or agent_count or route_count:
-                    await db.commit()
+                try:
+                    tool_count = await ToolRegistry(db).seed_defaults()
                     if tool_count:
+                        needs_commit = True
                         logger.info("Seeded %d tool definitions", tool_count)
+                except Exception:
+                    logger.warning("Tool seed failed (FK or schema issue)", exc_info=True)
+
+                try:
+                    agent_count = await AgentRegistry(db).seed_defaults()
                     if agent_count:
+                        needs_commit = True
                         logger.info("Seeded %d agent definitions", agent_count)
+                except Exception:
+                    logger.warning("Agent seed failed", exc_info=True)
+
+                try:
+                    route_count = await RouteResolver(db).seed_defaults()
                     if route_count:
+                        needs_commit = True
                         logger.info("Seeded %d agent routes", route_count)
+                except Exception:
+                    logger.warning("Route seed failed", exc_info=True)
+
+                if needs_commit:
+                    await db.commit()
         except Exception:
             logger.debug(
                 "Registry seed skipped (DB not ready)",
@@ -120,13 +137,25 @@ def create_app() -> FastAPI:
         except Exception:
             logger.debug("Qdrant collection init skipped", exc_info=True)
 
-        # Initialize MCP bridge to external servers (Google Workspace, GitHub, Slack, etc.)
+        # Initialize MCP gateway from workspace installations
+        # The gateway wraps the mcp_bridge transport with trust enforcement
+        # and circuit breakers. Per-workspace tools are resolved at request time.
         try:
             from src.connectors.mcp_bridge import initialize_mcp_bridge
 
             await initialize_mcp_bridge()
+
+            from src.integrations.gateway import MCPGateway
+
+            gateway = MCPGateway()
+            from src.connectors.mcp_bridge import get_mcp_config
+
+            config = await get_mcp_config()
+            await gateway.initialize(config)
+            app.state.mcp_gateway = gateway
         except Exception:
-            logger.debug("MCP bridge init skipped", exc_info=True)
+            logger.debug("MCP gateway init skipped", exc_info=True)
+            app.state.mcp_gateway = None
 
         yield
 

@@ -1,4 +1,4 @@
-"""Connector management routes."""
+"""Connector management routes — backed by ConnectorInstallation."""
 
 import logging
 from datetime import datetime, timedelta, timezone
@@ -47,15 +47,15 @@ async def list_connectors(
     db: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ):
-    """List all connectors for the current user with event counts."""
+    """List all connector installations for the current user with event counts."""
     mgr = _make_connector_manager(db, settings)
-    connectors = await mgr.get_user_connectors(user_id)
+    connectors = await mgr.get_user_connectors(user_id, workspace_id)
 
     # Enrich with event counts
     week_ago = datetime.now(timezone.utc) - timedelta(days=7)
     enriched = []
     for c in connectors:
-        provider = c.get("provider", "") if isinstance(c, dict) else getattr(c, "provider", "")
+        provider = c.get("provider", "")
         events_last_week = (
             await db.scalar(
                 select(func.count())
@@ -68,18 +68,9 @@ async def list_connectors(
             )
             or 0
         )
-        if isinstance(c, dict):
-            c["events_last_week"] = events_last_week
-            c["entities_created"] = 0
-            enriched.append(c)
-        else:
-            enriched.append(
-                {
-                    **c.__dict__,
-                    "events_last_week": events_last_week,
-                    "entities_created": 0,
-                }
-            )
+        c["events_last_week"] = events_last_week
+        c["entities_created"] = 0
+        enriched.append(c)
 
     return {"connectors": enriched}
 

@@ -34,6 +34,74 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+async def create_graph_executor(
+    settings: Settings,
+    db: AsyncSession,
+    workspace_id: str = "",
+) -> GraphExecutor:
+    """Factory that creates a GraphExecutor with all deps consistently resolved.
+
+    Use this instead of instantiating GraphExecutor directly so that every
+    callsite (API routes, orchestrator, runtime) gets the same dep set.
+    """
+    from src.services.event_bus import EventBus
+    from src.services.notifier import Notifier
+    from src.services.tool_registry import ToolRegistry
+
+    event_bus: EventBus | None = None
+    try:
+        event_bus = EventBus(settings.redis_url)
+    except Exception:
+        logger.debug("EventBus unavailable for GraphExecutor", exc_info=True)
+
+    notifier: Notifier | None = None
+    try:
+        notifier = Notifier(db, settings)
+    except Exception:
+        logger.debug("Notifier unavailable for GraphExecutor", exc_info=True)
+
+    tool_registry: ToolRegistry | None = None
+    try:
+        tool_registry = ToolRegistry(db)
+    except Exception:
+        logger.debug("ToolRegistry unavailable for GraphExecutor", exc_info=True)
+
+    context_builder = None
+    try:
+        from src.services.context_builder import ContextBuilder
+
+        context_builder = ContextBuilder(db, settings)
+    except Exception:
+        logger.debug("ContextBuilder unavailable for GraphExecutor", exc_info=True)
+
+    verifier = None
+    try:
+        from src.services.verifier import Verifier
+
+        verifier = Verifier(db, settings)
+    except Exception:
+        logger.debug("Verifier unavailable for GraphExecutor", exc_info=True)
+
+    memory_service = None
+    try:
+        from src.services.memory_service import MemoryService
+
+        memory_service = MemoryService(db, settings)
+    except Exception:
+        logger.debug("MemoryService unavailable for GraphExecutor", exc_info=True)
+
+    return GraphExecutor(
+        settings=settings,
+        db=db,
+        event_bus=event_bus,
+        notifier=notifier,
+        tool_registry=tool_registry,
+        verifier=verifier,
+        context_builder=context_builder,
+        memory_service=memory_service,
+    )
+
+
 class GraphExecutor:
     """Durable graph executor with parallel steps, checkpoints, and approval gates."""
 
@@ -280,7 +348,9 @@ class GraphExecutor:
 
         await self._db.commit()
         await self._emit_event(
-            "run.cancelled", run.user_id, {"run_id": run_id},
+            "run.cancelled",
+            run.user_id,
+            {"run_id": run_id},
             workspace_id=run.workspace_id,
         )
         return run
@@ -296,6 +366,12 @@ class GraphExecutor:
                 if not pending:
                     transition_run(run, "completed")
                     run.completed_at = datetime.now(timezone.utc)
+                    await self._emit_event(
+                        "run_completed",
+                        run.user_id,
+                        {"run_id": run.run_id, "plan_id": run.plan_id},
+                        workspace_id=run.workspace_id,
+                    )
                     # Run verifier if available
                     if self._verifier:
                         await self._run_verification(run)
@@ -332,50 +408,97 @@ class GraphExecutor:
                 break
 
     async def _execute_step(self, run: TaskRun, step: TaskStep) -> None:
-        """Execute a single step, with approval gate if required."""
-        # Check if step requires approval via ToolRegistry
-        if self._tool_registry and step.input_data:
-            task_type = step.input_data.get("task_type", "")
+        """Execute a single step, with approval gate if required.
+
+        Approval is required if EITHER:
+        1. The tool's requires_approval flag is True (per-tool setting)
+        2. An ApprovalPolicy for the workspace matches the capability/tool
+        """
+        needs_approval = False
+        risk_level = "low"
+        task_type = (step.input_data or {}).get("task_type", "")
+
+        # Check 1: per-tool requires_approval flag
+        if self._tool_registry and task_type:
             tool = await self._tool_registry.get_tool(task_type)
             if tool and tool.requires_approval:
-                # Create approval record and pause
-                from src.services.approval_service import create_approval
+                needs_approval = True
+                risk_level = tool.risk_level or "low"
 
-                approval = await create_approval(
-                    self._db,
-                    user_id=run.user_id,
-                    workspace_id=run.workspace_id,
-                    approval_type=f"step:{task_type}",
-                    title=f"Approve step: {step.name or task_type}",
-                    summary=f"Step in run {run.run_id} requires approval",
-                    risk_level=tool.risk_level,
-                    execution_id=run.run_id,
-                    run_id=run.run_id,
-                    step_id=step.step_id,
-                    requested_by=run.user_id,
+        # Check 2: workspace approval policies (capability-pattern based)
+        if not needs_approval and task_type and run.workspace_id:
+            try:
+                from src.integrations.capabilities import get_capability_for_tool
+                from src.services.approval_policy_engine import ApprovalPolicyEngine
+
+                capability = get_capability_for_tool(task_type)
+                engine = ApprovalPolicyEngine(self._db, run.workspace_id)
+                decision = await engine.check(
+                    capability=capability,
+                    tool_name=task_type,
+                    risk_level=risk_level,
                 )
-                transition_step(step, "waiting_approval")
-                transition_run(run, "awaiting_approval")
-                await self._checkpoint(run, step.step_id, "approval_gate")
-                await self._db.flush()
+                if decision.requires_approval:
+                    needs_approval = True
+                    logger.info(
+                        "Approval required by policy: %s (reason: %s)",
+                        decision.policy_id,
+                        decision.reason,
+                    )
+            except Exception:
+                logger.debug("Approval policy check failed", exc_info=True)
 
-                if self._notifier:
-                    try:
-                        await self._notifier.notify(
-                            user_id=run.user_id,
-                            notification_type="approval_request",
-                            title=f"Approve: {step.name or task_type}",
-                            body=f"Step requires approval in run {run.run_id}",
-                            data={
-                                "approval_id": approval.approval_id,
-                                "run_id": run.run_id,
-                                "step_id": step.step_id,
-                            },
-                            workspace_id=run.workspace_id,
-                        )
-                    except Exception:
-                        logger.warning("Failed to notify for step approval", exc_info=True)
-                return
+        if needs_approval:
+            from src.services.approval_service import create_approval
+
+            approval = await create_approval(
+                self._db,
+                user_id=run.user_id,
+                workspace_id=run.workspace_id,
+                approval_type=f"step:{task_type}",
+                title=f"Approve step: {step.name or task_type}",
+                summary=f"Step in run {run.run_id} requires approval",
+                risk_level=risk_level,
+                execution_id=run.run_id,
+                run_id=run.run_id,
+                step_id=step.step_id,
+                requested_by=run.user_id,
+            )
+            transition_step(step, "waiting_approval")
+            transition_run(run, "awaiting_approval")
+            await self._checkpoint(run, step.step_id, "approval_gate")
+            await self._db.flush()
+
+            await self._emit_event(
+                "approval_requested",
+                run.user_id,
+                {
+                    "run_id": run.run_id,
+                    "step_id": step.step_id,
+                    "approval_id": approval.approval_id,
+                    "task_type": task_type,
+                    "risk_level": risk_level,
+                },
+                workspace_id=run.workspace_id,
+            )
+
+            if self._notifier:
+                try:
+                    await self._notifier.notify(
+                        user_id=run.user_id,
+                        notification_type="approval_request",
+                        title=f"Approve: {step.name or task_type}",
+                        body=f"Step requires approval in run {run.run_id}",
+                        data={
+                            "approval_id": approval.approval_id,
+                            "run_id": run.run_id,
+                            "step_id": step.step_id,
+                        },
+                        workspace_id=run.workspace_id,
+                    )
+                except Exception:
+                    logger.warning("Failed to notify for step approval", exc_info=True)
+            return
 
         transition_step(step, "running")
         step.started_at = datetime.now(timezone.utc)
@@ -394,6 +517,19 @@ class GraphExecutor:
         try:
             output = await self._run_step_action(step, run)
             elapsed_ms = int((time.monotonic() - t0) * 1000)
+
+            await self._emit_event(
+                "tool_call_completed",
+                run.user_id,
+                {
+                    "run_id": run.run_id,
+                    "step_id": step.step_id,
+                    "tool_name": (step.input_data or {}).get("task_type", "unknown"),
+                    "duration_ms": elapsed_ms,
+                },
+                workspace_id=run.workspace_id,
+            )
+
             transition_step(step, "completed")
             step.output_data = output
             step.completed_at = datetime.now(timezone.utc)
@@ -407,33 +543,32 @@ class GraphExecutor:
 
             await self._checkpoint(run, step.step_id, "step_completed")
 
-            if self._event_bus:
-                await self._event_bus.publish(
-                    self._event_bus.agent_stream(run.user_id),
-                    "step_completed",
+            await self._emit_event(
+                "step_completed",
+                run.user_id,
+                {
+                    "run_id": run.run_id,
+                    "step_id": step.step_id,
+                    "task_id": step.task_id,
+                    "duration_ms": result.duration_ms,
+                },
+                workspace_id=run.workspace_id,
+            )
+            # Emit surface.updated for A2UI live streaming
+            if output and any(
+                k in output for k in ("draft", "report", "summary", "result", "view")
+            ):
+                await self._emit_event(
+                    "surface_created",
+                    run.user_id,
                     {
                         "run_id": run.run_id,
                         "step_id": step.step_id,
-                        "task_id": step.task_id,
-                        "duration_ms": result.duration_ms,
+                        "surface_type": "step_output",
+                        "preview": str(output.get("result", output.get("summary", "")))[:200],
                     },
-                    user_id=run.user_id,
+                    workspace_id=run.workspace_id,
                 )
-                # Emit surface.updated for A2UI live streaming
-                if output and any(
-                    k in output for k in ("draft", "report", "summary", "result", "view")
-                ):
-                    await self._emit_event(
-                        "surface.updated",
-                        run.user_id,
-                        {
-                            "run_id": run.run_id,
-                            "step_id": step.step_id,
-                            "surface_type": "step_output",
-                            "preview": str(output.get("result", output.get("summary", "")))[:200],
-                        },
-                        workspace_id=run.workspace_id,
-                    )
 
         except Exception as exc:
             elapsed_ms = int((time.monotonic() - t0) * 1000)
@@ -494,6 +629,13 @@ class GraphExecutor:
 
         # Enrich input with context if ContextBuilder is available
         context_prompt = await self._build_step_context(run, step)
+
+        await self._emit_event(
+            "tool_call_started",
+            run.user_id,
+            {"run_id": run.run_id, "step_id": step.step_id, "tool_name": task_type},
+            workspace_id=run.workspace_id,
+        )
 
         t0 = time.monotonic()
 

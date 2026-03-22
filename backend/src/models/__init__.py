@@ -11,7 +11,6 @@ from src.models.briefings import Briefing
 from src.models.browser_sessions import BrowserAction, BrowserSession
 from src.models.capability_binding import CapabilityBinding
 from src.models.connector_installation import ConnectorInstallation
-from src.models.connectors import Connector, ConnectorAccount
 from src.models.conversations import Conversation, Message
 from src.models.dead_letter import DeadLetterEntry
 from src.models.entities import Entity, EntityAlias, EntityRelationship
@@ -64,8 +63,6 @@ __all__ = [
     "Briefing",
     "BriefingFeedback",
     "AuditLog",
-    "Connector",
-    "ConnectorAccount",
     "DeadLetterEntry",
     "ObservationStatus",
     "Schedule",

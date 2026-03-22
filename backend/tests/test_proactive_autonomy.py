@@ -318,13 +318,17 @@ class TestPerceptionWiring:
         orchestrator = MagicMock()
 
         # Set up mock DB used by _get_observation_sources (via get_session_factory)
+        # Query 1: WorkspaceMember.workspace_id for user → returns workspace IDs
+        # Query 2: ConnectorInstallation.server_name for workspaces → returns providers
         mock_db = MagicMock()
-        connector_result = MagicMock()
-        connector_result.all.return_value = [("gmail",), ("calendar",)]
+        ws_result = MagicMock()
+        ws_result.all.return_value = [("ws_test",)]
+        install_result = MagicMock()
+        install_result.all.return_value = [("gmail",), ("calendar",)]
         empty_result = MagicMock()
         empty_result.all.return_value = []
         empty_result.scalars.return_value.all.return_value = []
-        mock_db.execute = AsyncMock(side_effect=[connector_result, empty_result, empty_result])
+        mock_db.execute = AsyncMock(side_effect=[ws_result, install_result, empty_result])
         mock_db.commit = AsyncMock()
 
         db_ctx = AsyncMock()

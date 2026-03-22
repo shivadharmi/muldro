@@ -1,4 +1,7 @@
-"""Connector lifecycle management — register, poll, health check."""
+"""Connector lifecycle management — register, poll, health check.
+
+Operates on ConnectorInstallation (the canonical installation model).
+"""
 
 from __future__ import annotations
 
@@ -8,10 +11,10 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from ulid import ULID
 
 from src.connectors.base import CONNECTOR_REGISTRY
-from src.models.connectors import Connector
+from src.models.connector_installation import ConnectorInstallation
+from src.models.ids import generate_id
 from src.models.observation_cursor import ObservationCursor
 from src.services.event_bus import EventBus
 
@@ -52,69 +55,86 @@ class ConnectorManager:
         self._oauth_manager = oauth_manager
         self._settings = settings
 
-    async def get_user_connectors(self, user_id: str) -> list[dict]:
-        """List all connectors for a user with status."""
-        result = await self._db.execute(select(Connector).where(Connector.user_id == user_id))
-        connectors = result.scalars().all()
+    async def get_user_connectors(self, user_id: str, workspace_id: str = "") -> list[dict]:
+        """List all installations for a user/workspace with status."""
+        stmt = select(ConnectorInstallation).where(
+            ConnectorInstallation.user_id == user_id,
+        )
+        if workspace_id:
+            stmt = stmt.where(ConnectorInstallation.workspace_id == workspace_id)
+        result = await self._db.execute(stmt)
+        installations = result.scalars().all()
         return [
             {
-                "connector_id": c.connector_id,
-                "provider": c.provider,
-                "status": c.status,
-                "config": c.config,
-                "created_at": c.created_at.isoformat() if c.created_at else None,
+                "connector_id": inst.install_id,
+                "provider": inst.server_name,
+                "status": inst.status,
+                "health_status": inst.health_status,
+                "display_name": inst.display_name,
+                "config": inst.config,
+                "created_at": inst.created_at.isoformat() if inst.created_at else None,
             }
-            for c in connectors
+            for inst in installations
         ]
 
     async def register_connector(
         self, user_id: str, provider: str, config: dict | None = None, workspace_id: str = ""
     ) -> dict:
-        """Register a new connector for a user."""
-        connector_id = f"conn_{ULID()}"
-        connector = Connector(
-            connector_id=connector_id,
+        """Register a new native connector as a ConnectorInstallation."""
+        installation = ConnectorInstallation(
+            install_id=generate_id("inst"),
             user_id=user_id,
             workspace_id=workspace_id,
-            provider=provider,
+            server_name=provider,
+            display_name=provider.replace("_", " ").title(),
+            transport="native",
+            auth_provider="oauth",
             status="active",
+            health_status="unknown",
             config=config or {},
+            enabled=True,
         )
-        self._db.add(connector)
+        self._db.add(installation)
         await self._db.commit()
-        logger.info("Connector registered: %s (%s) for user %s", connector_id, provider, user_id)
+        logger.info(
+            "Installation registered: %s (%s) for user %s",
+            installation.install_id,
+            provider,
+            user_id,
+        )
         return {
-            "connector_id": connector_id,
+            "connector_id": installation.install_id,
             "provider": provider,
             "status": "active",
         }
 
-    async def disconnect(self, connector_id: str, user_id: str) -> None:
-        """Disconnect (deactivate) a connector."""
+    async def disconnect(self, install_id: str, user_id: str) -> None:
+        """Disconnect (disable) an installation."""
         result = await self._db.execute(
-            select(Connector).where(
-                Connector.connector_id == connector_id,
-                Connector.user_id == user_id,
+            select(ConnectorInstallation).where(
+                ConnectorInstallation.install_id == install_id,
+                ConnectorInstallation.user_id == user_id,
             )
         )
-        connector = result.scalar_one_or_none()
-        if connector:
-            connector.status = "disconnected"
+        installation = result.scalar_one_or_none()
+        if installation:
+            installation.status = "disabled"
+            installation.enabled = False
             await self._db.commit()
 
-    async def poll_connector(self, connector_id: str, user_id: str) -> dict:
-        """Run one poll cycle for a specific connector."""
+    async def poll_connector(self, install_id: str, user_id: str) -> dict:
+        """Run one poll cycle for a specific installation."""
         result = await self._db.execute(
-            select(Connector).where(
-                Connector.connector_id == connector_id,
-                Connector.user_id == user_id,
+            select(ConnectorInstallation).where(
+                ConnectorInstallation.install_id == install_id,
+                ConnectorInstallation.user_id == user_id,
             )
         )
-        connector = result.scalar_one_or_none()
-        if not connector or connector.status != "active":
-            return {"events": 0, "error": "Connector not found or inactive"}
+        installation = result.scalar_one_or_none()
+        if not installation or installation.status != "active":
+            return {"events": 0, "error": "Installation not found or inactive"}
 
-        provider = connector.provider
+        provider = installation.server_name
         connector_cls = CONNECTOR_REGISTRY.get(provider)
         if not connector_cls:
             return {"events": 0, "error": f"No connector implementation for {provider}"}
@@ -133,7 +153,10 @@ class ConnectorManager:
 
         # Update cursor
         if new_cursor:
-            await self._update_cursor(user_id, provider, new_cursor, connector.workspace_id)
+            await self._update_cursor(user_id, provider, new_cursor, installation.workspace_id)
+
+        # Update health status
+        installation.health_status = "healthy"
 
         # Publish events to event bus
         if events and self._event_bus:
@@ -157,28 +180,34 @@ class ConnectorManager:
         logger.info("Polled %s for user %s: %d events", provider, user_id, len(events))
         return {"events": len(events), "provider": provider, "new_cursor": new_cursor}
 
-    async def test_connector(self, connector_id: str, user_id: str) -> dict:
+    async def test_connector(self, install_id: str, user_id: str) -> dict:
         """Test a connector's connection."""
         result = await self._db.execute(
-            select(Connector).where(
-                Connector.connector_id == connector_id,
-                Connector.user_id == user_id,
+            select(ConnectorInstallation).where(
+                ConnectorInstallation.install_id == install_id,
+                ConnectorInstallation.user_id == user_id,
             )
         )
-        connector = result.scalar_one_or_none()
-        if not connector:
-            return {"status": "error", "error": "Connector not found"}
+        installation = result.scalar_one_or_none()
+        if not installation:
+            return {"status": "error", "error": "Installation not found"}
 
-        connector_cls = CONNECTOR_REGISTRY.get(connector.provider)
+        provider = installation.server_name
+        connector_cls = CONNECTOR_REGISTRY.get(provider)
         if not connector_cls:
             return {"status": "error", "error": "No implementation"}
 
-        creds = await self._get_credentials(user_id, connector.provider)
+        creds = await self._get_credentials(user_id, provider)
         if not creds:
             return {"status": "error", "error": "No credentials"}
 
         instance = connector_cls(settings=self._settings)
         health = await instance.test(creds)
+
+        # Update health status on the installation
+        installation.health_status = "healthy" if health.status == "ok" else "degraded"
+        await self._db.flush()
+
         return {
             "status": health.status,
             "error": health.error,
@@ -209,7 +238,7 @@ class ConnectorManager:
         if not token:
             return "missing"
 
-        from datetime import datetime, timedelta, timezone
+        from datetime import timedelta
 
         if token.expires_at and token.expires_at < datetime.now(timezone.utc) + timedelta(
             minutes=5
@@ -246,6 +275,8 @@ class ConnectorManager:
         self, user_id: str, provider: str, value: str, workspace_id: str = ""
     ) -> None:
         """Update the observation cursor."""
+        from ulid import ULID
+
         result = await self._db.execute(
             select(ObservationCursor).where(
                 ObservationCursor.user_id == user_id,

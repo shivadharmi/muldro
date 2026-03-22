@@ -11,8 +11,8 @@ class ToolDefinition(Base, TimestampMixin):
     __tablename__ = "tool_definitions"
 
     tool_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    workspace_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
+    workspace_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=True
     )
     name: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     version: Mapped[str] = mapped_column(String(32), default="1.0")

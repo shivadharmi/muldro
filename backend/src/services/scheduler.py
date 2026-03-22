@@ -194,11 +194,7 @@ class SchedulerLoop:
 
                 svc = SettingsService(db)
                 configured = await svc.get_observation_sources(user_id)
-                wanted = {
-                    s["provider"]
-                    for s in configured
-                    if s.get("enabled", True)
-                }
+                wanted = {s["provider"] for s in configured if s.get("enabled", True)}
                 return sorted(wanted & authorized)
             except Exception:
                 logger.debug(
@@ -214,30 +210,14 @@ class SchedulerLoop:
 
         authorized: set[str] = set()
 
-        # 1. Legacy Connector table (OAuth-based: gmail, calendar, slack, github)
-        try:
-            from src.models.connectors import Connector
-
-            result = await db.execute(
-                select(Connector.provider).where(
-                    Connector.user_id == user_id,
-                    Connector.status == "active",
-                )
-            )
-            authorized.update(row[0] for row in result.all())
-        except Exception:
-            logger.debug("Connector table lookup failed", exc_info=True)
-
-        # 2. ConnectorInstallation table (workspace MCP installs)
+        # Query ConnectorInstallation table for active installations
         try:
             from src.models.connector_installation import ConnectorInstallation
             from src.models.users import WorkspaceMember
 
             # Resolve workspace(s) for this user
             ws_result = await db.execute(
-                select(WorkspaceMember.workspace_id).where(
-                    WorkspaceMember.user_id == user_id
-                )
+                select(WorkspaceMember.workspace_id).where(WorkspaceMember.user_id == user_id)
             )
             ws_ids = [row[0] for row in ws_result.all()]
             if ws_ids:

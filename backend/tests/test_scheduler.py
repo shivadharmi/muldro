@@ -233,8 +233,10 @@ class TestFireActions:
 
     @pytest.mark.asyncio
     @patch.object(
-        SchedulerLoop, "_get_authorized_providers",
-        new_callable=AsyncMock, return_value={"gmail"},
+        SchedulerLoop,
+        "_get_authorized_providers",
+        new_callable=AsyncMock,
+        return_value={"gmail"},
     )
     async def test_fire_observe_source_calls_orchestrator(self, mock_auth, settings):
         """observe_source should use orchestrator.run_perception_cycle when authorized."""
@@ -255,8 +257,10 @@ class TestFireActions:
 
     @pytest.mark.asyncio
     @patch.object(
-        SchedulerLoop, "_get_authorized_providers",
-        new_callable=AsyncMock, return_value=set(),
+        SchedulerLoop,
+        "_get_authorized_providers",
+        new_callable=AsyncMock,
+        return_value=set(),
     )
     async def test_fire_observe_source_skips_unauthorized(self, mock_auth, settings):
         """observe_source should skip when source is not authorized."""

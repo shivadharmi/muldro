@@ -425,9 +425,7 @@ async def oauth_callback(
         await _ensure_connector(db_factory, user_id, "github", workspace_id=workspace_id)
 
         logger.info("GitHub connector linked for %s", user_id)
-        background_tasks.add_task(
-            _trigger_initial_observation, user_id, ["github"], workspace_id
-        )
+        background_tasks.add_task(_trigger_initial_observation, user_id, ["github"], workspace_id)
 
     elif provider == "linear":
         client_id = settings.linear_oauth_client_id
@@ -479,9 +477,7 @@ async def oauth_callback(
         )
         await _ensure_connector(db_factory, user_id, "linear", workspace_id=workspace_id)
         logger.info("Linear connector linked for %s", user_id)
-        background_tasks.add_task(
-            _trigger_initial_observation, user_id, ["linear"], workspace_id
-        )
+        background_tasks.add_task(_trigger_initial_observation, user_id, ["linear"], workspace_id)
 
     elif provider == "notion":
         client_id = settings.notion_oauth_client_id
@@ -534,9 +530,7 @@ async def oauth_callback(
         )
         await _ensure_connector(db_factory, user_id, "notion", workspace_id=workspace_id)
         logger.info("Notion connector linked for %s", user_id)
-        background_tasks.add_task(
-            _trigger_initial_observation, user_id, ["notion"], workspace_id
-        )
+        background_tasks.add_task(_trigger_initial_observation, user_id, ["notion"], workspace_id)
 
     elif provider == "jira":
         client_id = settings.jira_oauth_client_id
@@ -604,29 +598,29 @@ async def oauth_callback(
             "jira",
             workspace_id=workspace_id,
         )
-        # Store cloudId in connector config for API calls
+        # Store cloudId in installation config for API calls
         if cloud_id:
             from sqlalchemy import select as sa_select
 
-            from src.models.connectors import Connector
+            from src.models.connector_installation import ConnectorInstallation
 
             async with db_factory() as _db:
                 result = await _db.execute(
-                    sa_select(Connector).where(
-                        Connector.user_id == user_id, Connector.provider == "jira"
+                    sa_select(ConnectorInstallation).where(
+                        ConnectorInstallation.user_id == user_id,
+                        ConnectorInstallation.server_name == "jira",
+                        ConnectorInstallation.workspace_id == workspace_id,
                     )
                 )
-                conn = result.scalar_one_or_none()
-                if conn:
-                    config = conn.config or {}
+                inst = result.scalar_one_or_none()
+                if inst:
+                    config = inst.config or {}
                     config["cloud_id"] = cloud_id
-                    conn.config = config
+                    inst.config = config
                     await _db.commit()
 
         logger.info("Jira connector linked for %s (cloudId=%s)", user_id, cloud_id)
-        background_tasks.add_task(
-            _trigger_initial_observation, user_id, ["jira"], workspace_id
-        )
+        background_tasks.add_task(_trigger_initial_observation, user_id, ["jira"], workspace_id)
 
     elif provider == "linkedin":
         client_id = settings.linkedin_oauth_client_id
@@ -764,9 +758,7 @@ async def oauth_callback(
     return RedirectResponse(url=f"{frontend_url}/connectors?{params}")
 
 
-async def _trigger_initial_observation(
-    user_id: str, sources: list[str], workspace_id: str
-) -> None:
+async def _trigger_initial_observation(user_id: str, sources: list[str], workspace_id: str) -> None:
     """Run initial perception cycle for newly connected sources (background)."""
     try:
         from src.config.settings import get_settings
@@ -787,6 +779,7 @@ async def _trigger_initial_observation(
                 settings=settings,
                 db_factory=db_factory,
                 services=svc,
+                gateway=None,  # perception cycles don't need MCP gateway
             )
             for source in sources:
                 try:
@@ -814,31 +807,39 @@ async def _ensure_connector(
     account_email: str | None = None,
     workspace_id: str = "",
 ) -> None:
-    """Create or reactivate a connector record after OAuth."""
+    """Create or reactivate a ConnectorInstallation after OAuth."""
     from sqlalchemy import select as sa_select
-    from ulid import ULID
 
-    from src.models.connectors import Connector
+    from src.models.connector_installation import ConnectorInstallation
+    from src.models.ids import generate_id
 
     try:
         async with db_factory() as db:
             result = await db.execute(
-                sa_select(Connector).where(
-                    Connector.user_id == user_id, Connector.provider == provider
+                sa_select(ConnectorInstallation).where(
+                    ConnectorInstallation.user_id == user_id,
+                    ConnectorInstallation.server_name == provider,
+                    ConnectorInstallation.workspace_id == workspace_id,
                 )
             )
             existing = result.scalar_one_or_none()
             if existing:
                 existing.status = "active"
+                existing.enabled = True
             else:
                 db.add(
-                    Connector(
-                        connector_id=f"conn_{ULID()}",
+                    ConnectorInstallation(
+                        install_id=generate_id("inst"),
                         user_id=user_id,
                         workspace_id=workspace_id,
-                        provider=provider,
+                        server_name=provider,
+                        display_name=provider.replace("_", " ").title(),
+                        transport="native",
+                        auth_provider="oauth",
                         status="active",
+                        health_status="unknown",
                         config={"account_email": account_email} if account_email else {},
+                        enabled=True,
                     )
                 )
             await db.commit()
