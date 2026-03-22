@@ -49,24 +49,10 @@ def main():
                     services = build_runtime(settings, svc_db)
                     intelligence_server.configure(db_factory, settings, services)
 
-                    # Initialize MCP gateway for worker context
-                    gateway = None
-                    try:
-                        from src.connectors.mcp_bridge import get_mcp_config, initialize_mcp_bridge
-                        from src.integrations.gateway import MCPGateway
-
-                        await initialize_mcp_bridge()
-                        gateway = MCPGateway()
-                        config = await get_mcp_config()
-                        await gateway.initialize(config)
-                    except Exception:
-                        logger.debug("MCP gateway unavailable for worker", exc_info=True)
-
                     return JarvisOrchestrator(
                         settings=settings,
                         db_factory=db_factory,
                         services=services,
-                        gateway=gateway,
                     )
 
                 orchestrator = loop.run_until_complete(_build())
@@ -138,24 +124,10 @@ def main():
                 services = build_runtime(settings, svc_db)
                 intelligence_server.configure(db_factory, settings, services)
 
-                # Initialize MCP gateway for bot context
-                gateway = None
-                try:
-                    from src.connectors.mcp_bridge import get_mcp_config, initialize_mcp_bridge
-                    from src.integrations.gateway import MCPGateway
-
-                    loop.run_until_complete(initialize_mcp_bridge())
-                    gateway = MCPGateway()
-                    config = loop.run_until_complete(get_mcp_config())
-                    loop.run_until_complete(gateway.initialize(config))
-                except Exception:
-                    bot_logger.debug("MCP gateway unavailable for bot", exc_info=True)
-
                 orchestrator = JarvisOrchestrator(
                     settings=settings,
                     db_factory=db_factory,
                     services=services,
-                    gateway=gateway,
                 )
 
                 # Set up surface registry and notifier
