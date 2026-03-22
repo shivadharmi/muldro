@@ -15,6 +15,7 @@ WHATSAPP_API = "https://graph.facebook.com/v18.0"
 class WhatsAppConnector(BaseConnector):
     """WhatsApp Business API connector. No MCP server — native only."""
 
+    cursor_type: str = "webhook_only"
     supports_webhooks: bool = True
     supports_actions: bool = True
     available_actions: list[str] = ["send_message", "send_template", "mark_read"]

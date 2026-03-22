@@ -15,6 +15,7 @@ LINKEDIN_API = "https://api.linkedin.com/v2"
 class LinkedInConnector(BaseConnector):
     """LinkedIn REST v2 API connector. No MCP server — native only."""
 
+    cursor_type: str = "since_timestamp"
     supports_actions: bool = True
     available_actions: list[str] = ["create_post", "share_article"]
 

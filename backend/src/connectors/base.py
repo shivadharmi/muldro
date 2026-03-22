@@ -20,6 +20,7 @@ class BaseConnector(ABC):
     """Abstract base class for all data source connectors."""
 
     provider: str
+    cursor_type: str = "opaque"  # Override per connector: history_id, sync_token, etc.
 
     # Override in subclasses that support webhooks / write actions
     supports_webhooks: bool = False

@@ -15,6 +15,7 @@ TWILIO_API = "https://api.twilio.com/2010-04-01"
 class TwilioConnector(BaseConnector):
     """Twilio SMS connector. MCP server is the primary write path for sends."""
 
+    cursor_type: str = "webhook_only"
     supports_webhooks: bool = True
     supports_actions: bool = True
     available_actions: list[str] = ["send_sms"]

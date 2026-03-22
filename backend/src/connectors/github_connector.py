@@ -13,6 +13,8 @@ logger = logging.getLogger(__name__)
 class GitHubConnector(BaseConnector):
     """Polls GitHub API for notifications and events."""
 
+    cursor_type: str = "since_timestamp"
+
     async def poll(
         self, user_id: str, cursor: str | None, credentials: dict
     ) -> tuple[list[RawEvent], str | None]:

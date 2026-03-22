@@ -13,6 +13,8 @@ logger = logging.getLogger(__name__)
 class CalendarConnector(BaseConnector):
     """Polls Google Calendar API using syncToken for incremental fetch."""
 
+    cursor_type: str = "sync_token"
+
     async def poll(
         self, user_id: str, cursor: str | None, credentials: dict
     ) -> tuple[list[RawEvent], str | None]:
