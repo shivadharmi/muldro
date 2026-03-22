@@ -1064,14 +1064,16 @@ class JarvisOrchestrator:
         async with self._db_factory() as db:
             from src.services.event_processor import EventProcessor
 
-            processor = EventProcessor(db, user_id=user_id, workspace_id=workspace_id)
+            processor = EventProcessor(self._settings, db)
             for raw in raw_events:
                 try:
-                    normalized = await processor.process_raw_event(raw)
-                    title = raw.title or raw.raw_data.get("subject", "")
+                    event_id = await processor.process(
+                        raw, user_id=user_id, workspace_id=workspace_id,
+                    )
+                    title = raw.title or getattr(raw, "raw_data", {}).get("subject", "")
                     summary = f"[{raw.source}] {raw.event_type}: {title}"
-                    if normalized:
-                        summary += f" (priority={normalized.priority_score})"
+                    if event_id:
+                        summary += f" (event_id={event_id})"
                     summaries.append(summary)
                 except Exception as e:
                     logger.debug("Failed to ingest raw event: %s", e)
