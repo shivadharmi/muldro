@@ -194,3 +194,95 @@ async def poll_connector(
     mgr = _make_connector_manager(db, settings)
     result = await mgr.poll_connector(connector_id, user_id)
     return result
+
+
+# ── MCP Server Management ─────────────────────────────────────────────
+
+
+@router.get("/v1/connectors/mcp/servers")
+async def list_mcp_servers(
+    workspace_id: str = Depends(get_current_workspace_id),
+):
+    """List all MCP servers for the current workspace with health status."""
+    from src.integrations.mcp_pool import get_workspace_pool
+
+    pool = get_workspace_pool()
+    if not pool:
+        return {"servers": [], "status": "pool_not_initialized"}
+    return {"servers": pool.get_servers(workspace_id)}
+
+
+@router.post("/v1/connectors/mcp/{server_name}/reload")
+async def reload_mcp_server(
+    server_name: str,
+    workspace_id: str = Depends(get_current_workspace_id),
+):
+    """Reload an MCP server config from DB and reconnect (no restart)."""
+    from src.integrations.mcp_pool import get_workspace_pool
+
+    pool = get_workspace_pool()
+    if not pool:
+        raise HTTPException(status_code=503, detail="MCP pool not initialized")
+
+    entry = await pool.reload_server(workspace_id, server_name)
+    if not entry:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No active installation for server '{server_name}'",
+        )
+    return {
+        "status": "reloaded",
+        "server_name": entry.server_name,
+        "transport": entry.config.get("transport"),
+    }
+
+
+@router.post("/v1/connectors/mcp/{server_name}/reconnect")
+async def reconnect_mcp_server(
+    server_name: str,
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+):
+    """Force reconnect all sessions for an MCP server (e.g., after token refresh)."""
+    from src.integrations.mcp_pool import get_workspace_pool
+
+    pool = get_workspace_pool()
+    if not pool:
+        raise HTTPException(status_code=503, detail="MCP pool not initialized")
+
+    await pool.session_pool.refresh_session(server_name, user_id)
+    return {"status": "reconnected", "server_name": server_name}
+
+
+@router.get("/v1/connectors/mcp/health")
+async def mcp_health(
+    workspace_id: str = Depends(get_current_workspace_id),
+):
+    """Get health status for all MCP servers."""
+    from src.connectors.mcp_bridge import get_bridge_health
+
+    return get_bridge_health()
+
+
+@router.post("/v1/tools/{tool_name}/enable")
+async def enable_tool(
+    tool_name: str,
+    workspace_id: str = Depends(get_current_workspace_id),
+):
+    """Enable a tool at runtime via Component Manager."""
+    from src.tools.server import jarvis_tools
+
+    jarvis_tools.enable(keys={f"tool:{tool_name}"})
+    return {"status": "enabled", "tool": tool_name}
+
+
+@router.post("/v1/tools/{tool_name}/disable")
+async def disable_tool(
+    tool_name: str,
+    workspace_id: str = Depends(get_current_workspace_id),
+):
+    """Disable a tool at runtime via Component Manager."""
+    from src.tools.server import jarvis_tools
+
+    jarvis_tools.disable(keys={f"tool:{tool_name}"})
+    return {"status": "disabled", "tool": tool_name}

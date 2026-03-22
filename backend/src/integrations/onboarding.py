@@ -232,6 +232,16 @@ class MCPOnboardingService:
         self._db.add(installation)
         await self._db.flush()
 
+        # Clean up orphaned capability bindings from previous activations
+        old_bindings = await self._db.execute(
+            select(CapabilityBinding).where(
+                CapabilityBinding.workspace_id == self._workspace_id,
+                CapabilityBinding.backend_ref == catalog_entry.server_name,
+            )
+        )
+        for old in old_bindings.scalars().all():
+            await self._db.delete(old)
+
         # Create capability bindings for discovered capabilities
         for cap in catalog_entry.capabilities or []:
             binding = CapabilityBinding(
@@ -249,6 +259,16 @@ class MCPOnboardingService:
 
         catalog_entry.status = "active"
         catalog_entry.verified = False
+
+        # Register in workspace pool for immediate availability (no restart)
+        from src.integrations.mcp_pool import _installation_to_config, get_workspace_pool
+
+        pool = get_workspace_pool()
+        if pool:
+            config = _installation_to_config(installation)
+            await pool.add_server(
+                self._workspace_id, catalog_entry.server_name, config,
+            )
 
         return OnboardingResult(
             status="activated",
@@ -301,6 +321,13 @@ class MCPOnboardingService:
             binding.enabled = False
 
         catalog_entry.status = "revoked"
+
+        # Remove from workspace pool (disconnects sessions immediately)
+        from src.integrations.mcp_pool import get_workspace_pool
+
+        pool = get_workspace_pool()
+        if pool:
+            await pool.remove_server(self._workspace_id, catalog_entry.server_name)
 
         return OnboardingResult(
             status="revoked",

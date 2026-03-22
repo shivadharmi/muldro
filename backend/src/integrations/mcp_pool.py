@@ -1,0 +1,284 @@
+"""Workspace MCP Pool — per-workspace server management with dynamic add/remove.
+
+Manages MCP server configurations per workspace. Servers are registered
+from ConnectorInstallation records and can be added/removed at runtime
+without process restart. Delegates actual connections to UserMCPSessionPool.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+from dataclasses import dataclass, field
+from typing import Any
+
+from src.integrations.session_pool import UserMCPSessionPool
+from src.integrations.tool_normalizer import ToolNameNormalizer, get_normalizer
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ServerEntry:
+    """A registered MCP server for a workspace."""
+
+    server_name: str
+    workspace_id: str
+    config: dict
+    tools: dict[str, str] = field(default_factory=dict)  # canonical → raw
+    health_status: str = "unknown"
+
+
+class WorkspaceMCPPool:
+    """Per-workspace MCP server pool with dynamic add/remove.
+
+    Manages server configurations and delegates connection management
+    to UserMCPSessionPool for per-user auth'd sessions.
+    """
+
+    def __init__(
+        self,
+        session_pool: UserMCPSessionPool,
+        normalizer: ToolNameNormalizer | None = None,
+    ) -> None:
+        self._session_pool = session_pool
+        self._normalizer = normalizer or get_normalizer()
+        # workspace_id → {server_name → ServerEntry}
+        self._workspaces: dict[str, dict[str, ServerEntry]] = {}
+        self._lock = asyncio.Lock()
+
+    @property
+    def session_pool(self) -> UserMCPSessionPool:
+        """Access the underlying session pool."""
+        return self._session_pool
+
+    async def add_server(
+        self,
+        workspace_id: str,
+        server_name: str,
+        config: dict,
+    ) -> ServerEntry:
+        """Register an MCP server for a workspace (no restart required).
+
+        The server config is stored and registered with the session pool
+        for lazy connection on first tool call.
+        """
+        async with self._lock:
+            if workspace_id not in self._workspaces:
+                self._workspaces[workspace_id] = {}
+
+            # Remove existing entry if re-adding
+            if server_name in self._workspaces[workspace_id]:
+                await self._remove_server_unlocked(workspace_id, server_name)
+
+            entry = ServerEntry(
+                server_name=server_name,
+                workspace_id=workspace_id,
+                config=config,
+            )
+            self._workspaces[workspace_id][server_name] = entry
+
+            # Register with session pool for lazy connection
+            self._session_pool.register_server_config(server_name, config)
+
+            logger.info(
+                "Added MCP server: workspace=%s server=%s transport=%s",
+                workspace_id,
+                server_name,
+                config.get("transport", "unknown"),
+            )
+            return entry
+
+    async def remove_server(
+        self,
+        workspace_id: str,
+        server_name: str,
+    ) -> bool:
+        """Remove an MCP server from a workspace and disconnect all sessions."""
+        async with self._lock:
+            return await self._remove_server_unlocked(workspace_id, server_name)
+
+    async def _remove_server_unlocked(
+        self,
+        workspace_id: str,
+        server_name: str,
+    ) -> bool:
+        """Internal remove without lock (caller must hold _lock)."""
+        ws = self._workspaces.get(workspace_id, {})
+        entry = ws.pop(server_name, None)
+        if not entry:
+            return False
+
+        # Disconnect all user sessions for this server
+        sessions_to_close = [
+            key for key in self._session_pool._sessions
+            if key[0] == server_name
+        ]
+        for key in sessions_to_close:
+            await self._session_pool.refresh_session(key[0], key[1])
+
+        logger.info(
+            "Removed MCP server: workspace=%s server=%s",
+            workspace_id,
+            server_name,
+        )
+        return True
+
+    async def reload_server(
+        self,
+        workspace_id: str,
+        server_name: str,
+    ) -> ServerEntry | None:
+        """Reload a server config from DB and reconnect.
+
+        Fetches fresh ConnectorInstallation from DB, re-registers config.
+        """
+        from src.models.database import get_session_factory
+
+        try:
+            from sqlalchemy import select
+
+            from src.models.connector_installation import ConnectorInstallation
+
+            async with get_session_factory()() as db:
+                result = await db.execute(
+                    select(ConnectorInstallation).where(
+                        ConnectorInstallation.workspace_id == workspace_id,
+                        ConnectorInstallation.server_name == server_name,
+                        ConnectorInstallation.status == "active",
+                        ConnectorInstallation.enabled.is_(True),
+                    )
+                )
+                inst = result.scalar_one_or_none()
+                if not inst:
+                    logger.warning(
+                        "Cannot reload: no active installation for %s/%s",
+                        workspace_id,
+                        server_name,
+                    )
+                    return None
+
+                config = _installation_to_config(inst)
+                return await self.add_server(workspace_id, server_name, config)
+
+        except Exception as e:
+            logger.error("Failed to reload server %s: %s", server_name, e)
+            return None
+
+    def get_servers(self, workspace_id: str) -> list[dict]:
+        """List all servers for a workspace with their status."""
+        ws = self._workspaces.get(workspace_id, {})
+        return [
+            {
+                "server_name": entry.server_name,
+                "transport": entry.config.get("transport", "unknown"),
+                "auth_provider": entry.config.get("auth_provider", "none"),
+                "health_status": entry.health_status,
+                "tool_count": len(entry.tools),
+            }
+            for entry in ws.values()
+        ]
+
+    def get_all_tools(self, workspace_id: str) -> dict[str, str]:
+        """Return all tools for a workspace: {canonical_name: server_name}."""
+        result: dict[str, str] = {}
+        ws = self._workspaces.get(workspace_id, {})
+        for server_name, entry in ws.items():
+            for canonical in entry.tools:
+                result[canonical] = server_name
+        # Also include tools from the session pool (discovered at runtime)
+        for tool_name, server_name in self._session_pool.get_all_tools().items():
+            if tool_name not in result:
+                result[tool_name] = server_name
+        return result
+
+    async def initialize_from_db(self) -> int:
+        """Load all active installations from DB and register them.
+
+        Called at startup. Returns count of servers registered.
+        """
+        from src.models.database import get_session_factory
+
+        try:
+            from sqlalchemy import select
+
+            from src.models.connector_installation import ConnectorInstallation
+
+            async with get_session_factory()() as db:
+                result = await db.execute(
+                    select(ConnectorInstallation).where(
+                        ConnectorInstallation.status == "active",
+                        ConnectorInstallation.enabled.is_(True),
+                        ConnectorInstallation.transport.in_(
+                            ["stdio", "sse", "streamable-http"]
+                        ),
+                    )
+                )
+                installations = result.scalars().all()
+
+                count = 0
+                for inst in installations:
+                    config = _installation_to_config(inst)
+                    await self.add_server(
+                        inst.workspace_id, inst.server_name, config,
+                    )
+                    count += 1
+
+                logger.info("Loaded %d MCP servers from DB", count)
+                return count
+
+        except Exception as e:
+            logger.debug("Failed to load MCP servers from DB: %s", e)
+            return 0
+
+    async def shutdown(self) -> None:
+        """Shut down all sessions across all workspaces."""
+        await self._session_pool.shutdown()
+        async with self._lock:
+            self._workspaces.clear()
+        logger.info("WorkspaceMCPPool shut down")
+
+
+def _installation_to_config(inst: Any) -> dict:
+    """Convert a ConnectorInstallation ORM object to a config dict."""
+    config: dict = {
+        "transport": inst.transport,
+        "auth_provider": inst.auth_provider or "none",
+    }
+
+    if inst.transport == "stdio" and inst.command:
+        config["command"] = inst.command
+        if inst.args:
+            config["args"] = inst.args
+        if inst.env_template:
+            env = {
+                k: v
+                for k, v in (
+                    (k, os.environ.get(k, ""))
+                    for k in inst.env_template
+                )
+                if v
+            }
+            if env:
+                config["env"] = env
+
+    elif inst.transport in ("sse", "streamable-http") and inst.remote_url:
+        config["url"] = inst.remote_url
+
+    return config
+
+
+# Module-level singleton
+_workspace_pool: WorkspaceMCPPool | None = None
+
+
+def get_workspace_pool() -> WorkspaceMCPPool | None:
+    """Get the global WorkspaceMCPPool singleton."""
+    return _workspace_pool
+
+
+def set_workspace_pool(pool: WorkspaceMCPPool) -> None:
+    """Set the global WorkspaceMCPPool singleton (called at startup)."""
+    global _workspace_pool
+    _workspace_pool = pool
