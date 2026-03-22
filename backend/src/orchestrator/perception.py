@@ -97,9 +97,7 @@ class PerceptionCoordinator:
             from src.services.scheduler import Scheduler
 
             async with self._orchestrator._db_factory() as db:
-                authorized = await Scheduler._get_authorized_providers(
-                    db, self._user_id
-                )
+                authorized = await Scheduler._get_authorized_providers(db, self._user_id)
         except Exception:
             logger.debug("Failed to refresh authorized sources", exc_info=True)
             return

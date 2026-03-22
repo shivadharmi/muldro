@@ -14,9 +14,13 @@ class RuntimeEvent(Base, TimestampMixin):
     """Captures runtime lifecycle events for runs, steps, and tools.
 
     event_type values:
-      route_selected, agent_started, tool_call_started, tool_call_completed,
-      approval_requested, artifact_created, fallback_triggered,
-      run_completed, run_failed
+      command_received, route_selected, plan_created, run_created,
+      step_started, step_completed, step_failed, step_blocked,
+      approval_requested, approval_resolved,
+      tool_call_started, tool_call_completed, tool_call_failed,
+      fallback_selected, artifact_created, surface_created,
+      agent_started, agent_completed,
+      run_completed, run_failed, run_cancelled
     """
 
     __tablename__ = "runtime_events"

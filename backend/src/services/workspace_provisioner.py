@@ -11,9 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 logger = logging.getLogger(__name__)
 
 
-async def provision_workspace(
-    db: AsyncSession, user_id: str, workspace_id: str
-) -> dict[str, int]:
+async def provision_workspace(db: AsyncSession, user_id: str, workspace_id: str) -> dict[str, int]:
     """Seed all defaults for a newly created workspace.
 
     Returns a dict of {resource_type: count_seeded}.

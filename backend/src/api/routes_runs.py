@@ -280,9 +280,9 @@ async def resume_run(
             detail=f"Run is not paused (status={run.status})",
         )
 
-    from src.services.graph_executor import GraphExecutor
+    from src.services.graph_executor import create_graph_executor
 
-    executor = GraphExecutor(settings=settings, db=db)
+    executor = await create_graph_executor(settings=settings, db=db, workspace_id=workspace_id)
     run = await executor.resume_run(run_id)
 
     return RunResponse(

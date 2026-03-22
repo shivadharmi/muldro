@@ -70,6 +70,86 @@ async def stream_global_events(
     )
 
 
+@router.get("/v1/realtime/runtime")
+async def stream_runtime_events(
+    request: Request,
+    user_id: str = Depends(get_current_user_id),
+):
+    """SSE endpoint for runtime lifecycle events (command, route, run, step, tool).
+
+    Subscribes to the user's agent event stream and filters for runtime events.
+    The frontend activity store can subscribe to this for live updates.
+    """
+    redis = getattr(request.app.state, "redis", None)
+    if not redis:
+        raise HTTPException(status_code=503, detail="Redis unavailable for realtime streaming")
+
+    channel_name = f"jarvis:agent_events:{user_id}"
+
+    runtime_event_types = {
+        "command_received",
+        "route_selected",
+        "plan_created",
+        "run_created",
+        "step_started",
+        "step_completed",
+        "step_failed",
+        "step_blocked",
+        "approval_requested",
+        "approval_resolved",
+        "tool_call_started",
+        "tool_call_completed",
+        "tool_call_failed",
+        "fallback_selected",
+        "artifact_created",
+        "surface_created",
+        "agent_started",
+        "agent_completed",
+        "run_completed",
+        "run_failed",
+        "run_cancelled",
+    }
+
+    async def event_generator():
+        pubsub = redis.pubsub()
+        await pubsub.subscribe(channel_name)
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                if message and message["type"] == "message":
+                    data = message["data"]
+                    if isinstance(data, bytes):
+                        data = data.decode("utf-8")
+                    try:
+                        parsed = json.loads(data)
+                        event_type = parsed.get("event_type", "")
+                        if event_type in runtime_event_types:
+                            yield f"event: {event_type}\ndata: {data}\n\n"
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                else:
+                    yield ": keepalive\n\n"
+                    await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await pubsub.unsubscribe(channel_name)
+            await pubsub.aclose()
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.get("/v1/realtime/runs/{run_id}")
 async def stream_run_progress(
     run_id: str,

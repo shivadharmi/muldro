@@ -13,7 +13,7 @@ from src.api.schemas import ApprovalDecisionRequest, ApprovalDetailResponse, App
 from src.config.settings import Settings, get_settings
 from src.models.approvals import Approval
 from src.models.plans import Plan
-from src.models.task_graph import TaskRun
+from src.models.task_graph import TaskRun, TaskStep
 from src.services.audit import AuditService
 from src.services.operator import Operator
 
@@ -127,10 +127,31 @@ async def approve_action(
     approval.approved_by = user_id
 
     # Update run status via state machine (awaiting_approval -> running)
-    run_result = await db.execute(select(TaskRun).where(TaskRun.run_id == approval.execution_id))
+    effective_run_id = approval.run_id or approval.execution_id
+    run_result = await db.execute(select(TaskRun).where(TaskRun.run_id == effective_run_id))
     run = run_result.scalar_one_or_none()
-    if run:
+    if run and run.status == "awaiting_approval":
         transition_run(run, "running")
+
+    # Emit approval_resolved runtime event
+    try:
+        from src.models.runtime_event import RuntimeEvent
+
+        db.add(
+            RuntimeEvent(
+                workspace_id=workspace_id,
+                run_id=approval.run_id,
+                step_id=approval.step_id,
+                event_type="approval_resolved",
+                payload={
+                    "approval_id": approval_id,
+                    "decision": "approved",
+                    "reason": req.reason if req else None,
+                },
+            )
+        )
+    except Exception:
+        pass
 
     audit = AuditService(db)
     await audit.log(
@@ -165,9 +186,9 @@ async def approve_action(
 
     # Resume the run (either step-level approval gate or plan-level)
     if approval.run_id:
-        from src.services.graph_executor import GraphExecutor
+        from src.services.graph_executor import create_graph_executor
 
-        executor = GraphExecutor(settings=settings, db=db)
+        executor = await create_graph_executor(settings=settings, db=db, workspace_id=workspace_id)
         try:
             from src.models.task_graph import TaskStep
 
@@ -226,21 +247,55 @@ async def reject_action(
     approval.decision_reason = req.reason if req else None
     approval.approved_by = user_id
 
-    # Cancel the run via state machine
-    run_result = await db.execute(select(TaskRun).where(TaskRun.run_id == approval.execution_id))
+    # Emit approval_resolved runtime event
+    try:
+        from src.models.runtime_event import RuntimeEvent
+
+        db.add(
+            RuntimeEvent(
+                workspace_id=workspace_id,
+                run_id=approval.run_id,
+                step_id=approval.step_id,
+                event_type="approval_resolved",
+                payload={
+                    "approval_id": approval_id,
+                    "decision": "rejected",
+                    "reason": req.reason if req else None,
+                },
+            )
+        )
+    except Exception:
+        pass
+
+    # Cancel the run and transition the step
+    effective_run_id = approval.run_id or approval.execution_id
+    run_result = await db.execute(select(TaskRun).where(TaskRun.run_id == effective_run_id))
     run = run_result.scalar_one_or_none()
-    if run:
-        transition_run(run, "cancelled")
+    if run and run.status in ("awaiting_approval", "running", "paused"):
+        # Transition the waiting step to cancelled
+        if approval.step_id:
+            from src.services.execution_state import transition_step
 
-    # If approval has a run_id, cancel the run
-    if approval.run_id:
-        from src.services.graph_executor import GraphExecutor
+            step_result = await db.execute(
+                select(TaskStep).where(
+                    TaskStep.step_id == approval.step_id,
+                    TaskStep.run_id == effective_run_id,
+                )
+            )
+            step = step_result.scalar_one_or_none()
+            if step and step.status == "waiting_approval":
+                transition_step(step, "cancelled")
 
-        executor = GraphExecutor(settings=settings, db=db)
+        # Cancel the full run via graph executor (handles all remaining steps)
+        from src.services.graph_executor import create_graph_executor
+
+        executor = await create_graph_executor(settings=settings, db=db, workspace_id=workspace_id)
         try:
-            await executor.cancel_run(approval.run_id)
+            await executor.cancel_run(effective_run_id)
         except Exception:
-            logger.warning("Failed to cancel run %s", approval.run_id, exc_info=True)
+            # Fallback: direct state transition
+            transition_run(run, "cancelled")
+            logger.warning("Failed to cancel run %s via executor", effective_run_id, exc_info=True)
 
     audit = AuditService(db)
     await audit.log(

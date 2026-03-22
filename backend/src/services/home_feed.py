@@ -25,8 +25,8 @@ class HomeFeedService:
         self._db = db
         self._workspace_id = workspace_id
 
-    async def build_home(self, since: datetime | None = None) -> dict:
-        """Build the complete home feed response."""
+    async def build_home(self, since: datetime | None = None, user_id: str | None = None) -> dict:
+        """Build the complete home feed response, personalized for the user."""
         if since is None:
             since = datetime.now(timezone.utc) - timedelta(hours=24)
 
@@ -36,6 +36,10 @@ class HomeFeedService:
 
         recommended_actions = await self._get_recommended_actions()
         capability_health = await self._get_capability_health()
+
+        # Personalize recommendations based on user activity
+        if user_id and recommended_actions:
+            recommended_actions = await self._personalize_actions(recommended_actions, user_id)
 
         return {
             "since_last_visit": since.isoformat(),
@@ -143,27 +147,52 @@ class HomeFeedService:
         return items
 
     async def _get_recommended_actions(self) -> list[dict]:
-        """Derive recommended actions from pending approvals, blocked runs, stale data."""
+        """Derive recommended actions with reasoning, confidence, and impact.
+
+        Each recommendation includes:
+        - reasoning: why this is recommended
+        - confidence: 0.0-1.0 (based on data freshness and count)
+        - impact: what happens if the user ignores this
+        - priority_score: numeric score for ranking (higher = more urgent)
+        """
         actions: list[dict] = []
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
 
         # Pending approvals → recommend reviewing
         pending_result = await self._db.execute(
-            select(func.count(Approval.approval_id)).where(
+            select(Approval)
+            .where(
                 Approval.workspace_id == self._workspace_id,
                 Approval.status == "pending",
             )
+            .order_by(Approval.created_at.asc())
+            .limit(10)
         )
-        pending_count = pending_result.scalar() or 0
-        if pending_count > 0:
+        pending = list(pending_result.scalars().all())
+        if pending:
+            oldest = pending[0]
+            hours_waiting = (
+                (datetime.now(timezone.utc) - oldest.created_at).total_seconds() / 3600
+                if oldest.created_at
+                else 0
+            )
+            high_risk = sum(1 for a in pending if a.risk_level in ("high", "critical"))
             actions.append(
                 {
                     "action_type": "review_approvals",
                     "title": (
-                        f"Review {pending_count} pending approval"
-                        f"{'s' if pending_count > 1 else ''}"
+                        f"Review {len(pending)} pending approval{'s' if len(pending) > 1 else ''}"
                     ),
                     "description": "Actions are waiting for your approval before they can proceed.",
-                    "priority": "high",
+                    "reasoning": (
+                        f"Oldest approval has been waiting {hours_waiting:.0f}h. "
+                        + (f"{high_risk} are high/critical risk. " if high_risk else "")
+                        + "Delayed approvals block downstream execution."
+                    ),
+                    "confidence": min(1.0, 0.7 + len(pending) * 0.05),
+                    "impact": "Blocked workflows cannot proceed. Tasks and plans stall.",
+                    "priority": "critical" if high_risk else "high",
+                    "priority_score": 100 + len(pending) * 5 + high_risk * 20,
                     "action_url": "/approvals?status=pending",
                 }
             )
@@ -181,17 +210,23 @@ class HomeFeedService:
                 {
                     "action_type": "unblock_runs",
                     "title": (
-                        f"Unblock {blocked_count} stalled workflow"
-                        f"{'s' if blocked_count > 1 else ''}"
+                        f"Unblock {blocked_count} stalled "
+                        f"workflow{'s' if blocked_count > 1 else ''}"
                     ),
                     "description": "Workflows are paused and need attention to continue.",
+                    "reasoning": (
+                        f"{blocked_count} run(s) are stuck in blocked or awaiting_approval state. "
+                        "These represent incomplete work that was planned and partially executed."
+                    ),
+                    "confidence": 0.9,
+                    "impact": "Planned work remains incomplete. Downstream tasks won't trigger.",
                     "priority": "high",
+                    "priority_score": 80 + blocked_count * 10,
                     "action_url": "/workflows?status=blocked",
                 }
             )
 
         # Failed runs in last 24h → recommend investigating
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
         failed_result = await self._db.execute(
             select(func.count(TaskRun.run_id)).where(
                 TaskRun.workspace_id == self._workspace_id,
@@ -205,14 +240,115 @@ class HomeFeedService:
                 {
                     "action_type": "investigate_failures",
                     "title": (
-                        f"Investigate {failed_count} failed run"
-                        f"{'s' if failed_count > 1 else ''}"
+                        f"Investigate {failed_count} failed run{'s' if failed_count > 1 else ''}"
                     ),
                     "description": "Recent workflow failures may need your attention.",
+                    "reasoning": (
+                        f"{failed_count} run(s) failed in the last 24 hours. "
+                        "Failures may indicate connector issues, policy blocks, or invalid plans."
+                    ),
+                    "confidence": 0.8,
+                    "impact": "Recurring failures go undiagnosed. User tasks may silently fail.",
                     "priority": "medium",
+                    "priority_score": 60 + failed_count * 5,
                     "action_url": "/workflows?status=failed",
                 }
             )
+
+        # Stale observations → recommend reconnecting
+        from src.models.observation import ObservationStatus
+
+        stale_result = await self._db.execute(
+            select(ObservationStatus)
+            .where(
+                ObservationStatus.workspace_id == self._workspace_id,
+                ObservationStatus.status == "error",
+            )
+            .limit(5)
+        )
+        stale = list(stale_result.scalars().all())
+        if stale:
+            sources = [s.source for s in stale]
+            actions.append(
+                {
+                    "action_type": "fix_observations",
+                    "title": f"{len(stale)} data source{'s' if len(stale) > 1 else ''} failing",
+                    "description": f"Sources with errors: {', '.join(sources)}",
+                    "reasoning": (
+                        "Observation sources reporting errors will not ingest new data. "
+                        "This means Jarvis is blind to changes from these sources."
+                    ),
+                    "confidence": 0.95,
+                    "impact": "No new data from failing sources. Briefings and plans become stale.",
+                    "priority": "high",
+                    "priority_score": 75 + len(stale) * 10,
+                    "action_url": "/connectors",
+                }
+            )
+
+        # Sort by priority_score descending
+        actions.sort(key=lambda a: a.get("priority_score", 0), reverse=True)
+
+        return actions
+
+    async def _personalize_actions(self, actions: list[dict], user_id: str) -> list[dict]:
+        """Boost recommendation priority scores based on user activity patterns.
+
+        Looks at the user's recent traces and runs to determine which areas
+        they interact with most, then boosts related recommendations.
+        """
+        try:
+            from src.models.traces import Trace
+
+            cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+
+            # Count user's recent traces by agent to understand their activity
+            trace_result = await self._db.execute(
+                select(Trace.metadata_)
+                .where(
+                    Trace.user_id == user_id,
+                    Trace.workspace_id == self._workspace_id,
+                    Trace.created_at >= cutoff,
+                )
+                .order_by(Trace.created_at.desc())
+                .limit(50)
+            )
+            traces = trace_result.all()
+
+            # Count user's runs to understand execution patterns
+            run_result = await self._db.execute(
+                select(func.count(TaskRun.run_id)).where(
+                    TaskRun.user_id == user_id,
+                    TaskRun.workspace_id == self._workspace_id,
+                    TaskRun.created_at >= cutoff,
+                )
+            )
+            recent_run_count = run_result.scalar() or 0
+
+            # Boost logic:
+            # - Many recent runs → boost "investigate_failures"
+            # - Few recent traces → boost "fix_observations"
+            # - Active user → boost approvals
+            for action in actions:
+                boost = 0
+                action_type = action.get("action_type", "")
+
+                if action_type == "investigate_failures" and recent_run_count > 5:
+                    boost = 15  # Active executor → cares more about failures
+                elif action_type == "fix_observations" and len(traces) < 5:
+                    boost = 20  # Low activity → data sources matter more
+                elif action_type == "review_approvals" and recent_run_count > 3:
+                    boost = 10  # Active user blocked by own approvals
+
+                if boost:
+                    action["priority_score"] = action.get("priority_score", 50) + boost
+                    action["personalized"] = True
+
+            # Re-sort by boosted scores
+            actions.sort(key=lambda a: a.get("priority_score", 0), reverse=True)
+
+        except Exception:
+            logger.debug("Personalization failed, returning unsorted", exc_info=True)
 
         return actions
 
