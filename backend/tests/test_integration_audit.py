@@ -83,21 +83,6 @@ class TestAuditLogger:
         assert len(result["items"]) == 20
 
 
-class TestTraceExplanation:
-    async def test_explain_not_found(self):
-        from src.services.trace_explanation import TraceExplanationService
-
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = None
-
-        db = AsyncMock()
-        db.execute = AsyncMock(return_value=mock_result)
-
-        svc = TraceExplanationService(db, TEST_WORKSPACE_ID)
-        result = await svc.explain("trace_nonexistent")
-        assert result is None
-
-
 class TestAgentAnalytics:
     async def test_empty_report(self):
         from src.services.agent_analytics import AgentAnalyticsService

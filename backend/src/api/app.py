@@ -6,8 +6,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.routes_agent_routes import router as agent_routes_router
-from src.api.routes_agents import router as agents_router
 from src.api.routes_approvals import router as approvals_router
 from src.api.routes_artifacts import router as artifacts_router
 from src.api.routes_auth import router as auth_router
@@ -18,9 +16,7 @@ from src.api.routes_command import router as command_router
 from src.api.routes_connectors import router as connectors_router
 from src.api.routes_conversations import router as conversations_router
 from src.api.routes_events import router as events_router
-from src.api.routes_executions import router as executions_router
 from src.api.routes_feedback import router as feedback_router
-from src.api.routes_goals import router as goals_router
 from src.api.routes_graph import router as graph_router
 from src.api.routes_health import router as health_router
 from src.api.routes_home import router as home_router
@@ -34,16 +30,12 @@ from src.api.routes_observation import router as observation_router
 from src.api.routes_realtime import router as realtime_router
 from src.api.routes_runs import router as runs_router
 from src.api.routes_runtime import router as runtime_router
-from src.api.routes_schedules import router as schedules_router
 from src.api.routes_search import router as search_router
 from src.api.routes_settings import router as settings_router
 from src.api.routes_system import router as system_router
-from src.api.routes_tasks import router as tasks_router
 from src.api.routes_traces import router as traces_router
-from src.api.routes_triggers import router as triggers_router
 from src.api.routes_ui import router as ui_router
 from src.api.routes_webhooks import router as webhooks_router
-from src.api.routes_workflows import router as workflows_router
 from src.api.routes_ws import router as ws_router
 from src.api.schemas import HealthResponse
 from src.config.settings import get_settings
@@ -223,7 +215,6 @@ def create_app() -> FastAPI:
     app.include_router(command_router, tags=["command"])
     app.include_router(briefings_router, tags=["briefings"])
     app.include_router(approvals_router, tags=["approvals"])
-    app.include_router(tasks_router, tags=["tasks"])
     app.include_router(search_router, tags=["search"])
     app.include_router(meetings_router, tags=["meetings"])
     app.include_router(canvas_router, tags=["canvas"])
@@ -237,9 +228,6 @@ def create_app() -> FastAPI:
 
     # Observation health tracking
     app.include_router(observation_router, tags=["observations"])
-
-    # Schedules (backend-owned dynamic scheduling)
-    app.include_router(schedules_router, tags=["schedules"])
 
     # System routes (heartbeat, maintenance, metrics)
     app.include_router(system_router, tags=["system"])
@@ -268,20 +256,11 @@ def create_app() -> FastAPI:
     # Memories
     app.include_router(memories_router, tags=["memories"])
 
-    # Executions
-    app.include_router(executions_router, tags=["executions"])
-
-    # Triggers
-    app.include_router(triggers_router, tags=["triggers"])
-
-    # Traces (observability)
+    # Traces (observability — internal debugging)
     app.include_router(traces_router, tags=["traces"])
 
     # Conversations (chat session persistence)
     app.include_router(conversations_router, tags=["conversations"])
-
-    # Goals
-    app.include_router(goals_router, tags=["goals"])
 
     # Artifacts
     app.include_router(artifacts_router, tags=["artifacts"])
@@ -292,14 +271,8 @@ def create_app() -> FastAPI:
     # Notifications
     app.include_router(notifications_router, tags=["notifications"])
 
-    # Workflows
-    app.include_router(workflows_router, tags=["workflows"])
-
     # Runs (task execution runs)
     app.include_router(runs_router, tags=["runs"])
-    # Agent management
-    app.include_router(agents_router, tags=["agents"])
-    app.include_router(agent_routes_router, tags=["agent-routes"])
 
     # Knowledge graph (Neo4j)
     app.include_router(graph_router, tags=["graph"])

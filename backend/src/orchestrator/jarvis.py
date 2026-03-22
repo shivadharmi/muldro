@@ -1089,7 +1089,6 @@ class JarvisOrchestrator:
                 event_bus=event_bus,
                 notifier=self._services.notifier,
                 planner=self._services.planner,
-                goal_tracker=self._services.goal_tracker,
             )
             for raw in raw_events:
                 try:
@@ -1348,7 +1347,6 @@ class JarvisOrchestrator:
             builder = ContextBuilder(
                 world_model=svc.world_model,
                 memory_service=svc.memory_service,
-                goal_tracker=svc.goal_tracker,
                 procedure_library=svc.procedure_library,
                 artifact_store=svc.artifact_store,
             )
@@ -1801,8 +1799,7 @@ class JarvisOrchestrator:
                 context_builder = ContextBuilder(
                     world_model=svc.world_model,
                     memory_service=svc.memory_service,
-                    goal_tracker=svc.goal_tracker,
-                    procedure_library=svc.procedure_library,
+                        procedure_library=svc.procedure_library,
                     artifact_store=svc.artifact_store,
                 )
 

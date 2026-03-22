@@ -186,16 +186,14 @@ class TestInitiativeAutoPlanning:
         memory_service = MagicMock()
         memory_service.retrieve = AsyncMock(return_value=[])
 
-        # Goal tracker with relevant goal → goal_relevance boost
-        goal_tracker = MagicMock()
-        goal_tracker.get_active_goals = AsyncMock(
-            return_value=[{"title": "Test Event follow-up", "status": "active"}]
+        # Memory service also returns goal memories for initiative scoring
+        memory_service.retrieve = AsyncMock(
+            return_value=[{"fact_text": "Goal: Test Event follow-up", "memory_type": "goal"}]
         )
 
         proc = _make_processor(
             notifier=notifier,
             memory_service=memory_service,
-            goal_tracker=goal_tracker,
         )
         # Score: 0.30*0.8 + 0.25*0.6 + 0.20*goal + 0.15*0 + 0.10*0.9
         # = 0.24 + 0.15 + goal + 0 + 0.09 = ~0.55+ with goal relevance

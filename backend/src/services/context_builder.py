@@ -11,7 +11,6 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from src.services.artifact_store import ArtifactStore
-    from src.services.goal_tracker import GoalTracker
     from src.services.memory_service import MemoryService
     from src.services.procedure_library import ProcedureLibrary
     from src.services.tool_registry import ToolRegistry
@@ -79,7 +78,6 @@ class ContextBuilder:
         self,
         world_model: WorldModel | None = None,
         memory_service: MemoryService | None = None,
-        goal_tracker: GoalTracker | None = None,
         procedure_library: ProcedureLibrary | None = None,
         artifact_store: ArtifactStore | None = None,
         tool_registry: ToolRegistry | None = None,
@@ -87,7 +85,6 @@ class ContextBuilder:
     ):
         self._world_model = world_model
         self._memory_service = memory_service
-        self._goal_tracker = goal_tracker
         self._procedure_library = procedure_library
         self._artifact_store = artifact_store
         self._tool_registry = tool_registry
@@ -136,21 +133,27 @@ class ContextBuilder:
             except Exception:
                 logger.debug("Memory retrieval failed", exc_info=True)
 
-        # Goals
-        if self._goal_tracker:
+        # Goals — retrieved from memory system (memory_type="goal")
+        if self._memory_service:
             try:
-                goals = await self._goal_tracker.list_goals(user_id, status="active")
+                goal_memories = await self._memory_service.retrieve(
+                    user_id,
+                    query=query,
+                    memory_types=["goal"],
+                    max_results=5,
+                    workspace_id=workspace_id,
+                )
                 pack.goals = [
                     {
-                        "goal_id": g.goal_id,
-                        "title": g.title,
-                        "progress": g.progress,
-                        "priority": getattr(g, "priority", "medium"),
+                        "memory_id": g.get("memory_id", ""),
+                        "title": g.get("fact_text", ""),
+                        "confidence": g.get("confidence", 0.5),
+                        "priority": (g.get("provenance") or {}).get("priority", "medium"),
                     }
-                    for g in goals[:5]
+                    for g in goal_memories
                 ]
             except Exception:
-                logger.debug("Goal fetch failed", exc_info=True)
+                logger.debug("Goal memory fetch failed", exc_info=True)
 
         # Procedures
         if self._procedure_library and task_type:

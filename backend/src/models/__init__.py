@@ -15,7 +15,6 @@ from src.models.conversations import Conversation, Message
 from src.models.dead_letter import DeadLetterEntry
 from src.models.entities import Entity, EntityAlias, EntityRelationship
 from src.models.events import NormalizedEvent
-from src.models.goals import Goal, TrustScore
 from src.models.integration_audit import IntegrationAuditEvent
 from src.models.mcp_server_catalog import MCPServerCatalog
 from src.models.memory import Memory
@@ -30,11 +29,11 @@ from src.models.runtime_event import RuntimeEvent
 from src.models.schedules import Schedule
 from src.models.server_trust import ServerTrustRecord
 from src.models.task_graph import TaskCheckpoint, TaskRun, TaskStep
-from src.models.tasks import Task, TaskDependency
 from src.models.token_usage import TokenUsage
 from src.models.tool_definitions import ToolDefinition
 from src.models.traces import ModelCall, Trace
 from src.models.triggers import Trigger
+from src.models.trust_score import TrustScore
 from src.models.ui_state import UISurface
 from src.models.users import (
     MagicLink,
@@ -85,11 +84,7 @@ __all__ = [
     "TaskRun",
     "TaskStep",
     "TaskCheckpoint",
-    # Standalone tasks
-    "Task",
-    "TaskDependency",
-    # Goals & trust
-    "Goal",
+    # Trust
     "TrustScore",
     # Triggers
     "Trigger",

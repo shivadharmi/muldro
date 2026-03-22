@@ -254,28 +254,29 @@ class UnifiedSearchService:
         ]
 
     async def _search_goals(self, query: str, limit: int) -> list[UnifiedSearchResult]:
-        from src.models.goals import Goal
+        from src.models.memory import Memory
 
         q = f"%{query}%"
         result = await self._db.execute(
-            select(Goal)
+            select(Memory)
             .where(
-                Goal.workspace_id == self._workspace_id,
-                Goal.title.ilike(q),
+                Memory.workspace_id == self._workspace_id,
+                Memory.memory_type == "goal",
+                Memory.status == "active",
+                Memory.fact_text.ilike(q),
             )
-            .order_by(Goal.updated_at.desc())
+            .order_by(Memory.created_at.desc())
             .limit(limit)
         )
         return [
             UnifiedSearchResult(
                 result_type="goal",
-                result_id=g.goal_id,
-                title=g.title or "",
-                snippet=g.description or "",
-                score=g.progress or 0.0,
+                result_id=g.memory_id,
+                title=g.fact_text or "",
+                snippet="",
+                score=g.confidence or 0.5,
                 why_matched="title match",
-                actions=[{"action": "open", "url": f"/goals/{g.goal_id}"}],
-                metadata={"status": g.status, "progress": g.progress},
+                metadata={"memory_type": "goal"},
             )
             for g in result.scalars().all()
         ]

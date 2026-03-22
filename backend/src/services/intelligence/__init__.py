@@ -1,6 +1,5 @@
-"""Intelligence services for proactive monitoring and goal tracking."""
+"""Intelligence services for proactive monitoring."""
 
-from src.services.intelligence.goal_tracker import GoalTracker
 from src.services.intelligence.watcher import WatcherService
 
-__all__ = ["GoalTracker", "WatcherService"]
+__all__ = ["WatcherService"]

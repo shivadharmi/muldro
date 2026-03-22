@@ -26,7 +26,6 @@ from src.models.events import NormalizedEvent
 if TYPE_CHECKING:
     from src.services.dead_letter import DeadLetterService
     from src.services.event_bus import EventBus
-    from src.services.goal_tracker import GoalTracker
     from src.services.memory_service import MemoryService
     from src.services.notifier import Notifier
     from src.services.planner import Planner
@@ -111,7 +110,6 @@ class EventProcessor:
         event_bus: EventBus | None = None,
         notifier: Notifier | None = None,
         planner: Planner | None = None,
-        goal_tracker: GoalTracker | None = None,
     ):
         self._settings = settings
         self._db = db
@@ -123,7 +121,6 @@ class EventProcessor:
         self._event_bus = event_bus
         self._notifier = notifier
         self._planner = planner
-        self._goal_tracker = goal_tracker
 
     async def process(self, raw: RawEvent, user_id: str, workspace_id: str = "") -> str | None:
         """Process a raw event. Returns event_id if stored, None if duplicate."""
@@ -347,7 +344,6 @@ class EventProcessor:
                 db=self._db,
                 world_model=self._world_model,
                 memory_service=self._memory_service,
-                goal_tracker=self._goal_tracker,
             )
             result = await scorer.score(event, user_id)
 

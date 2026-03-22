@@ -195,6 +195,51 @@ class MemoryService:
 
         return memory_ids
 
+    async def store_goal_memory(
+        self,
+        user_id: str,
+        workspace_id: str,
+        title: str,
+        description: str | None = None,
+        target_date: str | None = None,
+        priority: str = "medium",
+        entity_ids: list[str] | None = None,
+    ) -> str:
+        """Store a goal as a memory with memory_type='goal'.
+
+        Returns the memory_id.
+        """
+        parts = [f"Goal: {title}"]
+        if description:
+            parts.append(description)
+        if target_date:
+            parts.append(f"Target date: {target_date}")
+        parts.append(f"Priority: {priority}")
+        fact_text = ". ".join(parts)
+
+        embedding = await self._embedder.embed_text(fact_text)
+        memory_id = f"mem_{ULID()}"
+        memory = Memory(
+            memory_id=memory_id,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            memory_type="goal",
+            scope="planning",
+            fact_text=fact_text,
+            embedding=embedding,
+            confidence=0.9,
+            stability_score=0.5,
+            source_event_ids=[],
+            provenance={"source": "user_goal", "priority": priority},
+            ttl_days=None,
+            status="active",
+            entity_ids=entity_ids,
+        )
+        self._db.add(memory)
+        await self._db.flush()
+        logger.info("Goal memory stored: %s '%s'", memory_id, title)
+        return memory_id
+
     async def retrieve(
         self,
         user_id: str,

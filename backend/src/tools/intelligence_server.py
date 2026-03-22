@@ -739,123 +739,54 @@ async def update_execution(
             return make_error_response(e)
 
 
-# ── Task Management ─────────────────────────────────────────────────
-
-
-@intelligence.tool(
-    tags={"planner", "write"},
-    annotations=ToolAnnotations(readOnlyHint=False, idempotentHint=False),
-)
-async def create_task(
-    user_id: str,
-    title: str,
-    ctx: Context,
-    description: str = "",
-    task_type: str = "general",
-    priority: str = "medium",
-    goal_id: str = "",
-    workspace_id: str = "",
-) -> dict:
-    """Create a standalone task in the task system.
-
-    task_type: general, draft_email, research, meeting_prep, etc.
-    priority: low, medium, high, critical
-    """
-    async with _get_db() as db:
-        try:
-            from src.services.task_service import TaskService
-
-            svc = TaskService(db)
-            task = await svc.create_task(
-                user_id=user_id,
-                title=title,
-                description=description or None,
-                task_type=task_type,
-                priority=priority,
-                goal_id=goal_id or None,
-                workspace_id=workspace_id,
-            )
-            await db.commit()
-            return {
-                "status": "created",
-                "task_id": task.task_id,
-                "title": task.title,
-            }
-        except Exception as e:
-            logger.error("create_task failed: %s", e, exc_info=True)
-            await db.rollback()
-            return make_error_response(e)
-
-
 @intelligence.tool(
     tags={"planner", "read"},
     annotations=ToolAnnotations(readOnlyHint=True),
 )
-async def get_task(
-    user_id: str,
-    task_id: str,
-    ctx: Context,
-    workspace_id: str = "",
-) -> dict:
-    """Get details of a standalone task by ID."""
-    async with _get_db() as db:
-        try:
-            from src.services.task_service import TaskService
-
-            svc = TaskService(db)
-            task = await svc.get_task(task_id, user_id, workspace_id=workspace_id)
-            if not task:
-                return {"status": "not_found", "task_id": task_id}
-            return {
-                "task_id": task.task_id,
-                "title": task.title,
-                "description": task.description,
-                "status": task.status,
-                "priority": task.priority,
-                "task_type": task.task_type,
-                "goal_id": task.goal_id,
-            }
-        except Exception as e:
-            logger.error("get_task failed: %s", e, exc_info=True)
-            return make_error_response(e)
-
-
-@intelligence.tool(
-    tags={"planner", "read"},
-    annotations=ToolAnnotations(readOnlyHint=True),
-)
-async def get_goals(
+async def get_goal_memories(
     user_id: str,
     ctx: Context,
-    status: str = "active",
     limit: int = 10,
     workspace_id: str = "",
 ) -> dict:
-    """Get user goals, optionally filtered by status."""
-    async with _get_db():
+    """Get active user goals stored as memories.
+
+    Goals are stored as memories with memory_type='goal' and scope='planning'.
+    Returns goal text, confidence, and entity links.
+    """
+    async with _get_db() as db:
         try:
-            goal_tracker = _services.goal_tracker
-            if not goal_tracker:
-                return {
-                    "goals": [],
-                    "error": "Goal tracker not available",
-                }
-            goals = await goal_tracker.list_goals(user_id, status=status, workspace_id=workspace_id)
+            from sqlalchemy import select
+
+            from src.models.memory import Memory
+
+            result = await db.execute(
+                select(Memory)
+                .where(
+                    Memory.user_id == user_id,
+                    Memory.workspace_id == workspace_id,
+                    Memory.memory_type == "goal",
+                    Memory.status == "active",
+                )
+                .order_by(Memory.created_at.desc())
+                .limit(limit)
+            )
+            goals = result.scalars().all()
             return {
                 "goals": [
                     {
-                        "goal_id": g.goal_id,
-                        "title": g.title,
-                        "status": g.status,
-                        "progress": g.progress,
-                        "priority": getattr(g, "priority", "medium"),
+                        "memory_id": g.memory_id,
+                        "text": g.fact_text,
+                        "confidence": g.confidence,
+                        "entity_ids": g.entity_ids or [],
+                        "created_at": g.created_at.isoformat() if g.created_at else None,
                     }
-                    for g in goals[:limit]
+                    for g in goals
                 ],
-                "count": min(len(goals), limit),
+                "count": len(goals),
             }
         except Exception as e:
-            logger.error("get_goals failed: %s", e, exc_info=True)
+            logger.error("get_goal_memories failed: %s", e, exc_info=True)
             return {"goals": [], "error": str(e)}
 
 
@@ -883,7 +814,6 @@ async def build_context(
             builder = ContextBuilder(
                 world_model=_services.world_model,
                 memory_service=_services.memory_service,
-                goal_tracker=_services.goal_tracker,
                 procedure_library=_services.procedure_library,
                 artifact_store=_services.artifact_store,
             )

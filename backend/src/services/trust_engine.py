@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models.goals import TrustScore
+from src.models.trust_score import TrustScore
 
 logger = logging.getLogger(__name__)
 
