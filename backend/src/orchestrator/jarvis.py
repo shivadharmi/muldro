@@ -930,7 +930,7 @@ class JarvisOrchestrator:
                 return {"status": "skipped", "reason": "budget_exhausted"}
 
             # Step 1: Poll the connector directly for new events
-            raw_events, new_cursor, poll_error = await self._poll_connector(
+            raw_events, new_cursor, poll_error, cursor_type = await self._poll_connector(
                 source, user_id, workspace_id
             )
 
@@ -952,7 +952,7 @@ class JarvisOrchestrator:
             event_summaries = await self._ingest_raw_events(raw_events, user_id, workspace_id)
 
             # Update the observation cursor
-            await self._update_cursor(source, user_id, workspace_id, new_cursor)
+            await self._update_cursor(source, user_id, workspace_id, new_cursor, cursor_type)
 
             observer_summary = f"Polled {source}: {len(raw_events)} new event(s).\n" + "\n".join(
                 f"- {s}" for s in event_summaries[:20]
@@ -1009,16 +1009,17 @@ class JarvisOrchestrator:
 
     async def _poll_connector(
         self, source: str, user_id: str, workspace_id: str
-    ) -> tuple[list, str | None, str | None]:
-        """Poll a connector for new events. Returns (events, new_cursor, error)."""
+    ) -> tuple[list, str | None, str | None, str]:
+        """Poll a connector for new events. Returns (events, new_cursor, error, cursor_type)."""
         from src.connectors.base import CONNECTOR_REGISTRY
         from src.services.oauth_manager import OAuthManager
 
         connector_cls = CONNECTOR_REGISTRY.get(source)
         if not connector_cls:
-            return [], None, f"No connector registered for source: {source}"
+            return [], None, f"No connector registered for source: {source}", "opaque"
 
         connector = connector_cls(settings=self._settings)
+        cursor_type = connector.cursor_type
 
         # Get OAuth credentials
         oauth_mgr = OAuthManager(
@@ -1029,7 +1030,11 @@ class JarvisOrchestrator:
         oauth_provider = "google" if source in ("gmail", "calendar") else source
         access_token = await oauth_mgr.get_valid_token(user_id, oauth_provider)
         if not access_token:
-            return [], None, f"No valid credentials for {source} — user may need to re-authorize"
+            return (
+                [], None,
+                f"No valid credentials for {source} — user may need to re-authorize",
+                cursor_type,
+            )
 
         # Get current cursor
         cursor = None
@@ -1052,9 +1057,16 @@ class JarvisOrchestrator:
             events, new_cursor = await connector.poll(
                 user_id, cursor, {"access_token": access_token}
             )
-            return events, new_cursor, None
+            return events, new_cursor, None, cursor_type
         except Exception as e:
-            return [], None, f"Poll failed for {source}: {e}"
+            from src.integrations.mcp_errors import classify_error
+
+            error_code = classify_error(e)
+            logger.warning(
+                "connector_poll_error",
+                extra={"source": source, "error_code": error_code, "error": str(e)[:500]},
+            )
+            return [], None, f"Poll failed for {source} ({error_code}): {e}", cursor_type
 
     async def _ingest_raw_events(
         self, raw_events: list, user_id: str, workspace_id: str
@@ -1062,9 +1074,23 @@ class JarvisOrchestrator:
         """Ingest raw events into the event processor. Returns summary strings."""
         summaries = []
         async with self._db_factory() as db:
+            from src.services.dead_letter import DeadLetterService
             from src.services.event_processor import EventProcessor
 
-            processor = EventProcessor(self._settings, db)
+            event_bus = await self._ensure_event_bus()
+            dead_letter = DeadLetterService(db)
+
+            processor = EventProcessor(
+                self._settings,
+                db,
+                world_model=self._services.world_model,
+                memory_service=self._services.memory_service,
+                dead_letter=dead_letter,
+                event_bus=event_bus,
+                notifier=self._services.notifier,
+                planner=self._services.planner,
+                goal_tracker=self._services.goal_tracker,
+            )
             for raw in raw_events:
                 try:
                     event_id = await processor.process(
@@ -1076,13 +1102,41 @@ class JarvisOrchestrator:
                         summary += f" (event_id={event_id})"
                     summaries.append(summary)
                 except Exception as e:
-                    logger.debug("Failed to ingest raw event: %s", e)
+                    logger.warning(
+                        "event_ingest_failed",
+                        extra={
+                            "source": raw.source,
+                            "event_type": raw.event_type,
+                            "error": str(e)[:500],
+                        },
+                    )
                     summaries.append(f"[{raw.source}] {raw.event_type} (ingest error)")
+                    try:
+                        await dead_letter.enqueue(
+                            user_id=user_id,
+                            operation_type="event_ingest",
+                            error_type=type(e).__name__,
+                            error_message=str(e),
+                            source_id=raw.entity_id,
+                            payload={
+                                "source": raw.source,
+                                "event_type": raw.event_type,
+                                "entity_id": raw.entity_id,
+                            },
+                            workspace_id=workspace_id,
+                        )
+                    except Exception:
+                        logger.debug("DLQ enqueue failed", exc_info=True)
             await db.commit()
         return summaries
 
     async def _update_cursor(
-        self, source: str, user_id: str, workspace_id: str, new_cursor: str | None
+        self,
+        source: str,
+        user_id: str,
+        workspace_id: str,
+        new_cursor: str | None,
+        cursor_type: str = "opaque",
     ) -> None:
         """Update the observation cursor after a successful poll."""
         if not new_cursor:
@@ -1113,6 +1167,7 @@ class JarvisOrchestrator:
                         user_id=user_id,
                         workspace_id=workspace_id,
                         source=source,
+                        cursor_type=cursor_type,
                         cursor_value=new_cursor,
                         last_observation_at=datetime.now(timezone.utc),
                     )
@@ -1163,24 +1218,35 @@ class JarvisOrchestrator:
                 trace.trace_id, user_id=user_id, workspace_id=workspace_id
             )
 
+    async def _ensure_event_bus(self):
+        """Lazily initialize the event bus. Returns the bus or None on failure."""
+        if self._event_bus is not None:
+            return self._event_bus
+        try:
+            import redis.asyncio as aioredis
+
+            from src.services.event_bus import EventBus
+
+            self._event_bus_redis = aioredis.from_url(
+                self._settings.redis_url, decode_responses=True
+            )
+            self._event_bus = EventBus(self._event_bus_redis)
+        except Exception:
+            logger.debug("Failed to init event_bus", exc_info=True)
+        return self._event_bus
+
     async def _publish_event(
         self, event_type: str, user_id: str, payload: dict, trace_id: str | None = None
     ) -> None:
         """Publish an agent action event to the event bus (best-effort)."""
         try:
-            if self._event_bus is None:
-                import redis.asyncio as aioredis
+            event_bus = await self._ensure_event_bus()
+            if event_bus is None:
+                return
 
-                self._event_bus_redis = aioredis.from_url(
-                    self._settings.redis_url, decode_responses=True
-                )
-                from src.services.event_bus import EventBus
-
-                self._event_bus = EventBus(self._event_bus_redis)
-
-            stream = self._event_bus.agent_stream(user_id)
+            stream = event_bus.agent_stream(user_id)
             metadata = {"trace_id": trace_id} if trace_id else {}
-            await self._event_bus.publish(stream, event_type, payload, user_id, metadata)
+            await event_bus.publish(stream, event_type, payload, user_id, metadata)
         except Exception:
             logger.debug("Failed to publish event %s to bus", event_type, exc_info=True)
 
