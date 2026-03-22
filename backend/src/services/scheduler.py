@@ -303,7 +303,7 @@ class SchedulerLoop:
             checks = await alerting.check_all_slos()
             logger.info(
                 "SLO check complete: %s",
-                {c.name: c.status for c in checks},
+                ", ".join(f"{c.name}={c.status}" for c in checks),
             )
         elif action == "consolidate_memories":
             user_id = sched.user_id
