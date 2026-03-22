@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useCommandStore } from "@/stores/command-store";
 
 interface Props {
   onSubmit: (message: string) => void;
@@ -24,6 +25,7 @@ export function CommandInput({ onSubmit, disabled }: Props) {
   const [cmdKOpen, setCmdKOpen] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
 
   const filtered = (cmdKOpen || value.startsWith("/"))
     ? COMMANDS.filter((c) => {
@@ -54,6 +56,42 @@ export function CommandInput({ onSubmit, disabled }: Props) {
     window.addEventListener("keydown", handleGlobalKeyDown);
     return () => window.removeEventListener("keydown", handleGlobalKeyDown);
   }, [cmdKOpen]);
+
+  // Pending command from command launcher:
+  // Set the input value, then programmatically submit the form.
+  // This triggers React's synthetic event pipeline — same path as manual Enter.
+  useEffect(() => {
+    const { pendingCommand, setPendingCommand } = useCommandStore.getState();
+    if (!pendingCommand || disabled) return;
+
+    // Consume immediately
+    const cmd = pendingCommand;
+    setPendingCommand(null);
+
+    // Set value and submit on next frame (after React renders the value)
+    requestAnimationFrame(() => {
+      setValue(cmd);
+      requestAnimationFrame(() => {
+        formRef.current?.requestSubmit();
+      });
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Also subscribe for when user is already on /chat and uses launcher
+  useEffect(() => {
+    const unsub = useCommandStore.subscribe((state, prev) => {
+      if (state.pendingCommand && state.pendingCommand !== prev.pendingCommand && !disabled) {
+        const cmd = state.pendingCommand;
+        useCommandStore.getState().setPendingCommand(null);
+
+        setValue(cmd);
+        requestAnimationFrame(() => {
+          formRef.current?.requestSubmit();
+        });
+      }
+    });
+    return unsub;
+  }, [disabled]);
 
   const executeCommand = useCallback(
     (cmd: (typeof COMMANDS)[number]) => {
@@ -154,7 +192,7 @@ export function CommandInput({ onSubmit, disabled }: Props) {
           </div>
         </div>
       )}
-      <form onSubmit={handleSubmit} className="flex gap-2">
+      <form ref={formRef} onSubmit={handleSubmit} className="flex gap-2">
         <input
           ref={cmdKOpen ? undefined : inputRef}
           type="text"

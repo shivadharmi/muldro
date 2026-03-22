@@ -1,16 +1,73 @@
 "use client";
 
+import { useEffect, useReducer } from "react";
+import { useCommandStore } from "@/stores/command-store";
 import type { EvidenceBundle } from "@/lib/types/context";
 
-interface Props {
-  evidence?: EvidenceBundle;
+type State = { loading: boolean; evidence: EvidenceBundle | null };
+type Action =
+  | { type: "loading" }
+  | { type: "loaded"; evidence: EvidenceBundle | null }
+  | { type: "error" };
+
+function reducer(_state: State, action: Action): State {
+  switch (action.type) {
+    case "loading":
+      return { loading: true, evidence: null };
+    case "loaded":
+      return { loading: false, evidence: action.evidence };
+    case "error":
+      return { loading: false, evidence: null };
+  }
 }
 
-export function EvidencePanel({ evidence }: Props) {
+export function EvidencePanel() {
+  const focusedMessageId = useCommandStore((s) => s.focusedMessageId);
+  const [state, dispatch] = useReducer(reducer, { loading: false, evidence: null });
+
+  useEffect(() => {
+    if (!focusedMessageId) return;
+
+    let cancelled = false;
+    dispatch({ type: "loading" });
+
+    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "";
+
+    // Try to get evidence for the message's run (via trace)
+    fetch(`${backendUrl}/v1/conversations/messages/${focusedMessageId}/evidence`, {
+      credentials: "include",
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (!cancelled) dispatch({ type: "loaded", evidence: data });
+      })
+      .catch(() => {
+        if (!cancelled) dispatch({ type: "error" });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [focusedMessageId]);
+
+  const { loading, evidence } = state;
+
+  if (!focusedMessageId) {
+    return (
+      <div className="text-sm text-t-tertiary">
+        Select a message to see evidence and sources.
+      </div>
+    );
+  }
+
+  if (loading) {
+    return <div className="text-sm text-t-tertiary animate-pulse">Loading evidence...</div>;
+  }
+
   if (!evidence) {
     return (
       <div className="text-sm text-t-tertiary">
-        No evidence available for current context.
+        No evidence available for this message.
       </div>
     );
   }

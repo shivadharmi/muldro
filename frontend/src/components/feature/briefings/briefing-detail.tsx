@@ -75,7 +75,7 @@ export function BriefingDetail({
       )}
 
       {/* Evidence */}
-      <EvidencePanel evidence={evidence} />
+      <EvidencePanel />
 
       {/* Related Items */}
       {relatedItems.length > 0 && (
