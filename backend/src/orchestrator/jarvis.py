@@ -133,12 +133,10 @@ class JarvisOrchestrator:
         settings: Settings,
         db_factory,
         services: ServiceContainer,
-        gateway=None,
     ):
         self._settings = settings
         self._db_factory = db_factory
         self._services = services
-        self._gateway = gateway
         self._client = get_anthropic_client(settings)
         self._trace_store = TraceStore(
             elasticsearch_url=settings.elasticsearch_url,
@@ -256,36 +254,23 @@ class JarvisOrchestrator:
 
         Sources (in order):
         1. Internal Pydantic-defined tools (intelligence layer)
-        2. MCP tools from gateway or bridge (external MCP servers)
+        2. MCP tools from session pool (external MCP servers)
         3. Native connector actions (Gmail, Calendar, GitHub, Slack, etc.)
         """
         tools = self._build_internal_tool_definitions()
 
-        # Append MCP tools from the gateway (workspace-scoped, trust-enforced)
-        gateway = getattr(self, "_gateway", None)
-        if gateway:
-            for mcp_tool in gateway.list_tools():
-                schema = mcp_tool.get("input_schema", {})
-                tools.append(
-                    {
-                        "name": mcp_tool["name"],
-                        "description": mcp_tool.get("description", "External MCP tool"),
-                        "input_schema": schema if schema else {"type": "object", "properties": {}},
-                    }
-                )
-        else:
-            # Fallback: use bridge discovery if no gateway available
-            from src.connectors.mcp_bridge import list_mcp_tools
+        # Append MCP tools from the bridge session pool
+        from src.connectors.mcp_bridge import list_mcp_tools
 
-            for mcp_tool in list_mcp_tools():
-                schema = mcp_tool.get("input_schema", {})
-                tools.append(
-                    {
-                        "name": mcp_tool["name"],
-                        "description": mcp_tool.get("description", "External MCP tool"),
-                        "input_schema": schema if schema else {"type": "object", "properties": {}},
-                    }
-                )
+        for mcp_tool in list_mcp_tools():
+            schema = mcp_tool.get("input_schema", {})
+            tools.append(
+                {
+                    "name": mcp_tool["name"],
+                    "description": mcp_tool.get("description", "External MCP tool"),
+                    "input_schema": schema if schema else {"type": "object", "properties": {}},
+                }
+            )
 
         # Append native connector actions as tools (Gmail, Calendar, etc.)
         tools.extend(self._build_native_connector_tools())
@@ -1481,29 +1466,13 @@ class JarvisOrchestrator:
         if tool_name == "report_governor_verdict":
             return tool_input
 
-        from src.tools import intelligence_server
-
-        # Internal tool handlers — the intelligence server functions
-        internal_handlers = {
-            "ingest_event": intelligence_server.ingest_event,
-            "search_memory": intelligence_server.search_memory,
-            "get_entities": intelligence_server.get_entities,
-            "update_entity": intelligence_server.update_entity,
-            "plan_command": intelligence_server.plan_command,
-            "get_active_plans": intelligence_server.get_active_plans,
-            "evaluate_policy": intelligence_server.evaluate_policy,
-            "approve_action": intelligence_server.approve_action,
-            "get_briefing": intelligence_server.get_briefing,
-            "get_observation_cursor": intelligence_server.get_observation_cursor,
-            "update_observation_cursor": intelligence_server.update_observation_cursor,
-            "report_observation": intelligence_server.report_observation,
-            "update_execution": intelligence_server.update_execution,
-            "extract_preferences": intelligence_server.extract_preferences,
-            "create_task": intelligence_server.create_task,
-            "get_task": intelligence_server.get_task,
-            "get_goals": intelligence_server.get_goals,
-            "build_context": intelligence_server.build_context,
-            "verify_run": intelligence_server.verify_run,
+        # Internal tools served via MCP protocol (in-process Client)
+        internal_tools = {
+            "ingest_event", "search_memory", "get_entities", "update_entity",
+            "plan_command", "get_active_plans", "evaluate_policy", "approve_action",
+            "get_briefing", "get_observation_cursor", "update_observation_cursor",
+            "report_observation", "update_execution", "extract_preferences",
+            "create_task", "get_task", "get_goals", "build_context", "verify_run",
         }
 
         # Inject workspace_id so tools always have it, even if the model omitted it
@@ -1513,21 +1482,22 @@ class JarvisOrchestrator:
         # Emit tool.started event
         await self._publish_event("tool.started", user_id, {"tool": tool_name})
 
-        # 1. Try internal handlers first
-        handler = internal_handlers.get(tool_name)
-        if handler:
+        # 1. Try internal tools via in-process MCP Client
+        if tool_name in internal_tools:
             try:
-                result = await handler(user_id=user_id, **tool_input)
+                result = await self._call_internal_tool(
+                    tool_name, {**tool_input, "user_id": user_id}
+                )
                 await self._publish_event("tool.completed", user_id, {"tool": tool_name})
                 return result
-            except TypeError as e:
-                logger.warning("Tool %s argument error: %s", tool_name, e)
+            except Exception as e:
+                logger.warning("Internal tool %s failed: %s", tool_name, e)
                 await self._publish_event(
                     "tool.failed",
                     user_id,
                     {"tool": tool_name, "error": str(e)[:200]},
                 )
-                return {"error": f"Invalid arguments for {tool_name}: {e}"}
+                return {"error": f"Tool execution failed for {tool_name}: {e}"}
 
         # 2. Try native connector dispatch (gmail_*, calendar_*, etc.)
         native_result = await self._try_native_connector(tool_name, tool_input, user_id)
@@ -1537,11 +1507,12 @@ class JarvisOrchestrator:
 
         # 3. Try capability resolver (routes to best backend: native, MCP official, user MCP)
         try:
+            from src.connectors.mcp_bridge import get_session_pool
             from src.integrations.capability_resolver import CapabilityResolver
 
             async with self._db_factory() as db:
-                gateway = getattr(self, "_gateway", None)
-                resolver = CapabilityResolver(db, gateway, workspace_id)
+                session_pool = get_session_pool()
+                resolver = CapabilityResolver(db, session_pool, workspace_id)
                 capability = resolver.resolve_tool_to_capability(tool_name)
                 if capability:
                     result = await resolver.execute(tool_name, tool_input, user_id=user_id)
@@ -1550,11 +1521,14 @@ class JarvisOrchestrator:
         except Exception as e:
             logger.debug("Capability resolver failed for %s: %s", tool_name, e)
 
-        # 3. Try MCP gateway (trust-enforced, circuit-breaker protected)
-        gateway = getattr(self, "_gateway", None)
-        if gateway and gateway.is_gateway_tool(tool_name):
+        # 3. Try MCP bridge directly (session pool, circuit-breaker protected)
+        from src.connectors.mcp_bridge import call_mcp_tool, is_mcp_tool
+
+        if is_mcp_tool(tool_name):
             try:
-                result = await gateway.call_tool(tool_name, tool_input)
+                result = await call_mcp_tool(
+                    tool_name, tool_input, user_id=user_id, workspace_id=workspace_id,
+                )
                 await self._publish_event("tool.completed", user_id, {"tool": tool_name})
                 return result
             except Exception as e:
@@ -1588,6 +1562,50 @@ class JarvisOrchestrator:
         "gmail_archive": ("gmail", "archive"),
         "gmail_mark_read": ("gmail", "mark_read"),
     }
+
+    # Cached in-process MCP client for internal tools
+    _internal_client = None
+    _internal_client_ctx = None
+
+    async def _call_internal_tool(self, tool_name: str, tool_input: dict) -> dict:
+        """Call an internal tool via in-process FastMCP Client (MCP protocol).
+
+        The composed server mounts intelligence tools under "intelligence_" namespace.
+        We map flat tool names (e.g. "search_memory") to namespaced names
+        (e.g. "intelligence_search_memory").
+        """
+        import json
+
+        from fastmcp import Client
+
+        from src.tools.server import jarvis_tools
+
+        # Lazy-init: create and cache the in-process client
+        if self._internal_client is None:
+            self._internal_client_ctx = Client(jarvis_tools)
+            self._internal_client = await self._internal_client_ctx.__aenter__()
+
+        # Map flat name to namespaced name (intelligence_ prefix)
+        namespaced = f"intelligence_{tool_name}"
+        result = await self._internal_client.call_tool(namespaced, tool_input)
+
+        # Extract result from CallToolResult
+        if result.is_error:
+            error_text = result.data if hasattr(result, "data") else str(result)
+            return {"status": "error", "error": error_text}
+
+        # Parse structured content if available
+        if hasattr(result, "structured_content") and result.structured_content:
+            return result.structured_content.get("result", result.structured_content)
+
+        # Fallback: parse text content as JSON
+        text = result.data if hasattr(result, "data") else str(result)
+        if isinstance(text, str):
+            try:
+                return json.loads(text)
+            except (json.JSONDecodeError, TypeError):
+                return {"status": "ok", "result": text}
+        return {"status": "ok", "result": text}
 
     async def _try_native_connector(
         self, tool_name: str, tool_input: dict, user_id: str

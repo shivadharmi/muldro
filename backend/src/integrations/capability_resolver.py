@@ -6,20 +6,25 @@ Given a capability like "email.send", resolves to the best backend:
 3. User-added MCP server (T2/T3 trust)
 
 Selection considers priority, health, and trust tier.
+Uses session pool for external MCP calls (no gateway layer).
 """
 
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.integrations.capabilities import (
+    CAPABILITY_CATALOG,
     get_capability_for_tool,
 )
-from src.integrations.gateway import MCPGateway
 from src.models.capability_binding import CapabilityBinding
+
+if TYPE_CHECKING:
+    from src.integrations.session_pool import UserMCPSessionPool
 
 logger = logging.getLogger(__name__)
 
@@ -59,11 +64,11 @@ class CapabilityResolver:
     def __init__(
         self,
         db: AsyncSession,
-        gateway: MCPGateway | None,
+        session_pool: UserMCPSessionPool | None,
         workspace_id: str,
     ):
         self._db = db
-        self._gateway = gateway
+        self._session_pool = session_pool
         self._workspace_id = workspace_id
 
     async def resolve(self, capability: str) -> ResolvedBackend | None:
@@ -128,7 +133,7 @@ class CapabilityResolver:
         Resolution:
         1. Look up capability for the tool
         2. Resolve capability to best backend
-        3. Execute via native handler or gateway
+        3. Execute via native handler or session pool
         """
         capability = get_capability_for_tool(tool_name)
 
@@ -137,14 +142,26 @@ class CapabilityResolver:
             if backend and backend.backend_type == "native":
                 return await self._execute_native(tool_name, tool_input, user_id=user_id)
             if backend and backend.backend_type in ("mcp_official", "mcp_user"):
-                return await self._execute_via_gateway(tool_name, tool_input)
+                return await self._execute_external(
+                    tool_name, tool_input, user_id=user_id,
+                    server_name=backend.backend_ref,
+                )
 
-        # No capability mapping or no binding — try gateway directly
-        if self._gateway and self._gateway.is_gateway_tool(tool_name):
-            return await self._execute_via_gateway(tool_name, tool_input)
+        # No capability mapping — try session pool directly
+        if self._session_pool and self._session_pool.is_pool_tool(tool_name):
+            server_name = self._session_pool.get_server_for_tool(tool_name)
+            if server_name:
+                return await self._execute_external(
+                    tool_name, tool_input, user_id=user_id,
+                    server_name=server_name,
+                )
 
         # Fall through to native execution
         return await self._execute_native(tool_name, tool_input, user_id=user_id)
+
+    # Cached in-process client for internal MCP tools
+    _cached_client = None
+    _cached_client_ctx = None
 
     async def _execute_native(
         self,
@@ -153,54 +170,90 @@ class CapabilityResolver:
         *,
         user_id: str,
     ) -> dict:
-        """Execute via internal intelligence handler."""
-        from src.tools import intelligence_server
+        """Execute via in-process FastMCP Client (MCP protocol)."""
+        import json
 
-        internal_handlers = {
-            "ingest_event": intelligence_server.ingest_event,
-            "search_memory": intelligence_server.search_memory,
-            "get_entities": intelligence_server.get_entities,
-            "update_entity": intelligence_server.update_entity,
-            "plan_command": intelligence_server.plan_command,
-            "get_active_plans": intelligence_server.get_active_plans,
-            "evaluate_policy": intelligence_server.evaluate_policy,
-            "approve_action": intelligence_server.approve_action,
-            "get_briefing": intelligence_server.get_briefing,
-            "get_observation_cursor": intelligence_server.get_observation_cursor,
-            "update_observation_cursor": intelligence_server.update_observation_cursor,
-            "report_observation": intelligence_server.report_observation,
-            "update_execution": intelligence_server.update_execution,
-            "extract_preferences": intelligence_server.extract_preferences,
-            "create_task": intelligence_server.create_task,
-            "get_task": intelligence_server.get_task,
-            "get_goals": intelligence_server.get_goals,
-            "build_context": intelligence_server.build_context,
-            "verify_run": intelligence_server.verify_run,
-        }
+        from fastmcp import Client
 
-        handler = internal_handlers.get(tool_name)
-        if handler:
-            return await handler(user_id=user_id, **tool_input)
+        from src.tools.server import jarvis_tools
 
-        raise RuntimeError(f"No native handler for tool '{tool_name}'")
+        # Lazy-init cached client
+        if CapabilityResolver._cached_client is None:
+            CapabilityResolver._cached_client_ctx = Client(jarvis_tools)
+            CapabilityResolver._cached_client = (
+                await CapabilityResolver._cached_client_ctx.__aenter__()
+            )
 
-    async def _execute_via_gateway(self, tool_name: str, tool_input: dict) -> dict:
-        """Execute via MCP gateway."""
-        if not self._gateway:
-            raise RuntimeError("MCP gateway not available")
-        return await self._gateway.call_tool(tool_name, tool_input)
+        # Map flat tool name to namespaced (intelligence_ prefix)
+        namespaced = f"intelligence_{tool_name}"
+        result = await CapabilityResolver._cached_client.call_tool(
+            namespaced, {**tool_input, "user_id": user_id}
+        )
+
+        if result.is_error:
+            error_text = result.data if hasattr(result, "data") else str(result)
+            raise RuntimeError(f"Internal tool '{tool_name}' error: {error_text}")
+
+        # Extract structured content
+        if hasattr(result, "structured_content") and result.structured_content:
+            return result.structured_content.get("result", result.structured_content)
+
+        text = result.data if hasattr(result, "data") else str(result)
+        if isinstance(text, str):
+            try:
+                return json.loads(text)
+            except (json.JSONDecodeError, TypeError):
+                return {"status": "ok", "result": text}
+        return {"status": "ok", "result": text}
+
+    async def _execute_external(
+        self,
+        tool_name: str,
+        tool_input: dict,
+        *,
+        user_id: str,
+        server_name: str,
+    ) -> dict:
+        """Execute via MCP session pool (external servers with auth + circuit breaking)."""
+        if not self._session_pool:
+            raise RuntimeError("MCP session pool not available")
+
+        # Trust enforcement: check write tools on low-trust servers
+        self._check_trust(tool_name, server_name)
+
+        return await self._session_pool.call_tool(
+            tool_name,
+            tool_input,
+            user_id=user_id,
+            server_name=server_name,
+            workspace_id=self._workspace_id,
+        )
+
+    def _check_trust(self, tool_name: str, server_name: str) -> None:
+        """Check trust enforcement for external tool calls.
+
+        Write tools on untrusted servers log a warning. Full approval gating
+        is handled by the Governor pre-hook in the orchestrator.
+        """
+        capability = get_capability_for_tool(tool_name)
+        if capability and capability in CAPABILITY_CATALOG:
+            cap_meta = CAPABILITY_CATALOG[capability]
+            if not cap_meta.read_only:
+                logger.info(
+                    "External write tool via MCP: tool=%s server=%s capability=%s",
+                    tool_name,
+                    server_name,
+                    capability,
+                )
 
     def _is_backend_healthy(self, binding: CapabilityBinding) -> bool:
         """Check if a backend is healthy enough to use."""
         if binding.backend_type == "native":
             return True
-        if binding.backend_type in ("mcp_official", "mcp_user") and self._gateway:
+        if binding.backend_type in ("mcp_official", "mcp_user") and self._session_pool:
             server_name = binding.backend_ref
             if server_name:
-                health = self._gateway.get_server_health()
-                server_health = health.get(server_name, {})
-                circuit = server_health.get("circuit_state", "closed")
-                return circuit != "open"
+                return self._session_pool._circuit_breaker.is_available(server_name)
         return True
 
     async def get_capability_health(self) -> dict[str, str]:

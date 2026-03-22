@@ -137,25 +137,15 @@ def create_app() -> FastAPI:
         except Exception:
             logger.debug("Qdrant collection init skipped", exc_info=True)
 
-        # Initialize MCP gateway from workspace installations
-        # The gateway wraps the mcp_bridge transport with trust enforcement
-        # and circuit breakers. Per-workspace tools are resolved at request time.
+        # Initialize MCP bridge with session pool (replaces old gateway layer).
+        # Auth is resolved per-user from OAuthManager at call time.
         try:
             from src.connectors.mcp_bridge import initialize_mcp_bridge
 
-            await initialize_mcp_bridge()
-
-            from src.integrations.gateway import MCPGateway
-
-            gateway = MCPGateway()
-            from src.connectors.mcp_bridge import get_mcp_config
-
-            config = await get_mcp_config()
-            await gateway.initialize(config)
-            app.state.mcp_gateway = gateway
+            oauth_manager = getattr(app.state, "oauth_manager", None)
+            await initialize_mcp_bridge(oauth_manager=oauth_manager)
         except Exception:
-            logger.debug("MCP gateway init skipped", exc_info=True)
-            app.state.mcp_gateway = None
+            logger.debug("MCP bridge init skipped", exc_info=True)
 
         yield
 

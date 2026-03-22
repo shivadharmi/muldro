@@ -199,11 +199,14 @@ class SubAgent:
         if cap is not None:
             return cap in self.capability_scope
 
-        # Try stripping server name prefix (MCP tools are namespaced as servername_toolname)
-        parts = tool_name.split("_")
-        for i in range(1, len(parts)):
-            short_name = "_".join(parts[i:])
-            cap = get_capability_for_tool(short_name)
+        # Normalize the tool name (handles camelCase, kebab-case, server prefixes)
+        # and retry capability lookup on the canonical form
+        from src.integrations.tool_normalizer import get_normalizer
+
+        normalizer = get_normalizer()
+        canonical = normalizer.normalize(tool_name)
+        if canonical != tool_name:
+            cap = get_capability_for_tool(canonical)
             if cap is not None:
                 return cap in self.capability_scope
 

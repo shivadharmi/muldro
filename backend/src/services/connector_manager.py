@@ -214,41 +214,6 @@ class ConnectorManager:
             "provider": health.provider,
         }
 
-    async def check_credential_health(self, user_id: str, provider: str) -> str:
-        """Check credential status for a provider.
-
-        Returns: 'valid', 'expired_refreshable', 'expired_no_refresh', 'missing'
-        """
-        oauth_provider = _PROVIDER_TO_OAUTH.get(provider, provider)
-
-        if not self._oauth_manager:
-            return "missing"
-
-        from src.models.oauth_token import OAuthToken
-
-        async with self._oauth_manager._db_factory() as db:
-            result = await db.execute(
-                select(OAuthToken).where(
-                    OAuthToken.user_id == user_id,
-                    OAuthToken.provider == oauth_provider,
-                )
-            )
-            token = result.scalar_one_or_none()
-
-        if not token:
-            return "missing"
-
-        from datetime import timedelta
-
-        if token.expires_at and token.expires_at < datetime.now(timezone.utc) + timedelta(
-            minutes=5
-        ):
-            if token.refresh_token_encrypted:
-                return "expired_refreshable"
-            return "expired_no_refresh"
-
-        return "valid"
-
     async def _get_credentials(self, user_id: str, provider: str) -> dict | None:
         """Get decrypted, auto-refreshed OAuth credentials for a provider."""
         if not self._oauth_manager:
