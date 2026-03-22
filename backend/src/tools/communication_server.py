@@ -6,7 +6,8 @@ pushing UI updates via WebSocket, and sending approval prompts.
 
 import logging
 
-from fastmcp import FastMCP
+from fastmcp import Context, FastMCP
+from fastmcp.server.providers.local_provider.decorators.tools import ToolAnnotations
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +26,13 @@ def configure(settings, telegram_bot=None, redis=None):
     _redis = redis
 
 
-@communication.tool()
+@communication.tool(
+    tags={"presenter", "write"},
+    annotations=ToolAnnotations(destructiveHint=True, idempotentHint=False),
+)
 async def send_telegram(
     text: str,
+    ctx: Context,
     parse_mode: str = "Markdown",
     reply_markup: str = "",
 ) -> dict:
@@ -38,6 +43,7 @@ async def send_telegram(
     reply_markup: JSON string of inline keyboard markup (optional)
     """
     if not _settings or not _settings.telegram_chat_id:
+        await ctx.info("Telegram not configured — skipping send")
         return {"status": "skipped", "reason": "telegram_not_configured"}
 
     if not _telegram_bot:
@@ -62,11 +68,15 @@ async def send_telegram(
         return {"status": "error", "error": str(e)}
 
 
-@communication.tool()
+@communication.tool(
+    tags={"governor", "write"},
+    annotations=ToolAnnotations(destructiveHint=True, idempotentHint=True),
+)
 async def send_approval_prompt(
     approval_id: str,
     title: str,
     summary: str,
+    ctx: Context,
     risk_level: str = "medium",
 ) -> dict:
     """Send an approval request with interactive Approve/Reject buttons via Telegram."""
@@ -86,11 +96,15 @@ async def send_approval_prompt(
     return await send_telegram(text=text, parse_mode="Markdown", reply_markup=markup)
 
 
-@communication.tool()
+@communication.tool(
+    tags={"presenter", "write"},
+    annotations=ToolAnnotations(readOnlyHint=False, idempotentHint=True),
+)
 async def push_ui_update(
     surface_id: str,
     payload: str,
     user_id: str,
+    ctx: Context,
 ) -> dict:
     """Push a dynamic UI update to the web frontend via Redis pub/sub.
 
@@ -99,6 +113,7 @@ async def push_ui_update(
     user_id: User ID for the pub/sub channel
     """
     if not _redis:
+        await ctx.info("Redis not available — skipping UI push")
         return {"status": "skipped", "reason": "redis_not_available"}
 
     try:
