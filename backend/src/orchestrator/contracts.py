@@ -48,6 +48,7 @@ class PlannerOutput(BaseModel):
         "goal_update",
         "research",
         "observe",
+        "read_source",
         "remember",
         "ask_user",
         "recommend",

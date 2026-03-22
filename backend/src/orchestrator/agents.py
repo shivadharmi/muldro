@@ -187,14 +187,27 @@ class SubAgent:
         """Check if this agent is allowed to use a specific tool.
 
         Resolves the tool's canonical capability and checks against
-        this agent's capability_scope.
+        this agent's capability_scope. Handles namespaced MCP tool names
+        (e.g. google_workspace_gmail_list → gmail_list).
         """
         if not self.capability_scope:
             return False
         from src.integrations.capabilities import get_capability_for_tool
 
+        # Try direct match first
         cap = get_capability_for_tool(tool_name)
-        return cap is not None and cap in self.capability_scope
+        if cap is not None:
+            return cap in self.capability_scope
+
+        # Try stripping server name prefix (MCP tools are namespaced as servername_toolname)
+        parts = tool_name.split("_")
+        for i in range(1, len(parts)):
+            short_name = "_".join(parts[i:])
+            cap = get_capability_for_tool(short_name)
+            if cap is not None:
+                return cap in self.capability_scope
+
+        return False
 
 
 def create_sub_agents() -> dict[str, SubAgent]:

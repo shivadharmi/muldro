@@ -45,9 +45,9 @@ class TestDefaultRoutes:
         assert "watcher_create" in decision_types
         assert "goal_update" in decision_types
 
-    def test_default_routes_have_10_entries(self):
-        """Should have 10 default routes (8 original + watcher_create + goal_update)."""
-        assert len(DEFAULT_ROUTES) == 10
+    def test_default_routes_have_11_entries(self):
+        """Should have 11 default routes."""
+        assert len(DEFAULT_ROUTES) == 11
 
     def test_create_task_route_has_governor_and_operator(self):
         """create_task route should pipeline through governor then operator."""
@@ -83,8 +83,8 @@ class TestRouteSeeding:
         resolver = RouteResolver(mock_db)
         count = await resolver.seed_defaults()
 
-        assert count == 10
-        assert mock_db.add.call_count == 10
+        assert count == 11
+        assert mock_db.add.call_count == 11
 
     @pytest.mark.asyncio
     async def test_seed_defaults_skips_existing(self, mock_db):
@@ -97,7 +97,7 @@ class TestRouteSeeding:
         resolver = RouteResolver(mock_db)
         count = await resolver.seed_defaults()
 
-        assert count == 7  # 10 - 3 existing
+        assert count == 8  # 11 - 3 existing
 
 
 # ── Resolution ─────────────────────────────────────────────────

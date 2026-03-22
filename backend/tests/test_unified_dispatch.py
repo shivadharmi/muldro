@@ -235,7 +235,7 @@ class TestOrchestratorToolDispatch:
         assert result == {"data": "result"}
 
     async def test_mcp_tool_dispatched_when_not_internal(self):
-        """Tools not in internal_handlers check MCP bridge."""
+        """Tools not in internal_handlers are dispatched via the MCP gateway."""
         orch = self._make_orchestrator()
 
         mock_db = AsyncMock()
@@ -244,23 +244,22 @@ class TestOrchestratorToolDispatch:
         mock_context.__aexit__ = AsyncMock(return_value=False)
         orch._db_factory = MagicMock(return_value=mock_context)
 
+        # Set up a mock gateway that knows about this tool
+        mock_gateway = MagicMock()
+        mock_gateway.is_gateway_tool = MagicMock(return_value=True)
+        mock_gateway.call_tool = AsyncMock(return_value={"mcp": True})
+        orch._gateway = mock_gateway
+
         mock_registry = AsyncMock()
         mock_registry.is_blocked_tool = AsyncMock(return_value=False)
 
-        with (
-            patch("src.services.tool_registry.ToolRegistry", return_value=mock_registry),
-            patch("src.connectors.mcp_bridge.is_mcp_tool", return_value=True),
-            patch(
-                "src.connectors.mcp_bridge.call_mcp_tool",
-                AsyncMock(return_value={"mcp": True}),
-            ) as mock_call,
-        ):
+        with patch("src.services.tool_registry.ToolRegistry", return_value=mock_registry):
             result = await orch._execute_tool(
                 "gmail_read_email", {"id": "123"}, user_id=TEST_USER_ID
             )
 
         assert result == {"mcp": True}
-        mock_call.assert_called_once_with("gmail_read_email", {"id": "123"})
+        mock_gateway.call_tool.assert_called_once_with("gmail_read_email", {"id": "123"})
 
     async def test_connector_fallback_when_not_mcp(self):
         """Falls to connector-backed execution when not internal or MCP."""

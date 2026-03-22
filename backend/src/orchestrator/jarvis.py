@@ -133,10 +133,12 @@ class JarvisOrchestrator:
         settings: Settings,
         db_factory,
         services: ServiceContainer,
+        gateway=None,
     ):
         self._settings = settings
         self._db_factory = db_factory
         self._services = services
+        self._gateway = gateway
         self._client = get_anthropic_client(settings)
         self._trace_store = TraceStore(
             elasticsearch_url=settings.elasticsearch_url,
@@ -250,24 +252,136 @@ class JarvisOrchestrator:
             logger.debug("Failed to complete lightweight run %s", run_id, exc_info=True)
 
     def _build_tool_definitions(self) -> list[dict]:
-        """Build Claude tool definitions from intelligence + MCP tools."""
-        # Internal tools + any discovered MCP tools from external servers
+        """Build Claude tool definitions from internal tools + MCP + native connectors.
+
+        Sources (in order):
+        1. Internal Pydantic-defined tools (intelligence layer)
+        2. MCP tools from gateway or bridge (external MCP servers)
+        3. Native connector actions (Gmail, Calendar, GitHub, Slack, etc.)
+        """
         tools = self._build_internal_tool_definitions()
 
-        # Append MCP tools discovered from external servers
-        from src.connectors.mcp_bridge import list_mcp_tools
+        # Append MCP tools from the gateway (workspace-scoped, trust-enforced)
+        gateway = getattr(self, "_gateway", None)
+        if gateway:
+            for mcp_tool in gateway.list_tools():
+                schema = mcp_tool.get("input_schema", {})
+                tools.append(
+                    {
+                        "name": mcp_tool["name"],
+                        "description": mcp_tool.get("description", "External MCP tool"),
+                        "input_schema": schema if schema else {"type": "object", "properties": {}},
+                    }
+                )
+        else:
+            # Fallback: use bridge discovery if no gateway available
+            from src.connectors.mcp_bridge import list_mcp_tools
 
-        for mcp_tool in list_mcp_tools():
-            schema = mcp_tool.get("input_schema", {})
-            tools.append(
-                {
-                    "name": mcp_tool["name"],
-                    "description": mcp_tool.get("description", "External MCP tool"),
-                    "input_schema": schema if schema else {"type": "object", "properties": {}},
-                }
-            )
+            for mcp_tool in list_mcp_tools():
+                schema = mcp_tool.get("input_schema", {})
+                tools.append(
+                    {
+                        "name": mcp_tool["name"],
+                        "description": mcp_tool.get("description", "External MCP tool"),
+                        "input_schema": schema if schema else {"type": "object", "properties": {}},
+                    }
+                )
+
+        # Append native connector actions as tools (Gmail, Calendar, etc.)
+        tools.extend(self._build_native_connector_tools())
 
         return tools
+
+    @staticmethod
+    def _build_native_connector_tools() -> list[dict]:
+        """Build Claude tool definitions for native connector actions.
+
+        These tools use Jarvis's built-in connectors (with OAuth tokens from the DB)
+        instead of MCP servers that need separate credential files.
+        """
+        return [
+            {
+                "name": "gmail_list_unread",
+                "description": "List unread emails from Gmail inbox.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Max emails to return (default 20)",
+                            "default": 20,
+                        },
+                        "query": {
+                            "type": "string",
+                            "description": "Gmail search query (default: is:inbox is:unread)",
+                        },
+                    },
+                },
+            },
+            {
+                "name": "gmail_get_message",
+                "description": "Get full details of a specific Gmail message by ID.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "message_id": {"type": "string", "description": "Gmail message ID"},
+                    },
+                    "required": ["message_id"],
+                },
+            },
+            {
+                "name": "gmail_send_email",
+                "description": "Send an email via Gmail.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "to": {"type": "string", "description": "Recipient email address"},
+                        "subject": {"type": "string", "description": "Email subject"},
+                        "body": {"type": "string", "description": "Email body text"},
+                        "thread_id": {
+                            "type": "string",
+                            "description": "Thread ID for replies (optional)",
+                        },
+                    },
+                    "required": ["to", "subject", "body"],
+                },
+            },
+            {
+                "name": "gmail_create_draft",
+                "description": "Create an email draft in Gmail.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "to": {"type": "string", "description": "Recipient email"},
+                        "subject": {"type": "string", "description": "Email subject"},
+                        "body": {"type": "string", "description": "Email body"},
+                    },
+                    "required": ["to", "subject", "body"],
+                },
+            },
+            {
+                "name": "gmail_archive",
+                "description": "Archive a Gmail message (remove from inbox).",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "message_id": {"type": "string", "description": "Gmail message ID"},
+                    },
+                    "required": ["message_id"],
+                },
+            },
+            {
+                "name": "gmail_mark_read",
+                "description": "Mark a Gmail message as read.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "message_id": {"type": "string", "description": "Gmail message ID"},
+                    },
+                    "required": ["message_id"],
+                },
+            },
+        ]
 
     def _build_internal_tool_definitions(self) -> list[dict]:
         """Build Claude tool definitions from Pydantic models in tool_schemas."""
@@ -308,12 +422,28 @@ class JarvisOrchestrator:
         run_id: str | None = None
 
         try:
+            # Emit command_received event
+            await self._emit_runtime_event(
+                "command_received",
+                workspace_id=workspace_id,
+                user_id=user_id,
+                payload={"surface": surface, "message_preview": message[:100]},
+            )
+
             # Load conversation history for multi-turn context
             history_block = await self._load_conversation_history(conversation_id)
 
             # Step 0: Fast intent classification
             intent, confidence = await self._classify_intent(message, history_block)
             use_planner = intent not in FAST_INTENTS or confidence < INTENT_CONFIDENCE_THRESHOLD
+
+            # Emit route_selected event
+            await self._emit_runtime_event(
+                "route_selected",
+                workspace_id=workspace_id,
+                user_id=user_id,
+                payload={"intent": intent, "confidence": confidence, "use_planner": use_planner},
+            )
 
             if use_planner:
                 planner_message = f"User message: {message}\n\nContext: {json.dumps(context or {})}"
@@ -428,6 +558,13 @@ class JarvisOrchestrator:
 
             # Complete the lightweight run
             await self._complete_lightweight_run(run_id, result, success=True)
+            await self._emit_runtime_event(
+                "run_completed",
+                workspace_id=workspace_id,
+                user_id=user_id,
+                run_id=run_id,
+                payload={"trace_id": trace.trace_id},
+            )
 
             return result
 
@@ -440,6 +577,13 @@ class JarvisOrchestrator:
             }
             if run_id:
                 await self._complete_lightweight_run(run_id, error_result, success=False)
+                await self._emit_runtime_event(
+                    "run_failed",
+                    workspace_id=workspace_id,
+                    user_id=user_id,
+                    run_id=run_id,
+                    payload={"error": str(e)[:200]},
+                )
             return error_result
         finally:
             await self._trace_manager.finish_trace(
@@ -452,6 +596,7 @@ class JarvisOrchestrator:
         user_id: str,
         workspace_id: str,
         surface: str = "web",
+        mode: str = "ask",
         context: dict | None = None,
         conversation_id: str | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
@@ -474,8 +619,16 @@ class JarvisOrchestrator:
             intent, confidence = await self._classify_intent(message, history_block)
             yield {"event": "intent", "intent": intent, "confidence": confidence}
 
-            # Decide routing based on intent
-            use_planner = intent not in FAST_INTENTS or confidence < INTENT_CONFIDENCE_THRESHOLD
+            # Decide routing based on intent AND mode
+            # execute mode: always plan, then auto-execute
+            # plan mode: always plan, but stop before execution
+            # ask mode: use intent classification (current default)
+            if mode == "execute":
+                use_planner = True
+            elif mode == "plan":
+                use_planner = True
+            else:
+                use_planner = intent not in FAST_INTENTS or confidence < INTENT_CONFIDENCE_THRESHOLD
 
             decision: PlannerOutput
             plan_text = ""
@@ -501,6 +654,12 @@ class JarvisOrchestrator:
             else:
                 # Fast path — synthesize a lightweight decision from intent
                 decision = self._intent_to_decision(intent, message)
+
+            # Apply mode overrides
+            if mode == "execute" and decision.execution_mode != "auto_execute":
+                decision = decision.model_copy(update={"execution_mode": "auto_execute"})
+            elif mode == "plan" and decision.execution_mode != "draft_only":
+                decision = decision.model_copy(update={"execution_mode": "draft_only"})
 
             decision_dict = decision.model_dump(mode="json")
             decision_json = json.dumps(decision_dict)
@@ -536,6 +695,14 @@ class JarvisOrchestrator:
 
                     action = step.get("action")
                     if action == "execute_plan":
+                        # Plan mode (draft_only): skip execution, just present the plan
+                        if decision.execution_mode == "draft_only":
+                            yield {
+                                "event": "plan_ready",
+                                "plan_id": decision.plan_id,
+                                "message": "Plan created. Review and approve to execute.",
+                            }
+                            continue
                         if decision.plan_id:
                             yield {
                                 "event": "execution_start",
@@ -797,16 +964,13 @@ class JarvisOrchestrator:
                 return {"status": "completed", "source": source, "events": 0}
 
             # Ingest raw events into normalized_events table
-            event_summaries = await self._ingest_raw_events(
-                raw_events, user_id, workspace_id
-            )
+            event_summaries = await self._ingest_raw_events(raw_events, user_id, workspace_id)
 
             # Update the observation cursor
             await self._update_cursor(source, user_id, workspace_id, new_cursor)
 
-            observer_summary = (
-                f"Polled {source}: {len(raw_events)} new event(s).\n"
-                + "\n".join(f"- {s}" for s in event_summaries[:20])
+            observer_summary = f"Polled {source}: {len(raw_events)} new event(s).\n" + "\n".join(
+                f"- {s}" for s in event_summaries[:20]
             )
 
             # Step 2: Librarian extracts entities and memories
@@ -1032,6 +1196,33 @@ class JarvisOrchestrator:
             await self._event_bus.publish(stream, event_type, payload, user_id, metadata)
         except Exception:
             logger.debug("Failed to publish event %s to bus", event_type, exc_info=True)
+
+    async def _emit_runtime_event(
+        self,
+        event_type: str,
+        *,
+        workspace_id: str,
+        user_id: str,
+        run_id: str | None = None,
+        step_id: str | None = None,
+        payload: dict | None = None,
+    ) -> None:
+        """Emit a durable runtime event to DB + Redis (best-effort)."""
+        try:
+            async with self._db_factory() as db:
+                from src.services.runtime_events import RuntimeEventEmitter
+
+                emitter = RuntimeEventEmitter(db, workspace_id, self._event_bus)
+                await emitter.emit(
+                    event_type,
+                    run_id=run_id,
+                    step_id=step_id,
+                    user_id=user_id,
+                    payload=payload,
+                )
+                await db.commit()
+        except Exception:
+            logger.debug("Failed to emit runtime event %s", event_type, exc_info=True)
 
     async def _load_conversation_history(
         self, conversation_id: str | None, max_messages: int = 20, max_chars: int = 8000
@@ -1338,7 +1529,13 @@ class JarvisOrchestrator:
                 )
                 return {"error": f"Invalid arguments for {tool_name}: {e}"}
 
-        # 2. Try capability resolver (routes to best backend: native, MCP official, user MCP)
+        # 2. Try native connector dispatch (gmail_*, calendar_*, etc.)
+        native_result = await self._try_native_connector(tool_name, tool_input, user_id)
+        if native_result is not None:
+            await self._publish_event("tool.completed", user_id, {"tool": tool_name})
+            return native_result
+
+        # 3. Try capability resolver (routes to best backend: native, MCP official, user MCP)
         try:
             from src.integrations.capability_resolver import CapabilityResolver
 
@@ -1353,12 +1550,11 @@ class JarvisOrchestrator:
         except Exception as e:
             logger.debug("Capability resolver failed for %s: %s", tool_name, e)
 
-        # 3. Try MCP bridge directly (fallback for unmapped tools)
-        from src.connectors.mcp_bridge import call_mcp_tool, is_mcp_tool
-
-        if is_mcp_tool(tool_name):
+        # 3. Try MCP gateway (trust-enforced, circuit-breaker protected)
+        gateway = getattr(self, "_gateway", None)
+        if gateway and gateway.is_gateway_tool(tool_name):
             try:
-                result = await call_mcp_tool(tool_name, tool_input)
+                result = await gateway.call_tool(tool_name, tool_input)
                 await self._publish_event("tool.completed", user_id, {"tool": tool_name})
                 return result
             except Exception as e:
@@ -1382,6 +1578,64 @@ class JarvisOrchestrator:
                 {"tool": tool_name, "error": str(e)[:200]},
             )
             return {"error": f"Tool execution failed for {tool_name}: {e}"}
+
+    # Native connector tool name → (connector_type, action) mapping
+    _NATIVE_TOOL_MAP: dict[str, tuple[str, str]] = {
+        "gmail_list_unread": ("gmail", "list_unread"),
+        "gmail_get_message": ("gmail", "get_message"),
+        "gmail_send_email": ("gmail", "send_email"),
+        "gmail_create_draft": ("gmail", "create_draft"),
+        "gmail_archive": ("gmail", "archive"),
+        "gmail_mark_read": ("gmail", "mark_read"),
+    }
+
+    async def _try_native_connector(
+        self, tool_name: str, tool_input: dict, user_id: str
+    ) -> dict | None:
+        """Try to execute a tool via native connector. Returns None if not a native tool."""
+        mapping = self._NATIVE_TOOL_MAP.get(tool_name)
+        if not mapping:
+            return None
+
+        connector_type, action = mapping
+
+        from src.connectors.base import CONNECTOR_REGISTRY
+
+        connector_cls = CONNECTOR_REGISTRY.get(connector_type)
+        if not connector_cls:
+            return {"error": f"No native connector for: {connector_type}"}
+
+        # Get OAuth credentials
+        credentials = {}
+        oauth = self._services.oauth_manager
+        if oauth:
+            try:
+                provider_map = {
+                    "gmail": "google",
+                    "calendar": "google",
+                    "drive": "google",
+                    "github": "github",
+                    "slack": "slack",
+                }
+                oauth_provider = provider_map.get(connector_type, connector_type)
+                token = await oauth.get_valid_token(user_id, oauth_provider)
+                if token:
+                    credentials = {"access_token": token}
+            except Exception:
+                logger.warning("No credentials for native connector %s", connector_type)
+
+        if not credentials:
+            return {
+                "error": f"No OAuth credentials for {connector_type}. "
+                f"Please connect {connector_type} first."
+            }
+
+        connector = connector_cls(self._settings)
+        try:
+            return await connector.execute_action(action, tool_input, credentials)
+        except Exception as e:
+            logger.error("Native connector %s.%s failed: %s", connector_type, action, e)
+            return {"error": f"{connector_type}.{action} failed: {e}"}
 
     async def _execute_connector_tool(self, tool_name: str, tool_input: dict, user_id: str) -> dict:
         """Execute a tool via its connector, resolved from the ToolRegistry."""
@@ -1415,7 +1669,21 @@ class JarvisOrchestrator:
             credentials = {}
             if oauth:
                 try:
-                    credentials = await oauth.get_credentials(user_id, connector_type)
+                    # Map connector type to OAuth provider (e.g. gmail→google)
+                    provider_map = {
+                        "gmail": "google",
+                        "calendar": "google",
+                        "drive": "google",
+                        "github": "github",
+                        "slack": "slack",
+                        "linear": "linear",
+                        "notion": "notion",
+                        "jira": "jira",
+                    }
+                    oauth_provider = provider_map.get(connector_type, connector_type)
+                    access_token = await oauth.get_valid_token(user_id, oauth_provider)
+                    if access_token:
+                        credentials = {"access_token": access_token}
                 except Exception:
                     logger.warning("No credentials for connector %s", connector_type)
 
@@ -1454,7 +1722,20 @@ class JarvisOrchestrator:
 
                 async def get_credentials(connector_type: str) -> dict:
                     if svc.oauth_manager:
-                        return await svc.oauth_manager.get_credentials(user_id, connector_type)
+                        provider_map = {
+                            "gmail": "google",
+                            "calendar": "google",
+                            "drive": "google",
+                            "github": "github",
+                            "slack": "slack",
+                            "linear": "linear",
+                            "notion": "notion",
+                            "jira": "jira",
+                        }
+                        oauth_provider = provider_map.get(connector_type, connector_type)
+                        token = await svc.oauth_manager.get_valid_token(user_id, oauth_provider)
+                        if token:
+                            return {"access_token": token}
                     return {}
 
                 executor = GraphExecutor(
@@ -1509,7 +1790,7 @@ class JarvisOrchestrator:
             "greeting": "acknowledge",
             "chitchat": "acknowledge",
             "simple_question": "answer_directly",
-            "data_fetch": "observe",
+            "data_fetch": "read_source",
             "status_query": "answer_directly",
             "approval_response": "acknowledge",
         }

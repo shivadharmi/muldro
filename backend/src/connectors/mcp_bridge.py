@@ -27,16 +27,60 @@ _available_tools: dict[str, dict] = {}  # tool_name -> {server, schema}
 
 
 async def get_mcp_config() -> dict:
-    """Build the mcpServers config dict from DB-backed control plane."""
+    """Build the mcpServers config dict from all active installations across workspaces.
+
+    The MCP bridge is process-global (initialized at startup), so it aggregates
+    all active installations. Per-workspace scoping happens at the gateway/resolver layer.
+    """
+    import os
+
     from src.models.database import get_session_factory
 
     try:
-        from src.integrations.control_plane import IntegrationControlPlane
+        from sqlalchemy import select
+
+        from src.models.connector_installation import ConnectorInstallation
 
         async with get_session_factory()() as db:
-            # Use a default workspace for the bridge-level config
-            cp = IntegrationControlPlane(db, workspace_id="")
-            return await cp.get_mcp_server_configs()
+            result = await db.execute(
+                select(ConnectorInstallation).where(
+                    ConnectorInstallation.status == "active",
+                    ConnectorInstallation.enabled.is_(True),
+                    ConnectorInstallation.transport.in_(["stdio", "sse", "streamable-http"]),
+                )
+            )
+            installations = result.scalars().all()
+
+            servers: dict[str, dict] = {}
+            for inst in installations:
+                if inst.server_name in servers:
+                    continue  # deduplicate across workspaces
+
+                if inst.transport == "stdio" and inst.command:
+                    server_cfg: dict = {
+                        "transport": "stdio",
+                        "command": inst.command,
+                    }
+                    if inst.args:
+                        server_cfg["args"] = inst.args
+                    # Resolve env vars
+                    if inst.env_template:
+                        env = {
+                            k: v
+                            for k, v in ((k, os.environ.get(k, "")) for k in inst.env_template)
+                            if v
+                        }
+                        if env:
+                            server_cfg["env"] = env
+                    servers[inst.server_name] = server_cfg
+
+                elif inst.transport in ("sse", "streamable-http") and inst.remote_url:
+                    servers[inst.server_name] = {
+                        "transport": inst.transport,
+                        "url": inst.remote_url,
+                    }
+
+            return {"mcpServers": servers}
     except Exception:
         logger.debug("Control plane unavailable, returning empty config")
         return {"mcpServers": {}}

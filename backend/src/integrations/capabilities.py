@@ -168,9 +168,13 @@ TOOL_TO_CAPABILITY: dict[str, str] = {
     "gmail_draft": "email.draft",
     "gmail_reply": "email.reply",
     "gmail_list": "email.list",
+    "gmail_list_unread": "email.list",
     "gmail_read": "email.read",
+    "gmail_get_message": "email.read",
     "gmail_search": "email.search",
     "gmail_delete": "email.delete",
+    "gmail_archive": "email.delete",
+    "gmail_mark_read": "email.read",
     # Gmail MCP (camelCase)
     "sendGmailDraft": "email.send",
     "createGmailDraft": "email.draft",

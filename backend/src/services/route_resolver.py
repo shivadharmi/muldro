@@ -47,8 +47,44 @@ DEFAULT_ROUTES: list[dict[str, Any]] = [
         "keywords": ["research", "find", "look up", "investigate", "analyze"],
     },
     {
+        "name": "read_source",
+        "description": "Route for reading data from external sources.",
+        "decision_type": "read_source",
+        "agent_pipeline": [
+            {
+                "agent": "observer",
+                "message_template": "Read and report from external sources: {decision_json}",
+            },
+            {
+                "agent": "presenter",
+                "message_template": "Present observation results ({surface}): {decision_json}",
+            },
+        ],
+        "priority": 95,
+        "keywords": [
+            "check email",
+            "check gmail",
+            "check inbox",
+            "read email",
+            "list emails",
+            "check calendar",
+            "list events",
+            "upcoming meetings",
+            "check github",
+            "list PRs",
+            "list issues",
+            "check PRs",
+            "check slack",
+            "read messages",
+            "check messages",
+            "fetch",
+            "get latest",
+            "show me",
+        ],
+    },
+    {
         "name": "observe",
-        "description": "Route for observation requests — check external sources.",
+        "description": "Route for background observation — monitor and scan sources.",
         "decision_type": "observe",
         "agent_pipeline": [
             {
@@ -56,8 +92,8 @@ DEFAULT_ROUTES: list[dict[str, Any]] = [
                 "message_template": "Observe external sources: {decision_json}",
             },
         ],
-        "priority": 90,
-        "keywords": ["check", "monitor", "watch", "observe", "scan"],
+        "priority": 85,
+        "keywords": ["monitor", "watch", "observe", "scan", "poll"],
     },
     {
         "name": "remember",
@@ -133,7 +169,7 @@ DEFAULT_ROUTES: list[dict[str, Any]] = [
 ]
 
 # Decisions that always go through the presenter for user-facing output
-ALWAYS_PRESENT = {"ask_user", "recommend", "summarize", "acknowledge", "research"}
+ALWAYS_PRESENT = {"ask_user", "recommend", "summarize", "acknowledge", "research", "read_source"}
 
 
 class RouteResolver:

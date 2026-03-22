@@ -30,11 +30,12 @@ router = APIRouter()
 class ChatRequest(BaseModel):
     message: str
     surface: str = "web"
+    mode: str = "ask"  # ask, plan, execute
     context: dict | None = None
     conversation_id: str | None = None
 
 
-def _build_orchestrator(settings: Settings):
+def _build_orchestrator(settings: Settings, gateway=None):
     """Build orchestrator with all services for the API process."""
     from src.models.database import get_session_factory
     from src.orchestrator.jarvis import JarvisOrchestrator
@@ -56,6 +57,7 @@ def _build_orchestrator(settings: Settings):
         settings=settings,
         db_factory=db_factory,
         services=svc,
+        gateway=gateway,
     )
 
 
@@ -64,10 +66,10 @@ _orchestrator = None
 _module_svc_db_ref: list = []  # holds the long-lived session for shutdown cleanup
 
 
-async def _get_orchestrator(settings: Settings):
+async def _get_orchestrator(settings: Settings, gateway=None):
     global _orchestrator
     if _orchestrator is None:
-        _orchestrator = _build_orchestrator(settings)
+        _orchestrator = _build_orchestrator(settings, gateway=gateway)
         await _orchestrator.load_agents_from_db()
     return _orchestrator
 
@@ -94,7 +96,8 @@ async def chat_stream(
       - error: {message}
       - done: {trace_id}
     """
-    orchestrator = await _get_orchestrator(settings)
+    gateway = getattr(request.app.state, "mcp_gateway", None)
+    orchestrator = await _get_orchestrator(settings, gateway=gateway)
 
     # Resolve or create conversation
     conversation_id = req.conversation_id
@@ -161,6 +164,7 @@ async def chat_stream(
                 user_id=user_id,
                 workspace_id=workspace_id,
                 surface=req.surface,
+                mode=req.mode,
                 context=req.context,
                 conversation_id=conversation_id,
             ):

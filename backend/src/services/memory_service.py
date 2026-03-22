@@ -614,12 +614,14 @@ class MemoryService:
                 system=MEMORY_EXTRACTION_PROMPT,
                 messages=[{"role": "user", "content": source_text}],
             )
-            text = response.content[0].text
+            text = response.content[0].text.strip()
             if text.startswith("```"):
-                text = text.split("\n", 1)[1].rsplit("```", 1)[0]
+                text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            if not text or text[0] not in "{[":
+                return {"memories": []}
             return json.loads(text)
         except Exception:
-            logger.warning("Memory extraction failed", exc_info=True)
+            logger.debug("Memory extraction returned non-JSON", exc_info=True)
             return {"memories": []}
 
     async def _call_preference_extraction(self, source_text: str) -> dict:
@@ -631,12 +633,14 @@ class MemoryService:
                 system=PREFERENCE_EXTRACTION_PROMPT,
                 messages=[{"role": "user", "content": source_text}],
             )
-            text = response.content[0].text
+            text = response.content[0].text.strip()
             if text.startswith("```"):
-                text = text.split("\n", 1)[1].rsplit("```", 1)[0]
+                text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            if not text or text[0] not in "{[":
+                return {"preferences": []}
             return json.loads(text)
         except Exception:
-            logger.warning("Preference extraction failed", exc_info=True)
+            logger.debug("Preference extraction returned non-JSON", exc_info=True)
             return {"preferences": []}
 
     async def _is_duplicate(self, user_id: str, fact_text: str, workspace_id: str = "") -> bool:
