@@ -4,19 +4,51 @@ import asyncio
 import json
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_current_user_id
+from src.config.settings import Settings, get_settings
+from src.models.database import get_db
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+async def _resolve_user_id_for_sse(
+    authorization: str | None = Header(None),
+    token: str | None = Query(None, description="Auth token for EventSource (no header support)"),
+    settings: Settings = Depends(get_settings),
+    db: AsyncSession = Depends(get_db),
+) -> str:
+    """Resolve user_id from Bearer header OR query param token.
+
+    The browser-native EventSource API cannot send custom headers,
+    so SSE endpoints accept the session token as a query parameter
+    as a fallback.
+    """
+    raw_token: str | None = None
+    if authorization and authorization.startswith("Bearer "):
+        raw_token = authorization.removeprefix("Bearer ")
+    elif token:
+        raw_token = token
+
+    if not raw_token:
+        raise HTTPException(status_code=401, detail="Missing authorization")
+
+    from src.services.auth_service import AuthService
+
+    auth = AuthService(settings, db)
+    user = await auth.validate_session(raw_token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    return user.user_id
+
+
 @router.get("/v1/realtime/events")
 async def stream_global_events(
     request: Request,
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(_resolve_user_id_for_sse),
 ):
     """SSE endpoint for global event streaming.
 
@@ -73,7 +105,7 @@ async def stream_global_events(
 @router.get("/v1/realtime/runtime")
 async def stream_runtime_events(
     request: Request,
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(_resolve_user_id_for_sse),
 ):
     """SSE endpoint for runtime lifecycle events (command, route, run, step, tool).
 
@@ -154,7 +186,7 @@ async def stream_runtime_events(
 async def stream_run_progress(
     run_id: str,
     request: Request,
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(_resolve_user_id_for_sse),
 ):
     """SSE endpoint for run-specific progress streaming.
 

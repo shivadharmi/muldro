@@ -268,3 +268,65 @@ class PolicyDecision(BaseModel):
     risk_level: str = "low"
     approval_id: str | None = None
     execution_id: str | None = None
+
+
+# ── Realtime / A2UI contracts ────────────────────────────────────
+
+
+class RealtimeEventPayload(BaseModel):
+    """Payload published to Redis Pub/Sub for real-time SSE subscribers."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    event_id: str
+    event_type: str
+    user_id: str = ""
+    payload: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: str = ""
+
+
+class WorkspaceSurfaceMetadata(BaseModel):
+    """Typed metadata for a workspace surface pushed via WebSocket.
+
+    The frontend WebSocket hook reads ``kind``, ``title``, and the rest
+    of the metadata dict to build a ``GeneratedSurface`` object.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    kind: Literal[
+        "summary",
+        "briefing",
+        "plan",
+        "checklist",
+        "approval",
+        "comparison",
+        "alert",
+        "timeline",
+        "table",
+        "recommendation",
+        "activity",
+    ]
+    title: str
+    decision: str = ""
+    reasoning: str = ""
+    priority: Literal["low", "medium", "high", "critical"] = "medium"
+    source_run_id: str | None = None
+    source_message_id: str | None = None
+    response_preview: str = ""
+
+
+class WorkspaceSurfacePush(BaseModel):
+    """Full surface push payload sent via WebSocket / Redis Pub/Sub.
+
+    Matches the ``A2UISurface`` shape so the frontend WS hook can
+    convert it to a ``GeneratedSurface`` using metadata fields.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    type: Literal["surface"] = "surface"
+    id: str
+    children: list[Any] = Field(default_factory=list)
+    metadata: WorkspaceSurfaceMetadata

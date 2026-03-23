@@ -202,14 +202,14 @@ class EvidenceBundleService:
         trace_result = await self._db.execute(
             select(Trace)
             .where(Trace.workspace_id == self._workspace_id)
-            .order_by(Trace.created_at.desc())
+            .order_by(Trace.started_at.desc())
             .limit(3)
         )
         return [
             SourceRef(
                 source_type="trace",
                 source_id=t.trace_id,
-                label=f"Trace: {t.agent_name or 'system'}",
+                label=f"Trace: {t.trigger or 'system'}",
             )
             for t in trace_result.scalars().all()
         ]

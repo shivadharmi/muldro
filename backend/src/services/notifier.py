@@ -344,7 +344,9 @@ class Notifier:
         """Push notification to web dashboard via WebSocket/Redis pub/sub."""
         if not self._ws_sender:
             if self._redis:
-                # Fallback: publish to Redis for WebSocket subscribers
+                channel = f"jarvis:a2ui:{notification.user_id}"
+
+                # Publish notification message
                 message = json.dumps(
                     {
                         "type": "notification",
@@ -356,7 +358,37 @@ class Notifier:
                         "created_at": notification.created_at,
                     }
                 )
-                await self._redis.publish(f"jarvis:a2ui:{notification.user_id}", message)
+                await self._redis.publish(channel, message)
+
+                # Also push a typed surface for approval notifications so
+                # they appear on the workspace dashboard in real time.
+                if notification.type == "approval_request":
+                    try:
+                        from src.orchestrator.contracts import (
+                            WorkspaceSurfaceMetadata,
+                            WorkspaceSurfacePush,
+                        )
+
+                        surface = WorkspaceSurfacePush(
+                            id=f"notif_surf_{ULID()}",
+                            metadata=WorkspaceSurfaceMetadata(
+                                kind="approval",
+                                title=notification.title,
+                                decision="approval_requested",
+                                reasoning=notification.body or "",
+                            ),
+                        )
+                        ws_msg = json.dumps(
+                            {"type": "surface", "surface": surface.model_dump(mode="json")}
+                        )
+                        await self._redis.publish(channel, ws_msg)
+                    except Exception:
+                        logger.debug(
+                            "Failed to push approval surface for %s",
+                            notification.notification_id,
+                            exc_info=True,
+                        )
+
                 return {"status": "published"}
             return {"status": "skipped", "reason": "no_ws_sender"}
 
