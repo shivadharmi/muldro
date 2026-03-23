@@ -12,7 +12,9 @@ import {
   getAuthUrl,
   deleteConnector,
   testConnector,
+  fetchInstallations,
   type AuthProvider,
+  type Installation,
 } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 
@@ -306,6 +308,90 @@ function ConnectorsContent() {
       {providers.length === 0 && (
         <div className="text-center py-12 text-t-secondary">
           <p>Loading providers...</p>
+        </div>
+      )}
+
+      {/* Advanced: MCP server installations */}
+      <AdvancedMCPSection />
+    </div>
+  );
+}
+
+function AdvancedMCPSection() {
+  const [expanded, setExpanded] = useState(false);
+
+  const { data: installations } = useQuery({
+    queryKey: ["mcp-installations"],
+    queryFn: fetchInstallations,
+    enabled: expanded,
+  });
+
+  return (
+    <div className="border-t border-b-primary pt-4">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-2 text-xs text-t-tertiary hover:text-t-secondary transition-colors cursor-pointer"
+      >
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 12 12"
+          fill="none"
+          className={`transition-transform ${expanded ? "" : "-rotate-90"}`}
+        >
+          <path
+            d="M3 4.5l3 3 3-3"
+            stroke="currentColor"
+            strokeWidth="1.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+        Advanced: MCP Servers
+        {installations && installations.length > 0 && (
+          <span className="text-t-muted">({installations.length})</span>
+        )}
+      </button>
+
+      {expanded && (
+        <div className="mt-3 space-y-2">
+          {!installations || installations.length === 0 ? (
+            <p className="text-xs text-t-tertiary py-2">No MCP servers installed.</p>
+          ) : (
+            installations.map((inst: Installation) => (
+              <div
+                key={inst.install_id}
+                className="flex items-center justify-between px-3 py-2 rounded-lg bg-surface-1 border border-b-primary"
+              >
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      inst.health_status === "healthy"
+                        ? "bg-green-400"
+                        : inst.health_status === "degraded"
+                          ? "bg-yellow-400"
+                          : "bg-red-400"
+                    }`}
+                  />
+                  <span className="text-xs text-t-primary font-medium">
+                    {inst.display_name || inst.server_name}
+                  </span>
+                  <span className="text-[10px] text-t-tertiary">
+                    {inst.transport}
+                  </span>
+                </div>
+                <span
+                  className={`text-[10px] ${
+                    inst.status === "active"
+                      ? "text-green-400"
+                      : "text-t-tertiary"
+                  }`}
+                >
+                  {inst.status}
+                </span>
+              </div>
+            ))
+          )}
         </div>
       )}
     </div>
