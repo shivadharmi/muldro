@@ -241,6 +241,23 @@ class ExecutionPlan(BaseModel):
     reasoning_summary: str = ""
 
 
+class PerceptionDecision(BaseModel):
+    """Agent-informed perception policy returned after a perception cycle.
+
+    The planner optionally includes this in its response to control how soon
+    a source should next be checked, what entities to watch, and the urgency
+    level.  The runtime clamps all values within system guardrails.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    next_check_seconds: int | None = None
+    mode: Literal["poll", "push", "hybrid", "paused"] | None = None
+    watch_entities: list[str] = Field(default_factory=list)
+    urgency: Literal["low", "normal", "high"] = "normal"
+    reasoning: str = ""
+
+
 class PolicyDecision(BaseModel):
     """Governor verdict envelope."""
 
