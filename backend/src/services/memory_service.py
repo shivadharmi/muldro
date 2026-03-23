@@ -24,6 +24,24 @@ from src.services.embedding_service import EmbeddingService
 
 logger = logging.getLogger(__name__)
 
+
+def _vec_to_pg(embedding) -> str:
+    """Convert an embedding (list or numpy array) to pgvector-compatible string.
+
+    numpy str() uses spaces: '[-0.1  0.2  0.3]'
+    pgvector needs commas:   '[-0.1, 0.2, 0.3]'
+    """
+    if embedding is None:
+        return "[]"
+    if isinstance(embedding, str):
+        return embedding
+    # Handle numpy arrays and plain lists uniformly
+    try:
+        values = list(embedding)
+    except TypeError:
+        return str(embedding)
+    return "[" + ",".join(str(v) for v in values) + "]"
+
 MEMORY_EXTRACTION_PROMPT = """\
 You are Jarvis's memory extraction engine. Given text from an event or \
 interaction, extract facts worth remembering long-term.
@@ -390,7 +408,7 @@ class MemoryService:
                 "user_id": user_id,
                 "workspace_id": workspace_id,
                 "new_id": new_memory_id,
-                "embedding": str(embedding),
+                "embedding": _vec_to_pg(embedding),
             },
         )
         candidates = result.all()
@@ -492,7 +510,11 @@ class MemoryService:
                     ) AS similarity
                 """)
                 sim_result = await self._db.execute(
-                    sql, {"embedding1": str(mem1.embedding), "embedding2": str(mem2.embedding)}
+                    sql,
+                    {
+                        "embedding1": _vec_to_pg(mem1.embedding),
+                        "embedding2": _vec_to_pg(mem2.embedding),
+                    },
                 )
                 similarity = sim_result.scalar_one()
 
@@ -582,7 +604,7 @@ class MemoryService:
         params: dict = {
             "user_id": user_id,
             "workspace_id": workspace_id,
-            "embedding": str(query_embedding),
+            "embedding": _vec_to_pg(query_embedding),
             "limit": max_results,
         }
 
@@ -757,7 +779,12 @@ class MemoryService:
                 LIMIT 1
             """)
             result = await self._db.execute(
-                sql, {"user_id": user_id, "workspace_id": workspace_id, "embedding": str(embedding)}
+                sql,
+                {
+                    "user_id": user_id,
+                    "workspace_id": workspace_id,
+                    "embedding": _vec_to_pg(embedding),
+                },
             )
             if result.scalar_one_or_none() is not None:
                 return True

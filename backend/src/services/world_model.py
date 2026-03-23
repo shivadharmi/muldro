@@ -371,8 +371,10 @@ class WorldModel:
                           AND 1 - (embedding <=> cast(:emb as vector)) > 0.92
                         ORDER BY 1 - (embedding <=> cast(:emb as vector)) DESC LIMIT 1
                     """)
+                    from src.services.memory_service import _vec_to_pg
+
                     result = await self._db.execute(
-                        sql, {"uid": user_id, "wid": workspace_id, "emb": str(embedding)}
+                        sql, {"uid": user_id, "wid": workspace_id, "emb": _vec_to_pg(embedding)}
                     )
                     eid = result.scalar_one_or_none()
                     if eid:
