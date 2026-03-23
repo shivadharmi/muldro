@@ -4,9 +4,6 @@
  */
 
 import type {
-  AgentRoute,
-  AgentPerformance,
-  AggregateMetrics,
   Approval,
   ApprovalDetail,
   Artifact,
@@ -15,29 +12,11 @@ import type {
   BriefingFeedbackSummary,
   CanvasDashboard,
   CommandResponse,
-  DLQStats,
-  ExecutionItem,
-  Goal,
-  GoalCreateInput,
-  HeartbeatResult,
   MeetingPrep,
   MemoryItem,
   Notification,
-  ObservationStatus,
-  RunDetail,
-  RunStep,
-  Schedule,
-  ScheduleCreateInput,
-  ScheduleUpdateInput,
   SearchResponse,
-  StandaloneTask,
-  StandaloneTaskCreateInput,
   SystemDashboard,
-  Task,
-  TaskDetail,
-  TraceSummary,
-  TraceDetail,
-  Workflow,
 } from "./types";
 
 import { getStoredToken } from "./auth";
@@ -290,23 +269,7 @@ export function fetchCanvasDashboard(): Promise<CanvasDashboard> {
   return api("/canvas/dashboard");
 }
 
-export function fetchMetrics(): Promise<Record<string, unknown>> {
-  return api("/system/metrics");
-}
-
-export function fetchDLQStats(): Promise<DLQStats> {
-  return api("/system/dlq");
-}
-
-export function triggerHeartbeat(): Promise<HeartbeatResult> {
-  return post("/system/heartbeat", {});
-}
-
 // ── Observations ────────────────────────────────────────────────
-
-export function fetchObservationStatus(): Promise<ObservationStatus[]> {
-  return api("/observations/status");
-}
 
 // ── Approvals ───────────────────────────────────────────────────
 
@@ -336,43 +299,7 @@ export function rejectAction(id: string, reason?: string): Promise<ApprovalDetai
 
 // ── Tasks ───────────────────────────────────────────────────────
 
-export function fetchTasks(): Promise<Task[]> {
-  return api("/tasks");
-}
-
-export function fetchTask(id: string): Promise<TaskDetail> {
-  return api(`/tasks/${id}`);
-}
-
 // ── Schedules ───────────────────────────────────────────────────
-
-export function fetchScheduleSchema(): Promise<Record<string, unknown>> {
-  return api("/schedules/schema");
-}
-
-export function fetchSchedules(): Promise<Schedule[]> {
-  return api("/schedules");
-}
-
-export function createSchedule(input: ScheduleCreateInput): Promise<Schedule> {
-  return post("/schedules", input);
-}
-
-export function updateSchedule(id: string, input: ScheduleUpdateInput): Promise<Schedule> {
-  return patch(`/schedules/${id}`, input);
-}
-
-export function deleteSchedule(id: string): Promise<void> {
-  return del(`/schedules/${id}`);
-}
-
-export function pauseSchedule(id: string): Promise<Schedule> {
-  return post(`/schedules/${id}/pause`, {});
-}
-
-export function resumeSchedule(id: string): Promise<Schedule> {
-  return post(`/schedules/${id}/resume`, {});
-}
 
 // ── Briefings ───────────────────────────────────────────────────
 
@@ -499,83 +426,6 @@ export function fetchMemories(
   return api(`/memories${qs ? `?${qs}` : ""}`);
 }
 
-// ── Executions ─────────────────────────────────────────────────
-
-export function fetchExecutions(params?: {
-  status?: string;
-  source?: string;
-  limit?: number;
-}): Promise<ExecutionItem[]> {
-  const qs = new URLSearchParams();
-  if (params?.status) qs.set("status", params.status);
-  if (params?.source) qs.set("source", params.source);
-  if (params?.limit) qs.set("limit", String(params.limit));
-  const q = qs.toString();
-  return api(`/executions${q ? `?${q}` : ""}`);
-}
-
-export function fetchExecution(id: string): Promise<ExecutionItem> {
-  return api(`/executions/${id}`);
-}
-
-// ── Traces ─────────────────────────────────────────────────────
-
-export function fetchTraces(
-  hours?: number,
-  trigger?: string,
-  agentName?: string,
-  limit?: number
-): Promise<{ traces: TraceSummary[]; count: number }> {
-  const params = new URLSearchParams();
-  if (hours) params.set("time_range_hours", String(hours));
-  if (trigger) params.set("trigger", trigger);
-  if (agentName) params.set("agent_name", agentName);
-  if (limit) params.set("limit", String(limit));
-  const qs = params.toString();
-  return api(`/traces${qs ? `?${qs}` : ""}`);
-}
-
-export function fetchTraceDetail(traceId: string): Promise<TraceDetail> {
-  return api(`/traces/${traceId}`);
-}
-
-export function fetchAgentPerformance(hours?: number): Promise<{
-  agents: Record<string, AgentPerformance>;
-  time_range_hours: number;
-}> {
-  const qs = hours ? `?time_range_hours=${hours}` : "";
-  return api(`/traces/performance${qs}`);
-}
-
-export function fetchAggregateMetrics(hours?: number): Promise<AggregateMetrics> {
-  const qs = hours ? `?time_range_hours=${hours}` : "";
-  return api(`/traces/metrics${qs}`);
-}
-
-// ── Triggers ───────────────────────────────────────────────────
-
-export function fetchTriggerSchema(): Promise<Record<string, unknown>> {
-  return api("/triggers/schema");
-}
-
-export function fetchTriggers(): Promise<{ triggers: Array<Record<string, unknown>> }> {
-  return api("/triggers");
-}
-
-export function createTrigger(input: Record<string, unknown>): Promise<Record<string, unknown>> {
-  return post("/triggers", input);
-}
-
-export function deleteTrigger(id: string): Promise<void> {
-  return del(`/triggers/${id}`);
-}
-
-export function toggleTrigger(
-  id: string,
-  enabled: boolean
-): Promise<Record<string, unknown>> {
-  return patch(`/triggers/${id}`, { enabled });
-}
 
 // ── UI Surfaces ─────────────────────────────────────────────────
 
@@ -702,73 +552,6 @@ export function deleteConversation(id: string): Promise<void> {
   return del(`/conversations/${id}`);
 }
 
-// ── Standalone Tasks ────────────────────────────────────────────
-
-export function createTask(input: StandaloneTaskCreateInput): Promise<StandaloneTask> {
-  return post("/tasks", input);
-}
-
-export function fetchStandaloneTasks(params?: {
-  status?: string;
-  goal_id?: string;
-  task_type?: string;
-  priority?: string;
-}): Promise<StandaloneTask[]> {
-  const qs = new URLSearchParams();
-  if (params?.status) qs.set("status", params.status);
-  if (params?.goal_id) qs.set("goal_id", params.goal_id);
-  if (params?.task_type) qs.set("task_type", params.task_type);
-  if (params?.priority) qs.set("priority", params.priority);
-  const q = qs.toString();
-  return api(`/tasks${q ? `?${q}` : ""}`);
-}
-
-export function startTask(id: string): Promise<StandaloneTask> {
-  return post(`/tasks/${id}/start`, {});
-}
-
-export function cancelTask(id: string): Promise<StandaloneTask> {
-  return post(`/tasks/${id}/cancel`, {});
-}
-
-export function resumeTask(id: string): Promise<StandaloneTask> {
-  return post(`/tasks/${id}/resume`, {});
-}
-
-export function addTaskDependency(
-  taskId: string,
-  dependsOnTaskId: string,
-  dependencyType?: string
-): Promise<Record<string, unknown>> {
-  return post(`/tasks/${taskId}/dependencies`, {
-    depends_on_task_id: dependsOnTaskId,
-    dependency_type: dependencyType || "blocks",
-  });
-}
-
-// ── Goals ───────────────────────────────────────────────────────
-
-export async function fetchGoals(status?: string): Promise<Goal[]> {
-  const qs = status ? `?status=${status}` : "";
-  const data = await api<{ goals: Goal[] }>(`/goals${qs}`);
-  return data.goals ?? [];
-}
-
-export function createGoal(input: GoalCreateInput): Promise<Goal> {
-  return post("/goals", input);
-}
-
-export function updateGoal(
-  id: string,
-  input: Partial<GoalCreateInput & { status: string; progress: number }>
-): Promise<Goal> {
-  return patch(`/goals/${id}`, input);
-}
-
-export function deleteGoal(id: string): Promise<void> {
-  return del(`/goals/${id}`);
-}
-
 // ── Notifications ───────────────────────────────────────────────
 
 export function fetchNotifications(
@@ -788,19 +571,6 @@ export function markNotificationRead(id: string): Promise<void> {
 
 export function dismissNotification(id: string): Promise<void> {
   return post(`/notifications/${id}/dismiss`, {});
-}
-
-// ── Workflows ───────────────────────────────────────────────────
-
-export function fetchWorkflows(): Promise<Workflow[]> {
-  return api("/workflows");
-}
-
-export function startWorkflow(
-  name: string,
-  params?: Record<string, unknown>
-): Promise<Record<string, unknown>> {
-  return post(`/workflows/${name}/start`, params || {});
 }
 
 // ── Artifacts ───────────────────────────────────────────────────
@@ -855,84 +625,6 @@ export function subscribeToEvents(
     });
 }
 
-// ── Runs ────────────────────────────────────────────────────────
-
-export function fetchRun(runId: string): Promise<RunDetail> {
-  return api(`/runs/${runId}`);
-}
-
-export function fetchRunSteps(runId: string): Promise<RunStep[]> {
-  return api(`/runs/${runId}/steps`);
-}
-
-export function fetchRunTrace(runId: string): Promise<TraceDetail> {
-  return api(`/runs/${runId}/trace`);
-}
-
-export function resumeRun(runId: string): Promise<RunDetail> {
-  return post(`/runs/${runId}/resume`, {});
-}
-
-export function fetchRunArtifacts(runId: string): Promise<Artifact[]> {
-  return api(`/runs/${runId}/artifacts`);
-}
-
-// ── Routes ──────────────────────────────────────────────────────
-
-export function fetchRoutes(): Promise<AgentRoute[]> {
-  return api("/routes");
-}
-
-export function createRoute(input: Partial<AgentRoute>): Promise<AgentRoute> {
-  return post("/routes", input);
-}
-
-export function updateRoute(id: string, data: Partial<AgentRoute>): Promise<AgentRoute> {
-  return patch(`/routes/${id}`, data);
-}
-
-export function deleteRoute(id: string): Promise<void> {
-  return del(`/routes/${id}`);
-}
-
-// ── Runtime ─────────────────────────────────────────────────────
-
-export function fetchRuntimeSummary(): Promise<import("./types/runtime").RuntimeSummary> {
-  return api("/runtime/summary");
-}
-
-export function fetchRuntimeActivity(
-  eventType?: string,
-  limit?: number
-): Promise<import("./types/runtime").RuntimeEvent[]> {
-  const params = new URLSearchParams();
-  if (eventType) params.set("event_type", eventType);
-  if (limit) params.set("limit", String(limit));
-  const qs = params.toString();
-  return api(`/runtime/activity${qs ? `?${qs}` : ""}`);
-}
-
-export function fetchRuntimeRuns(
-  limit?: number
-): Promise<import("./types/runtime").RuntimeRun[]> {
-  const qs = limit ? `?limit=${limit}` : "";
-  return api(`/runtime/runs${qs}`);
-}
-
-export function fetchRuntimeBlocked(): Promise<
-  Array<{
-    run_id: string;
-    status: string;
-    blocking_steps: Array<{ step_id: string; status: string; action: string | null }>;
-  }>
-> {
-  return api("/runtime/blocked");
-}
-
-export function fetchAgentWorkload(): Promise<import("./types/runtime").AgentWorkload[]> {
-  return api("/runtime/agents");
-}
-
 // ── Budget ──────────────────────────────────────────────────────
 
 export function fetchBudget(): Promise<{ daily_limit_usd: number }> {
@@ -954,43 +646,6 @@ export function generateMeetingPrep(
   next?: boolean
 ): Promise<MeetingPrep> {
   return post("/meetings/prep", { meeting_id: meetingId, next });
-}
-
-// ── Agents ────────────────────────────────────────────────────────
-
-export interface AgentRecord {
-  agent_id: string;
-  name: string;
-  display_name: string | null;
-  description: string | null;
-  system_prompt: string | null;
-  model_tier: string;
-  tool_scope: string[] | null;
-  max_tokens: number;
-  temperature: number;
-  enabled: boolean;
-  calls_today: number;
-  success_rate: number;
-  avg_latency_ms: number;
-  last_invoked_at: string | null;
-}
-
-export function fetchAgents(): Promise<AgentRecord[]> {
-  return api("/agents");
-}
-
-export function updateAgent(
-  agentId: string,
-  data: Partial<AgentRecord>
-): Promise<AgentRecord> {
-  return patch(`/agents/${agentId}`, data);
-}
-
-export function toggleAgent(
-  agentId: string,
-  enabled: boolean
-): Promise<AgentRecord> {
-  return post(`/agents/${agentId}/${enabled ? "enable" : "disable"}`, {});
 }
 
 // ── Integrations / MCP ──────────────────────────────────────────

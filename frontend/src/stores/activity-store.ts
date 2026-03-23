@@ -7,7 +7,6 @@
 import { create } from "zustand";
 
 import type { RuntimeEvent } from "@/lib/types/runtime";
-import { fetchRuntimeActivity } from "@/lib/api";
 
 interface ActivityState {
   events: RuntimeEvent[];
@@ -51,13 +50,8 @@ export const useActivityStore = create<ActivityState>((set, get) => ({
 
   initialize: async () => {
     if (get().initialized) return;
-    try {
-      const events = await fetchRuntimeActivity(undefined, 50);
-      set({ events, initialized: true });
-    } catch {
-      // API may not be available — silently degrade
-      set({ initialized: true });
-    }
+    // Events arrive via SSE — no initial fetch needed
+    set({ initialized: true });
   },
 
   subscribeSSE: () => {
