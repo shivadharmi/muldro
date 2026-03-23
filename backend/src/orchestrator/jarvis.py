@@ -1037,6 +1037,7 @@ class JarvisOrchestrator:
         oauth_mgr = OAuthManager(
             self._db_factory,
             encryption_key=self._settings.oauth_encryption_key,
+            settings=self._settings,
         )
         # Map source to OAuth provider (gmail/calendar share "google" provider)
         oauth_provider = "google" if source in ("gmail", "calendar") else source
