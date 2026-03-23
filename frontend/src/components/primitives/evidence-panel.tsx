@@ -2,6 +2,7 @@
 
 import { useEffect, useReducer } from "react";
 import { useCommandStore } from "@/stores/command-store";
+import { fetchMessageEvidence } from "@/lib/api";
 import type { EvidenceBundle } from "@/lib/types/context";
 
 type State = { loading: boolean; evidence: EvidenceBundle | null };
@@ -31,18 +32,12 @@ export function EvidencePanel() {
     let cancelled = false;
     dispatch({ type: "loading" });
 
-    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "";
-
-    // Try to get evidence for the message's run (via trace)
-    fetch(`${backendUrl}/v1/conversations/messages/${focusedMessageId}/evidence`, {
-      credentials: "include",
-    })
-      .then((r) => (r.ok ? r.json() : null))
+    fetchMessageEvidence(focusedMessageId)
       .then((data) => {
         if (!cancelled) dispatch({ type: "loaded", evidence: data });
       })
       .catch(() => {
-        if (!cancelled) dispatch({ type: "error" });
+        if (!cancelled) dispatch({ type: "loaded", evidence: null });
       });
 
     return () => {
@@ -123,9 +118,9 @@ export function EvidencePanel() {
             Sources
           </h4>
           <ul className="space-y-1">
-            {evidence.sources.map((s) => (
+            {evidence.sources.map((s, i) => (
               <li
-                key={s.source_id}
+                key={`${s.source_id}-${i}`}
                 className="flex items-center gap-2 text-sm text-t-secondary"
               >
                 <span className="text-xs text-t-tertiary capitalize">
