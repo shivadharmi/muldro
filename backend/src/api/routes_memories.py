@@ -225,3 +225,29 @@ async def get_memory_stats(
     svc = MemoryInfluenceService(db, workspace_id)
     stats = await svc.get_stats(user_id)
     return stats
+
+
+@router.delete("/v1/memories/{memory_id}")
+async def delete_memory(
+    memory_id: str,
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+    db: AsyncSession = Depends(get_session),
+):
+    """Archive a memory via DELETE (set status to expired). Used to remove instructions/goals."""
+    result = await db.execute(
+        select(Memory).where(
+            Memory.memory_id == memory_id,
+            Memory.user_id == user_id,
+            Memory.workspace_id == workspace_id,
+        )
+    )
+    memory = result.scalar_one_or_none()
+    if not memory:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404, detail="Memory not found")
+
+    memory.status = "expired"
+    await db.commit()
+    return {"status": "archived", "memory_id": memory_id}

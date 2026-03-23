@@ -474,6 +474,18 @@ class JarvisOrchestrator:
                 trace_id=trace.trace_id,
             )
 
+            # Handle set_goal and set_instruction directly (no agent pipeline)
+            if decision.decision == "set_goal":
+                goal_result = await self._handle_set_goal(
+                    decision, user_id, workspace_id
+                )
+                result["goal"] = goal_result
+            elif decision.decision == "set_instruction":
+                instr_result = await self._handle_set_instruction(
+                    decision, user_id, workspace_id
+                )
+                result["instruction"] = instr_result
+
             # Resolve agent pipeline from routes
             pipeline = await self._resolve_pipeline(decision_dict)
 
@@ -1451,6 +1463,122 @@ class JarvisOrchestrator:
         tools = [dict(t) for t in tools]
         tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral"}}
         return tools
+
+    async def _handle_set_goal(
+        self, decision, user_id: str, workspace_id: str
+    ) -> dict:
+        """Store a goal as a memory via MemoryService."""
+        memory_svc = self._services.memory_service
+        if not memory_svc:
+            return {"status": "error", "error": "Memory service unavailable"}
+
+        title = decision.goal or decision.reasoning or "Untitled goal"
+        memory_id = await memory_svc.store_goal_memory(
+            user_id=user_id,
+            workspace_id=workspace_id,
+            title=title,
+            priority=decision.priority,
+        )
+        logger.info("Goal stored as memory %s: %s", memory_id, title)
+        return {"status": "created", "memory_id": memory_id, "title": title}
+
+    async def _handle_set_instruction(
+        self, decision, user_id: str, workspace_id: str
+    ) -> dict:
+        """Handle set_instruction: create trigger/schedule/preference memory."""
+        spec = decision.instruction
+        if not spec:
+            return {"status": "error", "error": "No instruction spec provided"}
+
+        memory_svc = self._services.memory_service
+        if not memory_svc:
+            return {"status": "error", "error": "Memory service unavailable"}
+
+        # Always store as a preference memory for context
+        from ulid import ULID
+
+        from src.models.memory import Memory
+
+        embedding = await memory_svc._embedder.embed_text(spec.instruction_text)
+        memory_id = f"mem_{ULID()}"
+        memory = Memory(
+            memory_id=memory_id,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            memory_type="preference",
+            scope="general",
+            fact_text=f"Instruction: {spec.instruction_text}",
+            embedding=embedding,
+            confidence=0.95,
+            stability_score=0.8,
+            source_event_ids=[],
+            provenance={
+                "source": "user_instruction",
+                "instruction_type": spec.instruction_type,
+            },
+            ttl_days=None,
+            status="active",
+        )
+        memory_svc._db.add(memory)
+        await memory_svc._db.flush()
+
+        result: dict = {
+            "status": "created",
+            "memory_id": memory_id,
+            "instruction_type": spec.instruction_type,
+            "text": spec.instruction_text,
+        }
+
+        # Create trigger if applicable
+        if spec.instruction_type == "trigger" and spec.trigger_conditions:
+            try:
+                from src.models.triggers import Trigger
+
+                trigger_id = f"trg_{ULID()}"
+                trigger = Trigger(
+                    trigger_id=trigger_id,
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    name=spec.instruction_text[:100],
+                    conditions=spec.trigger_conditions,
+                    action_type="notify",
+                    action_config={},
+                    enabled=True,
+                    status="active",
+                )
+                memory_svc._db.add(trigger)
+                await memory_svc._db.flush()
+                result["trigger_id"] = trigger_id
+            except Exception as e:
+                logger.warning("Failed to create trigger: %s", e)
+
+        # Create schedule if applicable
+        if spec.instruction_type == "schedule" and spec.schedule_config:
+            try:
+                from src.models.schedules import Schedule
+
+                schedule_id = f"sched_{ULID()}"
+                schedule = Schedule(
+                    schedule_id=schedule_id,
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    name=spec.instruction_text[:100],
+                    schedule_type=spec.schedule_config.get("type", "recurring"),
+                    cron_expr=spec.schedule_config.get("cron_expr"),
+                    action_type=spec.schedule_config.get("action_type", "custom_agent_task"),
+                    action_config=spec.schedule_config.get("action_config", {}),
+                    enabled=True,
+                    source="user",
+                    priority="medium",
+                )
+                memory_svc._db.add(schedule)
+                await memory_svc._db.flush()
+                result["schedule_id"] = schedule_id
+            except Exception as e:
+                logger.warning("Failed to create schedule: %s", e)
+
+        logger.info("Instruction stored: %s (%s)", spec.instruction_text, spec.instruction_type)
+        return result
 
     async def _call_agent(
         self,

@@ -54,6 +54,8 @@ class PlannerOutput(BaseModel):
         "recommend",
         "summarize",
         "schedule_reminder",
+        "set_goal",
+        "set_instruction",
     ] = "acknowledge"
     goal: str = ""
     reasoning: str = ""
@@ -62,6 +64,18 @@ class PlannerOutput(BaseModel):
     execution_mode: Literal["auto_execute", "approval_required", "draft_only"] = "approval_required"
     plan_id: str | None = None
     tasks: list[PlannerTask] = Field(default_factory=list)
+    instruction: InstructionSpec | None = None
+
+
+class InstructionSpec(BaseModel):
+    """Specification for a user instruction (trigger, schedule, or preference)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    instruction_text: str
+    instruction_type: Literal["trigger", "schedule", "preference"] = "preference"
+    trigger_conditions: dict[str, Any] | None = None
+    schedule_config: dict[str, Any] | None = None
 
 
 class AgentEnvelope(BaseModel):

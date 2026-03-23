@@ -12,11 +12,13 @@ import {
 } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { useAuth } from "@/lib/auth";
+import { PreferencesPanel } from "@/components/settings/preferences-panel";
 
-type SettingsTab = "account" | "policy" | "budget";
+type SettingsTab = "account" | "preferences" | "policy" | "budget";
 
 const TABS = [
   { key: "account", label: "Account" },
+  { key: "preferences", label: "Preferences" },
   { key: "policy", label: "Policy" },
   { key: "budget", label: "Budget" },
 ];
@@ -77,6 +79,8 @@ export default function SettingsPage() {
         active={activeTab}
         onChange={(k) => setActiveTab(k as SettingsTab)}
       />
+
+      {activeTab === "preferences" && <PreferencesPanel />}
 
       {activeTab === "account" && (
         <Card>
