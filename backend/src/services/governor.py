@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from ulid import ULID
 
 from src.models.plans import Plan
@@ -102,7 +103,9 @@ class Governor:
 
         Returns: PolicyDecision with decision, run_id, and justification.
         """
-        result = await self._db.execute(select(Plan).where(Plan.plan_id == plan_id))
+        result = await self._db.execute(
+            select(Plan).options(selectinload(Plan.tasks)).where(Plan.plan_id == plan_id)
+        )
         plan = result.scalar_one_or_none()
         if not plan:
             logger.warning("Plan not found for governance: %s", plan_id)

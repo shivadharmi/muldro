@@ -177,6 +177,66 @@ class JarvisOrchestrator:
         except Exception:
             logger.debug("Agent DB load failed, using hardcoded defaults", exc_info=True)
 
+    async def _persist_plan_record(
+        self,
+        decision: PlannerOutput,
+        user_id: str,
+        workspace_id: str,
+    ) -> PlannerOutput:
+        """Persist a Plan + PlanTasks to DB, returning decision with plan_id populated.
+
+        The Planner LLM agent returns a PlannerOutput but does NOT create DB
+        records.  This method bridges that gap so the Governor can call
+        evaluate_policy(plan_id) and the Operator can execute_plan via
+        GraphExecutor — both of which require a DB-backed Plan.
+        """
+        from src.models.plans import Plan, PlanTask
+
+        plan_id = f"plan_{ULID()}"
+
+        try:
+            async with self._db_factory() as db:
+                tasks = [
+                    PlanTask(
+                        task_id=f"ptask_{ULID()}",
+                        plan_id=plan_id,
+                        workspace_id=workspace_id,
+                        task_type=task.task_type,
+                        input_data=task.input_data,
+                        status="pending",
+                    )
+                    for task in decision.tasks
+                ]
+
+                plan = Plan(
+                    plan_id=plan_id,
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    trigger_type="user_message",
+                    trigger_ref=None,
+                    goal=decision.goal or "",
+                    priority=decision.priority,
+                    decision=decision.decision,
+                    reasoning_summary=decision.reasoning or None,
+                    risk_level=decision.risk_level,
+                    execution_mode=decision.execution_mode,
+                    status="created",
+                )
+                plan.tasks = tasks
+                db.add(plan)
+                await db.commit()
+
+            logger.info(
+                "Persisted plan %s decision=%s tasks=%d",
+                plan_id,
+                decision.decision,
+                len(tasks),
+            )
+            return decision.model_copy(update={"plan_id": plan_id})
+        except Exception:
+            logger.warning("Failed to persist plan record", exc_info=True)
+            return decision
+
     async def _create_lightweight_run(
         self,
         user_id: str,
@@ -461,6 +521,12 @@ class JarvisOrchestrator:
             else:
                 decision = self._intent_to_decision(intent, message)
 
+            # Persist Plan record so Governor and Operator can reference it
+            if decision.tasks and not decision.plan_id:
+                decision = await self._persist_plan_record(
+                    decision, user_id, workspace_id
+                )
+
             decision_dict = decision.model_dump(mode="json")
             decision_json = json.dumps(decision_dict)
 
@@ -578,6 +644,12 @@ class JarvisOrchestrator:
                 payload={"trace_id": trace.trace_id},
             )
 
+            # Push surface to workspace for visual decision types
+            await self._push_workspace_surface(
+                decision, user_id, workspace_id, run_id,
+                response_text=result.get("presenter", result.get("summary", "")),
+            )
+
             return result
 
         except Exception as e:
@@ -618,11 +690,25 @@ class JarvisOrchestrator:
           agent_start, thinking, tool_call, tool_result, agent_done,
           response, error, done
         """
+        import asyncio
+
         trace = self._trace_manager.start_trace("user_message")
         run_id: str | None = None
 
+        def _fire_event(event_type: str, **kwargs: Any) -> None:
+            """Schedule a runtime event emission without blocking the SSE generator."""
+            asyncio.create_task(self._emit_runtime_event(event_type, **kwargs))
+
         try:
             yield {"event": "trace", "trace_id": trace.trace_id}
+
+            # Emit command_received runtime event (fire-and-forget)
+            _fire_event(
+                "command_received",
+                workspace_id=workspace_id,
+                user_id=user_id,
+                payload={"surface": surface, "message_preview": message[:100]},
+            )
 
             # Load conversation history for multi-turn context
             history_block = await self._load_conversation_history(conversation_id)
@@ -645,6 +731,14 @@ class JarvisOrchestrator:
                 use_planner = True
             else:
                 use_planner = intent not in FAST_INTENTS or confidence < INTENT_CONFIDENCE_THRESHOLD
+
+            # Emit route_selected runtime event (fire-and-forget)
+            _fire_event(
+                "route_selected",
+                workspace_id=workspace_id,
+                user_id=user_id,
+                payload={"intent": intent, "confidence": confidence, "use_planner": use_planner},
+            )
 
             decision: PlannerOutput
             plan_text = ""
@@ -677,6 +771,12 @@ class JarvisOrchestrator:
             elif mode == "plan" and decision.execution_mode != "draft_only":
                 decision = decision.model_copy(update={"execution_mode": "draft_only"})
 
+            # Persist Plan record so Governor and Operator can reference it
+            if decision.tasks and not decision.plan_id:
+                decision = await self._persist_plan_record(
+                    decision, user_id, workspace_id
+                )
+
             decision_dict = decision.model_dump(mode="json")
             decision_json = json.dumps(decision_dict)
 
@@ -694,6 +794,15 @@ class JarvisOrchestrator:
                 "decision": decision_dict,
                 "run_id": run_id,
             }
+
+            # Emit plan_created runtime event (fire-and-forget)
+            _fire_event(
+                "plan_created",
+                workspace_id=workspace_id,
+                user_id=user_id,
+                run_id=run_id,
+                payload={"decision": decision.decision, "trace_id": trace.trace_id},
+            )
 
             # Step 2: Route based on intent
             if use_planner:
@@ -847,6 +956,19 @@ class JarvisOrchestrator:
                     {"decision": decision.decision, "summary": presenter_text},
                     success=True,
                 )
+                _fire_event(
+                    "run_completed",
+                    workspace_id=workspace_id,
+                    user_id=user_id,
+                    run_id=run_id,
+                    payload={"trace_id": trace.trace_id},
+                )
+
+            # Push surface to workspace for visual decision types (fire-and-forget)
+            asyncio.create_task(self._push_workspace_surface(
+                decision, user_id, workspace_id, run_id,
+                response_text=presenter_text,
+            ))
 
             yield {"event": "done", "trace_id": trace.trace_id, "run_id": run_id}
 
@@ -854,6 +976,13 @@ class JarvisOrchestrator:
             logger.error("process_message_stream failed: %s", e, exc_info=True)
             if run_id:
                 await self._complete_lightweight_run(run_id, {"summary": str(e)}, success=False)
+                _fire_event(
+                    "run_failed",
+                    workspace_id=workspace_id,
+                    user_id=user_id,
+                    run_id=run_id,
+                    payload={"error": str(e)[:200]},
+                )
             yield {"event": "error", "message": str(e)}
         finally:
             await self._trace_manager.finish_trace(
@@ -1314,6 +1443,87 @@ class JarvisOrchestrator:
                 await db.commit()
         except Exception:
             logger.debug("Failed to emit runtime event %s", event_type, exc_info=True)
+
+    async def _push_workspace_surface(
+        self,
+        decision: PlannerOutput,
+        user_id: str,
+        workspace_id: str,
+        run_id: str | None = None,
+        response_text: str = "",
+    ) -> None:
+        """Push a typed surface to the workspace via Redis Pub/Sub.
+
+        Uses ``WorkspaceSurfacePush`` to ensure the payload matches the
+        A2UISurface shape expected by the frontend WebSocket hook.
+        Only pushes for decision types that have visual representation.
+        """
+        from src.orchestrator.contracts import WorkspaceSurfaceMetadata, WorkspaceSurfacePush
+
+        surface_kind_map: dict[str, tuple[str, str]] = {
+            "create_task": ("plan", "New Plan"),
+            "draft_reply": ("recommendation", "Draft Reply"),
+            "recommend": ("recommendation", "Recommendation"),
+            "summarize": ("summary", "Summary"),
+            "research": ("summary", "Research Results"),
+            "add_to_brief": ("briefing", "Briefing Update"),
+            "set_goal": ("summary", "Goal Set"),
+            "schedule_reminder": ("alert", "Reminder Scheduled"),
+        }
+        mapping = surface_kind_map.get(decision.decision)
+        if not mapping:
+            return
+
+        kind, default_title = mapping
+
+        try:
+            event_bus = await self._ensure_event_bus()
+            if not event_bus:
+                return
+
+            from ulid import ULID
+
+            surface = WorkspaceSurfacePush(
+                id=f"surf_{ULID()}",
+                metadata=WorkspaceSurfaceMetadata(
+                    kind=kind,
+                    title=(decision.goal[:80] if decision.goal else default_title),
+                    decision=decision.decision,
+                    reasoning=(decision.reasoning[:200] if decision.reasoning else ""),
+                    priority=decision.priority,
+                    source_run_id=run_id,
+                    response_preview=(response_text[:300] if response_text else ""),
+                ),
+            )
+
+            channel = f"jarvis:a2ui:{user_id}"
+            ws_msg = json.dumps(
+                {"type": "surface", "surface": surface.model_dump(mode="json")}
+            )
+            await event_bus.publish_to_channel(channel, ws_msg)
+
+            # Persist to ui_surfaces table so the workspace survives page refresh
+            try:
+                from datetime import datetime, timedelta, timezone
+
+                from src.models.ui_state import UISurface
+
+                async with self._db_factory() as db:
+                    db.add(
+                        UISurface(
+                            surface_id=surface.id,
+                            user_id=user_id,
+                            workspace_id=workspace_id,
+                            surface_type=kind,
+                            payload=surface.model_dump(mode="json"),
+                            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+                        )
+                    )
+                    await db.commit()
+            except Exception:
+                logger.debug("Failed to persist workspace surface to DB", exc_info=True)
+        except Exception:
+            logger.debug("Failed to push workspace surface", exc_info=True)
 
     async def _load_conversation_history(
         self, conversation_id: str | None, max_messages: int = 20, max_chars: int = 8000
@@ -2061,7 +2271,7 @@ class JarvisOrchestrator:
                     settings=self._settings,
                     db=db,
                     event_bus=self._event_bus,
-                    notifier=self._notifier,
+                    notifier=svc.notifier,
                     tool_registry=tool_registry,
                     context_builder=context_builder,
                     connector_credentials_fn=get_credentials,
