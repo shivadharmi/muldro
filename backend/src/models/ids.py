@@ -52,6 +52,7 @@ ID_PREFIXES = {
     "mcat": "mcp_server_catalog",
     "oal": "org_allowlist",
     "iaud": "integration_audit",
+    "pst": "perception_state",
 }
 
 

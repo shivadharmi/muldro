@@ -23,6 +23,7 @@ from src.models.oauth_token import OAuthToken
 from src.models.observation import ObservationStatus
 from src.models.observation_cursor import ObservationCursor
 from src.models.org_allowlist import OrgAllowlist
+from src.models.perception_state import PerceptionState
 from src.models.plans import Plan, PlanTask
 from src.models.procedures import Procedure
 from src.models.runtime_event import RuntimeEvent
@@ -107,6 +108,8 @@ __all__ = [
     "MCPServerCatalog",
     "OrgAllowlist",
     "IntegrationAuditEvent",
+    # Perception
+    "PerceptionState",
     # Notifications
     "Notification",
     # Traces
