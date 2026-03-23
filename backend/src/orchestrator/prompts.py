@@ -188,6 +188,16 @@ Output:
 3. Batch related small items into briefing summaries
 4. Err on the side of surfacing important things
 5. Consider the user's goals and context from memories
+6. When evaluating perception observations, optionally include a "perception_policy"
+   block to control how soon the source should next be checked:
+   "perception_policy": {
+     "next_check_seconds": <int>,
+     "watch_entities": ["entity_id_1", ...],
+     "urgency": "low|normal|high",
+     "reasoning": "why this interval"
+   }
+   Use shorter intervals when important activity is detected. Use longer intervals
+   when source is quiet. Omit this block if no policy change is needed.
 </rules>
 """
 

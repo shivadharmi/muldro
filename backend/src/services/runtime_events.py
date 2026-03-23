@@ -22,6 +22,13 @@ Canonical event taxonomy:
   run_cancelled        — TaskRun cancelled
   agent_started        — sub-agent began processing
   agent_completed      — sub-agent finished processing
+
+Perception events:
+  perception_started          — perception cycle began for a source
+  perception_completed        — perception cycle finished
+  perception_skipped          — cycle skipped (budget, circuit, etc.)
+  perception_signal_received  — webhook/intent/agent signal arrived
+  perception_policy_updated   — agent-informed policy applied
 """
 
 from __future__ import annotations

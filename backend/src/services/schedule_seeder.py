@@ -195,4 +195,28 @@ async def enable_schedules_for_connector(db: AsyncSession, provider: str) -> lis
         await db.flush()
         logger.info("Enabled schedules for connector %s: %s", provider, enabled)
 
+    # Upsert PerceptionState for the connector source
+    try:
+        from src.services.perception_policy import DEFAULT_INTERVALS, PerceptionPolicyService
+
+        # Get user/workspace from one of the enabled schedules
+        observe_name = f"observe_{provider}"
+        sched_row = await db.execute(
+            select(Schedule).where(Schedule.name == observe_name).limit(1)
+        )
+        sched_obj = sched_row.scalar_one_or_none()
+        if sched_obj:
+            policy_svc = PerceptionPolicyService(db)
+            state = await policy_svc.get_or_create_state(
+                sched_obj.workspace_id, sched_obj.user_id, provider
+            )
+            state.mode = "poll"
+            state.base_interval_s = DEFAULT_INTERVALS.get(provider, 300)
+            state.effective_interval_s = state.base_interval_s
+            state.next_run_at = now
+            state.circuit_state = "closed"
+            await db.flush()
+    except Exception:
+        logger.debug("Failed to upsert perception state for %s", provider, exc_info=True)
+
     return enabled

@@ -2,6 +2,10 @@
 
 Runs as an asyncio task alongside StreamConsumerManager in the worker thread.
 Every POLL_INTERVAL seconds, queries Postgres for due schedules and fires them.
+
+Perception is driven by the ``perception_state`` table: sources with
+``pending_run=True`` or ``next_run_at <= now`` are picked up by
+``_tick_perception()`` each cycle.
 """
 
 import asyncio
@@ -35,15 +39,10 @@ class SchedulerLoop:
         self._orchestrator = orchestrator
         self._user_ids = user_ids or []
         self._running = False
-        self._perception: dict[str, object] = {}
 
     async def run(self) -> None:
         """Main loop: every 30s, check for due schedules and fire them."""
         self._running = True
-
-        # Restore perception coordinator cursors from DB
-        await self._init_perception()
-
         logger.info("SchedulerLoop started (poll every %ds)", self.POLL_INTERVAL)
 
         while self._running:
@@ -58,12 +57,16 @@ class SchedulerLoop:
         self._running = False
 
     async def _tick(self) -> None:
-        """One scheduler cycle: query due schedules, fire each, advance next_run_at."""
+        """One scheduler cycle: perception state, then due schedules."""
         factory = get_session_factory()
 
-        # Check follow-up notifications
+        # 1. Drive perception from perception_state table
+        await self._tick_perception(factory)
+
+        # 2. Check follow-up notifications
         await self._check_follow_ups(factory)
 
+        # 3. Process due schedules
         async with factory() as db:
             now = datetime.now(timezone.utc)
 
@@ -128,6 +131,73 @@ class SchedulerLoop:
             await db.commit()
             logger.info("Scheduler tick: %d due, fired", len(due))
 
+    # ------------------------------------------------------------------
+    # Perception tick — drives cycles from perception_state table
+    # ------------------------------------------------------------------
+
+    async def _tick_perception(self, factory) -> None:
+        """Run perception cycles for sources with pending_run or next_run_at <= now."""
+        if not self._orchestrator:
+            return
+
+        try:
+            from src.services.perception_policy import PerceptionPolicyService
+
+            budget_status = None
+            budget_multiplier = 1
+            try:
+                async with factory() as db:
+                    budget_status = await self._orchestrator._budget.get_budget_status(db)
+                    if not self._orchestrator._budget.should_allow_perception(budget_status):
+                        return
+                    budget_multiplier = (
+                        self._orchestrator._budget.get_perception_interval_multiplier(budget_status)
+                    )
+            except Exception:
+                logger.debug("Budget check failed, proceeding with defaults", exc_info=True)
+
+            async with factory() as db:
+                svc = PerceptionPolicyService(db)
+                due_states = await svc.get_due_sources_all_users(budget_multiplier)
+
+                if not due_states:
+                    return
+
+                for state in due_states:
+                    try:
+                        workspace_id = await self._resolve_workspace(state.user_id)
+                    except (ValueError, Exception):
+                        workspace_id = state.workspace_id or ""
+
+                    try:
+                        result = await self._orchestrator.run_perception_cycle(
+                            state.source,
+                            user_id=state.user_id,
+                            workspace_id=workspace_id,
+                        )
+                        event_count = result.get("events", 0)
+                        if result.get("status") == "error":
+                            await svc.record_failure(state, result.get("error", "unknown"))
+                        else:
+                            await svc.record_success(state, event_count)
+                    except Exception as e:
+                        await svc.record_failure(state, str(e)[:512])
+                        logger.warning(
+                            "Perception cycle failed for %s/%s: %s",
+                            state.user_id,
+                            state.source,
+                            e,
+                        )
+
+                await db.commit()
+                logger.info("Perception tick: %d sources processed", len(due_states))
+        except Exception:
+            logger.warning("Perception tick error", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Follow-up notifications
+    # ------------------------------------------------------------------
+
     async def _check_follow_ups(self, factory) -> None:
         """Re-queue notifications whose follow_up_at has passed."""
         try:
@@ -153,46 +223,18 @@ class SchedulerLoop:
         except Exception:
             logger.debug("Follow-up check failed", exc_info=True)
 
-    async def _init_perception(self) -> None:
-        """Initialize perception coordinators per user and restore cursors."""
-        if not self._orchestrator or not self._user_ids:
-            return
-        try:
-            from src.orchestrator.perception import PerceptionCoordinator
-
-            for uid in self._user_ids:
-                try:
-                    ws_id = await self._resolve_workspace(uid)
-                except ValueError:
-                    ws_id = ""
-                coord = PerceptionCoordinator(self._orchestrator, user_id=uid, workspace_id=ws_id)
-                sources = await self._get_observation_sources(uid)
-                for source in sources:
-                    coord.enable_source(source)
-                await coord.restore_cursors()
-                self._perception[uid] = coord
-            logger.info(
-                "Perception coordinators initialized for %d user(s)",
-                len(self._perception),
-            )
-        except Exception:
-            logger.warning("Perception coordinator init failed", exc_info=True)
-            self._perception = {}
+    # ------------------------------------------------------------------
+    # Observation source helpers
+    # ------------------------------------------------------------------
 
     async def _get_observation_sources(self, user_id: str) -> list[str]:
-        """Get observation sources that are both configured AND authorized.
-
-        Only returns sources where the user has an active connector (OAuth
-        completed) or an active workspace installation. Sources without valid
-        auth are skipped to avoid wasting API calls and money.
-        """
+        """Get observation sources that are both configured AND authorized."""
         factory = get_session_factory()
         async with factory() as db:
             authorized = await self._get_authorized_providers(db, user_id)
             if not authorized:
                 return []
 
-            # Intersect with user-configured observation sources
             try:
                 from src.services.settings_service import SettingsService
 
@@ -214,12 +256,10 @@ class SchedulerLoop:
 
         authorized: set[str] = set()
 
-        # Query ConnectorInstallation table for active installations
         try:
             from src.models.connector_installation import ConnectorInstallation
             from src.models.users import WorkspaceMember
 
-            # Resolve workspace(s) for this user
             ws_result = await db.execute(
                 select(WorkspaceMember.workspace_id).where(WorkspaceMember.user_id == user_id)
             )
@@ -244,6 +284,10 @@ class SchedulerLoop:
         async with factory() as db:
             return await resolve_workspace_id(db, user_id)
 
+    # ------------------------------------------------------------------
+    # Schedule action dispatch
+    # ------------------------------------------------------------------
+
     async def _fire(self, sched: Schedule) -> None:
         """Dispatch a single schedule's action via the orchestrator."""
         config = sched.action_config or {}
@@ -260,7 +304,30 @@ class SchedulerLoop:
             if not self._orchestrator:
                 raise RuntimeError("Orchestrator required for observe_source")
 
-            # Gate: skip sources without active auth to avoid wasted API calls
+            # Check if perception_state manages this source — if so, skip
+            # (perception_state is the primary mechanism; schedules are fallback)
+            try:
+                from src.models.perception_state import PerceptionState
+
+                factory = get_session_factory()
+                async with factory() as db:
+                    result = await db.execute(
+                        select(PerceptionState).where(
+                            PerceptionState.user_id == sched.user_id,
+                            PerceptionState.source == source,
+                            PerceptionState.mode != "paused",
+                        )
+                    )
+                    if result.scalar_one_or_none() is not None:
+                        logger.debug(
+                            "observe_source skipped for %s — managed by perception_state",
+                            source,
+                        )
+                        return
+            except Exception:
+                pass  # fall through to legacy path
+
+            # Legacy fallback: gate on auth and run directly
             factory = get_session_factory()
             async with factory() as db:
                 authorized = await self._get_authorized_providers(db, sched.user_id)
@@ -352,5 +419,30 @@ class SchedulerLoop:
                 )
             else:
                 raise RuntimeError("Orchestrator required for custom_agent_task")
+        elif action == "wake_agent":
+            # Agent-requested wakeup — bridge between agent decisions and perception
+            agent = config.get("agent", "observer")
+            source = config.get("source")
+            if agent == "observer" and source:
+                from src.services.perception_policy import PerceptionPolicyService
+
+                factory = get_session_factory()
+                async with factory() as db:
+                    svc = PerceptionPolicyService(db)
+                    await svc.request_run(
+                        workspace_id=workspace_id,
+                        user_id=sched.user_id,
+                        source=source,
+                        signal_source="agent",
+                    )
+                    await db.commit()
+            elif self._orchestrator:
+                msg = config.get("message", f"Wake {agent}")
+                await self._orchestrator.process_message(
+                    message=msg,
+                    user_id=sched.user_id,
+                    workspace_id=workspace_id,
+                    surface="scheduler",
+                )
         else:
             logger.warning("Unknown action_type: %s for schedule %s", action, sched.schedule_id)

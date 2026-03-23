@@ -90,6 +90,20 @@ class PushReceiver:
         # Record successful delivery
         await self._webhook_manager.record_delivery(subscription_id)
 
+        # Signal perception policy — source is hot
+        try:
+            from src.services.perception_policy import PerceptionPolicyService
+
+            policy_svc = PerceptionPolicyService(self._db)
+            await policy_svc.request_run(
+                workspace_id=sub.workspace_id,
+                user_id=sub.user_id,
+                source=sub.provider,
+                signal_source="webhook",
+            )
+        except Exception:
+            logger.debug("Failed to signal perception from webhook", exc_info=True)
+
         logger.info(
             "webhook_delivery_accepted",
             extra={

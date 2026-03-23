@@ -87,23 +87,34 @@ Output ONLY a JSON object, nothing else.
 - complex: Multi-step, ambiguous, or high-stakes requests needing deep planning
 </intents>
 
+<sources>
+Optionally include "sources" — external data sources relevant to this message.
+Valid values: gmail, calendar, slack, github
+Only include sources the user's intent clearly relates to. Omit if none apply.
+</sources>
+
 <output_format>
-{"intent": "<one of above>", "confidence": 0.0-1.0}
+{"intent": "<one of above>", "confidence": 0.0-1.0, "sources": ["source1", ...]}
 </output_format>
 
 <examples>
 "Hey Jarvis" -> {"intent": "greeting", "confidence": 0.99}
 "What's John's email?" -> {"intent": "simple_question", "confidence": 0.9}
-"Check my gmail" -> {"intent": "data_fetch", "confidence": 0.95}
-"Show my latest emails" -> {"intent": "data_fetch", "confidence": 0.95}
-"What's on my calendar today" -> {"intent": "data_fetch", "confidence": 0.95}
-"Any new Slack messages?" -> {"intent": "data_fetch", "confidence": 0.9}
-"Show my goals" -> {"intent": "status_query", "confidence": 0.95}
-"Approve that email" -> {"intent": "approval_response", "confidence": 0.9}
-"Send a follow-up to the investor" -> {"intent": "command", "confidence": 0.95}
-"Analyze our Q3 pipeline and create action items" -> {"intent": "complex", "confidence": 0.9}
+"Check my gmail" -> {"intent":"data_fetch","confidence":0.95,"sources":["gmail"]}
+"Show my latest emails" -> {"intent":"data_fetch","confidence":0.95,"sources":["gmail"]}
+"What's on my calendar today" -> {"intent":"data_fetch","confidence":0.95,"sources":["calendar"]}
+"Any new Slack messages?" -> {"intent":"data_fetch","confidence":0.9,"sources":["slack"]}
+"Did Sarah reply?" -> {"intent":"data_fetch","confidence":0.85,"sources":["gmail","slack"]}
+"Any new PRs on the repo?" -> {"intent":"data_fetch","confidence":0.9,"sources":["github"]}
+"Show my goals" -> {"intent":"status_query","confidence":0.95}
+"Approve that email" -> {"intent":"approval_response","confidence":0.9}
+"Send a follow-up to the investor" -> {"intent":"command","confidence":0.95,"sources":["gmail"]}
+"Analyze our Q3 pipeline" -> {"intent":"complex","confidence":0.9}
 </examples>
 """
+
+# Valid perception sources returned by the intent classifier
+VALID_PERCEPTION_SOURCES = {"gmail", "calendar", "slack", "github"}
 
 # Intents that skip the Planner entirely
 FAST_INTENTS = {
@@ -419,8 +430,12 @@ class JarvisOrchestrator:
             history_block = await self._load_conversation_history(conversation_id)
 
             # Step 0: Fast intent classification
-            intent, confidence = await self._classify_intent(message, history_block)
+            intent, confidence, sources = await self._classify_intent(message, history_block)
             use_planner = intent not in FAST_INTENTS or confidence < INTENT_CONFIDENCE_THRESHOLD
+
+            # Bump perception for relevant sources (fire-and-forget)
+            if sources:
+                await self._bump_perception_for_sources(sources, user_id, workspace_id)
 
             # Emit route_selected event
             await self._emit_runtime_event(
@@ -613,8 +628,12 @@ class JarvisOrchestrator:
             history_block = await self._load_conversation_history(conversation_id)
 
             # Step 0: Fast intent classification (Haiku — <200ms)
-            intent, confidence = await self._classify_intent(message, history_block)
+            intent, confidence, sources = await self._classify_intent(message, history_block)
             yield {"event": "intent", "intent": intent, "confidence": confidence}
+
+            # Bump perception for relevant sources (fire-and-forget)
+            if sources:
+                await self._bump_perception_for_sources(sources, user_id, workspace_id)
 
             # Decide routing based on intent AND mode
             # execute mode: always plan, then auto-execute
@@ -984,10 +1003,17 @@ class JarvisOrchestrator:
             planner_result = await self._call_agent(
                 "planner",
                 message=f"Evaluate these observations from {source}. "
-                f"Create plans for anything important:\n{observer_summary}",
+                f"Create plans for anything important.\n"
+                f"Optionally include a perception_policy JSON block to control "
+                f"how soon {source} should next be checked:\n{observer_summary}",
                 user_id=user_id,
                 trace=trace,
                 workspace_id=workspace_id,
+            )
+
+            # Step 4: Extract and apply perception policy if present
+            await self._apply_perception_policy_from_planner(
+                planner_result, source, user_id, workspace_id, len(raw_events)
             )
 
             # Publish perception completed event
@@ -1379,10 +1405,12 @@ class JarvisOrchestrator:
         self,
         message: str,
         history_block: str = "",
-    ) -> tuple[str, float]:
+    ) -> tuple[str, float, list[str]]:
         """Classify user message intent using Haiku — fast and cheap.
 
-        Returns (intent, confidence). Falls back to "command" on error.
+        Returns (intent, confidence, sources). Falls back to "command" on error.
+        ``sources`` contains perception sources relevant to the message
+        (e.g. ["gmail", "slack"]).
         """
         classifier_input = message
         if history_block:
@@ -1396,7 +1424,7 @@ class JarvisOrchestrator:
         try:
             response = await self._client.messages.create(
                 model=model,
-                max_tokens=100,
+                max_tokens=150,
                 temperature=0,
                 system=[{"type": "text", "text": INTENT_CLASSIFIER_PROMPT}],
                 messages=[{"role": "user", "content": classifier_input}],
@@ -1425,20 +1453,111 @@ class JarvisOrchestrator:
                 if intent not in valid_intents:
                     intent = "command"
 
+                # Extract perception sources (validated)
+                raw_sources = parsed.get("sources", [])
+                sources = [
+                    s for s in raw_sources
+                    if isinstance(s, str) and s in VALID_PERCEPTION_SOURCES
+                ]
+
                 logger.info(
                     "intent_classified",
                     extra={
                         "intent": intent,
                         "confidence": confidence,
+                        "sources": sources,
                         "message_preview": message[:80],
                     },
                 )
-                return intent, confidence
+                return intent, confidence, sources
 
         except Exception as e:
             logger.warning("Intent classification failed, defaulting to command: %s", e)
 
-        return "command", 0.5
+        return "command", 0.5, []
+
+    async def _apply_perception_policy_from_planner(
+        self,
+        planner_text: str,
+        source: str,
+        user_id: str,
+        workspace_id: str,
+        event_count: int,
+    ) -> None:
+        """Extract optional perception_policy from planner response and apply it.
+
+        Falls back to deterministic defaults if the planner doesn't include
+        a policy block or returns invalid JSON.
+        """
+        from src.orchestrator.contracts import PerceptionDecision
+        from src.services.perception_policy import PerceptionPolicyService
+
+        policy = self._extract_perception_policy(planner_text)
+        if policy is None and event_count > 0:
+            # Deterministic fallback: if events were found, check sooner
+            policy = PerceptionDecision(
+                next_check_seconds=120,
+                urgency="normal",
+                reasoning="events found, checking sooner",
+            )
+
+        if policy is None:
+            return
+
+        try:
+            async with self._db_factory() as db:
+                svc = PerceptionPolicyService(db)
+                state = await svc.get_or_create_state(workspace_id, user_id, source)
+                await svc.apply_agent_policy(
+                    state,
+                    next_check_seconds=policy.next_check_seconds,
+                    watch_entities=policy.watch_entities if policy.watch_entities else None,
+                )
+                await db.commit()
+        except Exception:
+            logger.debug("Failed to apply perception policy", exc_info=True)
+
+    async def _bump_perception_for_sources(
+        self, sources: list[str], user_id: str, workspace_id: str
+    ) -> None:
+        """Signal immediate perception run for sources identified by intent classifier."""
+        try:
+            from src.services.perception_policy import PerceptionPolicyService
+
+            async with self._db_factory() as db:
+                svc = PerceptionPolicyService(db)
+                for source in sources:
+                    await svc.request_run(
+                        workspace_id, user_id, source, signal_source="user_intent"
+                    )
+                await db.commit()
+        except Exception:
+            logger.debug("Failed to bump perception for sources", exc_info=True)
+
+    @staticmethod
+    def _extract_perception_policy(planner_text: str):
+        """Parse a perception_policy JSON block from planner output, if present."""
+        from src.orchestrator.contracts import PerceptionDecision
+
+        if not planner_text or "perception_policy" not in planner_text:
+            return None
+
+        try:
+            # Find the perception_policy JSON — could be embedded in markdown
+            import re
+
+            pattern = r'"perception_policy"\s*:\s*(\{[^}]+\})'
+            match = re.search(pattern, planner_text)
+            if not match:
+                return None
+
+            import json
+
+            raw = json.loads(match.group(1))
+            return PerceptionDecision(**raw)
+        except Exception:
+            logger.debug("Failed to parse perception_policy from planner", exc_info=True)
+            return None
 
     def _build_system_prompt(self, agent: SubAgent, context: str = "") -> list[dict]:
         """Build system prompt with cache_control for prompt caching.
