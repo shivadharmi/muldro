@@ -2,6 +2,9 @@
 
 Provides basic protection against abuse for the v1 single-user system.
 Uses Redis for rate limiting when available, falls back to in-memory.
+
+Uses pure ASGI middleware (not BaseHTTPMiddleware) to avoid buffering
+streaming responses like SSE.
 """
 
 import logging
@@ -9,9 +12,7 @@ import time
 from collections import defaultdict
 from typing import ClassVar
 
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 logger = logging.getLogger(__name__)
 
@@ -74,63 +75,101 @@ class RedisRateLimiter:
         return count <= self.rpm
 
 
-class RateLimitMiddleware(BaseHTTPMiddleware):
-    """Apply per-IP rate limiting. Uses Redis when available, in-memory fallback."""
+class RateLimitMiddleware:
+    """Pure ASGI middleware: per-IP rate limiting.
 
-    def __init__(self, app, requests_per_minute: int = 120):
-        super().__init__(app)
+    Uses Redis when available, in-memory fallback.
+    Does not buffer responses — streaming (SSE) passes through cleanly.
+    """
+
+    def __init__(self, app: ASGIApp, requests_per_minute: int = 120) -> None:
+        self.app = app
         self._limiter = RateLimiter(requests_per_minute=requests_per_minute)
         self._rpm = requests_per_minute
         self._redis_limiter: RedisRateLimiter | None = None
 
-    async def dispatch(self, request: Request, call_next) -> Response:
-        client_ip = request.client.host if request.client else "unknown"
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        # Extract client IP
+        client = scope.get("client")
+        client_ip = client[0] if client else "unknown"
 
         # Try Redis limiter first
-        redis = getattr(request.app.state, "redis", None)
+        app_state = scope.get("app")
+        redis = getattr(app_state.state, "redis", None) if app_state else None
+
         if redis is not None:
             if self._redis_limiter is None:
                 self._redis_limiter = RedisRateLimiter(redis, self._rpm)
             try:
                 if not await self._redis_limiter.is_allowed(client_ip):
-                    logger.warning("Rate limit exceeded: %s %s", client_ip, request.url.path)
-                    return JSONResponse(
-                        status_code=429,
-                        content={"detail": "Rate limit exceeded. Try again later."},
+                    path = scope.get("path", "")
+                    logger.warning("Rate limit exceeded: %s %s", client_ip, path)
+                    await _send_json_response(
+                        send, 429, {"detail": "Rate limit exceeded. Try again later."},
                     )
-                return await call_next(request)
+                    return
+                await self.app(scope, receive, send)
+                return
             except Exception:
                 logger.debug("Redis rate limiter failed, falling back to in-memory")
 
         # Fallback to in-memory limiter
         if not self._limiter.is_allowed(client_ip):
-            logger.warning("Rate limit exceeded: %s %s", client_ip, request.url.path)
-            return JSONResponse(
-                status_code=429,
-                content={"detail": "Rate limit exceeded. Try again later."},
+            path = scope.get("path", "")
+            logger.warning("Rate limit exceeded: %s %s", client_ip, path)
+            await _send_json_response(
+                send, 429, {"detail": "Rate limit exceeded. Try again later."},
             )
+            return
 
-        return await call_next(request)
+        await self.app(scope, receive, send)
 
 
-class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
-    """Reject requests with bodies exceeding the size limit."""
+class RequestSizeLimitMiddleware:
+    """Pure ASGI middleware: reject requests with bodies exceeding the size limit.
 
-    def __init__(self, app, max_bytes: int = MAX_REQUEST_BODY_BYTES):
-        super().__init__(app)
+    Does not buffer responses — streaming (SSE) passes through cleanly.
+    """
+
+    def __init__(self, app: ASGIApp, max_bytes: int = MAX_REQUEST_BODY_BYTES) -> None:
+        self.app = app
         self._max_bytes = max_bytes
 
-    async def dispatch(self, request: Request, call_next) -> Response:
-        content_length = request.headers.get("content-length")
-        if content_length and int(content_length) > self._max_bytes:
-            logger.warning(
-                "Request too large: %s bytes from %s",
-                content_length,
-                request.url.path,
-            )
-            return JSONResponse(
-                status_code=413,
-                content={"detail": "Request body too large"},
-            )
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
 
-        return await call_next(request)
+        headers = dict(scope.get("headers", []))
+        content_length = headers.get(b"content-length", b"").decode("utf-8")
+
+        if content_length and int(content_length) > self._max_bytes:
+            path = scope.get("path", "")
+            logger.warning("Request too large: %s bytes from %s", content_length, path)
+            await _send_json_response(send, 413, {"detail": "Request body too large"})
+            return
+
+        await self.app(scope, receive, send)
+
+
+async def _send_json_response(send: Send, status: int, body: dict) -> None:
+    """Send a JSON error response via raw ASGI send."""
+    import json
+
+    payload = json.dumps(body).encode("utf-8")
+    await send({
+        "type": "http.response.start",
+        "status": status,
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(payload)).encode()),
+        ],
+    })
+    await send({
+        "type": "http.response.body",
+        "body": payload,
+    })

@@ -2,6 +2,9 @@
 
 Adds correlation IDs to every request, tracks latency, and exposes
 a metrics endpoint for monitoring.
+
+Uses pure ASGI middleware (not BaseHTTPMiddleware) to avoid buffering
+streaming responses like SSE.
 """
 
 import logging
@@ -10,9 +13,7 @@ from collections import defaultdict
 from contextvars import ContextVar
 from typing import ClassVar
 
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
-from starlette.responses import Response
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from ulid import ULID
 
 logger = logging.getLogger(__name__)
@@ -75,45 +76,68 @@ class RequestMetrics:
         cls._latencies.clear()
 
 
-class TracingMiddleware(BaseHTTPMiddleware):
-    """Add correlation IDs and track request metrics."""
+class TracingMiddleware:
+    """Pure ASGI middleware: adds correlation IDs and tracks request metrics.
 
-    async def dispatch(self, request: Request, call_next) -> Response:
-        # Generate or propagate correlation ID
-        req_id = request.headers.get("X-Request-ID") or f"req_{ULID()}"
+    Unlike BaseHTTPMiddleware, this does not buffer the response body,
+    so streaming responses (SSE) pass through without being consumed.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        # Extract or generate correlation ID from request headers
+        headers = dict(scope.get("headers", []))
+        req_id = (
+            headers.get(b"x-request-id", b"").decode("utf-8")
+            or f"req_{ULID()}"
+        )
         correlation_id_var.set(req_id)
 
+        path = scope.get("path", "")
+        method = scope.get("method", "")
         start = time.monotonic()
+        status_code = 0
+
+        async def send_wrapper(message: Message) -> None:
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = message.get("status", 0)
+                # Inject correlation and timing headers
+                raw_headers = list(message.get("headers", []))
+                elapsed_ms = (time.monotonic() - start) * 1000
+                raw_headers.append((b"x-request-id", req_id.encode()))
+                raw_headers.append((b"x-response-time-ms", f"{elapsed_ms:.2f}".encode()))
+                message = {**message, "headers": raw_headers}
+            await send(message)
 
         try:
-            response = await call_next(request)
+            await self.app(scope, receive, send_wrapper)
         except Exception:
             elapsed_ms = (time.monotonic() - start) * 1000
-            path = request.url.path
             RequestMetrics.record(path, 500, elapsed_ms)
             logger.error(
                 "request_error path=%s method=%s correlation_id=%s latency_ms=%.2f",
                 path,
-                request.method,
+                method,
                 req_id,
                 elapsed_ms,
             )
             raise
 
         elapsed_ms = (time.monotonic() - start) * 1000
-        path = request.url.path
-        RequestMetrics.record(path, response.status_code, elapsed_ms)
-
-        response.headers["X-Request-ID"] = req_id
-        response.headers["X-Response-Time-Ms"] = f"{elapsed_ms:.2f}"
+        RequestMetrics.record(path, status_code, elapsed_ms)
 
         logger.info(
             "request path=%s method=%s status=%d latency_ms=%.2f correlation_id=%s",
             path,
-            request.method,
-            response.status_code,
+            method,
+            status_code,
             elapsed_ms,
             req_id,
         )
-
-        return response
