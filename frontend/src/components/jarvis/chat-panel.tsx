@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { streamChat, type ChatSSEEvent, type ConversationMessage, type PlannerOutput } from "@/lib/api";
 import { useCommandStore } from "@/stores/command-store";
+import { useShellStore } from "@/stores/shell-store";
 import { CommandInput } from "./command-input";
 import { MarkdownRenderer } from "./markdown-renderer";
 
@@ -131,12 +132,24 @@ export function ChatPanel({
     useCommandStore.getState().setConversationId(conversationId ?? null);
   }, [conversationId]);
 
-  // Load initial messages when conversation changes (from sidebar selection)
+  // Reset messages when conversation changes:
+  // - sidebar selection: initialMessages populated → render them
+  // - new chat: conversationId becomes null → clear messages
   useEffect(() => {
     if (initialMessages && initialMessages.length > 0) {
       setMessages(backendMessagesToChat(initialMessages));
     }
   }, [initialMessages]);
+
+  // Clear messages when switching to a new (blank) conversation
+  const prevConvoRef = useRef<string | null | undefined>(conversationId);
+  useEffect(() => {
+    if (prevConvoRef.current !== undefined && prevConvoRef.current !== null && conversationId === null) {
+      // Had a conversation before, now null → user clicked "New Chat"
+      setMessages([]);
+    }
+    prevConvoRef.current = conversationId;
+  }, [conversationId]);
 
   // Save message snapshots to store for cross-route restoration
   useEffect(() => {
@@ -168,7 +181,7 @@ export function ChatPanel({
       agents: [],
     };
 
-    const assistantId = crypto.randomUUID();
+    let assistantId = crypto.randomUUID();
     const assistantMsg: ChatMessage = {
       id: assistantId,
       role: "assistant",
@@ -209,6 +222,13 @@ export function ChatPanel({
                 traceId: event.trace_id,
               }));
               break;
+
+            case "message_id": {
+              const newId = event.message_id || assistantId;
+              updateAssistant((m) => ({ ...m, id: newId }));
+              assistantId = newId; // keep closure in sync
+              break;
+            }
 
             case "agent_start":
               updateAssistant((m) => ({
@@ -370,6 +390,10 @@ function UserBubble({ content }: { content: string }) {
 }
 
 function AssistantMessage({ msg }: { msg: ChatMessage }) {
+  const focusedId = useCommandStore((s) => s.focusedMessageId);
+  const setFocused = useCommandStore((s) => s.setFocusedMessageId);
+  const isFocused = focusedId === msg.id;
+
   // Auto-expand running agents by computing expanded set from state + running agents
   const [manualExpanded, setManualExpanded] = useState<Set<string>>(new Set());
 
@@ -393,8 +417,20 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
     });
   };
 
+  const handleFocus = () => {
+    if (msg.streaming) return;
+    const next = isFocused ? null : msg.id;
+    setFocused(next);
+    if (next && !useShellStore.getState().rightSidebarOpen) {
+      useShellStore.getState().toggleRightSidebar();
+    }
+  };
+
   return (
-    <div className="flex justify-start">
+    <div
+      className={`flex justify-start cursor-pointer transition-all ${isFocused ? "ring-1 ring-accent-primary/40 rounded-lg" : ""}`}
+      onClick={handleFocus}
+    >
       <div className="max-w-[95%] w-full space-y-2">
         {/* Agent pipeline visualization */}
         {msg.agents.length > 0 && (

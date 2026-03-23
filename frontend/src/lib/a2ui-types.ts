@@ -23,6 +23,7 @@ export interface A2UISurface {
 /** WebSocket message types from Jarvis backend */
 export type JarvisMessage =
   | { type: "surface"; surface: A2UISurface }
+  | { type: "surface_update"; surface_id: string; payload: A2UISurface }
   | { type: "notification"; notification_id: string; notification_type: string; title: string; body: string; data: Record<string, unknown> }
   | { type: "notification_resolved"; notification_id: string; resolved_on: string }
   | { type: "action_result"; action: string; result: Record<string, unknown> }

@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   fetchSystemDashboard,
   fetchCanvasDashboard,
   fetchHomeFeed,
   fetchApprovals,
+  fetchSurfaces,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useJarvisWs } from "@/hooks/use-jarvis-ws";
@@ -44,6 +45,38 @@ export default function WorkspacePage() {
     queryFn: () => fetchApprovals("pending"),
     refetchInterval: 10_000,
   });
+
+  // Hydrate surface store from persisted DB surfaces on first load
+  const hydratedRef = useRef(false);
+  useEffect(() => {
+    if (hydratedRef.current) return;
+    hydratedRef.current = true;
+
+    fetchSurfaces()
+      .then((raw) => {
+        const resp = raw as { surfaces?: { surface_id: string; surface_type: string; payload: Record<string, unknown>; created_at: string }[] };
+        const surfaces = resp?.surfaces ?? [];
+        for (const s of surfaces) {
+          const meta = (s.payload?.metadata ?? {}) as Record<string, unknown>;
+          addSurface({
+            id: s.surface_id,
+            kind: (meta.kind as SurfaceKind) || "summary",
+            title: String(meta.title ?? "Surface"),
+            data: meta,
+            created_at: s.created_at,
+            pinned: false,
+            position: "workspace",
+            schema_version: 1,
+            source_message_id: (meta.source_message_id as string) ?? null,
+            source_run_id: (meta.source_run_id as string) ?? null,
+            source_artifact_id: null,
+          });
+        }
+      })
+      .catch(() => {
+        // Persisted surfaces unavailable — workspace still works via REST polling
+      });
+  }, [addSurface]);
 
   const sourceCount = system?.observations
     ? Object.keys(system.observations).length

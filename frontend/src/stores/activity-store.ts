@@ -5,6 +5,7 @@
  */
 
 import { create } from "zustand";
+import { getStoredToken } from "@/lib/auth";
 
 import type { RuntimeEvent } from "@/lib/types/runtime";
 
@@ -57,8 +58,12 @@ export const useActivityStore = create<ActivityState>((set, get) => ({
   subscribeSSE: () => {
     if (get().sseConnected) return () => {};
 
-    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "";
-    const url = `${backendUrl}/v1/realtime/runtime`;
+    // EventSource can't send Authorization headers, so pass the
+    // session token as a query param. Route through Next.js proxy.
+    const token = getStoredToken();
+    const url = token
+      ? `/api/realtime/runtime?token=${encodeURIComponent(token)}`
+      : "/api/realtime/runtime";
 
     let eventSource: EventSource;
     try {

@@ -4,11 +4,13 @@ import { useEffect } from "react";
 import { useActivityStore } from "@/stores/activity-store";
 
 export function LiveActivityFeed() {
-  const { events, initialize } = useActivityStore();
+  const { events, initialize, subscribeSSE } = useActivityStore();
 
   useEffect(() => {
     initialize();
-  }, [initialize]);
+    const cleanup = subscribeSSE();
+    return cleanup;
+  }, [initialize, subscribeSSE]);
 
   if (events.length === 0) {
     return (

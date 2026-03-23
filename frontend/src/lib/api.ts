@@ -173,6 +173,7 @@ export interface ChatSSEEvent {
   blocked?: boolean;
   latency_ms?: number;
   message?: string;
+  message_id?: string;
   decision?: PlannerOutput;
   trace_id?: string;
   input_tokens?: number;
@@ -429,12 +430,26 @@ export function fetchMemories(
 
 // ── UI Surfaces ─────────────────────────────────────────────────
 
-export function fetchSurfaces(userId: string) {
-  return api(`/ui/surfaces/${userId}`);
+export function fetchSurfaces() {
+  return api("/ui/surfaces");
 }
 
-export function fetchSurface(userId: string, surfaceId: string) {
-  return api(`/ui/surfaces/${userId}/${surfaceId}`);
+export function fetchSurface(surfaceId: string) {
+  return api(`/ui/surfaces/${surfaceId}`);
+}
+
+// ── Message Context / Evidence ──────────────────────────────────
+
+export function fetchMessageContext(messageId: string) {
+  return api<import("@/lib/types/context").ContextSidebarData>(
+    `/conversations/messages/${messageId}/context`
+  );
+}
+
+export function fetchMessageEvidence(messageId: string) {
+  return api<import("@/lib/types/context").EvidenceBundle>(
+    `/conversations/messages/${messageId}/evidence`
+  );
 }
 
 // ── Conversations ───────────────────────────────────────────────

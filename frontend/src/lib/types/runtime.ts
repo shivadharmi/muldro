@@ -32,15 +32,26 @@ export interface RuntimeEvent {
 }
 
 export type RuntimeEventType =
+  | "command_received"
   | "route_selected"
+  | "plan_created"
+  | "run_created"
   | "agent_started"
+  | "agent_completed"
+  | "step_started"
+  | "step_completed"
+  | "step_failed"
   | "tool_call_started"
   | "tool_call_completed"
+  | "tool_call_failed"
   | "approval_requested"
+  | "approval_resolved"
   | "artifact_created"
+  | "surface_created"
   | "fallback_triggered"
   | "run_completed"
-  | "run_failed";
+  | "run_failed"
+  | "run_cancelled";
 
 export interface AgentWorkload {
   agent_name: string;

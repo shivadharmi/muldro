@@ -5,24 +5,19 @@ import { useShellStore } from "@/stores/shell-store";
 import { useCommandStore } from "@/stores/command-store";
 import { EvidencePanel } from "@/components/primitives/evidence-panel";
 import { LiveActivityFeed } from "@/components/primitives/live-activity-feed";
+import { fetchMessageContext } from "@/lib/api";
+import type { ContextSidebarData } from "@/lib/types/context";
 
 const TABS = ["context", "evidence", "activity"] as const;
 
-interface ContextData {
-  entities: { name: string; type: string; relevance: number }[];
-  memories: { content: string; type: string }[];
-  traceId: string | null;
-  runId: string | null;
-}
-
 type ContextAction =
   | { type: "loading" }
-  | { type: "loaded"; data: ContextData | null }
+  | { type: "loaded"; data: ContextSidebarData | null }
   | { type: "error" };
 
 interface ContextState {
   loading: boolean;
-  data: ContextData | null;
+  data: ContextSidebarData | null;
 }
 
 function contextReducer(_state: ContextState, action: ContextAction): ContextState {
@@ -46,16 +41,12 @@ function ContextTab() {
     let cancelled = false;
     dispatch({ type: "loading" });
 
-    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "";
-    fetch(`${backendUrl}/v1/conversations/messages/${focusedMessageId}/context`, {
-      credentials: "include",
-    })
-      .then((r) => (r.ok ? r.json() : null))
+    fetchMessageContext(focusedMessageId)
       .then((data) => {
         if (!cancelled) dispatch({ type: "loaded", data });
       })
       .catch(() => {
-        if (!cancelled) dispatch({ type: "error" });
+        if (!cancelled) dispatch({ type: "loaded", data: null });
       });
 
     return () => {
@@ -90,36 +81,20 @@ function ContextTab() {
     );
   }
 
+  const { evidence } = context;
+
   return (
     <div className="space-y-4">
-      {/* Trace/Run IDs */}
-      {(context.traceId || context.runId) && (
-        <div className="space-y-1">
-          {context.traceId && (
-            <div className="flex items-center gap-2 text-xs">
-              <span className="text-t-tertiary">Trace</span>
-              <code className="text-t-secondary font-mono truncate">{context.traceId}</code>
-            </div>
-          )}
-          {context.runId && (
-            <div className="flex items-center gap-2 text-xs">
-              <span className="text-t-tertiary">Run</span>
-              <code className="text-t-secondary font-mono truncate">{context.runId}</code>
-            </div>
-          )}
-        </div>
-      )}
-
       {/* Entities */}
-      {context.entities.length > 0 && (
+      {evidence.entities.length > 0 && (
         <div>
           <p className="text-xs font-medium text-t-secondary mb-2">Entities</p>
           <div className="space-y-1">
-            {context.entities.map((e, i) => (
-              <div key={i} className="flex items-center justify-between text-xs">
+            {evidence.entities.map((e) => (
+              <div key={e.entity_id} className="flex items-center justify-between text-xs">
                 <div className="flex items-center gap-1.5">
                   <span className="px-1.5 py-0.5 rounded bg-surface-2 text-t-tertiary text-[10px] uppercase">
-                    {e.type}
+                    {e.entity_type}
                   </span>
                   <span className="text-t-primary">{e.name}</span>
                 </div>
@@ -131,14 +106,29 @@ function ContextTab() {
       )}
 
       {/* Memories */}
-      {context.memories.length > 0 && (
+      {evidence.memories.length > 0 && (
         <div>
           <p className="text-xs font-medium text-t-secondary mb-2">Memories</p>
           <div className="space-y-1.5">
-            {context.memories.map((m, i) => (
-              <div key={i} className="text-xs">
-                <span className="text-t-tertiary text-[10px] uppercase">{m.type}</span>
+            {evidence.memories.map((m) => (
+              <div key={m.memory_id} className="text-xs">
+                <span className="text-t-tertiary text-[10px] uppercase">{m.memory_type}</span>
                 <p className="text-t-secondary line-clamp-2 mt-0.5">{m.content}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Sources */}
+      {evidence.sources.length > 0 && (
+        <div>
+          <p className="text-xs font-medium text-t-secondary mb-2">Sources</p>
+          <div className="space-y-1">
+            {evidence.sources.map((s) => (
+              <div key={s.source_id} className="flex items-center gap-2 text-xs">
+                <span className="text-t-tertiary capitalize text-[10px]">{s.source_type}</span>
+                <span className="text-t-secondary truncate">{s.label}</span>
               </div>
             ))}
           </div>

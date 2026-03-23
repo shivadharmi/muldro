@@ -9,14 +9,11 @@ interface Props {
 }
 
 const COMMANDS = [
-  { name: "/brief", description: "Morning briefing", endpoint: "/v1/briefings/latest" },
+  { name: "/brief", description: "Today's briefing" },
   { name: "/status", description: "System health", endpoint: "/v1/health" },
-  { name: "/search", description: "Search memories", params: ["query"] },
+  { name: "/search", description: "Search knowledge", params: ["query"] },
   { name: "/help", description: "Available commands" },
-  { name: "/agents", description: "List agents", endpoint: "/v1/agents" },
-  { name: "/runs", description: "Recent runs" },
   { name: "/goals", description: "Active goals" },
-  { name: "/triggers", description: "Active triggers" },
 ];
 
 export function CommandInput({ onSubmit, disabled }: Props) {
