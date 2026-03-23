@@ -1494,33 +1494,13 @@ class JarvisOrchestrator:
         if not memory_svc:
             return {"status": "error", "error": "Memory service unavailable"}
 
-        # Always store as a preference memory for context
-        from ulid import ULID
-
-        from src.models.memory import Memory
-
-        embedding = await memory_svc._embedder.embed_text(spec.instruction_text)
-        memory_id = f"mem_{ULID()}"
-        memory = Memory(
-            memory_id=memory_id,
+        # Store as a preference memory via public API
+        memory_id = await memory_svc.store_instruction_memory(
             user_id=user_id,
             workspace_id=workspace_id,
-            memory_type="preference",
-            scope="general",
-            fact_text=f"Instruction: {spec.instruction_text}",
-            embedding=embedding,
-            confidence=0.95,
-            stability_score=0.8,
-            source_event_ids=[],
-            provenance={
-                "source": "user_instruction",
-                "instruction_type": spec.instruction_type,
-            },
-            ttl_days=None,
-            status="active",
+            instruction_text=spec.instruction_text,
+            instruction_type=spec.instruction_type,
         )
-        memory_svc._db.add(memory)
-        await memory_svc._db.flush()
 
         result: dict = {
             "status": "created",
@@ -1532,22 +1512,25 @@ class JarvisOrchestrator:
         # Create trigger if applicable
         if spec.instruction_type == "trigger" and spec.trigger_conditions:
             try:
+                from ulid import ULID
+
                 from src.models.triggers import Trigger
 
-                trigger_id = f"trg_{ULID()}"
-                trigger = Trigger(
-                    trigger_id=trigger_id,
-                    user_id=user_id,
-                    workspace_id=workspace_id,
-                    name=spec.instruction_text[:100],
-                    conditions=spec.trigger_conditions,
-                    action_type="notify",
-                    action_config={},
-                    enabled=True,
-                    status="active",
-                )
-                memory_svc._db.add(trigger)
-                await memory_svc._db.flush()
+                async with self._db_factory() as db:
+                    trigger_id = f"trg_{ULID()}"
+                    trigger = Trigger(
+                        trigger_id=trigger_id,
+                        user_id=user_id,
+                        workspace_id=workspace_id,
+                        name=spec.instruction_text[:100],
+                        conditions=spec.trigger_conditions,
+                        action_type="notify",
+                        action_config={},
+                        enabled=True,
+                        status="active",
+                    )
+                    db.add(trigger)
+                    await db.commit()
                 result["trigger_id"] = trigger_id
             except Exception as e:
                 logger.warning("Failed to create trigger: %s", e)
@@ -1555,24 +1538,29 @@ class JarvisOrchestrator:
         # Create schedule if applicable
         if spec.instruction_type == "schedule" and spec.schedule_config:
             try:
+                from ulid import ULID
+
                 from src.models.schedules import Schedule
 
-                schedule_id = f"sched_{ULID()}"
-                schedule = Schedule(
-                    schedule_id=schedule_id,
-                    user_id=user_id,
-                    workspace_id=workspace_id,
-                    name=spec.instruction_text[:100],
-                    schedule_type=spec.schedule_config.get("type", "recurring"),
-                    cron_expr=spec.schedule_config.get("cron_expr"),
-                    action_type=spec.schedule_config.get("action_type", "custom_agent_task"),
-                    action_config=spec.schedule_config.get("action_config", {}),
-                    enabled=True,
-                    source="user",
-                    priority="medium",
-                )
-                memory_svc._db.add(schedule)
-                await memory_svc._db.flush()
+                async with self._db_factory() as db:
+                    schedule_id = f"sched_{ULID()}"
+                    schedule = Schedule(
+                        schedule_id=schedule_id,
+                        user_id=user_id,
+                        workspace_id=workspace_id,
+                        name=spec.instruction_text[:100],
+                        schedule_type=spec.schedule_config.get("type", "recurring"),
+                        cron_expr=spec.schedule_config.get("cron_expr"),
+                        action_type=spec.schedule_config.get(
+                            "action_type", "custom_agent_task"
+                        ),
+                        action_config=spec.schedule_config.get("action_config", {}),
+                        enabled=True,
+                        source="user",
+                        priority="medium",
+                    )
+                    db.add(schedule)
+                    await db.commit()
                 result["schedule_id"] = schedule_id
             except Exception as e:
                 logger.warning("Failed to create schedule: %s", e)

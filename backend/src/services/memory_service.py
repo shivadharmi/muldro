@@ -240,6 +240,43 @@ class MemoryService:
         logger.info("Goal memory stored: %s '%s'", memory_id, title)
         return memory_id
 
+    async def store_instruction_memory(
+        self,
+        user_id: str,
+        workspace_id: str,
+        instruction_text: str,
+        instruction_type: str = "preference",
+    ) -> str:
+        """Store a user instruction as a preference memory.
+
+        Returns the memory_id.
+        """
+        fact_text = f"Instruction: {instruction_text}"
+        embedding = await self._embedder.embed_text(fact_text)
+        memory_id = f"mem_{ULID()}"
+        memory = Memory(
+            memory_id=memory_id,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            memory_type="preference",
+            scope="general",
+            fact_text=fact_text,
+            embedding=embedding,
+            confidence=0.95,
+            stability_score=0.8,
+            source_event_ids=[],
+            provenance={
+                "source": "user_instruction",
+                "instruction_type": instruction_type,
+            },
+            ttl_days=None,
+            status="active",
+        )
+        self._db.add(memory)
+        await self._db.flush()
+        logger.info("Instruction memory stored: %s '%s'", memory_id, instruction_text[:80])
+        return memory_id
+
     async def retrieve(
         self,
         user_id: str,
