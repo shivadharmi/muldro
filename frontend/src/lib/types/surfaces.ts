@@ -9,9 +9,11 @@ export type SurfaceKind =
   | "comparison"
   | "alert"
   | "timeline"
-  | "table";
+  | "table"
+  | "recommendation"
+  | "activity";
 
-export type SurfacePosition = "inline" | "right-pane" | "center-pane";
+export type SurfacePosition = "inline" | "right-pane" | "center-pane" | "workspace";
 
 export interface GeneratedSurface {
   id: string;

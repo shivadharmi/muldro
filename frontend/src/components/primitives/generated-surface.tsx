@@ -76,14 +76,16 @@ function SurfaceIcon({ kind }: { kind: SurfaceKind }) {
     alert: "⚠️",
     timeline: "📅",
     table: "📊",
+    recommendation: "💡",
+    activity: "⚡",
   };
-  return <span className="text-sm">{icons[kind]}</span>;
+  return <span className="text-sm">{icons[kind] ?? "📋"}</span>;
 }
 
 function SurfaceBody({ surface }: { surface: GeneratedSurface }) {
   const { kind, data } = surface;
 
-  if (kind === "summary") {
+  if (kind === "summary" || kind === "recommendation" || kind === "activity") {
     const d = data as unknown as SummaryData;
     if (!d.text) return <FallbackJson data={data} />;
     return (
