@@ -303,130 +303,55 @@ class TestScheduleSeeder:
             assert schedule.enabled is False, f"{schedule.name} should be disabled"
 
 
-# ── Perception Coordinator Wiring ─────────────────────────────
+# ── Perception Policy Service ─────────────────────────────────
 
 
-class TestPerceptionWiring:
-    @pytest.mark.asyncio
-    @patch("src.services.scheduler.get_session_factory")
-    async def test_scheduler_inits_perception(self, mock_factory):
-        """Scheduler should initialize perception only for authorized connectors."""
-        from src.services.scheduler import SchedulerLoop
-
-        orchestrator = MagicMock()
-
-        # Set up mock DB used by _resolve_workspace + _get_observation_sources
-        # Query 0: resolve_workspace_id → scalar_one_or_none returns workspace_id
-        # Query 1: WorkspaceMember.workspace_id for user → returns workspace IDs
-        # Query 2: ConnectorInstallation.server_name for workspaces → returns providers
-        mock_db = MagicMock()
-        resolve_ws_result = MagicMock()
-        resolve_ws_result.scalar_one_or_none.return_value = "ws_test"
-        ws_result = MagicMock()
-        ws_result.all.return_value = [("ws_test",)]
-        install_result = MagicMock()
-        install_result.all.return_value = [("gmail",), ("calendar",)]
-        empty_result = MagicMock()
-        empty_result.all.return_value = []
-        empty_result.scalars.return_value.all.return_value = []
-        mock_db.execute = AsyncMock(
-            side_effect=[resolve_ws_result, ws_result, install_result, empty_result]
-        )
-        mock_db.commit = AsyncMock()
-
-        db_ctx = AsyncMock()
-        db_ctx.__aenter__ = AsyncMock(return_value=mock_db)
-        db_ctx.__aexit__ = AsyncMock(return_value=False)
-        mock_factory.return_value = MagicMock(return_value=db_ctx)
-
-        # Also set orchestrator._db_factory for restore_cursors
-        orchestrator._db_factory = MagicMock(return_value=db_ctx)
-
-        scheduler = SchedulerLoop(MagicMock(), orchestrator=orchestrator, user_ids=[TEST_USER_ID])
-        await scheduler._init_perception()
-
-        assert len(scheduler._perception) == 1
-        coord = scheduler._perception[TEST_USER_ID]
-        assert "gmail" in coord._enabled_sources
-        assert "calendar" in coord._enabled_sources
-
-    @pytest.mark.asyncio
-    @patch("src.services.scheduler.get_session_factory")
-    async def test_scheduler_skips_unauthorized_sources(self, mock_factory):
-        """Without authorized connectors, no sources should be enabled."""
-        from src.services.scheduler import SchedulerLoop
-
-        orchestrator = MagicMock()
-
-        mock_db = MagicMock()
-        empty_result = MagicMock()
-        empty_result.all.return_value = []
-        empty_result.scalars.return_value.all.return_value = []
-        mock_db.execute = AsyncMock(return_value=empty_result)
-        mock_db.commit = AsyncMock()
-
-        db_ctx = AsyncMock()
-        db_ctx.__aenter__ = AsyncMock(return_value=mock_db)
-        db_ctx.__aexit__ = AsyncMock(return_value=False)
-        mock_factory.return_value = MagicMock(return_value=db_ctx)
-        orchestrator._db_factory = MagicMock(return_value=db_ctx)
-
-        scheduler = SchedulerLoop(MagicMock(), orchestrator=orchestrator, user_ids=[TEST_USER_ID])
-        await scheduler._init_perception()
-
-        assert len(scheduler._perception) == 1
-        coord = scheduler._perception[TEST_USER_ID]
-        assert len(coord._enabled_sources) == 0
-
+class TestPerceptionPolicyWiring:
     @pytest.mark.asyncio
     async def test_scheduler_no_orchestrator_no_perception(self):
-        """Without orchestrator, perception should not be initialized."""
+        """Without orchestrator, _tick_perception should be a no-op."""
         from src.services.scheduler import SchedulerLoop
 
         scheduler = SchedulerLoop(MagicMock(), orchestrator=None)
-        await scheduler._init_perception()
+        # Should not raise or do anything
+        await scheduler._tick_perception(MagicMock())
 
-        assert scheduler._perception == {}
+    def test_policy_service_computes_effective_interval(self):
+        """Policy service should compute effective interval from base + backoff."""
+        from src.models.perception_state import PerceptionState
+        from src.services.perception_policy import PerceptionPolicyService
 
+        state = PerceptionState(
+            state_id="pst_test",
+            workspace_id="ws_test",
+            user_id=TEST_USER_ID,
+            source="gmail",
+            mode="poll",
+            base_interval_s=300,
+            effective_interval_s=300,
+            consecutive_failures=2,
+        )
+        svc = PerceptionPolicyService(AsyncMock())
+        # 300 * 2^2 = 1200
+        assert svc._compute_effective_interval(state) == 1200
 
-# ── Perception Coordinator ────────────────────────────────────
+    def test_budget_multiplier_stretches_interval(self):
+        """Budget multiplier should stretch the next_run_at interval."""
+        from src.models.perception_state import PerceptionState
+        from src.services.perception_policy import PerceptionPolicyService
 
-
-class TestPerceptionCoordinator:
-    def test_get_due_sources(self):
-        from src.orchestrator.perception import PerceptionCoordinator
-
-        coordinator = PerceptionCoordinator(MagicMock(), user_id=TEST_USER_ID)
-        coordinator.enable_source("gmail")
-        coordinator.enable_source("calendar")
-
-        # First call: both should be due (never run)
-        due = coordinator.get_due_sources()
-        assert "gmail" in due
-        assert "calendar" in due
-
-    def test_disable_source(self):
-        from src.orchestrator.perception import PerceptionCoordinator
-
-        coordinator = PerceptionCoordinator(MagicMock(), user_id=TEST_USER_ID)
-        coordinator.enable_source("gmail")
-        coordinator.disable_source("gmail")
-
-        due = coordinator.get_due_sources()
-        assert "gmail" not in due
-
-    def test_interval_multiplier(self):
-        from datetime import timedelta
-
-        from src.orchestrator.perception import PerceptionCoordinator
-
-        coordinator = PerceptionCoordinator(MagicMock(), user_id=TEST_USER_ID)
-        coordinator.enable_source("gmail")
-        coordinator.set_interval_multiplier(3)
-
-        # Simulate recent run
-        coordinator._last_run["gmail"] = datetime.now(timezone.utc) - timedelta(seconds=400)
-
-        # With 3x multiplier, 300s * 3 = 900s, so 400s ago is not due
-        due = coordinator.get_due_sources()
-        assert "gmail" not in due
+        state = PerceptionState(
+            state_id="pst_test",
+            workspace_id="ws_test",
+            user_id=TEST_USER_ID,
+            source="gmail",
+            mode="poll",
+            base_interval_s=300,
+            effective_interval_s=300,
+            last_run_at=datetime.now(timezone.utc),
+        )
+        svc = PerceptionPolicyService(AsyncMock())
+        next_run = svc._compute_next_run(state, budget_multiplier=3)
+        delta = (next_run - datetime.now(timezone.utc)).total_seconds()
+        # 300 * 3 = 900s
+        assert 899 <= delta <= 901

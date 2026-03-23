@@ -504,39 +504,59 @@ class TestA2UIRenderer:
 
 
 class TestPerception:
-    def test_enable_disable_source(self):
-        from src.orchestrator.perception import PerceptionCoordinator
+    def test_policy_service_effective_interval(self):
+        """Policy service computes effective interval from base + backoff."""
+        from src.models.perception_state import PerceptionState
+        from src.services.perception_policy import PerceptionPolicyService
 
-        coord = PerceptionCoordinator(orchestrator=MagicMock(), user_id=TEST_USER_ID)
-        coord.enable_source("gmail")
-        assert "gmail" in coord._enabled_sources
+        state = PerceptionState(
+            state_id="pst_test",
+            workspace_id="ws_test",
+            user_id=TEST_USER_ID,
+            source="gmail",
+            mode="poll",
+            base_interval_s=300,
+            effective_interval_s=300,
+            consecutive_failures=0,
+        )
+        svc = PerceptionPolicyService(AsyncMock())
+        assert svc._compute_effective_interval(state) == 300
 
-        coord.disable_source("gmail")
-        assert "gmail" not in coord._enabled_sources
+    def test_policy_service_backoff(self):
+        """Failures double the effective interval."""
+        from src.models.perception_state import PerceptionState
+        from src.services.perception_policy import PerceptionPolicyService
 
-    def test_get_due_sources_all_due_when_never_run(self):
-        from src.orchestrator.perception import PerceptionCoordinator
+        state = PerceptionState(
+            state_id="pst_test",
+            workspace_id="ws_test",
+            user_id=TEST_USER_ID,
+            source="gmail",
+            mode="poll",
+            base_interval_s=300,
+            effective_interval_s=300,
+            consecutive_failures=1,
+        )
+        svc = PerceptionPolicyService(AsyncMock())
+        assert svc._compute_effective_interval(state) == 600
 
-        coord = PerceptionCoordinator(orchestrator=MagicMock(), user_id=TEST_USER_ID)
-        coord.enable_source("gmail")
-        coord.enable_source("calendar")
+    def test_policy_service_budget_multiplier(self):
+        """Budget multiplier stretches next_run_at."""
+        from src.models.perception_state import PerceptionState
+        from src.services.perception_policy import PerceptionPolicyService
 
-        due = coord.get_due_sources()
-        assert set(due) == {"gmail", "calendar"}
-
-    def test_interval_multiplier_slows_checks(self):
-        from datetime import timedelta
-
-        from src.orchestrator.perception import PerceptionCoordinator
-
-        coord = PerceptionCoordinator(orchestrator=MagicMock(), user_id=TEST_USER_ID)
-        coord.enable_source("gmail")
-        # Simulate recent run (1 minute ago)
-        coord._last_run["gmail"] = datetime.now(timezone.utc) - timedelta(minutes=1)
-
-        # With default multiplier, gmail (5min interval) is not due
-        assert coord.get_due_sources() == []
-
-        # Even with 3x multiplier, still not due (would need 15min)
-        coord.set_interval_multiplier(3)
-        assert coord.get_due_sources() == []
+        state = PerceptionState(
+            state_id="pst_test",
+            workspace_id="ws_test",
+            user_id=TEST_USER_ID,
+            source="gmail",
+            mode="poll",
+            base_interval_s=300,
+            effective_interval_s=300,
+            last_run_at=datetime.now(timezone.utc),
+        )
+        svc = PerceptionPolicyService(AsyncMock())
+        next_run = svc._compute_next_run(state, budget_multiplier=3)
+        delta = (next_run - datetime.now(timezone.utc)).total_seconds()
+        # 300 * 3 = 900s
+        assert 899 <= delta <= 901
