@@ -27,6 +27,10 @@ export default function ChatPage() {
   const { mode, setMode } = useCommandStore();
   const setGlobalSendAction = useWsActionStore((s) => s.setSendAction);
   const { surfaces: a2uiSurfaces, upsertSurface } = useSurfaceState();
+  const dockableA2UISurfaces = useMemo(
+    () => surfaces.filter((surface) => !!surface.data?.a2ui_surface),
+    [surfaces]
+  );
 
   // Bridge: A2UISurface (from WebSocket) -> surface stores
   const handleWsSurface = useCallback(
@@ -179,7 +183,7 @@ export default function ChatPage() {
         </div>
       }
       surfaces={
-        a2uiSurfaces.length > 0 || surfaces.length > 0 ? (
+        a2uiSurfaces.length > 0 || dockableA2UISurfaces.length > 0 ? (
           <div className="space-y-3">
             {a2uiSurfaces.map((surface) => (
               <A2UIRenderer
@@ -190,9 +194,7 @@ export default function ChatPage() {
                 }
               />
             ))}
-            {surfaces
-              .filter((surface) => !!surface.data?.a2ui_surface)
-              .map((surface) => (
+            {dockableA2UISurfaces.map((surface) => (
                 <A2UIRenderer
                   key={`surface-${surface.id}`}
                   surface={surface.data.a2ui_surface as A2UISurface}

@@ -7,11 +7,10 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
-  fetchConnectors,
   fetchAuthProviders,
   getAuthUrl,
-  deleteConnector,
-  testConnector,
+  deleteInstallation,
+  checkInstallationHealth,
   fetchInstallations,
   type AuthProvider,
   type Installation,
@@ -45,7 +44,7 @@ function ConnectorsContent() {
     const provider = searchParams.get("provider");
     const error = searchParams.get("error");
     if (status === "connected" && provider) {
-      queryClient.invalidateQueries({ queryKey: ["connectors"] });
+      queryClient.invalidateQueries({ queryKey: ["installations"] });
       queryClient.invalidateQueries({ queryKey: ["auth-providers"] });
       setFlash(`${provider} connected successfully`);
       window.history.replaceState({}, "", "/connectors");
@@ -61,21 +60,19 @@ function ConnectorsContent() {
     queryFn: fetchAuthProviders,
   });
 
-  // Fetch active connectors
-  const { data: connectorsData } = useQuery({
-    queryKey: ["connectors"],
-    queryFn: fetchConnectors,
+  // Fetch installed integrations
+  const { data: installations = [] } = useQuery({
+    queryKey: ["installations"],
+    queryFn: fetchInstallations,
   });
 
   const { addToast } = useToast();
 
-  const connectors = (connectorsData?.connectors || []).filter(
-    (c: Record<string, unknown>) => c.status === "active"
-  ) as Array<{
-    connector_id: string;
-    provider: string;
-    status: string;
-  }>;
+  const connectors = installations.filter((i: Installation) => i.enabled).map((i: Installation) => ({
+    connector_id: i.install_id,
+    provider: i.server_name,
+    status: i.status,
+  }));
 
   const providers: AuthProvider[] = providersData?.providers || [];
 
@@ -102,30 +99,26 @@ function ConnectorsContent() {
   }
 
   const disconnectMutation = useMutation({
-    mutationFn: (id: string) => deleteConnector(id),
+    mutationFn: (id: string) => deleteInstallation(id),
     onMutate: async (id) => {
-      await queryClient.cancelQueries({ queryKey: ["connectors"] });
-      const prev = queryClient.getQueryData(["connectors"]);
+      await queryClient.cancelQueries({ queryKey: ["installations"] });
+      const prev = queryClient.getQueryData(["installations"]);
       queryClient.setQueryData(
-        ["connectors"],
-        (old: typeof connectorsData) => {
-          if (!old?.connectors) return old;
-          return {
-            connectors: old.connectors.filter(
-              (c: Record<string, unknown>) => c.connector_id !== id
-            ),
-          };
+        ["installations"],
+        (old: Installation[] | undefined) => {
+          if (!old) return old;
+          return old.filter((inst) => inst.install_id !== id);
         }
       );
       return { prev };
     },
     onError: (err, _id, context) => {
       if (context?.prev)
-        queryClient.setQueryData(["connectors"], context.prev);
+        queryClient.setQueryData(["installations"], context.prev);
       addToast(`Failed to disconnect: ${err.message}`, "error");
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["connectors"] });
+      queryClient.invalidateQueries({ queryKey: ["installations"] });
       queryClient.invalidateQueries({ queryKey: ["auth-providers"] });
     },
   });
@@ -133,10 +126,10 @@ function ConnectorsContent() {
   async function handleTest(connectorId: string) {
     setTestingId(connectorId);
     try {
-      const result = await testConnector(connectorId);
+      const result = await checkInstallationHealth(connectorId);
       setTestResult((prev) => ({
         ...prev,
-        [connectorId]: (result as { status: string }).status,
+        [connectorId]: result.health_status,
       }));
     } catch {
       setTestResult((prev) => ({ ...prev, [connectorId]: "error" }));
