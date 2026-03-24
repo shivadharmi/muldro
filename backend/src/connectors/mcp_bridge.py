@@ -35,14 +35,14 @@ async def get_mcp_config() -> dict:
     try:
         from sqlalchemy import select
 
-        from src.models.connector_installation import ConnectorInstallation
+        from src.models.integration_installation import IntegrationInstallation
 
         async with get_session_factory()() as db:
             result = await db.execute(
-                select(ConnectorInstallation).where(
-                    ConnectorInstallation.status == "active",
-                    ConnectorInstallation.enabled.is_(True),
-                    ConnectorInstallation.transport.in_(["stdio", "sse", "streamable-http"]),
+                select(IntegrationInstallation).where(
+                    IntegrationInstallation.status == "active",
+                    IntegrationInstallation.enabled.is_(True),
+                    IntegrationInstallation.transport.in_(["stdio", "sse", "streamable-http"]),
                 )
             )
             installations = result.scalars().all()

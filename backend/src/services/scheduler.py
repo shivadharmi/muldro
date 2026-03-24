@@ -257,7 +257,7 @@ class SchedulerLoop:
         authorized: set[str] = set()
 
         try:
-            from src.models.connector_installation import ConnectorInstallation
+            from src.models.integration_installation import IntegrationInstallation
             from src.models.users import WorkspaceMember
 
             ws_result = await db.execute(
@@ -266,15 +266,15 @@ class SchedulerLoop:
             ws_ids = [row[0] for row in ws_result.all()]
             if ws_ids:
                 inst_result = await db.execute(
-                    select(ConnectorInstallation.server_name).where(
-                        ConnectorInstallation.workspace_id.in_(ws_ids),
-                        ConnectorInstallation.status == "active",
-                        ConnectorInstallation.enabled.is_(True),
+                    select(IntegrationInstallation.server_name).where(
+                        IntegrationInstallation.workspace_id.in_(ws_ids),
+                        IntegrationInstallation.status == "active",
+                        IntegrationInstallation.enabled.is_(True),
                     )
                 )
                 authorized.update(row[0] for row in inst_result.all())
         except Exception:
-            logger.debug("ConnectorInstallation lookup failed", exc_info=True)
+            logger.debug("IntegrationInstallation lookup failed", exc_info=True)
 
         return authorized
 

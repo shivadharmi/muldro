@@ -45,7 +45,7 @@ ID_PREFIXES = {
     "watcher": "watcher",
     "trs": "server_trust",
     "capb": "capability_binding",
-    "inst": "connector_installation",
+    "inst": "installation",
     "revt": "runtime_event",
     "apol": "approval_policy",
     "whsub": "webhook_subscription",

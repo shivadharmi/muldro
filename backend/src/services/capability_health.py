@@ -176,15 +176,15 @@ class CapabilityHealthService:
     async def _check_installation(self, providers: list[str]) -> bool:
         """Check if any of the given providers have an active installation."""
         try:
-            from src.models.connector_installation import ConnectorInstallation
+            from src.models.integration_installation import IntegrationInstallation
 
             count = await self._db.scalar(
                 select(func.count())
-                .select_from(ConnectorInstallation)
+                .select_from(IntegrationInstallation)
                 .where(
-                    ConnectorInstallation.workspace_id == self._workspace_id,
-                    ConnectorInstallation.status == "active",
-                    ConnectorInstallation.server_name.in_(providers),
+                    IntegrationInstallation.workspace_id == self._workspace_id,
+                    IntegrationInstallation.status == "active",
+                    IntegrationInstallation.server_name.in_(providers),
                 )
             )
             return (count or 0) > 0

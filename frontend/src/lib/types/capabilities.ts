@@ -23,7 +23,7 @@ export interface CapabilityHealth {
 
 export type TrustTier = "T0" | "T1" | "T2" | "T3";
 
-export interface ConnectorInstallation {
+export interface IntegrationInstallation {
   install_id: string;
   server_name: string;
   display_name: string;

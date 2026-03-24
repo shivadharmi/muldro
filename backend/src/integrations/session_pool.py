@@ -61,7 +61,7 @@ class UserMCPSessionPool:
         # (server_name, user_id) → SessionEntry
         self._sessions: dict[tuple[str, str], SessionEntry] = {}
         self._lock = asyncio.Lock()
-        # server_name → config dict (loaded from ConnectorInstallation)
+        # server_name → config dict (loaded from IntegrationInstallation)
         self._server_configs: dict[str, dict] = {}
         # server_name → tool mapping (canonical → raw)
         self._server_tools: dict[str, dict[str, str]] = {}

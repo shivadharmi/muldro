@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.integrations.manifest_inspector import InspectionResult, inspect_manifest
 from src.models.capability_binding import CapabilityBinding
-from src.models.connector_installation import ConnectorInstallation
+from src.models.integration_installation import IntegrationInstallation
 from src.models.mcp_server_catalog import MCPServerCatalog
 from src.models.org_allowlist import OrgAllowlist
 from src.models.server_trust import ServerTrustRecord
@@ -214,7 +214,7 @@ class MCPOnboardingService:
         await self._db.flush()
 
         # Create installation
-        installation = ConnectorInstallation(
+        installation = IntegrationInstallation(
             workspace_id=self._workspace_id,
             user_id=user_id,
             server_name=catalog_entry.server_name,
@@ -291,9 +291,9 @@ class MCPOnboardingService:
 
         # Deactivate installations
         inst_result = await self._db.execute(
-            select(ConnectorInstallation).where(
-                ConnectorInstallation.workspace_id == self._workspace_id,
-                ConnectorInstallation.server_name == catalog_entry.server_name,
+            select(IntegrationInstallation).where(
+                IntegrationInstallation.workspace_id == self._workspace_id,
+                IntegrationInstallation.server_name == catalog_entry.server_name,
             )
         )
         for inst in inst_result.scalars().all():

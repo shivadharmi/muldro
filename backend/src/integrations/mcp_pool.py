@@ -1,7 +1,7 @@
 """Workspace MCP Pool — per-workspace server management with dynamic add/remove.
 
 Manages MCP server configurations per workspace. Servers are registered
-from ConnectorInstallation records and can be added/removed at runtime
+from IntegrationInstallation records and can be added/removed at runtime
 without process restart. Delegates actual connections to UserMCPSessionPool.
 """
 
@@ -132,22 +132,22 @@ class WorkspaceMCPPool:
     ) -> ServerEntry | None:
         """Reload a server config from DB and reconnect.
 
-        Fetches fresh ConnectorInstallation from DB, re-registers config.
+        Fetches fresh IntegrationInstallation from DB, re-registers config.
         """
         from src.models.database import get_session_factory
 
         try:
             from sqlalchemy import select
 
-            from src.models.connector_installation import ConnectorInstallation
+            from src.models.integration_installation import IntegrationInstallation
 
             async with get_session_factory()() as db:
                 result = await db.execute(
-                    select(ConnectorInstallation).where(
-                        ConnectorInstallation.workspace_id == workspace_id,
-                        ConnectorInstallation.server_name == server_name,
-                        ConnectorInstallation.status == "active",
-                        ConnectorInstallation.enabled.is_(True),
+                    select(IntegrationInstallation).where(
+                        IntegrationInstallation.workspace_id == workspace_id,
+                        IntegrationInstallation.server_name == server_name,
+                        IntegrationInstallation.status == "active",
+                        IntegrationInstallation.enabled.is_(True),
                     )
                 )
                 inst = result.scalar_one_or_none()
@@ -203,14 +203,14 @@ class WorkspaceMCPPool:
         try:
             from sqlalchemy import select
 
-            from src.models.connector_installation import ConnectorInstallation
+            from src.models.integration_installation import IntegrationInstallation
 
             async with get_session_factory()() as db:
                 result = await db.execute(
-                    select(ConnectorInstallation).where(
-                        ConnectorInstallation.status == "active",
-                        ConnectorInstallation.enabled.is_(True),
-                        ConnectorInstallation.transport.in_(
+                    select(IntegrationInstallation).where(
+                        IntegrationInstallation.status == "active",
+                        IntegrationInstallation.enabled.is_(True),
+                        IntegrationInstallation.transport.in_(
                             ["stdio", "sse", "streamable-http"]
                         ),
                     )
@@ -241,7 +241,7 @@ class WorkspaceMCPPool:
 
 
 def _installation_to_config(inst: Any) -> dict:
-    """Convert a ConnectorInstallation ORM object to a config dict."""
+    """Convert a IntegrationInstallation ORM object to a config dict."""
     config: dict = {
         "transport": inst.transport,
         "auth_provider": inst.auth_provider or "none",

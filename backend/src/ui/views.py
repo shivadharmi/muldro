@@ -17,7 +17,7 @@ class ViewType(str, Enum):
     EXECUTION_TRACE = "execution_trace"
     ENTITY_EXPLORER = "entity_explorer"
     MEMORY_BROWSER = "memory_browser"
-    CONNECTOR_STATUS = "connector_status"
+    INTEGRATION_STATUS = "integration_status"
     BRIEFING_VIEW = "briefing_view"
     BRIEFING_FULL = "briefing_full"
     RESEARCH_REPORT = "research_report"
@@ -34,7 +34,7 @@ def dashboard_view(
     pending_approvals: list[dict],
     recent_events: list[dict],
     budget: dict,
-    connector_health: list[dict],
+    integration_health: list[dict],
 ) -> A2UISurface:
     """Main user dashboard with overview widgets."""
     children = [r.heading("dash_title", "Dashboard")]
@@ -65,15 +65,15 @@ def dashboard_view(
     ]
     children.append(r.row("metrics_row", metrics))
 
-    # Connector health
-    if connector_health:
+    # Integration health
+    if integration_health:
         health_indicators = [
             r.status_indicator(
                 f"conn_{c['provider']}",
                 c.get("status", "unknown"),
                 label=c["provider"],
             )
-            for c in connector_health
+            for c in integration_health
         ]
         children.append(
             r.card(
@@ -268,11 +268,11 @@ def memory_browser_view(
     return r.surface(f"memories_{user_id}", children)
 
 
-def connector_status_view(
+def integration_status_view(
     user_id: str,
-    connectors: list[dict],
+    integrations: list[dict],
 ) -> A2UISurface:
-    """Connector health and configuration view."""
+    """Integration health and configuration view."""
     columns = [
         {"key": "provider", "label": "Provider"},
         {"key": "status", "label": "Status"},
@@ -286,13 +286,13 @@ def connector_status_view(
             "last_poll": c.get("last_poll_at", "-"),
             "events_count": c.get("events_count", 0),
         }
-        for c in connectors
+        for c in integrations
     ]
 
     return r.surface(
         f"integrations_{user_id}",
         [
-            r.heading("conn_title", "Connector Status"),
+            r.heading("conn_title", "Integration Status"),
             r.table("conn_table", columns, rows, sortable=True),
         ],
     )
@@ -492,7 +492,7 @@ VIEWS = {
     ViewType.EXECUTION_TRACE: execution_trace_view,
     ViewType.ENTITY_EXPLORER: entity_explorer_view,
     ViewType.MEMORY_BROWSER: memory_browser_view,
-    ViewType.CONNECTOR_STATUS: connector_status_view,
+    ViewType.INTEGRATION_STATUS: integration_status_view,
     ViewType.BRIEFING_FULL: briefing_full_view,
     ViewType.RESEARCH_REPORT: research_report_view,
     ViewType.MEETING_PREP: meeting_prep_view,

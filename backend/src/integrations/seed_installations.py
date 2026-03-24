@@ -1,4 +1,4 @@
-"""Seed default ConnectorInstallation records for a workspace.
+"""Seed default IntegrationInstallation records for a workspace.
 
 These mirror what was previously hardcoded in mcp_config.py but are now
 workspace-scoped DB rows managed by the IntegrationControlPlane.
@@ -9,7 +9,7 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models.connector_installation import ConnectorInstallation
+from src.models.integration_installation import IntegrationInstallation
 from src.models.ids import generate_id
 from src.models.server_trust import ServerTrustRecord
 
@@ -204,15 +204,15 @@ async def seed_installations(db: AsyncSession, workspace_id: str, user_id: str) 
     for inst_data in _DEFAULT_INSTALLATIONS:
         server_name = inst_data["server_name"]
         existing = await db.execute(
-            select(ConnectorInstallation).where(
-                ConnectorInstallation.workspace_id == workspace_id,
-                ConnectorInstallation.server_name == server_name,
+            select(IntegrationInstallation).where(
+                IntegrationInstallation.workspace_id == workspace_id,
+                IntegrationInstallation.server_name == server_name,
             )
         )
         if existing.scalar_one_or_none():
             continue
 
-        installation = ConnectorInstallation(
+        installation = IntegrationInstallation(
             install_id=generate_id("inst"),
             workspace_id=workspace_id,
             user_id=user_id,

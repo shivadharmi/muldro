@@ -355,9 +355,9 @@ async def oauth_callback(
     state: str = Query(""),
     settings: Settings = Depends(get_settings),
 ):
-    """Handle OAuth callback — exchange code for tokens, store as connector.
+    """Handle OAuth callback — exchange code for tokens, store as integration.
 
-    This is a connector OAuth flow, not a login flow.
+    This is an integration OAuth flow, not a login flow.
     Exchanges the authorization code for access/refresh tokens,
     stores them encrypted via OAuthManager, and redirects to the frontend.
     """
@@ -427,16 +427,16 @@ async def oauth_callback(
             workspace_id=workspace_id,
         )
 
-        # Register connectors for the Google services
-        await _ensure_connector(
+        # Register integrations for the Google services
+        await _ensure_integration(
             db_factory, user_id, "gmail", userinfo.get("email"), workspace_id=workspace_id
         )
-        await _ensure_connector(
+        await _ensure_integration(
             db_factory, user_id, "calendar", userinfo.get("email"), workspace_id=workspace_id
         )
 
         logger.info(
-            "Google connector linked for %s (%s)",
+            "Google integration linked for %s (%s)",
             user_id,
             userinfo.get("email", "unknown"),
         )
@@ -485,9 +485,9 @@ async def oauth_callback(
             workspace_id=workspace_id,
         )
 
-        await _ensure_connector(db_factory, user_id, "github", workspace_id=workspace_id)
+        await _ensure_integration(db_factory, user_id, "github", workspace_id=workspace_id)
 
-        logger.info("GitHub connector linked for %s", user_id)
+        logger.info("GitHub integration linked for %s", user_id)
         background_tasks.add_task(_trigger_initial_observation, user_id, ["github"], workspace_id)
 
     elif provider == "linear":
@@ -538,8 +538,8 @@ async def oauth_callback(
             scopes=token_data.get("scope", "").split() if token_data.get("scope") else None,
             workspace_id=workspace_id,
         )
-        await _ensure_connector(db_factory, user_id, "linear", workspace_id=workspace_id)
-        logger.info("Linear connector linked for %s", user_id)
+        await _ensure_integration(db_factory, user_id, "linear", workspace_id=workspace_id)
+        logger.info("Linear integration linked for %s", user_id)
         background_tasks.add_task(_trigger_initial_observation, user_id, ["linear"], workspace_id)
 
     elif provider == "notion":
@@ -591,8 +591,8 @@ async def oauth_callback(
             expires_at=None,
             workspace_id=workspace_id,
         )
-        await _ensure_connector(db_factory, user_id, "notion", workspace_id=workspace_id)
-        logger.info("Notion connector linked for %s", user_id)
+        await _ensure_integration(db_factory, user_id, "notion", workspace_id=workspace_id)
+        logger.info("Notion integration linked for %s", user_id)
         background_tasks.add_task(_trigger_initial_observation, user_id, ["notion"], workspace_id)
 
     elif provider == "jira":
@@ -655,7 +655,7 @@ async def oauth_callback(
             scopes=token_data.get("scope", "").split() if token_data.get("scope") else None,
             workspace_id=workspace_id,
         )
-        await _ensure_connector(
+        await _ensure_integration(
             db_factory,
             user_id,
             "jira",
@@ -665,14 +665,14 @@ async def oauth_callback(
         if cloud_id:
             from sqlalchemy import select as sa_select
 
-            from src.models.connector_installation import ConnectorInstallation
+            from src.models.integration_installation import IntegrationInstallation
 
             async with db_factory() as _db:
                 result = await _db.execute(
-                    sa_select(ConnectorInstallation).where(
-                        ConnectorInstallation.user_id == user_id,
-                        ConnectorInstallation.server_name == "jira",
-                        ConnectorInstallation.workspace_id == workspace_id,
+                    sa_select(IntegrationInstallation).where(
+                        IntegrationInstallation.user_id == user_id,
+                        IntegrationInstallation.server_name == "jira",
+                        IntegrationInstallation.workspace_id == workspace_id,
                     )
                 )
                 inst = result.scalar_one_or_none()
@@ -682,7 +682,7 @@ async def oauth_callback(
                     inst.config = config
                     await _db.commit()
 
-        logger.info("Jira connector linked for %s (cloudId=%s)", user_id, cloud_id)
+        logger.info("Jira integration linked for %s (cloudId=%s)", user_id, cloud_id)
         background_tasks.add_task(_trigger_initial_observation, user_id, ["jira"], workspace_id)
 
     elif provider == "linkedin":
@@ -732,8 +732,8 @@ async def oauth_callback(
             expires_at=expires_at,
             workspace_id=workspace_id,
         )
-        await _ensure_connector(db_factory, user_id, "linkedin", workspace_id=workspace_id)
-        logger.info("LinkedIn connector linked for %s", user_id)
+        await _ensure_integration(db_factory, user_id, "linkedin", workspace_id=workspace_id)
+        logger.info("LinkedIn integration linked for %s", user_id)
 
     elif provider == "twitter":
         client_id = settings.twitter_oauth_client_id
@@ -809,8 +809,8 @@ async def oauth_callback(
             scopes=token_data.get("scope", "").split() if token_data.get("scope") else None,
             workspace_id=workspace_id,
         )
-        await _ensure_connector(db_factory, user_id, "twitter", workspace_id=workspace_id)
-        logger.info("Twitter connector linked for %s", user_id)
+        await _ensure_integration(db_factory, user_id, "twitter", workspace_id=workspace_id)
+        logger.info("Twitter integration linked for %s", user_id)
 
     else:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
@@ -882,26 +882,26 @@ async def _trigger_initial_observation(user_id: str, sources: list[str], workspa
         logger.warning("Initial observation dispatch failed", exc_info=True)
 
 
-async def _ensure_connector(
+async def _ensure_integration(
     db_factory,
     user_id: str,
     provider: str,
     account_email: str | None = None,
     workspace_id: str = "",
 ) -> None:
-    """Create or reactivate a ConnectorInstallation after OAuth."""
+    """Create or reactivate an IntegrationInstallation after OAuth."""
     from sqlalchemy import select as sa_select
 
-    from src.models.connector_installation import ConnectorInstallation
+    from src.models.integration_installation import IntegrationInstallation
     from src.models.ids import generate_id
 
     try:
         async with db_factory() as db:
             result = await db.execute(
-                sa_select(ConnectorInstallation).where(
-                    ConnectorInstallation.user_id == user_id,
-                    ConnectorInstallation.server_name == provider,
-                    ConnectorInstallation.workspace_id == workspace_id,
+                sa_select(IntegrationInstallation).where(
+                    IntegrationInstallation.user_id == user_id,
+                    IntegrationInstallation.server_name == provider,
+                    IntegrationInstallation.workspace_id == workspace_id,
                 )
             )
             existing = result.scalar_one_or_none()
@@ -910,7 +910,7 @@ async def _ensure_connector(
                 existing.enabled = True
             else:
                 db.add(
-                    ConnectorInstallation(
+                    IntegrationInstallation(
                         install_id=generate_id("inst"),
                         user_id=user_id,
                         workspace_id=workspace_id,
@@ -926,14 +926,14 @@ async def _ensure_connector(
                 )
             await db.commit()
 
-        # Enable schedules tied to this connector (observation + globals on first)
-        await _enable_connector_schedules(db_factory, provider)
+        # Enable schedules tied to this integration (observation + globals on first)
+        await _enable_integration_schedules(db_factory, provider)
     except Exception:
-        logger.warning("Failed to ensure connector %s for %s", provider, user_id, exc_info=True)
+        logger.warning("Failed to ensure integration %s for %s", provider, user_id, exc_info=True)
 
 
-async def _enable_connector_schedules(db_factory, provider: str) -> None:
-    """Enable seeded schedules when a connector is authorized."""
+async def _enable_integration_schedules(db_factory, provider: str) -> None:
+    """Enable seeded schedules when an integration is authorized."""
     try:
         from src.services.schedule_seeder import enable_schedules_for_connector
 
