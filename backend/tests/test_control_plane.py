@@ -1,17 +1,17 @@
-"""Tests for IntegrationControlPlane and ConnectorInstallation model."""
+"""Tests for IntegrationControlPlane and IntegrationInstallation model."""
 
-from src.models.connector_installation import ConnectorInstallation
+from src.models.integration_installation import IntegrationInstallation
 from src.models.ids import generate_id, validate_typed_id
 
 
-class TestConnectorInstallation:
+class TestIntegrationInstallation:
     def test_generate_install_id(self):
         install_id = generate_id("inst")
         assert install_id.startswith("inst_")
         assert validate_typed_id(install_id, "inst")
 
     def test_create_installation(self):
-        inst = ConnectorInstallation(
+        inst = IntegrationInstallation(
             install_id=generate_id("inst"),
             workspace_id="ws_test",
             user_id="usr_test",
@@ -33,7 +33,7 @@ class TestConnectorInstallation:
 
     def test_transport_types(self):
         for transport in ["stdio", "sse", "streamable-http"]:
-            inst = ConnectorInstallation(
+            inst = IntegrationInstallation(
                 install_id=generate_id("inst"),
                 workspace_id="ws_test",
                 user_id="usr_test",
@@ -44,7 +44,7 @@ class TestConnectorInstallation:
             assert inst.transport == transport
 
     def test_scopes_granted(self):
-        inst = ConnectorInstallation(
+        inst = IntegrationInstallation(
             install_id=generate_id("inst"),
             workspace_id="ws_test",
             user_id="usr_test",
@@ -55,7 +55,7 @@ class TestConnectorInstallation:
         assert inst.scopes_granted == ["messaging.send", "messaging.reply"]
 
     def test_optional_fields(self):
-        inst = ConnectorInstallation(
+        inst = IntegrationInstallation(
             install_id=generate_id("inst"),
             workspace_id="ws_test",
             user_id="usr_test",
