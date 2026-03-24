@@ -172,7 +172,7 @@ export function WorkspaceCanvas({
               Talk to Jarvis
             </Link>
             <Link
-              href="/connectors"
+              href="/integrations"
               className="px-4 py-2 rounded-lg border border-b-primary text-t-secondary text-xs hover:bg-surface-1 transition-colors"
             >
               Connect Sources

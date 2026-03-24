@@ -30,7 +30,7 @@ const PROVIDER_ICONS: Record<string, string> = {
   twitter: "🐦",
 };
 
-function ConnectorsContent() {
+function IntegrationsContent() {
   const queryClient = useQueryClient();
   const searchParams = useSearchParams();
   const [testingId, setTestingId] = useState<string | null>(null);
@@ -47,10 +47,10 @@ function ConnectorsContent() {
       queryClient.invalidateQueries({ queryKey: ["installations"] });
       queryClient.invalidateQueries({ queryKey: ["auth-providers"] });
       setFlash(`${provider} connected successfully`);
-      window.history.replaceState({}, "", "/connectors");
+      window.history.replaceState({}, "", "/integrations");
     } else if (error) {
       setFlash(`Error: ${error}`);
-      window.history.replaceState({}, "", "/connectors");
+      window.history.replaceState({}, "", "/integrations");
     }
   }, [searchParams, queryClient]);
 
@@ -68,9 +68,9 @@ function ConnectorsContent() {
 
   const { addToast } = useToast();
 
-  const connectors = installations.filter((i: Installation) => i.enabled).map((i: Installation) => ({
-    connector_id: i.install_id,
-    provider: i.server_name,
+  const activeInstallations = installations.filter((i: Installation) => i.enabled).map((i: Installation) => ({
+    install_id: i.install_id,
+    server_name: i.server_name,
     status: i.status,
   }));
 
@@ -123,24 +123,24 @@ function ConnectorsContent() {
     },
   });
 
-  async function handleTest(connectorId: string) {
-    setTestingId(connectorId);
+  async function handleTest(installId: string) {
+    setTestingId(installId);
     try {
-      const result = await checkInstallationHealth(connectorId);
+      const result = await checkInstallationHealth(installId);
       setTestResult((prev) => ({
         ...prev,
-        [connectorId]: result.health_status,
+        [installId]: result.health_status,
       }));
     } catch {
-      setTestResult((prev) => ({ ...prev, [connectorId]: "error" }));
+      setTestResult((prev) => ({ ...prev, [installId]: "error" }));
     } finally {
       setTestingId(null);
     }
   }
 
   function renderProviderCard(provider: AuthProvider) {
-    const connector = connectors.find((c) => c.provider === provider.name);
-    const isConnected = provider.connected || !!connector;
+    const installation = activeInstallations.find((i) => i.server_name === provider.name);
+    const isConnected = provider.connected || !!installation;
     const icon = PROVIDER_ICONS[provider.name] || "🔌";
 
     return (
@@ -184,14 +184,14 @@ function ConnectorsContent() {
           )}
 
           <div className="flex gap-2">
-            {isConnected && connector ? (
+            {isConnected && installation ? (
               <>
                 <button
-                  onClick={() => handleTest(connector.connector_id)}
-                  disabled={testingId === connector.connector_id}
+                  onClick={() => handleTest(installation.install_id)}
+                  disabled={testingId === installation.install_id}
                   className="text-xs px-3 py-1.5 rounded-md border border-b-primary text-t-primary hover:bg-surface-2 disabled:opacity-50"
                 >
-                  {testingId === connector.connector_id
+                  {testingId === installation.install_id
                     ? "Testing..."
                     : "Test"}
                 </button>
@@ -203,21 +203,21 @@ function ConnectorsContent() {
                 </button>
                 <button
                   onClick={() =>
-                    disconnectMutation.mutate(connector.connector_id)
+                    disconnectMutation.mutate(installation.install_id)
                   }
                   className="text-xs px-3 py-1.5 rounded-md border border-j-error/30 text-j-error hover:bg-j-error-soft"
                 >
                   Disconnect
                 </button>
-                {testResult[connector.connector_id] && (
+                {testResult[installation.install_id] && (
                   <span
                     className={`text-xs py-1.5 ${
-                      testResult[connector.connector_id] === "healthy"
+                      testResult[installation.install_id] === "healthy"
                         ? "text-j-success"
                         : "text-j-error"
                     }`}
                   >
-                    {testResult[connector.connector_id]}
+                    {testResult[installation.install_id]}
                   </span>
                 )}
               </>
@@ -250,7 +250,7 @@ function ConnectorsContent() {
   return (
     <div className="p-4 sm:p-6 space-y-6">
       <PageHeader
-        title="Connectors"
+        title="Integrations"
         subtitle="Manage OAuth provider connections and data sources"
         variant="config"
       />
@@ -391,10 +391,10 @@ function AdvancedMCPSection() {
   );
 }
 
-export default function ConnectorsPage() {
+export default function IntegrationsPage() {
   return (
     <Suspense>
-      <ConnectorsContent />
+      <IntegrationsContent />
     </Suspense>
   );
 }

@@ -282,7 +282,7 @@ class HomeFeedService:
                     "impact": "No new data from failing sources. Briefings and plans become stale.",
                     "priority": "high",
                     "priority_score": 75 + len(stale) * 10,
-                    "action_url": "/connectors",
+                    "action_url": "/integrations",
                 }
             )
 

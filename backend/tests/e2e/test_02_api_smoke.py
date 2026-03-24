@@ -635,8 +635,8 @@ class TestSettings:
         resp = await client.put("/v1/settings/budget/daily_limit", json={"daily_limit_usd": 10.0})
         assert resp.status_code == 200
 
-    async def test_get_connector_settings(self, client: httpx.AsyncClient):
-        resp = await client.get("/v1/settings/connectors")
+    async def test_get_integration_settings(self, client: httpx.AsyncClient):
+        resp = await client.get("/v1/settings/integrations")
         assert resp.status_code == 200
 
 
@@ -683,7 +683,7 @@ class TestWorkflows:
 
     async def test_start_workflow(self, client: httpx.AsyncClient):
         resp = await client.post("/v1/workflows/inbox_triage/start", json={})
-        # May succeed or fail depending on connector availability
+        # May succeed or fail depending on integration availability
         assert resp.status_code in (200, 400, 500)
 
 

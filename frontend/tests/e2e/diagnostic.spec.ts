@@ -72,7 +72,7 @@ const allPages = [
   { path: "/workflows", name: "Workflows", expectApi: "/api/workflows" },
   { path: "/agents", name: "Agents", expectApi: "/api/agents" },
   { path: "/routes", name: "Routes", expectApi: "/api/routes" },
-  { path: "/connectors", name: "Connectors", expectApi: "/api/integrations" },
+  { path: "/integrations", name: "Integrations", expectApi: "/api/integrations" },
   { path: "/notifications", name: "Notifications", expectApi: "/api/notifications" },
   { path: "/settings", name: "Settings", expectApi: "/api/settings" },
   { path: "/system", name: "System", expectApi: "/api/system/dashboard" },

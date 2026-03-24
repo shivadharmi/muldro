@@ -835,10 +835,10 @@ async def oauth_callback(
     except Exception:
         logger.debug("MCP session refresh skipped", exc_info=True)
 
-    # Redirect to frontend connectors page with success status
+    # Redirect to frontend integrations page with success status
     frontend_url = settings.frontend_url.rstrip("/")
     params = urlencode({"provider": provider, "status": "connected"})
-    return RedirectResponse(url=f"{frontend_url}/connectors?{params}")
+    return RedirectResponse(url=f"{frontend_url}/integrations?{params}")
 
 
 async def _trigger_initial_observation(user_id: str, sources: list[str], workspace_id: str) -> None:
@@ -949,7 +949,7 @@ def _error_redirect(settings: Settings, message: str) -> RedirectResponse:
     """Redirect to frontend with an error message."""
     frontend_url = settings.frontend_url.rstrip("/")
     params = urlencode({"error": message})
-    return RedirectResponse(url=f"{frontend_url}/connectors?{params}")
+    return RedirectResponse(url=f"{frontend_url}/integrations?{params}")
 
 
 # ── Session Management ───────────────────────────────────────

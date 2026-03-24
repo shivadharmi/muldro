@@ -77,9 +77,9 @@ def dashboard_view(
         ]
         children.append(
             r.card(
-                "connectors_card",
+                "integrations_card",
                 [
-                    r.text("conn_title", "Connectors", variant="heading"),
+                    r.text("conn_title", "Integrations", variant="heading"),
                     r.row("conn_health", health_indicators),
                 ],
             )
@@ -290,7 +290,7 @@ def connector_status_view(
     ]
 
     return r.surface(
-        f"connectors_{user_id}",
+        f"integrations_{user_id}",
         [
             r.heading("conn_title", "Connector Status"),
             r.table("conn_table", columns, rows, sortable=True),

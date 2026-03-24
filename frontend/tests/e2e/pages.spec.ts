@@ -94,8 +94,8 @@ test.describe("Pages load and call correct APIs", () => {
     await page.waitForLoadState("networkidle");
   });
 
-  test("Connectors page calls /api/integrations", async ({ page }) => {
-    const calls = await collectAPICalls(page, () => page.goto("/connectors"));
+  test("Integrations page calls /api/integrations", async ({ page }) => {
+    const calls = await collectAPICalls(page, () => page.goto("/integrations"));
     expect(calls.some((c) => c.includes("/api/integrations"))).toBeTruthy();
   });
 
@@ -280,9 +280,9 @@ test.describe("Settings interaction", () => {
   });
 });
 
-test.describe("Connectors interaction", () => {
-  test("connectors page lists connected services", async ({ page }) => {
-    await page.goto("/connectors");
+test.describe("Integrations interaction", () => {
+  test("integrations page lists connected services", async ({ page }) => {
+    await page.goto("/integrations");
     await page.waitForLoadState("networkidle");
 
     const body = await page.textContent("body");
