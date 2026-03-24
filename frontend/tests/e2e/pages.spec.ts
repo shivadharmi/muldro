@@ -286,7 +286,7 @@ test.describe("Integrations interaction", () => {
     await page.waitForLoadState("networkidle");
 
     const body = await page.textContent("body");
-    expect(body?.toLowerCase()).toMatch(/connector|google|github|connect/);
+    expect(body?.toLowerCase()).toMatch(/integration|google|github|connect/);
   });
 });
 

@@ -1,6 +1,6 @@
 """Inbox Triage workflow — fetch, classify, group, draft, approve, send.
 
-Uses Google Workspace MCP server (preferred) or Gmail connector fallback
+Uses Google Workspace MCP server (preferred) or Gmail integration fallback
 for real email operations, and Claude for classification and draft generation.
 """
 
@@ -94,7 +94,7 @@ async def _send_via_mcp(
 
 
 async def fetch_unread(ctx: WorkflowContext) -> dict:
-    """Fetch unread emails — MCP first, connector fallback."""
+    """Fetch unread emails — MCP first, integration fallback."""
     max_results = ctx.get("max_results", 20)
 
     # Try MCP bridge
@@ -263,7 +263,7 @@ async def draft_responses(ctx: WorkflowContext) -> dict:
 
 
 async def send_approved(ctx: WorkflowContext) -> dict:
-    """Send approved draft responses — MCP first, connector fallback."""
+    """Send approved draft responses — MCP first, integration fallback."""
     drafts = ctx.get("drafts", [])
     approved = ctx.get("approved_draft_ids", [])
 

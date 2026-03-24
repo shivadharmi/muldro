@@ -191,7 +191,7 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
 
 
 async def seed_installations(db: AsyncSession, workspace_id: str, user_id: str) -> int:
-    """Seed default connector installations. Returns count created."""
+    """Seed default integration installations. Returns count created."""
     # Build trust_id lookup
     trust_result = await db.execute(
         select(ServerTrustRecord).where(ServerTrustRecord.workspace_id == workspace_id)
@@ -231,5 +231,5 @@ async def seed_installations(db: AsyncSession, workspace_id: str, user_id: str) 
 
     if created:
         await db.flush()
-        logger.info("Seeded %d connector installations", created)
+        logger.info("Seeded %d integration installations", created)
     return created

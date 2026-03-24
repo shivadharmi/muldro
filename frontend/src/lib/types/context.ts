@@ -15,7 +15,7 @@ export interface MemoryRef {
 }
 
 export interface SourceRef {
-  source_type: "trace" | "artifact" | "connector" | "observation";
+  source_type: "trace" | "artifact" | "integration" | "observation";
   source_id: string;
   label: string;
   url: string | null;

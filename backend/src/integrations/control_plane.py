@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class IntegrationControlPlane:
-    """Manages connector installations for a workspace."""
+    """Manages integration installations for a workspace."""
 
     def __init__(self, db: AsyncSession, workspace_id: str):
         self._db = db

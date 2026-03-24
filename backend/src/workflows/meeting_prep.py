@@ -1,6 +1,6 @@
 """Meeting Prep workflow — look up next meeting, gather context, generate prep.
 
-Uses Google Workspace MCP server (preferred) or Calendar connector fallback
+Uses Google Workspace MCP server (preferred) or Calendar integration fallback
 for meeting data, world model for attendee entities, memory service for
 related context, and Claude for synthesis.
 """
@@ -33,7 +33,7 @@ async def _poll_calendar_via_mcp(ctx: WorkflowContext) -> dict | None:
 
 
 async def find_next_meeting(ctx: WorkflowContext) -> dict:
-    """Find the next upcoming calendar meeting — MCP first, connector fallback."""
+    """Find the next upcoming calendar meeting — MCP first, integration fallback."""
     from datetime import datetime, timezone
 
     # Try MCP bridge
