@@ -41,7 +41,7 @@ def build(settings: Settings, db: AsyncSession) -> ServiceContainer:
     try:
         from src.services.memory_service import MemoryService
 
-        svc.memory_service = MemoryService(settings, db)
+        svc.memory_service = MemoryService(settings=settings, db=db)
     except Exception as exc:
         raise RuntimeBuildError(f"Tier 1 failure: MemoryService — {exc}") from exc
 
@@ -168,7 +168,12 @@ def build(settings: Settings, db: AsyncSession) -> ServiceContainer:
         try:
             from src.services.context_builder import ContextBuilder
 
-            context_builder = ContextBuilder(db, settings)
+            context_builder = ContextBuilder(
+                world_model=svc.world_model,
+                memory_service=svc.memory_service,
+                tool_registry=tool_registry,
+                db=db,
+            )
         except Exception:
             logger.debug("ContextBuilder unavailable for GraphExecutor", exc_info=True)
 
@@ -199,10 +204,12 @@ def build(settings: Settings, db: AsyncSession) -> ServiceContainer:
     # ── Wire OAuthManager ──────────────────────────────────────────
     try:
         from src.services.oauth_manager import OAuthManager
+        from src.models.database import get_session_factory
 
         svc.oauth_manager = OAuthManager(
-            db_factory=None,
+            db_factory=get_session_factory(),
             settings=settings,
+            encryption_key=settings.oauth_encryption_key,
         )
     except Exception:
         logger.debug("Tier 3: OAuthManager unavailable", exc_info=True)

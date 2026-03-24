@@ -11,7 +11,13 @@ Every tool Jarvis can invoke maps to a canonical capability string (e.g. "email.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import Enum
+
+try:  # Python 3.11+
+    from enum import StrEnum
+except ImportError:  # Python 3.10 fallback
+    class StrEnum(str, Enum):
+        """Compatibility fallback for enum.StrEnum on Python < 3.11."""
 
 
 class CapabilityFamily(StrEnum):

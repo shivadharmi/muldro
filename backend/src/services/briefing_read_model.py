@@ -135,9 +135,11 @@ class BriefingReadModel:
             "created_at": briefing.created_at.isoformat() if briefing.created_at else None,
         }
 
-    def _get_actions(self, _briefing: Briefing) -> list[dict]:
-        return [
-            {"action": "pin", "label": "Pin"},
+    def _get_actions(self, briefing: Briefing) -> list[dict]:
+        actions = [
             {"action": "snooze", "label": "Snooze"},
             {"action": "archive", "label": "Archive"},
         ]
+        if getattr(briefing, "status", "active") != "pinned":
+            actions.insert(0, {"action": "pin", "label": "Pin"})
+        return actions

@@ -8,7 +8,16 @@ from collections.abc import AsyncGenerator
 
 import httpx
 import pytest
-import pytest_asyncio
+try:
+    import pytest_asyncio
+except ImportError:  # pragma: no cover - only used in minimal local envs
+    class _PytestAsyncioShim:
+        @staticmethod
+        def fixture(*args, **kwargs):
+            kwargs.pop("loop_scope", None)
+            return pytest.fixture(*args, **kwargs)
+
+    pytest_asyncio = _PytestAsyncioShim()
 
 BASE_URL = "http://localhost:8000"
 

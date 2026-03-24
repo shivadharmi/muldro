@@ -13,7 +13,6 @@ from src.api.routes_briefings import router as briefings_router
 from src.api.routes_canvas import router as canvas_router
 from src.api.routes_chat import router as chat_router
 from src.api.routes_command import router as command_router
-from src.api.routes_connectors import router as connectors_router
 from src.api.routes_conversations import router as conversations_router
 from src.api.routes_events import router as events_router
 from src.api.routes_feedback import router as feedback_router
@@ -247,8 +246,6 @@ def create_app() -> FastAPI:
     # User settings
     app.include_router(settings_router, tags=["settings"])
 
-    # Connectors
-    app.include_router(connectors_router, tags=["connectors"])
 
     # Prometheus metrics
     app.include_router(metrics_router, tags=["metrics"])

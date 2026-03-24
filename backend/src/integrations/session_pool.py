@@ -65,6 +65,8 @@ class UserMCPSessionPool:
         self._server_configs: dict[str, dict] = {}
         # server_name → tool mapping (canonical → raw)
         self._server_tools: dict[str, dict[str, str]] = {}
+        # canonical_name → metadata
+        self._tool_metadata: dict[str, dict[str, Any]] = {}
 
     def register_server_config(self, server_name: str, config: dict) -> None:
         """Register server configuration for later session creation."""
@@ -112,6 +114,19 @@ class UserMCPSessionPool:
             tool_dicts = [{"name": t.name, "description": t.description or ""} for t in raw_tools]
             tool_mapping = self._normalizer.register_server_tools(server_name, tool_dicts)
             self._server_tools[server_name] = tool_mapping
+            for t in raw_tools:
+                canonical = self._normalizer.normalize(t.name, server_name)
+                input_schema = (
+                    getattr(t, "inputSchema", None)
+                    or getattr(t, "input_schema", None)
+                    or {"type": "object", "properties": {}}
+                )
+                self._tool_metadata[canonical] = {
+                    "name": canonical,
+                    "server": server_name,
+                    "description": t.description or "",
+                    "input_schema": input_schema,
+                }
 
             entry = SessionEntry(
                 client=client,
@@ -284,6 +299,15 @@ class UserMCPSessionPool:
         for server_name, tools in self._server_tools.items():
             for canonical in tools:
                 result[canonical] = server_name
+        return result
+
+    def get_all_tool_metadata(self) -> list[dict[str, Any]]:
+        """Return all tool metadata across servers."""
+        result: list[dict[str, Any]] = []
+        for name, meta in self._tool_metadata.items():
+            item = dict(meta)
+            item["name"] = name
+            result.append(item)
         return result
 
     def get_health(self) -> dict[str, dict]:

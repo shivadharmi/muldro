@@ -13,7 +13,7 @@ from src.workflows.workflow_registry import Workflow, WorkflowStep
 logger = logging.getLogger(__name__)
 
 
-async def _poll_calendar_via_mcp() -> dict | None:
+async def _poll_calendar_via_mcp(ctx: WorkflowContext) -> dict | None:
     """Try listing upcoming calendar events via Google Workspace MCP server."""
     from src.connectors.mcp_bridge import call_mcp_tool, is_mcp_tool
 
@@ -23,7 +23,12 @@ async def _poll_calendar_via_mcp() -> dict | None:
         "calendar_list_events",
     ):
         if is_mcp_tool(tool_name):
-            return await call_mcp_tool(tool_name, {"time_min": "now", "max_results": 5})
+            return await call_mcp_tool(
+                tool_name,
+                {"time_min": "now", "max_results": 5},
+                user_id=ctx.user_id,
+                workspace_id=ctx.workspace_id,
+            )
     return None
 
 
@@ -32,7 +37,7 @@ async def find_next_meeting(ctx: WorkflowContext) -> dict:
     from datetime import datetime, timezone
 
     # Try MCP bridge
-    mcp_result = await _poll_calendar_via_mcp()
+    mcp_result = await _poll_calendar_via_mcp(ctx)
     if mcp_result and mcp_result.get("status") == "ok":
         logger.info("Fetched calendar events via MCP bridge")
         return {

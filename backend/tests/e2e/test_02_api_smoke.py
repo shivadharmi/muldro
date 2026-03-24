@@ -640,36 +640,37 @@ class TestSettings:
         assert resp.status_code == 200
 
 
-# ── 2.18 Connectors ─────────────────────────────────────────────
+# ── 2.18 Integrations ──────────────────────────────────────────
 
 
-class TestConnectors:
-    async def test_list_connectors(self, client: httpx.AsyncClient):
-        resp = await client.get("/v1/connectors")
+class TestIntegrations:
+    async def test_list_integrations(self, client: httpx.AsyncClient):
+        resp = await client.get("/v1/integrations")
         assert resp.status_code == 200
         data = resp.json()
-        assert "connectors" in data
+        assert isinstance(data, list)
 
-    async def test_create_connector(self, client: httpx.AsyncClient):
-        resp = await client.post("/v1/connectors", json={"provider": "gmail"})
-        # 200 if created, 400 if already exists
-        assert resp.status_code in (200, 400)
+    async def test_create_integration(self, client: httpx.AsyncClient):
+        payload = {
+            "server_name": "gmail",
+            "display_name": "gmail",
+            "transport": "stdio",
+        }
+        resp = await client.post("/v1/integrations", json=payload)
+        # 201 if created, 409 if already exists
+        assert resp.status_code in (201, 409)
 
-    async def test_create_invalid_connector(self, client: httpx.AsyncClient):
-        resp = await client.post("/v1/connectors", json={"provider": "invalid_provider"})
-        assert resp.status_code == 400
+    async def test_get_integration_nonexistent(self, client: httpx.AsyncClient):
+        resp = await client.get("/v1/integrations/inst_nonexistent")
+        assert resp.status_code == 404
 
-    async def test_test_connector_nonexistent(self, client: httpx.AsyncClient):
-        resp = await client.post("/v1/connectors/conn_nonexistent/test")
-        assert resp.status_code in (200, 404)
+    async def test_delete_integration_nonexistent(self, client: httpx.AsyncClient):
+        resp = await client.delete("/v1/integrations/inst_nonexistent")
+        assert resp.status_code == 404
 
-    async def test_poll_connector_nonexistent(self, client: httpx.AsyncClient):
-        resp = await client.post("/v1/connectors/conn_nonexistent/poll")
-        assert resp.status_code in (200, 404)
-
-    async def test_delete_connector_nonexistent(self, client: httpx.AsyncClient):
-        resp = await client.delete("/v1/connectors/conn_nonexistent")
-        assert resp.status_code in (200, 404)
+    async def test_check_integration_health_nonexistent(self, client: httpx.AsyncClient):
+        resp = await client.get("/v1/integrations/inst_nonexistent/health")
+        assert resp.status_code == 404
 
 
 # ── 2.19 Workflows ──────────────────────────────────────────────

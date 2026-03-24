@@ -142,22 +142,36 @@ export function setPolicyMode(mode: string): Promise<{ mode: string }> {
   });
 }
 
-// ── Connectors ──────────────────────────────────────────────
+// ── Connectors (compat facade over integrations API) ─────────
 
 export function fetchConnectors(): Promise<{ connectors: Array<Record<string, unknown>> }> {
-  return api("/connectors");
+  return fetchInstallations().then((installations) => ({
+    connectors: installations.map((i) => ({
+      connector_id: i.install_id,
+      provider: i.server_name,
+      status: i.status,
+      health_status: i.health_status,
+      enabled: i.enabled,
+      display_name: i.display_name,
+      auth_provider: i.auth_provider,
+    })),
+  }));
 }
 
 export function createConnector(provider: string): Promise<Record<string, unknown>> {
-  return post("/connectors", { provider });
+  return post("/integrations", {
+    server_name: provider,
+    display_name: provider,
+    transport: "stdio",
+  });
 }
 
 export function deleteConnector(id: string): Promise<void> {
-  return del(`/connectors/${id}`);
+  return del(`/integrations/${id}`);
 }
 
 export function testConnector(id: string): Promise<Record<string, unknown>> {
-  return post(`/connectors/${id}/test`, {});
+  return api(`/integrations/${id}/health`);
 }
 
 // ── SSE Chat ────────────────────────────────────────────────────

@@ -3,9 +3,12 @@
 import { useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { GeneratedSurfaceCard } from "@/components/primitives/generated-surface";
+import { A2UIRenderer } from "@/components/a2ui/renderer";
+import { handleA2UIAction } from "@/components/a2ui/action-handler";
 import { useSurfaceStore } from "@/stores/surface-store";
+import { useWsActionStore } from "@/stores/ws-action-store";
 import { approveAction, rejectAction } from "@/lib/api";
+import type { A2UISurface } from "@/lib/a2ui-types";
 import type { Approval } from "@/lib/types";
 import type { GeneratedSurface, SurfaceKind } from "@/lib/types/surfaces";
 
@@ -78,6 +81,7 @@ export function WorkspaceCanvas({
   recommendedActions,
   priorityItems,
 }: Props) {
+  const sendAction = useWsActionStore((s) => s.sendAction);
   const { surfaces, removeSurface, togglePin } = useSurfaceStore();
   const queryClient = useQueryClient();
 
@@ -186,13 +190,18 @@ export function WorkspaceCanvas({
 
         return (
           <div key={surface.id} className="flex flex-col">
-            <GeneratedSurfaceCard
-              surface={surface}
-              onPin={togglePin}
-              onRemove={
-                isApproval ? undefined : removeSurface
-              }
-            />
+            {surface.data?.a2ui_surface ? (
+              <A2UIRenderer
+                surface={surface.data.a2ui_surface as A2UISurface}
+                onAction={(action, payload) =>
+                  handleA2UIAction(sendAction, action, payload)
+                }
+              />
+            ) : (
+              <div className="rounded-xl border border-dashed border-b-primary bg-surface-1 p-3 text-xs text-t-tertiary">
+                Surface unavailable: missing A2UI payload.
+              </div>
+            )}
             {/* Approval action buttons */}
             {isApproval && (
               <div className="flex gap-2 mt-2">

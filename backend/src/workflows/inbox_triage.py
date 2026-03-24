@@ -46,7 +46,7 @@ Rules:
 """
 
 
-async def _list_unread_via_mcp(max_results: int = 20) -> dict | None:
+async def _list_unread_via_mcp(ctx: WorkflowContext, max_results: int = 20) -> dict | None:
     """Try listing unread emails via Google Workspace MCP server."""
     from src.connectors.mcp_bridge import call_mcp_tool, is_mcp_tool
 
@@ -56,11 +56,22 @@ async def _list_unread_via_mcp(max_results: int = 20) -> dict | None:
         "gmail_list_unread",
     ):
         if is_mcp_tool(tool_name):
-            return await call_mcp_tool(tool_name, {"max_results": max_results})
+            return await call_mcp_tool(
+                tool_name,
+                {"max_results": max_results},
+                user_id=ctx.user_id,
+                workspace_id=ctx.workspace_id,
+            )
     return None
 
 
-async def _send_via_mcp(to: str, subject: str, body: str, thread_id: str | None) -> dict | None:
+async def _send_via_mcp(
+    ctx: WorkflowContext,
+    to: str,
+    subject: str,
+    body: str,
+    thread_id: str | None,
+) -> dict | None:
     """Try sending email via Google Workspace MCP server."""
     from src.connectors.mcp_bridge import call_mcp_tool, is_mcp_tool
 
@@ -73,7 +84,12 @@ async def _send_via_mcp(to: str, subject: str, body: str, thread_id: str | None)
             params = {"to": to, "subject": subject, "body": body}
             if thread_id:
                 params["thread_id"] = thread_id
-            return await call_mcp_tool(tool_name, params)
+            return await call_mcp_tool(
+                tool_name,
+                params,
+                user_id=ctx.user_id,
+                workspace_id=ctx.workspace_id,
+            )
     return None
 
 
@@ -82,7 +98,7 @@ async def fetch_unread(ctx: WorkflowContext) -> dict:
     max_results = ctx.get("max_results", 20)
 
     # Try MCP bridge
-    mcp_result = await _list_unread_via_mcp(max_results)
+    mcp_result = await _list_unread_via_mcp(ctx, max_results)
     if mcp_result and mcp_result.get("status") == "ok":
         logger.info("Fetched unread emails via MCP bridge")
         return {
@@ -267,7 +283,7 @@ async def send_approved(ctx: WorkflowContext) -> dict:
         thread_id = draft.get("thread_id")
 
         # Try MCP bridge first
-        mcp_result = await _send_via_mcp(to, subject, body, thread_id)
+        mcp_result = await _send_via_mcp(ctx, to, subject, body, thread_id)
         if mcp_result and mcp_result.get("status") == "ok":
             sent += 1
             continue

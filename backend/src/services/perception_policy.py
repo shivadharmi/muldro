@@ -15,8 +15,9 @@ Hard guardrails this service enforces:
 
 import logging
 from datetime import datetime, timezone
+from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.perception_state import PerceptionState
@@ -50,6 +51,7 @@ class PerceptionPolicyService:
 
     def __init__(self, db: AsyncSession) -> None:
         self._db = db
+        self._wake_signals = {"user_intent", "webhook", "agent", "bootstrap", "manual_poll"}
 
     # ------------------------------------------------------------------
     # State management
@@ -91,12 +93,12 @@ class PerceptionPolicyService:
     ) -> list[PerceptionState]:
         """Return sources due for a single user."""
         now = datetime.now(timezone.utc)
+        reopen_before = now - timedelta(seconds=CIRCUIT_COOLDOWN_S)
         stmt = (
             select(PerceptionState)
             .where(
                 PerceptionState.user_id == user_id,
                 PerceptionState.mode != "paused",
-                PerceptionState.circuit_state != "open",
             )
             .where(
                 (PerceptionState.pending_run.is_(True))
@@ -104,36 +106,50 @@ class PerceptionPolicyService:
                     PerceptionState.next_run_at.isnot(None)
                     & (PerceptionState.next_run_at <= now)
                 )
+                | (
+                    and_(
+                        PerceptionState.circuit_state == "open",
+                        PerceptionState.circuit_opened_at.isnot(None),
+                        PerceptionState.circuit_opened_at <= reopen_before,
+                    )
+                )
             )
             .order_by(PerceptionState.next_run_at.asc().nullslast())
         )
         result = await self._db.execute(stmt)
         states = list(result.scalars().all())
 
-        # Reopen half-open circuits that have cooled down
+        # Reopen circuits that have cooled down, then filter to runnable rows.
         for s in states:
             if s.circuit_state == "half_open":
                 continue  # allow trial run
             self._maybe_reopen_circuit(s, now)
 
-        return states
+        return [s for s in states if s.circuit_state != "open"]
 
     async def get_due_sources_all_users(
         self, budget_multiplier: int = 1
     ) -> list[PerceptionState]:
         """Return due sources across all users (used by scheduler)."""
         now = datetime.now(timezone.utc)
+        reopen_before = now - timedelta(seconds=CIRCUIT_COOLDOWN_S)
         stmt = (
             select(PerceptionState)
             .where(
                 PerceptionState.mode != "paused",
-                PerceptionState.circuit_state != "open",
             )
             .where(
                 (PerceptionState.pending_run.is_(True))
                 | (
                     PerceptionState.next_run_at.isnot(None)
                     & (PerceptionState.next_run_at <= now)
+                )
+                | (
+                    and_(
+                        PerceptionState.circuit_state == "open",
+                        PerceptionState.circuit_opened_at.isnot(None),
+                        PerceptionState.circuit_opened_at <= reopen_before,
+                    )
                 )
             )
             .order_by(PerceptionState.next_run_at.asc().nullslast())
@@ -144,7 +160,7 @@ class PerceptionPolicyService:
         for s in states:
             self._maybe_reopen_circuit(s, now)
 
-        return states
+        return [s for s in states if s.circuit_state != "open"]
 
     # ------------------------------------------------------------------
     # Lifecycle: success / failure / signal
@@ -211,7 +227,10 @@ class PerceptionPolicyService:
         state = await self.get_or_create_state(workspace_id, user_id, source)
 
         if state.mode == "paused":
-            return state  # don't wake paused sources
+            if signal_source in self._wake_signals:
+                state.mode = "active"
+            else:
+                return state  # don't wake paused sources without explicit activation
 
         state.pending_run = True
         state.signal_source = signal_source

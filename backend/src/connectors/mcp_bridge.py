@@ -150,8 +150,7 @@ def list_mcp_tools() -> list[dict]:
     """Return metadata for all known MCP tools across servers."""
     if not _session_pool:
         return []
-    all_tools = _session_pool.get_all_tools()
-    return [{"name": name, "server": server} for name, server in all_tools.items()]
+    return _session_pool.get_all_tool_metadata()
 
 
 def get_mcp_tool_names() -> list[str]:

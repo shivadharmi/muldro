@@ -21,7 +21,15 @@ export const useSurfaceStore = create<SurfaceState>((set) => ({
   activeSurfaceId: null,
 
   addSurface: (surface) =>
-    set((s) => ({ surfaces: [...s.surfaces, surface] })),
+    set((s) => {
+      const idx = s.surfaces.findIndex((sf) => sf.id === surface.id);
+      if (idx === -1) {
+        return { surfaces: [...s.surfaces, surface] };
+      }
+      const next = [...s.surfaces];
+      next[idx] = { ...next[idx], ...surface };
+      return { surfaces: next };
+    }),
 
   removeSurface: (id) =>
     set((s) => ({

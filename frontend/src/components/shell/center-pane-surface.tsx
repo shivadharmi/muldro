@@ -2,9 +2,13 @@
 
 import { useMemo } from "react";
 import { useSurfaceStore } from "@/stores/surface-store";
-import { GeneratedSurfaceCard } from "@/components/primitives/generated-surface";
+import { A2UIRenderer } from "@/components/a2ui/renderer";
+import { handleA2UIAction } from "@/components/a2ui/action-handler";
+import { useWsActionStore } from "@/stores/ws-action-store";
+import type { A2UISurface } from "@/lib/a2ui-types";
 
 export function CenterPaneSurface() {
+  const sendAction = useWsActionStore((s) => s.sendAction);
   const allSurfaces = useSurfaceStore((s) => s.surfaces);
   const activeSurfaceId = useSurfaceStore((s) => s.activeSurfaceId);
   const setActiveSurface = useSurfaceStore((s) => s.setActiveSurface);
@@ -85,11 +89,18 @@ export function CenterPaneSurface() {
 
           {/* Surface content */}
           <div className="flex-1 overflow-y-auto p-4">
-            <GeneratedSurfaceCard
-              surface={surface}
-              onPin={togglePin}
-              onRemove={removeSurface}
-            />
+            {surface.data?.a2ui_surface ? (
+              <A2UIRenderer
+                surface={surface.data.a2ui_surface as A2UISurface}
+                onAction={(action, payload) =>
+                  handleA2UIAction(sendAction, action, payload)
+                }
+              />
+            ) : (
+              <div className="rounded-xl border border-dashed border-b-primary bg-surface-1 p-3 text-xs text-t-tertiary">
+                Surface unavailable: missing A2UI payload.
+              </div>
+            )}
           </div>
 
           {/* Tab bar for multiple center-pane surfaces */}

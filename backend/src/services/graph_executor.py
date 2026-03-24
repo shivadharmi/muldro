@@ -66,11 +66,32 @@ async def create_graph_executor(
     except Exception:
         logger.debug("ToolRegistry unavailable for GraphExecutor", exc_info=True)
 
+    world_model = None
+    try:
+        from src.services.world_model import WorldModel
+
+        world_model = WorldModel(settings, db)
+    except Exception:
+        logger.debug("WorldModel unavailable for GraphExecutor", exc_info=True)
+
+    memory_service = None
+    try:
+        from src.services.memory_service import MemoryService
+
+        memory_service = MemoryService(settings=settings, db=db)
+    except Exception:
+        logger.debug("MemoryService unavailable for GraphExecutor", exc_info=True)
+
     context_builder = None
     try:
         from src.services.context_builder import ContextBuilder
 
-        context_builder = ContextBuilder(db, settings)
+        context_builder = ContextBuilder(
+            world_model=world_model,
+            memory_service=memory_service,
+            tool_registry=tool_registry,
+            db=db,
+        )
     except Exception:
         logger.debug("ContextBuilder unavailable for GraphExecutor", exc_info=True)
 
@@ -81,14 +102,6 @@ async def create_graph_executor(
         verifier = Verifier(db, settings)
     except Exception:
         logger.debug("Verifier unavailable for GraphExecutor", exc_info=True)
-
-    memory_service = None
-    try:
-        from src.services.memory_service import MemoryService
-
-        memory_service = MemoryService(db, settings)
-    except Exception:
-        logger.debug("MemoryService unavailable for GraphExecutor", exc_info=True)
 
     return GraphExecutor(
         settings=settings,
@@ -662,7 +675,12 @@ class GraphExecutor:
         from src.connectors.mcp_bridge import call_mcp_tool, is_mcp_tool
 
         if is_mcp_tool(task_type):
-            raw = await call_mcp_tool(task_type, input_data)
+            raw = await call_mcp_tool(
+                task_type,
+                input_data,
+                user_id=run.user_id,
+                workspace_id=run.workspace_id,
+            )
             ToolCallResult(
                 tool_name=request.tool_name,
                 status="success",

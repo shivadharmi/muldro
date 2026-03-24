@@ -88,13 +88,17 @@ class Notifier:
             interruptibility=data.get("interruptibility", 0.5) if data else 0.5,
         )
 
+        payload = dict(data or {})
+        if workspace_id and "workspace_id" not in payload:
+            payload["workspace_id"] = workspace_id
+
         notification = Notification(
             notification_id=f"notif_{ULID()}",
             user_id=user_id,
             type=notification_type,
             title=title,
             body=body,
-            data=data or {},
+            data=payload,
             created_at=datetime.now(timezone.utc).isoformat(),
         )
 
@@ -110,7 +114,7 @@ class Notifier:
                     channel=notification_type,
                     title=title,
                     body=body,
-                    payload_json=data,
+                    payload_json=payload,
                     priority_score=priority,
                     status="pending",
                 )
@@ -291,12 +295,15 @@ class Notifier:
                 return {"status": "skipped", "reason": "slack_mcp_not_available"}
 
             text = f"*{notification.title}*\n{notification.body or ''}"
+            workspace_id = str(notification.data.get("workspace_id", "") or "")
             result = await call_mcp_tool(
                 tool_name,
                 {
                     "text": text,
                     "channel": notification.data.get("slack_channel", "#jarvis"),
                 },
+                user_id=notification.user_id,
+                workspace_id=workspace_id,
             )
             return {"status": "sent", "slack_result": result}
         except Exception as e:
@@ -309,6 +316,7 @@ class Notifier:
             from src.connectors.mcp_bridge import call_mcp_tool, is_mcp_tool
 
             if is_mcp_tool("email_send"):
+                workspace_id = str(notification.data.get("workspace_id", "") or "")
                 result = await call_mcp_tool(
                     "email_send",
                     {
@@ -316,6 +324,8 @@ class Notifier:
                         "subject": notification.title,
                         "body": notification.body,
                     },
+                    user_id=notification.user_id,
+                    workspace_id=workspace_id,
                 )
                 return {"status": "sent", "via": "mcp", "result": result}
         except Exception:

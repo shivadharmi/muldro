@@ -12,6 +12,7 @@ import {
 import { useAuth } from "@/lib/auth";
 import { useJarvisWs } from "@/hooks/use-jarvis-ws";
 import { useSurfaceStore } from "@/stores/surface-store";
+import { useWsActionStore } from "@/stores/ws-action-store";
 import { GreetingHero } from "@/components/dashboard/greeting-hero";
 import { WorkspaceStatusBar } from "@/components/workspace/workspace-status-bar";
 import { WorkspaceCanvas } from "@/components/workspace/workspace-canvas";
@@ -21,6 +22,7 @@ import type { SurfaceKind } from "@/lib/types/surfaces";
 export default function WorkspacePage() {
   const { user } = useAuth();
   const { addSurface } = useSurfaceStore();
+  const setGlobalSendAction = useWsActionStore((s) => s.setSendAction);
 
   const { data: system } = useQuery({
     queryKey: ["system-dashboard"],
@@ -62,7 +64,7 @@ export default function WorkspacePage() {
             id: s.surface_id,
             kind: (meta.kind as SurfaceKind) || "summary",
             title: String(meta.title ?? "Surface"),
-            data: meta,
+            data: { ...meta, a2ui_surface: s.payload },
             created_at: s.created_at,
             pinned: false,
             position: "workspace",
@@ -89,7 +91,7 @@ export default function WorkspacePage() {
         id: ws.id,
         kind: (ws.metadata?.kind as SurfaceKind) || "summary",
         title: String(ws.metadata?.title ?? "Update"),
-        data: ws.metadata ?? {},
+        data: { ...(ws.metadata ?? {}), a2ui_surface: ws },
         created_at: new Date().toISOString(),
         pinned: false,
         position: ws.metadata?.source_message_id ? "inline" : "workspace",
@@ -102,11 +104,35 @@ export default function WorkspacePage() {
     [addSurface]
   );
 
-  useJarvisWs({
+  const handleWsSurfaceUpdate = useCallback(
+    (_surfaceId: string, ws: A2UISurface) => {
+      addSurface({
+        id: ws.id,
+        kind: (ws.metadata?.kind as SurfaceKind) || "summary",
+        title: String(ws.metadata?.title ?? "Update"),
+        data: { ...(ws.metadata ?? {}), a2ui_surface: ws },
+        created_at: new Date().toISOString(),
+        pinned: false,
+        position: ws.metadata?.source_message_id ? "inline" : "workspace",
+        schema_version: 1,
+        source_message_id: (ws.metadata?.source_message_id as string) ?? null,
+        source_run_id: (ws.metadata?.source_run_id as string) ?? null,
+        source_artifact_id: (ws.metadata?.source_artifact_id as string) ?? null,
+      });
+    },
+    [addSurface]
+  );
+
+  const { sendAction } = useJarvisWs({
     userId: user?.user_id ?? "",
     onSurface: handleWsSurface,
+    onSurfaceUpdate: handleWsSurfaceUpdate,
     enabled: !!user,
   });
+
+  useEffect(() => {
+    setGlobalSendAction(() => sendAction);
+  }, [sendAction, setGlobalSendAction]);
 
   return (
     <div className="p-4 sm:p-6 space-y-5">

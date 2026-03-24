@@ -94,9 +94,9 @@ test.describe("Pages load and call correct APIs", () => {
     await page.waitForLoadState("networkidle");
   });
 
-  test("Connectors page calls /api/connectors", async ({ page }) => {
+  test("Connectors page calls /api/integrations", async ({ page }) => {
     const calls = await collectAPICalls(page, () => page.goto("/connectors"));
-    expect(calls.some((c) => c.includes("/api/connectors"))).toBeTruthy();
+    expect(calls.some((c) => c.includes("/api/integrations"))).toBeTruthy();
   });
 
   test("Executions page calls /api/executions", async ({ page }) => {

@@ -1,14 +1,17 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
-import { GeneratedSurfaceCard } from "@/components/primitives/generated-surface";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChatPanel } from "@/components/jarvis/chat-panel";
 import { SessionSidebar } from "@/components/jarvis/session-sidebar";
+import { A2UIRenderer } from "@/components/a2ui/renderer";
+import { handleA2UIAction } from "@/components/a2ui/action-handler";
 import { CommandWorkspace } from "@/components/feature/command/command-workspace";
 import { useAuth } from "@/lib/auth";
 import { useJarvisWs } from "@/hooks/use-jarvis-ws";
+import { useSurfaceState } from "@/hooks/use-surface-state";
 import { useSurfaceStore } from "@/stores/surface-store";
 import { useCommandStore } from "@/stores/command-store";
+import { useWsActionStore } from "@/stores/ws-action-store";
 import { fetchConversationMessages, type ConversationMessage } from "@/lib/api";
 import type { A2UISurface } from "@/lib/a2ui-types";
 import type { SurfaceKind } from "@/lib/types/surfaces";
@@ -20,19 +23,23 @@ export default function ChatPage() {
   const allSurfaces = useSurfaceStore((s) => s.surfaces);
   const surfaces = useMemo(() => allSurfaces.filter((sf) => sf.position === "inline"), [allSurfaces]);
   const addSurface = useSurfaceStore((s) => s.addSurface);
-  const removeSurface = useSurfaceStore((s) => s.removeSurface);
-  const togglePin = useSurfaceStore((s) => s.togglePin);
 
   const { mode, setMode } = useCommandStore();
+  const setGlobalSendAction = useWsActionStore((s) => s.setSendAction);
+  const { surfaces: a2uiSurfaces, upsertSurface } = useSurfaceState();
 
-  // Bridge: A2UISurface (from WebSocket) → GeneratedSurface (store)
+  // Bridge: A2UISurface (from WebSocket) -> surface stores
   const handleWsSurface = useCallback(
     (ws: A2UISurface) => {
+      // Primary: keep full protocol surface for A2UI-native render path
+      upsertSurface(ws);
+
+      // Keep workspace/shell surface store synchronized for docking + layout state
       addSurface({
         id: ws.id,
         kind: (ws.metadata?.kind as SurfaceKind) || "summary",
         title: String(ws.metadata?.title ?? "Surface"),
-        data: ws.metadata ?? {},
+        data: { ...(ws.metadata ?? {}), a2ui_surface: ws },
         created_at: new Date().toISOString(),
         pinned: false,
         position: "inline",
@@ -42,7 +49,27 @@ export default function ChatPage() {
         source_artifact_id: (ws.metadata?.source_artifact_id as string) ?? null,
       });
     },
-    [addSurface]
+    [addSurface, upsertSurface]
+  );
+
+  const handleWsSurfaceUpdate = useCallback(
+    (_surfaceId: string, ws: A2UISurface) => {
+      upsertSurface(ws);
+      addSurface({
+        id: ws.id,
+        kind: (ws.metadata?.kind as SurfaceKind) || "summary",
+        title: String(ws.metadata?.title ?? "Surface"),
+        data: { ...(ws.metadata ?? {}), a2ui_surface: ws },
+        created_at: new Date().toISOString(),
+        pinned: false,
+        position: "inline",
+        schema_version: 1,
+        source_message_id: (ws.metadata?.source_message_id as string) ?? null,
+        source_run_id: (ws.metadata?.source_run_id as string) ?? null,
+        source_artifact_id: (ws.metadata?.source_artifact_id as string) ?? null,
+      });
+    },
+    [addSurface, upsertSurface]
   );
 
   // Restore active conversation from global store (survives navigation)
@@ -52,11 +79,16 @@ export default function ChatPage() {
   const [initialMessages, setInitialMessages] = useState<ConversationMessage[]>([]);
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
 
-  const { connected } = useJarvisWs({
+  const { connected, sendAction } = useJarvisWs({
     userId,
     onSurface: handleWsSurface,
+    onSurfaceUpdate: handleWsSurfaceUpdate,
     enabled: !!user,
   });
+
+  useEffect(() => {
+    setGlobalSendAction(() => sendAction);
+  }, [sendAction, setGlobalSendAction]);
 
   const handleSelectConversation = useCallback(
     async (conversationId: string) => {
@@ -147,16 +179,28 @@ export default function ChatPage() {
         </div>
       }
       surfaces={
-        surfaces.length > 0 ? (
+        a2uiSurfaces.length > 0 || surfaces.length > 0 ? (
           <div className="space-y-3">
-            {surfaces.map((surface) => (
-              <GeneratedSurfaceCard
-                key={surface.id}
+            {a2uiSurfaces.map((surface) => (
+              <A2UIRenderer
+                key={`a2ui-${surface.id}`}
                 surface={surface}
-                onPin={togglePin}
-                onRemove={removeSurface}
+                onAction={(action, payload) =>
+                  handleA2UIAction(sendAction, action, payload)
+                }
               />
             ))}
+            {surfaces
+              .filter((surface) => !!surface.data?.a2ui_surface)
+              .map((surface) => (
+                <A2UIRenderer
+                  key={`surface-${surface.id}`}
+                  surface={surface.data.a2ui_surface as A2UISurface}
+                  onAction={(action, payload) =>
+                    handleA2UIAction(sendAction, action, payload)
+                  }
+                />
+              ))}
           </div>
         ) : undefined
       }
