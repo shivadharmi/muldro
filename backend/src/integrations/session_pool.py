@@ -1,7 +1,7 @@
 """Per-user MCP session pool — manages authenticated Client instances.
 
-Each (server_name, user_id) pair gets its own Client with the user's
-OAuth token injected. Sessions are lazily created and TTL-cleaned.
+Each (workspace_id, server_name, user_id) triple gets its own Client with
+the user's OAuth token injected. Sessions are lazily created and TTL-cleaned.
 """
 
 from __future__ import annotations
@@ -22,6 +22,15 @@ logger = logging.getLogger(__name__)
 
 # Default idle timeout before a session is cleaned up (30 minutes)
 SESSION_TTL_SECONDS = 1800
+
+# Mapping: server_name → env var name for stdio token injection.
+# Google Workspace excluded — it uses file-based auth, not raw tokens.
+_STDIO_TOKEN_ENV_VARS: dict[str, str] = {
+    "github": "GITHUB_PERSONAL_ACCESS_TOKEN",
+    "slack": "SLACK_BOT_TOKEN",
+    "linear": "LINEAR_ACCESS_TOKEN",
+    "notion": "NOTION_TOKEN",
+}
 
 
 @dataclass
@@ -58,19 +67,21 @@ class UserMCPSessionPool:
         self._circuit_breaker = circuit_breaker or MCPCircuitBreaker()
         self._normalizer = normalizer or get_normalizer()
         self._ttl_seconds = ttl_seconds
-        # (server_name, user_id) → SessionEntry
-        self._sessions: dict[tuple[str, str], SessionEntry] = {}
+        # (workspace_id, server_name, user_id) → SessionEntry
+        self._sessions: dict[tuple[str, str, str], SessionEntry] = {}
         self._lock = asyncio.Lock()
-        # server_name → config dict (loaded from IntegrationInstallation)
-        self._server_configs: dict[str, dict] = {}
-        # server_name → tool mapping (canonical → raw)
-        self._server_tools: dict[str, dict[str, str]] = {}
-        # canonical_name → metadata
+        # (workspace_id, server_name) → config dict
+        self._server_configs: dict[tuple[str, str], dict] = {}
+        # (workspace_id, server_name) → tool mapping (canonical → raw)
+        self._server_tools: dict[tuple[str, str], dict[str, str]] = {}
+        # canonical_name → metadata (global — names don't conflict across workspaces)
         self._tool_metadata: dict[str, dict[str, Any]] = {}
 
-    def register_server_config(self, server_name: str, config: dict) -> None:
+    def register_server_config(
+        self, server_name: str, config: dict, workspace_id: str = "",
+    ) -> None:
         """Register server configuration for later session creation."""
-        self._server_configs[server_name] = config
+        self._server_configs[(workspace_id, server_name)] = config
 
     async def get_or_create_session(
         self,
@@ -79,7 +90,7 @@ class UserMCPSessionPool:
         workspace_id: str = "",
     ) -> SessionEntry:
         """Get an existing session or create a new one with auth."""
-        key = (server_name, user_id)
+        key = (workspace_id, server_name, user_id)
 
         async with self._lock:
             entry = self._sessions.get(key)
@@ -88,12 +99,17 @@ class UserMCPSessionPool:
                 return entry
 
             # Create new session
-            config = self._server_configs.get(server_name)
+            config = self._server_configs.get((workspace_id, server_name))
             if not config:
                 raise RuntimeError(
                     f"No config registered for MCP server '{server_name}'. "
                     f"Call register_server_config() first."
                 )
+
+            # Shallow copy to avoid mutating the registered template
+            config = dict(config)
+            if "env" in config:
+                config["env"] = dict(config["env"])
 
             # Resolve auth
             auth = await self._resolve_auth(server_name, user_id, config)
@@ -104,7 +120,9 @@ class UserMCPSessionPool:
                 url = config["url"]
                 client_ctx = Client(url, auth=auth) if auth else Client(url)
             else:
-                # stdio transport — build config dict
+                # stdio transport — inject auth as env var, then build config
+                if auth and isinstance(auth, BearerAuth):
+                    _inject_stdio_auth(config, server_name, auth.token)
                 server_cfg = {"mcpServers": {server_name: config}}
                 client_ctx = Client(server_cfg)
 
@@ -113,7 +131,7 @@ class UserMCPSessionPool:
             raw_tools = await client.list_tools()
             tool_dicts = [{"name": t.name, "description": t.description or ""} for t in raw_tools]
             tool_mapping = self._normalizer.register_server_tools(server_name, tool_dicts)
-            self._server_tools[server_name] = tool_mapping
+            self._server_tools[(workspace_id, server_name)] = tool_mapping
             for t in raw_tools:
                 canonical = self._normalizer.normalize(t.name, server_name)
                 input_schema = (
@@ -233,9 +251,11 @@ class UserMCPSessionPool:
             tool_name=tool_name,
         )
 
-    async def refresh_session(self, server_name: str, user_id: str) -> None:
+    async def refresh_session(
+        self, server_name: str, user_id: str, workspace_id: str = "",
+    ) -> None:
         """Force reconnect a session (e.g., after OAuth token refresh)."""
-        key = (server_name, user_id)
+        key = (workspace_id, server_name, user_id)
 
         async with self._lock:
             entry = self._sessions.pop(key, None)
@@ -250,7 +270,7 @@ class UserMCPSessionPool:
     async def cleanup_idle(self) -> int:
         """Remove sessions that have been idle beyond TTL. Returns count removed."""
         now = time.monotonic()
-        to_remove: list[tuple[str, str]] = []
+        to_remove: list[tuple[str, str, str]] = []
 
         async with self._lock:
             for key, entry in self._sessions.items():
@@ -279,32 +299,40 @@ class UserMCPSessionPool:
             self._sessions.clear()
         logger.info("MCP session pool shut down")
 
-    def is_pool_tool(self, tool_name: str) -> bool:
+    def is_pool_tool(self, tool_name: str, workspace_id: str = "") -> bool:
         """Check if a tool is known to any server in the pool."""
-        for server_tools in self._server_tools.values():
+        for key, server_tools in self._server_tools.items():
+            if workspace_id and key[0] != workspace_id:
+                continue
             if tool_name in server_tools:
                 return True
         return False
 
-    def get_server_for_tool(self, tool_name: str) -> str | None:
+    def get_server_for_tool(self, tool_name: str, workspace_id: str = "") -> str | None:
         """Find which server provides a canonical tool name."""
-        for server_name, tools in self._server_tools.items():
+        for key, tools in self._server_tools.items():
+            if workspace_id and key[0] != workspace_id:
+                continue
             if tool_name in tools:
-                return server_name
+                return key[1]  # server_name
         return None
 
-    def get_all_tools(self) -> dict[str, str]:
+    def get_all_tools(self, workspace_id: str = "") -> dict[str, str]:
         """Return all tools across all servers: {canonical_name: server_name}."""
         result: dict[str, str] = {}
-        for server_name, tools in self._server_tools.items():
+        for key, tools in self._server_tools.items():
+            if workspace_id and key[0] != workspace_id:
+                continue
             for canonical in tools:
-                result[canonical] = server_name
+                result[canonical] = key[1]  # server_name
         return result
 
-    def get_all_tool_metadata(self) -> list[dict[str, Any]]:
+    def get_all_tool_metadata(self, workspace_id: str = "") -> list[dict[str, Any]]:
         """Return all tool metadata across servers."""
         result: list[dict[str, Any]] = []
         for name, meta in self._tool_metadata.items():
+            if workspace_id and meta.get("_workspace_id") and meta["_workspace_id"] != workspace_id:
+                continue
             item = dict(meta)
             item["name"] = name
             result.append(item)
@@ -313,7 +341,7 @@ class UserMCPSessionPool:
     def get_health(self) -> dict[str, dict]:
         """Get health status for all servers in the pool."""
         health: dict[str, dict] = {}
-        for (server_name, user_id), entry in self._sessions.items():
+        for (workspace_id, server_name, user_id), entry in self._sessions.items():
             if server_name not in health:
                 health[server_name] = {
                     "sessions": 0,
@@ -379,3 +407,27 @@ def _infer_provider(server_name: str) -> str:
     if "jira" in name_lower or "atlassian" in name_lower:
         return "jira"
     return server_name
+
+
+def _inject_stdio_auth(config: dict, server_name: str, token: str) -> None:
+    """Inject an OAuth/API token into the env dict for a stdio MCP server.
+
+    Each server expects its token in a specific env var. Looks up the var
+    name from _STDIO_TOKEN_ENV_VARS by server_name, falling back to
+    _infer_provider(). Mutates config["env"] in place — caller must pass
+    a copy, not the registered template.
+    """
+    env_var = _STDIO_TOKEN_ENV_VARS.get(server_name)
+    if not env_var:
+        provider = _infer_provider(server_name)
+        env_var = _STDIO_TOKEN_ENV_VARS.get(provider)
+
+    if not env_var:
+        logger.debug(
+            "No env var mapping for stdio server %s — auth token not injected",
+            server_name,
+        )
+        return
+
+    env = config.setdefault("env", {})
+    env[env_var] = token

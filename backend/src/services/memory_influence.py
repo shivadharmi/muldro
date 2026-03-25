@@ -10,7 +10,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select, update
+from sqlalchemy import Text, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.memory import Memory
@@ -212,12 +212,15 @@ class MemoryInfluenceService:
         }
 
     async def _get_influenced_plans(self, memory_id: str) -> list[str]:
-        """Find plans that used this memory (via context_data JSONB search)."""
+        """Find plans that used this memory (via required_context JSONB search)."""
         from src.models.plans import Plan
 
         result = await self._db.execute(
             select(Plan.plan_id)
-            .where(Plan.workspace_id == self._workspace_id)
+            .where(
+                Plan.workspace_id == self._workspace_id,
+                Plan.required_context.cast(Text).contains(memory_id),
+            )
             .order_by(Plan.created_at.desc())
             .limit(10)
         )
@@ -229,7 +232,10 @@ class MemoryInfluenceService:
 
         result = await self._db.execute(
             select(Briefing.briefing_id)
-            .where(Briefing.workspace_id == self._workspace_id)
+            .where(
+                Briefing.workspace_id == self._workspace_id,
+                Briefing.full_text.contains(memory_id),
+            )
             .order_by(Briefing.created_at.desc())
             .limit(5)
         )

@@ -182,7 +182,7 @@ async def call_mcp_tool(
         return {"status": "error", "error": "MCP bridge not initialized"}
 
     # Find which server provides this tool
-    server_name = _session_pool.get_server_for_tool(tool_name)
+    server_name = _session_pool.get_server_for_tool(tool_name, workspace_id=workspace_id)
     if not server_name:
         return {"status": "error", "error": f"Unknown MCP tool: {tool_name}"}
 
@@ -195,10 +195,14 @@ async def call_mcp_tool(
     )
 
 
-async def refresh_server_auth(server_name: str, user_id: str) -> None:
+async def refresh_server_auth(
+    server_name: str, user_id: str, workspace_id: str = "",
+) -> None:
     """Force reconnect a server session after OAuth token refresh."""
     if _session_pool:
-        await _session_pool.refresh_session(server_name, user_id)
+        await _session_pool.refresh_session(
+            server_name, user_id, workspace_id=workspace_id,
+        )
 
 
 def get_bridge_health() -> dict:

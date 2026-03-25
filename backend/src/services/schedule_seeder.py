@@ -116,7 +116,12 @@ async def seed_default_schedules(db: AsyncSession, user_id: str, workspace_id: s
     so code changes propagate on restart. Does NOT change the enabled flag
     (that is controlled by connector authorization).
     """
-    result = await db.execute(select(Schedule).where(Schedule.source == "system"))
+    result = await db.execute(
+        select(Schedule).where(
+            Schedule.source == "system",
+            Schedule.workspace_id == workspace_id,
+        )
+    )
     existing = {s.name: s for s in result.scalars().all()}
 
     now = datetime.now(timezone.utc)
@@ -177,7 +182,9 @@ async def seed_default_schedules(db: AsyncSession, user_id: str, workspace_id: s
     return changed
 
 
-async def enable_schedules_for_connector(db: AsyncSession, provider: str) -> list[str]:
+async def enable_schedules_for_connector(
+    db: AsyncSession, provider: str, workspace_id: str = "",
+) -> list[str]:
     """Enable schedules associated with a newly-authorized connector.
 
     Returns the list of schedule names that were enabled.
@@ -195,6 +202,7 @@ async def enable_schedules_for_connector(db: AsyncSession, provider: str) -> lis
         select(Schedule.name).where(
             Schedule.name.like("observe_%"),
             Schedule.enabled.is_(True),
+            Schedule.workspace_id == workspace_id,
         )
     )
     has_existing_connector = bool(result.first())
@@ -209,6 +217,7 @@ async def enable_schedules_for_connector(db: AsyncSession, provider: str) -> lis
         select(Schedule).where(
             Schedule.name.in_(names_to_enable),
             Schedule.enabled.is_(False),
+            Schedule.workspace_id == workspace_id,
         )
     )
     enabled: list[str] = []
@@ -229,7 +238,10 @@ async def enable_schedules_for_connector(db: AsyncSession, provider: str) -> lis
         # Get user/workspace from one of the enabled schedules
         observe_name = f"observe_{provider}"
         sched_row = await db.execute(
-            select(Schedule).where(Schedule.name == observe_name).limit(1)
+            select(Schedule).where(
+                Schedule.name == observe_name,
+                Schedule.workspace_id == workspace_id,
+            ).limit(1)
         )
         sched_obj = sched_row.scalar_one_or_none()
         if sched_obj:

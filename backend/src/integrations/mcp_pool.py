@@ -80,7 +80,9 @@ class WorkspaceMCPPool:
             self._workspaces[workspace_id][server_name] = entry
 
             # Register with session pool for lazy connection
-            self._session_pool.register_server_config(server_name, config)
+            self._session_pool.register_server_config(
+                server_name, config, workspace_id=workspace_id,
+            )
 
             logger.info(
                 "Added MCP server: workspace=%s server=%s transport=%s",
@@ -110,13 +112,15 @@ class WorkspaceMCPPool:
         if not entry:
             return False
 
-        # Disconnect all user sessions for this server
+        # Disconnect all user sessions for this server in this workspace
         sessions_to_close = [
             key for key in self._session_pool._sessions
-            if key[0] == server_name
+            if key[0] == workspace_id and key[1] == server_name
         ]
         for key in sessions_to_close:
-            await self._session_pool.refresh_session(key[0], key[1])
+            await self._session_pool.refresh_session(
+                key[1], key[2], workspace_id=key[0],
+            )
 
         logger.info(
             "Removed MCP server: workspace=%s server=%s",
@@ -188,7 +192,9 @@ class WorkspaceMCPPool:
             for canonical in entry.tools:
                 result[canonical] = server_name
         # Also include tools from the session pool (discovered at runtime)
-        for tool_name, server_name in self._session_pool.get_all_tools().items():
+        for tool_name, server_name in self._session_pool.get_all_tools(
+            workspace_id=workspace_id,
+        ).items():
             if tool_name not in result:
                 result[tool_name] = server_name
         return result

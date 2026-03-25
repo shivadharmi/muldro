@@ -10,8 +10,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.services.event_processor import EventProcessor
-from src.services.schedule_seeder import DEFAULT_SCHEDULES, seed_default_schedules
-from tests.conftest import TEST_USER_ID
+from src.services.schedule_seeder import (
+    DEFAULT_SCHEDULES,
+    enable_schedules_for_connector,
+    seed_default_schedules,
+)
+from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID
 
 # ── Trigger Action Execution ──────────────────────────────────
 
@@ -315,6 +319,81 @@ class TestScheduleSeeder:
         for call in db.add.call_args_list:
             schedule = call[0][0]
             assert schedule.enabled is False, f"{schedule.name} should be disabled"
+
+    @pytest.mark.asyncio
+    async def test_seed_scopes_to_workspace(self):
+        """Schedules from workspace A should not prevent seeding in workspace B."""
+        db = MagicMock()
+        result_empty = MagicMock()
+        result_empty.scalars.return_value = result_empty
+        result_empty.all.return_value = []
+        db.execute = AsyncMock(return_value=result_empty)
+        db.add = MagicMock()
+        db.flush = AsyncMock()
+
+        # Seed workspace A
+        count_a = await seed_default_schedules(
+            db, user_id=TEST_USER_ID, workspace_id="ws_a",
+        )
+        assert count_a == 7
+
+        # Reset mocks for workspace B — DB still returns empty for ws_b query
+        db.add.reset_mock()
+        db.flush.reset_mock()
+        db.execute = AsyncMock(return_value=result_empty)
+
+        count_b = await seed_default_schedules(
+            db, user_id="usr_other", workspace_id="ws_b",
+        )
+        assert count_b == 7  # Should seed all 7, not skip
+
+    @pytest.mark.asyncio
+    async def test_enable_connector_scopes_to_workspace(self):
+        """Enabling schedules for a connector should scope to the target workspace."""
+        db = MagicMock()
+
+        # Query 1: no existing observe_* enabled in this workspace
+        result_no_existing = MagicMock()
+        result_no_existing.first.return_value = None
+
+        # Query 2: schedules to enable
+        observe_sched = MagicMock()
+        observe_sched.name = "observe_gmail"
+        observe_sched.enabled = False
+        observe_sched.next_run_at = None
+        observe_sched.cron_expr = "*/5 * * * *"
+        observe_sched.workspace_id = TEST_WORKSPACE_ID
+        observe_sched.user_id = TEST_USER_ID
+
+        briefing_sched = MagicMock()
+        briefing_sched.name = "morning_briefing"
+        briefing_sched.enabled = False
+        briefing_sched.next_run_at = None
+        briefing_sched.cron_expr = "0 7 * * *"
+        briefing_sched.workspace_id = TEST_WORKSPACE_ID
+        briefing_sched.user_id = TEST_USER_ID
+
+        result_schedules = MagicMock()
+        result_schedules.scalars.return_value = result_schedules
+        result_schedules.all.return_value = [observe_sched, briefing_sched]
+
+        # Query 3: PerceptionState schedule lookup
+        result_sched_obj = MagicMock()
+        result_sched_obj.scalar_one_or_none.return_value = observe_sched
+
+        db.execute = AsyncMock(
+            side_effect=[result_no_existing, result_schedules, result_sched_obj],
+        )
+        db.flush = AsyncMock()
+
+        enabled = await enable_schedules_for_connector(
+            db, "gmail", workspace_id=TEST_WORKSPACE_ID,
+        )
+        assert "observe_gmail" in enabled
+        assert "morning_briefing" in enabled
+        # Verify schedules were actually enabled
+        assert observe_sched.enabled is True
+        assert briefing_sched.enabled is True
 
 
 # ── Perception Policy Service ─────────────────────────────────
