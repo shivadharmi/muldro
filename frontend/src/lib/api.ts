@@ -19,6 +19,7 @@ import type {
   SystemDashboard,
 } from "./types";
 
+import type { A2UISurface } from "./a2ui-types";
 import { getStoredToken } from "./auth";
 
 // ── Typed API Error ─────────────────────────────────────────────
@@ -165,6 +166,11 @@ export interface ChatSSEEvent {
   cost_usd?: number;
   is_thinking?: boolean;
   conversation_id?: string;
+  // A2UI surface fields (event: "surface")
+  type?: string;
+  id?: string;
+  children?: unknown[];
+  metadata?: Record<string, unknown>;
 }
 
 export async function streamChat(
@@ -418,6 +424,10 @@ export function fetchSurfaces() {
 
 export function fetchSurface(surfaceId: string) {
   return api(`/ui/surfaces/${surfaceId}`);
+}
+
+export function fetchWorkspaceSurfaces(): Promise<{ surfaces: A2UISurface[]; count: number }> {
+  return api("/workspace/surfaces");
 }
 
 // ── Message Context / Evidence ──────────────────────────────────

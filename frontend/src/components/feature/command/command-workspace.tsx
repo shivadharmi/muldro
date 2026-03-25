@@ -14,13 +14,20 @@ export function CommandWorkspace({ sessionRail, commandPanel, surfaces }: Props)
         {sessionRail}
       </div>
 
-      {/* Central Command + Surfaces */}
+      {/* Chat Panel — expands to fill when no surfaces */}
       <div className="flex-1 flex flex-col min-w-0">
-        <div className="flex-1 overflow-y-auto">{commandPanel}</div>
-        {surfaces && (
-          <div className="border-t border-b-primary p-3">{surfaces}</div>
-        )}
+        {commandPanel}
       </div>
+
+      {/* Surface Panel — slides in from right when surfaces exist */}
+      {surfaces && (
+        <div
+          className="w-[380px] shrink-0 border-l border-b-primary bg-surface-0
+                     overflow-y-auto transition-all duration-200 ease-in-out"
+        >
+          {surfaces}
+        </div>
+      )}
     </div>
   );
 }
