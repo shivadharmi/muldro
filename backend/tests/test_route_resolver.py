@@ -113,9 +113,10 @@ class TestDefaultRoutes:
 class TestRouteSeeding:
     @pytest.mark.asyncio
     async def test_seed_defaults_creates_routes(self, mock_db):
-        """Should seed all 10 default routes when none exist."""
+        """Should seed all 16 default routes when none exist."""
         # No existing routes
         result_mock = MagicMock()
+        result_mock.scalars.return_value = result_mock
         result_mock.all.return_value = []
         mock_db.execute = AsyncMock(return_value=result_mock)
 
@@ -127,10 +128,25 @@ class TestRouteSeeding:
 
     @pytest.mark.asyncio
     async def test_seed_defaults_skips_existing(self, mock_db):
-        """Should skip routes that already exist."""
+        """Should skip routes that already exist (with matching fields)."""
+        from src.services.route_resolver import DEFAULT_ROUTES
+
+        # Simulate 3 existing routes with matching fields — no updates needed
+        existing_routes = []
+        for rd in DEFAULT_ROUTES:
+            if rd["name"] in ("create_task", "research", "observe"):
+                r = MagicMock()
+                r.name = rd["name"]
+                r.agent_pipeline = rd["agent_pipeline"]
+                r.priority = rd.get("priority", 100)
+                r.conditions = rd.get("conditions")
+                r.keywords = rd.get("keywords")
+                r.description = rd.get("description")
+                existing_routes.append(r)
+
         result_mock = MagicMock()
-        # Simulate 3 existing routes
-        result_mock.all.return_value = [("create_task",), ("research",), ("observe",)]
+        result_mock.scalars.return_value = result_mock
+        result_mock.all.return_value = existing_routes
         mock_db.execute = AsyncMock(return_value=result_mock)
 
         resolver = RouteResolver(mock_db)

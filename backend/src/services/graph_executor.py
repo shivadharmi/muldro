@@ -21,7 +21,7 @@ from ulid import ULID
 from src.config.settings import Settings, get_anthropic_client
 from src.models.plans import Plan, PlanTask
 from src.models.task_graph import TaskCheckpoint, TaskRun, TaskStep
-from src.orchestrator.contracts import StepResult, ToolCallRequest, ToolCallResult
+from src.orchestrator.contracts import StepResult, ToolCallRequest
 from src.services.audit import AuditService
 from src.services.execution_state import transition_run, transition_step
 
@@ -650,8 +650,6 @@ class GraphExecutor:
             workspace_id=run.workspace_id,
         )
 
-        t0 = time.monotonic()
-
         # 1. Try capability resolver (routes to best backend)
         try:
             from src.integrations.capabilities import get_capability_for_tool
@@ -661,12 +659,6 @@ class GraphExecutor:
             if capability:
                 resolver = CapabilityResolver(self._db, None, run.workspace_id)
                 raw = await resolver.execute(task_type, input_data, user_id=run.user_id)
-                ToolCallResult(
-                    tool_name=request.tool_name,
-                    status="success",
-                    result=raw,
-                    duration_ms=int((time.monotonic() - t0) * 1000),
-                )
                 return raw
         except Exception:
             logger.debug("Capability resolver failed for %s, falling back", task_type)
@@ -681,12 +673,6 @@ class GraphExecutor:
                 user_id=run.user_id,
                 workspace_id=run.workspace_id,
             )
-            ToolCallResult(
-                tool_name=request.tool_name,
-                status="success",
-                result=raw,
-                duration_ms=int((time.monotonic() - t0) * 1000),
-            )
             return raw
 
         # 3. Try connector dispatch via ToolRegistry
@@ -697,12 +683,6 @@ class GraphExecutor:
                 if tool_def.connector_type and tool_def.connector_type != "internal":
                     raw = await self._execute_via_connector(
                         tool_def, task_type, input_data, context_prompt
-                    )
-                    ToolCallResult(
-                        tool_name=request.tool_name,
-                        status="success",
-                        result=raw,
-                        duration_ms=int((time.monotonic() - t0) * 1000),
                     )
                     return raw
 
@@ -801,7 +781,10 @@ class GraphExecutor:
         text = response.content[0].text
         if text.startswith("```"):
             text = text.split("\n", 1)[1].rsplit("```", 1)[0]
-        draft = json.loads(text)
+        try:
+            draft = json.loads(text)
+        except json.JSONDecodeError:
+            draft = {"subject": "Draft", "body": text, "tone": "professional"}
 
         # Actually create the draft in Gmail if recipient is available
         recipient = input_data.get("to") or input_data.get("recipient", "")
@@ -857,7 +840,10 @@ class GraphExecutor:
         text = response.content[0].text
         if text.startswith("```"):
             text = text.split("\n", 1)[1].rsplit("```", 1)[0]
-        return json.loads(text)
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return {"status": "completed", "summary": text}
 
     async def _generic_claude_action(
         self, task_type: str, input_data: dict, context_prompt: str = ""

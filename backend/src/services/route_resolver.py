@@ -240,35 +240,64 @@ class RouteResolver:
         self._cache: list[AgentRoute] | None = None
 
     async def seed_defaults(self) -> int:
-        """Seed default routes if they don't exist. Returns count seeded."""
-        result = await self._db.execute(select(AgentRoute.name))
-        existing = {row[0] for row in result.all()}
+        """Seed or update default routes. Returns count created/updated.
 
-        seeded = 0
+        Creates new routes that don't exist. For existing routes, syncs
+        agent_pipeline, priority, conditions, and keywords from DEFAULT_ROUTES
+        so code changes propagate without manual DB migration.
+        """
+        result = await self._db.execute(select(AgentRoute))
+        existing = {route.name: route for route in result.scalars().all()}
+
+        changed = 0
         for route_def in DEFAULT_ROUTES:
-            if route_def["name"] in existing:
+            name = route_def["name"]
+
+            if name not in existing:
+                route = AgentRoute(
+                    route_id=f"rte_{ULID()}",
+                    name=name,
+                    description=route_def.get("description"),
+                    decision_type=route_def["decision_type"],
+                    agent_pipeline=route_def["agent_pipeline"],
+                    conditions=route_def.get("conditions"),
+                    priority=route_def.get("priority", 100),
+                    enabled=True,
+                    keywords=route_def.get("keywords"),
+                    weight=route_def.get("weight", 1.0),
+                )
+                self._db.add(route)
+                changed += 1
                 continue
 
-            route = AgentRoute(
-                route_id=f"rte_{ULID()}",
-                name=route_def["name"],
-                description=route_def.get("description"),
-                decision_type=route_def["decision_type"],
-                agent_pipeline=route_def["agent_pipeline"],
-                conditions=route_def.get("conditions"),
-                priority=route_def.get("priority", 100),
-                enabled=True,
-                keywords=route_def.get("keywords"),
-                weight=route_def.get("weight", 1.0),
-            )
-            self._db.add(route)
-            seeded += 1
+            # Sync mutable fields if they diverged from defaults
+            route = existing[name]
+            needs_update = False
 
-        if seeded:
+            if route.agent_pipeline != route_def["agent_pipeline"]:
+                route.agent_pipeline = route_def["agent_pipeline"]
+                needs_update = True
+            if route.priority != route_def.get("priority", 100):
+                route.priority = route_def.get("priority", 100)
+                needs_update = True
+            if route.conditions != route_def.get("conditions"):
+                route.conditions = route_def.get("conditions")
+                needs_update = True
+            if route.keywords != route_def.get("keywords"):
+                route.keywords = route_def.get("keywords")
+                needs_update = True
+            if route.description != route_def.get("description"):
+                route.description = route_def.get("description")
+                needs_update = True
+
+            if needs_update:
+                changed += 1
+
+        if changed:
             await self._db.flush()
-            logger.info("Seeded %d default agent routes", seeded)
+            logger.info("Seeded/updated %d agent routes", changed)
 
-        return seeded
+        return changed
 
     async def resolve(self, decision: dict) -> list[dict]:
         """Resolve a planner decision to an agent pipeline.

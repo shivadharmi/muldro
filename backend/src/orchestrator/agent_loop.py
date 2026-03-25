@@ -141,6 +141,8 @@ async def agent_loop(
     execute_tool_fn,
     max_tool_rounds: int = 10,
     stream: bool = False,
+    circuit_breaker=None,  # AnthropicCircuitBreaker | None
+    run_id: str | None = None,  # B1: link tool-level approvals to execution context
 ) -> AsyncGenerator[LoopEvent, None]:
     """Core agent loop — yields LoopEvent instances.
 
@@ -175,6 +177,13 @@ async def agent_loop(
             thinking_budget_tokens = agent.max_tokens - 1
 
     try:
+        # Circuit breaker check — if API is in outage, fail fast
+        if circuit_breaker and not circuit_breaker.is_available(model):
+            text = f"[Agent {agent_name} skipped — API circuit open for {model}]"
+            yield LoopError(agent=agent_name, message=text)
+            yield LoopDone(agent=agent_name, text=text)
+            return
+
         for _round in range(max_tool_rounds):
             api_kwargs: dict[str, Any] = {
                 "model": model,
@@ -254,6 +263,10 @@ async def agent_loop(
             total_cache_creation += getattr(response.usage, "cache_creation_input_tokens", 0) or 0
             total_cache_read += getattr(response.usage, "cache_read_input_tokens", 0) or 0
 
+            # Record success for circuit breaker
+            if circuit_breaker:
+                circuit_breaker.record_success(model)
+
             # Capture thinking from final message
             for block in response.content:
                 if block.type == "thinking" and hasattr(block, "thinking"):
@@ -294,6 +307,7 @@ async def agent_loop(
                     user_id=user_id,
                     db_factory=db_factory,
                     services=services,
+                    run_id=run_id,
                 )
 
                 if not pre_result.get("allowed", True):
@@ -406,6 +420,8 @@ async def agent_loop(
 
     except anthropic.APIError as e:
         logger.error("Claude API error in %s: %s", agent_name, e)
+        if circuit_breaker:
+            circuit_breaker.record_failure(model)
         text = f"[Agent {agent_name} API error: {e}]"
         yield LoopError(agent=agent_name, message=str(e))
     except Exception as e:

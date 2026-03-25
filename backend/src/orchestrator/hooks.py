@@ -26,12 +26,15 @@ async def governor_pre_tool_hook(
     db_factory=None,
     services: dict | None = None,
     trust_tier: str | None = None,
+    run_id: str | None = None,
 ) -> dict:
     """Pre-tool-use hook: enforce Governor policy before external writes.
 
     Args:
         trust_tier: Trust tier of the MCP server (T0-T3). Passed from
             the capability resolver for trust-aware classification.
+        run_id: Current TaskRun ID (if available) — links tool-level
+            approvals to execution context for resume after approval.
 
     Returns:
         {"allowed": True} to proceed
@@ -70,6 +73,11 @@ async def governor_pre_tool_hook(
                         summary=_policy.summarize_input(tool_name, tool_input),
                         risk_level=classification.risk_level,
                         requested_by=user_id,
+                        run_id=run_id,
+                        artifact_refs={
+                            "tool_name": tool_name,
+                            "tool_params": tool_input,
+                        },
                     )
                     await db.commit()
 

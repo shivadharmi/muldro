@@ -191,7 +191,12 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
 
 
 async def seed_installations(db: AsyncSession, workspace_id: str, user_id: str) -> int:
-    """Seed default integration installations. Returns count created."""
+    """Seed or update default integration installations. Returns count created/updated.
+
+    For existing installations, syncs transport, command, args, scopes_granted,
+    and env_template from defaults so code changes propagate on restart.
+    Does NOT change enabled/status (user controls those).
+    """
     # Build trust_id lookup
     trust_result = await db.execute(
         select(ServerTrustRecord).where(ServerTrustRecord.workspace_id == workspace_id)
@@ -200,36 +205,63 @@ async def seed_installations(db: AsyncSession, workspace_id: str, user_id: str) 
         r.server_name: r.trust_id for r in trust_result.scalars().all()
     }
 
-    created = 0
+    # Build lookup of existing installations
+    inst_result = await db.execute(
+        select(IntegrationInstallation).where(
+            IntegrationInstallation.workspace_id == workspace_id,
+        )
+    )
+    existing = {inst.server_name: inst for inst in inst_result.scalars().all()}
+
+    changed = 0
     for inst_data in _DEFAULT_INSTALLATIONS:
         server_name = inst_data["server_name"]
-        existing = await db.execute(
-            select(IntegrationInstallation).where(
-                IntegrationInstallation.workspace_id == workspace_id,
-                IntegrationInstallation.server_name == server_name,
+
+        if server_name not in existing:
+            installation = IntegrationInstallation(
+                install_id=generate_id("inst"),
+                workspace_id=workspace_id,
+                user_id=user_id,
+                server_name=server_name,
+                display_name=inst_data["display_name"],
+                transport=inst_data.get("transport", "stdio"),
+                command=inst_data.get("command"),
+                args=inst_data.get("args"),
+                env_template=inst_data.get("env_template"),
+                trust_id=trust_by_name.get(server_name),
+                auth_provider=inst_data.get("auth_provider"),
+                scopes_granted=inst_data.get("scopes_granted"),
             )
-        )
-        if existing.scalar_one_or_none():
+            db.add(installation)
+            changed += 1
             continue
 
-        installation = IntegrationInstallation(
-            install_id=generate_id("inst"),
-            workspace_id=workspace_id,
-            user_id=user_id,
-            server_name=server_name,
-            display_name=inst_data["display_name"],
-            transport=inst_data.get("transport", "stdio"),
-            command=inst_data.get("command"),
-            args=inst_data.get("args"),
-            env_template=inst_data.get("env_template"),
-            trust_id=trust_by_name.get(server_name),
-            auth_provider=inst_data.get("auth_provider"),
-            scopes_granted=inst_data.get("scopes_granted"),
-        )
-        db.add(installation)
-        created += 1
+        # Sync mutable fields (never touch enabled/status — user controls those)
+        inst = existing[server_name]
+        needs_update = False
 
-    if created:
+        if inst.command != inst_data.get("command"):
+            inst.command = inst_data.get("command")
+            needs_update = True
+        if inst.args != inst_data.get("args"):
+            inst.args = inst_data.get("args")
+            needs_update = True
+        if inst.scopes_granted != inst_data.get("scopes_granted"):
+            inst.scopes_granted = inst_data.get("scopes_granted")
+            needs_update = True
+        if inst.env_template != inst_data.get("env_template"):
+            inst.env_template = inst_data.get("env_template")
+            needs_update = True
+        # Update trust_id if it was populated later
+        expected_trust = trust_by_name.get(server_name)
+        if expected_trust and inst.trust_id != expected_trust:
+            inst.trust_id = expected_trust
+            needs_update = True
+
+        if needs_update:
+            changed += 1
+
+    if changed:
         await db.flush()
-        logger.info("Seeded %d integration installations", created)
-    return created
+        logger.info("Seeded/updated %d integration installations", changed)
+    return changed

@@ -58,7 +58,9 @@ def empty_builder():
 def _make_procedure(name="email_procedure", steps=None):
     p = MagicMock()
     p.name = name
-    p.steps_json = steps or ["step1", "step2"]
+    p.task_template = steps or [{"task_type": "tool_call", "input_template": {}}]
+    p.confidence = 0.8
+    p.usage_count = 3
     return p
 
 
@@ -158,11 +160,12 @@ class TestBuildWithGoals:
     @pytest.mark.asyncio
     async def test_build_with_procedures(self, builder, mock_procedure_library):
         procs = [_make_procedure("email_send_procedure")]
-        mock_procedure_library.find_procedures.return_value = procs
+        mock_procedure_library.get_procedures.return_value = procs
 
-        pack = await builder.build("usr_1", "send email", task_type="send_email")
+        pack = await builder.build("usr_1", "send email")
         assert len(pack.procedures) == 1
         assert pack.procedures[0]["name"] == "email_send_procedure"
+        assert pack.procedures[0]["confidence"] == 0.8
 
     @pytest.mark.asyncio
     async def test_build_with_artifacts(self, builder, mock_artifact_store):

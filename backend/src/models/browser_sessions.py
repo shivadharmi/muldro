@@ -1,32 +1,10 @@
-"""Browser automation models — session tracking and action audit log."""
+"""Browser automation models — action audit log for replay."""
 
-from datetime import datetime
-
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text
+from sqlalchemy import ForeignKey, Index, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.models.base import Base, TimestampMixin
-
-
-class BrowserSession(Base, TimestampMixin):
-    __tablename__ = "browser_sessions"
-
-    session_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    workspace_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
-    )
-    status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="idle"
-    )  # idle/active/recording
-    url: Mapped[str | None] = mapped_column(Text, nullable=True)
-    page_title: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    screenshot_artifact_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    last_action_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-    __table_args__ = (Index("ix_browser_sessions_user_status", "user_id", "status"),)
 
 
 class BrowserAction(Base, TimestampMixin):

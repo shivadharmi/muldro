@@ -85,35 +85,59 @@ _SERVER_TO_CONNECTORS: dict[str, list[str]] = {
 
 
 async def seed_trust_records(db: AsyncSession, workspace_id: str) -> list[ServerTrustRecord]:
-    """Seed default trust records. Returns created records (skips existing)."""
+    """Seed or update default trust records. Returns created/updated records.
+
+    For existing records, syncs trust_tier, verified_by, and status
+    from defaults so code changes propagate on restart.
+    """
     from sqlalchemy import select
 
-    created = []
+    result = await db.execute(
+        select(ServerTrustRecord).where(ServerTrustRecord.workspace_id == workspace_id)
+    )
+    existing = {r.server_name: r for r in result.scalars().all()}
+
+    changed = []
     for rec_data in _DEFAULT_TRUST_RECORDS:
-        existing = await db.execute(
-            select(ServerTrustRecord).where(
-                ServerTrustRecord.workspace_id == workspace_id,
-                ServerTrustRecord.server_name == rec_data["server_name"],
+        name = rec_data["server_name"]
+
+        if name not in existing:
+            record = ServerTrustRecord(
+                trust_id=generate_id("trs"),
+                workspace_id=workspace_id,
+                **rec_data,
             )
-        )
-        if existing.scalar_one_or_none():
+            db.add(record)
+            changed.append(record)
             continue
 
-        record = ServerTrustRecord(
-            trust_id=generate_id("trs"),
-            workspace_id=workspace_id,
-            **rec_data,
-        )
-        db.add(record)
-        created.append(record)
+        # Sync mutable fields
+        record = existing[name]
+        needs_update = False
+        if record.trust_tier != rec_data["trust_tier"]:
+            record.trust_tier = rec_data["trust_tier"]
+            needs_update = True
+        if record.verified_by != rec_data.get("verified_by"):
+            record.verified_by = rec_data.get("verified_by")
+            needs_update = True
+        if record.status != rec_data.get("status", "active"):
+            record.status = rec_data.get("status", "active")
+            needs_update = True
 
-    if created:
+        if needs_update:
+            changed.append(record)
+
+    if changed:
         await db.flush()
-    return created
+    return changed
 
 
 async def seed_capability_bindings(db: AsyncSession, workspace_id: str) -> list[CapabilityBinding]:
-    """Seed default capability bindings from TOOL_TO_CAPABILITY mapping."""
+    """Seed or update capability bindings from TOOL_TO_CAPABILITY mapping.
+
+    For existing bindings, syncs priority, backend_ref, and trust_id
+    from current defaults so code changes propagate on restart.
+    """
     from sqlalchemy import select
 
     # Build trust_id lookup
@@ -128,7 +152,15 @@ async def seed_capability_bindings(db: AsyncSession, workspace_id: str) -> list[
         for conn in connectors:
             connector_to_server[conn] = server
 
-    created = []
+    # Load existing bindings for this workspace
+    existing_result = await db.execute(
+        select(CapabilityBinding).where(CapabilityBinding.workspace_id == workspace_id)
+    )
+    existing_map: dict[tuple[str, str], CapabilityBinding] = {
+        (b.capability, b.backend_type): b for b in existing_result.scalars().all()
+    }
+
+    changed = []
     seen_caps: set[tuple[str, str]] = set()  # (capability, backend_type)
 
     for tool_name, capability in TOOL_TO_CAPABILITY.items():
@@ -136,12 +168,10 @@ async def seed_capability_bindings(db: AsyncSession, workspace_id: str) -> list[
         if not family:
             continue
 
-        # Determine backend type from the capability catalog
         cap_meta = CAPABILITY_CATALOG.get(capability)
         if not cap_meta:
             continue
 
-        # Determine which server provides this tool
         connector_type = _infer_connector(tool_name, family)
         server_name = connector_to_server.get(connector_type, "")
         trust_id = trust_by_server.get(server_name)
@@ -154,34 +184,45 @@ async def seed_capability_bindings(db: AsyncSession, workspace_id: str) -> list[
             continue
         seen_caps.add(key)
 
-        existing = await db.execute(
-            select(CapabilityBinding).where(
-                CapabilityBinding.workspace_id == workspace_id,
-                CapabilityBinding.capability == capability,
-                CapabilityBinding.backend_type == backend_type,
+        expected_ref = server_name or connector_type
+        expected_priority = 10 if backend_type == "native" else 50
+
+        if key not in existing_map:
+            binding = CapabilityBinding(
+                binding_id=generate_id("capb"),
+                workspace_id=workspace_id,
+                capability=capability,
+                family=str(family),
+                backend_type=backend_type,
+                backend_ref=expected_ref,
+                tool_name=tool_name,
+                priority=expected_priority,
+                enabled=True,
+                trust_id=trust_id,
             )
-        )
-        if existing.scalar_one_or_none():
+            db.add(binding)
+            changed.append(binding)
             continue
 
-        binding = CapabilityBinding(
-            binding_id=generate_id("capb"),
-            workspace_id=workspace_id,
-            capability=capability,
-            family=str(family),
-            backend_type=backend_type,
-            backend_ref=server_name or connector_type,
-            tool_name=tool_name,
-            priority=10 if backend_type == "native" else 50,
-            enabled=True,
-            trust_id=trust_id,
-        )
-        db.add(binding)
-        created.append(binding)
+        # Sync mutable fields
+        binding = existing_map[key]
+        needs_update = False
+        if binding.backend_ref != expected_ref:
+            binding.backend_ref = expected_ref
+            needs_update = True
+        if binding.priority != expected_priority:
+            binding.priority = expected_priority
+            needs_update = True
+        if trust_id and binding.trust_id != trust_id:
+            binding.trust_id = trust_id
+            needs_update = True
 
-    if created:
+        if needs_update:
+            changed.append(binding)
+
+    if changed:
         await db.flush()
-    return created
+    return changed
 
 
 def _infer_connector(tool_name: str, family: CapabilityFamily) -> str:

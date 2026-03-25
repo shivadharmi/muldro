@@ -381,40 +381,20 @@ class TestOrchestrator:
 
     @patch("src.orchestrator.jarvis.get_anthropic_client")
     async def test_extract_decision_from_json(self, mock_get_client):
-        from src.orchestrator.jarvis import JarvisOrchestrator
-
-        mock_get_client.return_value = AsyncMock()
-        settings = make_mock_settings(
-            daily_token_budget_usd=5.0,
-            use_bedrock=False,
-            telegram_bot_token="",
-        )
-        orchestrator = JarvisOrchestrator(
-            settings=settings, db_factory=MagicMock(), services=ServiceContainer()
-        )
+        from src.orchestrator.intent_classifier import extract_decision
 
         # Test JSON extraction — returns PlannerOutput
         text = 'Here is my analysis:\n{"decision": "create_task", "priority": "high"}\nDone.'
-        result = orchestrator._extract_decision(text)
+        result = extract_decision(text)
         assert result.decision == "create_task"
         assert result.priority == "high"
 
     @patch("src.orchestrator.jarvis.get_anthropic_client")
     async def test_extract_decision_fallback(self, mock_get_client):
-        from src.orchestrator.jarvis import JarvisOrchestrator
-
-        mock_get_client.return_value = AsyncMock()
-        settings = make_mock_settings(
-            daily_token_budget_usd=5.0,
-            use_bedrock=False,
-            telegram_bot_token="",
-        )
-        orchestrator = JarvisOrchestrator(
-            settings=settings, db_factory=MagicMock(), services=ServiceContainer()
-        )
+        from src.orchestrator.intent_classifier import extract_decision
 
         # No JSON in response — fallback to PlannerOutput defaults
-        result = orchestrator._extract_decision("Just some plain text response")
+        result = extract_decision("Just some plain text response")
         assert result.decision == "acknowledge"
         assert result.reasoning == "Just some plain text response"[:500]
 

@@ -1,7 +1,7 @@
 """Tests for IntegrationControlPlane and IntegrationInstallation model."""
 
-from src.models.integration_installation import IntegrationInstallation
 from src.models.ids import generate_id, validate_typed_id
+from src.models.integration_installation import IntegrationInstallation
 
 
 class TestIntegrationInstallation:

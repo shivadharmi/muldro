@@ -25,7 +25,7 @@ User <-> Telegram Bot / Next.js Frontend (A2UI)
 ```
 
 **Key paths:**
-- Orchestrator + agents: `backend/src/orchestrator/` (jarvis.py, agents.py, agent_loop.py, hooks.py, prompts.py, tracing.py, budget.py, perception.py, recovery.py)
+- Orchestrator + agents: `backend/src/orchestrator/` (jarvis.py, agents.py, agent_loop.py, hooks.py, prompts.py, tracing.py, budget.py, perception.py, recovery.py, intent_classifier.py, api_circuit_breaker.py)
 - Services (business logic): `backend/src/services/` (planner, governor, operator, presenter, memory_service, world_model, event_processor, etc.)
 - MCP tool servers: `backend/src/tools/` (intelligence_server.py, communication_server.py, mcp_config.py)
 - Runtime contracts: `backend/src/orchestrator/contracts.py` (PlannerOutput, PolicyDecision, StepResult, ToolCallRequest, DomainEvent, WorkspaceSurfaceMetadata, WorkspaceSurfacePush)
@@ -162,6 +162,16 @@ System prompts are split into two parts (`src/orchestrator/prompts.py`):
 
 Only the Planner sees the decision framework. Other agents receive only the core soul + their role prompt. This prevents non-Planner agents from making routing decisions.
 
+## Intent Classification
+
+Fast Haiku-based intent classification is extracted into `src/orchestrator/intent_classifier.py`:
+- `classify_intent()` — calls Haiku, returns `(intent, confidence, sources)`
+- `intent_to_decision()` — synthesizes lightweight PlannerOutput from fast intents
+- `extract_decision()` — parses structured JSON from Planner response text
+- Constants: `FAST_INTENTS`, `INTENT_CONFIDENCE_THRESHOLD` (0.7), `VALID_PERCEPTION_SOURCES`
+
+Fast intents (`greeting`, `chitchat`, `simple_question`, `data_fetch`, `status_query`, `approval_response`) skip the Planner entirely and route directly to the appropriate agent.
+
 ## Data Flow
 
 Observer → EventProcessor (normalize, score, dedup) → Librarian (entities, memories) → Planner (task graphs) → Governor (policy/approval gate) → Operator (execute) → Presenter (deliver via Telegram/A2UI)
@@ -226,8 +236,13 @@ Every external write requires approval in v1. Audit log with correlation IDs on 
 
 - **Tool timeout**: 60s via `asyncio.wait_for`. Timed-out tools return `{"error": "...", "timed_out": true}`.
 - **API retry**: 3 attempts with exponential backoff (2s/4s/8s) for `anthropic.RateLimitError` only.
+- **API circuit breaker**: `AnthropicCircuitBreaker` (`src/orchestrator/api_circuit_breaker.py`) tracks failures per model. CLOSED/OPEN/HALF_OPEN states, 5-failure threshold, 120s cooldown. When OPEN, agent_loop yields LoopError without calling the API. Mirrors `MCPCircuitBreaker` pattern.
 - **Tool error signaling**: Error dicts (`{"error": "..."}`) are flagged with `is_error: true` in tool results so Claude knows the tool failed.
-- **Governor approval notification**: When the governor hook creates an approval, the Notifier immediately sends an `approval_request` notification to the user (Telegram + Web).
+- **Governor approval notification**: When the governor hook creates an approval, the Notifier immediately sends an `approval_request` notification to the user (Telegram + Web). Tool-level approvals now include `run_id` and `artifact_refs` (tool_name + tool_params) for resume after approval.
+- **Background task tracking**: `_spawn_background()` replaces bare `asyncio.create_task()`. Tasks are tracked in `_background_tasks` set with done-callback cleanup. `shutdown()` awaits pending tasks.
+- **Perception idempotency**: `pending_run=False` is set atomically BEFORE running perception cycles, preventing the next scheduler tick from double-picking the same source.
+- **EventBus init race**: `asyncio.Lock()` with double-check pattern guards lazy `_ensure_event_bus()` initialization.
+- **JSON parsing protection**: `_draft_action` and `_summarize_action` in GraphExecutor catch `JSONDecodeError` with graceful fallback.
 - **Budget hydration**: BudgetTracker in-memory counter hydrates from DB on day change (survives restarts).
 - **Input validation**: `process_message` and `process_message_stream` reject empty `user_id`, `workspace_id`, or `message` before starting a trace.
 
@@ -237,7 +252,16 @@ The `SchedulerLoop` (`src/services/scheduler.py`) runs a `_tick_background_tasks
 
 ## Conversation Context
 
-`_load_conversation_history` loads up to 20 messages (8000 chars). When history overflows, older messages are summarized via Haiku (`_summarize_history`) and prepended as `[Earlier conversation summary]`. Most recent 5 messages are kept verbatim.
+`_load_conversation_history` loads up to 20 messages (8000 chars) including `metadata_` column. Assistant messages are annotated with their decision type (e.g., `Assistant [create_task]: ...`), giving downstream agents execution lineage. When history overflows, older messages are summarized via Haiku (`_summarize_history`) and prepended as `[Earlier conversation summary]`. Most recent 5 messages are kept verbatim.
+
+## Intelligence Loop (Soul)
+
+The system learns from execution outcomes and synthesizes across perception sources:
+
+- **Outcome learning** (`_learn_from_outcome`): After each run completes, checks for linked approval decisions. Approved/rejected actions are stored as preference memories. Failed plans are stored as task_context memories (30-day TTL). These flow into future context packs via the preference system.
+- **Cross-source synthesis**: When 2+ perception sources have new events in the same scheduler tick, triggers a Planner synthesis call to identify cross-cutting insights. Throttled to once per 30 minutes, budget-aware.
+- **Explicit preference injection**: `ContextBuilder.build()` fetches ALL active preferences via `get_user_preferences()` and merges with semantic matches, ensuring preferences always influence decisions even when they don't match the current query semantically.
+- **Context enrichment**: `_assemble_context()` builds a full ContextPack with entities, memories, preferences, graph relationships (Neo4j), related runs, procedures, artifacts, goals, constraints, and risks. Rendered as structured sections in the agent system prompt.
 
 ## Multi-Tenant Workspace Isolation
 
@@ -270,3 +294,7 @@ All 54 data tables are scoped by `workspace_id` (NOT NULL FK to `workspaces`). O
 - Do not add direct decision handlers only to `process_message` — always wire into BOTH `process_message` and `process_message_stream` (the chat UI uses the streaming path)
 - Do not use `has_key` condition for plan_id checks — use `has_truthy_key` since Pydantic dumps include `plan_id: null`
 - Do not use `JARVIS_SOUL` directly — use `JARVIS_SOUL_CORE` (all agents) + `JARVIS_DECISION_FRAMEWORK` (Planner only)
+- Do not use bare `asyncio.create_task()` in jarvis.py — use `self._spawn_background()` for lifecycle tracking
+- Do not import `classify_intent`/`extract_decision`/`intent_to_decision` from `jarvis.py` — they moved to `src/orchestrator/intent_classifier.py`
+- Do not create tool-level approvals without `run_id` and `artifact_refs` — the approval resume path needs these to re-execute the tool after user approval
+- Do not skip `workspace_id` when calling `_assemble_context()` or `ContextBuilder.build()` — preferences and related runs are workspace-scoped

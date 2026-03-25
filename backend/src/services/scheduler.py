@@ -39,6 +39,7 @@ class SchedulerLoop:
         self._orchestrator = orchestrator
         self._user_ids = user_ids or []
         self._running = False
+        self._last_synthesis_at: float = 0.0  # D2: throttle cross-source synthesis
 
     async def run(self) -> None:
         """Main loop: every 30s, check for due schedules and fire them."""
@@ -166,6 +167,12 @@ class SchedulerLoop:
                 if not due_states:
                     return
 
+                # C4: Clear pending_run BEFORE running cycles to prevent
+                # the next 30s tick from double-picking the same sources
+                for state in due_states:
+                    state.pending_run = False
+                await db.flush()
+
                 for state in due_states:
                     try:
                         workspace_id = await self._resolve_workspace(state.user_id)
@@ -194,6 +201,45 @@ class SchedulerLoop:
 
                 await db.commit()
                 logger.info("Perception tick: %d sources processed", len(due_states))
+
+                # D2: Cross-source synthesis — when 2+ sources had new events,
+                # ask the Planner to synthesize cross-cutting insights
+                import time
+
+                sources_with_events = sum(
+                    1
+                    for s in due_states
+                    if not s.pending_run  # was processed (not skipped)
+                )
+                now = time.monotonic()
+                synthesis_cooldown = 1800  # 30 minutes
+                if (
+                    sources_with_events >= 2
+                    and self._orchestrator
+                    and (now - self._last_synthesis_at) > synthesis_cooldown
+                ):
+                    self._last_synthesis_at = now
+                    try:
+                        user_id = due_states[0].user_id
+                        ws_id = due_states[0].workspace_id or ""
+                        source_names = [s.source for s in due_states]
+                        await self._orchestrator.process_message(
+                            message=(
+                                f"Synthesize recent observations across these sources: "
+                                f"{', '.join(source_names)}. "
+                                f"Identify any cross-cutting insights, connections between "
+                                f"events, or actions that span multiple sources."
+                            ),
+                            user_id=user_id,
+                            workspace_id=ws_id,
+                            surface="perception_synthesis",
+                        )
+                        logger.info(
+                            "Cross-source synthesis triggered for %d sources",
+                            sources_with_events,
+                        )
+                    except Exception:
+                        logger.debug("Cross-source synthesis failed", exc_info=True)
         except Exception:
             logger.warning("Perception tick error", exc_info=True)
 

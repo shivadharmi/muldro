@@ -297,7 +297,7 @@ TOOL_TO_CAPABILITY: dict[str, str] = {
     "drive_search": "doc.drive_search",
     "drive_create": "doc.drive_create",
     "drive_delete": "doc.drive_delete",
-    # Browser
+    # Browser (native module)
     "browser_open": "browser.open",
     "browser_snapshot": "browser.snapshot",
     "browser_extract": "browser.extract",
@@ -305,7 +305,23 @@ TOOL_TO_CAPABILITY: dict[str, str] = {
     "browser_type": "browser.type",
     "browser_submit": "browser.submit",
     "browser_screenshot": "browser.screenshot",
+    # Browser (Playwright MCP — @playwright/mcp tool names)
+    "browser_navigate": "browser.open",
+    "browser_tabs": "browser.open",
+    "browser_press_key": "browser.type",
+    "browser_select_option": "browser.click",
+    "browser_hover": "browser.click",
+    "browser_drag": "browser.click",
+    "browser_handle_dialog": "browser.click",
+    "browser_file_upload": "browser.submit",
+    "browser_wait": "browser.snapshot",
+    "browser_close": "browser.open",
+    "browser_resize": "browser.open",
+    "browser_pdf_save": "browser.screenshot",
+    "browser_network_requests": "browser.snapshot",
+    "browser_console_messages": "browser.snapshot",
     # Research
+    "web_search": "search.web",
     "perplexity_search": "search.web",
     # Internal intelligence
     "search_memory": "internal.search_memory",
