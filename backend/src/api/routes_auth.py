@@ -831,7 +831,9 @@ async def oauth_callback(
             "twitter": [],
         }
         for server_name in _provider_servers.get(provider, []):
-            background_tasks.add_task(refresh_server_auth, server_name, user_id)
+            background_tasks.add_task(
+                refresh_server_auth, server_name, user_id, workspace_id=workspace_id,
+            )
     except Exception:
         logger.debug("MCP session refresh skipped", exc_info=True)
 
@@ -927,18 +929,22 @@ async def _ensure_integration(
             await db.commit()
 
         # Enable schedules tied to this integration (observation + globals on first)
-        await _enable_integration_schedules(db_factory, provider)
+        await _enable_integration_schedules(db_factory, provider, workspace_id=workspace_id)
     except Exception:
         logger.warning("Failed to ensure integration %s for %s", provider, user_id, exc_info=True)
 
 
-async def _enable_integration_schedules(db_factory, provider: str) -> None:
+async def _enable_integration_schedules(
+    db_factory, provider: str, workspace_id: str = "",
+) -> None:
     """Enable seeded schedules when an integration is authorized."""
     try:
         from src.services.schedule_seeder import enable_schedules_for_connector
 
         async with db_factory() as db:
-            enabled = await enable_schedules_for_connector(db, provider)
+            enabled = await enable_schedules_for_connector(
+                db, provider, workspace_id=workspace_id,
+            )
             if enabled:
                 await db.commit()
     except Exception:
