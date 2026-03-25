@@ -1,6 +1,6 @@
 #!/bin/bash
 # Pre-commit hook for Jarvis project
-# Runs lint checks on staged Python files
+# Mirrors CI checks: ruff lint + format, TypeScript types, secrets scan
 
 set -e
 
@@ -8,7 +8,7 @@ cd "$(git rev-parse --show-toplevel)"
 
 ERRORS=0
 
-# Check Python lint
+# Check Python lint + format (matches CI: ruff check + ruff format --check)
 if git diff --cached --name-only | grep -q '\.py$'; then
   echo "Running ruff on staged Python files..."
   cd backend
@@ -18,8 +18,25 @@ if git diff --cached --name-only | grep -q '\.py$'; then
       echo "ERROR: Python lint failed. Run 'ruff check --fix src/ tests/' to fix."
       ERRORS=1
     fi
+    if ! ruff format --check src/ tests/ 2>/dev/null; then
+      echo "ERROR: Python format check failed. Run 'ruff format src/ tests/' to fix."
+      ERRORS=1
+    fi
   fi
   cd ..
+fi
+
+# Check TypeScript
+if git diff --cached --name-only | grep -qE '\.tsx?$'; then
+  echo "Checking TypeScript types..."
+  if [ -d "frontend/node_modules" ]; then
+    cd frontend
+    if ! npx tsc --noEmit 2>/dev/null; then
+      echo "ERROR: TypeScript type check failed."
+      ERRORS=1
+    fi
+    cd ..
+  fi
 fi
 
 # Check for secrets in staged files (exclude example files and this hook)
