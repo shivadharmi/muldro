@@ -4,6 +4,7 @@ Extracts the duplicated logic from JarvisOrchestrator._call_agent() and
 _call_agent_stream() into a single async generator that yields typed events.
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -87,6 +88,27 @@ LoopEvent = (
     | LoopDone
     | LoopError
 )
+
+
+_MAX_API_RETRIES = 3
+_RETRY_BASE_DELAY = 2.0  # seconds
+
+
+async def _api_call_with_retry(client, api_kwargs: dict, agent_name: str):
+    """Call Claude API with exponential backoff retry on rate limits."""
+    for attempt in range(_MAX_API_RETRIES):
+        try:
+            return await client.messages.create(**api_kwargs)
+        except anthropic.RateLimitError:
+            if attempt < _MAX_API_RETRIES - 1:
+                wait = min(_RETRY_BASE_DELAY * (2 ** attempt), 30)
+                logger.warning(
+                    "Rate limited on %s (attempt %d/%d), retrying in %.1fs",
+                    agent_name, attempt + 1, _MAX_API_RETRIES, wait,
+                )
+                await asyncio.sleep(wait)
+            else:
+                raise
 
 
 def _sanitize_content_blocks(content) -> list[dict]:
@@ -210,10 +232,10 @@ async def agent_loop(
                         if thinking_enabled:
                             api_kwargs["temperature"] = agent.temperature
                             api_kwargs.pop("thinking", None)
-                        response = await client.messages.create(**api_kwargs)
+                        response = await _api_call_with_retry(client, api_kwargs, agent_name)
             else:
                 try:
-                    response = await client.messages.create(**api_kwargs)
+                    response = await _api_call_with_retry(client, api_kwargs, agent_name)
                 except Exception as think_err:
                     if thinking_enabled:
                         logger.warning(
@@ -223,7 +245,7 @@ async def agent_loop(
                         )
                         api_kwargs["temperature"] = agent.temperature
                         api_kwargs.pop("thinking", None)
-                        response = await client.messages.create(**api_kwargs)
+                        response = await _api_call_with_retry(client, api_kwargs, agent_name)
                     else:
                         raise
 
@@ -305,19 +327,33 @@ async def agent_loop(
                     continue
 
                 tool_start = time.time()
-                result = await execute_tool_fn(
-                    tool_name,
-                    tool_input,
-                    user_id=user_id,
-                    workspace_id=workspace_id,
-                )
+                try:
+                    result = await asyncio.wait_for(
+                        execute_tool_fn(
+                            tool_name,
+                            tool_input,
+                            user_id=user_id,
+                            workspace_id=workspace_id,
+                        ),
+                        timeout=60.0,
+                    )
+                except asyncio.TimeoutError:
+                    result = {"error": f"Tool '{tool_name}' timed out after 60s", "timed_out": True}
                 tool_latency = int((time.time() - tool_start) * 1000)
+
+                # Detect tool errors and signal them to Claude via is_error
+                is_error = (
+                    isinstance(result, dict)
+                    and "error" in result
+                    and result.get("status") not in ("ok", "success", "updated", "ingested")
+                )
 
                 tool_results.append(
                     {
                         "type": "tool_result",
                         "tool_use_id": tool_block.id,
                         "content": json.dumps(result) if isinstance(result, dict) else str(result),
+                        **({"is_error": True} if is_error else {}),
                     }
                 )
 
@@ -335,7 +371,8 @@ async def agent_loop(
                         tool_name=tool_name,
                         input_data=tool_input if isinstance(tool_input, dict) else {},
                         output_data=persisted_output,
-                        status="success",
+                        status="error" if is_error else "success",
+                        error=result.get("error", "")[:200] if is_error else None,
                         duration_ms=tool_latency,
                     )
                 )

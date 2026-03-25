@@ -167,7 +167,7 @@ AGENT_THINKING: dict[str, ThinkingConfig] = {
     "governor": ThinkingConfig(enabled=True, budget_tokens=2048),
     "operator": ThinkingConfig(enabled=True, budget_tokens=2048),
     "observer": ThinkingConfig(enabled=True, budget_tokens=2048),
-    "persona": ThinkingConfig(enabled=False, budget_tokens=0),
+    "persona": ThinkingConfig(enabled=True, budget_tokens=2048),
 }
 
 

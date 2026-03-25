@@ -57,7 +57,7 @@ class SchedulerLoop:
         self._running = False
 
     async def _tick(self) -> None:
-        """One scheduler cycle: perception state, then due schedules."""
+        """One scheduler cycle: perception, follow-ups, background tasks, schedules."""
         factory = get_session_factory()
 
         # 1. Drive perception from perception_state table
@@ -66,7 +66,10 @@ class SchedulerLoop:
         # 2. Check follow-up notifications
         await self._check_follow_ups(factory)
 
-        # 3. Process due schedules
+        # 3. Execute pending background tasks
+        await self._tick_background_tasks(factory)
+
+        # 4. Process due schedules
         async with factory() as db:
             now = datetime.now(timezone.utc)
 
@@ -193,6 +196,68 @@ class SchedulerLoop:
                 logger.info("Perception tick: %d sources processed", len(due_states))
         except Exception:
             logger.warning("Perception tick error", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Background task execution
+    # ------------------------------------------------------------------
+
+    async def _tick_background_tasks(self, factory) -> None:
+        """Execute pending background tasks queued by the orchestrator."""
+        if not self._orchestrator:
+            return
+
+        try:
+            from src.models.task_graph import TaskRun
+
+            async with factory() as db:
+                result = await db.execute(
+                    select(TaskRun)
+                    .where(
+                        TaskRun.status == "pending",
+                        TaskRun.source == "background",
+                    )
+                    .order_by(TaskRun.created_at.asc())
+                    .limit(3)
+                )
+                pending = list(result.scalars().all())
+
+                if not pending:
+                    return
+
+                for run in pending:
+                    try:
+                        workspace_id = run.workspace_id or ""
+                        from src.services.graph_executor import (
+                            create_graph_executor,
+                        )
+
+                        executor = await create_graph_executor(
+                            settings=self._settings,
+                            db=db,
+                            workspace_id=workspace_id,
+                        )
+                        completed = await executor.execute_run(
+                            run.run_id,
+                        )
+                        logger.info(
+                            "Background task %s completed: %s",
+                            run.run_id,
+                            completed.status,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Background task %s failed: %s",
+                            run.run_id,
+                            e,
+                        )
+
+                await db.commit()
+                logger.info(
+                    "Background tick: %d tasks processed",
+                    len(pending),
+                )
+        except Exception:
+            logger.warning("Background task tick error", exc_info=True)
 
     # ------------------------------------------------------------------
     # Follow-up notifications

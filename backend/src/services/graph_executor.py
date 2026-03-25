@@ -802,6 +802,38 @@ class GraphExecutor:
         if text.startswith("```"):
             text = text.split("\n", 1)[1].rsplit("```", 1)[0]
         draft = json.loads(text)
+
+        # Actually create the draft in Gmail if recipient is available
+        recipient = input_data.get("to") or input_data.get("recipient", "")
+        if recipient and self._connector_credentials_fn:
+            try:
+                from src.connectors.base import CONNECTOR_REGISTRY
+
+                connector_cls = CONNECTOR_REGISTRY.get("gmail")
+                if connector_cls:
+                    creds = await self._connector_credentials_fn("gmail")
+                    if creds:
+                        connector = connector_cls(self._settings)
+                        create_result = await connector.execute_action(
+                            "create_draft",
+                            {
+                                "to": recipient,
+                                "subject": draft.get("subject", ""),
+                                "body": draft.get("body", ""),
+                            },
+                            creds,
+                        )
+                        draft["gmail_draft_id"] = create_result.get("draft_id")
+                        draft["created_in_gmail"] = True
+                        logger.info(
+                            "Gmail draft created for %s: %s",
+                            recipient,
+                            draft.get("subject", ""),
+                        )
+            except Exception:
+                logger.warning("Failed to create Gmail draft, returning text-only", exc_info=True)
+                draft["created_in_gmail"] = False
+
         return {"status": "completed", "draft": draft, "artifact_ref": f"draft_{ULID()}"}
 
     async def _summarize_action(self, input_data: dict, context_prompt: str = "") -> dict:

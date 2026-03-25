@@ -40,7 +40,7 @@ sequenceDiagram
     Note over APP,DB: Seed Configuration
     APP->>DB: ToolRegistry.seed_defaults() (tool definitions)
     APP->>DB: AgentRegistry.seed_defaults() (8 agents)
-    APP->>DB: RouteResolver.seed_defaults() (10 routes)
+    APP->>DB: RouteResolver.seed_defaults() (16 routes)
     APP->>DB: ScheduleSeeder.seed_default_schedules() (7 schedules)
 
     Note over APP,MCP: Connect External Tools
@@ -108,6 +108,14 @@ graph TD
 | `observe_github` | `*/10 * * * *` | observe_source | Poll GitHub every 10 min |
 | `memory_consolidation` | `0 2 * * *` | consolidate_memories | Merge duplicates at 2 AM |
 | `slo_health_check` | `0 */6 * * *` | check_slos | SLO evaluation every 6 hours |
+
+### Background Task Execution
+
+The scheduler also runs `_tick_background_tasks()` every 30 seconds, picking up `TaskRun` records with `status="pending"` and `source="background"`. These are executed via `GraphExecutor.execute_run()` and the user is notified on completion.
+
+### Budget Hydration
+
+The `BudgetTracker` in-memory counter hydrates from the database on calendar day change (survives restarts). If hydration fails, it falls back to 0.
 
 ### Follow-Up Notifications
 

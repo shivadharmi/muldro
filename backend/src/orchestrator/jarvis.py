@@ -27,7 +27,7 @@ from src.orchestrator.agent_loop import (
 from src.orchestrator.agents import AGENTS, SubAgent
 from src.orchestrator.budget import BudgetTracker
 from src.orchestrator.contracts import PlannerOutput
-from src.orchestrator.prompts import JARVIS_SOUL
+from src.orchestrator.prompts import JARVIS_DECISION_FRAMEWORK, JARVIS_SOUL_CORE
 from src.orchestrator.services import ServiceContainer
 from src.orchestrator.tool_schemas import build_tool_definitions
 from src.orchestrator.tracing import TraceManager
@@ -354,7 +354,7 @@ class JarvisOrchestrator:
                 db.add(step)
                 await db.commit()
         except Exception:
-            logger.debug("Failed to create lightweight run", exc_info=True)
+            logger.warning("Failed to create lightweight run", exc_info=True)
             return None
 
         return run_id
@@ -546,6 +546,13 @@ class JarvisOrchestrator:
         This is the main entry point for user interactions.
         The orchestrator decides which sub-agents to invoke.
         """
+        if not user_id:
+            return {"error": "user_id is required", "decision": "error"}
+        if not workspace_id:
+            return {"error": "workspace_id is required", "decision": "error"}
+        if not message or not message.strip():
+            return {"error": "Empty message", "decision": "ignore"}
+
         trace = self._trace_manager.start_trace("user_message")
         run_id: str | None = None
 
@@ -627,7 +634,7 @@ class JarvisOrchestrator:
                 trace_id=trace.trace_id,
             )
 
-            # Handle set_goal and set_instruction directly (no agent pipeline)
+            # Handle direct decisions (no agent pipeline needed)
             if decision.decision == "set_goal":
                 goal_result = await self._handle_set_goal(
                     decision, user_id, workspace_id
@@ -638,6 +645,16 @@ class JarvisOrchestrator:
                     decision, user_id, workspace_id
                 )
                 result["instruction"] = instr_result
+            elif decision.decision == "schedule_reminder":
+                reminder_result = await self._handle_schedule_reminder(
+                    decision, user_id, workspace_id
+                )
+                result["reminder"] = reminder_result
+            elif decision.decision == "add_to_brief":
+                brief_result = await self._handle_add_to_brief(
+                    decision, user_id, workspace_id
+                )
+                result["briefing_item"] = brief_result
 
             # Resolve agent pipeline from routes
             pipeline = await self._resolve_pipeline(decision_dict)
@@ -764,6 +781,13 @@ class JarvisOrchestrator:
         """
         import asyncio
 
+        if not user_id or not workspace_id:
+            yield {"event": "error", "message": "user_id and workspace_id are required"}
+            return
+        if not message or not message.strip():
+            yield {"event": "error", "message": "Empty message"}
+            return
+
         trace = self._trace_manager.start_trace("user_message")
         run_id: str | None = None
 
@@ -875,6 +899,16 @@ class JarvisOrchestrator:
                 run_id=run_id,
                 payload={"decision": decision.decision, "trace_id": trace.trace_id},
             )
+
+            # Handle direct decisions (no agent pipeline needed)
+            if decision.decision == "set_goal":
+                await self._handle_set_goal(decision, user_id, workspace_id)
+            elif decision.decision == "set_instruction":
+                await self._handle_set_instruction(decision, user_id, workspace_id)
+            elif decision.decision == "schedule_reminder":
+                await self._handle_schedule_reminder(decision, user_id, workspace_id)
+            elif decision.decision == "add_to_brief":
+                await self._handle_add_to_brief(decision, user_id, workspace_id)
 
             # Step 2: Route based on intent
             if use_planner:
@@ -1516,7 +1550,7 @@ class JarvisOrchestrator:
                 )
                 await db.commit()
         except Exception:
-            logger.debug("Failed to emit runtime event %s", event_type, exc_info=True)
+            logger.warning("Failed to emit runtime event %s", event_type, exc_info=True)
 
     async def _push_workspace_surface(
         self,
@@ -1544,7 +1578,11 @@ class JarvisOrchestrator:
             "observe": ("summary", "Observation"),
             "add_to_brief": ("briefing", "Briefing Update"),
             "set_goal": ("summary", "Goal Set"),
+            "set_instruction": ("summary", "Instruction Set"),
             "schedule_reminder": ("alert", "Reminder Scheduled"),
+            "answer_directly": ("summary", "Answer"),
+            "search_memory": ("summary", "Knowledge Search"),
+            "remember": ("summary", "Memory Updated"),
         }
         mapping = surface_kind_map.get(decision.decision)
         if not mapping:
@@ -1604,7 +1642,7 @@ class JarvisOrchestrator:
             except Exception:
                 logger.debug("Failed to persist workspace surface to DB", exc_info=True)
         except Exception:
-            logger.debug("Failed to push workspace surface", exc_info=True)
+            logger.warning("Failed to push workspace surface", exc_info=True)
 
     async def _load_conversation_history(
         self, conversation_id: str | None, max_messages: int = 20, max_chars: int = 8000
@@ -1642,25 +1680,72 @@ class JarvisOrchestrator:
             total = 0
             for role, content in history:
                 label = "User" if role == "user" else "Assistant"
-                # Truncate individual messages to avoid one huge message dominating
                 snippet = content[:1000] if len(content) > 1000 else content
                 line = f"{label}: {snippet}"
-                if total + len(line) > max_chars:
-                    break
                 lines.append(line)
                 total += len(line)
 
             if not lines:
                 return ""
 
+            # If history exceeds budget, summarize older messages
+            if total > max_chars and len(lines) > 5:
+                recent = lines[-5:]
+                older = lines[:-5]
+                summary = await self._summarize_history(older)
+                lines = [f"[Earlier conversation summary]: {summary}"] + recent
+
+            # Final trim to budget
+            output_lines: list[str] = []
+            remaining = max_chars
+            for line in lines:
+                if remaining - len(line) < 0:
+                    break
+                output_lines.append(line)
+                remaining -= len(line)
+
+            if not output_lines:
+                return ""
+
             return (
                 "--- CONVERSATION HISTORY (most recent messages) ---\n"
-                + "\n".join(lines)
+                + "\n".join(output_lines)
                 + "\n--- END HISTORY ---"
             )
         except Exception:
             logger.debug("Failed to load conversation history", exc_info=True)
             return ""
+
+    async def _summarize_history(self, lines: list[str]) -> str:
+        """Summarize older conversation messages using Haiku (cheap, fast)."""
+        try:
+            if self._settings.use_bedrock:
+                model = BEDROCK_MODEL_TIERS["haiku"]
+            else:
+                model = MODEL_TIERS["haiku"]
+
+            text = "\n".join(lines)[:4000]
+            response = await self._client.messages.create(
+                model=model,
+                max_tokens=300,
+                temperature=0,
+                system=[{
+                    "type": "text",
+                    "text": (
+                        "Summarize this conversation in 2-3 sentences. "
+                        "Focus on: topics discussed, decisions made, "
+                        "and any pending items."
+                    ),
+                }],
+                messages=[{"role": "user", "content": text}],
+            )
+            return "".join(
+                b.text for b in response.content if b.type == "text"
+            )
+        except Exception:
+            logger.debug("History summarization failed", exc_info=True)
+            # Fallback: just truncate
+            return "\n".join(lines)[:500] + "..."
 
     async def _assemble_context(self, agent_name: str, message: str, user_id: str) -> str:
         """Pre-load relevant context for context-enriched agents using ContextBuilder.
@@ -1823,7 +1908,7 @@ class JarvisOrchestrator:
                     )
                 await db.commit()
         except Exception:
-            logger.debug("Failed to bump perception for sources", exc_info=True)
+            logger.warning("Failed to bump perception for sources", exc_info=True)
 
     @staticmethod
     def _extract_perception_policy(planner_text: str):
@@ -1856,10 +1941,15 @@ class JarvisOrchestrator:
         Uses structured system blocks so the static soul + role prompt is cached
         across calls (5-min TTL), saving ~90% on re-reads of the system prompt.
         """
+        # Only the Planner sees the decision framework; other agents just get the core soul
+        soul = JARVIS_SOUL_CORE
+        if agent.name == "planner":
+            soul += "\n" + JARVIS_DECISION_FRAMEWORK
+
         blocks = [
             {
                 "type": "text",
-                "text": f"{JARVIS_SOUL}\n\n--- YOUR ROLE ---\n{agent.prompt}",
+                "text": f"{soul}\n\n--- YOUR ROLE ---\n{agent.prompt}",
                 "cache_control": {"type": "ephemeral"},
             },
         ]
@@ -1978,6 +2068,70 @@ class JarvisOrchestrator:
 
         logger.info("Instruction stored: %s (%s)", spec.instruction_text, spec.instruction_type)
         return result
+
+    async def _handle_schedule_reminder(
+        self, decision, user_id: str, workspace_id: str
+    ) -> dict:
+        """Create a one-shot schedule for a reminder."""
+        from src.models.schedules import Schedule
+
+        title = decision.goal or decision.reasoning or "Reminder"
+        # Extract timing from tasks if available
+        schedule_config = {}
+        if decision.tasks:
+            schedule_config = decision.tasks[0].input_data or {}
+
+        try:
+            async with self._db_factory() as db:
+                schedule_id = f"sched_{ULID()}"
+                schedule = Schedule(
+                    schedule_id=schedule_id,
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    name=title[:100],
+                    schedule_type="one_shot",
+                    cron_expr=schedule_config.get("cron_expr"),
+                    action_type="custom_agent_task",
+                    action_config={
+                        "instructions": f"Remind the user: {title}",
+                        **schedule_config,
+                    },
+                    enabled=True,
+                    source="user",
+                    priority=decision.priority,
+                )
+                db.add(schedule)
+                await db.commit()
+
+            logger.info("Reminder scheduled %s: %s", schedule_id, title)
+            return {"status": "created", "schedule_id": schedule_id, "title": title}
+        except Exception as e:
+            logger.warning("Failed to create reminder schedule: %s", e)
+            return {"status": "error", "error": str(e)}
+
+    async def _handle_add_to_brief(
+        self, decision, user_id: str, workspace_id: str
+    ) -> dict:
+        """Store a briefing item as a memory so the next briefing includes it."""
+        memory_svc = self._services.memory_service
+        if not memory_svc:
+            return {"status": "error", "error": "Memory service unavailable"}
+
+        text = decision.goal or decision.reasoning or "Briefing item"
+        try:
+            memory_id = await memory_svc.store(
+                user_id=user_id,
+                workspace_id=workspace_id,
+                fact_text=text,
+                memory_type="briefing_item",
+                scope="planning",
+                source_event_ids=[],
+            )
+            logger.info("Briefing item stored as memory %s: %s", memory_id, text[:80])
+            return {"status": "stored", "memory_id": memory_id, "text": text}
+        except Exception as e:
+            logger.warning("Failed to store briefing item: %s", e)
+            return {"status": "error", "error": str(e)}
 
     async def _call_agent(
         self,
@@ -2444,7 +2598,7 @@ class JarvisOrchestrator:
                 resolver = RouteResolver(db)
                 return await resolver.resolve(decision)
         except Exception:
-            logger.debug("Route resolution failed, using empty pipeline", exc_info=True)
+            logger.warning("Route resolution failed, using empty pipeline", exc_info=True)
             return []
 
     @staticmethod

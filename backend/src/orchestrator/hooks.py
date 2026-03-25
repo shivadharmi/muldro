@@ -73,6 +73,28 @@ async def governor_pre_tool_hook(
                     )
                     await db.commit()
 
+                    # Notify user about pending approval
+                    notifier = getattr(services, "notifier", None) if services else None
+                    if notifier:
+                        try:
+                            await notifier.notify(
+                                user_id=user_id,
+                                notification_type="approval_request",
+                                title=f"Approve: {tool_name}",
+                                body=_policy.summarize_input(tool_name, tool_input),
+                                data={
+                                    "approval_id": approval.approval_id,
+                                    "risk_level": classification.risk_level,
+                                },
+                                workspace_id=workspace_id,
+                            )
+                        except Exception:
+                            logger.warning(
+                                "Failed to notify for approval %s",
+                                approval.approval_id,
+                                exc_info=True,
+                            )
+
                     return {
                         "allowed": False,
                         "approval_required": True,

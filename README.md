@@ -18,7 +18,7 @@ graph TB
     end
 
     subgraph API["API Layer"]
-        FA[FastAPI<br/>37 routers · /v1/ prefix · 198 endpoints]
+        FA[FastAPI<br/>30 routers · /v1/ prefix · ~128 endpoints]
     end
 
     subgraph ORCH["Orchestrator"]
@@ -118,19 +118,19 @@ Infrastructure is managed with Terraform in `infra/`. A single EC2 instance runs
 jarvis/
 ├── backend/
 │   ├── src/
-│   │   ├── api/            # 37 REST/SSE routers (/v1/ prefix, 198 endpoints)
+│   │   ├── api/            # 30 REST/SSE routers (/v1/ prefix, ~128 endpoints)
 │   │   ├── config/         # Settings (pydantic-settings, JARVIS_ env prefix)
-│   │   ├── connectors/     # Gmail, MCP bridge, 7 connector types
+│   │   ├── connectors/     # Gmail, MCP bridge, 15 integration types
 │   │   ├── interface/      # Telegram bot
-│   │   ├── models/         # 49 SQLAlchemy models (all workspace-scoped)
+│   │   ├── models/         # 54 SQLAlchemy tables (all workspace-scoped)
 │   │   ├── orchestrator/   # JarvisOrchestrator, agents, hooks, tracing, budget, contracts
-│   │   ├── services/       # 54 services (planner, governor, operator, etc.)
+│   │   ├── services/       # 69 services (planner, governor, operator, etc.)
 │   │   ├── tools/          # FastMCP intelligence server + MCP config
 │   │   ├── ui/             # A2UI renderer + contracts
 │   │   └── workflows/      # inbox_triage, meeting_prep, research
-│   ├── tests/              # 853 tests (pytest + pytest-asyncio)
-│   └── alembic/            # 29 database migrations
-├── frontend/               # Next.js + A2UI renderer + chat panel (22 pages)
+│   ├── tests/              # ~1196 tests (pytest + pytest-asyncio)
+│   └── alembic/            # 44 database migrations
+├── frontend/               # Next.js + A2UI renderer + chat panel (7 pages)
 ├── infra/                  # Terraform (AWS: EC2, VPC, Route53, IAM, SSM)
 ├── docs/architecture/      # Detailed architecture documentation
 └── docker-compose.yml      # Local dev infrastructure
@@ -156,7 +156,7 @@ jarvis/
 
 ## Key Features
 
-- **Multi-tenant workspace isolation**: All 49 data tables scoped by `workspace_id` with CASCADE deletes
+- **Multi-tenant workspace isolation**: All 54 data tables scoped by `workspace_id` with CASCADE deletes
 - **Real-time streaming**: Claude API streaming with extended thinking (Opus) + SSE to frontend
 - **Full cost tracking**: Cache tokens (1.25x write, 0.1x read), thinking tokens, per-agent cost breakdown
 - **Graduated trust**: TrustEngine scores + time-based policy overrides for autonomous operation
@@ -169,4 +169,4 @@ jarvis/
 
 ## Status
 
-853 tests passing, 29 migrations, 49 tables, 198 API endpoints, all lint clean.
+~1196 tests passing, 44 migrations, 54 tables, ~128 API endpoints, all lint clean.

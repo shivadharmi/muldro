@@ -26,7 +26,7 @@ DEFAULT_ROUTES: list[dict[str, Any]] = [
             {"agent": "governor", "message_template": "Evaluate this plan: {decision_json}"},
             {
                 "agent": "operator",
-                "condition": {"has_key": "plan_id"},
+                "condition": {"has_truthy_key": "plan_id"},
                 "action": "execute_plan",
             },
         ],
@@ -159,6 +159,63 @@ DEFAULT_ROUTES: list[dict[str, Any]] = [
         "keywords": ["goal", "objective", "target", "milestone"],
     },
     {
+        "name": "draft_reply",
+        "description": "Route for drafting replies — governance check, then execution.",
+        "decision_type": "draft_reply",
+        "agent_pipeline": [
+            {"agent": "governor", "message_template": "Evaluate this plan: {decision_json}"},
+            {
+                "agent": "operator",
+                "condition": {"has_truthy_key": "plan_id"},
+                "action": "execute_plan",
+            },
+        ],
+        "priority": 95,
+        "keywords": ["draft", "reply", "compose", "write email", "respond"],
+    },
+    {
+        "name": "schedule_reminder",
+        "description": "Route for scheduling reminders.",
+        "decision_type": "schedule_reminder",
+        "agent_pipeline": [],
+        "priority": 85,
+        "keywords": ["remind", "reminder", "alert me", "notify me at", "schedule"],
+    },
+    {
+        "name": "add_to_brief",
+        "description": "Route for adding items to the next briefing.",
+        "decision_type": "add_to_brief",
+        "agent_pipeline": [
+            {
+                "agent": "librarian",
+                "message_template": "Store this as a briefing item for the user: {decision_json}",
+            },
+        ],
+        "priority": 85,
+        "keywords": ["brief", "briefing", "add to brief", "morning update"],
+    },
+    {
+        "name": "answer_directly",
+        "description": "Route for direct answers from context — Presenter only.",
+        "decision_type": "answer_directly",
+        "agent_pipeline": [],
+        "priority": 80,
+        "keywords": [],
+    },
+    {
+        "name": "search_memory",
+        "description": "Route for knowledge search — Researcher gathers, Presenter formats.",
+        "decision_type": "search_memory",
+        "agent_pipeline": [
+            {
+                "agent": "researcher",
+                "message_template": "Search memories and knowledge for: {decision_json}",
+            },
+        ],
+        "priority": 80,
+        "keywords": ["recall", "what do you know", "search memory"],
+    },
+    {
         "name": "acknowledge",
         "description": "Default fallback — just acknowledge.",
         "decision_type": "acknowledge",
@@ -169,7 +226,10 @@ DEFAULT_ROUTES: list[dict[str, Any]] = [
 ]
 
 # Decisions that always go through the presenter for user-facing output
-ALWAYS_PRESENT = {"ask_user", "recommend", "summarize", "acknowledge", "research", "read_source"}
+ALWAYS_PRESENT = {
+    "ask_user", "recommend", "summarize", "acknowledge", "research", "read_source",
+    "draft_reply", "answer_directly", "search_memory", "add_to_brief", "schedule_reminder",
+}
 
 
 class RouteResolver:
@@ -257,6 +317,9 @@ class RouteResolver:
         for key, value in conditions.items():
             if key == "has_key":
                 if value not in decision:
+                    return False
+            elif key == "has_truthy_key":
+                if not decision.get(value):
                     return False
             elif key == "not_has_key":
                 if value in decision:

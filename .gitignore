@@ -40,3 +40,4 @@ server.log
 client_secret.json
 test-results/
 references/
+prompts/
