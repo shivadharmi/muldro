@@ -378,9 +378,51 @@ class Notifier:
                             WorkspaceSurfaceMetadata,
                             WorkspaceSurfacePush,
                         )
+                        from src.ui import renderer as r
+
+                        approval_id = (notification.data or {}).get("approval_id", "")
+                        risk_level = (notification.data or {}).get("risk_level", "medium")
+                        risk_variant = (
+                            "warning" if risk_level in ("high", "critical") else "default"
+                        )
+
+                        children = [
+                            r.card(
+                                "apr_card",
+                                [
+                                    r.heading("apr_title", notification.title),
+                                    r.badge("apr_risk", risk_level, variant=risk_variant),
+                                    r.text("apr_body", notification.body or ""),
+                                    r.row(
+                                        "apr_actions",
+                                        [
+                                            r.button(
+                                                f"approve_{approval_id}",
+                                                "Approve",
+                                                variant="primary",
+                                                action_payload={
+                                                    "action": "approve",
+                                                    "id": approval_id,
+                                                },
+                                            ),
+                                            r.button(
+                                                f"reject_{approval_id}",
+                                                "Reject",
+                                                variant="danger",
+                                                action_payload={
+                                                    "action": "reject",
+                                                    "id": approval_id,
+                                                },
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                        ]
 
                         surface = WorkspaceSurfacePush(
                             id=f"notif_surf_{ULID()}",
+                            children=[c.model_dump(mode="json") for c in children],
                             metadata=WorkspaceSurfaceMetadata(
                                 kind="approval",
                                 title=notification.title,

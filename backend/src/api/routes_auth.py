@@ -892,8 +892,8 @@ async def _ensure_integration(
     """Create or reactivate an IntegrationInstallation after OAuth."""
     from sqlalchemy import select as sa_select
 
-    from src.models.integration_installation import IntegrationInstallation
     from src.models.ids import generate_id
+    from src.models.integration_installation import IntegrationInstallation
 
     try:
         async with db_factory() as db:

@@ -130,6 +130,78 @@ FAST_INTENTS = {
 INTENT_CONFIDENCE_THRESHOLD = 0.7
 
 
+def _build_surface_children(
+    decision: PlannerOutput,
+    kind: str,
+    default_title: str,
+    response_text: str,
+) -> list:
+    """Build A2UI component children for a workspace surface push.
+
+    Uses renderer.py builders so the frontend A2UIRenderer has
+    actual component trees to render instead of empty children[].
+
+    The surface shows decision context (reasoning, priority, kind) — NOT the
+    full response text, which is already visible in the chat bubble.
+    """
+    from src.ui import renderer as r
+
+    title = decision.goal[:80] if decision.goal else default_title
+    reasoning = decision.reasoning[:200] if decision.reasoning else ""
+
+    if kind == "plan":
+        children = [r.heading("sf_title", title)]
+        if reasoning:
+            children.append(r.caption("sf_reasoning", reasoning))
+        children.append(r.badge("sf_priority", decision.priority, variant="default"))
+        if decision.tasks:
+            task_items = [
+                r.text(
+                    f"sf_task_{i}",
+                    f"• {t.task_type}: {(t.input_data or {}).get('description', '')[:60]}",
+                )
+                for i, t in enumerate(decision.tasks[:5])
+            ]
+            children.extend(task_items)
+        return [r.card("sf_card", children)]
+
+    if kind == "recommendation":
+        children = [
+            r.heading("sf_title", title),
+            r.badge("sf_kind", "Recommendation", variant="default"),
+        ]
+        if reasoning:
+            children.append(r.text("sf_reasoning", reasoning))
+        return [r.card("sf_card", children)]
+
+    if kind == "summary":
+        children = [
+            r.heading("sf_title", title),
+            r.badge("sf_kind", default_title, variant="default"),
+        ]
+        if reasoning:
+            children.append(r.text("sf_reasoning", reasoning))
+        return [r.card("sf_card", children)]
+
+    if kind == "briefing":
+        children = [
+            r.heading("sf_title", title),
+            r.badge("sf_kind", "Briefing", variant="default"),
+        ]
+        if reasoning:
+            children.append(r.text("sf_reasoning", reasoning))
+        return [r.card("sf_card", children)]
+
+    if kind == "alert":
+        return [r.alert("sf_alert", reasoning or title, severity="info", title=title)]
+
+    # Fallback: generic card with reasoning
+    children = [r.heading("sf_title", title)]
+    if reasoning:
+        children.append(r.text("sf_reasoning", reasoning))
+    return [r.card("sf_card", children)]
+
+
 class JarvisOrchestrator:
     """The Jarvis brain — orchestrates sub-agents via Claude API.
 
@@ -964,7 +1036,9 @@ class JarvisOrchestrator:
                     payload={"trace_id": trace.trace_id},
                 )
 
-            # Push surface to workspace for visual decision types (fire-and-forget)
+            # Push surface to workspace via Redis + persist to DB.
+            # The chat page receives it via WebSocket; workspace page via REST polling.
+            # SSE delivery removed to avoid duplicates (WS is the canonical path).
             asyncio.create_task(self._push_workspace_surface(
                 decision, user_id, workspace_id, run_id,
                 response_text=presenter_text,
@@ -1466,6 +1540,8 @@ class JarvisOrchestrator:
             "recommend": ("recommendation", "Recommendation"),
             "summarize": ("summary", "Summary"),
             "research": ("summary", "Research Results"),
+            "read_source": ("summary", "Source Summary"),
+            "observe": ("summary", "Observation"),
             "add_to_brief": ("briefing", "Briefing Update"),
             "set_goal": ("summary", "Goal Set"),
             "schedule_reminder": ("alert", "Reminder Scheduled"),
@@ -1483,8 +1559,13 @@ class JarvisOrchestrator:
 
             from ulid import ULID
 
+            children = _build_surface_children(
+                decision, kind, default_title, response_text
+            )
+
             surface = WorkspaceSurfacePush(
                 id=f"surf_{ULID()}",
+                children=[c.model_dump(mode="json") for c in children],
                 metadata=WorkspaceSurfaceMetadata(
                     kind=kind,
                     title=(decision.goal[:80] if decision.goal else default_title),

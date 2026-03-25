@@ -13,8 +13,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.connectors.base import CONNECTOR_REGISTRY
-from src.models.integration_installation import IntegrationInstallation
 from src.models.ids import generate_id
+from src.models.integration_installation import IntegrationInstallation
 from src.models.observation_cursor import ObservationCursor
 from src.services.event_bus import EventBus
 

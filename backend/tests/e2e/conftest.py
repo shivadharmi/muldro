@@ -8,6 +8,7 @@ from collections.abc import AsyncGenerator
 
 import httpx
 import pytest
+
 try:
     import pytest_asyncio
 except ImportError:  # pragma: no cover - only used in minimal local envs

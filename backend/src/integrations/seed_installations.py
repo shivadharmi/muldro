@@ -9,8 +9,8 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models.integration_installation import IntegrationInstallation
 from src.models.ids import generate_id
+from src.models.integration_installation import IntegrationInstallation
 from src.models.server_trust import ServerTrustRecord
 
 logger = logging.getLogger(__name__)

@@ -203,8 +203,8 @@ def build(settings: Settings, db: AsyncSession) -> ServiceContainer:
 
     # ── Wire OAuthManager ──────────────────────────────────────────
     try:
-        from src.services.oauth_manager import OAuthManager
         from src.models.database import get_session_factory
+        from src.services.oauth_manager import OAuthManager
 
         svc.oauth_manager = OAuthManager(
             db_factory=get_session_factory(),
