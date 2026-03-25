@@ -28,10 +28,12 @@ User <-> Telegram Bot / Next.js Frontend (A2UI)
 - Orchestrator + agents: `backend/src/orchestrator/` (jarvis.py, agents.py, hooks.py, tracing.py, budget.py, perception.py, recovery.py)
 - Services (business logic): `backend/src/services/` (planner, governor, operator, presenter, memory_service, world_model, event_processor, etc.)
 - MCP tool servers: `backend/src/tools/` (intelligence_server.py, communication_server.py, mcp_config.py)
-- Runtime contracts: `backend/src/orchestrator/contracts.py` (PlannerOutput, PolicyDecision, StepResult, ToolCallRequest, DomainEvent)
-- API routes: `backend/src/api/` (37 routers, 198 endpoints, all `/v1/` prefixed)
+- Runtime contracts: `backend/src/orchestrator/contracts.py` (PlannerOutput, PolicyDecision, StepResult, ToolCallRequest, DomainEvent, WorkspaceSurfaceMetadata, WorkspaceSurfacePush)
+- A2UI component system: `backend/src/ui/` (contracts.py, renderer.py, views.py)
+- A2UI surface builder: `backend/src/services/surface_builder.py` (SurfaceService)
+- API routes: `backend/src/api/` (30 routers, all `/v1/` prefixed)
 - SQLAlchemy models: `backend/src/models/` (49 tables, all workspace-scoped)
-- Frontend: `frontend/src/` (Next.js + A2UI renderer + chat panel, 22 pages)
+- Frontend: `frontend/src/` (Next.js + A2UI renderer + chat split-pane, 22 pages)
 - Infra: `infra/` (Terraform for AWS) + `docker-compose.yml` (local dev)
 
 ## Commands
@@ -118,7 +120,7 @@ All backend settings via env vars with `JARVIS_` prefix (pydantic-settings in `s
 | Planner | Produce task graphs (structured JSON, never free-form) | plans, plan_tasks |
 | Governor | Evaluate policies, gate approvals | policy decisions, approvals |
 | Operator | Execute approved plans via MCP tools | task_runs, task_steps |
-| Presenter | Generate user-facing output | briefings, UI payloads |
+| Presenter | Generate user-facing output | briefings, A2UI surfaces (via SurfaceService + renderer.py) |
 | Researcher | Deep context gathering | None (read-only) |
 | Persona | Learn preferences | memories (preference type) |
 
@@ -127,6 +129,50 @@ All backend settings via env vars with `JARVIS_` prefix (pydantic-settings in `s
 ## Data Flow
 
 Observer → EventProcessor (normalize, score, dedup) → Librarian (entities, memories) → Planner (task graphs) → Governor (policy/approval gate) → Operator (execute) → Presenter (deliver via Telegram/A2UI)
+
+## A2UI System (Agent-to-UI)
+
+A2UI is the dynamic interface generation layer. Backend agents produce typed component trees that the frontend renders via a recursive React dispatcher.
+
+**Backend pipeline:**
+```
+SurfaceService (surface_builder.py) or _push_workspace_surface (jarvis.py)
+  → uses renderer.py builders: card(), heading(), text(), badge(), button(), alert(), etc.
+  → uses views.py generators: briefing_full_view(), dashboard_view(), etc.
+  → produces A2UISurface with populated children[]
+  → delivered via: GET /v1/workspace/surfaces (REST) or jarvis:a2ui:{user_id} (Redis → WebSocket)
+  → persisted to ui_surfaces table (24h TTL)
+```
+
+**Frontend pipeline:**
+```
+fetchWorkspaceSurfaces() or useJarvisWs hook
+  → A2UISurface objects with children[]
+  → useSurfaceStore (Zustand) — single store for all surface state
+  → A2UIRenderer (renderer.tsx) — 27-case switch dispatcher
+  → 29 React components in components/a2ui/components/
+```
+
+**Key files:**
+- Contracts: `src/ui/contracts.py` (A2UIComponent, A2UISurface, ComponentType enum — 25+ types)
+- Builders: `src/ui/renderer.py` (36 builder functions: card, text, button, table, metric, etc.)
+- Views: `src/ui/views.py` (10 view generators: briefing, dashboard, execution trace, etc.)
+- Surface builder: `src/services/surface_builder.py` (SurfaceService — builds workspace surfaces from DB)
+- WS surface push: `src/orchestrator/jarvis.py` `_push_workspace_surface()` + `_build_surface_children()`
+- Notifier: `src/services/notifier.py` `_deliver_web()` (approval surfaces with A2UI buttons)
+- Frontend renderer: `frontend/src/components/a2ui/renderer.tsx`
+- Frontend store: `frontend/src/stores/surface-store.ts` (single Zustand store)
+- Workspace: `frontend/src/app/page.tsx` → `workspace-canvas.tsx` (pure A2UIRenderer grid)
+- Chat: `frontend/src/app/chat/page.tsx` → split-pane layout (chat left, surfaces right)
+
+**Surface kinds:** summary, briefing, plan, checklist, approval, comparison, alert, timeline, table, recommendation, activity
+
+**Decision → Surface mapping** (in `_push_workspace_surface`):
+- create_task → plan, draft_reply/recommend → recommendation, summarize/research → summary, add_to_brief → briefing, set_goal → summary, schedule_reminder → alert
+
+**API:** `GET /v1/workspace/surfaces` — unified endpoint returning pre-built A2UI surfaces. Replaces separate canvas/dashboard, home, approvals calls on the workspace page.
+
+**Do not:** create surfaces with empty `children[]`. Always use `renderer.py` builders to populate component trees. Do not create client-side surface conversion (e.g., `approvalToSurface()`). Do not use `useSurfaceState` hook (deleted — use `useSurfaceStore` only).
 
 ## Execution State Machine
 
@@ -162,3 +208,7 @@ All 49 data tables are scoped by `workspace_id` (NOT NULL FK to `workspaces`). O
 - Do not use bare `db = db_factory()` — always `async with db_factory() as db:` + `await db.commit()`
 - Do not mutate TaskRun/TaskStep status directly — use `transition_run()` / `transition_step()`
 - Do not hardcode user IDs — resolve from auth context
+- Do not push A2UI surfaces with empty `children[]` — use `renderer.py` builders
+- Do not create client-side surface conversion functions — all surfaces are built server-side by `SurfaceService` or `_push_workspace_surface()`
+- Do not use `useSurfaceState` hook — it was deleted. Use `useSurfaceStore` (Zustand) as the single surface store
+- Do not add new REST endpoints for workspace data — add methods to `SurfaceService` instead
