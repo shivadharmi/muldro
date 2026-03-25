@@ -14,8 +14,9 @@ Use this when an agent isn't behaving as expected — wrong routing, tool call f
    - GET `/v1/traces/{id}` — specific trace with agent spans
    - GET `/v1/traces/performance` — performance stats
 2. **Check agent routing** in `backend/src/orchestrator/jarvis.py`:
-   - `JarvisOrchestrator.route()` determines which agent handles a request
+   - `JarvisOrchestrator.process_message()` / `process_message_stream()` classify intent via Planner, then route via RouteResolver
    - Verify the routing logic matches the user intent
+   - Check direct handlers (`set_goal`, `set_instruction`, `schedule_reminder`, `add_to_brief`) which execute before pipeline resolution
 3. **Check tool scopes** in `backend/src/orchestrator/agents.py`:
    - `AGENT_TOOL_SCOPES` — is the tool in the agent's scope?
    - `SubAgent.can_use_tool()` — the enforcement point
@@ -32,7 +33,11 @@ Use this when an agent isn't behaving as expected — wrong routing, tool call f
 7. **Check MCP resilience** in `backend/src/services/mcp_resilience.py`:
    - Circuit breaker state per MCP server
    - Is the external MCP server circuit open?
-8. **Run relevant tests**:
+8. **Check runtime resilience** in `backend/src/orchestrator/agent_loop.py`:
+   - Tool timeout: 60s via `asyncio.wait_for` — timed-out tools return `{"error": "...", "timed_out": true}`
+   - API retry: 3 attempts with exponential backoff (2s/4s/8s) for `anthropic.RateLimitError`
+   - Tool error signaling: `is_error: true` flag on error dicts so Claude knows the tool failed
+9. **Run relevant tests**:
    - `pytest tests/test_orchestrator.py -v` — routing tests
    - `pytest tests/golden/ -v` — agent behavior golden tests
    - `pytest tests/test_integration.py -v` — recovery + circuit breaker

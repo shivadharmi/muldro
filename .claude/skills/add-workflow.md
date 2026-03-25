@@ -28,7 +28,7 @@ Workflows are multi-step compositions in `backend/src/workflows/`. They use the 
 5. **Add a trigger**:
    - **Cron-triggered**: Add action to `backend/src/services/scheduler.py` schedule entries
    - **Event-triggered**: Wire from EventProcessor or TriggerEngine
-   - **User-triggered**: Add API endpoint in `backend/src/api/routes_workflows.py`
+   - **User-triggered**: User tells Jarvis in chat; Planner creates task graph via `set_instruction` decision
 6. **Add presenter output**: Define output schema, use Presenter to format user-facing content
 7. **Write tests** for each step handler
 8. **Run**: `cd backend && ruff check src/ tests/ && pytest tests/ -v`
