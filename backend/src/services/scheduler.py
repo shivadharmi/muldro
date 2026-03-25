@@ -39,6 +39,7 @@ class SchedulerLoop:
         self._orchestrator = orchestrator
         self._user_ids = user_ids or []
         self._running = False
+        self._last_synthesis_at: float = 0.0  # D2: throttle cross-source synthesis
 
     async def run(self) -> None:
         """Main loop: every 30s, check for due schedules and fire them."""
@@ -57,7 +58,7 @@ class SchedulerLoop:
         self._running = False
 
     async def _tick(self) -> None:
-        """One scheduler cycle: perception state, then due schedules."""
+        """One scheduler cycle: perception, follow-ups, background tasks, schedules."""
         factory = get_session_factory()
 
         # 1. Drive perception from perception_state table
@@ -66,7 +67,10 @@ class SchedulerLoop:
         # 2. Check follow-up notifications
         await self._check_follow_ups(factory)
 
-        # 3. Process due schedules
+        # 3. Execute pending background tasks
+        await self._tick_background_tasks(factory)
+
+        # 4. Process due schedules
         async with factory() as db:
             now = datetime.now(timezone.utc)
 
@@ -163,6 +167,12 @@ class SchedulerLoop:
                 if not due_states:
                     return
 
+                # C4: Clear pending_run BEFORE running cycles to prevent
+                # the next 30s tick from double-picking the same sources
+                for state in due_states:
+                    state.pending_run = False
+                await db.flush()
+
                 for state in due_states:
                     try:
                         workspace_id = await self._resolve_workspace(state.user_id)
@@ -191,8 +201,109 @@ class SchedulerLoop:
 
                 await db.commit()
                 logger.info("Perception tick: %d sources processed", len(due_states))
+
+                # D2: Cross-source synthesis — when 2+ sources had new events,
+                # ask the Planner to synthesize cross-cutting insights
+                import time
+
+                sources_with_events = sum(
+                    1
+                    for s in due_states
+                    if not s.pending_run  # was processed (not skipped)
+                )
+                now = time.monotonic()
+                synthesis_cooldown = 1800  # 30 minutes
+                if (
+                    sources_with_events >= 2
+                    and self._orchestrator
+                    and (now - self._last_synthesis_at) > synthesis_cooldown
+                ):
+                    self._last_synthesis_at = now
+                    try:
+                        user_id = due_states[0].user_id
+                        ws_id = due_states[0].workspace_id or ""
+                        source_names = [s.source for s in due_states]
+                        await self._orchestrator.process_message(
+                            message=(
+                                f"Synthesize recent observations across these sources: "
+                                f"{', '.join(source_names)}. "
+                                f"Identify any cross-cutting insights, connections between "
+                                f"events, or actions that span multiple sources."
+                            ),
+                            user_id=user_id,
+                            workspace_id=ws_id,
+                            surface="perception_synthesis",
+                        )
+                        logger.info(
+                            "Cross-source synthesis triggered for %d sources",
+                            sources_with_events,
+                        )
+                    except Exception:
+                        logger.debug("Cross-source synthesis failed", exc_info=True)
         except Exception:
             logger.warning("Perception tick error", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Background task execution
+    # ------------------------------------------------------------------
+
+    async def _tick_background_tasks(self, factory) -> None:
+        """Execute pending background tasks queued by the orchestrator."""
+        if not self._orchestrator:
+            return
+
+        try:
+            from src.models.task_graph import TaskRun
+
+            async with factory() as db:
+                result = await db.execute(
+                    select(TaskRun)
+                    .where(
+                        TaskRun.status == "pending",
+                        TaskRun.source == "background",
+                    )
+                    .order_by(TaskRun.created_at.asc())
+                    .limit(3)
+                )
+                pending = list(result.scalars().all())
+
+                if not pending:
+                    return
+
+                for run in pending:
+                    try:
+                        workspace_id = run.workspace_id or ""
+                        from src.services.graph_executor import (
+                            create_graph_executor,
+                        )
+
+                        executor = await create_graph_executor(
+                            settings=self._settings,
+                            db=db,
+                            workspace_id=workspace_id,
+                        )
+                        completed = await executor.execute_run(
+                            run.run_id,
+                        )
+                        logger.info(
+                            "Background task %s completed: %s",
+                            run.run_id,
+                            completed.status,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Background task %s failed: %s",
+                            run.run_id,
+                            e,
+                        )
+
+                await db.commit()
+                logger.info(
+                    "Background tick: %d tasks processed",
+                    len(pending),
+                )
+        except Exception:
+            logger.warning("Background task tick error", exc_info=True)
 
     # ------------------------------------------------------------------
     # Follow-up notifications
@@ -257,7 +368,7 @@ class SchedulerLoop:
         authorized: set[str] = set()
 
         try:
-            from src.models.connector_installation import ConnectorInstallation
+            from src.models.integration_installation import IntegrationInstallation
             from src.models.users import WorkspaceMember
 
             ws_result = await db.execute(
@@ -266,15 +377,15 @@ class SchedulerLoop:
             ws_ids = [row[0] for row in ws_result.all()]
             if ws_ids:
                 inst_result = await db.execute(
-                    select(ConnectorInstallation.server_name).where(
-                        ConnectorInstallation.workspace_id.in_(ws_ids),
-                        ConnectorInstallation.status == "active",
-                        ConnectorInstallation.enabled.is_(True),
+                    select(IntegrationInstallation.server_name).where(
+                        IntegrationInstallation.workspace_id.in_(ws_ids),
+                        IntegrationInstallation.status == "active",
+                        IntegrationInstallation.enabled.is_(True),
                     )
                 )
                 authorized.update(row[0] for row in inst_result.all())
         except Exception:
-            logger.debug("ConnectorInstallation lookup failed", exc_info=True)
+            logger.debug("IntegrationInstallation lookup failed", exc_info=True)
 
         return authorized
 

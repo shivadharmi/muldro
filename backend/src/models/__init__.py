@@ -8,14 +8,14 @@ from src.models.audit import AuditLog
 from src.models.base import Base
 from src.models.briefing_feedback import BriefingFeedback
 from src.models.briefings import Briefing
-from src.models.browser_sessions import BrowserAction, BrowserSession
+from src.models.browser_sessions import BrowserAction
 from src.models.capability_binding import CapabilityBinding
-from src.models.connector_installation import ConnectorInstallation
 from src.models.conversations import Conversation, Message
 from src.models.dead_letter import DeadLetterEntry
 from src.models.entities import Entity, EntityAlias, EntityRelationship
 from src.models.events import NormalizedEvent
 from src.models.integration_audit import IntegrationAuditEvent
+from src.models.integration_installation import IntegrationInstallation
 from src.models.mcp_server_catalog import MCPServerCatalog
 from src.models.memory import Memory
 from src.models.notifications import Notification
@@ -94,7 +94,6 @@ __all__ = [
     "Procedure",
     "WorkingMemoryEntry",
     # Browser automation
-    "BrowserSession",
     "BrowserAction",
     # Tool definitions
     "ToolDefinition",
@@ -102,7 +101,7 @@ __all__ = [
     "ServerTrustRecord",
     "CapabilityBinding",
     "RuntimeEvent",
-    "ConnectorInstallation",
+    "IntegrationInstallation",
     "ApprovalPolicy",
     "WebhookSubscription",
     "MCPServerCatalog",

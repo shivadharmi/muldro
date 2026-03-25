@@ -121,9 +121,9 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           }
         />
         <NavItem
-          href="/connectors"
-          label="Connectors"
-          active={pathname === "/connectors"}
+          href="/integrations"
+          label="Integrations"
+          active={pathname === "/integrations"}
           collapsed={collapsed}
           icon={
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none">

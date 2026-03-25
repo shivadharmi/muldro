@@ -49,35 +49,57 @@ class AgentRegistry:
         self._db = db
 
     async def seed_defaults(self) -> int:
-        """Seed the 8 default agents if they don't exist. Returns count of agents seeded."""
-        result = await self._db.execute(select(Agent.name))
-        existing = {row[0] for row in result.all()}
+        """Seed or update the 8 default agents. Returns count of agents created/updated.
 
-        seeded = 0
+        Creates new agents that don't exist. For existing agents, syncs
+        capability_scope and system_prompt from hardcoded defaults so that
+        code changes to AGENT_CAPABILITY_SCOPES or AGENT_PROMPTS are
+        reflected without manual DB migration.
+        """
+        result = await self._db.execute(select(Agent))
+        existing = {agent.name: agent for agent in result.scalars().all()}
+
+        changed = 0
         for name, prompt in AGENT_PROMPTS.items():
-            if name in existing:
+            expected_scope = sorted(AGENT_CAPABILITY_SCOPES.get(name, set()))
+
+            if name not in existing:
+                agent = Agent(
+                    agent_id=f"agt_{ULID()}",
+                    name=name,
+                    display_name=_DEFAULT_DISPLAY_NAMES.get(name, name.title()),
+                    description=_DEFAULT_DESCRIPTIONS.get(name),
+                    system_prompt=prompt,
+                    model_tier=AGENT_MODEL_TIERS.get(name, "sonnet"),
+                    capability_scope=expected_scope,
+                    max_tokens=8192 if name == "planner" else 4096,
+                    temperature=0.1 if name == "governor" else 0.3,
+                    enabled=True,
+                )
+                self._db.add(agent)
+                changed += 1
                 continue
 
-            agent = Agent(
-                agent_id=f"agt_{ULID()}",
-                name=name,
-                display_name=_DEFAULT_DISPLAY_NAMES.get(name, name.title()),
-                description=_DEFAULT_DESCRIPTIONS.get(name),
-                system_prompt=prompt,
-                model_tier=AGENT_MODEL_TIERS.get(name, "sonnet"),
-                capability_scope=sorted(AGENT_CAPABILITY_SCOPES.get(name, set())),
-                max_tokens=8192 if name == "planner" else 4096,
-                temperature=0.1 if name == "governor" else 0.3,
-                enabled=True,
-            )
-            self._db.add(agent)
-            seeded += 1
+            # Sync capability_scope and system_prompt if they diverged
+            agent = existing[name]
+            needs_update = False
 
-        if seeded:
+            if sorted(agent.capability_scope or []) != expected_scope:
+                agent.capability_scope = expected_scope
+                needs_update = True
+
+            if agent.system_prompt != prompt:
+                agent.system_prompt = prompt
+                needs_update = True
+
+            if needs_update:
+                changed += 1
+
+        if changed:
             await self._db.flush()
-            logger.info("Seeded %d default agents", seeded)
+            logger.info("Seeded/updated %d agent definitions", changed)
 
-        return seeded
+        return changed
 
     async def list_agents(self, include_disabled: bool = False) -> list[Agent]:
         """List all agents, optionally including disabled ones."""

@@ -1,7 +1,7 @@
 """Workspace provisioner — seeds defaults when a user signs up.
 
 Called once when a new user + workspace are created (during onboarding).
-Seeds: default schedules, trust records, connector installations.
+Seeds: default schedules, trust records, integration installations.
 """
 
 import logging
@@ -31,7 +31,7 @@ async def provision_workspace(db: AsyncSession, user_id: str, workspace_id: str)
     trust_records = await seed_trust_records(db, workspace_id)
     counts["trust_records"] = len(trust_records)
 
-    # 3. Default connector installations
+    # 3. Default integration installations
     from src.integrations.seed_installations import seed_installations
 
     counts["installations"] = await seed_installations(db, workspace_id, user_id)

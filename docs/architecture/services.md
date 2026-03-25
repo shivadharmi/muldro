@@ -28,7 +28,7 @@ Services are organized in dependency layers. Higher layers depend on lower layer
 **Purpose:** Normalizes raw events, scores via Claude, deduplicates, triggers downstream processing.
 
 **Constructor:**
-- `settings`, `db`, `world_model?`, `memory_service?`, `dead_letter?`, `event_bus?`, `notifier?`, `planner?`, `goal_tracker?`
+- `settings`, `db`, `world_model?`, `memory_service?`, `dead_letter?`, `event_bus?`, `notifier?`, `planner?`
 
 **Key Methods:**
 | Method | Description |
@@ -107,7 +107,7 @@ score = 0.40 * cosine_similarity   (relevance)
 | `plan_for_command(command, user_id, context?)` | Create plan from user input |
 | `plan_for_event(event_id, user_id)` | Create plan from event (skips if importance < 0.4) |
 
-**Output:** `PlannerOutput` with 9 decision types, validated via Pydantic with text fallback.
+**Output:** `PlannerOutput` with 19 decision types, validated via Pydantic with text fallback.
 
 **Calls:** Claude API (tool_use structured output), WorldModel, MemoryService
 
@@ -120,14 +120,14 @@ score = 0.40 * cosine_similarity   (relevance)
 **Purpose:** Decides when Jarvis should proactively act without user request.
 
 **Constructor:**
-- `db`, `world_model?`, `memory_service?`, `goal_tracker?`, `auto_plan_threshold=0.70`, `notify_threshold=0.50`
+- `db`, `world_model?`, `memory_service?`, `auto_plan_threshold=0.70`, `notify_threshold=0.50`
 
 **Key Methods:**
 | Method | Description |
 |--------|-------------|
 | `score(event, user_id)` | Composite initiative score with plan/notify recommendations |
 
-**Calls:** WorldModel, MemoryService, GoalTracker
+**Calls:** WorldModel, MemoryService
 
 ---
 
@@ -138,7 +138,7 @@ score = 0.40 * cosine_similarity   (relevance)
 **Purpose:** Assembles rich context packs for agent prompts.
 
 **Constructor:**
-- `world_model?`, `memory_service?`, `goal_tracker?`, `procedure_library?`, `artifact_store?`
+- `world_model?`, `memory_service?`, `procedure_library?`, `artifact_store?`
 
 **Key Methods:**
 | Method | Description |
@@ -146,7 +146,7 @@ score = 0.40 * cosine_similarity   (relevance)
 | `build(user_id, query, task_type)` | Gather entities, memories, goals, procedures into ContextPack. Populates `related_runs`, `tool_options`, `constraints`, and `risks`. |
 | `to_prompt(pack, max_tokens?)` | Convert ContextPack to markdown for system prompt injection. Accepts optional `max_tokens` for priority-based truncation (higher-priority sections preserved first). |
 
-**Calls:** WorldModel, MemoryService, GoalTracker, ProcedureLibrary, ArtifactStore
+**Calls:** WorldModel, MemoryService, ProcedureLibrary, ArtifactStore
 
 ---
 
@@ -328,7 +328,7 @@ score = 0.40 * cosine_similarity   (relevance)
 **Key Methods:**
 | Method | Description |
 |--------|-------------|
-| `seed_defaults()` | Seed 10 default routes |
+| `seed_defaults()` | Seed 16 default routes |
 | `resolve(decision)` | Map decision to agent pipeline |
 | CRUD | `list_routes`, `get_route`, `create_route`, `update_route`, `delete_route` |
 
@@ -627,11 +627,8 @@ graph TD
 
     IS --> WM
     IS --> MS
-    IS --> GT[GoalTracker]
-
     CB[ContextBuilder] --> WM
     CB --> MS
-    CB --> GT
     CB --> AS[ArtifactStore]
 
     PL --> WM

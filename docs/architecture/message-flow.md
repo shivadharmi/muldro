@@ -114,19 +114,29 @@ sequenceDiagram
 
 ## Planner Decisions
 
-The Planner returns a structured `PlannerOutput` (Pydantic model) with one of 9 decision types:
+The Planner returns a structured `PlannerOutput` (Pydantic model) with one of 19 decision types:
 
 | Decision | Meaning | Triggers Execution? |
 |----------|---------|-------------------|
 | `acknowledge` | Confirm message received | No |
 | `answer_directly` | Respond without planning | No |
 | `create_task` | Create structured task graph | Yes (Governor -> GraphExecutor) |
-| `draft_reply` | Prepare but don't send response | No |
+| `draft_reply` | Prepare but don't send response | Yes (Governor -> Operator) |
 | `search_memory` | Query knowledge base | No |
-| `add_to_brief` | Include in daily briefing | No |
+| `add_to_brief` | Include in daily briefing | No (direct handler) |
 | `ignore` | No action needed | No |
 | `watcher_create` | Create a monitoring rule | No |
 | `goal_update` | Create/update user goal | No |
+| `read_source` | Read from external source | No (Observer -> Presenter) |
+| `research` | Deep context gathering | No (Researcher) |
+| `observe` | Background observation | No (Observer) |
+| `remember` | Entity/memory updates | No (Librarian) |
+| `ask_user` | Request clarification | No (Presenter) |
+| `recommend` | Suggest options | No (Presenter) |
+| `summarize` | Summarize information | No (Presenter) |
+| `schedule_reminder` | Create one-shot reminder | No (direct handler) |
+| `set_goal` | Store goal in memory | No (direct handler) |
+| `set_instruction` | Create trigger/schedule | No (direct handler) |
 
 ### PlannerOutput Contract
 
@@ -145,22 +155,30 @@ The Planner uses Claude's `tool_use` structured output with a text fallback pars
 
 ## Route Resolution
 
-The `RouteResolver` dynamically maps planner decisions to agent pipelines, replacing the previous hardcoded if/elif routing. Routes are stored in the database and seeded with 10 defaults:
+The `RouteResolver` dynamically maps planner decisions to agent pipelines, replacing the previous hardcoded if/elif routing. Routes are stored in the database and seeded with 16 defaults:
 
 | Decision Type | Agent Pipeline | Notes |
 |--------------|---------------|-------|
 | `create_task` | governor -> operator | Execution via GraphExecutor |
+| `draft_reply` | governor -> operator | Gmail draft creation via `_draft_action` |
+| `read_source` | observer -> presenter | External source reads (gmail_*, calendar_*) |
 | `research` | researcher | Deep context gathering |
 | `observe` | observer | Source observation |
 | `remember` | librarian | Entity/memory extraction |
+| `add_to_brief` | librarian | Stores as `briefing_item` memory |
+| `search_memory` | researcher | Knowledge search |
 | `ask_user` | (empty) | Direct response |
 | `recommend` | (empty) | Direct response |
 | `summarize` | (empty) | Direct response |
+| `answer_directly` | (empty) | Context-based answer |
 | `watcher_create` | observer | Create monitoring rule |
 | `goal_update` | planner | Goal CRUD |
+| `schedule_reminder` | (empty) | Direct handler → one-shot schedule |
 | `acknowledge` | (empty) | Fallback |
 
-Each pipeline step can have conditions (`has_key`, `not_has_key`, `field:name`) and special actions (`execute_plan` for GraphExecutor bridging).
+**Direct handlers** (`set_goal`, `set_instruction`, `schedule_reminder`, `add_to_brief`) execute before pipeline resolution in both `process_message` and `process_message_stream`.
+
+Each pipeline step can have conditions (`has_key`, `has_truthy_key`, `not_has_key`, `field:name`) and special actions (`execute_plan` for GraphExecutor bridging). The `has_truthy_key` condition checks that a key exists AND has a truthy value (avoids Pydantic null serialization issues).
 
 Routes are fully customizable via the `/v1/routes` CRUD API.
 
@@ -172,18 +190,20 @@ Four agents receive pre-loaded context (Planner, Presenter, Researcher, Libraria
 graph TD
     CB[ContextBuilder] --> M[MemoryService<br/>Episodic + Preference memories]
     CB --> WM[WorldModel<br/>Relevant entities with importance]
-    CB --> G[GoalTracker<br/>Active goals]
+    CB --> GM[MemoryService<br/>Goal memories (memory_type=goal)]
     CB --> P[ProcedureLibrary<br/>Task-type procedures]
 
     M --> CP[ContextPack]
     WM --> CP
-    G --> CP
+    GM --> CP
     P --> CP
 
     CP --> SP[System Prompt<br/>--- CONTEXT ---<br/>goals, entities, memories, procedures]
 ```
 
 The `ContextPack` is converted to a markdown block appended to the agent's system prompt via `to_prompt(max_tokens)`. When the context exceeds `max_tokens`, it is truncated by priority order: goals > entities > events > preferences > artifacts > procedures. Memory retrieval uses a composite ranking formula (see [Services Reference](services.md)).
+
+**Prompt architecture:** System prompts are split into `JARVIS_SOUL_CORE` (shared by all 8 agents) and `JARVIS_DECISION_FRAMEWORK` (Planner-only). This prevents non-Planner agents from making routing decisions.
 
 ## Streaming Implementation
 

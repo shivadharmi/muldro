@@ -109,45 +109,72 @@ CONNECTOR_SCHEDULES: dict[str, list[str]] = {
 
 
 async def seed_default_schedules(db: AsyncSession, user_id: str, workspace_id: str = "") -> int:
-    """Seed default schedules as disabled. Returns count seeded."""
-    result = await db.execute(select(Schedule.name))
-    existing = {row[0] for row in result.all()}
+    """Seed or update default schedules. Returns count created/updated.
+
+    Creates new schedules as disabled. For existing schedules, syncs
+    cron_expr, action_type, action_config, and priority from defaults
+    so code changes propagate on restart. Does NOT change the enabled flag
+    (that is controlled by connector authorization).
+    """
+    result = await db.execute(select(Schedule).where(Schedule.source == "system"))
+    existing = {s.name: s for s in result.scalars().all()}
 
     now = datetime.now(timezone.utc)
-    seeded = 0
+    changed = 0
 
     for sched_def in DEFAULT_SCHEDULES:
-        if sched_def["name"] in existing:
+        name = sched_def["name"]
+        cron_expr = sched_def.get("cron_expr")
+
+        if name not in existing:
+            next_run = None
+            if cron_expr:
+                next_run = croniter(cron_expr, now).get_next(datetime)
+
+            schedule = Schedule(
+                schedule_id=f"sched_{ULID()}",
+                user_id=user_id,
+                workspace_id=workspace_id,
+                name=name,
+                description=sched_def.get("description"),
+                schedule_type=sched_def["schedule_type"],
+                cron_expr=cron_expr,
+                action_type=sched_def["action_type"],
+                action_config=sched_def.get("action_config"),
+                enabled=False,
+                source=sched_def.get("source", "system"),
+                priority=sched_def.get("priority", "medium"),
+                next_run_at=next_run,
+            )
+            db.add(schedule)
+            changed += 1
             continue
 
-        cron_expr = sched_def.get("cron_expr")
-        next_run = None
-        if cron_expr:
-            next_run = croniter(cron_expr, now).get_next(datetime)
+        # Sync mutable fields (never touch enabled — user/connector controls that)
+        sched = existing[name]
+        needs_update = False
 
-        schedule = Schedule(
-            schedule_id=f"sched_{ULID()}",
-            user_id=user_id,
-            workspace_id=workspace_id,
-            name=sched_def["name"],
-            description=sched_def.get("description"),
-            schedule_type=sched_def["schedule_type"],
-            cron_expr=cron_expr,
-            action_type=sched_def["action_type"],
-            action_config=sched_def.get("action_config"),
-            enabled=False,
-            source=sched_def.get("source", "system"),
-            priority=sched_def.get("priority", "medium"),
-            next_run_at=next_run,
-        )
-        db.add(schedule)
-        seeded += 1
+        if sched.cron_expr != cron_expr:
+            sched.cron_expr = cron_expr
+            needs_update = True
+        if sched.action_type != sched_def["action_type"]:
+            sched.action_type = sched_def["action_type"]
+            needs_update = True
+        if sched.action_config != sched_def.get("action_config"):
+            sched.action_config = sched_def.get("action_config")
+            needs_update = True
+        if sched.priority != sched_def.get("priority", "medium"):
+            sched.priority = sched_def.get("priority", "medium")
+            needs_update = True
 
-    if seeded:
+        if needs_update:
+            changed += 1
+
+    if changed:
         await db.flush()
-        logger.info("Seeded %d default schedules (all disabled)", seeded)
+        logger.info("Seeded/updated %d default schedules", changed)
 
-    return seeded
+    return changed
 
 
 async def enable_schedules_for_connector(db: AsyncSession, provider: str) -> list[str]:

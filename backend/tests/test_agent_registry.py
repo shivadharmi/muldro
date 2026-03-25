@@ -62,10 +62,17 @@ async def test_seed_defaults_creates_eight_agents(mock_db):
 
 @pytest.mark.asyncio
 async def test_seed_defaults_skips_existing(mock_db):
-    """seed_defaults should skip agents that already exist."""
-    # Simulate 5 existing agents
-    existing = [("observer",), ("librarian",), ("planner",), ("governor",), ("operator",)]
-    mock_db.execute = AsyncMock(return_value=FakeResult(rows=existing))
+    """seed_defaults should skip agents that already exist (with matching scope/prompt)."""
+    # Simulate 5 existing agents with correct scope/prompt — no updates needed
+    existing_agents = []
+    for name in ["observer", "librarian", "planner", "governor", "operator"]:
+        agent = MagicMock(spec=Agent)
+        agent.name = name
+        agent.capability_scope = sorted(AGENT_CAPABILITY_SCOPES.get(name, set()))
+        agent.system_prompt = AGENT_PROMPTS[name]
+        existing_agents.append(agent)
+
+    mock_db.execute = AsyncMock(return_value=FakeResult(rows=existing_agents))
 
     registry = AgentRegistry(mock_db)
     count = await registry.seed_defaults()

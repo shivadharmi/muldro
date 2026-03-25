@@ -68,6 +68,14 @@ def _mock_db():
     return db
 
 
+def _mock_scalar_result(states: list[PerceptionState]):
+    result = MagicMock()
+    scalars = MagicMock()
+    scalars.all.return_value = states
+    result.scalars.return_value = scalars
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Effective interval computation
 # ---------------------------------------------------------------------------
@@ -260,7 +268,7 @@ class TestRequestRun:
         assert result.signal_at is not None
 
     @pytest.mark.asyncio
-    async def test_does_not_wake_paused_source(self):
+    async def test_wakes_paused_source_on_activation_signal(self):
         db = _mock_db()
         state = _make_state(mode="paused", pending_run=False)
         svc = PerceptionPolicyService(db)
@@ -268,6 +276,19 @@ class TestRequestRun:
 
         result = await svc.request_run("ws_test", "usr_test", "gmail", "webhook")
 
+        assert result.mode == "active"
+        assert result.pending_run is True
+
+    @pytest.mark.asyncio
+    async def test_does_not_wake_paused_source_for_non_activation_signal(self):
+        db = _mock_db()
+        state = _make_state(mode="paused", pending_run=False)
+        svc = PerceptionPolicyService(db)
+        svc.get_or_create_state = AsyncMock(return_value=state)
+
+        result = await svc.request_run("ws_test", "usr_test", "gmail", "manual_probe")
+
+        assert result.mode == "paused"
         assert result.pending_run is False
 
     @pytest.mark.asyncio
@@ -369,6 +390,27 @@ class TestCircuitBreaker:
         svc = PerceptionPolicyService(_mock_db())
         svc._maybe_reopen_circuit(state, datetime.now(timezone.utc))
         assert state.circuit_state == "closed"
+
+
+class TestDueSources:
+    @pytest.mark.asyncio
+    async def test_reopens_open_circuit_without_next_run(self):
+        db = _mock_db()
+        cooled = datetime.now(timezone.utc) - timedelta(seconds=CIRCUIT_COOLDOWN_S + 30)
+        state = _make_state(
+            mode="poll",
+            pending_run=False,
+            next_run_at=None,
+            circuit_state="open",
+            circuit_opened_at=cooled,
+        )
+        db.execute = AsyncMock(return_value=_mock_scalar_result([state]))
+        svc = PerceptionPolicyService(db)
+
+        result = await svc.get_due_sources(user_id="usr_test")
+
+        assert len(result) == 1
+        assert result[0].circuit_state == "half_open"
 
 
 # ---------------------------------------------------------------------------

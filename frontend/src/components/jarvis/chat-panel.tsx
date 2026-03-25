@@ -46,6 +46,7 @@ interface ChatPanelProps {
   initialMessages?: ConversationMessage[];
   onConversationCreated?: (id: string) => void;
   onMessageSent?: () => void;
+  onSurface?: (surface: { id: string; children: unknown[]; metadata: Record<string, unknown> }) => void;
 }
 
 function backendMessagesToChat(messages: ConversationMessage[]): ChatMessage[] {
@@ -101,6 +102,7 @@ export function ChatPanel({
   initialMessages,
   onConversationCreated,
   onMessageSent,
+  onSurface,
 }: ChatPanelProps) {
   // Restore messages from cache on mount, fall back to initialMessages
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
@@ -318,6 +320,16 @@ export function ChatPanel({
                 content: m.content || `Error: ${event.message}`,
                 streaming: false,
               }));
+              break;
+
+            case "surface":
+              if (onSurface && event.id && event.metadata) {
+                onSurface({
+                  id: event.id,
+                  children: event.children ?? [],
+                  metadata: event.metadata,
+                });
+              }
               break;
 
             case "done":

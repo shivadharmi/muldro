@@ -26,7 +26,7 @@ DEFAULT_ROUTES: list[dict[str, Any]] = [
             {"agent": "governor", "message_template": "Evaluate this plan: {decision_json}"},
             {
                 "agent": "operator",
-                "condition": {"has_key": "plan_id"},
+                "condition": {"has_truthy_key": "plan_id"},
                 "action": "execute_plan",
             },
         ],
@@ -159,6 +159,63 @@ DEFAULT_ROUTES: list[dict[str, Any]] = [
         "keywords": ["goal", "objective", "target", "milestone"],
     },
     {
+        "name": "draft_reply",
+        "description": "Route for drafting replies — governance check, then execution.",
+        "decision_type": "draft_reply",
+        "agent_pipeline": [
+            {"agent": "governor", "message_template": "Evaluate this plan: {decision_json}"},
+            {
+                "agent": "operator",
+                "condition": {"has_truthy_key": "plan_id"},
+                "action": "execute_plan",
+            },
+        ],
+        "priority": 95,
+        "keywords": ["draft", "reply", "compose", "write email", "respond"],
+    },
+    {
+        "name": "schedule_reminder",
+        "description": "Route for scheduling reminders.",
+        "decision_type": "schedule_reminder",
+        "agent_pipeline": [],
+        "priority": 85,
+        "keywords": ["remind", "reminder", "alert me", "notify me at", "schedule"],
+    },
+    {
+        "name": "add_to_brief",
+        "description": "Route for adding items to the next briefing.",
+        "decision_type": "add_to_brief",
+        "agent_pipeline": [
+            {
+                "agent": "librarian",
+                "message_template": "Store this as a briefing item for the user: {decision_json}",
+            },
+        ],
+        "priority": 85,
+        "keywords": ["brief", "briefing", "add to brief", "morning update"],
+    },
+    {
+        "name": "answer_directly",
+        "description": "Route for direct answers from context — Presenter only.",
+        "decision_type": "answer_directly",
+        "agent_pipeline": [],
+        "priority": 80,
+        "keywords": [],
+    },
+    {
+        "name": "search_memory",
+        "description": "Route for knowledge search — Researcher gathers, Presenter formats.",
+        "decision_type": "search_memory",
+        "agent_pipeline": [
+            {
+                "agent": "researcher",
+                "message_template": "Search memories and knowledge for: {decision_json}",
+            },
+        ],
+        "priority": 80,
+        "keywords": ["recall", "what do you know", "search memory"],
+    },
+    {
         "name": "acknowledge",
         "description": "Default fallback — just acknowledge.",
         "decision_type": "acknowledge",
@@ -169,7 +226,10 @@ DEFAULT_ROUTES: list[dict[str, Any]] = [
 ]
 
 # Decisions that always go through the presenter for user-facing output
-ALWAYS_PRESENT = {"ask_user", "recommend", "summarize", "acknowledge", "research", "read_source"}
+ALWAYS_PRESENT = {
+    "ask_user", "recommend", "summarize", "acknowledge", "research", "read_source",
+    "draft_reply", "answer_directly", "search_memory", "add_to_brief", "schedule_reminder",
+}
 
 
 class RouteResolver:
@@ -180,35 +240,64 @@ class RouteResolver:
         self._cache: list[AgentRoute] | None = None
 
     async def seed_defaults(self) -> int:
-        """Seed default routes if they don't exist. Returns count seeded."""
-        result = await self._db.execute(select(AgentRoute.name))
-        existing = {row[0] for row in result.all()}
+        """Seed or update default routes. Returns count created/updated.
 
-        seeded = 0
+        Creates new routes that don't exist. For existing routes, syncs
+        agent_pipeline, priority, conditions, and keywords from DEFAULT_ROUTES
+        so code changes propagate without manual DB migration.
+        """
+        result = await self._db.execute(select(AgentRoute))
+        existing = {route.name: route for route in result.scalars().all()}
+
+        changed = 0
         for route_def in DEFAULT_ROUTES:
-            if route_def["name"] in existing:
+            name = route_def["name"]
+
+            if name not in existing:
+                route = AgentRoute(
+                    route_id=f"rte_{ULID()}",
+                    name=name,
+                    description=route_def.get("description"),
+                    decision_type=route_def["decision_type"],
+                    agent_pipeline=route_def["agent_pipeline"],
+                    conditions=route_def.get("conditions"),
+                    priority=route_def.get("priority", 100),
+                    enabled=True,
+                    keywords=route_def.get("keywords"),
+                    weight=route_def.get("weight", 1.0),
+                )
+                self._db.add(route)
+                changed += 1
                 continue
 
-            route = AgentRoute(
-                route_id=f"rte_{ULID()}",
-                name=route_def["name"],
-                description=route_def.get("description"),
-                decision_type=route_def["decision_type"],
-                agent_pipeline=route_def["agent_pipeline"],
-                conditions=route_def.get("conditions"),
-                priority=route_def.get("priority", 100),
-                enabled=True,
-                keywords=route_def.get("keywords"),
-                weight=route_def.get("weight", 1.0),
-            )
-            self._db.add(route)
-            seeded += 1
+            # Sync mutable fields if they diverged from defaults
+            route = existing[name]
+            needs_update = False
 
-        if seeded:
+            if route.agent_pipeline != route_def["agent_pipeline"]:
+                route.agent_pipeline = route_def["agent_pipeline"]
+                needs_update = True
+            if route.priority != route_def.get("priority", 100):
+                route.priority = route_def.get("priority", 100)
+                needs_update = True
+            if route.conditions != route_def.get("conditions"):
+                route.conditions = route_def.get("conditions")
+                needs_update = True
+            if route.keywords != route_def.get("keywords"):
+                route.keywords = route_def.get("keywords")
+                needs_update = True
+            if route.description != route_def.get("description"):
+                route.description = route_def.get("description")
+                needs_update = True
+
+            if needs_update:
+                changed += 1
+
+        if changed:
             await self._db.flush()
-            logger.info("Seeded %d default agent routes", seeded)
+            logger.info("Seeded/updated %d agent routes", changed)
 
-        return seeded
+        return changed
 
     async def resolve(self, decision: dict) -> list[dict]:
         """Resolve a planner decision to an agent pipeline.
@@ -257,6 +346,9 @@ class RouteResolver:
         for key, value in conditions.items():
             if key == "has_key":
                 if value not in decision:
+                    return False
+            elif key == "has_truthy_key":
+                if not decision.get(value):
                     return False
             elif key == "not_has_key":
                 if value in decision:

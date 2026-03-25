@@ -245,7 +245,7 @@ class HomeFeedService:
                     "description": "Recent workflow failures may need your attention.",
                     "reasoning": (
                         f"{failed_count} run(s) failed in the last 24 hours. "
-                        "Failures may indicate connector issues, policy blocks, or invalid plans."
+                        "Failures may indicate integration issues, policy blocks, or invalid plans."
                     ),
                     "confidence": 0.8,
                     "impact": "Recurring failures go undiagnosed. User tasks may silently fail.",
@@ -282,7 +282,7 @@ class HomeFeedService:
                     "impact": "No new data from failing sources. Briefings and plans become stale.",
                     "priority": "high",
                     "priority_score": 75 + len(stale) * 10,
-                    "action_url": "/connectors",
+                    "action_url": "/integrations",
                 }
             )
 

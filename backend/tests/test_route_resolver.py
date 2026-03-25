@@ -44,10 +44,15 @@ class TestDefaultRoutes:
         assert "acknowledge" in decision_types
         assert "watcher_create" in decision_types
         assert "goal_update" in decision_types
+        assert "draft_reply" in decision_types
+        assert "schedule_reminder" in decision_types
+        assert "add_to_brief" in decision_types
+        assert "answer_directly" in decision_types
+        assert "search_memory" in decision_types
 
-    def test_default_routes_have_11_entries(self):
-        """Should have 11 default routes."""
-        assert len(DEFAULT_ROUTES) == 11
+    def test_default_routes_have_16_entries(self):
+        """Should have 16 default routes."""
+        assert len(DEFAULT_ROUTES) == 16
 
     def test_create_task_route_has_governor_and_operator(self):
         """create_task route should pipeline through governor then operator."""
@@ -67,6 +72,40 @@ class TestDefaultRoutes:
         agents = [step["agent"] for step in route["agent_pipeline"]]
         assert agents == ["planner"]
 
+    def test_draft_reply_route_has_governor_and_operator(self):
+        """draft_reply route should pipeline through governor then operator."""
+        route = next(r for r in DEFAULT_ROUTES if r["decision_type"] == "draft_reply")
+        agents = [step["agent"] for step in route["agent_pipeline"]]
+        assert agents == ["governor", "operator"]
+
+    def test_schedule_reminder_route_exists(self):
+        """schedule_reminder should have an explicit route."""
+        types = {r["decision_type"] for r in DEFAULT_ROUTES}
+        assert "schedule_reminder" in types
+
+    def test_add_to_brief_route_uses_librarian(self):
+        """add_to_brief should route to librarian."""
+        route = next(r for r in DEFAULT_ROUTES if r["decision_type"] == "add_to_brief")
+        agents = [step["agent"] for step in route["agent_pipeline"]]
+        assert agents == ["librarian"]
+
+    def test_search_memory_route_uses_researcher(self):
+        """search_memory should route to researcher."""
+        route = next(r for r in DEFAULT_ROUTES if r["decision_type"] == "search_memory")
+        agents = [step["agent"] for step in route["agent_pipeline"]]
+        assert agents == ["researcher"]
+
+    def test_answer_directly_route_has_empty_pipeline(self):
+        """answer_directly should have empty pipeline (Presenter handles directly)."""
+        route = next(r for r in DEFAULT_ROUTES if r["decision_type"] == "answer_directly")
+        assert route["agent_pipeline"] == []
+
+    def test_create_task_uses_has_truthy_key_condition(self):
+        """create_task operator step should use has_truthy_key to check plan_id."""
+        route = next(r for r in DEFAULT_ROUTES if r["decision_type"] == "create_task")
+        operator_step = route["agent_pipeline"][1]
+        assert operator_step["condition"] == {"has_truthy_key": "plan_id"}
+
 
 # ── Seeding ────────────────────────────────────────────────────
 
@@ -74,30 +113,46 @@ class TestDefaultRoutes:
 class TestRouteSeeding:
     @pytest.mark.asyncio
     async def test_seed_defaults_creates_routes(self, mock_db):
-        """Should seed all 10 default routes when none exist."""
+        """Should seed all 16 default routes when none exist."""
         # No existing routes
         result_mock = MagicMock()
+        result_mock.scalars.return_value = result_mock
         result_mock.all.return_value = []
         mock_db.execute = AsyncMock(return_value=result_mock)
 
         resolver = RouteResolver(mock_db)
         count = await resolver.seed_defaults()
 
-        assert count == 11
-        assert mock_db.add.call_count == 11
+        assert count == 16
+        assert mock_db.add.call_count == 16
 
     @pytest.mark.asyncio
     async def test_seed_defaults_skips_existing(self, mock_db):
-        """Should skip routes that already exist."""
+        """Should skip routes that already exist (with matching fields)."""
+        from src.services.route_resolver import DEFAULT_ROUTES
+
+        # Simulate 3 existing routes with matching fields — no updates needed
+        existing_routes = []
+        for rd in DEFAULT_ROUTES:
+            if rd["name"] in ("create_task", "research", "observe"):
+                r = MagicMock()
+                r.name = rd["name"]
+                r.agent_pipeline = rd["agent_pipeline"]
+                r.priority = rd.get("priority", 100)
+                r.conditions = rd.get("conditions")
+                r.keywords = rd.get("keywords")
+                r.description = rd.get("description")
+                existing_routes.append(r)
+
         result_mock = MagicMock()
-        # Simulate 3 existing routes
-        result_mock.all.return_value = [("create_task",), ("research",), ("observe",)]
+        result_mock.scalars.return_value = result_mock
+        result_mock.all.return_value = existing_routes
         mock_db.execute = AsyncMock(return_value=result_mock)
 
         resolver = RouteResolver(mock_db)
         count = await resolver.seed_defaults()
 
-        assert count == 8  # 11 - 3 existing
+        assert count == 13  # 16 - 3 existing
 
 
 # ── Resolution ─────────────────────────────────────────────────
@@ -199,6 +254,18 @@ class TestConditionMatching:
         route.conditions = {"decision": "create_task"}
         assert resolver._matches_conditions(route, {"decision": "create_task"}) is True
         assert resolver._matches_conditions(route, {"decision": "research"}) is False
+
+    def test_has_truthy_key_condition(self):
+        """has_truthy_key should match only when key exists AND value is truthy."""
+        resolver = RouteResolver(MagicMock())
+        route = MagicMock()
+        route.conditions = {"has_truthy_key": "plan_id"}
+        # Key present with truthy value → matches
+        assert resolver._matches_conditions(route, {"plan_id": "plan_001"}) is True
+        # Key present with None value → does NOT match
+        assert resolver._matches_conditions(route, {"plan_id": None}) is False
+        # Key missing entirely → does NOT match
+        assert resolver._matches_conditions(route, {"other": "val"}) is False
 
 
 # ── Priority Ordering ──────────────────────────────────────────

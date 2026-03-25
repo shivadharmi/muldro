@@ -1,5 +1,7 @@
 /** Generated surface types for the A2UI system. */
 
+import type { A2UISurface } from "@/lib/a2ui-types";
+
 export type SurfaceKind =
   | "summary"
   | "briefing"
@@ -19,7 +21,7 @@ export interface GeneratedSurface {
   id: string;
   kind: SurfaceKind;
   title: string;
-  data: Record<string, unknown>;
+  data: Record<string, unknown> & { a2ui_surface?: A2UISurface };
   created_at: string;
   pinned: boolean;
   position: SurfacePosition;

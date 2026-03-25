@@ -1,4 +1,4 @@
-"""ConnectorInstallation — DB-backed MCP server configuration.
+"""IntegrationInstallation — DB-backed integration server configuration.
 
 Replaces the static mcp_config.py with workspace-scoped installation records.
 Each row represents one MCP server installed for a workspace.
@@ -12,8 +12,8 @@ from src.models.base import Base, TimestampMixin
 from src.models.ids import generate_id
 
 
-class ConnectorInstallation(Base, TimestampMixin):
-    __tablename__ = "connector_installations"
+class IntegrationInstallation(Base, TimestampMixin):
+    __tablename__ = "integration_installations"
 
     install_id: Mapped[str] = mapped_column(
         String(64), primary_key=True, default=lambda: generate_id("inst")

@@ -243,6 +243,7 @@ class TestScheduleSeeder:
         """Should seed all 7 schedules when none exist."""
         db = MagicMock()
         result_mock = MagicMock()
+        result_mock.scalars.return_value = result_mock
         result_mock.all.return_value = []
         db.execute = AsyncMock(return_value=result_mock)
         db.add = MagicMock()
@@ -255,13 +256,25 @@ class TestScheduleSeeder:
 
     @pytest.mark.asyncio
     async def test_seed_skips_existing(self):
-        """Should skip schedules that already exist."""
+        """Should skip schedules that already exist (with matching fields)."""
+        from src.services.schedule_seeder import DEFAULT_SCHEDULES
+
         db = MagicMock()
+        # Simulate 2 existing schedules with matching fields
+        existing_scheds = []
+        for sd in DEFAULT_SCHEDULES:
+            if sd["name"] in ("morning_briefing", "observe_gmail"):
+                s = MagicMock()
+                s.name = sd["name"]
+                s.cron_expr = sd.get("cron_expr")
+                s.action_type = sd["action_type"]
+                s.action_config = sd.get("action_config")
+                s.priority = sd.get("priority", "medium")
+                existing_scheds.append(s)
+
         result_mock = MagicMock()
-        result_mock.all.return_value = [
-            ("morning_briefing",),
-            ("observe_gmail",),
-        ]
+        result_mock.scalars.return_value = result_mock
+        result_mock.all.return_value = existing_scheds
         db.execute = AsyncMock(return_value=result_mock)
         db.add = MagicMock()
         db.flush = AsyncMock()
@@ -275,6 +288,7 @@ class TestScheduleSeeder:
         """Seeded schedules should compute next_run_at from cron."""
         db = MagicMock()
         result_mock = MagicMock()
+        result_mock.scalars.return_value = result_mock
         result_mock.all.return_value = []
         db.execute = AsyncMock(return_value=result_mock)
         db.add = MagicMock()

@@ -1,6 +1,6 @@
-"""Connector lifecycle management — register, poll, health check.
+"""Integration lifecycle management — register, poll, health check.
 
-Operates on ConnectorInstallation (the canonical installation model).
+Operates on IntegrationInstallation (the canonical installation model).
 """
 
 from __future__ import annotations
@@ -13,8 +13,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.connectors.base import CONNECTOR_REGISTRY
-from src.models.connector_installation import ConnectorInstallation
 from src.models.ids import generate_id
+from src.models.integration_installation import IntegrationInstallation
 from src.models.observation_cursor import ObservationCursor
 from src.services.event_bus import EventBus
 
@@ -40,7 +40,7 @@ _PROVIDER_TO_OAUTH: dict[str, str] = {
 }
 
 
-class ConnectorManager:
+class IntegrationManager:
     """Manages connector lifecycle: registration, polling, health checks."""
 
     def __init__(
@@ -57,16 +57,16 @@ class ConnectorManager:
 
     async def get_user_connectors(self, user_id: str, workspace_id: str = "") -> list[dict]:
         """List all installations for a user/workspace with status."""
-        stmt = select(ConnectorInstallation).where(
-            ConnectorInstallation.user_id == user_id,
+        stmt = select(IntegrationInstallation).where(
+            IntegrationInstallation.user_id == user_id,
         )
         if workspace_id:
-            stmt = stmt.where(ConnectorInstallation.workspace_id == workspace_id)
+            stmt = stmt.where(IntegrationInstallation.workspace_id == workspace_id)
         result = await self._db.execute(stmt)
         installations = result.scalars().all()
         return [
             {
-                "connector_id": inst.install_id,
+                "integration_id": inst.install_id,
                 "provider": inst.server_name,
                 "status": inst.status,
                 "health_status": inst.health_status,
@@ -77,11 +77,11 @@ class ConnectorManager:
             for inst in installations
         ]
 
-    async def register_connector(
+    async def register_integration(
         self, user_id: str, provider: str, config: dict | None = None, workspace_id: str = ""
     ) -> dict:
-        """Register a new native connector as a ConnectorInstallation."""
-        installation = ConnectorInstallation(
+        """Register a new native connector as a IntegrationInstallation."""
+        installation = IntegrationInstallation(
             install_id=generate_id("inst"),
             user_id=user_id,
             workspace_id=workspace_id,
@@ -103,7 +103,7 @@ class ConnectorManager:
             user_id,
         )
         return {
-            "connector_id": installation.install_id,
+            "integration_id": installation.install_id,
             "provider": provider,
             "status": "active",
         }
@@ -111,9 +111,9 @@ class ConnectorManager:
     async def disconnect(self, install_id: str, user_id: str) -> None:
         """Disconnect (disable) an installation."""
         result = await self._db.execute(
-            select(ConnectorInstallation).where(
-                ConnectorInstallation.install_id == install_id,
-                ConnectorInstallation.user_id == user_id,
+            select(IntegrationInstallation).where(
+                IntegrationInstallation.install_id == install_id,
+                IntegrationInstallation.user_id == user_id,
             )
         )
         installation = result.scalar_one_or_none()
@@ -122,12 +122,12 @@ class ConnectorManager:
             installation.enabled = False
             await self._db.commit()
 
-    async def poll_connector(self, install_id: str, user_id: str) -> dict:
+    async def poll_integration(self, install_id: str, user_id: str) -> dict:
         """Run one poll cycle for a specific installation."""
         result = await self._db.execute(
-            select(ConnectorInstallation).where(
-                ConnectorInstallation.install_id == install_id,
-                ConnectorInstallation.user_id == user_id,
+            select(IntegrationInstallation).where(
+                IntegrationInstallation.install_id == install_id,
+                IntegrationInstallation.user_id == user_id,
             )
         )
         installation = result.scalar_one_or_none()
@@ -180,12 +180,12 @@ class ConnectorManager:
         logger.info("Polled %s for user %s: %d events", provider, user_id, len(events))
         return {"events": len(events), "provider": provider, "new_cursor": new_cursor}
 
-    async def test_connector(self, install_id: str, user_id: str) -> dict:
+    async def test_integration(self, install_id: str, user_id: str) -> dict:
         """Test a connector's connection."""
         result = await self._db.execute(
-            select(ConnectorInstallation).where(
-                ConnectorInstallation.install_id == install_id,
-                ConnectorInstallation.user_id == user_id,
+            select(IntegrationInstallation).where(
+                IntegrationInstallation.install_id == install_id,
+                IntegrationInstallation.user_id == user_id,
             )
         )
         installation = result.scalar_one_or_none()

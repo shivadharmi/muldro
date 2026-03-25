@@ -10,7 +10,7 @@ All API routes live in `backend/src/api/routes_{name}.py` and are `/v1/` prefixe
 ## Steps
 
 1. **Ask the user**: What resource does this route manage? What HTTP methods are needed?
-2. **Read existing route files** for patterns (e.g., `routes_tasks.py`, `routes_goals.py`)
+2. **Read existing route files** for patterns (e.g., `routes_chat.py`, `routes_memories.py`)
 3. **Add Pydantic schemas** in `backend/src/api/schemas.py`:
    - Request models for POST/PUT bodies
    - Response models for all returns (never bare dicts)

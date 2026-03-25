@@ -5,13 +5,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 class TestGetCredentialsUsesOAuthManager:
     async def test_returns_plaintext_token(self):
-        from src.services.connector_manager import ConnectorManager
+        from src.services.integration_manager import IntegrationManager
 
         mock_db = AsyncMock()
         mock_oauth = AsyncMock()
         mock_oauth.get_valid_token = AsyncMock(return_value="plaintext_token_123")
 
-        mgr = ConnectorManager(mock_db, oauth_manager=mock_oauth)
+        mgr = IntegrationManager(mock_db, oauth_manager=mock_oauth)
         creds = await mgr._get_credentials("usr_1", "gmail")
 
         assert creds == {"access_token": "plaintext_token_123"}

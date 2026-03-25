@@ -11,7 +11,6 @@ erDiagram
     User ||--o{ Entity : owns
     User ||--o{ Memory : stores
     User ||--o{ Plan : creates
-    User ||--o{ Goal : sets
     User ||--o{ Trigger : defines
     User ||--o{ Schedule : configures
     User ||--o{ Notification : receives
@@ -32,9 +31,6 @@ erDiagram
     TaskRun ||--o{ TaskStep : contains
     TaskRun ||--o{ TaskCheckpoint : records
     TaskRun ||--o{ Artifact : produces
-
-    Task ||--o{ TaskDependency : has
-    Task }o--|| Goal : belongs_to
 
     Trace ||--o{ ModelCall : records
 
@@ -85,14 +81,6 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 | `task_runs` | `run_` | plan_id (FK), status (11 states: pending, running, paused, awaiting_approval, completed, failed, cancelled, blocked, partially_completed, archived, timed_out), graph_definition (JSONB), current_step_ids (ARRAY), checkpoint (JSONB), trace_id, context_pack_json (JSONB) | |
 | `task_steps` | `step_` | run_id (FK), task_id, step_type, depends_on (ARRAY), status (9 states: pending, running, completed, failed, skipped, cancelled, awaiting_approval, blocked, timed_out), input_data (JSONB), output_data (JSONB) | Cascade on run |
 | `task_checkpoints` | - | run_id (FK), step_id, state_snapshot (JSONB), reason | |
-
-### Tasks & Goals (3 tables)
-
-| Table | PK Prefix | Key Columns | Notes |
-|-------|-----------|-------------|-------|
-| `tasks` | `task_` | title, task_type, source, priority, status (18 states), due_at, assigned_agent, goal_id (FK), parent_task_id (FK) | |
-| `task_dependencies` | - | task_id (FK), depends_on_task_id (FK), dependency_type | |
-| `goals` | `goal_` | title, target_date, priority, status, progress (float), related_entity_ids (ARRAY), success_criteria_json (JSONB) | |
 
 ### Governance (2 tables)
 
@@ -182,6 +170,31 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 | `oauth_tokens` | - | connection_id (FK), token_type, token_encrypted, expires_at | Individual OAuth token storage |
 | `magic_links` | - | user_id, token_hash, expires_at, used_at | Passwordless auth links |
 
+### MCP & Integration Trust (4 tables)
+
+| Table | PK Prefix | Key Columns | Notes |
+|-------|-----------|-------------|-------|
+| `mcp_server_catalog` | - | name, uri, transport, status, capabilities (JSONB) | Discovered MCP servers |
+| `server_trust_records` | - | server_name, trust_level, verified_at | MCP server trust scores |
+| `capability_bindings` | - | server_name, capability, agent_name, enabled | Agent-to-MCP capability mapping |
+| `org_allowlists` | - | domain, approved_by, reason | Approved external domains |
+
+### Integration & Webhooks (3 tables)
+
+| Table | PK Prefix | Key Columns | Notes |
+|-------|-----------|-------------|-------|
+| `integration_installations` | - | provider, status, config (JSONB), installed_at | Installed OAuth integrations |
+| `integration_audit_events` | - | integration_id (FK), action, details (JSONB) | Integration activity audit |
+| `webhook_subscriptions` | - | url, event_types (ARRAY), secret_hash, enabled | Inbound webhook registrations |
+
+### Perception & Runtime (3 tables)
+
+| Table | PK Prefix | Key Columns | Notes |
+|-------|-----------|-------------|-------|
+| `perception_state` | - | source, user_id, last_run_at, next_run_at, status | Per-source perception scheduling |
+| `runtime_events` | - | event_type, agent_name, payload (JSONB), created_at | Internal runtime event log |
+| `approval_policies` | - | action_type, risk_level, auto_approve, conditions (JSONB) | Configurable approval rules |
+
 > **Note:** All data tables listed above include `workspace_id` for multi-tenant isolation unless noted as user-level or system-global.
 
 ## ID Scheme
@@ -199,8 +212,6 @@ All IDs use ULID (Universally Unique Lexicographically Sortable Identifier) with
 | `run_` | task_runs | `run_01HWQX44...` |
 | `step_` | task_steps | `step_01HWQX45...` |
 | `apr_` | approvals | `apr_01HWQX46...` |
-| `task_` | tasks | `task_01HWQX47...` |
-| `goal_` | goals | `goal_01HWQX48...` |
 | `trace_` | traces | `trace_01HWQX49...` |
 | `notif_` | notifications | `notif_01HWQX4A...` |
 | `trg_` | triggers | `trg_01HWQX4B...` |
@@ -260,7 +271,7 @@ Data is distributed across 6 infrastructure services. Postgres is always the sou
 ```mermaid
 graph LR
     subgraph "Source of Truth"
-        PG[(Postgres 17<br/>49 tables, pgvector)]
+        PG[(Postgres 17<br/>54 tables, pgvector)]
     end
 
     subgraph "Search Indexes"
@@ -349,7 +360,7 @@ graph LR
 
 ## Migrations
 
-The project uses Alembic for database migrations. As of the current state, there are 29 migrations covering all schema changes from initial setup through the complete system redesign.
+The project uses Alembic for database migrations. As of the current state, there are 44 migrations covering all schema changes from initial setup through the complete system redesign.
 
 ```bash
 # From backend/

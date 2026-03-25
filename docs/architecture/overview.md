@@ -20,7 +20,7 @@ graph TB
     end
 
     subgraph "API Layer"
-        API[FastAPI + SSE Streaming<br/>37 routers, /v1/ prefix]
+        API[FastAPI + SSE Streaming<br/>30 routers, /v1/ prefix]
     end
 
     subgraph "Orchestrator"
@@ -185,7 +185,7 @@ Every external write requires approval in v1. An audit log with correlation IDs 
 
 ## Multi-Tenant Workspace Isolation
 
-All 49 data tables have a `workspace_id` column (`String(64)`, NOT NULL FK to `workspaces` with CASCADE delete). This enforces strict multi-tenant isolation at the database level.
+All 54 data tables have a `workspace_id` column (`String(64)`, NOT NULL FK to `workspaces` with CASCADE delete). This enforces strict multi-tenant isolation at the database level.
 
 - **API routes** resolve the workspace via the `get_current_workspace_id()` dependency.
 - **Background services** resolve the workspace via `resolve_workspace_id(db, user_id)`.

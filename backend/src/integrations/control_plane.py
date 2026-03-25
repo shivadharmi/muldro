@@ -1,6 +1,6 @@
 """Integration Control Plane — DB-backed replacement for mcp_config.py.
 
-Manages ConnectorInstallation records: CRUD, health checks, and server config
+Manages IntegrationInstallation records: CRUD, health checks, and server config
 resolution. All MCP server configs are now workspace-scoped DB rows instead
 of static env-driven functions.
 """
@@ -11,13 +11,13 @@ import os
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models.connector_installation import ConnectorInstallation
+from src.models.integration_installation import IntegrationInstallation
 
 logger = logging.getLogger(__name__)
 
 
 class IntegrationControlPlane:
-    """Manages connector installations for a workspace."""
+    """Manages integration installations for a workspace."""
 
     def __init__(self, db: AsyncSession, workspace_id: str):
         self._db = db
@@ -27,32 +27,32 @@ class IntegrationControlPlane:
 
     async def list_installations(
         self, status: str | None = None, enabled_only: bool = False
-    ) -> list[ConnectorInstallation]:
-        stmt = select(ConnectorInstallation).where(
-            ConnectorInstallation.workspace_id == self._workspace_id
+    ) -> list[IntegrationInstallation]:
+        stmt = select(IntegrationInstallation).where(
+            IntegrationInstallation.workspace_id == self._workspace_id
         )
         if status:
-            stmt = stmt.where(ConnectorInstallation.status == status)
+            stmt = stmt.where(IntegrationInstallation.status == status)
         if enabled_only:
-            stmt = stmt.where(ConnectorInstallation.enabled.is_(True))
-        stmt = stmt.order_by(ConnectorInstallation.server_name)
+            stmt = stmt.where(IntegrationInstallation.enabled.is_(True))
+        stmt = stmt.order_by(IntegrationInstallation.server_name)
         result = await self._db.execute(stmt)
         return list(result.scalars().all())
 
-    async def get_installation(self, install_id: str) -> ConnectorInstallation | None:
+    async def get_installation(self, install_id: str) -> IntegrationInstallation | None:
         result = await self._db.execute(
-            select(ConnectorInstallation).where(
-                ConnectorInstallation.install_id == install_id,
-                ConnectorInstallation.workspace_id == self._workspace_id,
+            select(IntegrationInstallation).where(
+                IntegrationInstallation.install_id == install_id,
+                IntegrationInstallation.workspace_id == self._workspace_id,
             )
         )
         return result.scalar_one_or_none()
 
-    async def get_by_server_name(self, server_name: str) -> ConnectorInstallation | None:
+    async def get_by_server_name(self, server_name: str) -> IntegrationInstallation | None:
         result = await self._db.execute(
-            select(ConnectorInstallation).where(
-                ConnectorInstallation.workspace_id == self._workspace_id,
-                ConnectorInstallation.server_name == server_name,
+            select(IntegrationInstallation).where(
+                IntegrationInstallation.workspace_id == self._workspace_id,
+                IntegrationInstallation.server_name == server_name,
             )
         )
         return result.scalar_one_or_none()
@@ -73,8 +73,8 @@ class IntegrationControlPlane:
         auth_provider: str | None = None,
         scopes_granted: list[str] | None = None,
         config: dict | None = None,
-    ) -> ConnectorInstallation:
-        installation = ConnectorInstallation(
+    ) -> IntegrationInstallation:
+        installation = IntegrationInstallation(
             workspace_id=self._workspace_id,
             user_id=user_id,
             server_name=server_name,
@@ -109,10 +109,10 @@ class IntegrationControlPlane:
 
     async def update_health(self, install_id: str, health: str) -> bool:
         result = await self._db.execute(
-            update(ConnectorInstallation)
+            update(IntegrationInstallation)
             .where(
-                ConnectorInstallation.install_id == install_id,
-                ConnectorInstallation.workspace_id == self._workspace_id,
+                IntegrationInstallation.install_id == install_id,
+                IntegrationInstallation.workspace_id == self._workspace_id,
             )
             .values(health_status=health)
         )
@@ -121,10 +121,10 @@ class IntegrationControlPlane:
 
     async def _set_status(self, install_id: str, status: str) -> bool:
         result = await self._db.execute(
-            update(ConnectorInstallation)
+            update(IntegrationInstallation)
             .where(
-                ConnectorInstallation.install_id == install_id,
-                ConnectorInstallation.workspace_id == self._workspace_id,
+                IntegrationInstallation.install_id == install_id,
+                IntegrationInstallation.workspace_id == self._workspace_id,
             )
             .values(status=status)
         )

@@ -35,14 +35,14 @@ async def get_mcp_config() -> dict:
     try:
         from sqlalchemy import select
 
-        from src.models.connector_installation import ConnectorInstallation
+        from src.models.integration_installation import IntegrationInstallation
 
         async with get_session_factory()() as db:
             result = await db.execute(
-                select(ConnectorInstallation).where(
-                    ConnectorInstallation.status == "active",
-                    ConnectorInstallation.enabled.is_(True),
-                    ConnectorInstallation.transport.in_(["stdio", "sse", "streamable-http"]),
+                select(IntegrationInstallation).where(
+                    IntegrationInstallation.status == "active",
+                    IntegrationInstallation.enabled.is_(True),
+                    IntegrationInstallation.transport.in_(["stdio", "sse", "streamable-http"]),
                 )
             )
             installations = result.scalars().all()
@@ -150,8 +150,7 @@ def list_mcp_tools() -> list[dict]:
     """Return metadata for all known MCP tools across servers."""
     if not _session_pool:
         return []
-    all_tools = _session_pool.get_all_tools()
-    return [{"name": name, "server": server} for name, server in all_tools.items()]
+    return _session_pool.get_all_tool_metadata()
 
 
 def get_mcp_tool_names() -> list[str]:

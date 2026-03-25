@@ -2,8 +2,8 @@
 
 import { Badge } from "@/components/ui/badge";
 
-interface ConnectorDetail {
-  connector_id: string;
+interface IntegrationDetail {
+  install_id: string;
   provider: string;
   status: string;
   last_sync_at?: string | null;
@@ -13,14 +13,14 @@ interface ConnectorDetail {
 }
 
 interface Props {
-  connector: ConnectorDetail | null;
+  integration: IntegrationDetail | null;
 }
 
-export function ConnectorDetailPanel({ connector }: Props) {
-  if (!connector) {
+export function IntegrationDetailPanel({ integration }: Props) {
+  if (!integration) {
     return (
       <div className="flex items-center justify-center h-full text-sm text-t-tertiary">
-        Select a connector to view details
+        Select an integration to view details
       </div>
     );
   }
@@ -29,10 +29,10 @@ export function ConnectorDetailPanel({ connector }: Props) {
     <div className="p-4 space-y-4">
       <div className="flex items-center justify-between">
         <h3 className="text-base font-medium text-t-primary capitalize">
-          {connector.provider}
+          {integration.provider}
         </h3>
-        <Badge variant={connector.status === "active" ? "green" : "default"}>
-          {connector.status}
+        <Badge variant={integration.status === "active" ? "green" : "default"}>
+          {integration.status}
         </Badge>
       </div>
 
@@ -40,32 +40,32 @@ export function ConnectorDetailPanel({ connector }: Props) {
         <div className="rounded-[var(--radius-md)] bg-surface-1 p-3">
           <p className="text-xs text-t-tertiary">Events (24h)</p>
           <p className="text-lg font-medium text-t-primary">
-            {connector.event_count_24h ?? 0}
+            {integration.event_count_24h ?? 0}
           </p>
         </div>
         <div className="rounded-[var(--radius-md)] bg-surface-1 p-3">
           <p className="text-xs text-t-tertiary">Errors (24h)</p>
           <p className={`text-lg font-medium ${
-            (connector.error_count_24h ?? 0) > 0 ? "text-status-error" : "text-t-primary"
+            (integration.error_count_24h ?? 0) > 0 ? "text-status-error" : "text-t-primary"
           }`}>
-            {connector.error_count_24h ?? 0}
+            {integration.error_count_24h ?? 0}
           </p>
         </div>
       </div>
 
-      {connector.last_sync_at && (
+      {integration.last_sync_at && (
         <div className="text-xs text-t-tertiary">
-          Last sync: {new Date(connector.last_sync_at).toLocaleString()}
+          Last sync: {new Date(integration.last_sync_at).toLocaleString()}
         </div>
       )}
 
-      {connector.capabilities && connector.capabilities.length > 0 && (
+      {integration.capabilities && integration.capabilities.length > 0 && (
         <div>
           <h4 className="text-xs font-medium text-t-secondary uppercase tracking-wider mb-1">
             Capabilities
           </h4>
           <div className="flex flex-wrap gap-1">
-            {connector.capabilities.map((cap) => (
+            {integration.capabilities.map((cap) => (
               <span
                 key={cap}
                 className="px-2 py-0.5 rounded-full bg-surface-1 text-xs text-t-secondary"

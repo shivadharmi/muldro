@@ -61,7 +61,12 @@ async def search_memory_and_web(ctx: WorkflowContext) -> dict:
             from src.connectors.mcp_bridge import call_mcp_tool, is_mcp_tool
 
             if is_mcp_tool("web_search"):
-                result = await call_mcp_tool("web_search", {"query": query})
+                result = await call_mcp_tool(
+                    "web_search",
+                    {"query": query},
+                    user_id=ctx.user_id,
+                    workspace_id=ctx.workspace_id,
+                )
                 if isinstance(result, dict):
                     web_results.extend(result.get("results", [])[:5])
         except Exception:

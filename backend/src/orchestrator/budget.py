@@ -129,11 +129,14 @@ class BudgetTracker:
         db.add(usage)
         await db.flush()
 
-        # Update in-memory daily counter
+        # Update in-memory daily counter (hydrate from DB on day change)
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if self._today_date != today:
             self._today_date = today
-            self._today_spend = 0.0
+            try:
+                self._today_spend = await self.get_daily_spend(db)
+            except Exception:
+                self._today_spend = 0.0
         self._today_spend += cost
 
         logger.info(

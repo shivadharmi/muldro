@@ -1,6 +1,6 @@
 """Capability Health Service — user-facing capability status.
 
-Translates system state (connector health, MCP gateway status, native adapter
+Translates system state (integration health, MCP gateway status, native adapter
 availability) into a user-understandable capability health grid.
 """
 
@@ -170,21 +170,21 @@ class CapabilityHealthService:
             last_activity_at=last_activity,
             capabilities_available=0,
             capabilities_total=total_caps,
-            message="No activity in 7+ days; check connector health",
+            message="No activity in 7+ days; check integration health",
         )
 
     async def _check_installation(self, providers: list[str]) -> bool:
         """Check if any of the given providers have an active installation."""
         try:
-            from src.models.connector_installation import ConnectorInstallation
+            from src.models.integration_installation import IntegrationInstallation
 
             count = await self._db.scalar(
                 select(func.count())
-                .select_from(ConnectorInstallation)
+                .select_from(IntegrationInstallation)
                 .where(
-                    ConnectorInstallation.workspace_id == self._workspace_id,
-                    ConnectorInstallation.status == "active",
-                    ConnectorInstallation.server_name.in_(providers),
+                    IntegrationInstallation.workspace_id == self._workspace_id,
+                    IntegrationInstallation.status == "active",
+                    IntegrationInstallation.server_name.in_(providers),
                 )
             )
             return (count or 0) > 0

@@ -1,14 +1,16 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
-import { GeneratedSurfaceCard } from "@/components/primitives/generated-surface";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChatPanel } from "@/components/jarvis/chat-panel";
 import { SessionSidebar } from "@/components/jarvis/session-sidebar";
+import { A2UIRenderer } from "@/components/a2ui/renderer";
+import { handleA2UIAction } from "@/components/a2ui/action-handler";
 import { CommandWorkspace } from "@/components/feature/command/command-workspace";
 import { useAuth } from "@/lib/auth";
 import { useJarvisWs } from "@/hooks/use-jarvis-ws";
 import { useSurfaceStore } from "@/stores/surface-store";
 import { useCommandStore } from "@/stores/command-store";
+import { useWsActionStore } from "@/stores/ws-action-store";
 import { fetchConversationMessages, type ConversationMessage } from "@/lib/api";
 import type { A2UISurface } from "@/lib/a2ui-types";
 import type { SurfaceKind } from "@/lib/types/surfaces";
@@ -18,21 +20,44 @@ export default function ChatPage() {
   const userId = user?.user_id ?? "";
 
   const allSurfaces = useSurfaceStore((s) => s.surfaces);
-  const surfaces = useMemo(() => allSurfaces.filter((sf) => sf.position === "inline"), [allSurfaces]);
+  const inlineSurfaces = useMemo(
+    () => allSurfaces.filter((sf) => sf.position === "inline"),
+    [allSurfaces]
+  );
   const addSurface = useSurfaceStore((s) => s.addSurface);
   const removeSurface = useSurfaceStore((s) => s.removeSurface);
-  const togglePin = useSurfaceStore((s) => s.togglePin);
+  const setPosition = useSurfaceStore((s) => s.setPosition);
 
   const { mode, setMode } = useCommandStore();
+  const setGlobalSendAction = useWsActionStore((s) => s.setSendAction);
 
-  // Bridge: A2UISurface (from WebSocket) → GeneratedSurface (store)
+  // Single store: WebSocket surfaces go to useSurfaceStore only
   const handleWsSurface = useCallback(
     (ws: A2UISurface) => {
       addSurface({
         id: ws.id,
         kind: (ws.metadata?.kind as SurfaceKind) || "summary",
         title: String(ws.metadata?.title ?? "Surface"),
-        data: ws.metadata ?? {},
+        data: { ...(ws.metadata ?? {}), a2ui_surface: ws },
+        created_at: new Date().toISOString(),
+        pinned: false,
+        position: "inline",
+        schema_version: 1,
+        source_message_id: (ws.metadata?.source_message_id as string) ?? null,
+        source_run_id: (ws.metadata?.source_run_id as string) ?? null,
+        source_artifact_id: (ws.metadata?.source_artifact_id as string) ?? null,
+      });
+    },
+    [addSurface]
+  );
+
+  const handleWsSurfaceUpdate = useCallback(
+    (_surfaceId: string, ws: A2UISurface) => {
+      addSurface({
+        id: ws.id,
+        kind: (ws.metadata?.kind as SurfaceKind) || "summary",
+        title: String(ws.metadata?.title ?? "Surface"),
+        data: { ...(ws.metadata ?? {}), a2ui_surface: ws },
         created_at: new Date().toISOString(),
         pinned: false,
         position: "inline",
@@ -52,11 +77,16 @@ export default function ChatPage() {
   const [initialMessages, setInitialMessages] = useState<ConversationMessage[]>([]);
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
 
-  const { connected } = useJarvisWs({
+  const { connected, sendAction } = useJarvisWs({
     userId,
     onSurface: handleWsSurface,
+    onSurfaceUpdate: handleWsSurfaceUpdate,
     enabled: !!user,
   });
+
+  useEffect(() => {
+    setGlobalSendAction(() => sendAction);
+  }, [sendAction, setGlobalSendAction]);
 
   const handleSelectConversation = useCallback(
     async (conversationId: string) => {
@@ -86,6 +116,35 @@ export default function ChatPage() {
   const handleMessageSent = useCallback(() => {
     setSidebarRefreshKey((k) => k + 1);
   }, []);
+
+  // Handle surfaces arriving through the SSE chat stream (direct delivery,
+  // no WebSocket/Redis dependency)
+  const handleSSESurface = useCallback(
+    (surface: { id: string; children: unknown[]; metadata: Record<string, unknown> }) => {
+      addSurface({
+        id: surface.id,
+        kind: (surface.metadata?.kind as SurfaceKind) || "summary",
+        title: String(surface.metadata?.title ?? "Surface"),
+        data: {
+          ...(surface.metadata ?? {}),
+          a2ui_surface: {
+            type: "surface" as const,
+            id: surface.id,
+            children: surface.children as A2UISurface["children"],
+            metadata: surface.metadata,
+          },
+        },
+        created_at: new Date().toISOString(),
+        pinned: false,
+        position: "inline",
+        schema_version: 1,
+        source_message_id: (surface.metadata?.source_message_id as string) ?? null,
+        source_run_id: (surface.metadata?.source_run_id as string) ?? null,
+        source_artifact_id: null,
+      });
+    },
+    [addSurface]
+  );
 
   if (!user) return null;
 
@@ -143,19 +202,70 @@ export default function ChatPage() {
             initialMessages={initialMessages}
             onConversationCreated={handleConversationCreated}
             onMessageSent={handleMessageSent}
+            onSurface={handleSSESurface}
           />
         </div>
       }
       surfaces={
-        surfaces.length > 0 ? (
-          <div className="space-y-3">
-            {surfaces.map((surface) => (
-              <GeneratedSurfaceCard
+        inlineSurfaces.length > 0 ? (
+          <div className="p-3 space-y-3">
+            {/* Surface panel header */}
+            <div className="flex items-center justify-between px-1">
+              <span className="text-xs font-medium text-t-secondary">
+                Surfaces ({inlineSurfaces.length})
+              </span>
+            </div>
+
+            {/* Surface cards */}
+            {inlineSurfaces.map((surface) => (
+              <div
                 key={surface.id}
-                surface={surface}
-                onPin={togglePin}
-                onRemove={removeSurface}
-              />
+                className="rounded-xl border border-b-primary bg-surface-0 overflow-hidden"
+              >
+                {/* Mini header: title + controls */}
+                <div className="flex items-center justify-between px-3 py-2 border-b border-b-primary bg-surface-1/50">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-xs font-medium text-t-primary truncate">
+                      {surface.title}
+                    </span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface-2 text-t-tertiary capitalize shrink-0">
+                      {surface.kind}
+                    </span>
+                  </div>
+                  <div className="flex gap-0.5 shrink-0">
+                    <button
+                      onClick={() => setPosition(surface.id, "center-pane")}
+                      title="Expand"
+                      className="p-1 rounded text-t-tertiary hover:text-t-primary hover:bg-surface-2 transition-colors cursor-pointer text-xs"
+                    >
+                      &#9634;
+                    </button>
+                    <button
+                      onClick={() => removeSurface(surface.id)}
+                      title="Dismiss"
+                      className="p-1 rounded text-t-tertiary hover:text-red-400 hover:bg-surface-2 transition-colors cursor-pointer text-xs"
+                    >
+                      &#10005;
+                    </button>
+                  </div>
+                </div>
+
+                {/* A2UI content */}
+                <div className="p-3">
+                  {surface.data?.a2ui_surface ? (
+                    <A2UIRenderer
+                      surface={surface.data.a2ui_surface as A2UISurface}
+                      onAction={(action, payload) =>
+                        handleA2UIAction(sendAction, action, payload)
+                      }
+                    />
+                  ) : (
+                    <p className="text-xs text-t-tertiary">
+                      {surface.title}
+                    </p>
+                  )}
+                </div>
+              </div>
             ))}
           </div>
         ) : undefined

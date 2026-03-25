@@ -19,6 +19,7 @@ import type {
   SystemDashboard,
 } from "./types";
 
+import type { A2UISurface } from "./a2ui-types";
 import { getStoredToken } from "./auth";
 
 // ── Typed API Error ─────────────────────────────────────────────
@@ -142,24 +143,6 @@ export function setPolicyMode(mode: string): Promise<{ mode: string }> {
   });
 }
 
-// ── Connectors ──────────────────────────────────────────────
-
-export function fetchConnectors(): Promise<{ connectors: Array<Record<string, unknown>> }> {
-  return api("/connectors");
-}
-
-export function createConnector(provider: string): Promise<Record<string, unknown>> {
-  return post("/connectors", { provider });
-}
-
-export function deleteConnector(id: string): Promise<void> {
-  return del(`/connectors/${id}`);
-}
-
-export function testConnector(id: string): Promise<Record<string, unknown>> {
-  return post(`/connectors/${id}/test`, {});
-}
-
 // ── SSE Chat ────────────────────────────────────────────────────
 
 export interface ChatSSEEvent {
@@ -183,6 +166,11 @@ export interface ChatSSEEvent {
   cost_usd?: number;
   is_thinking?: boolean;
   conversation_id?: string;
+  // A2UI surface fields (event: "surface")
+  type?: string;
+  id?: string;
+  children?: unknown[];
+  metadata?: Record<string, unknown>;
 }
 
 export async function streamChat(
@@ -438,6 +426,10 @@ export function fetchSurface(surfaceId: string) {
   return api(`/ui/surfaces/${surfaceId}`);
 }
 
+export function fetchWorkspaceSurfaces(): Promise<{ surfaces: A2UISurface[]; count: number }> {
+  return api("/workspace/surfaces");
+}
+
 // ── Message Context / Evidence ──────────────────────────────────
 
 export function fetchMessageContext(messageId: string) {
@@ -680,4 +672,14 @@ export interface Installation {
 
 export function fetchInstallations(): Promise<Installation[]> {
   return api("/integrations");
+}
+
+export function deleteInstallation(installId: string): Promise<void> {
+  return del(`/integrations/${installId}`);
+}
+
+export function checkInstallationHealth(
+  installId: string
+): Promise<{ install_id?: string; server_name?: string; health_status: string }> {
+  return api(`/integrations/${installId}/health`);
 }

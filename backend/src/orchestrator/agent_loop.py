@@ -4,6 +4,7 @@ Extracts the duplicated logic from JarvisOrchestrator._call_agent() and
 _call_agent_stream() into a single async generator that yields typed events.
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -89,6 +90,27 @@ LoopEvent = (
 )
 
 
+_MAX_API_RETRIES = 3
+_RETRY_BASE_DELAY = 2.0  # seconds
+
+
+async def _api_call_with_retry(client, api_kwargs: dict, agent_name: str):
+    """Call Claude API with exponential backoff retry on rate limits."""
+    for attempt in range(_MAX_API_RETRIES):
+        try:
+            return await client.messages.create(**api_kwargs)
+        except anthropic.RateLimitError:
+            if attempt < _MAX_API_RETRIES - 1:
+                wait = min(_RETRY_BASE_DELAY * (2 ** attempt), 30)
+                logger.warning(
+                    "Rate limited on %s (attempt %d/%d), retrying in %.1fs",
+                    agent_name, attempt + 1, _MAX_API_RETRIES, wait,
+                )
+                await asyncio.sleep(wait)
+            else:
+                raise
+
+
 def _sanitize_content_blocks(content) -> list[dict]:
     """Convert SDK response content blocks to plain dicts for re-submission.
 
@@ -119,6 +141,8 @@ async def agent_loop(
     execute_tool_fn,
     max_tool_rounds: int = 10,
     stream: bool = False,
+    circuit_breaker=None,  # AnthropicCircuitBreaker | None
+    run_id: str | None = None,  # B1: link tool-level approvals to execution context
 ) -> AsyncGenerator[LoopEvent, None]:
     """Core agent loop — yields LoopEvent instances.
 
@@ -153,6 +177,13 @@ async def agent_loop(
             thinking_budget_tokens = agent.max_tokens - 1
 
     try:
+        # Circuit breaker check — if API is in outage, fail fast
+        if circuit_breaker and not circuit_breaker.is_available(model):
+            text = f"[Agent {agent_name} skipped — API circuit open for {model}]"
+            yield LoopError(agent=agent_name, message=text)
+            yield LoopDone(agent=agent_name, text=text)
+            return
+
         for _round in range(max_tool_rounds):
             api_kwargs: dict[str, Any] = {
                 "model": model,
@@ -210,10 +241,10 @@ async def agent_loop(
                         if thinking_enabled:
                             api_kwargs["temperature"] = agent.temperature
                             api_kwargs.pop("thinking", None)
-                        response = await client.messages.create(**api_kwargs)
+                        response = await _api_call_with_retry(client, api_kwargs, agent_name)
             else:
                 try:
-                    response = await client.messages.create(**api_kwargs)
+                    response = await _api_call_with_retry(client, api_kwargs, agent_name)
                 except Exception as think_err:
                     if thinking_enabled:
                         logger.warning(
@@ -223,7 +254,7 @@ async def agent_loop(
                         )
                         api_kwargs["temperature"] = agent.temperature
                         api_kwargs.pop("thinking", None)
-                        response = await client.messages.create(**api_kwargs)
+                        response = await _api_call_with_retry(client, api_kwargs, agent_name)
                     else:
                         raise
 
@@ -231,6 +262,10 @@ async def agent_loop(
             total_output += response.usage.output_tokens
             total_cache_creation += getattr(response.usage, "cache_creation_input_tokens", 0) or 0
             total_cache_read += getattr(response.usage, "cache_read_input_tokens", 0) or 0
+
+            # Record success for circuit breaker
+            if circuit_breaker:
+                circuit_breaker.record_success(model)
 
             # Capture thinking from final message
             for block in response.content:
@@ -272,6 +307,7 @@ async def agent_loop(
                     user_id=user_id,
                     db_factory=db_factory,
                     services=services,
+                    run_id=run_id,
                 )
 
                 if not pre_result.get("allowed", True):
@@ -305,19 +341,33 @@ async def agent_loop(
                     continue
 
                 tool_start = time.time()
-                result = await execute_tool_fn(
-                    tool_name,
-                    tool_input,
-                    user_id=user_id,
-                    workspace_id=workspace_id,
-                )
+                try:
+                    result = await asyncio.wait_for(
+                        execute_tool_fn(
+                            tool_name,
+                            tool_input,
+                            user_id=user_id,
+                            workspace_id=workspace_id,
+                        ),
+                        timeout=60.0,
+                    )
+                except asyncio.TimeoutError:
+                    result = {"error": f"Tool '{tool_name}' timed out after 60s", "timed_out": True}
                 tool_latency = int((time.time() - tool_start) * 1000)
+
+                # Detect tool errors and signal them to Claude via is_error
+                is_error = (
+                    isinstance(result, dict)
+                    and "error" in result
+                    and result.get("status") not in ("ok", "success", "updated", "ingested")
+                )
 
                 tool_results.append(
                     {
                         "type": "tool_result",
                         "tool_use_id": tool_block.id,
                         "content": json.dumps(result) if isinstance(result, dict) else str(result),
+                        **({"is_error": True} if is_error else {}),
                     }
                 )
 
@@ -335,7 +385,8 @@ async def agent_loop(
                         tool_name=tool_name,
                         input_data=tool_input if isinstance(tool_input, dict) else {},
                         output_data=persisted_output,
-                        status="success",
+                        status="error" if is_error else "success",
+                        error=result.get("error", "")[:200] if is_error else None,
                         duration_ms=tool_latency,
                     )
                 )
@@ -369,6 +420,8 @@ async def agent_loop(
 
     except anthropic.APIError as e:
         logger.error("Claude API error in %s: %s", agent_name, e)
+        if circuit_breaker:
+            circuit_breaker.record_failure(model)
         text = f"[Agent {agent_name} API error: {e}]"
         yield LoopError(agent=agent_name, message=str(e))
     except Exception as e:

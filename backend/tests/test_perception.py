@@ -346,7 +346,7 @@ Done.'''
 
 class TestIntentClassifierSources:
     def test_valid_sources_constant(self):
-        from src.orchestrator.jarvis import VALID_PERCEPTION_SOURCES
+        from src.orchestrator.intent_classifier import VALID_PERCEPTION_SOURCES
 
         assert "gmail" in VALID_PERCEPTION_SOURCES
         assert "calendar" in VALID_PERCEPTION_SOURCES

@@ -116,28 +116,28 @@ async def set_budget_limit(
     return BudgetResponse(daily_limit_usd=req.daily_limit_usd)
 
 
-# ── Connectors / Observation ─────────────────────────────────
+# ── Integrations / Observation ──────────────────────────────
 
 
-@router.get("/v1/settings/connectors")
-async def get_connector_intervals(
+@router.get("/v1/settings/integrations")
+async def get_integration_intervals(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ):
-    """Get observation polling intervals for each connector."""
+    """Get observation polling intervals for each integration source."""
     svc = SettingsService(db)
     intervals = await svc.get_observation_intervals(user.user_id)
     return {"intervals": intervals}
 
 
-@router.put("/v1/settings/connectors/{source}/interval")
-async def set_connector_interval(
+@router.put("/v1/settings/integrations/{source}/interval")
+async def set_integration_interval(
     source: str,
     req: ObservationIntervalRequest,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ):
-    """Set the observation polling interval for a connector."""
+    """Set the observation polling interval for an integration source."""
     svc = SettingsService(db)
     key = f"{source}_interval_minutes"
     await svc.set(user.user_id, "observation", key, req.interval_minutes)

@@ -5,12 +5,14 @@ when WebSocket is not available or on initial page load.
 """
 
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_current_user_id, get_current_workspace_id
+from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -43,9 +45,11 @@ async def get_user_surfaces(
     from src.models.ui_state import UISurface
 
     async with get_session_factory()() as db:
+        now = datetime.now(timezone.utc)
         stmt = select(UISurface).where(
             UISurface.user_id == user_id,
             UISurface.workspace_id == workspace_id,
+            UISurface.expires_at > now,
         )
         if surface_type:
             stmt = stmt.where(UISurface.surface_type == surface_type)
@@ -98,3 +102,31 @@ async def get_surface(
             created_at=surface.created_at.isoformat(),
             updated_at=surface.updated_at.isoformat(),
         )
+
+
+class WorkspaceSurfacesResponse(BaseModel):
+    surfaces: list[dict]
+    count: int
+
+
+@router.get("/v1/workspace/surfaces", response_model=WorkspaceSurfacesResponse)
+async def get_workspace_surfaces(
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+    db: AsyncSession = Depends(get_session),
+):
+    """Unified workspace surfaces — pre-built A2UI component trees.
+
+    Returns all surfaces needed by the workspace page in a single call:
+    approvals, briefing, priority alerts, recommendations, and persisted
+    WS surfaces. Each surface has populated children[] ready for rendering.
+    """
+    from src.services.surface_builder import SurfaceService
+
+    svc = SurfaceService(db, workspace_id)
+    surfaces = await svc.build_workspace_surfaces(user_id)
+
+    return WorkspaceSurfacesResponse(
+        surfaces=[s.model_dump(mode="json") for s in surfaces],
+        count=len(surfaces),
+    )

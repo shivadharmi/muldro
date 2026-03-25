@@ -64,25 +64,25 @@ class TestPushSubscription:
         assert resp.status_code == 200
 
 
-class TestConnectorInterval:
-    """PUT /v1/settings/connectors/{source}/interval"""
+class TestIntegrationInterval:
+    """PUT /v1/settings/integrations/{source}/interval"""
 
-    async def test_set_connector_interval(self, client: httpx.AsyncClient):
+    async def test_set_integration_interval(self, client: httpx.AsyncClient):
         resp = await client.put(
-            "/v1/settings/connectors/gmail/interval",
+            "/v1/settings/integrations/gmail/interval",
             json={"interval_minutes": 30},
         )
         assert resp.status_code == 200
         data = resp.json()
         assert data["interval_minutes"] == 30
 
-    async def test_get_connector_intervals(self, client: httpx.AsyncClient):
+    async def test_get_integration_intervals(self, client: httpx.AsyncClient):
         # Set a known value first
         await client.put(
-            "/v1/settings/connectors/gmail/interval",
+            "/v1/settings/integrations/gmail/interval",
             json={"interval_minutes": 30},
         )
-        resp = await client.get("/v1/settings/connectors")
+        resp = await client.get("/v1/settings/integrations")
         assert resp.status_code == 200
         assert "intervals" in resp.json()
 

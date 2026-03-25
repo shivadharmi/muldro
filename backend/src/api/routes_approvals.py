@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from ulid import ULID
 
 from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
 from src.api.schemas import ApprovalDecisionRequest, ApprovalDetailResponse, ApprovalResponse
@@ -214,6 +215,58 @@ async def approve_action(
             await operator.execute_plan(run.run_id, user_id)
         except Exception:
             logger.exception("Execution failed after approval: %s", run.run_id)
+    elif approval.artifact_refs and approval.artifact_refs.get("tool_name"):
+        # B1: Tool-level approval resume — create a background TaskRun to
+        # re-execute the approved tool with the original parameters.
+        try:
+            from src.models.plans import Plan, PlanTask
+
+            tool_name = approval.artifact_refs["tool_name"]
+            tool_params = approval.artifact_refs.get("tool_params", {})
+            plan_id = f"plan_{ULID()}"
+            plan = Plan(
+                plan_id=plan_id,
+                user_id=user_id,
+                workspace_id=workspace_id,
+                trigger_type="approval_resume",
+                goal=f"Execute approved tool: {tool_name}",
+                priority="high",
+                decision="create_task",
+                status="created",
+            )
+            plan.tasks = [
+                PlanTask(
+                    task_id=f"ptask_{ULID()}",
+                    plan_id=plan_id,
+                    workspace_id=workspace_id,
+                    task_type=tool_name,
+                    input_data=tool_params,
+                    status="pending",
+                )
+            ]
+            db.add(plan)
+
+            bg_run = TaskRun(
+                run_id=f"run_{ULID()}",
+                plan_id=plan_id,
+                user_id=user_id,
+                workspace_id=workspace_id,
+                source="approval_resume",
+                status="pending",
+                trace_id=None,
+            )
+            db.add(bg_run)
+            await db.commit()
+            logger.info(
+                "Tool-level approval resumed: %s → run %s",
+                approval.approval_id,
+                bg_run.run_id,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to create resume run for tool approval: %s",
+                approval.approval_id,
+            )
 
     return ApprovalResponse(
         approval_id=approval.approval_id,

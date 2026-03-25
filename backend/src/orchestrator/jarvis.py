@@ -5,6 +5,7 @@ manages traces, enforces budgets, and coordinates the intelligence loop.
 This is the main entry point for all Jarvis interactions.
 """
 
+import asyncio
 import json
 import logging
 from collections.abc import AsyncGenerator
@@ -27,12 +28,20 @@ from src.orchestrator.agent_loop import (
 from src.orchestrator.agents import AGENTS, SubAgent
 from src.orchestrator.budget import BudgetTracker
 from src.orchestrator.contracts import PlannerOutput
-from src.orchestrator.prompts import JARVIS_SOUL
+from src.orchestrator.intent_classifier import (
+    FAST_INTENTS,
+    INTENT_CONFIDENCE_THRESHOLD,
+    classify_intent,
+    extract_decision,
+    intent_to_decision,
+)
+from src.orchestrator.prompts import JARVIS_DECISION_FRAMEWORK, JARVIS_SOUL_CORE
 from src.orchestrator.services import ServiceContainer
 from src.orchestrator.tool_schemas import build_tool_definitions
 from src.orchestrator.tracing import TraceManager
 from src.services.agent_registry import AgentRegistry
 from src.services.context_builder import ContextBuilder, ContextPack
+from src.services.execution_state import transition_run, transition_step
 from src.services.route_resolver import RouteResolver
 from src.services.trace_store import TraceStore
 
@@ -69,65 +78,79 @@ BEDROCK_MODEL_TIERS = {
 # Agents that benefit from context enrichment (read-heavy agents)
 CONTEXT_ENRICHED_AGENTS = {"planner", "presenter", "researcher", "librarian"}
 
-# Intent classifier prompt — used with Haiku for fast, cheap classification
-INTENT_CLASSIFIER_PROMPT = """\
-<role>
-You classify user messages for a personal AI assistant called Jarvis.
-Output ONLY a JSON object, nothing else.
-</role>
+# Intent classification constants imported from intent_classifier module
 
-<intents>
-- greeting: Greetings, pleasantries, "hey", "hi", "good morning", "thanks"
-- chitchat: Casual conversation, "how are you", jokes, small talk
-- simple_question: Direct factual question answerable from context/memory
-- data_fetch: Read from external source (check email, show calendar, read slack)
-- status_query: Asking about goals, plans, briefing, pending items, tasks
-- approval_response: Approving/rejecting a pending action
-- command: Actionable WRITE request needing planning (send email, schedule, create)
-- complex: Multi-step, ambiguous, or high-stakes requests needing deep planning
-</intents>
 
-<sources>
-Optionally include "sources" — external data sources relevant to this message.
-Valid values: gmail, calendar, slack, github
-Only include sources the user's intent clearly relates to. Omit if none apply.
-</sources>
+def _build_surface_children(
+    decision: PlannerOutput,
+    kind: str,
+    default_title: str,
+    response_text: str,
+) -> list:
+    """Build A2UI component children for a workspace surface push.
 
-<output_format>
-{"intent": "<one of above>", "confidence": 0.0-1.0, "sources": ["source1", ...]}
-</output_format>
+    Uses renderer.py builders so the frontend A2UIRenderer has
+    actual component trees to render instead of empty children[].
 
-<examples>
-"Hey Jarvis" -> {"intent": "greeting", "confidence": 0.99}
-"What's John's email?" -> {"intent": "simple_question", "confidence": 0.9}
-"Check my gmail" -> {"intent":"data_fetch","confidence":0.95,"sources":["gmail"]}
-"Show my latest emails" -> {"intent":"data_fetch","confidence":0.95,"sources":["gmail"]}
-"What's on my calendar today" -> {"intent":"data_fetch","confidence":0.95,"sources":["calendar"]}
-"Any new Slack messages?" -> {"intent":"data_fetch","confidence":0.9,"sources":["slack"]}
-"Did Sarah reply?" -> {"intent":"data_fetch","confidence":0.85,"sources":["gmail","slack"]}
-"Any new PRs on the repo?" -> {"intent":"data_fetch","confidence":0.9,"sources":["github"]}
-"Show my goals" -> {"intent":"status_query","confidence":0.95}
-"Approve that email" -> {"intent":"approval_response","confidence":0.9}
-"Send a follow-up to the investor" -> {"intent":"command","confidence":0.95,"sources":["gmail"]}
-"Analyze our Q3 pipeline" -> {"intent":"complex","confidence":0.9}
-</examples>
-"""
+    The surface shows decision context (reasoning, priority, kind) — NOT the
+    full response text, which is already visible in the chat bubble.
+    """
+    from src.ui import renderer as r
 
-# Valid perception sources returned by the intent classifier
-VALID_PERCEPTION_SOURCES = {"gmail", "calendar", "slack", "github"}
+    title = decision.goal[:80] if decision.goal else default_title
+    reasoning = decision.reasoning[:200] if decision.reasoning else ""
 
-# Intents that skip the Planner entirely
-FAST_INTENTS = {
-    "greeting",
-    "chitchat",
-    "simple_question",
-    "data_fetch",
-    "status_query",
-    "approval_response",
-}
+    if kind == "plan":
+        children = [r.heading("sf_title", title)]
+        if reasoning:
+            children.append(r.caption("sf_reasoning", reasoning))
+        children.append(r.badge("sf_priority", decision.priority, variant="default"))
+        if decision.tasks:
+            task_items = [
+                r.text(
+                    f"sf_task_{i}",
+                    f"• {t.task_type}: {(t.input_data or {}).get('description', '')[:60]}",
+                )
+                for i, t in enumerate(decision.tasks[:5])
+            ]
+            children.extend(task_items)
+        return [r.card("sf_card", children)]
 
-# Confidence threshold — below this, fall back to Planner
-INTENT_CONFIDENCE_THRESHOLD = 0.7
+    if kind == "recommendation":
+        children = [
+            r.heading("sf_title", title),
+            r.badge("sf_kind", "Recommendation", variant="default"),
+        ]
+        if reasoning:
+            children.append(r.text("sf_reasoning", reasoning))
+        return [r.card("sf_card", children)]
+
+    if kind == "summary":
+        children = [
+            r.heading("sf_title", title),
+            r.badge("sf_kind", default_title, variant="default"),
+        ]
+        if reasoning:
+            children.append(r.text("sf_reasoning", reasoning))
+        return [r.card("sf_card", children)]
+
+    if kind == "briefing":
+        children = [
+            r.heading("sf_title", title),
+            r.badge("sf_kind", "Briefing", variant="default"),
+        ]
+        if reasoning:
+            children.append(r.text("sf_reasoning", reasoning))
+        return [r.card("sf_card", children)]
+
+    if kind == "alert":
+        return [r.alert("sf_alert", reasoning or title, severity="info", title=title)]
+
+    # Fallback: generic card with reasoning
+    children = [r.heading("sf_title", title)]
+    if reasoning:
+        children.append(r.text("sf_reasoning", reasoning))
+    return [r.card("sf_card", children)]
 
 
 class JarvisOrchestrator:
@@ -158,6 +181,29 @@ class JarvisOrchestrator:
         self._agents: dict[str, SubAgent] = dict(AGENTS)  # Start with hardcoded defaults
         self._tools = self._build_tool_definitions()
         self._event_bus = None  # Lazy-init when Redis available
+        self._event_bus_lock = asyncio.Lock()  # C5: guard lazy EventBus init
+        self._background_tasks: set[asyncio.Task] = set()  # C2: track fire-and-forget tasks
+        # C1: API circuit breaker — fail fast when Claude API is in sustained outage
+        from src.orchestrator.api_circuit_breaker import AnthropicCircuitBreaker
+
+        self._circuit_breaker = AnthropicCircuitBreaker()
+        # Precompute haiku model ID for intent classification
+        if settings.use_bedrock:
+            self._haiku_model = BEDROCK_MODEL_TIERS["haiku"]
+        else:
+            self._haiku_model = MODEL_TIERS["haiku"]
+
+    def _spawn_background(self, coro) -> None:
+        """Launch a background task with lifecycle tracking (C2)."""
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    async def shutdown(self) -> None:
+        """Await all pending background tasks on orchestrator shutdown."""
+        if self._background_tasks:
+            logger.info("Awaiting %d background tasks", len(self._background_tasks))
+            await asyncio.wait(self._background_tasks, timeout=5.0)
 
     async def load_agents_from_db(self) -> None:
         """Load agent definitions from the database, replacing hardcoded defaults."""
@@ -282,7 +328,7 @@ class JarvisOrchestrator:
                 db.add(step)
                 await db.commit()
         except Exception:
-            logger.debug("Failed to create lightweight run", exc_info=True)
+            logger.warning("Failed to create lightweight run", exc_info=True)
             return None
 
         return run_id
@@ -303,13 +349,20 @@ class JarvisOrchestrator:
                 if not run:
                     return
 
-                run.status = "completed" if success else "failed"
+                target_status = "completed" if success else "failed"
+                try:
+                    transition_run(run, target_status)
+                except Exception:
+                    run.status = target_status  # fallback for edge-case states
                 if not success:
                     run.error = {"message": result.get("summary", "unknown error")[:500]}
 
                 step_res = await db.execute(select(TaskStep).where(TaskStep.run_id == run_id))
                 for step in step_res.scalars().all():
-                    step.status = "completed" if success else "failed"
+                    try:
+                        transition_step(step, target_status)
+                    except Exception:
+                        step.status = target_status  # fallback for edge-case states
                     if success:
                         step.output_data = {
                             "decision": result.get("decision"),
@@ -317,8 +370,66 @@ class JarvisOrchestrator:
                         }
 
                 await db.commit()
+
+                # D1: Learn from execution outcomes — store preference memories
+                # based on approval decisions and failures for future context
+                await self._learn_from_outcome(run_id, run, result, success)
         except Exception:
             logger.debug("Failed to complete lightweight run %s", run_id, exc_info=True)
+
+    async def _learn_from_outcome(
+        self,
+        run_id: str,
+        run,
+        result: dict,
+        success: bool,
+    ) -> None:
+        """Store preference/task_context memories from execution outcomes (D1).
+
+        After a run completes, checks for linked approval decisions and
+        failure context, then stores them as memories so future Planner
+        calls have execution history context.
+        """
+        if not self._services.memory_service:
+            return
+        try:
+            facts: list[str] = []
+
+            async with self._db_factory() as db:
+                # Check for linked approvals
+                from sqlalchemy import select
+
+                from src.models.approvals import Approval
+
+                apr_result = await db.execute(
+                    select(Approval).where(
+                        Approval.run_id == run_id,
+                        Approval.status.in_(["approved", "rejected"]),
+                    )
+                )
+                for apr in apr_result.scalars().all():
+                    fact = (
+                        f"User {apr.status} '{apr.title}'"
+                        f"{f' — reason: {apr.decision_reason}' if apr.decision_reason else ''}"
+                    )
+                    facts.append(fact)
+
+            # Store failure context for the Planner
+            if not success:
+                goal = run.policy_decision.get("decision", "") if run.policy_decision else ""
+                error_msg = result.get("summary", "unknown error")[:200]
+                if goal:
+                    facts.append(f"Plan '{goal}' failed: {error_msg}")
+
+            if facts:
+                await self._services.memory_service.extract_and_store(
+                    user_id=run.user_id,
+                    source_text="\n".join(facts),
+                    source_event_ids=[run_id],
+                    workspace_id=run.workspace_id,
+                )
+        except Exception:
+            logger.debug("Outcome learning failed for run %s", run_id, exc_info=True)
 
     def _build_tool_definitions(self) -> list[dict]:
         """Build Claude tool definitions from internal tools + MCP + native connectors.
@@ -345,6 +456,33 @@ class JarvisOrchestrator:
 
         # Append native connector actions as tools (Gmail, Calendar, etc.)
         tools.extend(self._build_native_connector_tools())
+
+        # Composite web_search tool (uses Playwright MCP internally)
+        tools.append(
+            {
+                "name": "web_search",
+                "description": (
+                    "Search the web using DuckDuckGo via a headless browser. "
+                    "Returns structured results with titles, URLs, and snippets. "
+                    "Use this when you need to find information on the web."
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query string",
+                        },
+                        "num_results": {
+                            "type": "integer",
+                            "description": "Max results to return (default 10, max 20)",
+                            "default": 10,
+                        },
+                    },
+                    "required": ["query"],
+                },
+            }
+        )
 
         return tools
 
@@ -474,6 +612,13 @@ class JarvisOrchestrator:
         This is the main entry point for user interactions.
         The orchestrator decides which sub-agents to invoke.
         """
+        if not user_id:
+            return {"error": "user_id is required", "decision": "error"}
+        if not workspace_id:
+            return {"error": "workspace_id is required", "decision": "error"}
+        if not message or not message.strip():
+            return {"error": "Empty message", "decision": "ignore"}
+
         trace = self._trace_manager.start_trace("user_message")
         run_id: str | None = None
 
@@ -490,7 +635,9 @@ class JarvisOrchestrator:
             history_block = await self._load_conversation_history(conversation_id)
 
             # Step 0: Fast intent classification
-            intent, confidence, sources = await self._classify_intent(message, history_block)
+            intent, confidence, sources = await classify_intent(
+                self._client, self._haiku_model, message, history_block
+            )
             use_planner = intent not in FAST_INTENTS or confidence < INTENT_CONFIDENCE_THRESHOLD
 
             # Bump perception for relevant sources (fire-and-forget)
@@ -517,9 +664,9 @@ class JarvisOrchestrator:
                     trace=trace,
                     workspace_id=workspace_id,
                 )
-                decision = self._extract_decision(plan_result)
+                decision = extract_decision(plan_result)
             else:
-                decision = self._intent_to_decision(intent, message)
+                decision = intent_to_decision(intent, message)
 
             # Persist Plan record so Governor and Operator can reference it
             if decision.tasks and not decision.plan_id:
@@ -555,7 +702,7 @@ class JarvisOrchestrator:
                 trace_id=trace.trace_id,
             )
 
-            # Handle set_goal and set_instruction directly (no agent pipeline)
+            # Handle direct decisions (no agent pipeline needed)
             if decision.decision == "set_goal":
                 goal_result = await self._handle_set_goal(
                     decision, user_id, workspace_id
@@ -566,6 +713,16 @@ class JarvisOrchestrator:
                     decision, user_id, workspace_id
                 )
                 result["instruction"] = instr_result
+            elif decision.decision == "schedule_reminder":
+                reminder_result = await self._handle_schedule_reminder(
+                    decision, user_id, workspace_id
+                )
+                result["reminder"] = reminder_result
+            elif decision.decision == "add_to_brief":
+                brief_result = await self._handle_add_to_brief(
+                    decision, user_id, workspace_id
+                )
+                result["briefing_item"] = brief_result
 
             # Resolve agent pipeline from routes
             pipeline = await self._resolve_pipeline(decision_dict)
@@ -690,14 +847,19 @@ class JarvisOrchestrator:
           agent_start, thinking, tool_call, tool_result, agent_done,
           response, error, done
         """
-        import asyncio
+        if not user_id or not workspace_id:
+            yield {"event": "error", "message": "user_id and workspace_id are required"}
+            return
+        if not message or not message.strip():
+            yield {"event": "error", "message": "Empty message"}
+            return
 
         trace = self._trace_manager.start_trace("user_message")
         run_id: str | None = None
 
         def _fire_event(event_type: str, **kwargs: Any) -> None:
             """Schedule a runtime event emission without blocking the SSE generator."""
-            asyncio.create_task(self._emit_runtime_event(event_type, **kwargs))
+            self._spawn_background(self._emit_runtime_event(event_type, **kwargs))
 
         try:
             yield {"event": "trace", "trace_id": trace.trace_id}
@@ -714,7 +876,9 @@ class JarvisOrchestrator:
             history_block = await self._load_conversation_history(conversation_id)
 
             # Step 0: Fast intent classification (Haiku — <200ms)
-            intent, confidence, sources = await self._classify_intent(message, history_block)
+            intent, confidence, sources = await classify_intent(
+                self._client, self._haiku_model, message, history_block
+            )
             yield {"event": "intent", "intent": intent, "confidence": confidence}
 
             # Bump perception for relevant sources (fire-and-forget)
@@ -760,10 +924,10 @@ class JarvisOrchestrator:
                     if evt.get("event") == "agent_done":
                         plan_text = evt.get("text", "")
 
-                decision = self._extract_decision(plan_text)
+                decision = extract_decision(plan_text)
             else:
                 # Fast path — synthesize a lightweight decision from intent
-                decision = self._intent_to_decision(intent, message)
+                decision = intent_to_decision(intent, message)
 
             # Apply mode overrides
             if mode == "execute" and decision.execution_mode != "auto_execute":
@@ -803,6 +967,16 @@ class JarvisOrchestrator:
                 run_id=run_id,
                 payload={"decision": decision.decision, "trace_id": trace.trace_id},
             )
+
+            # Handle direct decisions (no agent pipeline needed)
+            if decision.decision == "set_goal":
+                await self._handle_set_goal(decision, user_id, workspace_id)
+            elif decision.decision == "set_instruction":
+                await self._handle_set_instruction(decision, user_id, workspace_id)
+            elif decision.decision == "schedule_reminder":
+                await self._handle_schedule_reminder(decision, user_id, workspace_id)
+            elif decision.decision == "add_to_brief":
+                await self._handle_add_to_brief(decision, user_id, workspace_id)
 
             # Step 2: Route based on intent
             if use_planner:
@@ -869,6 +1043,8 @@ class JarvisOrchestrator:
                     workspace_id=workspace_id,
                 ):
                     yield evt
+                    if evt.get("event") == "agent_done":
+                        plan_text = f"Researcher findings:\n{evt.get('text', '')}"
 
             elif intent == "data_fetch":
                 # Observer reads from external sources (Gmail, Calendar, Slack)
@@ -906,6 +1082,8 @@ class JarvisOrchestrator:
                     workspace_id=workspace_id,
                 ):
                     yield evt
+                    if evt.get("event") == "agent_done":
+                        plan_text = f"Governor response:\n{evt.get('text', '')}"
 
             # Step 3: Presenter formats the response (always)
             presenter_msg = (
@@ -964,8 +1142,10 @@ class JarvisOrchestrator:
                     payload={"trace_id": trace.trace_id},
                 )
 
-            # Push surface to workspace for visual decision types (fire-and-forget)
-            asyncio.create_task(self._push_workspace_surface(
+            # Push surface to workspace via Redis + persist to DB.
+            # The chat page receives it via WebSocket; workspace page via REST polling.
+            # SSE delivery removed to avoid duplicates (WS is the canonical path).
+            self._spawn_background(self._push_workspace_surface(
                 decision, user_id, workspace_id, run_id,
                 response_text=presenter_text,
             ))
@@ -1006,7 +1186,9 @@ class JarvisOrchestrator:
 
         model = self._get_model_for_agent(agent)
         tools = self._apply_cache_control_to_tools(self._get_tools_for_agent(agent))
-        context_block = await self._assemble_context(agent_name, message, user_id=user_id)
+        context_block = await self._assemble_context(
+            agent_name, message, user_id=user_id, workspace_id=workspace_id
+        )
         system_blocks = self._build_system_prompt(agent, context_block)
 
         async for evt in agent_loop(
@@ -1025,6 +1207,7 @@ class JarvisOrchestrator:
             execute_tool_fn=self._execute_tool,
             max_tool_rounds=max_tool_rounds,
             stream=True,
+            circuit_breaker=self._circuit_breaker,
         ):
             if isinstance(evt, LoopAgentStart):
                 yield {"event": "agent_start", "agent": evt.agent, "model": evt.model}
@@ -1376,6 +1559,29 @@ class JarvisOrchestrator:
                 trace_id=trace.trace_id,
             )
 
+            # B3: Deliver briefing to user via notifications + workspace surface
+            try:
+                if self._services.notifier:
+                    await self._services.notifier.notify(
+                        user_id=user_id,
+                        notification_type="briefing",
+                        title="Daily Briefing",
+                        body=str(result)[:500],
+                        workspace_id=workspace_id,
+                    )
+                await self._push_workspace_surface(
+                    PlannerOutput(
+                        decision="add_to_brief",
+                        goal="Daily Briefing",
+                        reasoning=str(result)[:200],
+                    ),
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    response_text=str(result)[:1000],
+                )
+            except Exception:
+                logger.debug("Briefing delivery failed", exc_info=True)
+
             return {"status": "completed", "trace_id": trace.trace_id, "briefing": result}
         except Exception as e:
             logger.error("generate_briefing failed: %s", e, exc_info=True)
@@ -1386,20 +1592,28 @@ class JarvisOrchestrator:
             )
 
     async def _ensure_event_bus(self):
-        """Lazily initialize the event bus. Returns the bus or None on failure."""
+        """Lazily initialize the event bus. Returns the bus or None on failure.
+
+        Uses asyncio.Lock to prevent race condition where two concurrent
+        requests both create a Redis connection (C5).
+        """
         if self._event_bus is not None:
             return self._event_bus
-        try:
-            import redis.asyncio as aioredis
+        async with self._event_bus_lock:
+            # Double-check after acquiring lock
+            if self._event_bus is not None:
+                return self._event_bus
+            try:
+                import redis.asyncio as aioredis
 
-            from src.services.event_bus import EventBus
+                from src.services.event_bus import EventBus
 
-            self._event_bus_redis = aioredis.from_url(
-                self._settings.redis_url, decode_responses=True
-            )
-            self._event_bus = EventBus(self._event_bus_redis)
-        except Exception:
-            logger.debug("Failed to init event_bus", exc_info=True)
+                self._event_bus_redis = aioredis.from_url(
+                    self._settings.redis_url, decode_responses=True
+                )
+                self._event_bus = EventBus(self._event_bus_redis)
+            except Exception:
+                logger.debug("Failed to init event_bus", exc_info=True)
         return self._event_bus
 
     async def _publish_event(
@@ -1442,7 +1656,7 @@ class JarvisOrchestrator:
                 )
                 await db.commit()
         except Exception:
-            logger.debug("Failed to emit runtime event %s", event_type, exc_info=True)
+            logger.warning("Failed to emit runtime event %s", event_type, exc_info=True)
 
     async def _push_workspace_surface(
         self,
@@ -1466,9 +1680,15 @@ class JarvisOrchestrator:
             "recommend": ("recommendation", "Recommendation"),
             "summarize": ("summary", "Summary"),
             "research": ("summary", "Research Results"),
+            "read_source": ("summary", "Source Summary"),
+            "observe": ("summary", "Observation"),
             "add_to_brief": ("briefing", "Briefing Update"),
             "set_goal": ("summary", "Goal Set"),
+            "set_instruction": ("summary", "Instruction Set"),
             "schedule_reminder": ("alert", "Reminder Scheduled"),
+            "answer_directly": ("summary", "Answer"),
+            "search_memory": ("summary", "Knowledge Search"),
+            "remember": ("summary", "Memory Updated"),
         }
         mapping = surface_kind_map.get(decision.decision)
         if not mapping:
@@ -1483,8 +1703,13 @@ class JarvisOrchestrator:
 
             from ulid import ULID
 
+            children = _build_surface_children(
+                decision, kind, default_title, response_text
+            )
+
             surface = WorkspaceSurfacePush(
                 id=f"surf_{ULID()}",
+                children=[c.model_dump(mode="json") for c in children],
                 metadata=WorkspaceSurfaceMetadata(
                     kind=kind,
                     title=(decision.goal[:80] if decision.goal else default_title),
@@ -1523,7 +1748,7 @@ class JarvisOrchestrator:
             except Exception:
                 logger.debug("Failed to persist workspace surface to DB", exc_info=True)
         except Exception:
-            logger.debug("Failed to push workspace surface", exc_info=True)
+            logger.warning("Failed to push workspace surface", exc_info=True)
 
     async def _load_conversation_history(
         self, conversation_id: str | None, max_messages: int = 20, max_chars: int = 8000
@@ -1543,7 +1768,7 @@ class JarvisOrchestrator:
 
             async with self._db_factory() as db:
                 result = await db.execute(
-                    select(Message.role, Message.content)
+                    select(Message.role, Message.content, Message.metadata_)
                     .where(Message.conversation_id == conversation_id)
                     .order_by(Message.created_at.desc())
                     .limit(max_messages + 1)  # +1 for the just-saved user message
@@ -1559,29 +1784,84 @@ class JarvisOrchestrator:
 
             lines: list[str] = []
             total = 0
-            for role, content in history:
+            for role, content, meta in history:
                 label = "User" if role == "user" else "Assistant"
-                # Truncate individual messages to avoid one huge message dominating
                 snippet = content[:1000] if len(content) > 1000 else content
-                line = f"{label}: {snippet}"
-                if total + len(line) > max_chars:
-                    break
+                # B4: Annotate with decision type for execution context
+                decision_tag = ""
+                if meta and isinstance(meta, dict):
+                    decision_data = meta.get("decision")
+                    if isinstance(decision_data, dict):
+                        decision_tag = f" [{decision_data.get('decision', '')}]"
+                line = f"{label}{decision_tag}: {snippet}"
                 lines.append(line)
                 total += len(line)
 
             if not lines:
                 return ""
 
+            # If history exceeds budget, summarize older messages
+            if total > max_chars and len(lines) > 5:
+                recent = lines[-5:]
+                older = lines[:-5]
+                summary = await self._summarize_history(older)
+                lines = [f"[Earlier conversation summary]: {summary}"] + recent
+
+            # Final trim to budget
+            output_lines: list[str] = []
+            remaining = max_chars
+            for line in lines:
+                if remaining - len(line) < 0:
+                    break
+                output_lines.append(line)
+                remaining -= len(line)
+
+            if not output_lines:
+                return ""
+
             return (
                 "--- CONVERSATION HISTORY (most recent messages) ---\n"
-                + "\n".join(lines)
+                + "\n".join(output_lines)
                 + "\n--- END HISTORY ---"
             )
         except Exception:
             logger.debug("Failed to load conversation history", exc_info=True)
             return ""
 
-    async def _assemble_context(self, agent_name: str, message: str, user_id: str) -> str:
+    async def _summarize_history(self, lines: list[str]) -> str:
+        """Summarize older conversation messages using Haiku (cheap, fast)."""
+        try:
+            if self._settings.use_bedrock:
+                model = BEDROCK_MODEL_TIERS["haiku"]
+            else:
+                model = MODEL_TIERS["haiku"]
+
+            text = "\n".join(lines)[:4000]
+            response = await self._client.messages.create(
+                model=model,
+                max_tokens=300,
+                temperature=0,
+                system=[{
+                    "type": "text",
+                    "text": (
+                        "Summarize this conversation in 2-3 sentences. "
+                        "Focus on: topics discussed, decisions made, "
+                        "and any pending items."
+                    ),
+                }],
+                messages=[{"role": "user", "content": text}],
+            )
+            return "".join(
+                b.text for b in response.content if b.type == "text"
+            )
+        except Exception:
+            logger.debug("History summarization failed", exc_info=True)
+            # Fallback: just truncate
+            return "\n".join(lines)[:500] + "..."
+
+    async def _assemble_context(
+        self, agent_name: str, message: str, user_id: str, workspace_id: str = ""
+    ) -> str:
         """Pre-load relevant context for context-enriched agents using ContextBuilder.
 
         Returns a context block to append to the system prompt, giving the
@@ -1593,98 +1873,26 @@ class JarvisOrchestrator:
 
         try:
             svc = self._services
-            builder = ContextBuilder(
-                world_model=svc.world_model,
-                memory_service=svc.memory_service,
-                procedure_library=svc.procedure_library,
-                artifact_store=svc.artifact_store,
-            )
-            pack: ContextPack = await builder.build(
-                user_id=user_id,
-                query=message[:500],
-            )
-            context_text = ContextBuilder.to_prompt(pack)
-            if context_text:
-                return f"\n\n--- CONTEXT ---\n{context_text}"
+            async with self._db_factory() as db:
+                builder = ContextBuilder(
+                    world_model=svc.world_model,
+                    memory_service=svc.memory_service,
+                    procedure_library=svc.procedure_library,
+                    artifact_store=svc.artifact_store,
+                    db=db,
+                )
+                pack: ContextPack = await builder.build(
+                    user_id=user_id,
+                    query=message[:500],
+                    workspace_id=workspace_id,
+                )
+                context_text = ContextBuilder.to_prompt(pack)
+                if context_text:
+                    return f"\n\n--- CONTEXT ---\n{context_text}"
         except Exception:
             logger.debug("Context assembly via ContextBuilder failed", exc_info=True)
 
         return ""
-
-    async def _classify_intent(
-        self,
-        message: str,
-        history_block: str = "",
-    ) -> tuple[str, float, list[str]]:
-        """Classify user message intent using Haiku — fast and cheap.
-
-        Returns (intent, confidence, sources). Falls back to "command" on error.
-        ``sources`` contains perception sources relevant to the message
-        (e.g. ["gmail", "slack"]).
-        """
-        classifier_input = message
-        if history_block:
-            classifier_input = f"{history_block}\n\nUser: {message}"
-
-        if self._settings.use_bedrock:
-            model = BEDROCK_MODEL_TIERS["haiku"]
-        else:
-            model = MODEL_TIERS["haiku"]
-
-        try:
-            response = await self._client.messages.create(
-                model=model,
-                max_tokens=150,
-                temperature=0,
-                system=[{"type": "text", "text": INTENT_CLASSIFIER_PROMPT}],
-                messages=[{"role": "user", "content": classifier_input}],
-            )
-
-            text = "".join(b.text for b in response.content if b.type == "text")
-
-            # Parse JSON from response
-            if "{" in text:
-                start = text.index("{")
-                end = text.rindex("}") + 1
-                parsed = json.loads(text[start:end])
-                intent = parsed.get("intent", "command")
-                confidence = float(parsed.get("confidence", 0.5))
-
-                valid_intents = {
-                    "greeting",
-                    "chitchat",
-                    "simple_question",
-                    "data_fetch",
-                    "status_query",
-                    "approval_response",
-                    "command",
-                    "complex",
-                }
-                if intent not in valid_intents:
-                    intent = "command"
-
-                # Extract perception sources (validated)
-                raw_sources = parsed.get("sources", [])
-                sources = [
-                    s for s in raw_sources
-                    if isinstance(s, str) and s in VALID_PERCEPTION_SOURCES
-                ]
-
-                logger.info(
-                    "intent_classified",
-                    extra={
-                        "intent": intent,
-                        "confidence": confidence,
-                        "sources": sources,
-                        "message_preview": message[:80],
-                    },
-                )
-                return intent, confidence, sources
-
-        except Exception as e:
-            logger.warning("Intent classification failed, defaulting to command: %s", e)
-
-        return "command", 0.5, []
 
     async def _apply_perception_policy_from_planner(
         self,
@@ -1742,7 +1950,7 @@ class JarvisOrchestrator:
                     )
                 await db.commit()
         except Exception:
-            logger.debug("Failed to bump perception for sources", exc_info=True)
+            logger.warning("Failed to bump perception for sources", exc_info=True)
 
     @staticmethod
     def _extract_perception_policy(planner_text: str):
@@ -1775,10 +1983,15 @@ class JarvisOrchestrator:
         Uses structured system blocks so the static soul + role prompt is cached
         across calls (5-min TTL), saving ~90% on re-reads of the system prompt.
         """
+        # Only the Planner sees the decision framework; other agents just get the core soul
+        soul = JARVIS_SOUL_CORE
+        if agent.name == "planner":
+            soul += "\n" + JARVIS_DECISION_FRAMEWORK
+
         blocks = [
             {
                 "type": "text",
-                "text": f"{JARVIS_SOUL}\n\n--- YOUR ROLE ---\n{agent.prompt}",
+                "text": f"{soul}\n\n--- YOUR ROLE ---\n{agent.prompt}",
                 "cache_control": {"type": "ephemeral"},
             },
         ]
@@ -1898,6 +2111,70 @@ class JarvisOrchestrator:
         logger.info("Instruction stored: %s (%s)", spec.instruction_text, spec.instruction_type)
         return result
 
+    async def _handle_schedule_reminder(
+        self, decision, user_id: str, workspace_id: str
+    ) -> dict:
+        """Create a one-shot schedule for a reminder."""
+        from src.models.schedules import Schedule
+
+        title = decision.goal or decision.reasoning or "Reminder"
+        # Extract timing from tasks if available
+        schedule_config = {}
+        if decision.tasks:
+            schedule_config = decision.tasks[0].input_data or {}
+
+        try:
+            async with self._db_factory() as db:
+                schedule_id = f"sched_{ULID()}"
+                schedule = Schedule(
+                    schedule_id=schedule_id,
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    name=title[:100],
+                    schedule_type="one_shot",
+                    cron_expr=schedule_config.get("cron_expr"),
+                    action_type="custom_agent_task",
+                    action_config={
+                        "instructions": f"Remind the user: {title}",
+                        **schedule_config,
+                    },
+                    enabled=True,
+                    source="user",
+                    priority=decision.priority,
+                )
+                db.add(schedule)
+                await db.commit()
+
+            logger.info("Reminder scheduled %s: %s", schedule_id, title)
+            return {"status": "created", "schedule_id": schedule_id, "title": title}
+        except Exception as e:
+            logger.warning("Failed to create reminder schedule: %s", e)
+            return {"status": "error", "error": str(e)}
+
+    async def _handle_add_to_brief(
+        self, decision, user_id: str, workspace_id: str
+    ) -> dict:
+        """Store a briefing item as a memory so the next briefing includes it."""
+        memory_svc = self._services.memory_service
+        if not memory_svc:
+            return {"status": "error", "error": "Memory service unavailable"}
+
+        text = decision.goal or decision.reasoning or "Briefing item"
+        try:
+            memory_id = await memory_svc.store(
+                user_id=user_id,
+                workspace_id=workspace_id,
+                fact_text=text,
+                memory_type="briefing_item",
+                scope="planning",
+                source_event_ids=[],
+            )
+            logger.info("Briefing item stored as memory %s: %s", memory_id, text[:80])
+            return {"status": "stored", "memory_id": memory_id, "text": text}
+        except Exception as e:
+            logger.warning("Failed to store briefing item: %s", e)
+            return {"status": "error", "error": str(e)}
+
     async def _call_agent(
         self,
         agent_name: str,
@@ -1914,7 +2191,9 @@ class JarvisOrchestrator:
 
         model = self._get_model_for_agent(agent)
         tools = self._apply_cache_control_to_tools(self._get_tools_for_agent(agent))
-        context_block = await self._assemble_context(agent_name, message, user_id=user_id)
+        context_block = await self._assemble_context(
+            agent_name, message, user_id=user_id, workspace_id=workspace_id
+        )
         system_blocks = self._build_system_prompt(agent, context_block)
 
         text = ""
@@ -1934,6 +2213,7 @@ class JarvisOrchestrator:
             execute_tool_fn=self._execute_tool,
             max_tool_rounds=max_tool_rounds,
             stream=False,
+            circuit_breaker=self._circuit_breaker,
         ):
             if isinstance(evt, LoopDone):
                 text = evt.text
@@ -1977,6 +2257,24 @@ class JarvisOrchestrator:
         # Governor structured output: reporting tool returns input as-is
         if tool_name == "report_governor_verdict":
             return tool_input
+
+        # Composite web_search: uses Playwright MCP browser internally
+        if tool_name == "web_search":
+            try:
+                from src.browser.web_search import web_search
+
+                await self._publish_event("tool.started", user_id, {"tool": tool_name})
+                result = await web_search(
+                    query=tool_input.get("query", ""),
+                    num_results=tool_input.get("num_results", 10),
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                )
+                await self._publish_event("tool.completed", user_id, {"tool": tool_name})
+                return result
+            except Exception as e:
+                logger.warning("web_search failed: %s", e)
+                return {"status": "error", "error": str(e)[:200], "results": []}
 
         # Internal tools served via MCP protocol (in-process Client)
         internal_tools = {
@@ -2312,50 +2610,6 @@ class JarvisOrchestrator:
             logger.error("Plan execution via graph failed: %s", e, exc_info=True)
             return {"status": "error", "error": str(e)}
 
-    @staticmethod
-    def _intent_to_decision(intent: str, message: str) -> PlannerOutput:
-        """Synthesize a lightweight PlannerOutput from a fast intent classification."""
-        intent_map = {
-            "greeting": "acknowledge",
-            "chitchat": "acknowledge",
-            "simple_question": "answer_directly",
-            "data_fetch": "read_source",
-            "status_query": "answer_directly",
-            "approval_response": "acknowledge",
-        }
-        return PlannerOutput(
-            decision=intent_map.get(intent, "acknowledge"),
-            reasoning=f"Fast-classified as {intent}",
-            priority="low" if intent in ("greeting", "chitchat") else "medium",
-            risk_level="none" if intent in ("greeting", "chitchat") else "low",
-            execution_mode="auto_execute",
-            goal=message[:200],
-        )
-
-    def _extract_decision(self, response_text: str) -> PlannerOutput:
-        """Extract and validate structured decision from planner response."""
-        raw: dict[str, Any] = {}
-        try:
-            if "{" in response_text:
-                start = response_text.index("{")
-                depth = 0
-                for i, ch in enumerate(response_text[start:], start):
-                    if ch == "{":
-                        depth += 1
-                    elif ch == "}":
-                        depth -= 1
-                        if depth == 0:
-                            json_str = response_text[start : i + 1]
-                            raw = json.loads(json_str)
-                            break
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-        if not raw:
-            raw = {"decision": "acknowledge", "reasoning": response_text[:500]}
-
-        return PlannerOutput.model_validate(raw)
-
     async def _resolve_pipeline(self, decision: dict) -> list[dict]:
         """Resolve a planner decision to an agent pipeline via RouteResolver."""
         try:
@@ -2363,7 +2617,7 @@ class JarvisOrchestrator:
                 resolver = RouteResolver(db)
                 return await resolver.resolve(decision)
         except Exception:
-            logger.debug("Route resolution failed, using empty pipeline", exc_info=True)
+            logger.warning("Route resolution failed, using empty pipeline", exc_info=True)
             return []
 
     @staticmethod
