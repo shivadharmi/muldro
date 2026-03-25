@@ -82,7 +82,7 @@ export function WorkspaceCanvas({
   priorityItems,
 }: Props) {
   const sendAction = useWsActionStore((s) => s.sendAction);
-  const { surfaces, removeSurface, togglePin } = useSurfaceStore();
+  const { surfaces } = useSurfaceStore();
   const queryClient = useQueryClient();
 
   // Merge static data (approvals, recommendations, priorities) with dynamic WebSocket surfaces
@@ -134,6 +134,62 @@ export function WorkspaceCanvas({
     } catch {
       // Toast handled by caller if needed
     }
+  }
+
+  function renderLegacySurface(surface: GeneratedSurface) {
+    if (surface.kind === "approval") {
+      return (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
+          <p className="text-xs uppercase tracking-wide text-amber-300/80">Approval Required</p>
+          <h3 className="mt-1 text-sm font-semibold text-t-primary">{surface.title}</h3>
+          <p className="mt-2 text-xs text-t-secondary">
+            {String(surface.data.summary ?? "Review this request and choose approve or reject.")}
+          </p>
+        </div>
+      );
+    }
+
+    if (surface.kind === "alert") {
+      return (
+        <div className="rounded-xl border border-b-primary bg-surface-0 p-4">
+          <p className="text-xs uppercase tracking-wide text-t-tertiary">Priority</p>
+          <h3 className="mt-1 text-sm font-semibold text-t-primary">{surface.title}</h3>
+          <p className="mt-2 text-xs text-t-secondary">
+            {String(surface.data.message ?? "")}
+          </p>
+        </div>
+      );
+    }
+
+    if (surface.kind === "briefing") {
+      return (
+        <div className="rounded-xl border border-b-primary bg-surface-0 p-4">
+          <p className="text-xs uppercase tracking-wide text-t-tertiary">Briefing</p>
+          <h3 className="mt-1 text-sm font-semibold text-t-primary">{surface.title}</h3>
+          <p className="mt-2 text-xs text-t-secondary">
+            {String(surface.data.headline ?? "")}
+          </p>
+        </div>
+      );
+    }
+
+    if (surface.kind === "recommendation") {
+      return (
+        <div className="rounded-xl border border-b-primary bg-surface-0 p-4">
+          <p className="text-xs uppercase tracking-wide text-t-tertiary">Recommended Action</p>
+          <h3 className="mt-1 text-sm font-semibold text-t-primary">{surface.title}</h3>
+          <p className="mt-2 text-xs text-t-secondary">
+            {String(surface.data.text ?? "")}
+          </p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="rounded-xl border border-b-primary bg-surface-0 p-4">
+        <h3 className="text-sm font-semibold text-t-primary">{surface.title}</h3>
+      </div>
+    );
   }
 
   if (workspaceSurfaces.length === 0) {
@@ -198,9 +254,7 @@ export function WorkspaceCanvas({
                 }
               />
             ) : (
-              <div className="rounded-xl border border-dashed border-b-primary bg-surface-1 p-3 text-xs text-t-tertiary">
-                Surface unavailable: missing A2UI payload.
-              </div>
+              renderLegacySurface(surface)
             )}
             {/* Approval action buttons */}
             {isApproval && (
