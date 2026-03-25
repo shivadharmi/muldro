@@ -1,14 +1,12 @@
 "use client";
 
 import { useMemo } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { A2UIRenderer } from "@/components/a2ui/renderer";
 import { handleA2UIAction } from "@/components/a2ui/action-handler";
 import { useSurfaceStore } from "@/stores/surface-store";
 import { useWsActionStore } from "@/stores/ws-action-store";
-import { approveAction, rejectAction } from "@/lib/api";
-import type { A2UISurface } from "@/lib/a2ui-types";
+import type { A2UIComponent, A2UISurface } from "@/lib/a2ui-types";
 import type { Approval } from "@/lib/types";
 import type { GeneratedSurface, SurfaceKind } from "@/lib/types/surfaces";
 
@@ -19,15 +17,84 @@ interface Props {
   priorityItems: Array<{ title: string; summary: string; urgency?: string }>;
 }
 
-function approvalToSurface(approval: Approval): GeneratedSurface {
+function textComponent(id: string, text: string, variant: "heading" | "body" | "caption" = "body"): A2UIComponent {
   return {
-    id: `approval_${approval.approval_id}`,
+    type: "Text",
+    id,
+    properties: { text, variant },
+    children: [],
+    actions: [],
+  };
+}
+
+function buttonComponent(id: string, label: string, variant: "primary" | "secondary" | "danger", payload: Record<string, unknown>): A2UIComponent {
+  return {
+    type: "Button",
+    id,
+    properties: { label, variant },
+    children: [],
+    actions: [{ type: "click", payload }],
+  };
+}
+
+function cardSurface(id: string, metadata: Record<string, unknown>, children: A2UIComponent[]): A2UISurface {
+  return {
+    type: "surface",
+    id,
+    metadata,
+    children: [
+      {
+        type: "Card",
+        id: `${id}_card`,
+        properties: {},
+        actions: [],
+        children,
+      },
+    ],
+  };
+}
+
+function approvalToSurface(approval: Approval): GeneratedSurface {
+  const id = `approval_${approval.approval_id}`;
+  const a2uiSurface = cardSurface(
+    id,
+    { kind: "approval" },
+    [
+      textComponent(`${id}_label`, "Approval Required", "caption"),
+      textComponent(`${id}_title`, approval.title || "Pending Approval", "heading"),
+      textComponent(
+        `${id}_summary`,
+        approval.summary ?? "Review this request and choose approve or reject.",
+        "body"
+      ),
+      {
+        type: "Row",
+        id: `${id}_actions`,
+        properties: {},
+        actions: [],
+        children: [
+          buttonComponent(`${id}_approve`, "Approve", "primary", {
+            action: "approve",
+            id: approval.approval_id,
+          }),
+          buttonComponent(`${id}_reject`, "Reject", "danger", {
+            action: "reject",
+            id: approval.approval_id,
+          }),
+        ],
+      },
+    ]
+  );
+
+  return {
+    id,
     kind: "approval",
     title: approval.title || "Pending Approval",
     data: {
       risk_level: approval.risk_level,
       summary: approval.summary,
       approval_id: approval.approval_id,
+      a2ui_surface: a2uiSurface,
     },
     created_at: approval.created_at ?? new Date().toISOString(),
     pinned: true,
@@ -40,11 +107,22 @@ function approvalToSurface(approval: Approval): GeneratedSurface {
 }
 
 function actionToSurface(action: { title: string; reason: string; action_type?: string }, idx: number): GeneratedSurface {
+  const id = `action_${idx}`;
+  const a2uiSurface = cardSurface(
+    id,
+    { kind: "recommendation" },
+    [
+      textComponent(`${id}_label`, "Recommended Action", "caption"),
+      textComponent(`${id}_title`, action.title, "heading"),
+      textComponent(`${id}_reason`, action.reason, "body"),
+    ]
+  );
+
   return {
-    id: `action_${idx}_${Date.now()}`,
+    id,
     kind: "recommendation" as SurfaceKind,
     title: action.title,
-    data: { text: action.reason, highlights: [] },
+    data: { text: action.reason, highlights: [], a2ui_surface: a2uiSurface },
     created_at: new Date().toISOString(),
     pinned: false,
     position: "workspace",
@@ -56,14 +134,26 @@ function actionToSurface(action: { title: string; reason: string; action_type?: 
 }
 
 function priorityToSurface(item: { title: string; summary: string; urgency?: string }, idx: number): GeneratedSurface {
+  const id = `priority_${idx}`;
+  const a2uiSurface = cardSurface(
+    id,
+    { kind: "alert", urgency: item.urgency ?? "medium" },
+    [
+      textComponent(`${id}_label`, "Priority", "caption"),
+      textComponent(`${id}_title`, item.title, "heading"),
+      textComponent(`${id}_summary`, item.summary, "body"),
+    ]
+  );
+
   return {
-    id: `priority_${idx}_${Date.now()}`,
+    id,
     kind: "alert",
     title: item.title,
     data: {
       level: item.urgency === "critical" ? "error" : "warning",
       title: item.title,
       message: item.summary,
+      a2ui_surface: a2uiSurface,
     },
     created_at: new Date().toISOString(),
     pinned: false,
@@ -83,7 +173,6 @@ export function WorkspaceCanvas({
 }: Props) {
   const sendAction = useWsActionStore((s) => s.sendAction);
   const { surfaces } = useSurfaceStore();
-  const queryClient = useQueryClient();
 
   // Merge static data (approvals, recommendations, priorities) with dynamic WebSocket surfaces
   const workspaceSurfaces = useMemo(() => {
@@ -100,7 +189,18 @@ export function WorkspaceCanvas({
             id: "briefing_today",
             kind: "briefing",
             title: "Today's Briefing",
-            data: { headline: briefingHeadline },
+            data: {
+              headline: briefingHeadline,
+              a2ui_surface: cardSurface(
+                "briefing_today",
+                { kind: "briefing" },
+                [
+                  textComponent("briefing_today_label", "Briefing", "caption"),
+                  textComponent("briefing_today_title", "Today's Briefing", "heading"),
+                  textComponent("briefing_today_headline", briefingHeadline, "body"),
+                ]
+              ),
+            },
             created_at: new Date().toISOString(),
             pinned: false,
             position: "workspace",
@@ -121,76 +221,6 @@ export function WorkspaceCanvas({
       ...wsSurfaces,
     ];
   }, [approvals, briefingHeadline, recommendedActions, priorityItems, surfaces]);
-
-  async function handleApprovalAction(approvalId: string, action: "approve" | "reject") {
-    try {
-      if (action === "approve") {
-        await approveAction(approvalId);
-      } else {
-        await rejectAction(approvalId);
-      }
-      queryClient.invalidateQueries({ queryKey: ["workspace-approvals"] });
-      queryClient.invalidateQueries({ queryKey: ["system-dashboard"] });
-    } catch {
-      // Toast handled by caller if needed
-    }
-  }
-
-  function renderLegacySurface(surface: GeneratedSurface) {
-    if (surface.kind === "approval") {
-      return (
-        <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
-          <p className="text-xs uppercase tracking-wide text-amber-300/80">Approval Required</p>
-          <h3 className="mt-1 text-sm font-semibold text-t-primary">{surface.title}</h3>
-          <p className="mt-2 text-xs text-t-secondary">
-            {String(surface.data.summary ?? "Review this request and choose approve or reject.")}
-          </p>
-        </div>
-      );
-    }
-
-    if (surface.kind === "alert") {
-      return (
-        <div className="rounded-xl border border-b-primary bg-surface-0 p-4">
-          <p className="text-xs uppercase tracking-wide text-t-tertiary">Priority</p>
-          <h3 className="mt-1 text-sm font-semibold text-t-primary">{surface.title}</h3>
-          <p className="mt-2 text-xs text-t-secondary">
-            {String(surface.data.message ?? "")}
-          </p>
-        </div>
-      );
-    }
-
-    if (surface.kind === "briefing") {
-      return (
-        <div className="rounded-xl border border-b-primary bg-surface-0 p-4">
-          <p className="text-xs uppercase tracking-wide text-t-tertiary">Briefing</p>
-          <h3 className="mt-1 text-sm font-semibold text-t-primary">{surface.title}</h3>
-          <p className="mt-2 text-xs text-t-secondary">
-            {String(surface.data.headline ?? "")}
-          </p>
-        </div>
-      );
-    }
-
-    if (surface.kind === "recommendation") {
-      return (
-        <div className="rounded-xl border border-b-primary bg-surface-0 p-4">
-          <p className="text-xs uppercase tracking-wide text-t-tertiary">Recommended Action</p>
-          <h3 className="mt-1 text-sm font-semibold text-t-primary">{surface.title}</h3>
-          <p className="mt-2 text-xs text-t-secondary">
-            {String(surface.data.text ?? "")}
-          </p>
-        </div>
-      );
-    }
-
-    return (
-      <div className="rounded-xl border border-b-primary bg-surface-0 p-4">
-        <h3 className="text-sm font-semibold text-t-primary">{surface.title}</h3>
-      </div>
-    );
-  }
 
   if (workspaceSurfaces.length === 0) {
     return (
@@ -242,47 +272,19 @@ export function WorkspaceCanvas({
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
       {workspaceSurfaces.map((surface) => {
-        const isApproval = surface.kind === "approval" && !!surface.data.approval_id;
+        const a2uiSurface = surface.data?.a2ui_surface as A2UISurface | undefined;
+        if (!a2uiSurface) {
+          return null;
+        }
 
         return (
           <div key={surface.id} className="flex flex-col">
-            {surface.data?.a2ui_surface ? (
-              <A2UIRenderer
-                surface={surface.data.a2ui_surface as A2UISurface}
-                onAction={(action, payload) =>
-                  handleA2UIAction(sendAction, action, payload)
-                }
-              />
-            ) : (
-              renderLegacySurface(surface)
-            )}
-            {/* Approval action buttons */}
-            {isApproval && (
-              <div className="flex gap-2 mt-2">
-                <button
-                  onClick={() =>
-                    handleApprovalAction(
-                      surface.data.approval_id as string,
-                      "approve"
-                    )
-                  }
-                  className="flex-1 px-3 py-2 rounded-lg bg-green-500/10 text-green-400 text-xs font-medium hover:bg-green-500/20 transition-colors"
-                >
-                  Approve
-                </button>
-                <button
-                  onClick={() =>
-                    handleApprovalAction(
-                      surface.data.approval_id as string,
-                      "reject"
-                    )
-                  }
-                  className="flex-1 px-3 py-2 rounded-lg bg-red-500/10 text-red-400 text-xs font-medium hover:bg-red-500/20 transition-colors"
-                >
-                  Reject
-                </button>
-              </div>
-            )}
+            <A2UIRenderer
+              surface={a2uiSurface}
+              onAction={(action, payload) =>
+                handleA2UIAction(sendAction, action, payload)
+              }
+            />
           </div>
         );
       })}
