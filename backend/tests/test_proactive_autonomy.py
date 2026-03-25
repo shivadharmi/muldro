@@ -333,7 +333,9 @@ class TestScheduleSeeder:
 
         # Seed workspace A
         count_a = await seed_default_schedules(
-            db, user_id=TEST_USER_ID, workspace_id="ws_a",
+            db,
+            user_id=TEST_USER_ID,
+            workspace_id="ws_a",
         )
         assert count_a == 7
 
@@ -343,7 +345,9 @@ class TestScheduleSeeder:
         db.execute = AsyncMock(return_value=result_empty)
 
         count_b = await seed_default_schedules(
-            db, user_id="usr_other", workspace_id="ws_b",
+            db,
+            user_id="usr_other",
+            workspace_id="ws_b",
         )
         assert count_b == 7  # Should seed all 7, not skip
 
@@ -387,7 +391,9 @@ class TestScheduleSeeder:
         db.flush = AsyncMock()
 
         enabled = await enable_schedules_for_connector(
-            db, "gmail", workspace_id=TEST_WORKSPACE_ID,
+            db,
+            "gmail",
+            workspace_id=TEST_WORKSPACE_ID,
         )
         assert "observe_gmail" in enabled
         assert "morning_briefing" in enabled

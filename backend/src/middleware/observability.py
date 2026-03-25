@@ -93,10 +93,7 @@ class TracingMiddleware:
 
         # Extract or generate correlation ID from request headers
         headers = dict(scope.get("headers", []))
-        req_id = (
-            headers.get(b"x-request-id", b"").decode("utf-8")
-            or f"req_{ULID()}"
-        )
+        req_id = headers.get(b"x-request-id", b"").decode("utf-8") or f"req_{ULID()}"
         correlation_id_var.set(req_id)
 
         path = scope.get("path", "")

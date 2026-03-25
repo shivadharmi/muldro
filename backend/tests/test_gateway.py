@@ -42,9 +42,7 @@ class TestToolNameNormalizer:
 
     def test_normalize_with_server_prefix(self):
         n = ToolNameNormalizer()
-        result = n.normalize(
-            "google_workspace_sendGmailDraft", server_name="google-workspace"
-        )
+        result = n.normalize("google_workspace_sendGmailDraft", server_name="google-workspace")
         assert result == "send_gmail_draft"
 
     def test_normalize_kebab_with_prefix(self):
@@ -150,7 +148,9 @@ class TestUserMCPSessionPool:
     def test_register_server_config(self):
         pool = UserMCPSessionPool()
         pool.register_server_config(
-            "test-server", {"transport": "sse", "url": "http://test"}, workspace_id="ws_a",
+            "test-server",
+            {"transport": "sse", "url": "http://test"},
+            workspace_id="ws_a",
         )
         # Config registered but no sessions yet
         assert pool.get_health() == {}
@@ -159,10 +159,14 @@ class TestUserMCPSessionPool:
         """Two workspaces can register same server_name with different configs."""
         pool = UserMCPSessionPool()
         pool.register_server_config(
-            "github", {"transport": "sse", "url": "http://a"}, workspace_id="ws_a",
+            "github",
+            {"transport": "sse", "url": "http://a"},
+            workspace_id="ws_a",
         )
         pool.register_server_config(
-            "github", {"transport": "sse", "url": "http://b"}, workspace_id="ws_b",
+            "github",
+            {"transport": "sse", "url": "http://b"},
+            workspace_id="ws_b",
         )
         assert pool._server_configs[("ws_a", "github")]["url"] == "http://a"
         assert pool._server_configs[("ws_b", "github")]["url"] == "http://b"

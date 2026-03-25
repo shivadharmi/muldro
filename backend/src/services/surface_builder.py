@@ -203,11 +203,14 @@ class SurfaceService:
         )
         failed_count = failed_result.scalar() or 0
         if failed_count > 0:
-            actions.append({
-                "title": f"Investigate {failed_count} failed run{'s' if failed_count > 1 else ''}",
-                "description": "Recent workflow failures may need your attention.",
-                "priority": "medium",
-            })
+            actions.append(
+                {
+                    "title": f"Investigate {failed_count} failed"
+                    f" run{'s' if failed_count > 1 else ''}",
+                    "description": "Recent workflow failures may need your attention.",
+                    "priority": "medium",
+                }
+            )
 
         # Stale observations
         try:
@@ -224,11 +227,13 @@ class SurfaceService:
             stale = list(stale_result.scalars().all())
             if stale:
                 sources = [s.source for s in stale]
-                actions.append({
-                    "title": f"{len(stale)} data source{'s' if len(stale) > 1 else ''} failing",
-                    "description": f"Sources with errors: {', '.join(sources)}",
-                    "priority": "high",
-                })
+                actions.append(
+                    {
+                        "title": f"{len(stale)} data source{'s' if len(stale) > 1 else ''} failing",
+                        "description": f"Sources with errors: {', '.join(sources)}",
+                        "priority": "high",
+                    }
+                )
         except Exception:
             logger.debug("Failed to check observation status", exc_info=True)
 
@@ -289,13 +294,9 @@ class SurfaceService:
                 if raw_children:
                     from src.ui.contracts import A2UIComponent
 
-                    surface.children = [
-                        A2UIComponent.model_validate(c) for c in raw_children
-                    ]
+                    surface.children = [A2UIComponent.model_validate(c) for c in raw_children]
                 surfaces.append(surface)
             except Exception:
-                logger.debug(
-                    "Failed to parse persisted surface %s", row.surface_id, exc_info=True
-                )
+                logger.debug("Failed to parse persisted surface %s", row.surface_id, exc_info=True)
 
         return surfaces

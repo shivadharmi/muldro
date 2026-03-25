@@ -78,7 +78,10 @@ class UserMCPSessionPool:
         self._tool_metadata: dict[str, dict[str, Any]] = {}
 
     def register_server_config(
-        self, server_name: str, config: dict, workspace_id: str = "",
+        self,
+        server_name: str,
+        config: dict,
+        workspace_id: str = "",
     ) -> None:
         """Register server configuration for later session creation."""
         self._server_configs[(workspace_id, server_name)] = config
@@ -198,7 +201,9 @@ class UserMCPSessionPool:
         # Get or create session
         try:
             session = await self.get_or_create_session(
-                server_name, user_id, workspace_id,
+                server_name,
+                user_id,
+                workspace_id,
             )
         except Exception as e:
             return make_error_response(e, tool_name=tool_name)
@@ -238,13 +243,20 @@ class UserMCPSessionPool:
                 delay = (2**attempt) + random.uniform(0, 0.5)
                 logger.info(
                     "Retrying MCP tool '%s' (attempt %d/%d, %s), delay=%.1fs",
-                    tool_name, attempt + 1, max_retries, error_code, delay,
+                    tool_name,
+                    attempt + 1,
+                    max_retries,
+                    error_code,
+                    delay,
                 )
                 await asyncio.sleep(delay)
 
         logger.warning(
             "MCP tool '%s' on '%s' failed after %d attempts: %s",
-            tool_name, server_name, max_retries, last_error,
+            tool_name,
+            server_name,
+            max_retries,
+            last_error,
         )
         return make_error_response(
             last_error or RuntimeError("Unknown error"),
@@ -252,7 +264,10 @@ class UserMCPSessionPool:
         )
 
     async def refresh_session(
-        self, server_name: str, user_id: str, workspace_id: str = "",
+        self,
+        server_name: str,
+        user_id: str,
+        workspace_id: str = "",
     ) -> None:
         """Force reconnect a session (e.g., after OAuth token refresh)."""
         key = (workspace_id, server_name, user_id)
@@ -375,16 +390,14 @@ class UserMCPSessionPool:
                 return None
 
             # Map server auth_provider to OAuth provider name
-            provider_name = auth_provider if auth_provider != "oauth" else _infer_provider(
-                server_name
+            provider_name = (
+                auth_provider if auth_provider != "oauth" else _infer_provider(server_name)
             )
             try:
                 token = await self._oauth_manager.get_valid_token(user_id, provider_name)
                 if token:
                     return BearerAuth(token=token)
-                logger.warning(
-                    "No OAuth token for user=%s provider=%s", user_id, provider_name
-                )
+                logger.warning("No OAuth token for user=%s provider=%s", user_id, provider_name)
             except Exception as e:
                 logger.warning("OAuth token resolution failed: %s", e)
 

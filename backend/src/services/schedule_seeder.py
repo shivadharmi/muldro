@@ -183,7 +183,9 @@ async def seed_default_schedules(db: AsyncSession, user_id: str, workspace_id: s
 
 
 async def enable_schedules_for_connector(
-    db: AsyncSession, provider: str, workspace_id: str = "",
+    db: AsyncSession,
+    provider: str,
+    workspace_id: str = "",
 ) -> list[str]:
     """Enable schedules associated with a newly-authorized connector.
 
@@ -238,10 +240,12 @@ async def enable_schedules_for_connector(
         # Get user/workspace from one of the enabled schedules
         observe_name = f"observe_{provider}"
         sched_row = await db.execute(
-            select(Schedule).where(
+            select(Schedule)
+            .where(
                 Schedule.name == observe_name,
                 Schedule.workspace_id == workspace_id,
-            ).limit(1)
+            )
+            .limit(1)
         )
         sched_obj = sched_row.scalar_one_or_none()
         if sched_obj:

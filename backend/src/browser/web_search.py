@@ -159,8 +159,8 @@ def _extract_snippet(lines: list[str], start_idx: int) -> str:
         if 'link "' in line or line.startswith("- heading") or line.startswith("- navigation"):
             break
         # Extract text content — strip accessibility annotations
-        text = re.sub(r'\[ref=\w+\]', '', line)
-        text = re.sub(r'^-\s*(text|paragraph|generic)\s*', '', text).strip(' "')
+        text = re.sub(r"\[ref=\w+\]", "", line)
+        text = re.sub(r"^-\s*(text|paragraph|generic)\s*", "", text).strip(' "')
         if text and len(text) > 5:
             snippet_parts.append(text)
     return " ".join(snippet_parts)[:500]

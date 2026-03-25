@@ -42,6 +42,7 @@ def _vec_to_pg(embedding) -> str:
         return str(embedding)
     return "[" + ",".join(str(v) for v in values) + "]"
 
+
 MEMORY_EXTRACTION_PROMPT = """\
 You are Jarvis's memory extraction engine. Given text from an event or \
 interaction, extract facts worth remembering long-term.

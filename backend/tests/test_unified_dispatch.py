@@ -227,9 +227,7 @@ class TestOrchestratorToolDispatch:
         # Mock the in-process MCP Client dispatch
         orch._call_internal_tool = AsyncMock(return_value={"data": "result"})
 
-        result = await orch._execute_tool(
-            "ingest_event", {"event": "test"}, user_id=TEST_USER_ID
-        )
+        result = await orch._execute_tool("ingest_event", {"event": "test"}, user_id=TEST_USER_ID)
 
         assert result == {"data": "result"}
 
@@ -248,9 +246,7 @@ class TestOrchestratorToolDispatch:
 
         with (
             patch("src.services.tool_registry.ToolRegistry", return_value=mock_registry),
-            patch(
-                "src.connectors.mcp_bridge.is_mcp_tool", return_value=True
-            ),
+            patch("src.connectors.mcp_bridge.is_mcp_tool", return_value=True),
             patch(
                 "src.connectors.mcp_bridge.call_mcp_tool",
                 AsyncMock(return_value={"mcp": True}),

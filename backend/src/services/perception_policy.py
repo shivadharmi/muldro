@@ -101,10 +101,7 @@ class PerceptionPolicyService:
             )
             .where(
                 (PerceptionState.pending_run.is_(True))
-                | (
-                    PerceptionState.next_run_at.isnot(None)
-                    & (PerceptionState.next_run_at <= now)
-                )
+                | (PerceptionState.next_run_at.isnot(None) & (PerceptionState.next_run_at <= now))
                 | (
                     and_(
                         PerceptionState.circuit_state == "open",
@@ -126,9 +123,7 @@ class PerceptionPolicyService:
 
         return [s for s in states if s.circuit_state != "open"]
 
-    async def get_due_sources_all_users(
-        self, budget_multiplier: int = 1
-    ) -> list[PerceptionState]:
+    async def get_due_sources_all_users(self, budget_multiplier: int = 1) -> list[PerceptionState]:
         """Return due sources across all users (used by scheduler)."""
         now = datetime.now(timezone.utc)
         reopen_before = now - timedelta(seconds=CIRCUIT_COOLDOWN_S)
@@ -139,10 +134,7 @@ class PerceptionPolicyService:
             )
             .where(
                 (PerceptionState.pending_run.is_(True))
-                | (
-                    PerceptionState.next_run_at.isnot(None)
-                    & (PerceptionState.next_run_at <= now)
-                )
+                | (PerceptionState.next_run_at.isnot(None) & (PerceptionState.next_run_at <= now))
                 | (
                     and_(
                         PerceptionState.circuit_state == "open",
@@ -186,9 +178,7 @@ class PerceptionPolicyService:
         await self._db.flush()
         return state
 
-    async def record_failure(
-        self, state: PerceptionState, error: str
-    ) -> PerceptionState:
+    async def record_failure(self, state: PerceptionState, error: str) -> PerceptionState:
         """After a failed perception cycle."""
         now = datetime.now(timezone.utc)
         state.consecutive_failures += 1
@@ -270,14 +260,12 @@ class PerceptionPolicyService:
 
         # Apply failure backoff: 2^failures capped at BACKOFF_CAP
         if state.consecutive_failures > 0:
-            backoff = min(2 ** state.consecutive_failures, BACKOFF_CAP)
+            backoff = min(2**state.consecutive_failures, BACKOFF_CAP)
             base = base * backoff
 
         return max(MIN_INTERVAL_S, min(base, MAX_INTERVAL_S))
 
-    def _compute_next_run(
-        self, state: PerceptionState, budget_multiplier: int = 1
-    ) -> datetime:
+    def _compute_next_run(self, state: PerceptionState, budget_multiplier: int = 1) -> datetime:
         """Compute next_run_at from effective interval."""
         now = datetime.now(timezone.utc)
         interval = state.effective_interval_s * max(budget_multiplier, 1)

@@ -143,20 +143,26 @@ class CapabilityResolver:
                 return await self._execute_native(tool_name, tool_input, user_id=user_id)
             if backend and backend.backend_type in ("mcp_official", "mcp_user"):
                 return await self._execute_external(
-                    tool_name, tool_input, user_id=user_id,
+                    tool_name,
+                    tool_input,
+                    user_id=user_id,
                     server_name=backend.backend_ref,
                 )
 
         # No capability mapping — try session pool directly
         if self._session_pool and self._session_pool.is_pool_tool(
-            tool_name, workspace_id=self._workspace_id,
+            tool_name,
+            workspace_id=self._workspace_id,
         ):
             server_name = self._session_pool.get_server_for_tool(
-                tool_name, workspace_id=self._workspace_id,
+                tool_name,
+                workspace_id=self._workspace_id,
             )
             if server_name:
                 return await self._execute_external(
-                    tool_name, tool_input, user_id=user_id,
+                    tool_name,
+                    tool_input,
+                    user_id=user_id,
                     server_name=server_name,
                 )
 

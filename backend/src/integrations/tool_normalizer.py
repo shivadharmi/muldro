@@ -57,7 +57,7 @@ def strip_server_prefix(raw_name: str, server_name: str) -> str:
     """
     prefix = server_name.replace("-", "_") + "_"
     if raw_name.startswith(prefix):
-        return raw_name[len(prefix):]
+        return raw_name[len(prefix) :]
     return raw_name
 
 
@@ -145,9 +145,7 @@ class ToolNameNormalizer:
             self._canonical_to_raw[server_name][canonical] = raw_name
             mapping[canonical] = raw_name
 
-            logger.debug(
-                "Registered tool: %s → %s (server: %s)", raw_name, canonical, server_name
-            )
+            logger.debug("Registered tool: %s → %s (server: %s)", raw_name, canonical, server_name)
 
         return mapping
 

@@ -42,11 +42,20 @@ class TestCapabilityMappings:
         from src.integrations.capabilities import TOOL_TO_CAPABILITY
 
         playwright_tools = [
-            "browser_navigate", "browser_tabs", "browser_press_key",
-            "browser_select_option", "browser_hover", "browser_drag",
-            "browser_handle_dialog", "browser_file_upload", "browser_wait",
-            "browser_close", "browser_resize", "browser_pdf_save",
-            "browser_network_requests", "browser_console_messages",
+            "browser_navigate",
+            "browser_tabs",
+            "browser_press_key",
+            "browser_select_option",
+            "browser_hover",
+            "browser_drag",
+            "browser_handle_dialog",
+            "browser_file_upload",
+            "browser_wait",
+            "browser_close",
+            "browser_resize",
+            "browser_pdf_save",
+            "browser_network_requests",
+            "browser_console_messages",
         ]
         for tool_name in playwright_tools:
             assert tool_name in TOOL_TO_CAPABILITY, f"{tool_name} not mapped"
@@ -177,8 +186,7 @@ class TestWebSearch:
     async def test_web_search_caps_num_results(self):
         """num_results is capped at 20."""
         snapshot_text = "\n".join(
-            f'- link "Result {i}" [ref=e{i}] -> https://example.com/{i}\n'
-            f'  - text "Snippet {i}"'
+            f'- link "Result {i}" [ref=e{i}] -> https://example.com/{i}\n  - text "Snippet {i}"'
             for i in range(25)
         )
         mock_call = AsyncMock(

@@ -101,10 +101,13 @@ async def _api_call_with_retry(client, api_kwargs: dict, agent_name: str):
             return await client.messages.create(**api_kwargs)
         except anthropic.RateLimitError:
             if attempt < _MAX_API_RETRIES - 1:
-                wait = min(_RETRY_BASE_DELAY * (2 ** attempt), 30)
+                wait = min(_RETRY_BASE_DELAY * (2**attempt), 30)
                 logger.warning(
                     "Rate limited on %s (attempt %d/%d), retrying in %.1fs",
-                    agent_name, attempt + 1, _MAX_API_RETRIES, wait,
+                    agent_name,
+                    attempt + 1,
+                    _MAX_API_RETRIES,
+                    wait,
                 )
                 await asyncio.sleep(wait)
             else:

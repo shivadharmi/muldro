@@ -915,14 +915,16 @@ async def recent_entities_resource(workspace_id: str) -> str:
             .limit(20)
         )
         entities = result.scalars().all()
-        return json.dumps([
-            {
-                "entity_id": e.entity_id,
-                "name": e.canonical_name,
-                "type": e.entity_type,
-            }
-            for e in entities
-        ])
+        return json.dumps(
+            [
+                {
+                    "entity_id": e.entity_id,
+                    "name": e.canonical_name,
+                    "type": e.entity_type,
+                }
+                for e in entities
+            ]
+        )
 
 
 @intelligence.resource("plans://{workspace_id}/active")
@@ -943,12 +945,14 @@ async def active_plans_resource(workspace_id: str) -> str:
             .limit(10)
         )
         plans = result.scalars().all()
-        return json.dumps([
-            {
-                "plan_id": p.plan_id,
-                "goal": p.goal,
-                "priority": p.priority,
-                "status": p.status,
-            }
-            for p in plans
-        ])
+        return json.dumps(
+            [
+                {
+                    "plan_id": p.plan_id,
+                    "goal": p.goal,
+                    "priority": p.priority,
+                    "status": p.status,
+                }
+                for p in plans
+            ]
+        )

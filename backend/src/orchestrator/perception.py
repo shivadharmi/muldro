@@ -114,9 +114,7 @@ class PerceptionCoordinator:
 
                 svc = PerceptionPolicyService(db)
                 for source in push_sources:
-                    state = await svc.get_or_create_state(
-                        self._workspace_id, self._user_id, source
-                    )
+                    state = await svc.get_or_create_state(self._workspace_id, self._user_id, source)
                     if state.mode == "poll":
                         state.mode = "push"
                         await db.flush()

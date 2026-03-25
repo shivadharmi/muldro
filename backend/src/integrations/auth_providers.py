@@ -262,11 +262,13 @@ def get_provider_status(settings: Settings) -> list[dict]:
         else:
             client_id = getattr(settings, f"{name}_oauth_client_id", "")
 
-        statuses.append({
-            "provider": name,
-            "display_name": meta.display_name,
-            "type": meta.provider_type,
-            "configured": bool(client_id),
-            "scopes": meta.default_scopes,
-        })
+        statuses.append(
+            {
+                "provider": name,
+                "display_name": meta.display_name,
+                "type": meta.provider_type,
+                "configured": bool(client_id),
+                "scopes": meta.default_scopes,
+            }
+        )
     return statuses

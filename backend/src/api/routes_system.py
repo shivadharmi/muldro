@@ -86,10 +86,7 @@ async def list_audit_logs(
 
     from src.models.audit import AuditLog
 
-    stmt = (
-        select(AuditLog)
-        .where(AuditLog.workspace_id == workspace_id)
-    )
+    stmt = select(AuditLog).where(AuditLog.workspace_id == workspace_id)
     if action_type:
         stmt = stmt.where(AuditLog.action_type == action_type)
     stmt = stmt.order_by(AuditLog.created_at.desc()).limit(min(limit, 200))

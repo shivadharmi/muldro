@@ -123,8 +123,7 @@ async def classify_intent(
             # Extract perception sources (validated)
             raw_sources = parsed.get("sources", [])
             sources = [
-                s for s in raw_sources
-                if isinstance(s, str) and s in VALID_PERCEPTION_SOURCES
+                s for s in raw_sources if isinstance(s, str) and s in VALID_PERCEPTION_SOURCES
             ]
 
             logger.info(

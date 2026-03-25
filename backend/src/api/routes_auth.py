@@ -156,7 +156,8 @@ async def list_auth_providers(
     connected_providers: dict[str, dict] = {}
     try:
         oauth_mgr = OAuthManager(
-            db_factory, encryption_key=settings.oauth_encryption_key,
+            db_factory,
+            encryption_key=settings.oauth_encryption_key,
         )
         for provider_name in SUPPORTED_PROVIDERS:
             # Map sub-providers to their OAuth parent
@@ -178,14 +179,16 @@ async def list_auth_providers(
         if name in ("gmail", "calendar", "drive"):
             is_connected = "google" in connected_providers
 
-        providers.append({
-            "name": name,
-            "display_name": meta.display_name,
-            "type": meta.provider_type,
-            "configured": bool(client_id),
-            "connected": is_connected,
-            "scopes": meta.default_scopes,
-        })
+        providers.append(
+            {
+                "name": name,
+                "display_name": meta.display_name,
+                "type": meta.provider_type,
+                "configured": bool(client_id),
+                "connected": is_connected,
+                "scopes": meta.default_scopes,
+            }
+        )
 
     return {"providers": providers}
 
@@ -832,7 +835,10 @@ async def oauth_callback(
         }
         for server_name in _provider_servers.get(provider, []):
             background_tasks.add_task(
-                refresh_server_auth, server_name, user_id, workspace_id=workspace_id,
+                refresh_server_auth,
+                server_name,
+                user_id,
+                workspace_id=workspace_id,
             )
     except Exception:
         logger.debug("MCP session refresh skipped", exc_info=True)
@@ -935,7 +941,9 @@ async def _ensure_integration(
 
 
 async def _enable_integration_schedules(
-    db_factory, provider: str, workspace_id: str = "",
+    db_factory,
+    provider: str,
+    workspace_id: str = "",
 ) -> None:
     """Enable seeded schedules when an integration is authorized."""
     try:
@@ -943,7 +951,9 @@ async def _enable_integration_schedules(
 
         async with db_factory() as db:
             enabled = await enable_schedules_for_connector(
-                db, provider, workspace_id=workspace_id,
+                db,
+                provider,
+                workspace_id=workspace_id,
             )
             if enabled:
                 await db.commit()

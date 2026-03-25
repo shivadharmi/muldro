@@ -670,9 +670,7 @@ class JarvisOrchestrator:
 
             # Persist Plan record so Governor and Operator can reference it
             if decision.tasks and not decision.plan_id:
-                decision = await self._persist_plan_record(
-                    decision, user_id, workspace_id
-                )
+                decision = await self._persist_plan_record(decision, user_id, workspace_id)
 
             decision_dict = decision.model_dump(mode="json")
             decision_json = json.dumps(decision_dict)
@@ -704,14 +702,10 @@ class JarvisOrchestrator:
 
             # Handle direct decisions (no agent pipeline needed)
             if decision.decision == "set_goal":
-                goal_result = await self._handle_set_goal(
-                    decision, user_id, workspace_id
-                )
+                goal_result = await self._handle_set_goal(decision, user_id, workspace_id)
                 result["goal"] = goal_result
             elif decision.decision == "set_instruction":
-                instr_result = await self._handle_set_instruction(
-                    decision, user_id, workspace_id
-                )
+                instr_result = await self._handle_set_instruction(decision, user_id, workspace_id)
                 result["instruction"] = instr_result
             elif decision.decision == "schedule_reminder":
                 reminder_result = await self._handle_schedule_reminder(
@@ -719,9 +713,7 @@ class JarvisOrchestrator:
                 )
                 result["reminder"] = reminder_result
             elif decision.decision == "add_to_brief":
-                brief_result = await self._handle_add_to_brief(
-                    decision, user_id, workspace_id
-                )
+                brief_result = await self._handle_add_to_brief(decision, user_id, workspace_id)
                 result["briefing_item"] = brief_result
 
             # Resolve agent pipeline from routes
@@ -803,7 +795,10 @@ class JarvisOrchestrator:
 
             # Push surface to workspace for visual decision types
             await self._push_workspace_surface(
-                decision, user_id, workspace_id, run_id,
+                decision,
+                user_id,
+                workspace_id,
+                run_id,
                 response_text=result.get("presenter", result.get("summary", "")),
             )
 
@@ -937,9 +932,7 @@ class JarvisOrchestrator:
 
             # Persist Plan record so Governor and Operator can reference it
             if decision.tasks and not decision.plan_id:
-                decision = await self._persist_plan_record(
-                    decision, user_id, workspace_id
-                )
+                decision = await self._persist_plan_record(decision, user_id, workspace_id)
 
             decision_dict = decision.model_dump(mode="json")
             decision_json = json.dumps(decision_dict)
@@ -1145,10 +1138,15 @@ class JarvisOrchestrator:
             # Push surface to workspace via Redis + persist to DB.
             # The chat page receives it via WebSocket; workspace page via REST polling.
             # SSE delivery removed to avoid duplicates (WS is the canonical path).
-            self._spawn_background(self._push_workspace_surface(
-                decision, user_id, workspace_id, run_id,
-                response_text=presenter_text,
-            ))
+            self._spawn_background(
+                self._push_workspace_surface(
+                    decision,
+                    user_id,
+                    workspace_id,
+                    run_id,
+                    response_text=presenter_text,
+                )
+            )
 
             yield {"event": "done", "trace_id": trace.trace_id, "run_id": run_id}
 
@@ -1382,7 +1380,8 @@ class JarvisOrchestrator:
         access_token = await oauth_mgr.get_valid_token(user_id, oauth_provider)
         if not access_token:
             return (
-                [], None,
+                [],
+                None,
                 f"No valid credentials for {source} — user may need to re-authorize",
                 cursor_type,
             )
@@ -1444,7 +1443,9 @@ class JarvisOrchestrator:
             for raw in raw_events:
                 try:
                     event_id = await processor.process(
-                        raw, user_id=user_id, workspace_id=workspace_id,
+                        raw,
+                        user_id=user_id,
+                        workspace_id=workspace_id,
                     )
                     title = raw.title or getattr(raw, "raw_data", {}).get("subject", "")
                     summary = f"[{raw.source}] {raw.event_type}: {title}"
@@ -1703,9 +1704,7 @@ class JarvisOrchestrator:
 
             from ulid import ULID
 
-            children = _build_surface_children(
-                decision, kind, default_title, response_text
-            )
+            children = _build_surface_children(decision, kind, default_title, response_text)
 
             surface = WorkspaceSurfacePush(
                 id=f"surf_{ULID()}",
@@ -1722,9 +1721,7 @@ class JarvisOrchestrator:
             )
 
             channel = f"jarvis:a2ui:{user_id}"
-            ws_msg = json.dumps(
-                {"type": "surface", "surface": surface.model_dump(mode="json")}
-            )
+            ws_msg = json.dumps({"type": "surface", "surface": surface.model_dump(mode="json")})
             await event_bus.publish_to_channel(channel, ws_msg)
 
             # Persist to ui_surfaces table so the workspace survives page refresh
@@ -1841,19 +1838,19 @@ class JarvisOrchestrator:
                 model=model,
                 max_tokens=300,
                 temperature=0,
-                system=[{
-                    "type": "text",
-                    "text": (
-                        "Summarize this conversation in 2-3 sentences. "
-                        "Focus on: topics discussed, decisions made, "
-                        "and any pending items."
-                    ),
-                }],
+                system=[
+                    {
+                        "type": "text",
+                        "text": (
+                            "Summarize this conversation in 2-3 sentences. "
+                            "Focus on: topics discussed, decisions made, "
+                            "and any pending items."
+                        ),
+                    }
+                ],
                 messages=[{"role": "user", "content": text}],
             )
-            return "".join(
-                b.text for b in response.content if b.type == "text"
-            )
+            return "".join(b.text for b in response.content if b.type == "text")
         except Exception:
             logger.debug("History summarization failed", exc_info=True)
             # Fallback: just truncate
@@ -2007,9 +2004,7 @@ class JarvisOrchestrator:
         tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral"}}
         return tools
 
-    async def _handle_set_goal(
-        self, decision, user_id: str, workspace_id: str
-    ) -> dict:
+    async def _handle_set_goal(self, decision, user_id: str, workspace_id: str) -> dict:
         """Store a goal as a memory via MemoryService."""
         memory_svc = self._services.memory_service
         if not memory_svc:
@@ -2025,9 +2020,7 @@ class JarvisOrchestrator:
         logger.info("Goal stored as memory %s: %s", memory_id, title)
         return {"status": "created", "memory_id": memory_id, "title": title}
 
-    async def _handle_set_instruction(
-        self, decision, user_id: str, workspace_id: str
-    ) -> dict:
+    async def _handle_set_instruction(self, decision, user_id: str, workspace_id: str) -> dict:
         """Handle set_instruction: create trigger/schedule/preference memory."""
         spec = decision.instruction
         if not spec:
@@ -2094,9 +2087,7 @@ class JarvisOrchestrator:
                         name=spec.instruction_text[:100],
                         schedule_type=spec.schedule_config.get("type", "recurring"),
                         cron_expr=spec.schedule_config.get("cron_expr"),
-                        action_type=spec.schedule_config.get(
-                            "action_type", "custom_agent_task"
-                        ),
+                        action_type=spec.schedule_config.get("action_type", "custom_agent_task"),
                         action_config=spec.schedule_config.get("action_config", {}),
                         enabled=True,
                         source="user",
@@ -2111,9 +2102,7 @@ class JarvisOrchestrator:
         logger.info("Instruction stored: %s (%s)", spec.instruction_text, spec.instruction_type)
         return result
 
-    async def _handle_schedule_reminder(
-        self, decision, user_id: str, workspace_id: str
-    ) -> dict:
+    async def _handle_schedule_reminder(self, decision, user_id: str, workspace_id: str) -> dict:
         """Create a one-shot schedule for a reminder."""
         from src.models.schedules import Schedule
 
@@ -2151,9 +2140,7 @@ class JarvisOrchestrator:
             logger.warning("Failed to create reminder schedule: %s", e)
             return {"status": "error", "error": str(e)}
 
-    async def _handle_add_to_brief(
-        self, decision, user_id: str, workspace_id: str
-    ) -> dict:
+    async def _handle_add_to_brief(self, decision, user_id: str, workspace_id: str) -> dict:
         """Store a briefing item as a memory so the next briefing includes it."""
         memory_svc = self._services.memory_service
         if not memory_svc:
@@ -2278,11 +2265,25 @@ class JarvisOrchestrator:
 
         # Internal tools served via MCP protocol (in-process Client)
         internal_tools = {
-            "ingest_event", "search_memory", "get_entities", "update_entity",
-            "plan_command", "get_active_plans", "evaluate_policy", "approve_action",
-            "get_briefing", "get_observation_cursor", "update_observation_cursor",
-            "report_observation", "update_execution", "extract_preferences",
-            "create_task", "get_task", "get_goals", "build_context", "verify_run",
+            "ingest_event",
+            "search_memory",
+            "get_entities",
+            "update_entity",
+            "plan_command",
+            "get_active_plans",
+            "evaluate_policy",
+            "approve_action",
+            "get_briefing",
+            "get_observation_cursor",
+            "update_observation_cursor",
+            "report_observation",
+            "update_execution",
+            "extract_preferences",
+            "create_task",
+            "get_task",
+            "get_goals",
+            "build_context",
+            "verify_run",
         }
 
         # Inject workspace_id so tools always have it, even if the model omitted it
@@ -2337,7 +2338,10 @@ class JarvisOrchestrator:
         if is_mcp_tool(tool_name):
             try:
                 result = await call_mcp_tool(
-                    tool_name, tool_input, user_id=user_id, workspace_id=workspace_id,
+                    tool_name,
+                    tool_input,
+                    user_id=user_id,
+                    workspace_id=workspace_id,
                 )
                 await self._publish_event("tool.completed", user_id, {"tool": tool_name})
                 return result
@@ -2543,7 +2547,7 @@ class JarvisOrchestrator:
                 context_builder = ContextBuilder(
                     world_model=svc.world_model,
                     memory_service=svc.memory_service,
-                        procedure_library=svc.procedure_library,
+                    procedure_library=svc.procedure_library,
                     artifact_store=svc.artifact_store,
                 )
 

@@ -33,9 +33,7 @@ class PerceptionState(Base, TimestampMixin):
         String(16), nullable=False, server_default="paused"
     )  # poll | push | hybrid | paused
     base_interval_s: Mapped[int] = mapped_column(Integer, nullable=False, server_default="300")
-    effective_interval_s: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default="300"
-    )
+    effective_interval_s: Mapped[int] = mapped_column(Integer, nullable=False, server_default="300")
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

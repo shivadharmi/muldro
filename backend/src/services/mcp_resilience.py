@@ -134,7 +134,8 @@ class MCPCircuitBreaker:
 
             if latencies:
                 entry["p50_latency_ms"] = round(
-                    latencies[len(latencies) // 2], 1,
+                    latencies[len(latencies) // 2],
+                    1,
                 )
                 p95_idx = min(int(len(latencies) * 0.95), len(latencies) - 1)
                 entry["p95_latency_ms"] = round(latencies[p95_idx], 1)

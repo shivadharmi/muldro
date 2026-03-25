@@ -81,7 +81,9 @@ class WorkspaceMCPPool:
 
             # Register with session pool for lazy connection
             self._session_pool.register_server_config(
-                server_name, config, workspace_id=workspace_id,
+                server_name,
+                config,
+                workspace_id=workspace_id,
             )
 
             logger.info(
@@ -114,12 +116,15 @@ class WorkspaceMCPPool:
 
         # Disconnect all user sessions for this server in this workspace
         sessions_to_close = [
-            key for key in self._session_pool._sessions
+            key
+            for key in self._session_pool._sessions
             if key[0] == workspace_id and key[1] == server_name
         ]
         for key in sessions_to_close:
             await self._session_pool.refresh_session(
-                key[1], key[2], workspace_id=key[0],
+                key[1],
+                key[2],
+                workspace_id=key[0],
             )
 
         logger.info(
@@ -216,9 +221,7 @@ class WorkspaceMCPPool:
                     select(IntegrationInstallation).where(
                         IntegrationInstallation.status == "active",
                         IntegrationInstallation.enabled.is_(True),
-                        IntegrationInstallation.transport.in_(
-                            ["stdio", "sse", "streamable-http"]
-                        ),
+                        IntegrationInstallation.transport.in_(["stdio", "sse", "streamable-http"]),
                     )
                 )
                 installations = result.scalars().all()
@@ -227,7 +230,9 @@ class WorkspaceMCPPool:
                 for inst in installations:
                     config = _installation_to_config(inst)
                     await self.add_server(
-                        inst.workspace_id, inst.server_name, config,
+                        inst.workspace_id,
+                        inst.server_name,
+                        config,
                     )
                     count += 1
 
@@ -258,14 +263,7 @@ def _installation_to_config(inst: Any) -> dict:
         if inst.args:
             config["args"] = inst.args
         if inst.env_template:
-            env = {
-                k: v
-                for k, v in (
-                    (k, os.environ.get(k, ""))
-                    for k in inst.env_template
-                )
-                if v
-            }
+            env = {k: v for k, v in ((k, os.environ.get(k, "")) for k in inst.env_template) if v}
             if env:
                 config["env"] = env
 

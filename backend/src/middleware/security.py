@@ -109,7 +109,9 @@ class RateLimitMiddleware:
                     path = scope.get("path", "")
                     logger.warning("Rate limit exceeded: %s %s", client_ip, path)
                     await _send_json_response(
-                        send, 429, {"detail": "Rate limit exceeded. Try again later."},
+                        send,
+                        429,
+                        {"detail": "Rate limit exceeded. Try again later."},
                     )
                     return
                 await self.app(scope, receive, send)
@@ -122,7 +124,9 @@ class RateLimitMiddleware:
             path = scope.get("path", "")
             logger.warning("Rate limit exceeded: %s %s", client_ip, path)
             await _send_json_response(
-                send, 429, {"detail": "Rate limit exceeded. Try again later."},
+                send,
+                429,
+                {"detail": "Rate limit exceeded. Try again later."},
             )
             return
 
@@ -161,15 +165,19 @@ async def _send_json_response(send: Send, status: int, body: dict) -> None:
     import json
 
     payload = json.dumps(body).encode("utf-8")
-    await send({
-        "type": "http.response.start",
-        "status": status,
-        "headers": [
-            (b"content-type", b"application/json"),
-            (b"content-length", str(len(payload)).encode()),
-        ],
-    })
-    await send({
-        "type": "http.response.body",
-        "body": payload,
-    })
+    await send(
+        {
+            "type": "http.response.start",
+            "status": status,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(payload)).encode()),
+            ],
+        }
+    )
+    await send(
+        {
+            "type": "http.response.body",
+            "body": payload,
+        }
+    )

@@ -246,7 +246,6 @@ def create_app() -> FastAPI:
     # User settings
     app.include_router(settings_router, tags=["settings"])
 
-
     # Prometheus metrics
     app.include_router(metrics_router, tags=["metrics"])
 

@@ -246,4 +246,3 @@ def test_approval_detail_not_found():
     client = TestClient(app)
     resp = client.get("/v1/approvals/apr_nonexistent")
     assert resp.status_code == 404
-

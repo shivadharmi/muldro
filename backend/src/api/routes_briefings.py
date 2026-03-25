@@ -13,7 +13,6 @@ from src.services.presenter import Presenter
 router = APIRouter()
 
 
-
 @router.get("/v1/briefings/{briefing_date}", response_model=BriefingResponse)
 async def get_briefing(
     briefing_date: str,

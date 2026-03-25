@@ -242,9 +242,7 @@ class TestAgentLoop:
             response=MagicMock(status_code=429, headers={}, json=MagicMock(return_value={})),
             body={},
         )
-        client.messages.create = AsyncMock(
-            side_effect=[rate_err, make_text_response("Recovered")]
-        )
+        client.messages.create = AsyncMock(side_effect=[rate_err, make_text_response("Recovered")])
 
         events = await _collect_events(
             agent_loop(
@@ -385,9 +383,7 @@ class TestAgentLoop:
         from src.orchestrator.agent_loop import LoopDone, agent_loop
 
         # Always return tool calls, never text
-        client.messages.create = AsyncMock(
-            return_value=make_tool_response("infinite_tool", {})
-        )
+        client.messages.create = AsyncMock(return_value=make_tool_response("infinite_tool", {}))
 
         events = await _collect_events(
             agent_loop(

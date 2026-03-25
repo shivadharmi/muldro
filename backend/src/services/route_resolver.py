@@ -227,8 +227,17 @@ DEFAULT_ROUTES: list[dict[str, Any]] = [
 
 # Decisions that always go through the presenter for user-facing output
 ALWAYS_PRESENT = {
-    "ask_user", "recommend", "summarize", "acknowledge", "research", "read_source",
-    "draft_reply", "answer_directly", "search_memory", "add_to_brief", "schedule_reminder",
+    "ask_user",
+    "recommend",
+    "summarize",
+    "acknowledge",
+    "research",
+    "read_source",
+    "draft_reply",
+    "answer_directly",
+    "search_memory",
+    "add_to_brief",
+    "schedule_reminder",
 }
 
 

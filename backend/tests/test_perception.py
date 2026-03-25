@@ -301,9 +301,9 @@ class TestPerceptionDecisionExtraction:
         """Should parse perception_policy JSON from planner text."""
         from src.orchestrator.jarvis import JarvisOrchestrator
 
-        text = '''Here is my analysis.
+        text = """Here is my analysis.
 "perception_policy": {"next_check_seconds": 120, "urgency": "high", "reasoning": "active thread"}
-Done.'''
+Done."""
         policy = JarvisOrchestrator._extract_perception_policy(text)
         assert policy is not None
         assert policy.next_check_seconds == 120

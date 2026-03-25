@@ -415,10 +415,12 @@ async def get_message_evidence(
         from src.models.task_graph import TaskRun
 
         run_result = await db.execute(
-            select(TaskRun.run_id).where(
+            select(TaskRun.run_id)
+            .where(
                 TaskRun.trace_id == msg.trace_id,
                 TaskRun.workspace_id == workspace_id,
-            ).limit(1)
+            )
+            .limit(1)
         )
         run_row = run_result.first()
         if run_row:

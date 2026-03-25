@@ -267,7 +267,9 @@ class MCPOnboardingService:
         if pool:
             config = _installation_to_config(installation)
             await pool.add_server(
-                self._workspace_id, catalog_entry.server_name, config,
+                self._workspace_id,
+                catalog_entry.server_name,
+                config,
             )
 
         return OnboardingResult(

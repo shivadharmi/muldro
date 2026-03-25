@@ -16,6 +16,7 @@ from enum import Enum
 try:  # Python 3.11+
     from enum import StrEnum
 except ImportError:  # Python 3.10 fallback
+
     class StrEnum(str, Enum):
         """Compatibility fallback for enum.StrEnum on Python < 3.11."""
 

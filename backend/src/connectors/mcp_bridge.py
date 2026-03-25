@@ -65,10 +65,7 @@ async def get_mcp_config() -> dict:
                     if inst.env_template:
                         env = {
                             k: v
-                            for k, v in (
-                                (k, os.environ.get(k, ""))
-                                for k in inst.env_template
-                            )
+                            for k, v in ((k, os.environ.get(k, "")) for k in inst.env_template)
                             if v
                         }
                         if env:
@@ -196,12 +193,16 @@ async def call_mcp_tool(
 
 
 async def refresh_server_auth(
-    server_name: str, user_id: str, workspace_id: str = "",
+    server_name: str,
+    user_id: str,
+    workspace_id: str = "",
 ) -> None:
     """Force reconnect a server session after OAuth token refresh."""
     if _session_pool:
         await _session_pool.refresh_session(
-            server_name, user_id, workspace_id=workspace_id,
+            server_name,
+            user_id,
+            workspace_id=workspace_id,
         )
 
 
