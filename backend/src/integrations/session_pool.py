@@ -147,6 +147,7 @@ class UserMCPSessionPool:
                     "server": server_name,
                     "description": t.description or "",
                     "input_schema": input_schema,
+                    "_workspace_id": workspace_id,
                 }
 
             entry = SessionEntry(

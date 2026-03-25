@@ -136,11 +136,11 @@ def get_session_pool() -> UserMCPSessionPool | None:
     return _session_pool
 
 
-def is_mcp_tool(tool_name: str) -> bool:
+def is_mcp_tool(tool_name: str, workspace_id: str = "") -> bool:
     """Check if a tool is available via MCP bridge (checks pool's tool registry)."""
     if not _session_pool:
         return False
-    return _session_pool.is_pool_tool(tool_name)
+    return _session_pool.is_pool_tool(tool_name, workspace_id=workspace_id)
 
 
 def list_mcp_tools() -> list[dict]:

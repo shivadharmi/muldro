@@ -666,7 +666,7 @@ class GraphExecutor:
         # 2. Try MCP bridge (external MCP servers)
         from src.connectors.mcp_bridge import call_mcp_tool, is_mcp_tool
 
-        if is_mcp_tool(task_type):
+        if is_mcp_tool(task_type, workspace_id=run.workspace_id):
             raw = await call_mcp_tool(
                 task_type,
                 input_data,

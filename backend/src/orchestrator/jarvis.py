@@ -2335,7 +2335,7 @@ class JarvisOrchestrator:
         # 3. Try MCP bridge directly (session pool, circuit-breaker protected)
         from src.connectors.mcp_bridge import call_mcp_tool, is_mcp_tool
 
-        if is_mcp_tool(tool_name):
+        if is_mcp_tool(tool_name, workspace_id=workspace_id):
             try:
                 result = await call_mcp_tool(
                     tool_name,
