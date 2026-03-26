@@ -25,6 +25,12 @@ SESSION_TTL_SECONDS = 1800
 
 # Mapping: server_name → env var name for stdio token injection.
 # Google Workspace excluded — it uses file-based auth, not raw tokens.
+#
+# Security note: Tokens are injected via environment variables because the
+# MCP stdio transport protocol requires servers to be spawned as subprocesses.
+# Env vars are visible in `ps aux` output — accepted trade-off because
+# stdin-based token passing would break MCP server compatibility.
+# The sessions are short-lived (30-min TTL) and per-user.
 _STDIO_TOKEN_ENV_VARS: dict[str, str] = {
     "github": "GITHUB_PERSONAL_ACCESS_TOKEN",
     "slack": "SLACK_BOT_TOKEN",

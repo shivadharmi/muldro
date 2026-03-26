@@ -20,7 +20,6 @@ from src.models.mcp_server_catalog import MCPServerCatalog
 from src.models.memory import Memory
 from src.models.notifications import Notification
 from src.models.oauth_token import OAuthToken
-from src.models.observation import ObservationStatus
 from src.models.observation_cursor import ObservationCursor
 from src.models.org_allowlist import OrgAllowlist
 from src.models.perception_state import PerceptionState
@@ -64,7 +63,6 @@ __all__ = [
     "BriefingFeedback",
     "AuditLog",
     "DeadLetterEntry",
-    "ObservationStatus",
     "Schedule",
     "Conversation",
     "Message",

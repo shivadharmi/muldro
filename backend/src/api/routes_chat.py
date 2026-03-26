@@ -117,6 +117,20 @@ async def chat_stream(
                 db.add(convo)
                 await db.commit()
                 conversation_id = convo.conversation_id
+
+                from src.services.search_service import es_index_best_effort
+
+                await es_index_best_effort(
+                    "index_conversation",
+                    conversation_id,
+                    user_id,
+                    {
+                        "workspace_id": workspace_id,
+                        "title": "",
+                        "surface": req.surface or "web",
+                        "status": "active",
+                    },
+                )
         except Exception:
             logger.warning("Failed to create conversation record", exc_info=True)
             conversation_id = None
@@ -129,10 +143,11 @@ async def chat_stream(
             from src.models.conversations import Message
             from src.models.database import get_session_factory
 
+            user_msg_id = f"msg_{ULID()}"
             async with get_session_factory()() as db:
                 db.add(
                     Message(
-                        message_id=f"msg_{ULID()}",
+                        message_id=user_msg_id,
                         conversation_id=conversation_id,
                         workspace_id=workspace_id,
                         role="user",
@@ -141,6 +156,20 @@ async def chat_stream(
                     )
                 )
                 await db.commit()
+
+            from src.services.search_service import es_index_best_effort
+
+            await es_index_best_effort(
+                "index_message",
+                user_msg_id,
+                user_id,
+                {
+                    "workspace_id": workspace_id,
+                    "conversation_id": conversation_id,
+                    "role": "user",
+                    "content": req.message[:2000],
+                },
+            )
         except Exception:
             logger.warning("Failed to save user message", exc_info=True)
 
@@ -319,6 +348,20 @@ async def chat_stream(
                             )
                         )
                         await db.commit()
+
+                    from src.services.search_service import es_index_best_effort
+
+                    await es_index_best_effort(
+                        "index_message",
+                        assistant_message_id,
+                        user_id,
+                        {
+                            "workspace_id": workspace_id,
+                            "conversation_id": conversation_id,
+                            "role": "assistant",
+                            "content": (final_response_text or "")[:2000],
+                        },
+                    )
                 except Exception:
                     logger.warning("Failed to save assistant message", exc_info=True)
 

@@ -40,6 +40,8 @@ class BusEvent:
 class EventBus:
     """Redis Streams-based event bus with consumer groups."""
 
+    STREAM_MAXLEN = 10_000
+
     def __init__(self, redis):
         self._redis = redis
 
@@ -67,7 +69,7 @@ class EventBus:
             "metadata": json.dumps(metadata or {}),
             "created_at": created_at,
         }
-        msg_id = await self._redis.xadd(stream, data)
+        msg_id = await self._redis.xadd(stream, data, maxlen=self.STREAM_MAXLEN)
         logger.debug("Published %s to %s (msg=%s)", event_type, stream, msg_id)
 
         # Dual-publish to Pub/Sub for real-time SSE subscribers

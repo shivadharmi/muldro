@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
+from src.middleware.security import per_endpoint_rate_limit
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -299,7 +300,11 @@ async def get_run_artifacts(
     ]
 
 
-@router.post("/v1/runs/{run_id}/resume", response_model=RunResponse)
+@router.post(
+    "/v1/runs/{run_id}/resume",
+    response_model=RunResponse,
+    dependencies=[Depends(per_endpoint_rate_limit(3))],
+)
 async def resume_run(
     run_id: str,
     user_id: str = Depends(get_current_user_id),

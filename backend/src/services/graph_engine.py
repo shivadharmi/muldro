@@ -5,6 +5,7 @@ tables. Postgres remains source of truth; Neo4j enables multi-hop traversals,
 path finding, and community detection.
 """
 
+import json
 import logging
 
 from src.config.settings import Settings
@@ -52,21 +53,24 @@ class GraphEngine:
         if not driver:
             return
 
-        async with driver.session() as session:
-            await session.run(
-                """
-                MERGE (e:Entity {entity_id: $entity_id})
-                SET e.entity_type = $entity_type,
-                    e.name = $name,
-                    e.user_id = $user_id,
-                    e.attributes = $attributes
-                """,
-                entity_id=entity_id,
-                entity_type=entity_type,
-                name=name,
-                user_id=user_id,
-                attributes=str(attributes or {}),
-            )
+        try:
+            async with driver.session() as session:
+                await session.run(
+                    """
+                    MERGE (e:Entity {entity_id: $entity_id})
+                    SET e.entity_type = $entity_type,
+                        e.name = $name,
+                        e.user_id = $user_id,
+                        e.attributes = $attributes
+                    """,
+                    entity_id=entity_id,
+                    entity_type=entity_type,
+                    name=name,
+                    user_id=user_id,
+                    attributes=json.dumps(attributes or {}, default=str),
+                )
+        except Exception:
+            logger.warning("Neo4j sync_entity failed for %s", entity_id, exc_info=True)
 
     async def sync_relationship(
         self,
@@ -81,20 +85,23 @@ class GraphEngine:
         if not driver:
             return
 
-        async with driver.session() as session:
-            await session.run(
-                """
-                MATCH (a:Entity {entity_id: $from_id})
-                MATCH (b:Entity {entity_id: $to_id})
-                MERGE (a)-[r:RELATES_TO {relation_id: $rel_id}]->(b)
-                SET r.relation_type = $rel_type, r.user_id = $user_id
-                """,
-                from_id=from_entity_id,
-                to_id=to_entity_id,
-                rel_id=relation_id,
-                rel_type=relation_type,
-                user_id=user_id,
-            )
+        try:
+            async with driver.session() as session:
+                await session.run(
+                    """
+                    MATCH (a:Entity {entity_id: $from_id})
+                    MATCH (b:Entity {entity_id: $to_id})
+                    MERGE (a)-[r:RELATES_TO {relation_id: $rel_id}]->(b)
+                    SET r.relation_type = $rel_type, r.user_id = $user_id
+                    """,
+                    from_id=from_entity_id,
+                    to_id=to_entity_id,
+                    rel_id=relation_id,
+                    rel_type=relation_type,
+                    user_id=user_id,
+                )
+        except Exception:
+            logger.warning("Neo4j sync_relationship failed for %s", relation_id, exc_info=True)
 
     async def traverse(
         self, entity_id: str, user_id: str, relation_types: list[str] | None = None, depth: int = 2

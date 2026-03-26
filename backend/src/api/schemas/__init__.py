@@ -272,21 +272,21 @@ class TaskDetailResponse(BaseModel):
 # ── Observation ──────────────────────────────────────────────────
 
 
-class ObservationReportRequest(BaseModel):
+class PerceptionReportRequest(BaseModel):
     source: str
-    items_found: int = 0
-    items_ingested: int = 0
-    status: str = "ok"
+    event_count: int = 0
+    status: str = "ok"  # ok | error
     error_message: str | None = None
 
 
-class ObservationStatusResponse(BaseModel):
+class PerceptionStatusResponse(BaseModel):
     source: str
-    last_observed_at: datetime | None = None
-    items_found: int = 0
-    items_ingested: int = 0
-    status: str = "ok"
+    last_run_at: datetime | None = None
+    event_count: int = 0
+    circuit_state: str = "closed"  # closed | open | half_open
     error_message: str | None = None
+    consecutive_failures: int = 0
+    total_runs: int = 0
     is_stale: bool = False
 
 

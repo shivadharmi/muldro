@@ -177,7 +177,10 @@ class JarvisOrchestrator:
             db_factory=db_factory,
         )
         self._trace_manager = TraceManager(trace_store=self._trace_store)
-        self._budget = BudgetTracker(daily_limit_usd=settings.daily_token_budget_usd)
+        self._budget = BudgetTracker(
+            daily_limit_usd=settings.daily_token_budget_usd,
+            redis=getattr(services, "redis", None) if services else None,
+        )
         self._agents: dict[str, SubAgent] = dict(AGENTS)  # Start with hardcoded defaults
         self._tools = self._build_tool_definitions()
         self._event_bus = None  # Lazy-init when Redis available
@@ -2350,12 +2353,13 @@ class JarvisOrchestrator:
                 await self._publish_event("tool.completed", user_id, {"tool": tool_name})
                 return result
             except Exception as e:
+                logger.error("MCP tool %s failed: %s", tool_name, e, exc_info=True)
                 await self._publish_event(
                     "tool.failed",
                     user_id,
                     {"tool": tool_name, "error": str(e)[:200]},
                 )
-                raise
+                return {"error": f"MCP tool '{tool_name}' failed: {e}", "status": "error"}
 
         # 4. Fall back to ToolRegistry for connector-backed tools
         try:

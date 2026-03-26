@@ -160,6 +160,45 @@ class RequestSizeLimitMiddleware:
         await self.app(scope, receive, send)
 
 
+def per_endpoint_rate_limit(max_rpm: int = 10):
+    """FastAPI dependency factory for per-endpoint rate limiting.
+
+    Uses Redis when available, falls back to in-memory. Returns a Depends
+    callable that raises HTTPException(429) when the limit is exceeded.
+
+    Usage: @router.post("/path", dependencies=[Depends(per_endpoint_rate_limit(5))])
+    """
+    from starlette.requests import Request
+
+    _in_memory = RateLimiter(requests_per_minute=max_rpm)
+
+    async def _check(request: Request):
+        from fastapi import HTTPException
+
+        client = request.client
+        client_ip = client.host if client else "unknown"
+        path = request.url.path
+        key = f"ep:{path}:{client_ip}"
+
+        msg = "Rate limit exceeded. Try again later."
+        redis = getattr(request.app.state, "redis", None)
+        if redis is not None:
+            try:
+                rl = RedisRateLimiter(redis, requests_per_minute=max_rpm)
+                if not await rl.is_allowed(key):
+                    raise HTTPException(status_code=429, detail=msg)
+                return
+            except HTTPException:
+                raise
+            except Exception:
+                pass  # fall back to in-memory
+
+        if not _in_memory.is_allowed(key):
+            raise HTTPException(status_code=429, detail=msg)
+
+    return _check
+
+
 async def _send_json_response(send: Send, status: int, body: dict) -> None:
     """Send a JSON error response via raw ASGI send."""
     import json

@@ -217,6 +217,21 @@ class Presenter:
 
         logger.info("Briefing generated: %s for %s", briefing_id, briefing_date)
 
+        # Index to ES for full-text search
+        from src.services.search_service import es_index_best_effort
+
+        await es_index_best_effort(
+            "index_briefing",
+            briefing_id,
+            user_id,
+            {
+                "workspace_id": workspace_id,
+                "briefing_date": str(briefing_date),
+                "headline": briefing.headline or "",
+                "full_text": briefing.full_text or "",
+            },
+        )
+
         # Notify user that briefing is ready via active surfaces
         if self._notifier:
             try:

@@ -5,6 +5,7 @@ Audit hook: Logs every tool call for observability.
 """
 
 import logging
+import re
 
 from ulid import ULID
 
@@ -147,8 +148,8 @@ async def audit_post_tool_hook(
                 span_id=span_id,
                 agent_name=agent_name,
                 tool_name=tool_name,
-                input_summary=_truncate(str(tool_input), 500),
-                output_summary=_truncate(str(tool_result), 500),
+                input_summary=_truncate(_sanitize_secrets(str(tool_input)), 500),
+                output_summary=_truncate(_sanitize_secrets(str(tool_result)), 500),
                 tokens_used=tokens_used,
                 latency_ms=latency_ms,
             )
@@ -156,6 +157,19 @@ async def audit_post_tool_hook(
             await db.commit()
     except Exception as e:
         logger.error("audit_post_tool_hook failed: %s", e, exc_info=True)
+
+
+_SECRET_PATTERN = re.compile(
+    r'(["\']?(?:api[_-]?key|token|password|secret|authorization|access_token'
+    r"|refresh_token|client_secret)[\"']?"
+    r'[\s]*[:=][\s]*["\']?)([^\s"\',:}{]{8,})',
+    re.IGNORECASE,
+)
+
+
+def _sanitize_secrets(text: str) -> str:
+    """Redact common secret patterns from text before audit persistence."""
+    return _SECRET_PATTERN.sub(r"\1***REDACTED***", text)
 
 
 def _truncate(text: str, max_chars: int) -> str:

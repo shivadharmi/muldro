@@ -33,8 +33,10 @@ class Memory(Base, TimestampMixin):
     access_count: Mapped[int] = mapped_column(Integer, default=0)
     superseded_by: Mapped[str | None] = mapped_column(String(64))
     entity_ids: Mapped[list[str] | None] = mapped_column(ARRAY(String(64)))
+    embed_model_version: Mapped[str | None] = mapped_column(String(64))
 
     __table_args__ = (
         Index("ix_memories_user_type_status", "user_id", "memory_type", "status"),
         Index("ix_memories_last_accessed", "last_accessed_at"),
+        Index("ix_memories_user_scope", "user_id", "scope"),
     )

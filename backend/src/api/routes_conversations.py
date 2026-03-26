@@ -183,6 +183,22 @@ async def create_conversation(
     )
     db.add(convo)
     await db.commit()
+
+    # Index to ES for full-text search (best-effort)
+    from src.services.search_service import es_index_best_effort
+
+    await es_index_best_effort(
+        "index_conversation",
+        convo.conversation_id,
+        user_id,
+        {
+            "workspace_id": workspace_id,
+            "title": req.title or "",
+            "surface": req.surface or "web",
+            "status": "active",
+        },
+    )
+
     return ConversationCreateResponse(conversation_id=convo.conversation_id)
 
 

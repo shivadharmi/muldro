@@ -26,6 +26,7 @@ class Entity(Base, TimestampMixin):
     importance_score: Mapped[float] = mapped_column(Float, default=0.0)
     confidence_score: Mapped[float] = mapped_column(Float, default=1.0)
     embedding: Mapped[list | None] = mapped_column(Vector(1024))
+    embed_model_version: Mapped[str | None] = mapped_column(String(64))
 
     aliases: Mapped[list["EntityAlias"]] = relationship(
         back_populates="entity", cascade="all, delete-orphan"
@@ -83,4 +84,5 @@ class EntityRelationship(Base, TimestampMixin):
     __table_args__ = (
         Index("ix_relations_from", "from_entity_id", "relation_type"),
         Index("ix_relations_to", "to_entity_id", "relation_type"),
+        Index("ix_entity_rels_ws", "workspace_id"),
     )

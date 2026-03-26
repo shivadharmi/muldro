@@ -212,15 +212,15 @@ class SurfaceService:
                 }
             )
 
-        # Stale observations
+        # Stale observations (backed by perception_state)
         try:
-            from src.models.observation import ObservationStatus
+            from src.models.perception_state import PerceptionState
 
             stale_result = await self._db.execute(
-                select(ObservationStatus)
+                select(PerceptionState)
                 .where(
-                    ObservationStatus.workspace_id == self._workspace_id,
-                    ObservationStatus.status == "error",
+                    PerceptionState.workspace_id == self._workspace_id,
+                    PerceptionState.circuit_state == "open",
                 )
                 .limit(5)
             )

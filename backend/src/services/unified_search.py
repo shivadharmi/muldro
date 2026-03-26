@@ -62,11 +62,21 @@ class UnifiedSearchResult:
 
 
 class UnifiedSearchService:
-    """Federated search across all Jarvis data types."""
+    """Federated search across all Jarvis data types.
 
-    def __init__(self, db: AsyncSession, workspace_id: str):
+    Uses Elasticsearch for full-text search when available (fast, scalable),
+    falls back to Postgres ILIKE queries when ES is not configured.
+    """
+
+    def __init__(
+        self,
+        db: AsyncSession,
+        workspace_id: str,
+        search_service=None,
+    ):
         self._db = db
         self._workspace_id = workspace_id
+        self._search_service = search_service
 
     async def search(
         self,
@@ -121,7 +131,60 @@ class UnifiedSearchService:
             "groups": groups,
         }
 
+    async def _es_query(
+        self,
+        index: str,
+        query: str,
+        fields: list[str],
+        limit: int,
+        extra_filters: list[dict] | None = None,
+    ) -> list[dict] | None:
+        """Run an ES multi_match query. Returns None if ES unavailable."""
+        if not self._search_service:
+            return None
+        try:
+            es = await self._search_service._get_es()
+            if not es:
+                return None
+            filters = [{"term": {"workspace_id": self._workspace_id}}]
+            if extra_filters:
+                filters.extend(extra_filters)
+            resp = await es.search(
+                index=index,
+                body={
+                    "query": {
+                        "bool": {
+                            "must": [{"multi_match": {"query": query, "fields": fields}}],
+                            "filter": filters,
+                        }
+                    },
+                    "size": limit,
+                },
+            )
+            return [
+                {"id": hit["_id"], "source": hit["_source"], "score": hit["_score"]}
+                for hit in resp["hits"]["hits"]
+            ]
+        except Exception:
+            logger.debug("ES query failed for %s, falling back to Postgres", index)
+            return None
+
     async def _search_conversations(self, query: str, limit: int) -> list[UnifiedSearchResult]:
+        es_hits = await self._es_query("jarvis-conversations", query, ["title"], limit)
+        if es_hits is not None:
+            return [
+                UnifiedSearchResult(
+                    result_type="conversation",
+                    result_id=h["id"],
+                    title=h["source"].get("title", "Untitled"),
+                    snippet="",
+                    score=h["score"],
+                    why_matched="title match",
+                    actions=[{"action": "open", "url": f"/chat?c={h['id']}"}],
+                )
+                for h in es_hits
+            ]
+
         from src.models.conversations import Conversation
 
         q = f"%{query}%"
@@ -147,6 +210,21 @@ class UnifiedSearchService:
         ]
 
     async def _search_briefings(self, query: str, limit: int) -> list[UnifiedSearchResult]:
+        es_hits = await self._es_query("jarvis-briefings", query, ["headline", "full_text"], limit)
+        if es_hits is not None:
+            return [
+                UnifiedSearchResult(
+                    result_type="briefing",
+                    result_id=h["id"],
+                    title=h["source"].get("headline", "Briefing"),
+                    snippet=(h["source"].get("full_text", ""))[:150],
+                    score=h["score"],
+                    why_matched="content match",
+                    actions=[{"action": "open", "url": f"/briefings/{h['id']}"}],
+                )
+                for h in es_hits
+            ]
+
         from src.models.briefings import Briefing
 
         q = f"%{query}%"
@@ -175,6 +253,25 @@ class UnifiedSearchService:
         ]
 
     async def _search_approvals(self, query: str, limit: int) -> list[UnifiedSearchResult]:
+        es_hits = await self._es_query("jarvis-approvals", query, ["title", "summary"], limit)
+        if es_hits is not None:
+            return [
+                UnifiedSearchResult(
+                    result_type="approval",
+                    result_id=h["id"],
+                    title=h["source"].get("title", "Approval"),
+                    snippet=(h["source"].get("summary", ""))[:150],
+                    score=h["score"],
+                    why_matched="title/summary match",
+                    actions=[{"action": "open", "url": f"/approvals/{h['id']}"}],
+                    metadata={
+                        "status": h["source"].get("status", ""),
+                        "risk_level": h["source"].get("risk_level", ""),
+                    },
+                )
+                for h in es_hits
+            ]
+
         from src.models.approvals import Approval
 
         q = f"%{query}%"
@@ -204,6 +301,21 @@ class UnifiedSearchService:
         ]
 
     async def _search_entities(self, query: str, limit: int) -> list[UnifiedSearchResult]:
+        es_hits = await self._es_query("jarvis-entities", query, ["canonical_name"], limit)
+        if es_hits is not None:
+            return [
+                UnifiedSearchResult(
+                    result_type="entity",
+                    result_id=h["id"],
+                    title=h["source"].get("canonical_name", ""),
+                    snippet=h["source"].get("entity_type", ""),
+                    score=h["score"],
+                    why_matched="name match",
+                    metadata={"entity_type": h["source"].get("entity_type", "")},
+                )
+                for h in es_hits
+            ]
+
         from src.models.entities import Entity
 
         q = f"%{query}%"
@@ -229,6 +341,21 @@ class UnifiedSearchService:
         ]
 
     async def _search_memories(self, query: str, limit: int) -> list[UnifiedSearchResult]:
+        es_hits = await self._es_query("jarvis-memories", query, ["fact_text"], limit)
+        if es_hits is not None:
+            return [
+                UnifiedSearchResult(
+                    result_type="memory",
+                    result_id=h["id"],
+                    title=(h["source"].get("fact_text", ""))[:80],
+                    snippet=(h["source"].get("fact_text", ""))[:200],
+                    score=h["score"],
+                    why_matched="content match",
+                    metadata={"memory_type": h["source"].get("memory_type", "")},
+                )
+                for h in es_hits
+            ]
+
         from src.models.memory import Memory
 
         q = f"%{query}%"
@@ -254,6 +381,29 @@ class UnifiedSearchService:
         ]
 
     async def _search_goals(self, query: str, limit: int) -> list[UnifiedSearchResult]:
+        es_hits = await self._es_query(
+            "jarvis-memories",
+            query,
+            ["fact_text"],
+            limit,
+            extra_filters=[
+                {"term": {"memory_type": "goal"}},
+            ],
+        )
+        if es_hits is not None:
+            return [
+                UnifiedSearchResult(
+                    result_type="goal",
+                    result_id=h["id"],
+                    title=h["source"].get("fact_text", ""),
+                    snippet="",
+                    score=h["score"],
+                    why_matched="title match",
+                    metadata={"memory_type": "goal"},
+                )
+                for h in es_hits
+            ]
+
         from src.models.memory import Memory
 
         q = f"%{query}%"

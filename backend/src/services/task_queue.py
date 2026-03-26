@@ -33,7 +33,7 @@ class TaskQueue:
     async def enqueue(self, stream: str, task_type: str, payload: dict) -> str:
         """Add task to stream. Returns message ID."""
         data = {"task_type": task_type, "payload": json.dumps(payload)}
-        msg_id = await self._redis.xadd(stream, data)
+        msg_id = await self._redis.xadd(stream, data, maxlen=10_000)
         logger.debug("Enqueued %s to %s: %s", task_type, stream, msg_id)
         return msg_id
 

@@ -79,6 +79,47 @@ class SearchService:
                     "approval_id": {"type": "keyword"},
                 }
             },
+            "jarvis-briefings": {
+                "properties": {
+                    "user_id": {"type": "keyword"},
+                    "workspace_id": {"type": "keyword"},
+                    "briefing_date": {"type": "date"},
+                    "headline": {"type": "text"},
+                    "full_text": {"type": "text"},
+                }
+            },
+            "jarvis-approvals": {
+                "properties": {
+                    "user_id": {"type": "keyword"},
+                    "workspace_id": {"type": "keyword"},
+                    "approval_type": {"type": "keyword"},
+                    "title": {"type": "text"},
+                    "summary": {"type": "text"},
+                    "status": {"type": "keyword"},
+                    "risk_level": {"type": "keyword"},
+                    "created_at": {"type": "date"},
+                }
+            },
+            "jarvis-conversations": {
+                "properties": {
+                    "user_id": {"type": "keyword"},
+                    "workspace_id": {"type": "keyword"},
+                    "title": {"type": "text"},
+                    "surface": {"type": "keyword"},
+                    "status": {"type": "keyword"},
+                    "created_at": {"type": "date"},
+                }
+            },
+            "jarvis-messages": {
+                "properties": {
+                    "user_id": {"type": "keyword"},
+                    "workspace_id": {"type": "keyword"},
+                    "conversation_id": {"type": "keyword"},
+                    "role": {"type": "keyword"},
+                    "content": {"type": "text"},
+                    "created_at": {"type": "date"},
+                }
+            },
         }
 
         for index_name, mapping in indices.items():
@@ -144,6 +185,58 @@ class SearchService:
                         "memories", memory_id, embedding, {"user_id": user_id, **data}, user_id
                     )
 
+    async def index_briefing(self, briefing_id: str, user_id: str, data: dict) -> None:
+        """Index a briefing to ES."""
+        es = await self._get_es()
+        if es:
+            try:
+                await es.index(
+                    index="jarvis-briefings",
+                    id=briefing_id,
+                    body={"user_id": user_id, **data},
+                )
+            except Exception:
+                logger.debug("ES index_briefing failed for %s", briefing_id, exc_info=True)
+
+    async def index_approval(self, approval_id: str, user_id: str, data: dict) -> None:
+        """Index an approval to ES."""
+        es = await self._get_es()
+        if es:
+            try:
+                await es.index(
+                    index="jarvis-approvals",
+                    id=approval_id,
+                    body={"user_id": user_id, **data},
+                )
+            except Exception:
+                logger.debug("ES index_approval failed for %s", approval_id, exc_info=True)
+
+    async def index_conversation(self, conversation_id: str, user_id: str, data: dict) -> None:
+        """Index a conversation to ES."""
+        es = await self._get_es()
+        if es:
+            try:
+                await es.index(
+                    index="jarvis-conversations",
+                    id=conversation_id,
+                    body={"user_id": user_id, **data},
+                )
+            except Exception:
+                logger.debug("ES index_conversation failed for %s", conversation_id, exc_info=True)
+
+    async def index_message(self, message_id: str, user_id: str, data: dict) -> None:
+        """Index a message to ES."""
+        es = await self._get_es()
+        if es:
+            try:
+                await es.index(
+                    index="jarvis-messages",
+                    id=message_id,
+                    body={"user_id": user_id, **data},
+                )
+            except Exception:
+                logger.debug("ES index_message failed for %s", message_id, exc_info=True)
+
     async def index_artifact(self, artifact_id: str, user_id: str, data: dict) -> None:
         """Index an artifact to ES and Qdrant."""
         es = await self._get_es()
@@ -187,9 +280,22 @@ class SearchService:
         entities: list[dict] | None = None,
         memories: list[dict] | None = None,
         artifacts: list[dict] | None = None,
+        briefings: list[dict] | None = None,
+        approvals: list[dict] | None = None,
+        conversations: list[dict] | None = None,
+        messages: list[dict] | None = None,
     ) -> dict:
         """Bulk reindex items to ES and Qdrant."""
-        counts = {"events": 0, "entities": 0, "memories": 0, "artifacts": 0}
+        counts = {
+            "events": 0,
+            "entities": 0,
+            "memories": 0,
+            "artifacts": 0,
+            "briefings": 0,
+            "approvals": 0,
+            "conversations": 0,
+            "messages": 0,
+        }
 
         for event in events or []:
             await self.index_event(event["event_id"], user_id, event)
@@ -206,6 +312,22 @@ class SearchService:
         for artifact in artifacts or []:
             await self.index_artifact(artifact["artifact_id"], user_id, artifact)
             counts["artifacts"] += 1
+
+        for briefing in briefings or []:
+            await self.index_briefing(briefing["briefing_id"], user_id, briefing)
+            counts["briefings"] += 1
+
+        for approval in approvals or []:
+            await self.index_approval(approval["approval_id"], user_id, approval)
+            counts["approvals"] += 1
+
+        for convo in conversations or []:
+            await self.index_conversation(convo["conversation_id"], user_id, convo)
+            counts["conversations"] += 1
+
+        for msg in messages or []:
+            await self.index_message(msg["message_id"], user_id, msg)
+            counts["messages"] += 1
 
         logger.info("Reindexed for user %s: %s", user_id, counts)
         return counts
@@ -299,3 +421,50 @@ class SearchService:
 
         sorted_ids = sorted(scores, key=lambda x: scores[x], reverse=True)
         return [{**items[item_id], "rrf_score": scores[item_id]} for item_id in sorted_ids[:limit]]
+
+
+# ── Module-level convenience for best-effort ES indexing ────────────────
+
+_default_search_service: SearchService | None = None
+
+
+async def _get_default_search_service() -> SearchService | None:
+    """Lazy singleton SearchService for ES indexing at data creation points."""
+    global _default_search_service
+    if _default_search_service is not None:
+        return _default_search_service
+    try:
+        from src.config.settings import get_settings
+
+        settings = get_settings()
+        if not settings.elasticsearch_url:
+            return None
+        _default_search_service = SearchService(settings)
+        return _default_search_service
+    except Exception:
+        return None
+
+
+async def es_index_best_effort(
+    index_method: str,
+    doc_id: str,
+    user_id: str,
+    data: dict,
+) -> None:
+    """Best-effort ES indexing — never raises, never blocks the caller.
+
+    Args:
+        index_method: Name of SearchService method (e.g. "index_briefing")
+        doc_id: Document ID
+        user_id: Owner user ID
+        data: Document data dict
+    """
+    try:
+        svc = await _get_default_search_service()
+        if svc is None:
+            return
+        method = getattr(svc, index_method, None)
+        if method:
+            await method(doc_id, user_id, data)
+    except Exception:
+        logger.debug("es_index_best_effort(%s, %s) failed", index_method, doc_id)

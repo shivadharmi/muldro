@@ -16,6 +16,7 @@ import logging
 from datetime import datetime, timezone
 
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
@@ -253,7 +254,15 @@ class WorldModel:
                     )
                 )
 
-        await self._db.commit()
+        try:
+            await self._db.commit()
+        except IntegrityError:
+            await self._db.rollback()
+            logger.info("Entity race condition, retrying lookup: name=%s", canonical_name)
+            retry = await self._find_by_name_or_alias(canonical_name, user_id, workspace_id)
+            if retry:
+                return retry.entity_id
+            raise
         logger.info("Entity created: %s type=%s name=%s", entity_id, entity_type, canonical_name)
         await self._emit_event("entity.created", user_id, {"entity_id": entity_id})
         return entity_id

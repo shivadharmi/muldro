@@ -22,7 +22,7 @@ from fastapi.testclient import TestClient
 from src.api.app import app
 from src.api.deps import get_current_user, get_current_user_id, get_session
 from src.models.approvals import Approval
-from src.models.observation import ObservationStatus
+from src.models.perception_state import PerceptionState
 from src.models.task_graph import TaskRun
 from tests.conftest import TEST_USER_ID
 
@@ -274,13 +274,12 @@ def test_observation_report_then_status():
     empty_result.scalar_one_or_none.return_value = None
 
     # For GET: return the observation we just "created"
-    obs = MagicMock(spec=ObservationStatus)
+    obs = MagicMock(spec=PerceptionState)
     obs.source = "gmail"
-    obs.last_observed_at = now
-    obs.items_found = 5
-    obs.items_ingested = 3
-    obs.status = "ok"
-    obs.error_message = None
+    obs.last_run_at = now
+    obs.last_event_count = 5
+    obs.circuit_state = "closed"
+    obs.last_error = None
 
     list_result = MagicMock()
     list_result.scalars.return_value.all.return_value = [obs]
@@ -303,7 +302,7 @@ def test_observation_report_then_status():
             # POST report
             post_resp = client.post(
                 "/v1/observations/report",
-                json={"source": "gmail", "items_found": 5, "items_ingested": 3},
+                json={"source": "gmail", "event_count": 5},
             )
             assert post_resp.status_code == 200
             assert post_resp.json()["source"] == "gmail"

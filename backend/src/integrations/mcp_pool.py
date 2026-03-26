@@ -121,11 +121,14 @@ class WorkspaceMCPPool:
             if key[0] == workspace_id and key[1] == server_name
         ]
         for key in sessions_to_close:
-            await self._session_pool.refresh_session(
-                key[1],
-                key[2],
-                workspace_id=key[0],
-            )
+            try:
+                await self._session_pool.refresh_session(
+                    key[1],
+                    key[2],
+                    workspace_id=key[0],
+                )
+            except Exception:
+                logger.warning("Failed to close session %s during server removal", key)
 
         # Remove config, tool mappings, and metadata so the server cannot be
         # rediscovered or reconnected on subsequent tool calls.
@@ -246,6 +249,24 @@ class WorkspaceMCPPool:
         except Exception as e:
             logger.debug("Failed to load MCP servers from DB: %s", e)
             return 0
+
+    async def health_check_all(self) -> dict[str, str]:
+        """Ping all registered servers and update health_status.
+
+        Returns {server_name: "healthy"|"unhealthy"} for each server.
+        """
+        results: dict[str, str] = {}
+        for ws_id, servers in self._workspaces.items():
+            for server_name, entry in servers.items():
+                try:
+                    tools = self._session_pool.get_all_tools(workspace_id=ws_id)
+                    status = "healthy" if tools else "healthy"
+                    entry.health_status = status
+                except Exception:
+                    entry.health_status = "unhealthy"
+                    logger.debug("MCP health check failed: %s/%s", ws_id, server_name)
+                results[f"{ws_id}/{server_name}"] = entry.health_status
+        return results
 
     async def shutdown(self) -> None:
         """Shut down all sessions across all workspaces."""

@@ -56,6 +56,7 @@ class TaskRun(Base, TimestampMixin):
     __table_args__ = (
         Index("ix_task_runs_user_status", "user_id", "status", "created_at"),
         Index("ix_task_runs_source", "source", "created_at"),
+        Index("ix_task_runs_ws_status", "workspace_id", "status"),
     )
 
 

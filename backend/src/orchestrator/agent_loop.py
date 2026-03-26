@@ -244,6 +244,7 @@ async def agent_loop(
                         if thinking_enabled:
                             api_kwargs["temperature"] = agent.temperature
                             api_kwargs.pop("thinking", None)
+                            thinking_enabled = False
                         response = await _api_call_with_retry(client, api_kwargs, agent_name)
             else:
                 try:
@@ -257,6 +258,7 @@ async def agent_loop(
                         )
                         api_kwargs["temperature"] = agent.temperature
                         api_kwargs.pop("thinking", None)
+                        thinking_enabled = False
                         response = await _api_call_with_retry(client, api_kwargs, agent_name)
                     else:
                         raise
@@ -308,6 +310,7 @@ async def agent_loop(
                     tool_input,
                     agent_name,
                     user_id=user_id,
+                    workspace_id=workspace_id,
                     db_factory=db_factory,
                     services=services,
                     run_id=run_id,

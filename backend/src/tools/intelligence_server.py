@@ -552,6 +552,7 @@ async def get_observation_cursor(
             result = await db.execute(
                 select(ObservationCursor).where(
                     ObservationCursor.user_id == user_id,
+                    ObservationCursor.workspace_id == workspace_id,
                     ObservationCursor.source == source,
                 )
             )
@@ -592,6 +593,7 @@ async def update_observation_cursor(
             result = await db.execute(
                 select(ObservationCursor).where(
                     ObservationCursor.user_id == user_id,
+                    ObservationCursor.workspace_id == workspace_id,
                     ObservationCursor.source == source,
                 )
             )
@@ -639,38 +641,51 @@ async def report_observation(
     error_message: str = "",
     workspace_id: str = "",
 ) -> dict:
-    """Report the results of an observation cycle for health tracking."""
+    """Report the results of an observation cycle for health tracking.
+
+    Writes to perception_state (consolidated from legacy observation_status).
+    """
     async with _get_db() as db:
         try:
-            from src.models.observation import ObservationStatus
+            from src.models.perception_state import PerceptionState
 
             result = await db.execute(
-                select(ObservationStatus).where(
-                    ObservationStatus.user_id == user_id,
-                    ObservationStatus.source == source,
+                select(PerceptionState).where(
+                    PerceptionState.user_id == user_id,
+                    PerceptionState.workspace_id == workspace_id,
+                    PerceptionState.source == source,
                 )
             )
-            obs = result.scalar_one_or_none()
+            ps = result.scalar_one_or_none()
             now = datetime.now(timezone.utc)
+            circuit = "open" if status == "error" else "closed"
 
-            if obs:
-                obs.last_observed_at = now
-                obs.items_found = items_found
-                obs.items_ingested = items_ingested
-                obs.status = status
-                obs.error_message = error_message if error_message else None
+            if ps:
+                ps.last_run_at = now
+                ps.last_event_count = items_found
+                ps.circuit_state = circuit
+                ps.last_error = error_message if error_message else None
+                if status == "error":
+                    ps.consecutive_failures += 1
+                else:
+                    ps.consecutive_failures = 0
+                ps.total_runs += 1
             else:
-                obs = ObservationStatus(
+                from src.models.ids import generate_id
+
+                ps = PerceptionState(
+                    state_id=generate_id("pst"),
                     user_id=user_id,
                     workspace_id=workspace_id,
                     source=source,
-                    last_observed_at=now,
-                    items_found=items_found,
-                    items_ingested=items_ingested,
-                    status=status,
-                    error_message=error_message if error_message else None,
+                    last_run_at=now,
+                    last_event_count=items_found,
+                    circuit_state=circuit,
+                    last_error=error_message if error_message else None,
+                    consecutive_failures=1 if status == "error" else 0,
+                    total_runs=1,
                 )
-                db.add(obs)
+                db.add(ps)
 
             await db.flush()
             await db.commit()

@@ -255,14 +255,14 @@ class HomeFeedService:
                 }
             )
 
-        # Stale observations → recommend reconnecting
-        from src.models.observation import ObservationStatus
+        # Stale observations → recommend reconnecting (backed by perception_state)
+        from src.models.perception_state import PerceptionState
 
         stale_result = await self._db.execute(
-            select(ObservationStatus)
+            select(PerceptionState)
             .where(
-                ObservationStatus.workspace_id == self._workspace_id,
-                ObservationStatus.status == "error",
+                PerceptionState.workspace_id == self._workspace_id,
+                PerceptionState.circuit_state == "open",
             )
             .limit(5)
         )

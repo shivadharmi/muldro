@@ -42,6 +42,7 @@ class AnthropicCircuitBreaker:
     failure_threshold: int = 5
     cooldown_seconds: float = 120.0
     _circuits: dict[str, ModelCircuit] = field(default_factory=dict)
+    _half_open_testing: dict[str, bool] = field(default_factory=dict)
 
     def _get_circuit(self, model: str) -> ModelCircuit:
         if model not in self._circuits:
@@ -58,7 +59,12 @@ class AnthropicCircuitBreaker:
 
     def is_available(self, model: str) -> bool:
         state = self.get_state(model)
-        return state in (CircuitState.CLOSED, CircuitState.HALF_OPEN)
+        if state == CircuitState.HALF_OPEN:
+            if self._half_open_testing.get(model, False):
+                return False  # already testing with one request
+            self._half_open_testing[model] = True
+            return True
+        return state == CircuitState.CLOSED
 
     def record_success(self, model: str) -> None:
         circuit = self._get_circuit(model)
@@ -68,6 +74,7 @@ class AnthropicCircuitBreaker:
         circuit.failure_count = 0
         circuit.last_success_at = time.monotonic()
         circuit.total_calls += 1
+        self._half_open_testing[model] = False
 
     def record_failure(self, model: str) -> None:
         circuit = self._get_circuit(model)
@@ -80,6 +87,7 @@ class AnthropicCircuitBreaker:
             if circuit.state != CircuitState.OPEN:
                 circuit.state = CircuitState.OPEN
                 circuit.opened_at = time.monotonic()
+                self._half_open_testing[model] = False
                 logger.warning(
                     "api_circuit_opened",
                     extra={

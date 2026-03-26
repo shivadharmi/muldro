@@ -76,9 +76,11 @@ async def unified_search(
     req: UnifiedSearchRequest,
     workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ):
     """Unified search across conversations, briefings, approvals, entities, memories, goals."""
     from src.services.unified_search import UnifiedSearchService
 
-    svc = UnifiedSearchService(db, workspace_id)
+    search_svc = SearchService(settings) if settings.elasticsearch_url else None
+    svc = UnifiedSearchService(db, workspace_id, search_service=search_svc)
     return await svc.search(req.query, types=req.types, limit=req.limit)

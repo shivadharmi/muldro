@@ -23,7 +23,9 @@ class Artifact(Base, TimestampMixin):
     size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     s3_key: Mapped[str] = mapped_column(String(512), nullable=False)
     s3_bucket: Mapped[str] = mapped_column(String(128), nullable=False)
-    run_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    run_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("task_runs.run_id", ondelete="SET NULL"), nullable=True, index=True
+    )
     step_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     task_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     source_ref: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

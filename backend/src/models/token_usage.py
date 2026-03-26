@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -24,7 +26,7 @@ class TokenUsage(Base):
     )  # user_message, perception_cycle, scheduled_briefing
     conversation_id: Mapped[str | None] = mapped_column(String(64))
     trace_id: Mapped[str | None] = mapped_column(String(64))
-    created_at: Mapped[str] = mapped_column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 

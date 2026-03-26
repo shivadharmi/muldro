@@ -27,9 +27,16 @@ class Approval(Base, TimestampMixin):
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     decision_reason: Mapped[str | None] = mapped_column(Text)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    step_id: Mapped[str | None] = mapped_column(String(64))
-    run_id: Mapped[str | None] = mapped_column(String(64))
+    step_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("task_steps.step_id", ondelete="SET NULL")
+    )
+    run_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("task_runs.run_id", ondelete="SET NULL")
+    )
     requested_by: Mapped[str | None] = mapped_column(String(64))
     approved_by: Mapped[str | None] = mapped_column(String(64))
 
-    __table_args__ = (Index("ix_approvals_user_status", "user_id", "status", "created_at"),)
+    __table_args__ = (
+        Index("ix_approvals_user_status", "user_id", "status", "created_at"),
+        Index("ix_approvals_run_status", "run_id", "status"),
+    )

@@ -73,4 +73,21 @@ async def create_approval(
         },
     )
 
+    # Index to ES for full-text search (best-effort, non-blocking)
+    from src.services.search_service import es_index_best_effort
+
+    await es_index_best_effort(
+        "index_approval",
+        approval_id,
+        user_id,
+        {
+            "workspace_id": workspace_id,
+            "approval_type": approval_type,
+            "title": title,
+            "summary": summary or "",
+            "status": "pending",
+            "risk_level": risk_level,
+        },
+    )
+
     return approval

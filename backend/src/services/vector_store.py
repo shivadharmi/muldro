@@ -27,6 +27,9 @@ COLLECTION_ENTITIES = "entities"
 COLLECTION_EVENTS = "events"
 COLLECTION_ARTIFACTS = "artifacts"
 
+# Vector dimensions (Bedrock Titan V2)
+VECTOR_SIZE = 1024
+
 
 class VectorStore:
     """Qdrant-backed vector store with user-scoped filtering."""
@@ -36,18 +39,31 @@ class VectorStore:
         self._client = None
 
     async def _get_client(self):
-        """Lazy-init Qdrant client."""
-        if self._client is None:
-            if not self._settings.qdrant_url:
-                logger.warning("Qdrant not configured, vector store is no-op")
-                return None
-            from qdrant_client import AsyncQdrantClient
+        """Lazy-init Qdrant client with reconnection on failure."""
+        if self._client is not None:
+            try:
+                await self._client.get_collections()
+                return self._client
+            except Exception:
+                logger.warning("Qdrant health check failed, reconnecting")
+                self._client = None
 
-            self._client = AsyncQdrantClient(
-                url=self._settings.qdrant_url,
-                api_key=self._settings.qdrant_api_key or None,
-            )
+        if not self._settings.qdrant_url:
+            logger.warning("Qdrant not configured, vector store is no-op")
+            return None
+        from qdrant_client import AsyncQdrantClient
+
+        self._client = AsyncQdrantClient(
+            url=self._settings.qdrant_url,
+            api_key=self._settings.qdrant_api_key or None,
+        )
         return self._client
+
+    async def close(self) -> None:
+        """Close the Qdrant client connection."""
+        if self._client:
+            await self._client.close()
+            self._client = None
 
     async def ensure_collections(self) -> None:
         """Create collections if they don't exist."""
@@ -69,7 +85,7 @@ class VectorStore:
             except Exception:
                 await client.create_collection(
                     collection_name=name,
-                    vectors_config=VectorParams(size=1024, distance=Distance.COSINE),
+                    vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
                 )
                 logger.info("Created Qdrant collection: %s", name)
 
@@ -95,6 +111,40 @@ class VectorStore:
             collection_name=collection,
             points=[PointStruct(id=qdrant_id, vector=vector, payload=payload)],
         )
+
+    async def batch_upsert(
+        self,
+        collection: str,
+        points: list[dict],
+        user_id: str,
+    ) -> int:
+        """Batch upsert multiple vectors.
+
+        Each point dict: {"id": str, "vector": list[float], "payload": dict}
+        Returns count of upserted points.
+        """
+        client = await self._get_client()
+        if not client:
+            return 0
+
+        from qdrant_client.models import PointStruct
+
+        qdrant_points = []
+        for p in points:
+            payload = dict(p.get("payload", {}))
+            payload["user_id"] = user_id
+            payload["_original_id"] = p["id"]
+            qdrant_points.append(
+                PointStruct(
+                    id=_to_qdrant_id(p["id"]),
+                    vector=p["vector"],
+                    payload=payload,
+                )
+            )
+
+        if qdrant_points:
+            await client.upsert(collection_name=collection, points=qdrant_points)
+        return len(qdrant_points)
 
     async def search(
         self,
