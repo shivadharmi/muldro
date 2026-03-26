@@ -85,9 +85,9 @@ def upgrade() -> None:
             $$ LANGUAGE plpgsql
         """)
 
-        # 4. Create trigger
+        # 4. Drop old trigger (if exists) then create
+        op.execute(f"DROP TRIGGER IF EXISTS trig_{table}_search_vector ON {table}")
         op.execute(f"""
-            DROP TRIGGER IF EXISTS trig_{table}_search_vector ON {table};
             CREATE TRIGGER trig_{table}_search_vector
                 BEFORE INSERT OR UPDATE ON {table}
                 FOR EACH ROW EXECUTE FUNCTION {fn_name}()
