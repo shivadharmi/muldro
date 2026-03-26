@@ -190,7 +190,6 @@ _DEFAULT_TOOLS = [
     _t("create-a-page", "medium", True, "notion"),
     _t("update-a-page", "medium", True, "notion"),
     _t("retrieve-a-page", "low", False, "notion"),
-    _t("notion_search", "low", False, "notion"),
     _t("query-data-source", "low", False, "notion"),
     _t("create-a-comment", "medium", True, "notion"),
     _t("append-block-children", "medium", True, "notion"),
@@ -251,9 +250,13 @@ class ToolRegistry:
         result = await self._db.execute(select(ToolDefinition))
         existing = {t.name: t for t in result.scalars().all()}
 
+        seen: set[str] = set()
         changed = 0
         for tool_data in _DEFAULT_TOOLS:
             name = tool_data["name"]
+            if name in seen:
+                continue
+            seen.add(name)
             capability = tool_data.get("capability") or TOOL_TO_CAPABILITY.get(name)
             risk = tool_data.get("risk_level", "low")
             approval = tool_data.get("requires_approval", False)
