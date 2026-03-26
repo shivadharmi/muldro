@@ -829,7 +829,7 @@ async def oauth_callback(
             "slack": ["slack"],
             "linear": ["linear"],
             "notion": ["notion"],
-            "jira": ["jira", "atlassian-rovo"],
+            "jira": ["atlassian"],
             "linkedin": [],
             "twitter": [],
         }

@@ -200,6 +200,24 @@ class MCPOnboardingService:
                 error=f"Cannot activate server in '{catalog_entry.status}' state",
             )
 
+        # Idempotent: if already active, return existing installation
+        if catalog_entry.status == "active":
+            existing = await self._db.execute(
+                select(IntegrationInstallation).where(
+                    IntegrationInstallation.workspace_id == self._workspace_id,
+                    IntegrationInstallation.server_name == catalog_entry.server_name,
+                    IntegrationInstallation.status == "active",
+                )
+            )
+            inst = existing.scalar_one_or_none()
+            if inst:
+                return OnboardingResult(
+                    status="activated",
+                    catalog_id=catalog_id,
+                    install_id=inst.install_id,
+                    trust_id=inst.trust_id,
+                )
+
         # Create trust record
         trust_record = ServerTrustRecord(
             workspace_id=self._workspace_id,

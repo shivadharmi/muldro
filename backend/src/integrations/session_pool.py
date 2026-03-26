@@ -315,6 +315,16 @@ class UserMCPSessionPool:
             self._sessions.clear()
         logger.info("MCP session pool shut down")
 
+    def unregister_server(self, server_name: str, workspace_id: str = "") -> None:
+        """Remove all config, tool mappings, and metadata for a server.
+
+        Called when a server is revoked so it cannot be rediscovered or reconnected.
+        """
+        self._server_configs.pop((workspace_id, server_name), None)
+        removed_tools = self._server_tools.pop((workspace_id, server_name), {})
+        for canonical in removed_tools:
+            self._tool_metadata.pop(canonical, None)
+
     def is_pool_tool(self, tool_name: str, workspace_id: str = "") -> bool:
         """Check if a tool is known to any server in the pool."""
         for key, server_tools in self._server_tools.items():

@@ -355,6 +355,7 @@ async def get_message(
 @router.get("/v1/conversations/messages/{message_id}/context")
 async def get_message_context_by_id(
     message_id: str,
+    user_id: str = Depends(get_current_user_id),
     workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_db),
 ):
@@ -368,9 +369,12 @@ async def get_message_context_by_id(
     from src.services.evidence_bundle import EvidenceBundleService
 
     result = await db.execute(
-        select(Message).where(
+        select(Message)
+        .join(Conversation, Message.conversation_id == Conversation.conversation_id)
+        .where(
             Message.message_id == message_id,
             Message.workspace_id == workspace_id,
+            Conversation.user_id == user_id,
         )
     )
     msg = result.scalar_one_or_none()
@@ -390,6 +394,7 @@ async def get_message_context_by_id(
 @router.get("/v1/conversations/messages/{message_id}/evidence")
 async def get_message_evidence(
     message_id: str,
+    user_id: str = Depends(get_current_user_id),
     workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_db),
 ):
@@ -398,9 +403,12 @@ async def get_message_evidence(
     from src.services.evidence_bundle import EvidenceBundleService
 
     result = await db.execute(
-        select(Message).where(
+        select(Message)
+        .join(Conversation, Message.conversation_id == Conversation.conversation_id)
+        .where(
             Message.message_id == message_id,
             Message.workspace_id == workspace_id,
+            Conversation.user_id == user_id,
         )
     )
     msg = result.scalar_one_or_none()
@@ -435,12 +443,24 @@ async def get_message_evidence(
 async def get_message_context(
     conversation_id: str,
     message_id: str,
+    user_id: str = Depends(get_current_user_id),
     workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_db),
 ):
     """Get context sidebar data for a specific message (evidence, entities, sources)."""
     from src.api.schemas.command_context import ContextSidebarData
     from src.services.evidence_bundle import EvidenceBundleService
+
+    # Verify conversation ownership
+    convo_result = await db.execute(
+        select(Conversation.conversation_id).where(
+            Conversation.conversation_id == conversation_id,
+            Conversation.workspace_id == workspace_id,
+            Conversation.user_id == user_id,
+        )
+    )
+    if not convo_result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Conversation not found")
 
     svc = EvidenceBundleService(db, workspace_id)
     evidence = await svc.build_for_message(conversation_id, message_id)

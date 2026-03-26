@@ -127,6 +127,10 @@ class WorkspaceMCPPool:
                 workspace_id=key[0],
             )
 
+        # Remove config, tool mappings, and metadata so the server cannot be
+        # rediscovered or reconnected on subsequent tool calls.
+        self._session_pool.unregister_server(server_name, workspace_id=workspace_id)
+
         logger.info(
             "Removed MCP server: workspace=%s server=%s",
             workspace_id,
