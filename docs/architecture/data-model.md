@@ -111,13 +111,14 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 | `notifications` | `notif_` | channel, title, body, priority_score, status (5 states), sent_at, read_at, follow_up_at, payload_json (JSONB) | |
 | `triggers` | `trg_` | name, conditions (JSONB), action_type, action_config (JSONB), status (4 states), fire_count, last_fired_at, cooldown_until | |
 
-### Scheduling & Observation (3 tables)
+### Scheduling & Observation (2 tables)
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
 | `schedules` | `sched_` | name, cron_expr, action_type, action_config (JSONB), enabled, next_run_at, run_count, priority | |
-| `observation_statuses` | - | source, last_observed_at, status, items_found, items_ingested | |
 | `observation_cursors` | - | source, cursor_value, poll_interval_seconds | |
+
+> **Note:** `observation_statuses` was consolidated into `perception_state` (see Perception & Runtime section below).
 
 ### Conversations (2 tables)
 
@@ -274,7 +275,7 @@ Data is distributed across 5 infrastructure services. Postgres is always the sou
 ```mermaid
 graph LR
     subgraph "Source of Truth"
-        PG[(Postgres 17<br/>54 tables, tsvector FTS)]
+        PG[(Postgres 17<br/>53 tables, tsvector FTS)]
     end
 
     subgraph "Vector Search"
@@ -365,7 +366,7 @@ graph LR
 
 ## Migrations
 
-The project uses Alembic for database migrations. As of the current state, there are 46 migrations covering all schema changes from initial setup through the complete system redesign, including FTS tsvector columns (045) and pgvector column removal (046).
+The project uses Alembic for database migrations. As of the current state, there are 48 migrations covering all schema changes from initial setup through the complete system redesign, including FTS tsvector columns (045) and pgvector column removal (046).
 
 ```bash
 # From backend/

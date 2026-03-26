@@ -32,7 +32,7 @@ User <-> Telegram Bot / Next.js Frontend (A2UI)
 - A2UI component system: `backend/src/ui/` (contracts.py, renderer.py, views.py)
 - A2UI surface builder: `backend/src/services/surface_builder.py` (SurfaceService)
 - API routes: `backend/src/api/` (30 routers, all `/v1/` prefixed)
-- SQLAlchemy models: `backend/src/models/` (54 tables, all workspace-scoped)
+- SQLAlchemy models: `backend/src/models/` (53 tables, all workspace-scoped)
 - Frontend: `frontend/src/` (Next.js + A2UI renderer + chat split-pane, 7 pages)
 - Infra: `infra/` (Terraform for AWS) + `docker-compose.yml` (local dev)
 
@@ -265,7 +265,7 @@ The system learns from execution outcomes and synthesizes across perception sour
 
 ## Multi-Tenant Workspace Isolation
 
-All 54 data tables are scoped by `workspace_id` (NOT NULL FK to `workspaces`). Only 5 tables are user-level: `users`, `workspaces`, `workspace_members`, `sessions`, `magic_links`. Global tables: `agents`, `agent_routes`, `user_settings`.
+All 53 data tables are scoped by `workspace_id` (NOT NULL FK to `workspaces`). Only 5 tables are user-level: `users`, `workspaces`, `workspace_members`, `sessions`, `magic_links`. Global tables: `agents`, `agent_routes`, `user_settings`.
 
 - API routes: resolve workspace via `get_current_workspace_id()` dependency (reads from session, zero queries)
 - Background services: resolve via `resolve_workspace_id(db, user_id)` helper (queries WorkspaceMember)

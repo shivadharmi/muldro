@@ -43,13 +43,12 @@ graph TB
         EP[EventProcessor] ~~~ WM[WorldModel]
         MS[MemoryService] ~~~ PL[Planner]
         GV[Governor] ~~~ GE[GraphExecutor]
-        NT[Notifier] ~~~ SS[SearchService]
+        NT[Notifier] ~~~ TS[TriSearchService]
     end
 
     subgraph INFRA["Infrastructure"]
-        PG[(Postgres 17<br/>pgvector · source of truth)]
+        PG[(Postgres 17<br/>tsvector FTS · source of truth)]
         RD[(Redis 7<br/>streams · cache · locks)]
-        ES[(Elasticsearch 8<br/>full-text search)]
         QD[(Qdrant<br/>vector search)]
         N4J[(Neo4j 5<br/>knowledge graph)]
         S3[(MinIO / S3<br/>artifact storage)]
@@ -64,9 +63,8 @@ graph TB
     INT --> SVC
     MCP --> SVC
     SVC --> PG & RD
-    SS --> ES & QD
-    WM --> N4J
-    EP --> ES & QD
+    TS --> QD & PG
+    WM --> N4J & QD
     GE -.->|artifact files| S3
 ```
 
@@ -90,7 +88,7 @@ Only Planner decides intent. Only Operator executes external actions. Only Prese
 ## Quick Start
 
 ```bash
-# 1. Start infrastructure (Postgres, Redis, MinIO, Elasticsearch, Qdrant, Neo4j)
+# 1. Start infrastructure (Postgres, Redis, MinIO, Qdrant, Neo4j)
 docker compose up -d
 
 # 2. Set up backend
@@ -122,14 +120,14 @@ jarvis/
 │   │   ├── config/         # Settings (pydantic-settings, JARVIS_ env prefix)
 │   │   ├── connectors/     # Gmail, MCP bridge, 15 integration types
 │   │   ├── interface/      # Telegram bot
-│   │   ├── models/         # 54 SQLAlchemy tables (all workspace-scoped)
+│   │   ├── models/         # 53 SQLAlchemy tables (all workspace-scoped)
 │   │   ├── orchestrator/   # JarvisOrchestrator, agents, hooks, tracing, budget, contracts
-│   │   ├── services/       # 69 services (planner, governor, operator, etc.)
+│   │   ├── services/       # Business logic (planner, governor, operator, tri_search, etc.)
 │   │   ├── tools/          # FastMCP intelligence server + MCP config
 │   │   ├── ui/             # A2UI renderer + contracts
 │   │   └── workflows/      # inbox_triage, meeting_prep, research
 │   ├── tests/              # ~1196 tests (pytest + pytest-asyncio)
-│   └── alembic/            # 44 database migrations
+│   └── alembic/            # 48 database migrations
 ├── frontend/               # Next.js + A2UI renderer + chat panel (7 pages)
 ├── infra/                  # Terraform (AWS: EC2, VPC, Route53, IAM, SSM)
 ├── docs/architecture/      # Detailed architecture documentation
@@ -142,9 +140,9 @@ jarvis/
 |-------|-----------|
 | Backend | Python 3.13+ / FastAPI |
 | Frontend | Next.js / React / A2UI |
-| Database | PostgreSQL 17 (pgvector) — source of truth |
-| Full-text Search | Elasticsearch 8.16 — BM25 indexing |
+| Database | PostgreSQL 17 (tsvector FTS) — source of truth |
 | Vector Search | Qdrant 1.12 — semantic similarity (4 collections) |
+| Reranking | AWS Bedrock amazon.rerank-v1:0 |
 | Knowledge Graph | Neo4j 5 — multi-hop traversal, community detection |
 | Object Storage | MinIO / S3 — artifact documents and media |
 | Cache/Queue | Redis 7 — streams, cache, locks, pubsub, surface tracking |
@@ -156,7 +154,7 @@ jarvis/
 
 ## Key Features
 
-- **Multi-tenant workspace isolation**: All 54 data tables scoped by `workspace_id` with CASCADE deletes
+- **Multi-tenant workspace isolation**: All 53 data tables scoped by `workspace_id` with CASCADE deletes
 - **Real-time streaming**: Claude API streaming with extended thinking (Opus) + SSE to frontend
 - **Full cost tracking**: Cache tokens (1.25x write, 0.1x read), thinking tokens, per-agent cost breakdown
 - **Graduated trust**: TrustEngine scores + time-based policy overrides for autonomous operation
@@ -169,4 +167,4 @@ jarvis/
 
 ## Status
 
-~1196 tests passing, 44 migrations, 54 tables, ~128 API endpoints, all lint clean.
+~1196 tests passing, 48 migrations, 53 tables, ~128 API endpoints, all lint clean.

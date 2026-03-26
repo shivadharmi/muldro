@@ -147,17 +147,20 @@ class BudgetStatus:
 
 ## Observation Health
 
-The `observation_statuses` table tracks per-source health:
+The `perception_state` table tracks per-source health alongside scheduling (replaces the legacy `observation_statuses` table):
 
 | Field | Purpose |
 |-------|---------|
-| `source` | Source name |
-| `last_observed_at` | Last successful observation |
-| `status` | healthy, degraded, failed |
-| `items_found` | Items discovered in last cycle |
-| `items_ingested` | Items successfully ingested |
+| `source` | Source name (gmail, calendar, slack, github) |
+| `consecutive_failures` | Failure counter for circuit breaker |
+| `last_error` | Most recent error message (512 chars) |
+| `circuit_state` | closed, open, half_open (circuit breaker state) |
+| `circuit_opened_at` | When circuit was opened |
+| `last_run_at` | Last successful observation |
+| `last_event_count` | Items discovered in last cycle |
+| `total_runs` | Lifetime run count |
 
-This data feeds into the `/v1/system/dashboard` health endpoint.
+The circuit breaker pattern prevents hammering failing sources: after consecutive failures the circuit opens, skipping the source until a cooldown period elapses (half_open probe).
 
 ## Multi-Agent Perception
 
