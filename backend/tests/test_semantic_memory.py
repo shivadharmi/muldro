@@ -63,9 +63,9 @@ async def test_extract_stores_with_embedding(mock_get_client, mock_embed_cls, se
 
     assert len(ids) == 1
     assert ids[0].startswith("mem_")
-    # Verify embedding was set on the Memory object
+    # Verify Memory object was added to DB (embedding now in Qdrant, not model)
     add_call = mock_db.add.call_args[0][0]
-    assert add_call.embedding == fake_embedding
+    assert add_call.fact_text == "Alice is CFO at Acme Corp"
 
 
 @patch("src.services.memory_service.EmbeddingService")

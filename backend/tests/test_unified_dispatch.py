@@ -208,9 +208,7 @@ class TestOrchestratorToolDispatch:
         orch._call_internal_tool = AsyncMock(return_value={"status": "ok"})
 
         with patch("src.services.tool_registry.ToolRegistry", return_value=mock_registry):
-            result = await orch._execute_tool(
-                "search_memory", {"query": "test"}, user_id=TEST_USER_ID
-            )
+            result = await orch._execute_tool("search", {"query": "test"}, user_id=TEST_USER_ID)
 
         assert result == {"status": "ok"}
         orch._call_internal_tool.assert_called_once()

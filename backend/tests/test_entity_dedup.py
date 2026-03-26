@@ -153,7 +153,7 @@ class TestEntityFuzzyDedup:
 
 class TestEntityEmbeddingOnUpsert:
     async def test_upsert_stores_embedding_on_create(self):
-        """New entity gets embedding stored."""
+        """New entity gets embedding stored in Qdrant (not on model)."""
         db = AsyncMock()
         db.add = MagicMock()
         db.commit = AsyncMock()
@@ -166,7 +166,10 @@ class TestEntityEmbeddingOnUpsert:
         embed_svc = AsyncMock()
         embed_svc.embed = AsyncMock(return_value=[0.5] * 1024)
 
-        wm = _make_world_model(db=db, embedding_service=embed_svc)
+        vs = AsyncMock()
+        vs.upsert = AsyncMock()
+
+        wm = _make_world_model(db=db, embedding_service=embed_svc, vector_store=vs)
 
         with patch.object(wm, "_emit_event", new_callable=AsyncMock):
             entity_id = await wm.upsert_entity(
@@ -176,14 +179,15 @@ class TestEntityEmbeddingOnUpsert:
             )
 
         assert entity_id.startswith("ent_")
-        # embed called for both fuzzy dedup lookup and entity creation
         assert embed_svc.embed.call_count >= 1
-        # Check that Entity was added with embedding
-        added_entity = db.add.call_args[0][0]
-        assert added_entity.embedding == [0.5] * 1024
+        # Embedding stored in Qdrant, not on the Entity model
+        vs.upsert.assert_called_once()
+        call_args = vs.upsert.call_args
+        assert call_args[0][0] == "entities"
+        assert call_args[0][1] == entity_id
 
     async def test_upsert_without_embedding_service(self):
-        """Upsert works fine without embedding_service."""
+        """Upsert works fine without embedding_service — no Qdrant upsert."""
         db = AsyncMock()
         db.add = MagicMock()
         db.commit = AsyncMock()
@@ -202,5 +206,6 @@ class TestEntityEmbeddingOnUpsert:
             )
 
         assert entity_id.startswith("ent_")
+        # Entity created in Postgres, no embedding column needed
         added_entity = db.add.call_args[0][0]
-        assert added_entity.embedding is None
+        assert added_entity.canonical_name == "Bob"

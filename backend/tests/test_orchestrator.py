@@ -229,7 +229,7 @@ class TestAgents:
         assert AGENTS["operator"].can_use_tool("plan_command") is False
 
         # Researcher is read-only (no write tools)
-        assert AGENTS["researcher"].can_use_tool("search_memory") is True
+        assert AGENTS["researcher"].can_use_tool("search") is True
         assert AGENTS["researcher"].can_use_tool("gmail_send") is False
         assert AGENTS["researcher"].can_use_tool("slack_post_message") is False
 

@@ -50,8 +50,8 @@ class TestPersonaAgentConfig:
     def test_persona_uses_haiku(self):
         assert AGENTS["persona"].model_tier == "haiku"
 
-    def test_persona_has_search_memory_tool(self):
-        assert AGENTS["persona"].can_use_tool("search_memory")
+    def test_persona_has_search_tool(self):
+        assert AGENTS["persona"].can_use_tool("search")
 
     def test_persona_has_extract_preferences_tool(self):
         assert AGENTS["persona"].can_use_tool("extract_preferences")
