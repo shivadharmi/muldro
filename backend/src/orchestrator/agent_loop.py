@@ -436,6 +436,11 @@ async def agent_loop(
             circuit_breaker.record_failure(model)
         text = f"[Agent {agent_name} error: {e}]"
         yield LoopError(agent=agent_name, message=str(e))
+    finally:
+        # Guarantee half-open probe lock is released even if the generator
+        # is abandoned (caller break/cancel) without hitting success/failure.
+        if circuit_breaker:
+            circuit_breaker.reset_half_open_probe(model)
 
     latency_ms = int((time.time() - start_time) * 1000)
 

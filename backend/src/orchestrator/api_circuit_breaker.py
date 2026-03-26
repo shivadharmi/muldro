@@ -82,12 +82,13 @@ class AnthropicCircuitBreaker:
         circuit.total_failures += 1
         circuit.total_calls += 1
         circuit.last_failure_at = time.monotonic()
+        # Always clear half-open probe lock on failure
+        self._half_open_testing[model] = False
 
         if circuit.failure_count >= self.failure_threshold:
             if circuit.state != CircuitState.OPEN:
                 circuit.state = CircuitState.OPEN
                 circuit.opened_at = time.monotonic()
-                self._half_open_testing[model] = False
                 logger.warning(
                     "api_circuit_opened",
                     extra={
@@ -96,6 +97,16 @@ class AnthropicCircuitBreaker:
                         "total_failures": circuit.total_failures,
                     },
                 )
+
+    def reset_half_open_probe(self, model: str) -> None:
+        """Unconditionally release the half-open probe lock.
+
+        Call from a finally block to guarantee the probe lock is cleared
+        even if the caller is cancelled or exits through an unexpected path.
+        """
+        if self._half_open_testing.get(model, False):
+            self._half_open_testing[model] = False
+            logger.debug("half_open_probe_reset", extra={"model": model})
 
     def get_status(self) -> dict[str, dict]:
         return {

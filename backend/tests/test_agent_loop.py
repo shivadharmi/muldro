@@ -506,3 +506,28 @@ class TestAgentLoop:
         )
 
         assert breaker._circuits["claude-sonnet-4-20250514"].failure_count == 1
+
+    async def test_circuit_breaker_half_open_probe_reset_on_abandon(self):
+        """Half-open probe lock is released even if generator is abandoned."""
+        from src.orchestrator.api_circuit_breaker import AnthropicCircuitBreaker, CircuitState
+
+        breaker = AnthropicCircuitBreaker(failure_threshold=1, cooldown_seconds=0)
+        model = "claude-sonnet-4-20250514"
+
+        # Drive circuit to OPEN then let cooldown expire (0s) → HALF_OPEN
+        breaker.record_failure(model)
+        assert breaker.get_state(model) == CircuitState.HALF_OPEN
+
+        # Simulate probe: is_available sets _half_open_testing = True
+        assert breaker.is_available(model) is True
+        assert breaker._half_open_testing[model] is True
+
+        # Second call should be blocked (already probing)
+        assert breaker.is_available(model) is False
+
+        # Simulate abandoned probe — reset_half_open_probe clears the lock
+        breaker.reset_half_open_probe(model)
+        assert breaker._half_open_testing[model] is False
+
+        # Now a new probe should be allowed
+        assert breaker.is_available(model) is True
