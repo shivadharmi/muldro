@@ -101,6 +101,7 @@ GLOBAL_SCHEDULES = {"morning_briefing", "memory_consolidation", "slo_health_chec
 
 # Per-connector schedule mapping.
 CONNECTOR_SCHEDULES: dict[str, list[str]] = {
+    "google": ["observe_gmail", "observe_calendar"],
     "gmail": ["observe_gmail"],
     "calendar": ["observe_calendar"],
     "slack": ["observe_slack"],

@@ -143,11 +143,11 @@ def is_mcp_tool(tool_name: str, workspace_id: str = "") -> bool:
     return _session_pool.is_pool_tool(tool_name, workspace_id=workspace_id)
 
 
-def list_mcp_tools() -> list[dict]:
-    """Return metadata for all known MCP tools across servers."""
+def list_mcp_tools(workspace_id: str = "") -> list[dict]:
+    """Return metadata for MCP tools, optionally scoped to a workspace."""
     if not _session_pool:
         return []
-    return _session_pool.get_all_tool_metadata()
+    return _session_pool.get_all_tool_metadata(workspace_id=workspace_id)
 
 
 def get_mcp_tool_names() -> list[str]:

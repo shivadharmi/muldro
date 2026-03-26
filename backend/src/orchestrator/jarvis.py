@@ -432,27 +432,12 @@ class JarvisOrchestrator:
             logger.debug("Outcome learning failed for run %s", run_id, exc_info=True)
 
     def _build_tool_definitions(self) -> list[dict]:
-        """Build Claude tool definitions from internal tools + MCP + native connectors.
+        """Build workspace-independent tool definitions (internal + native connectors).
 
-        Sources (in order):
-        1. Internal Pydantic-defined tools (intelligence layer)
-        2. MCP tools from session pool (external MCP servers)
-        3. Native connector actions (Gmail, Calendar, GitHub, Slack, etc.)
+        MCP tools are workspace-scoped and merged at call time via
+        _get_tools_for_agent(workspace_id=...).
         """
         tools = self._build_internal_tool_definitions()
-
-        # Append MCP tools from the bridge session pool
-        from src.connectors.mcp_bridge import list_mcp_tools
-
-        for mcp_tool in list_mcp_tools():
-            schema = mcp_tool.get("input_schema", {})
-            tools.append(
-                {
-                    "name": mcp_tool["name"],
-                    "description": mcp_tool.get("description", "External MCP tool"),
-                    "input_schema": schema if schema else {"type": "object", "properties": {}},
-                }
-            )
 
         # Append native connector actions as tools (Gmail, Calendar, etc.)
         tools.extend(self._build_native_connector_tools())
@@ -588,9 +573,24 @@ class JarvisOrchestrator:
 
         return set(TOOL_INPUT_MODELS.keys())
 
-    def _get_tools_for_agent(self, agent: SubAgent) -> list[dict]:
-        """Filter tool definitions to only those the agent can use."""
-        return [t for t in self._tools if agent.can_use_tool(t["name"])]
+    def _get_tools_for_agent(self, agent: SubAgent, workspace_id: str = "") -> list[dict]:
+        """Filter tool definitions to only those the agent can use.
+
+        Merges cached internal/native tools with workspace-scoped MCP tools.
+        """
+        from src.connectors.mcp_bridge import list_mcp_tools
+
+        tools = list(self._tools)
+        for mcp_tool in list_mcp_tools(workspace_id=workspace_id):
+            schema = mcp_tool.get("input_schema", {})
+            tools.append(
+                {
+                    "name": mcp_tool["name"],
+                    "description": mcp_tool.get("description", "External MCP tool"),
+                    "input_schema": schema if schema else {"type": "object", "properties": {}},
+                }
+            )
+        return [t for t in tools if agent.can_use_tool(t["name"])]
 
     def _get_model_for_agent(self, agent: SubAgent) -> str:
         """Get the Claude model ID for an agent's tier."""
@@ -1183,7 +1183,9 @@ class JarvisOrchestrator:
             return
 
         model = self._get_model_for_agent(agent)
-        tools = self._apply_cache_control_to_tools(self._get_tools_for_agent(agent))
+        tools = self._apply_cache_control_to_tools(
+            self._get_tools_for_agent(agent, workspace_id=workspace_id)
+        )
         context_block = await self._assemble_context(
             agent_name, message, user_id=user_id, workspace_id=workspace_id
         )
@@ -2177,7 +2179,9 @@ class JarvisOrchestrator:
             raise ValueError(f"Unknown agent: {agent_name}")
 
         model = self._get_model_for_agent(agent)
-        tools = self._apply_cache_control_to_tools(self._get_tools_for_agent(agent))
+        tools = self._apply_cache_control_to_tools(
+            self._get_tools_for_agent(agent, workspace_id=workspace_id)
+        )
         context_block = await self._assemble_context(
             agent_name, message, user_id=user_id, workspace_id=workspace_id
         )
