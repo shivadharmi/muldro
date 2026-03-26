@@ -58,7 +58,7 @@ class SchedulerLoop:
         self._running = False
 
     async def _tick(self) -> None:
-        """One scheduler cycle: perception, follow-ups, background tasks, schedules."""
+        """One scheduler cycle: perception, follow-ups, background tasks, eviction, schedules."""
         factory = get_session_factory()
 
         # 1. Drive perception from perception_state table
@@ -70,7 +70,12 @@ class SchedulerLoop:
         # 3. Execute pending background tasks
         await self._tick_background_tasks(factory)
 
-        # 4. Process due schedules
+        # 4. Eviction — clean up expired data every 5th tick (~150s)
+        self._tick_count = getattr(self, "_tick_count", 0) + 1
+        if self._tick_count % 5 == 0:
+            await self._tick_eviction(factory)
+
+        # 5. Process due schedules
         async with factory() as db:
             now = datetime.now(timezone.utc)
 
@@ -166,6 +171,23 @@ class SchedulerLoop:
 
                 if not due_states:
                     return
+
+                # Rate limit: cap perception cycles per tick to avoid
+                # API exhaustion when many sources are due simultaneously
+                max_per_tick = self._settings.max_perception_per_tick
+                if len(due_states) > max_per_tick:
+                    # Priority: pending_run=True first (explicit user/agent requests),
+                    # then by next_run_at ascending (oldest first)
+                    due_states.sort(
+                        key=lambda s: (not s.pending_run, s.next_run_at or datetime.max)
+                    )
+                    logger.info(
+                        "Perception throttled: %d due, processing %d, deferring %d",
+                        len(due_states),
+                        max_per_tick,
+                        len(due_states) - max_per_tick,
+                    )
+                    due_states = due_states[:max_per_tick]
 
                 # C4: Clear pending_run BEFORE running cycles to prevent
                 # the next 30s tick from double-picking the same sources
@@ -304,6 +326,44 @@ class SchedulerLoop:
                 )
         except Exception:
             logger.warning("Background task tick error", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Data eviction — hard-delete expired records
+    # ------------------------------------------------------------------
+
+    async def _tick_eviction(self, factory) -> None:
+        """Run eviction pass to hard-delete expired data with cascade cleanup."""
+        try:
+            async with factory() as db:
+                from src.services.eviction_service import EvictionService
+
+                vector_store = None
+                graph_engine = None
+
+                if self._settings.qdrant_url:
+                    from src.services.vector_store import VectorStore
+
+                    vector_store = VectorStore(self._settings)
+                    await vector_store.ensure_collections()
+
+                if self._settings.neo4j_url:
+                    from src.services.graph_engine import GraphEngine
+
+                    graph_engine = GraphEngine(self._settings)
+
+                svc = EvictionService(
+                    settings=self._settings,
+                    db=db,
+                    vector_store=vector_store,
+                    graph_engine=graph_engine,
+                )
+                await svc.run_full_eviction()
+                await db.commit()
+
+                if graph_engine:
+                    await graph_engine.close()
+        except Exception:
+            logger.warning("Eviction tick error", exc_info=True)
 
     # ------------------------------------------------------------------
     # Follow-up notifications

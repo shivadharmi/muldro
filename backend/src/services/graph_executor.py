@@ -271,7 +271,26 @@ class GraphExecutor:
         )
 
         try:
-            await self._execute_dag(run)
+            # Enforce timeout for background runs to prevent indefinite hangs
+            timeout = run.timeout_seconds or (600 if run.source == "background" else None)
+            if timeout:
+                await asyncio.wait_for(self._execute_dag(run), timeout=timeout)
+            else:
+                await self._execute_dag(run)
+        except asyncio.TimeoutError:
+            transition_run(run, "timed_out")
+            run.completed_at = datetime.now(timezone.utc)
+            run.error = {
+                "type": "TimeoutError",
+                "message": f"Run timed out after {timeout}s",
+            }
+            logger.warning("Run %s timed out after %ds", run_id, timeout)
+            await self._emit_event(
+                "run.timed_out",
+                run.user_id,
+                {"run_id": run_id, "timeout": timeout},
+                workspace_id=run.workspace_id,
+            )
         except Exception as exc:
             transition_run(run, "failed")
             run.completed_at = datetime.now(timezone.utc)
@@ -299,14 +318,40 @@ class GraphExecutor:
         return run
 
     async def resume_run(self, run_id: str) -> TaskRun:
-        """Resume a paused run from its last checkpoint."""
+        """Resume a paused/awaiting run from its last checkpoint.
+
+        If the run has been paused for >30 minutes and a ContextBuilder is
+        available, the context is refreshed before resuming to avoid
+        stale data from the original run creation.
+        """
         result = await self._db.execute(select(TaskRun).where(TaskRun.run_id == run_id))
         run = result.scalar_one_or_none()
         if not run:
             raise ValueError(f"Run not found: {run_id}")
 
-        if run.status not in ("paused", "awaiting_approval"):
-            raise ValueError(f"Run {run_id} is not paused (status={run.status})")
+        resumable = ("paused", "awaiting_approval", "awaiting_input")
+        if run.status not in resumable:
+            raise ValueError(f"Run {run_id} is not resumable (status={run.status})")
+
+        # Refresh stale context if paused for >30 minutes
+        pause_duration = (
+            datetime.now(timezone.utc) - (run.started_at or run.created_at)
+        ).total_seconds()
+        if pause_duration > 1800 and hasattr(self, "_context_builder") and self._context_builder:
+            try:
+                fresh_pack = await self._context_builder.build(
+                    user_id=run.user_id,
+                    query=(run.context_pack_json or {}).get("task_summary", "")[:500],
+                    workspace_id=run.workspace_id,
+                )
+                run.context_pack_json = fresh_pack.model_dump()
+                logger.info(
+                    "Refreshed stale context for run %s (paused %ds)",
+                    run_id,
+                    int(pause_duration),
+                )
+            except Exception:
+                logger.debug("Context refresh failed, using cached", exc_info=True)
 
         transition_run(run, "running")
         await self._db.flush()
@@ -525,6 +570,12 @@ class GraphExecutor:
             },
             workspace_id=run.workspace_id,
         )
+
+        # Resolve step output references: {task_id}.output.field → actual value
+        resolved_input = await self._resolve_step_references(step, run.run_id)
+        if resolved_input != (step.input_data or {}):
+            step.input_data = resolved_input
+            await self._db.flush()
 
         t0 = time.monotonic()
         try:
@@ -903,21 +954,60 @@ class GraphExecutor:
         )
         return list(result.scalars().all())
 
+    async def _resolve_step_references(self, step: TaskStep, run_id: str) -> dict:
+        """Resolve {task_id}.output.field references in step input_data.
+
+        Enables declarative wiring between DAG steps: a downstream step
+        can reference an upstream step's output by task_id.
+        """
+        input_data = dict(step.input_data or {})
+        all_steps = await self._get_all_steps(run_id)
+        outputs_by_task = {s.task_id: s.output_data for s in all_steps if s.output_data}
+
+        def resolve(value):
+            if isinstance(value, str) and value.startswith("{") and "}.output." in value:
+                ref, _, field = value[1:].partition("}.output.")
+                source = outputs_by_task.get(ref)
+                if source and isinstance(source, dict):
+                    return source.get(field, value)
+            return value
+
+        return {k: resolve(v) for k, v in input_data.items()}
+
     async def _checkpoint(self, run: TaskRun, step_id: str | None, reason: str) -> None:
-        """Save a checkpoint."""
+        """Save a rich checkpoint with completed step outputs."""
+        # Collect completed step outputs for checkpoint context
+        completed_outputs = {}
+        try:
+            all_steps = await self._get_all_steps(run.run_id)
+            completed_outputs = {
+                s.step_id: {
+                    "task_id": s.task_id,
+                    "status": s.status,
+                    "output_summary": str(s.output_data)[:500] if s.output_data else None,
+                }
+                for s in all_steps
+                if s.status == "completed"
+            }
+        except Exception:
+            pass  # Non-critical — checkpoint still saved without outputs
+
+        snapshot = {
+            "status": run.status,
+            "current_step_ids": run.current_step_ids,
+            "completed_steps": completed_outputs,
+            "checkpoint_at": datetime.now(timezone.utc).isoformat(),
+        }
         checkpoint = TaskCheckpoint(
             checkpoint_id=f"ckpt_{ULID()}",
             run_id=run.run_id,
             workspace_id=run.workspace_id,
             step_id=step_id,
             reason=reason,
-            state_snapshot={
-                "status": run.status,
-                "current_step_ids": run.current_step_ids,
-            },
+            state_snapshot=snapshot,
         )
         self._db.add(checkpoint)
-        run.checkpoint = checkpoint.state_snapshot
+        run.checkpoint = snapshot
         await self._db.flush()
 
     async def _writeback_memories(self, run: TaskRun) -> None:

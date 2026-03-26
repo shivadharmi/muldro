@@ -33,7 +33,7 @@ export function ResultGroupList({ groups, onSelect }: Props) {
           </h3>
           <ul className="space-y-1">
             {results.map((r) => (
-              <li key={r.id}>
+              <li key={`${r.id}-${r.source_db ?? "unknown"}`}>
                 <button
                   onClick={() => onSelect(r)}
                   className="w-full text-left p-2 rounded-[var(--radius-sm)] hover:bg-surface-1 transition-colors cursor-pointer"

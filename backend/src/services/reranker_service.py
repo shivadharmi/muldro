@@ -18,7 +18,7 @@ class RerankerService:
 
     def __init__(self, settings: Settings):
         self._settings = settings
-        self._region = settings.bedrock_region
+        self._region = settings.reranker_region
         self._model_id = settings.reranker_model
         self._enabled = settings.reranker_enabled
         self._client = None
@@ -57,6 +57,17 @@ class RerankerService:
             )
             return sorted(documents, key=lambda d: d.get("score", 0), reverse=True)[:top_k]
 
+    def _resolve_model_arn(self) -> str:
+        """Resolve the model ID to a full ARN if needed.
+
+        Bedrock Rerank API requires the full ARN format:
+        arn:aws:bedrock:<region>::foundation-model/<model-id>
+        """
+        model = self._model_id
+        if model.startswith("arn:"):
+            return model
+        return f"arn:aws:bedrock:{self._region}::foundation-model/{model}"
+
     def _invoke_rerank(self, query: str, documents: list[dict], top_k: int) -> list[dict]:
         """Synchronous call to Bedrock Rerank API."""
         client = self._get_client()
@@ -78,7 +89,10 @@ class RerankerService:
             sources.append(
                 {
                     "type": "INLINE",
-                    "inlineDocumentSource": {"textDocument": {"text": text}},
+                    "inlineDocumentSource": {
+                        "type": "TEXT",
+                        "textDocument": {"text": text},
+                    },
                 }
             )
 
@@ -89,7 +103,7 @@ class RerankerService:
             rerankingConfiguration={
                 "type": "BEDROCK_RERANKING_MODEL",
                 "bedrockRerankingConfiguration": {
-                    "modelConfiguration": {"modelArn": self._model_id},
+                    "modelConfiguration": {"modelArn": self._resolve_model_arn()},
                     "numberOfResults": min(top_k, len(documents)),
                 },
             },

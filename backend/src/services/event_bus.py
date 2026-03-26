@@ -107,6 +107,8 @@ class EventBus:
             if "BUSYGROUP" not in str(exc):
                 raise
 
+    DLQ_MAX_DELIVERIES = 3
+
     async def subscribe(
         self,
         stream: str,
@@ -116,7 +118,11 @@ class EventBus:
         count: int = 10,
         block_ms: int = 5000,
     ) -> int:
-        """Read and process messages from a stream. Returns count processed."""
+        """Read and process messages from a stream. Returns count processed.
+
+        Messages that fail DLQ_MAX_DELIVERIES times are acked and logged
+        as dead-lettered to prevent infinite retry loops.
+        """
         results = await self._redis.xreadgroup(
             group, consumer, {stream: ">"}, count=count, block=block_ms
         )
@@ -131,10 +137,35 @@ class EventBus:
                         await self._redis.xack(stream, group, msg_id)
                         processed += 1
                     except Exception:
-                        logger.warning(
-                            "Failed to process %s from %s", msg_id, stream, exc_info=True
-                        )
+                        delivery_count = await self._get_delivery_count(stream, group, msg_id)
+                        if delivery_count >= self.DLQ_MAX_DELIVERIES:
+                            await self._redis.xack(stream, group, msg_id)
+                            logger.warning(
+                                "Message %s dead-lettered after %d attempts on %s/%s",
+                                msg_id,
+                                delivery_count,
+                                stream,
+                                group,
+                            )
+                        else:
+                            logger.warning(
+                                "Failed to process %s from %s (attempt %d)",
+                                msg_id,
+                                stream,
+                                delivery_count,
+                                exc_info=True,
+                            )
         return processed
+
+    async def _get_delivery_count(self, stream: str, group: str, msg_id: str) -> int:
+        """Get the number of times a message has been delivered."""
+        try:
+            pending = await self._redis.xpending_range(stream, group, msg_id, msg_id, 1)
+            if pending:
+                return pending[0].get("times_delivered", 1)
+        except Exception:
+            pass
+        return 1
 
     async def ack(self, stream: str, group: str, msg_id: str) -> None:
         """Acknowledge a message."""
@@ -169,6 +200,18 @@ class EventBus:
             await handler(event)
             processed += 1
         return processed
+
+    async def get_stream_lag(self, stream: str) -> int:
+        """Get total pending messages across all consumer groups.
+
+        Used for backpressure detection — when lag exceeds a threshold,
+        webhook endpoints should reject new events with HTTP 429.
+        """
+        try:
+            info = await self._redis.xinfo_groups(stream)
+            return sum(g.get("lag", g.get("pending", 0)) for g in info)
+        except Exception:
+            return 0
 
     def event_stream(self, user_id: str) -> str:
         """Get the events stream name for a user."""

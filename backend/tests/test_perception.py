@@ -221,7 +221,9 @@ class TestSchedulerPerceptionTick:
         mock_cm.__aexit__ = AsyncMock(return_value=False)
         mock_factory.return_value = MagicMock(return_value=mock_cm)
 
-        scheduler = SchedulerLoop(MagicMock(), orchestrator=orchestrator)
+        mock_settings = MagicMock()
+        mock_settings.max_perception_per_tick = 5
+        scheduler = SchedulerLoop(mock_settings, orchestrator=orchestrator)
 
         mock_svc_instance = AsyncMock()
         mock_svc_instance.get_due_sources_all_users = AsyncMock(return_value=[state])

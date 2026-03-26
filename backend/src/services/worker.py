@@ -21,13 +21,26 @@ class StreamConsumerManager:
     - entity_extractor: Extract entities from processed events
     - memory_extractor: Extract memories from event summaries
     - planner: Auto-plan for high-importance events
-    - event_indexer: Index events to ES + Qdrant
+    - trigger_evaluator: Evaluate user-defined triggers
+
+    Each consumer group runs in its own asyncio task for parallel
+    processing — slow handlers (e.g., entity_extractor with Neo4j sync)
+    don't block other groups.
     """
+
+    CONSUMER_GROUPS = (
+        "entity_extractor",
+        "memory_extractor",
+        "planner",
+        "trigger_evaluator",
+    )
+    HANDLER_CONCURRENCY = 3  # max concurrent handler invocations per group
 
     def __init__(self, settings: Settings):
         self._settings = settings
         self._running = False
         self._vector_store = None
+        self._tasks: list[asyncio.Task] = []
 
     async def _init_search(self) -> None:
         """Initialize shared VectorStore once at startup."""
@@ -38,7 +51,12 @@ class StreamConsumerManager:
             await self._vector_store.ensure_collections()
 
     async def run(self, user_ids: list[str]) -> None:
-        """Main loop: consume from event bus streams."""
+        """Main loop: consume from event bus streams.
+
+        Launches one asyncio task per (user, consumer_group) pair so that
+        slow handlers (e.g., entity extraction with Neo4j sync) don't
+        block other consumer groups.
+        """
         import redis.asyncio as aioredis
 
         from src.services.event_bus import EventBus
@@ -53,65 +71,62 @@ class StreamConsumerManager:
         # Initialize shared Qdrant client once
         await self._init_search()
 
-        # Create consumer groups for each user stream
+        # Build handler map
+        handler_map = {
+            "entity_extractor": self._handle_entity_extraction,
+            "memory_extractor": self._handle_memory_extraction,
+            "planner": self._handle_proactive_planning,
+            "trigger_evaluator": self._handle_trigger_evaluation,
+        }
+
+        # Create consumer groups and launch parallel tasks
         for uid in user_ids:
             stream = bus.event_stream(uid)
-            for group in (
-                "entity_extractor",
-                "memory_extractor",
-                "planner",
-                "trigger_evaluator",
-            ):
+            for group in self.CONSUMER_GROUPS:
                 await bus.create_consumer_group(stream, group)
+                task = asyncio.create_task(
+                    self._consumer_loop(bus, stream, group, handler_map[group]),
+                    name=f"consumer-{uid}-{group}",
+                )
+                self._tasks.append(task)
 
-        logger.info("StreamConsumerManager started for %d user(s)", len(user_ids))
+        logger.info(
+            "StreamConsumerManager started: %d user(s), %d parallel tasks",
+            len(user_ids),
+            len(self._tasks),
+        )
 
-        while self._running:
-            try:
-                for uid in user_ids:
-                    stream = bus.event_stream(uid)
-
-                    await bus.subscribe(
-                        stream,
-                        "entity_extractor",
-                        "worker-1",
-                        self._handle_entity_extraction,
-                        count=10,
-                        block_ms=1000,
-                    )
-                    await bus.subscribe(
-                        stream,
-                        "memory_extractor",
-                        "worker-1",
-                        self._handle_memory_extraction,
-                        count=10,
-                        block_ms=1000,
-                    )
-                    await bus.subscribe(
-                        stream,
-                        "planner",
-                        "worker-1",
-                        self._handle_proactive_planning,
-                        count=10,
-                        block_ms=1000,
-                    )
-                    await bus.subscribe(
-                        stream,
-                        "trigger_evaluator",
-                        "worker-1",
-                        self._handle_trigger_evaluation,
-                        count=10,
-                        block_ms=1000,
-                    )
-            except Exception:
-                logger.warning("StreamConsumer loop error", exc_info=True)
-                await asyncio.sleep(1)
+        try:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        except asyncio.CancelledError:
+            pass
 
         await r.aclose()
         logger.info("StreamConsumerManager stopped")
 
+    async def _consumer_loop(self, bus, stream: str, group: str, handler) -> None:
+        """Independent loop for one consumer group with concurrency semaphore."""
+        sem = asyncio.Semaphore(self.HANDLER_CONCURRENCY)
+        while self._running:
+            try:
+                async with sem:
+                    await bus.subscribe(
+                        stream,
+                        group,
+                        "worker-1",
+                        handler,
+                        count=10,
+                        block_ms=2000,
+                    )
+            except Exception:
+                logger.warning("Consumer %s error on %s", group, stream, exc_info=True)
+                await asyncio.sleep(1)
+
     async def stop(self) -> None:
         self._running = False
+        for task in self._tasks:
+            task.cancel()
+        self._tasks.clear()
 
     async def _handle_entity_extraction(self, event) -> None:
         """Extract entities from an event, then sync to Neo4j and Qdrant."""

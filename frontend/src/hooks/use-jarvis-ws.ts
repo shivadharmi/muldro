@@ -80,23 +80,39 @@ export function useJarvisWs({
       };
 
       ws.onmessage = (event) => {
+        let msg: JarvisMessage;
         try {
-          const msg = JSON.parse(event.data) as JarvisMessage;
-          if (msg.type === "auth_ok") {
-            setConnected(true);
-          } else if (msg.type === "auth_error") {
-            ws.close();
-          } else if (msg.type === "surface" && onSurfaceRef.current) {
-            onSurfaceRef.current(msg.surface);
-          } else if (msg.type === "surface_update" && onSurfaceUpdateRef.current) {
-            onSurfaceUpdateRef.current(msg.surface_id, msg.payload);
-          } else if (msg.type === "heartbeat") {
-            // no-op
-          } else if (onNotificationRef.current) {
-            onNotificationRef.current(msg);
-          }
+          msg = JSON.parse(event.data) as JarvisMessage;
         } catch {
-          // skip malformed
+          console.warn(
+            "[jarvis-ws] Malformed JSON:",
+            typeof event.data === "string" ? event.data.slice(0, 200) : "non-string"
+          );
+          return;
+        }
+
+        if (!msg || typeof msg !== "object" || !("type" in msg)) {
+          console.warn("[jarvis-ws] Invalid message structure");
+          return;
+        }
+
+        if (msg.type === "auth_ok") {
+          setConnected(true);
+        } else if (msg.type === "auth_error") {
+          ws.close();
+        } else if (msg.type === "surface" && onSurfaceRef.current) {
+          // Validate surface payload before dispatching
+          if (!msg.surface?.id || !Array.isArray(msg.surface?.children)) {
+            console.warn("[jarvis-ws] Invalid surface payload:", msg.surface?.id);
+            return;
+          }
+          onSurfaceRef.current(msg.surface);
+        } else if (msg.type === "surface_update" && onSurfaceUpdateRef.current) {
+          onSurfaceUpdateRef.current(msg.surface_id, msg.payload);
+        } else if (msg.type === "heartbeat") {
+          // no-op
+        } else if (onNotificationRef.current) {
+          onNotificationRef.current(msg);
         }
       };
 

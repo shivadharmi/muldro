@@ -24,6 +24,7 @@ def _make_processor(**kwargs):
     """Build an EventProcessor with mocked dependencies."""
     settings = MagicMock()
     settings.anthropic_model = "claude-sonnet-4-20250514"
+    settings.event_processor_concurrency = 5
     db = MagicMock()
     db.add = MagicMock()
     db.commit = AsyncMock()

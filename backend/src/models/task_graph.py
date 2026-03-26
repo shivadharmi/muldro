@@ -48,6 +48,7 @@ class TaskRun(Base, TimestampMixin):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[dict | None] = mapped_column(JSONB)
+    timeout_seconds: Mapped[int | None] = mapped_column(Integer)
 
     steps: Mapped[list["TaskStep"]] = relationship(
         back_populates="run", cascade="all, delete-orphan"
@@ -80,6 +81,7 @@ class TaskStep(Base, TimestampMixin):
     # pending, ready, running, completed, failed, skipped
     input_data: Mapped[dict | None] = mapped_column(JSONB)
     output_data: Mapped[dict | None] = mapped_column(JSONB)
+    input_schema: Mapped[dict | None] = mapped_column(JSONB)
     artifact_refs: Mapped[list[str] | None] = mapped_column(ARRAY(String(512)))
     error: Mapped[dict | None] = mapped_column(JSONB)
     retry_count: Mapped[int] = mapped_column(Integer, default=0)

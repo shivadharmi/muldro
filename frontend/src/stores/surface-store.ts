@@ -22,6 +22,16 @@ export const useSurfaceStore = create<SurfaceState>((set) => ({
 
   addSurface: (surface) =>
     set((s) => {
+      // Validate before storing — reject malformed surfaces
+      if (!surface?.id) {
+        console.warn("[surface-store] Rejected surface with missing id");
+        return s;
+      }
+      if (!surface.kind || !surface.data) {
+        console.warn("[surface-store] Rejected surface with missing kind/data:", surface.id);
+        return s;
+      }
+
       const idx = s.surfaces.findIndex((sf) => sf.id === surface.id);
       if (idx === -1) {
         return { surfaces: [...s.surfaces, surface] };

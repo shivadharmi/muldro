@@ -40,6 +40,24 @@ class GraphEngine:
             await self._driver.close()
             self._driver = None
 
+    async def delete_entity(self, entity_id: str) -> None:
+        """Delete an entity node and all its relationships from Neo4j.
+
+        Uses DETACH DELETE to atomically remove the node and edges.
+        """
+        driver = await self._get_driver()
+        if not driver:
+            return
+
+        try:
+            async with driver.session() as session:
+                await session.run(
+                    "MATCH (e:Entity {entity_id: $entity_id}) DETACH DELETE e",
+                    entity_id=entity_id,
+                )
+        except Exception:
+            logger.warning("Neo4j delete_entity failed for %s", entity_id, exc_info=True)
+
     async def sync_entity(
         self,
         entity_id: str,
@@ -208,7 +226,7 @@ class GraphEngine:
             result = await session.run(
                 f"""
                 MATCH (e:Entity {{user_id: $user_id}})
-                WHERE toLower(e.name) CONTAINS toLower($query)
+                WHERE toLower(e.name) CONTAINS toLower($search_query)
                 {type_filter}
                 RETURN e.entity_id AS entity_id,
                        e.name AS name,
@@ -218,7 +236,7 @@ class GraphEngine:
                 LIMIT $limit
                 """,
                 user_id=user_id,
-                query=query,
+                search_query=query,
                 entity_type=entity_type,
                 limit=limit,
             )

@@ -10,6 +10,7 @@ Responsibilities:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
@@ -121,9 +122,20 @@ class EventProcessor:
         self._event_bus = event_bus
         self._notifier = notifier
         self._planner = planner
+        self._semaphore = asyncio.Semaphore(settings.event_processor_concurrency)
 
     async def process(self, raw: RawEvent, user_id: str, workspace_id: str = "") -> str | None:
-        """Process a raw event. Returns event_id if stored, None if duplicate."""
+        """Process a raw event. Returns event_id if stored, None if duplicate.
+
+        Gated by a semaphore to limit concurrent Claude API scoring calls.
+        """
+        async with self._semaphore:
+            return await self._process_inner(raw, user_id, workspace_id)
+
+    async def _process_inner(
+        self, raw: RawEvent, user_id: str, workspace_id: str = ""
+    ) -> str | None:
+        """Inner event processing — dedup, score, store, trigger downstream."""
         idempotency_key = f"{raw.source}:{raw.entity_id}:{raw.event_type}"
 
         existing = await self._db.execute(
@@ -480,3 +492,146 @@ class EventProcessor:
                 context_parts.append(f"User preferences:\n{pref_text}")
 
         return "\n".join(context_parts) if context_parts else None
+
+    # ------------------------------------------------------------------
+    # Batch processing — score multiple events in a single Claude call
+    # ------------------------------------------------------------------
+
+    BATCH_SIZE = 10
+
+    async def process_batch(
+        self, events: list[RawEvent], user_id: str, workspace_id: str = ""
+    ) -> list[str | None]:
+        """Process multiple events with batch scoring. Returns list of event_ids.
+
+        Groups up to BATCH_SIZE events into a single Claude scoring call,
+        reducing API costs ~10x under burst ingestion.
+        """
+        if not events:
+            return []
+
+        # Process in chunks of BATCH_SIZE
+        results: list[str | None] = []
+        for i in range(0, len(events), self.BATCH_SIZE):
+            chunk = events[i : i + self.BATCH_SIZE]
+            chunk_results = await self._process_batch_chunk(chunk, user_id, workspace_id)
+            results.extend(chunk_results)
+        return results
+
+    async def _process_batch_chunk(
+        self, events: list[RawEvent], user_id: str, workspace_id: str
+    ) -> list[str | None]:
+        """Score and store a chunk of events via a single Claude call."""
+        # 1. Batch dedup check
+        keys = [f"{r.source}:{r.entity_id}:{r.event_type}" for r in events]
+        existing = await self._db.execute(
+            select(NormalizedEvent.idempotency_key).where(NormalizedEvent.idempotency_key.in_(keys))
+        )
+        existing_keys = {row[0] for row in existing.all()}
+
+        non_dupe_events = [(r, k) for r, k in zip(events, keys) if k not in existing_keys]
+        if not non_dupe_events:
+            return [None] * len(events)
+
+        # 2. Batch score via single Claude call
+        async with self._semaphore:
+            scores_list = await self._score_events_batch([r for r, _ in non_dupe_events], user_id)
+
+        # 3. Store events + post-process
+        results: list[str | None] = []
+        score_idx = 0
+        for raw, key in zip(events, keys):
+            if key in existing_keys:
+                results.append(None)
+                continue
+            scores = scores_list[score_idx] if score_idx < len(scores_list) else DEFAULT_SCORES
+            score_idx += 1
+
+            event_id = f"evt_{ULID()}"
+            event = NormalizedEvent(
+                event_id=event_id,
+                user_id=user_id,
+                workspace_id=workspace_id,
+                source=raw.source,
+                source_account_id=raw.source_account_id,
+                event_type=raw.event_type,
+                entity_type=raw.entity_type,
+                entity_id=raw.entity_id,
+                occurred_at=raw.occurred_at or datetime.now(timezone.utc),
+                title=raw.title,
+                summary=scores.get("summary") or raw.summary,
+                actor_entities=[raw.actor] if raw.actor else None,
+                importance_signals=scores.get("importance_signals"),
+                urgency_score=scores.get("urgency_score"),
+                importance_score=scores.get("importance_score"),
+                confidence_score=scores.get("confidence_score"),
+                correlation_id=raw.correlation_id,
+                causation_id=raw.causation_id,
+                idempotency_key=key,
+                status="processed",
+            )
+            self._db.add(event)
+            results.append(event_id)
+
+        await self._db.commit()
+
+        # 4. Post-process (triggers + initiative) for stored events
+        for raw, key in zip(events, keys):
+            if key not in existing_keys:
+                try:
+                    result_ = await self._db.execute(
+                        select(NormalizedEvent).where(NormalizedEvent.idempotency_key == key)
+                    )
+                    ev = result_.scalar_one_or_none()
+                    if ev:
+                        await self._evaluate_triggers(ev, user_id, workspace_id=workspace_id)
+                        await self._evaluate_initiative(ev, user_id, workspace_id=workspace_id)
+                except Exception:
+                    logger.debug("Batch post-process failed for %s", key, exc_info=True)
+
+        return results
+
+    async def _score_events_batch(self, events: list[RawEvent], user_id: str) -> list[dict]:
+        """Score multiple events in a single Claude call. Falls back to individual scoring."""
+        if len(events) == 1:
+            return [await self._score_event(events[0], user_id)]
+
+        # Build numbered event list
+        parts = []
+        for i, raw in enumerate(events, 1):
+            lines = [f"Event {i}:", f"  Source: {raw.source}", f"  Type: {raw.event_type}"]
+            if raw.title:
+                lines.append(f"  Title: {raw.title}")
+            if raw.summary:
+                lines.append(f"  Summary: {raw.summary}")
+            if raw.actor:
+                actor_str = raw.actor.get("name", raw.actor.get("email", "unknown"))
+                lines.append(f"  From: {actor_str}")
+            parts.append("\n".join(lines))
+
+        batch_prompt = (
+            "Score the following events. Respond with a JSON array of score objects, "
+            "one per event, in the same order.\n\n" + "\n\n".join(parts)
+        )
+
+        try:
+            response = await self._client.messages.create(
+                model=self._settings.resolved_model,
+                max_tokens=256 * len(events),
+                system=SCORING_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": batch_prompt}],
+            )
+            text = response.content[0].text
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1].rsplit("```", 1)[0]
+            parsed = json.loads(text)
+            if isinstance(parsed, list) and len(parsed) == len(events):
+                return parsed
+            logger.warning(
+                "Batch scoring returned %d results for %d events", len(parsed), len(events)
+            )
+        except Exception:
+            logger.warning("Batch scoring failed, falling back to individual", exc_info=True)
+
+        # Fallback: score individually
+        return [await self._score_event(raw, user_id) for raw in events]

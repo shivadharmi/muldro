@@ -33,9 +33,10 @@ class Settings(BaseSettings):
     # Embeddings (Bedrock Titan)
     embedding_model: str = "amazon.titan-embed-text-v2:0"
 
-    # Reranker (Bedrock)
+    # Reranker (Bedrock) — available in: us-west-2, eu-central-1, ap-northeast-1, ca-central-1
     reranker_model: str = "amazon.rerank-v1:0"
     reranker_enabled: bool = True
+    reranker_region: str = "us-west-2"
 
     # Thresholds
     importance_threshold: float = 0.7  # Events above this score trigger planning
@@ -69,6 +70,11 @@ class Settings(BaseSettings):
 
     # Budget
     daily_token_budget_usd: float = 5.0  # Daily spend limit before degradation
+
+    # Backpressure
+    event_processor_concurrency: int = 5  # Max concurrent event scoring calls
+    max_perception_per_tick: int = 5  # Max perception cycles per scheduler tick
+    webhook_lag_threshold: int = 5000  # Reject webhooks when stream lag exceeds this
 
     # Telegram bot
     telegram_bot_token: str = ""  # Telegram Bot API token

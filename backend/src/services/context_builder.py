@@ -190,12 +190,13 @@ class ContextBuilder:
             except Exception:
                 logger.debug("Memory retrieval failed", exc_info=True)
 
-        # D3: Explicit preference fetch — ensures ALL active preferences are
-        # included even when they don't semantically match the current query
+        # D3: Explicit preference fetch — ensures active preferences are
+        # included even when they don't semantically match the current query.
+        # Bounded to max_results=20 to prevent unbounded context growth.
         if self._memory_service:
             try:
                 all_prefs = await self._memory_service.get_user_preferences(
-                    user_id, workspace_id=workspace_id
+                    user_id, workspace_id=workspace_id, max_results=20
                 )
                 existing_ids = {p.get("memory_id") for p in pack.preferences}
                 for p in all_prefs:
@@ -206,6 +207,9 @@ class ContextBuilder:
                         )
             except Exception:
                 logger.debug("Explicit preference fetch failed", exc_info=True)
+
+        # Hard cap preferences after merge (semantic + explicit)
+        pack.preferences = pack.preferences[:25]
 
         # Goals — retrieved from memory system (memory_type="goal")
         if self._memory_service:
@@ -410,3 +414,110 @@ class ContextBuilder:
         if len(result) > max_chars:
             result = result[:max_chars] + "\n\n[context truncated]"
         return result
+
+    # ------------------------------------------------------------------
+    # Haiku-summarized context compression (avoids lossy truncation)
+    # ------------------------------------------------------------------
+
+    # Section config: (summarize_if_over_chars, strategy)
+    # "verbatim" = keep as-is, "summarize" = compress via Haiku if oversized
+    SECTION_STRATEGIES: dict[str, tuple[int | None, str]] = {
+        "goals": (None, "verbatim"),
+        "preferences": (None, "verbatim"),
+        "entities": (2000, "summarize"),
+        "graph_relationships": (None, "verbatim"),
+        "recent_events": (1500, "summarize"),
+        "procedures": (800, "summarize"),
+        "artifacts": (None, "verbatim"),
+        "related_runs": (None, "verbatim"),
+        "tool_options": (None, "verbatim"),
+        "constraints": (None, "verbatim"),
+        "risks": (None, "verbatim"),
+    }
+
+    @staticmethod
+    async def to_prompt_compressed(
+        pack: ContextPack,
+        client,
+        model: str,
+        max_tokens: int = 3000,
+    ) -> str:
+        """Compress context via Haiku summarization instead of raw truncation.
+
+        Sections that exceed their char limit and have strategy="summarize"
+        are compressed via a fast Haiku call. Goals, preferences, and other
+        verbatim sections are kept as-is to preserve individual facts.
+
+        Falls back to to_prompt() if no client is available.
+        """
+        import asyncio
+
+        if client is None:
+            return ContextBuilder.to_prompt(pack, max_tokens=max_tokens)
+
+        # First render all sections using the existing to_prompt logic
+        rendered = ContextBuilder.to_prompt(pack, max_tokens=max_tokens * 2)
+        sections = rendered.split("\n\n")
+
+        # Identify oversized sections that need summarization
+        summarize_tasks = []
+        section_indices = []
+        for i, section in enumerate(sections):
+            # Match section header to strategy
+            header = section.split("\n")[0].strip("# ").lower().replace(" ", "_")
+            config = ContextBuilder.SECTION_STRATEGIES.get(header)
+            if config:
+                char_limit, strategy = config
+                if strategy == "summarize" and char_limit and len(section) > char_limit:
+                    summarize_tasks.append(_summarize_section(client, model, header, section))
+                    section_indices.append(i)
+
+        # Run summarizations in parallel
+        if summarize_tasks:
+            summaries = await asyncio.gather(*summarize_tasks, return_exceptions=True)
+            for idx, summary in zip(section_indices, summaries):
+                if isinstance(summary, str):
+                    sections[idx] = summary
+
+        result = "\n\n".join(sections)
+        max_chars = max_tokens * 4
+        if len(result) > max_chars:
+            result = result[:max_chars] + "\n\n[context truncated]"
+        return result
+
+
+async def _summarize_section(
+    client, model: str, section_name: str, text: str, max_tokens: int = 300
+) -> str:
+    """Compress a context section via Haiku. Preserves all key facts."""
+    try:
+        response = await client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            temperature=0,
+            system=(
+                f"Summarize this {section_name.replace('_', ' ')} context concisely. "
+                "Preserve ALL names, dates, numbers, and key facts. "
+                "Output only the summary, no preamble."
+            ),
+            messages=[{"role": "user", "content": text}],
+        )
+        header = section_name.replace("_", " ").title()
+        return f"## {header}\n{response.content[0].text}"
+    except Exception:
+        logger.debug("Section summarization failed for %s", section_name, exc_info=True)
+        # Fallback: raw truncation
+        return text[:1200] + "..."
+
+
+def _rerank_by_relevance(items: list[dict]) -> list[dict]:
+    """Rerank items by combined static + semantic relevance score.
+
+    Used in the fallback path (non-TriSearch) to ensure the most
+    relevant items survive any downstream caps or truncation.
+    """
+    for item in items:
+        static = item.get("_static_rank", 0.5)
+        semantic = item.get("relevance_score", item.get("score", 0.5))
+        item["_combined_score"] = 0.6 * semantic + 0.4 * static
+    return sorted(items, key=lambda x: x.get("_combined_score", 0), reverse=True)
