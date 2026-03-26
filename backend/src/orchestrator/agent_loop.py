@@ -432,6 +432,8 @@ async def agent_loop(
         yield LoopError(agent=agent_name, message=str(e))
     except Exception as e:
         logger.error("Agent %s failed: %s", agent_name, e, exc_info=True)
+        if circuit_breaker:
+            circuit_breaker.record_failure(model)
         text = f"[Agent {agent_name} error: {e}]"
         yield LoopError(agent=agent_name, message=str(e))
 

@@ -177,7 +177,8 @@ def per_endpoint_rate_limit(max_rpm: int = 10):
 
         client = request.client
         client_ip = client.host if client else "unknown"
-        path = request.url.path
+        route = request.scope.get("route")
+        path = route.path if route else request.url.path
         key = f"ep:{path}:{client_ip}"
 
         msg = "Rate limit exceeded. Try again later."
