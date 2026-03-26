@@ -88,16 +88,13 @@ class AggregateMetricsResponse(BaseModel):
 
 
 def _get_trace_store() -> TraceStore:
-    from src.config.settings import get_settings
-
-    settings = get_settings()
     try:
         from src.models.database import get_session_factory
 
         db_factory = get_session_factory()
     except Exception:
         db_factory = None
-    return TraceStore(elasticsearch_url=settings.elasticsearch_url, db_factory=db_factory)
+    return TraceStore(db_factory=db_factory)
 
 
 @router.get("/v1/traces", response_model=TraceListResponse)

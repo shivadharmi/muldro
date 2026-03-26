@@ -41,7 +41,7 @@ User <-> Telegram Bot / Next.js Frontend (A2UI)
 ### Backend (run from `backend/`)
 
 ```bash
-# Infrastructure (Postgres, Redis, MinIO, Elasticsearch, Qdrant, Neo4j)
+# Infrastructure (Postgres, Redis, MinIO, Qdrant, Neo4j)
 docker compose up -d
 
 # Run backend API server (port 8000)
@@ -81,7 +81,7 @@ npm run lint    # eslint
 
 ## Configuration
 
-All backend settings via env vars with `JARVIS_` prefix (pydantic-settings in `src/config/settings.py`). Key vars: `JARVIS_DATABASE_URL`, `JARVIS_REDIS_URL`, `JARVIS_ANTHROPIC_API_KEY`, `JARVIS_USE_BEDROCK`, `JARVIS_TELEGRAM_BOT_TOKEN`, `JARVIS_TELEGRAM_CHAT_ID`, `JARVIS_LOG_JSON`, `JARVIS_DAILY_TOKEN_BUDGET_USD`. Uses `.env` file.
+All backend settings via env vars with `JARVIS_` prefix (pydantic-settings in `src/config/settings.py`). Key vars: `JARVIS_DATABASE_URL`, `JARVIS_REDIS_URL`, `JARVIS_ANTHROPIC_API_KEY`, `JARVIS_USE_BEDROCK`, `JARVIS_TELEGRAM_BOT_TOKEN`, `JARVIS_TELEGRAM_CHAT_ID`, `JARVIS_LOG_JSON`, `JARVIS_DAILY_TOKEN_BUDGET_USD`, `JARVIS_RERANKER_MODEL`, `JARVIS_RERANKER_ENABLED`. Uses `.env` file.
 
 ## Coding Standards
 
@@ -136,11 +136,11 @@ The `RouteResolver` (`src/services/route_resolver.py`) maps Planner decisions to
 | `create_task` | Governor → Operator (execute_plan) | GraphExecutor DAG |
 | `draft_reply` | Governor → Operator (execute_plan) | `_draft_action` → Gmail draft |
 | `read_source` | Observer → Presenter | Tool calls (gmail_*, calendar_*) |
-| `research` | Researcher | search_memory, web tools |
+| `research` | Researcher | search, web tools |
 | `observe` | Observer | Background observation |
 | `remember` | Librarian | Entity/memory updates |
 | `add_to_brief` | Librarian | Stores as `briefing_item` memory |
-| `search_memory` | Researcher | Knowledge search |
+| `search_memory` | Researcher | Knowledge search (via `search` tool) |
 | `watcher_create` | Observer | Watcher setup |
 | `goal_update` | Planner | Goal modification |
 | `set_goal` | (direct handler) | `_handle_set_goal` → memory |
@@ -281,7 +281,7 @@ All 54 data tables are scoped by `workspace_id` (NOT NULL FK to `workspaces`). O
 - Do not let the planner output free-form text — always structured JSON
 - Do not skip the Governor for external writes
 - Do not store secrets in memory or model context
-- Do not over-engineer — Postgres + Redis is the core stack
+- Do not over-engineer — Postgres + Redis + Qdrant is the core stack
 - Do not use bare `db = db_factory()` — always `async with db_factory() as db:` + `await db.commit()`
 - Do not mutate TaskRun/TaskStep status directly — use `transition_run()` / `transition_step()`
 - Do not hardcode user IDs — resolve from auth context

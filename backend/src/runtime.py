@@ -4,7 +4,8 @@ All service wiring happens here. Three tiers control startup behaviour:
   Tier 1 (fail fast): WorldModel, MemoryService, EmbeddingService
   Tier 2 (log + degrade): EventProcessor, Planner, Governor, Presenter,
                           AuditService, WorkingMemoryService, ToolRegistry
-  Tier 3 (optional): VectorStore, SearchService, EventCorrelator
+  Tier 3 (optional): VectorStore, GraphEngine, RerankerService,
+                      TriSearchService, EventCorrelator
 """
 
 import logging
@@ -121,11 +122,33 @@ def build(settings: Settings, db: AsyncSession) -> ServiceContainer:
         logger.debug("Tier 3: VectorStore unavailable", exc_info=True)
 
     try:
-        from src.services.search_service import SearchService
+        from src.services.graph_engine import GraphEngine
 
-        svc.search_service = SearchService(settings, vector_store=svc.vector_store)
+        if settings.neo4j_url:
+            svc.graph_engine = GraphEngine(settings)
     except Exception:
-        logger.debug("Tier 3: SearchService unavailable", exc_info=True)
+        logger.debug("Tier 3: GraphEngine unavailable", exc_info=True)
+
+    try:
+        from src.services.reranker_service import RerankerService
+
+        if settings.reranker_enabled:
+            svc.reranker = RerankerService(settings)
+    except Exception:
+        logger.debug("Tier 3: RerankerService unavailable", exc_info=True)
+
+    try:
+        from src.services.tri_search import TriSearchService
+
+        svc.tri_search = TriSearchService(
+            settings=settings,
+            vector_store=svc.vector_store,
+            graph_engine=svc.graph_engine,
+            reranker=svc.reranker,
+            embedder=svc.extras.get("embedding_service"),
+        )
+    except Exception:
+        logger.debug("Tier 3: TriSearchService unavailable", exc_info=True)
 
     try:
         from src.services.event_correlator import EventCorrelator
@@ -231,7 +254,7 @@ def _log_summary(svc: ServiceContainer) -> None:
         "graph_executor",
         "operator",
     ]
-    tier3 = ["vector_store", "search_service"]
+    tier3 = ["vector_store", "graph_engine", "reranker", "tri_search"]
 
     populated = []
     missing = []

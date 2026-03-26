@@ -1,15 +1,12 @@
 "use client";
 
-interface SearchResult {
-  result_type: string;
-  result_id: string;
-  title: string;
-  snippet: string;
-  score: number;
-  why_matched: string;
-  actions: { action: string; url: string }[];
-  metadata: Record<string, unknown>;
-}
+import type { SearchResult } from "@/lib/types";
+
+const SOURCE_DB_COLORS: Record<string, string> = {
+  qdrant: "bg-blue-500/15 text-blue-400",
+  postgres_fts: "bg-green-500/15 text-green-400",
+  neo4j: "bg-purple-500/15 text-purple-400",
+};
 
 interface Props {
   groups: Record<string, SearchResult[]>;
@@ -36,20 +33,33 @@ export function ResultGroupList({ groups, onSelect }: Props) {
           </h3>
           <ul className="space-y-1">
             {results.map((r) => (
-              <li key={r.result_id}>
+              <li key={r.id}>
                 <button
                   onClick={() => onSelect(r)}
                   className="w-full text-left p-2 rounded-[var(--radius-sm)] hover:bg-surface-1 transition-colors cursor-pointer"
                 >
-                  <p className="text-sm text-t-primary truncate">{r.title}</p>
-                  {r.snippet && (
+                  <div className="flex items-center gap-1.5">
+                    <p className="text-sm text-t-primary truncate flex-1">
+                      {r.title}
+                    </p>
+                    {r.source_db && (
+                      <span
+                        className={`shrink-0 px-1.5 py-0.5 text-[10px] font-medium rounded ${SOURCE_DB_COLORS[r.source_db] ?? "bg-surface-2 text-t-tertiary"}`}
+                      >
+                        {r.source_db}
+                      </span>
+                    )}
+                  </div>
+                  {r.summary && (
                     <p className="text-xs text-t-tertiary truncate mt-0.5">
-                      {r.snippet}
+                      {r.summary}
                     </p>
                   )}
-                  <p className="text-xs text-t-tertiary mt-0.5">
-                    {r.why_matched}
-                  </p>
+                  {r.why_matched && (
+                    <p className="text-xs text-t-tertiary mt-0.5">
+                      {r.why_matched}
+                    </p>
+                  )}
                 </button>
               </li>
             ))}

@@ -316,6 +316,8 @@ export interface SearchResult {
   title: string;
   summary: string | null;
   score: number | null;
+  source_db: string | null;
+  why_matched: string | null;
 }
 
 export interface SearchResponse {

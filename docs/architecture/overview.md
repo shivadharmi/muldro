@@ -59,9 +59,8 @@ graph TB
     end
 
     subgraph "Persistence"
-        PG[(Postgres 17<br/>pgvector)]
+        PG[(Postgres 17<br/>FTS via tsvector)]
         RD[(Redis 7<br/>Streams, Cache, Locks)]
-        ES[(Elasticsearch 8<br/>Full-text Search)]
         QD[(Qdrant<br/>Vector Search)]
         N4J[(Neo4j 5<br/>Knowledge Graph)]
         S3[(MinIO / S3<br/>Artifact Storage)]
@@ -80,7 +79,7 @@ graph TB
     EP & NT & IS --> RD
     WM --> N4J
     MS --> QD
-    EP --> ES & QD
+    EP --> QD
 ```
 
 ## The 8 Sub-Agents
@@ -90,13 +89,13 @@ The orchestrator routes to 8 specialized sub-agents via Claude API. Each agent h
 | Agent | Model Tier | Role | Write Scope | Tool Scope |
 |-------|-----------|------|-------------|------------|
 | **Observer** | Sonnet | Read external sources, detect changes, ingest events | `normalized_events` | Gmail/Calendar/Drive/Slack/GitHub read + cursors |
-| **Librarian** | Sonnet | Extract entities, update world model | `entities`, `relationships`, `memories` | update_entity, get_entities, search_memory |
-| **Planner** | Opus | Determine intent, produce structured task graphs | `plans`, `plan_tasks` | plan_command, get_active_plans, search_memory, get_entities |
+| **Librarian** | Sonnet | Extract entities, update world model | `entities`, `relationships`, `memories` | update_entity, search |
+| **Planner** | Opus | Determine intent, produce structured task graphs | `plans`, `plan_tasks` | plan_command, get_active_plans, search |
 | **Governor** | Sonnet | Evaluate policies, gate approvals | `policy decisions`, `approvals` | evaluate_policy, approve_action |
 | **Operator** | Sonnet | Execute approved plans via MCP tools | `executions`, `task_runs` | Gmail/Calendar/Slack/GitHub sends + execution tracking |
-| **Presenter** | Sonnet | Generate user-facing output | `briefings`, `UI payloads` | get_briefing, search_memory, send_telegram, push_ui_update |
-| **Researcher** | Sonnet | Deep context gathering (read-only) | None | All read tools + Perplexity search + Playwright browser |
-| **Persona** | Haiku | Learn user preferences from interactions | `memories` (preference type) | search_memory, extract_preferences |
+| **Presenter** | Sonnet | Generate user-facing output | `briefings`, `UI payloads` | get_briefing, search, send_telegram, push_ui_update |
+| **Researcher** | Sonnet | Deep context gathering (read-only) | None | All read tools + web_search + Playwright browser |
+| **Persona** | Haiku | Learn user preferences from interactions | `memories` (preference type) | search, extract_preferences |
 
 ### Agent Boundaries
 
@@ -117,29 +116,29 @@ These boundaries are strict and must not be violated:
 
 ## Infrastructure Services
 
-Jarvis uses 6 infrastructure services. Postgres and Redis are required; the rest are optional with graceful degradation.
+Jarvis uses 5 infrastructure services. Postgres and Redis are required; the rest are optional with graceful degradation.
 
 | Service | Version | Role | Required? | Fallback |
 |---------|---------|------|-----------|----------|
-| **PostgreSQL** | 17 (pgvector) | System of record: all models, pgvector for dedup | Yes | None |
+| **PostgreSQL** | 17 | System of record: all models, tsvector FTS with GIN indexes | Yes | None |
 | **Redis** | 7 | Event streams, task queue, caching, distributed locks, surface tracking, pubsub | Yes | In-memory (limited) |
-| **Elasticsearch** | 8.16 | Full-text BM25 search for traces, events, entities, memories, artifacts | No | Postgres-only search |
-| **Qdrant** | 1.12 | Semantic vector search (4 collections: memories, entities, events, artifacts) | No | pgvector fallback |
+| **Qdrant** | 1.12 | Semantic vector search (4 collections: memories, entities, events, artifacts) | No | Postgres FTS only |
 | **Neo4j** | 5 Community | Knowledge graph projection: multi-hop traversal, shortest-path, community detection | No | Postgres entity tables only |
 | **MinIO / S3** | - | Artifact document/media storage (Postgres holds metadata + S3 key ref) | No | No artifact storage |
 
-### Search Architecture
+### Search Architecture (TriSearch)
 
-Jarvis uses **hybrid search** combining full-text and semantic approaches:
+Jarvis uses **TriSearch** — a three-engine parallel search with reranking:
 
 ```
 User query
     ├── Qdrant: semantic vector search (Titan V2 1024-dim embeddings)
-    ├── Elasticsearch: BM25 full-text search (phrase + keyword)
-    └── Reciprocal Rank Fusion (RRF) merges results
+    ├── Postgres FTS: tsvector + GIN keyword search (7 tables)
+    ├── Neo4j: graph entity search (CONTAINS matching)
+    └── Bedrock Reranker (amazon.rerank-v1:0) merges + reranks results
 ```
 
-The `SearchService` indexes all events, entities, memories, and artifacts to both ES and Qdrant in parallel. Queries run against both and merge results via RRF scoring.
+The `TriSearchService` (`src/services/tri_search.py`) runs all three backends in parallel, deduplicates results, and reranks via Bedrock. Full-text search uses Postgres native `tsvector` columns with GIN indexes on 7 tables (memories, entities, events, conversations, briefings, approvals, artifacts). Elasticsearch has been fully removed.
 
 ### Knowledge Graph (Neo4j)
 

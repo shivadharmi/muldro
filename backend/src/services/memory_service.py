@@ -6,7 +6,7 @@ Responsibilities:
 - Extract candidate memories from interactions and events
 - Score memory usefulness and stability
 - Store with provenance and vector embeddings
-- Provide retrieval API: semantic (pgvector) with text fallback
+- Provide retrieval API: semantic (Qdrant) with text fallback
 - Expire or demote low-value memories
 """
 
@@ -14,7 +14,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import case, select, text, update
+from sqlalchemy import case, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
@@ -23,24 +23,6 @@ from src.models.memory import Memory
 from src.services.embedding_service import EmbeddingService
 
 logger = logging.getLogger(__name__)
-
-
-def _vec_to_pg(embedding) -> str:
-    """Convert an embedding (list or numpy array) to pgvector-compatible string.
-
-    numpy str() uses spaces: '[-0.1  0.2  0.3]'
-    pgvector needs commas:   '[-0.1, 0.2, 0.3]'
-    """
-    if embedding is None:
-        return "[]"
-    if isinstance(embedding, str):
-        return embedding
-    # Handle numpy arrays and plain lists uniformly
-    try:
-        values = list(embedding)
-    except TypeError:
-        return str(embedding)
-    return "[" + ",".join(str(v) for v in values) + "]"
 
 
 MEMORY_EXTRACTION_PROMPT = """\
@@ -102,12 +84,13 @@ Rules:
 class MemoryService:
     """Manage Jarvis long-term memory."""
 
-    def __init__(self, settings: Settings, db: AsyncSession, event_bus=None):
+    def __init__(self, settings: Settings, db: AsyncSession, event_bus=None, vector_store=None):
         self._settings = settings
         self._db = db
         self._client = get_anthropic_client(settings)
         self._embedder = EmbeddingService(settings)
         self._event_bus = event_bus
+        self._vector_store = vector_store
 
     async def extract_and_store(
         self,
@@ -140,7 +123,6 @@ class MemoryService:
                 memory_type=mem_data.get("memory_type", "semantic"),
                 scope=mem_data.get("scope", "general"),
                 fact_text=fact_text,
-                embedding=embedding,
                 confidence=mem_data.get("confidence", 0.5),
                 stability_score=0.0,
                 source_event_ids=source_event_ids,
@@ -151,6 +133,19 @@ class MemoryService:
             )
             self._db.add(memory)
             memory_ids.append(memory_id)
+
+            if self._vector_store and embedding:
+                await self._vector_store.upsert(
+                    "memories",
+                    memory_id,
+                    embedding,
+                    {
+                        "memory_type": mem_data.get("memory_type"),
+                        "fact_text": fact_text,
+                        "user_id": user_id,
+                    },
+                    user_id,
+                )
 
         if memory_ids:
             await self._db.flush()
@@ -194,7 +189,6 @@ class MemoryService:
                 memory_type="preference",
                 scope=pref_data.get("category", "general"),
                 fact_text=fact_text,
-                embedding=embedding,
                 confidence=pref_data.get("confidence", 0.5),
                 stability_score=0.0,
                 source_event_ids=source_event_ids,
@@ -207,6 +201,19 @@ class MemoryService:
             )
             self._db.add(memory)
             memory_ids.append(memory_id)
+
+            if self._vector_store and embedding:
+                await self._vector_store.upsert(
+                    "memories",
+                    memory_id,
+                    embedding,
+                    {
+                        "memory_type": "preference",
+                        "fact_text": fact_text,
+                        "user_id": user_id,
+                    },
+                    user_id,
+                )
 
         if memory_ids:
             await self._db.flush()
@@ -245,7 +252,6 @@ class MemoryService:
             memory_type="goal",
             scope="planning",
             fact_text=fact_text,
-            embedding=embedding,
             confidence=0.9,
             stability_score=0.5,
             source_event_ids=[],
@@ -256,6 +262,20 @@ class MemoryService:
         )
         self._db.add(memory)
         await self._db.flush()
+
+        if self._vector_store and embedding:
+            await self._vector_store.upsert(
+                "memories",
+                memory_id,
+                embedding,
+                {
+                    "memory_type": "goal",
+                    "fact_text": fact_text,
+                    "user_id": user_id,
+                },
+                user_id,
+            )
+
         logger.info("Goal memory stored: %s '%s'", memory_id, title)
         return memory_id
 
@@ -280,7 +300,6 @@ class MemoryService:
             memory_type="preference",
             scope="general",
             fact_text=fact_text,
-            embedding=embedding,
             confidence=0.95,
             stability_score=0.8,
             source_event_ids=[],
@@ -293,7 +312,25 @@ class MemoryService:
         )
         self._db.add(memory)
         await self._db.flush()
-        logger.info("Instruction memory stored: %s '%s'", memory_id, instruction_text[:80])
+
+        if self._vector_store and embedding:
+            await self._vector_store.upsert(
+                "memories",
+                memory_id,
+                embedding,
+                {
+                    "memory_type": "preference",
+                    "fact_text": fact_text,
+                    "user_id": user_id,
+                },
+                user_id,
+            )
+
+        logger.info(
+            "Instruction memory stored: %s '%s'",
+            memory_id,
+            instruction_text[:80],
+        )
         return memory_id
 
     async def retrieve(
@@ -392,49 +429,45 @@ class MemoryService:
         if not embedding:
             return superseded
 
-        sql = text("""
-            SELECT memory_id, fact_text
-            FROM memories
-            WHERE user_id = :user_id
-              AND workspace_id = :workspace_id
-              AND status = 'active'
-              AND memory_id != :new_id
-              AND embedding IS NOT NULL
-              AND 1 - (embedding <=> cast(:embedding as vector)) > 0.7
-            LIMIT 10
-        """)
-        result = await self._db.execute(
-            sql,
-            {
-                "user_id": user_id,
-                "workspace_id": workspace_id,
-                "new_id": new_memory_id,
-                "embedding": _vec_to_pg(embedding),
-            },
-        )
-        candidates = result.all()
+        candidates = []
+        if self._vector_store:
+            similar = await self._vector_store.find_similar(
+                "memories",
+                embedding,
+                user_id,
+                threshold=0.7,
+                limit=10,
+            )
+            candidates = [
+                (
+                    s.get("payload", {}).get("_original_id") or s["id"],
+                    s.get("payload", {}).get("fact_text", ""),
+                )
+                for s in similar
+                if (s.get("payload", {}).get("_original_id") or s["id"]) != new_memory_id
+            ]
 
         if not candidates:
             return superseded
 
         # Ask Claude to check for contradictions
-        for row in candidates:
-            is_contradiction = await self._check_contradiction_pair(new_fact, row.fact_text)
+        for cand_id, cand_text in candidates:
+            is_contradiction = await self._check_contradiction_pair(new_fact, cand_text)
             if is_contradiction:
                 # Supersede the old memory
                 stmt = (
                     update(Memory)
-                    .where(Memory.memory_id == row.memory_id)
+                    .where(Memory.memory_id == cand_id)
                     .values(
                         superseded_by=new_memory_id,
                         confidence=Memory.confidence * 0.5,
                     )
                 )
                 await self._db.execute(stmt)
-                superseded.append(row.memory_id)
+                superseded.append(cand_id)
                 logger.info(
                     "Memory %s superseded by %s (contradiction)",
-                    row.memory_id,
+                    cand_id,
                     new_memory_id,
                 )
 
@@ -477,15 +510,14 @@ class MemoryService:
     async def consolidate_memories(self, user_id: str, workspace_id: str = "") -> int:
         """Find and merge highly similar memories (>0.95 similarity).
 
+        Uses Qdrant find_similar for O(n) comparisons instead of O(n^2).
         Keeps the memory with higher confidence, increments its stability_score,
         and marks the duplicate as 'merged'. Returns count of merged memories.
         """
-        # Find all active memories with embeddings for this user
         stmt = select(Memory).where(
             Memory.user_id == user_id,
             Memory.workspace_id == workspace_id,
             Memory.status == "active",
-            Memory.embedding.isnot(None),
         )
         result = await self._db.execute(stmt)
         memories = result.scalars().all()
@@ -494,56 +526,70 @@ class MemoryService:
             return 0
 
         merged_count = 0
+        merged_ids: set[str] = set()
 
-        # Compare each pair of memories
-        for i, mem1 in enumerate(memories):
-            if mem1.status != "active":  # May have been marked merged in previous iteration
+        for mem in memories:
+            if mem.memory_id in merged_ids:
                 continue
 
-            for mem2 in memories[i + 1 :]:
-                if mem2.status != "active":
+            if not self._vector_store:
+                break
+
+            # Re-embed the fact_text (embeddings live in Qdrant now)
+            embedding = await self._embedder.embed_text(mem.fact_text)
+            if not embedding:
+                continue
+
+            similar = await self._vector_store.find_similar(
+                "memories",
+                embedding,
+                user_id,
+                threshold=0.95,
+                limit=5,
+            )
+
+            for s in similar:
+                dup_id = s.get("payload", {}).get("_original_id") or s["id"]
+                if dup_id == mem.memory_id or dup_id in merged_ids:
                     continue
 
-                # Calculate similarity
-                sql = text("""
-                    SELECT 1 - (
-                        cast(:embedding1 as vector) <=> cast(:embedding2 as vector)
-                    ) AS similarity
-                """)
-                sim_result = await self._db.execute(
-                    sql,
-                    {
-                        "embedding1": _vec_to_pg(mem1.embedding),
-                        "embedding2": _vec_to_pg(mem2.embedding),
-                    },
-                )
-                similarity = sim_result.scalar_one()
-
-                # If very high similarity, merge them
-                if similarity > 0.95:
-                    # Keep the one with higher confidence
-                    if mem1.confidence >= mem2.confidence:
-                        keeper, duplicate = mem1, mem2
-                    else:
-                        keeper, duplicate = mem2, mem1
-
-                    # Update keeper: increment stability
-                    keeper.stability_score = min(keeper.stability_score + 0.1, 1.0)
-
-                    # Mark duplicate as merged
-                    duplicate.status = "merged"
-
-                    merged_count += 1
-                    logger.info(
-                        "Merged memory %s into %s (similarity=%.4f)",
-                        duplicate.memory_id,
-                        keeper.memory_id,
-                        similarity,
+                # Find the duplicate Memory row
+                dup_result = await self._db.execute(
+                    select(Memory).where(
+                        Memory.memory_id == dup_id,
+                        Memory.status == "active",
                     )
+                )
+                dup_mem = dup_result.scalar_one_or_none()
+                if not dup_mem:
+                    continue
+
+                # Keep the one with higher confidence
+                if mem.confidence >= dup_mem.confidence:
+                    keeper, duplicate = mem, dup_mem
+                else:
+                    keeper, duplicate = dup_mem, mem
+
+                keeper.stability_score = min((keeper.stability_score or 0.0) + 0.1, 1.0)
+                duplicate.status = "merged"
+                merged_ids.add(duplicate.memory_id)
+                merged_count += 1
+
+                score = s.get("score", 0.0)
+                logger.info(
+                    "Merged memory %s into %s (similarity=%.4f)",
+                    duplicate.memory_id,
+                    keeper.memory_id,
+                    score,
+                )
 
         if merged_count > 0:
             await self._db.flush()
-            logger.info("Consolidated %d memories for user %s", merged_count, user_id)
+            logger.info(
+                "Consolidated %d memories for user %s",
+                merged_count,
+                user_id,
+            )
             await self._emit_event(
                 "memory.updated",
                 user_id,
@@ -595,84 +641,85 @@ class MemoryService:
         max_results: int,
         workspace_id: str = "",
     ) -> list[dict]:
-        """Retrieve memories using composite ranking formula.
+        """Retrieve memories using Qdrant + Postgres composite ranking.
 
         Score = 0.40*relevance + 0.25*recency + 0.15*confidence
               + 0.10*stability + 0.10*entity_overlap
         """
-        type_filter = ""
-        entity_filter = ""
-        params: dict = {
-            "user_id": user_id,
-            "workspace_id": workspace_id,
-            "embedding": _vec_to_pg(query_embedding),
-            "limit": max_results,
-        }
+        if not self._vector_store:
+            return await self._text_retrieve(
+                user_id,
+                "",
+                memory_types,
+                max_results,
+                workspace_id=workspace_id,
+            )
 
+        # Step 1: Qdrant semantic search
+        qdrant_results = await self._vector_store.search(
+            "memories",
+            query_embedding,
+            user_id,
+            limit=max_results * 2,
+        )
+        if not qdrant_results:
+            return []
+
+        # Step 2: Extract memory_ids and batch-fetch from Postgres
+        memory_ids = [r.get("payload", {}).get("_original_id") or r["id"] for r in qdrant_results]
+        stmt = select(Memory).where(
+            Memory.memory_id.in_(memory_ids),
+            Memory.status == "active",
+        )
         if memory_types:
-            type_filter = "AND memory_type = ANY(:memory_types)"
-            params["memory_types"] = memory_types
+            stmt = stmt.where(Memory.memory_type.in_(memory_types))
 
-        if entity_refs:
-            entity_filter = "AND entity_ids && cast(:entity_refs as varchar(64)[])"
-            params["entity_refs"] = entity_refs
+        result = await self._db.execute(stmt)
+        rows = result.scalars().all()
+        memory_map = {m.memory_id: m for m in rows}
 
-        sql = text(f"""
-            SELECT memory_id, memory_type, fact_text, confidence, scope,
-                   entity_ids, stability_score,
-                   1 - (embedding <=> cast(:embedding as vector)) AS relevance,
-                   GREATEST(0.0, 1.0 - EXTRACT(EPOCH FROM (
-                       NOW() - COALESCE(last_accessed_at, created_at)
-                   )) / (30.0 * 86400.0)) AS recency,
-                   CASE
-                       WHEN entity_ids IS NOT NULL
-                       AND :has_entity_refs
-                       AND entity_ids && cast(:entity_ref_arr as varchar(64)[])
-                       THEN 1.0
-                       ELSE 0.0
-                   END AS entity_overlap
-            FROM memories
-            WHERE user_id = :user_id
-              AND workspace_id = :workspace_id
-              AND status = 'active'
-              AND embedding IS NOT NULL
-              {type_filter}
-              {entity_filter}
-            ORDER BY (
-                0.40 * (1 - (embedding <=> cast(:embedding as vector)))
-              + 0.25 * GREATEST(0.0, 1.0 - EXTRACT(EPOCH FROM (
-                    NOW() - COALESCE(last_accessed_at, created_at)
-                )) / (30.0 * 86400.0))
-              + 0.15 * confidence
-              + 0.10 * COALESCE(stability_score, 0.0)
-              + 0.10 * CASE
-                    WHEN entity_ids IS NOT NULL
-                    AND :has_entity_refs
-                    AND entity_ids && cast(:entity_ref_arr as varchar(64)[])
-                    THEN 1.0
-                    ELSE 0.0
-                END
-            ) DESC
-            LIMIT :limit
-        """)
+        # Step 3: Composite scoring
+        now = datetime.now(timezone.utc)
+        scored = []
+        for r in qdrant_results:
+            mem_id = r.get("payload", {}).get("_original_id") or r["id"]
+            mem = memory_map.get(mem_id)
+            if not mem:
+                continue
 
-        params["has_entity_refs"] = bool(entity_refs)
-        params["entity_ref_arr"] = entity_refs or []
+            relevance = r.get("score", 0.5)
+            accessed = mem.last_accessed_at or mem.created_at
+            age_seconds = (now - accessed).total_seconds()
+            recency = max(0.0, 1.0 - age_seconds / (30 * 86400))
+            confidence = mem.confidence or 0.5
+            stability = mem.stability_score or 0.0
+            entity_overlap = (
+                1.0
+                if (entity_refs and mem.entity_ids and set(entity_refs) & set(mem.entity_ids))
+                else 0.0
+            )
+            score = (
+                0.40 * relevance
+                + 0.25 * recency
+                + 0.15 * confidence
+                + 0.10 * stability
+                + 0.10 * entity_overlap
+            )
+            scored.append((score, relevance, mem))
 
-        result = await self._db.execute(sql, params)
-        rows = result.all()
+        scored.sort(key=lambda x: x[0], reverse=True)
 
         return [
             {
-                "memory_id": row.memory_id,
-                "memory_type": row.memory_type,
-                "fact_text": row.fact_text,
-                "confidence": row.confidence,
-                "scope": row.scope,
-                "relevance": round(row.relevance, 4) if row.relevance else None,
-                "entity_ids": row.entity_ids,
+                "memory_id": mem.memory_id,
+                "memory_type": mem.memory_type,
+                "fact_text": mem.fact_text,
+                "confidence": mem.confidence,
+                "scope": mem.scope,
+                "relevance": round(rel, 4),
+                "entity_ids": mem.entity_ids,
             }
-            for row in rows
+            for _, rel, mem in scored[:max_results]
         ]
 
     async def _text_retrieve(
@@ -751,7 +798,7 @@ class MemoryService:
     async def _is_duplicate(self, user_id: str, fact_text: str, workspace_id: str = "") -> bool:
         """Check if a substantially similar memory already exists.
 
-        Uses semantic similarity when embeddings are available,
+        Uses Qdrant semantic similarity when available,
         falls back to exact text match.
         """
         # Check exact match first (fast)
@@ -766,29 +813,19 @@ class MemoryService:
         if result.scalar_one_or_none() is not None:
             return True
 
-        # Check semantic similarity for near-duplicates
-        embedding = await self._embedder.embed_text(fact_text)
-        if embedding:
-            sql = text("""
-                SELECT memory_id
-                FROM memories
-                WHERE user_id = :user_id
-                  AND workspace_id = :workspace_id
-                  AND status = 'active'
-                  AND embedding IS NOT NULL
-                  AND 1 - (embedding <=> cast(:embedding as vector)) > 0.92
-                LIMIT 1
-            """)
-            result = await self._db.execute(
-                sql,
-                {
-                    "user_id": user_id,
-                    "workspace_id": workspace_id,
-                    "embedding": _vec_to_pg(embedding),
-                },
-            )
-            if result.scalar_one_or_none() is not None:
-                return True
+        # Check semantic similarity via Qdrant
+        if self._vector_store:
+            embedding = await self._embedder.embed_text(fact_text)
+            if embedding:
+                similar = await self._vector_store.find_similar(
+                    "memories",
+                    embedding,
+                    user_id,
+                    threshold=0.92,
+                    limit=1,
+                )
+                if similar:
+                    return True
 
         return False
 

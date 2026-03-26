@@ -137,13 +137,19 @@ class WorldModel:
     """Manage the entity graph."""
 
     def __init__(
-        self, settings: Settings, db: AsyncSession, event_bus=None, embedding_service=None
+        self,
+        settings: Settings,
+        db: AsyncSession,
+        event_bus=None,
+        embedding_service=None,
+        vector_store=None,
     ):
         self._settings = settings
         self._db = db
         self._client = get_anthropic_client(settings)
         self._event_bus = event_bus
         self._embedding_service = embedding_service
+        self._vector_store = vector_store
 
     async def extract_from_event(
         self, event_id: str, user_id: str, workspace_id: str = ""
@@ -239,7 +245,6 @@ class WorldModel:
             last_seen_at=now,
             interaction_count=1,
             importance_score=importance or 0.5,
-            embedding=embedding,
         )
         self._db.add(entity)
 
@@ -258,12 +263,44 @@ class WorldModel:
             await self._db.commit()
         except IntegrityError:
             await self._db.rollback()
-            logger.info("Entity race condition, retrying lookup: name=%s", canonical_name)
-            retry = await self._find_by_name_or_alias(canonical_name, user_id, workspace_id)
+            logger.info(
+                "Entity race condition, retrying lookup: name=%s",
+                canonical_name,
+            )
+            retry = await self._find_by_name_or_alias(
+                user_id, canonical_name, None, workspace_id=workspace_id
+            )
             if retry:
                 return retry.entity_id
             raise
-        logger.info("Entity created: %s type=%s name=%s", entity_id, entity_type, canonical_name)
+
+        # Upsert entity vector to Qdrant
+        if self._vector_store:
+            try:
+                emb = embedding
+                if emb is None and self._embedding_service:
+                    emb = await self._embedding_service.embed(canonical_name)
+                if emb:
+                    await self._vector_store.upsert(
+                        "entities",
+                        entity_id,
+                        emb,
+                        {
+                            "entity_type": entity_type,
+                            "canonical_name": canonical_name,
+                            "user_id": user_id,
+                        },
+                        user_id,
+                    )
+            except Exception:
+                logger.debug("Qdrant entity upsert failed", exc_info=True)
+
+        logger.info(
+            "Entity created: %s type=%s name=%s",
+            entity_id,
+            entity_type,
+            canonical_name,
+        )
         await self._emit_event("entity.created", user_id, {"entity_id": entity_id})
         return entity_id
 
@@ -366,36 +403,26 @@ class WorldModel:
                 if entity:
                     return entity
 
-        # Fuzzy match via embedding cosine similarity
-        if self._embedding_service:
+        # Fuzzy match via Qdrant vector similarity
+        if self._vector_store and self._embedding_service:
             try:
-                from sqlalchemy import text
-
                 embedding = await self._embedding_service.embed(canonical_name)
                 if embedding:
-                    sql = text("""
-                        SELECT entity_id FROM entities
-                        WHERE user_id = :uid AND workspace_id = :wid
-                          AND embedding IS NOT NULL
-                          AND 1 - (embedding <=> cast(:emb as vector)) > 0.92
-                        ORDER BY 1 - (embedding <=> cast(:emb as vector)) DESC LIMIT 1
-                    """)
-                    from src.services.memory_service import _vec_to_pg
-
-                    result = await self._db.execute(
-                        sql, {"uid": user_id, "wid": workspace_id, "emb": _vec_to_pg(embedding)}
+                    similar = await self._vector_store.find_similar(
+                        "entities",
+                        embedding,
+                        user_id,
+                        threshold=0.92,
+                        limit=1,
                     )
-                    eid = result.scalar_one_or_none()
-                    if eid:
-                        return (
-                            await self._db.execute(select(Entity).where(Entity.entity_id == eid))
-                        ).scalar_one_or_none()
+                    if similar:
+                        eid = similar[0].get("payload", {}).get("_original_id") or similar[0]["id"]
+                        result = await self._db.execute(
+                            select(Entity).where(Entity.entity_id == eid)
+                        )
+                        return result.scalar_one_or_none()
             except Exception:
-                try:
-                    await self._db.rollback()
-                except Exception:
-                    pass
-                logger.debug("Fuzzy entity dedup failed", exc_info=True)
+                logger.debug("Qdrant entity dedup failed", exc_info=True)
 
         return None
 

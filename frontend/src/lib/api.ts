@@ -363,18 +363,12 @@ export function fetchBriefingFeedback(briefingId: string): Promise<BriefingFeedb
 
 // ── Search ──────────────────────────────────────────────────────
 
-export function searchKnowledge(query: string, scope?: string): Promise<SearchResponse> {
-  return post("/search", { query, scope: scope || "all" });
-}
-
-export interface UnifiedSearchResponse {
-  total_count: number;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  groups: Record<string, any[]>;
-}
-
-export function searchUnified(query: string, limit = 20): Promise<UnifiedSearchResponse> {
-  return post("/search/unified", { query, limit });
+export function searchAll(
+  query: string,
+  types?: string[],
+  limit = 20
+): Promise<SearchResponse> {
+  return post("/search", { query, types: types || null, limit });
 }
 
 // ── Auth ────────────────────────────────────────────────────────

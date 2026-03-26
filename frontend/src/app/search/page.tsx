@@ -2,30 +2,22 @@
 
 import { useState, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { searchUnified } from "@/lib/api";
+import { searchAll } from "@/lib/api";
 import { PageHeader } from "@/components/layout/page-header";
 import { SearchBar } from "@/components/search/search-bar";
 import { ResultGroupList } from "@/components/feature/search/result-group-list";
 import { ResultDetailPane } from "@/components/feature/search/result-detail-pane";
-
-interface SearchResult {
-  result_type: string;
-  result_id: string;
-  title: string;
-  snippet: string;
-  score: number;
-  why_matched: string;
-  actions: { action: string; url: string }[];
-  metadata: Record<string, unknown>;
-}
+import type { SearchResult } from "@/lib/types";
 
 export default function SearchPage() {
   const [query, setQuery] = useState("");
-  const [selectedResult, setSelectedResult] = useState<SearchResult | null>(null);
+  const [selectedResult, setSelectedResult] = useState<SearchResult | null>(
+    null
+  );
 
   const { data, isLoading } = useQuery({
-    queryKey: ["unified-search", query],
-    queryFn: () => searchUnified(query, 20),
+    queryKey: ["search", query],
+    queryFn: () => searchAll(query, undefined, 20),
     enabled: query.length > 0,
   });
 
@@ -33,6 +25,18 @@ export default function SearchPage() {
     setQuery(_query);
     setSelectedResult(null);
   }, []);
+
+  // Group flat results by type for the ResultGroupList component
+  const groups: Record<string, SearchResult[]> = {};
+  if (data?.results) {
+    for (const r of data.results) {
+      const key = r.type || "unknown";
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(r);
+    }
+  }
+
+  const totalCount = data?.results?.length ?? 0;
 
   return (
     <div className="flex h-full">
@@ -56,10 +60,10 @@ export default function SearchPage() {
           {data && (
             <>
               <p className="text-xs text-t-tertiary mb-3">
-                {data.total_count} result{data.total_count !== 1 ? "s" : ""} found
+                {totalCount} result{totalCount !== 1 ? "s" : ""} found
               </p>
               <ResultGroupList
-                groups={data.groups ?? {}}
+                groups={groups}
                 onSelect={setSelectedResult}
               />
             </>

@@ -192,6 +192,39 @@ class GraphEngine:
             records = await result.data()
             return records
 
+    async def search_entities(
+        self, user_id: str, query: str, entity_type: str | None = None, limit: int = 20
+    ) -> list[dict]:
+        """Search entities by name using Neo4j CONTAINS matching."""
+        driver = await self._get_driver()
+        if not driver:
+            return []
+
+        type_filter = ""
+        if entity_type:
+            type_filter = "AND e.entity_type = $entity_type"
+
+        async with driver.session() as session:
+            result = await session.run(
+                f"""
+                MATCH (e:Entity {{user_id: $user_id}})
+                WHERE toLower(e.name) CONTAINS toLower($query)
+                {type_filter}
+                RETURN e.entity_id AS entity_id,
+                       e.name AS name,
+                       e.entity_type AS entity_type,
+                       e.attributes AS attributes
+                ORDER BY e.name
+                LIMIT $limit
+                """,
+                user_id=user_id,
+                query=query,
+                entity_type=entity_type,
+                limit=limit,
+            )
+            records = await result.data()
+            return records
+
     async def full_sync(self, user_id: str, entities: list[dict], relationships: list[dict]) -> int:
         """Bulk sync all entities and relationships to Neo4j."""
         count = 0

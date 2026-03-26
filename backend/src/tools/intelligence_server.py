@@ -122,103 +122,61 @@ async def ingest_event(
             return make_error_response(e)
 
 
-# ── Memory Search ────────────────────────────────────────────────────────
+# ── Unified Search ──────────────────────────────────────────────────────
 
 
 @intelligence.tool(
     tags={"librarian", "read"},
     annotations=ToolAnnotations(readOnlyHint=True),
 )
-async def search_memory(
+async def search(
     user_id: str,
     query: str,
     ctx: Context,
-    scope: str = "all",
-    memory_type: str = "",
-    limit: int = 10,
+    types: str = "",
+    limit: int = 20,
     workspace_id: str = "",
 ) -> dict:
-    """Search Jarvis's knowledge: memories, entities, events.
+    """Unified search across all knowledge: memories, entities, events.
 
-    Uses pgvector semantic search + keyword matching.
-    scope: all, memory, entities, events
-    memory_type: episodic, semantic, preference, relationship, task_context (optional filter)
+    Uses TriSearch: vector (Qdrant) + keyword (Postgres FTS) + graph (Neo4j).
+    types: comma-separated filter (e.g., "memory,entity"). Empty = all.
     """
-    async with _get_db():
+    async with _get_db() as db:
         try:
-            memory_svc = _services.memory_service
-            memory_types = [memory_type] if memory_type else None
-            results = await memory_svc.retrieve(
-                user_id,
-                query,
-                memory_types=memory_types,
-                max_results=limit,
-                workspace_id=workspace_id,
-            )
+            svc = _services
+            if svc and hasattr(svc, "tri_search") and svc.tri_search:
+                type_list = [t.strip() for t in types.split(",") if t.strip()] or None
+                results = await svc.tri_search.search(
+                    query=query,
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    db=db,
+                    types=type_list,
+                    limit=limit,
+                )
+                return {"results": results, "count": len(results)}
+            # Fallback to memory service if TriSearch not available
+            memory_svc = svc.memory_service if svc else None
+            if memory_svc:
+                results = await memory_svc.retrieve(
+                    user_id,
+                    query,
+                    max_results=limit,
+                    workspace_id=workspace_id,
+                )
+                return {"results": results, "count": len(results)}
             return {
-                "results": results,
-                "count": len(results),
+                "results": [],
+                "count": 0,
+                "error": "No search service available",
             }
         except Exception as e:
-            logger.error("search_memory failed: %s", e, exc_info=True)
+            logger.error("search failed: %s", e, exc_info=True)
             return {"results": [], "count": 0, "error": str(e)}
 
 
 # ── Entity Management ────────────────────────────────────────────────────
-
-
-@intelligence.tool(
-    tags={"librarian", "read"},
-    annotations=ToolAnnotations(readOnlyHint=True),
-)
-async def get_entities(
-    user_id: str,
-    ctx: Context,
-    query: str = "",
-    entity_type: str = "",
-    limit: int = 20,
-    workspace_id: str = "",
-) -> dict:
-    """Get entities from the world model.
-
-    Optionally filter by query (name search) and entity_type (person, organization, project).
-    """
-    async with _get_db() as db:
-        try:
-            world_model = _services.world_model
-            if query:
-                entities = await world_model.find_entity(user_id, query, workspace_id=workspace_id)
-                return {
-                    "entities": [entities] if entities else [],
-                    "count": 1 if entities else 0,
-                }
-            # List recent entities
-            from src.models.entities import Entity
-
-            stmt = select(Entity).where(
-                Entity.user_id == user_id,
-                Entity.workspace_id == workspace_id,
-            )
-            if entity_type:
-                stmt = stmt.where(Entity.entity_type == entity_type)
-            stmt = stmt.order_by(Entity.updated_at.desc()).limit(limit)
-            result = await db.execute(stmt)
-            entities = result.scalars().all()
-            return {
-                "entities": [
-                    {
-                        "entity_id": e.entity_id,
-                        "name": e.canonical_name,
-                        "type": e.entity_type,
-                        "attributes": e.attributes,
-                    }
-                    for e in entities
-                ],
-                "count": len(entities),
-            }
-        except Exception as e:
-            logger.error("get_entities failed: %s", e, exc_info=True)
-            return {"entities": [], "count": 0, "error": str(e)}
 
 
 @intelligence.tool(

@@ -28,27 +28,15 @@ class IngestEventInput(BaseModel):
     )
 
 
-class SearchMemoryInput(BaseModel):
-    """Search Jarvis knowledge base: memories, entities, and events."""
+class SearchInput(BaseModel):
+    """Unified search across all knowledge: memories, entities, events via TriSearch."""
 
     query: str = Field(description="Natural language search query")
-    memory_type: Literal["all", "fact", "preference", "task_context", "episodic"] = Field(
-        default="all", description="Filter by memory type"
+    types: str = Field(
+        default="",
+        description="Comma-separated result type filter (e.g., 'memory,entity'). Empty = all.",
     )
-    scope: Literal["all", "memories", "entities", "events"] = Field(
-        default="all", description="Search scope: all, memories, entities, or events"
-    )
-    limit: int = Field(default=10, ge=1, le=50, description="Maximum results to return")
-
-
-class GetEntitiesInput(BaseModel):
-    """Get entities from the world model."""
-
-    query: str = Field(default="", description="Optional search query to filter entities")
-    entity_type: str = Field(
-        default="", description="Filter by entity type: person, project, company, task"
-    )
-    limit: int = Field(default=20, ge=1, le=100, description="Maximum entities to return")
+    limit: int = Field(default=20, ge=1, le=100, description="Maximum results")
 
 
 class PlanCommandInput(BaseModel):
@@ -188,8 +176,7 @@ class ReportGovernorVerdictInput(BaseModel):
 
 TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
     "ingest_event": IngestEventInput,
-    "search_memory": SearchMemoryInput,
-    "get_entities": GetEntitiesInput,
+    "search": SearchInput,
     "plan_command": PlanCommandInput,
     "evaluate_policy": EvaluatePolicyInput,
     "get_briefing": GetBriefingInput,

@@ -60,8 +60,7 @@ FastMCP tools wrapping the intelligence services layer:
 | Tool | Purpose |
 |------|---------|
 | `ingest_event` | Normalize, score, dedup raw events |
-| `search_memory` | Semantic knowledge search |
-| `get_entities` | Entity retrieval by query/type |
+| `search` | Unified search across memories, entities, events via TriSearch |
 | `update_entity` | Create/update entity |
 | `plan_command` | Create plan from command |
 | `get_active_plans` | List in-flight plans |
@@ -73,9 +72,6 @@ FastMCP tools wrapping the intelligence services layer:
 | `report_observation` | Record observation results |
 | `update_execution` | Update execution status |
 | `extract_preferences` | Learn user preferences |
-| `create_task` | Create standalone task |
-| `get_task` | Retrieve task details |
-| `get_goals` | List user goals |
 | `build_context` | Assemble context pack |
 | `verify_run` | Verify execution output |
 
@@ -185,7 +181,7 @@ sequenceDiagram
 
 | Category | Tools |
 |----------|-------|
-| Intelligence | search_memory, get_entities, get_active_plans, get_briefing |
+| Intelligence | search, get_active_plans, get_briefing |
 | Gmail/Calendar/Drive | list, read, search operations |
 | Cursors | get_observation_cursor, report_observation |
 
@@ -213,13 +209,13 @@ Each agent has a curated set of allowed tools, enforced at two levels:
 | Agent | Tool Scope Summary |
 |-------|-------------------|
 | Observer | Gmail/Calendar/Drive/Slack/GitHub read + cursor tools |
-| Librarian | update_entity, get_entities, search_memory |
-| Planner | plan_command, get_active_plans, search_memory, get_entities |
+| Librarian | update_entity, search |
+| Planner | plan_command, get_active_plans, search |
 | Governor | evaluate_policy, approve_action |
 | Operator | All write tools + execution tracking |
-| Presenter | get_briefing, search_memory, send_telegram, push_ui_update |
-| Researcher | All read tools + Perplexity + Playwright |
-| Persona | search_memory, extract_preferences |
+| Presenter | get_briefing, search, send_telegram, push_ui_update |
+| Researcher | All read tools + web_search + Playwright |
+| Persona | search, extract_preferences |
 
 ## Audit Logging
 

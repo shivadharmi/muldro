@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     # Embeddings (Bedrock Titan)
     embedding_model: str = "amazon.titan-embed-text-v2:0"
 
+    # Reranker (Bedrock)
+    reranker_model: str = "amazon.rerank-v1:0"
+    reranker_enabled: bool = True
+
     # Thresholds
     importance_threshold: float = 0.7  # Events above this score trigger planning
     briefing_lookback_hours: int = 24  # Default time window for briefing data
@@ -140,9 +144,6 @@ class Settings(BaseSettings):
     s3_bucket: str = ""
     s3_endpoint_url: str = ""  # For MinIO local dev
     s3_region: str = "ap-south-1"
-
-    # Elasticsearch
-    elasticsearch_url: str = ""
 
     # Qdrant
     qdrant_url: str = ""

@@ -14,7 +14,9 @@ if TYPE_CHECKING:
     from src.services.graph_engine import GraphEngine
     from src.services.memory_service import MemoryService
     from src.services.procedure_library import ProcedureLibrary
+    from src.services.reranker_service import RerankerService
     from src.services.tool_registry import ToolRegistry
+    from src.services.tri_search import TriSearchService
     from src.services.vector_store import VectorStore
     from src.services.world_model import WorldModel
 
@@ -87,6 +89,8 @@ class ContextBuilder:
         db: AsyncSession | None = None,
         graph_engine: GraphEngine | None = None,
         vector_store: VectorStore | None = None,
+        tri_search: TriSearchService | None = None,
+        reranker: RerankerService | None = None,
     ):
         self._world_model = world_model
         self._memory_service = memory_service
@@ -96,6 +100,8 @@ class ContextBuilder:
         self._db = db
         self._graph_engine = graph_engine
         self._vector_store = vector_store
+        self._tri_search = tri_search
+        self._reranker = reranker
 
     async def build(
         self,
@@ -106,6 +112,40 @@ class ContextBuilder:
     ) -> ContextPack:
         """Build a context pack for the given query/task."""
         pack = ContextPack(task_summary=query)
+
+        # Try TriSearch for unified context retrieval
+        if self._tri_search and self._db:
+            try:
+                grouped = await self._tri_search.search_for_context(
+                    query=query,
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    db=self._db,
+                    limit=20,
+                )
+                # Populate pack from grouped TriSearch results
+                pack.entities = [
+                    {
+                        "entity_id": r.get("id", ""),
+                        "entity_type": r.get("result_type", "entity"),
+                        "canonical_name": r.get("title", ""),
+                        **r,
+                    }
+                    for r in grouped.get("entity", [])
+                ][:10]
+                episodic = [
+                    r for r in grouped.get("memory", []) if r.get("memory_type") == "episodic"
+                ]
+                pack.recent_events = episodic
+                pack.preferences = [
+                    r for r in grouped.get("memory", []) if r.get("memory_type") == "preference"
+                ]
+                # Still fetch goals, procedures, artifacts separately below
+            except Exception:
+                logger.debug(
+                    "TriSearch context assembly failed, using individual services",
+                    exc_info=True,
+                )
 
         # Entities
         entity_ids: list[str] = []

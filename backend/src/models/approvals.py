@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, Index, String, Text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.models.base import Base, TimestampMixin
@@ -35,6 +35,7 @@ class Approval(Base, TimestampMixin):
     )
     requested_by: Mapped[str | None] = mapped_column(String(64))
     approved_by: Mapped[str | None] = mapped_column(String(64))
+    search_vector = mapped_column(TSVECTOR, nullable=True)
 
     __table_args__ = (
         Index("ix_approvals_user_status", "user_id", "status", "created_at"),

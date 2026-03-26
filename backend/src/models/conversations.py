@@ -7,7 +7,7 @@ exchange including typed metadata (agent steps, tool calls, thinking).
 from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, Index, Integer, Numeric, String, Text, func
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.models.base import Base, TimestampMixin
@@ -33,6 +33,7 @@ class Conversation(Base, TimestampMixin):
     last_active_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    search_vector = mapped_column(TSVECTOR, nullable=True)
 
     __table_args__ = (Index("ix_conversations_user_status", "user_id", "status"),)
 
@@ -61,5 +62,6 @@ class Message(Base, TimestampMixin):
     input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cost_usd: Mapped[float | None] = mapped_column(Numeric(10, 6), nullable=True)
+    search_vector = mapped_column(TSVECTOR, nullable=True)
 
     __table_args__ = (Index("ix_messages_conversation_created", "conversation_id", "created_at"),)

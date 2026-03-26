@@ -55,14 +55,12 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
     },
     "librarian": {
         "internal.update_entity",
-        "internal.get_entities",
-        "internal.search_memory",
+        "internal.search",
     },
     "planner": {
         "internal.plan_command",
         "internal.get_plans",
-        "internal.search_memory",
-        "internal.get_entities",
+        "internal.search",
     },
     "governor": {
         "internal.evaluate_policy",
@@ -101,16 +99,14 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
     },
     "presenter": {
         "internal.get_briefing",
-        "internal.search_memory",
-        "internal.get_entities",
+        "internal.search",
         "internal.send_telegram",
         "internal.send_approval",
         "internal.push_ui",
         "messaging.send",
     },
     "researcher": {
-        "internal.search_memory",
-        "internal.get_entities",
+        "internal.search",
         "email.list",
         "email.read",
         "email.search",
@@ -144,7 +140,7 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "browser.screenshot",
     },
     "persona": {
-        "internal.search_memory",
+        "internal.search",
         "internal.extract_preferences",
     },
 }

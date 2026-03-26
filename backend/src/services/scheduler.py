@@ -480,7 +480,7 @@ class SchedulerLoop:
             from src.services.alerting import AlertingService
             from src.services.trace_store import TraceStore
 
-            trace_store = TraceStore(elasticsearch_url=self._settings.elasticsearch_url)
+            trace_store = TraceStore()
             alerting = AlertingService(trace_store=trace_store)
             checks = await alerting.check_all_slos()
             logger.info(

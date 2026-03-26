@@ -93,8 +93,7 @@ _DEFAULT_TOOLS = [
     _t("drive_create", "medium", True, "drive"),
     _t("drive_delete", "critical", True, "drive", enabled=False),
     # Internal intelligence tools (read-only)
-    _t("search_memory", "low", False, "internal"),
-    _t("get_entities", "low", False, "internal"),
+    _t("search", "low", False, "internal"),
     _t("get_active_plans", "low", False, "internal"),
     _t("get_briefing", "low", False, "internal"),
     _t("get_observation_cursor", "low", False, "internal"),

@@ -135,8 +135,7 @@ CAPABILITY_CATALOG: dict[str, CapabilityMeta] = {
     "messaging.share": _cap(CapabilityFamily.MESSAGING, False, "high"),
     "messaging.get_mentions": _cap(CapabilityFamily.MESSAGING, True),
     # Internal intelligence
-    "internal.search_memory": _cap(CapabilityFamily.INTERNAL, True),
-    "internal.get_entities": _cap(CapabilityFamily.INTERNAL, True),
+    "internal.search": _cap(CapabilityFamily.INTERNAL, True),
     "internal.get_plans": _cap(CapabilityFamily.INTERNAL, True),
     "internal.get_briefing": _cap(CapabilityFamily.INTERNAL, True),
     "internal.get_cursor": _cap(CapabilityFamily.INTERNAL, True),
@@ -268,7 +267,6 @@ TOOL_TO_CAPABILITY: dict[str, str] = {
     "create-a-page": "doc.create",
     "update-a-page": "doc.update",
     "retrieve-a-page": "doc.get",
-    "search": "doc.search",
     "query-data-source": "doc.query",
     "create-a-comment": "doc.comment",
     "append-block-children": "doc.append",
@@ -325,8 +323,8 @@ TOOL_TO_CAPABILITY: dict[str, str] = {
     "web_search": "search.web",
     "perplexity_search": "search.web",
     # Internal intelligence
-    "search_memory": "internal.search_memory",
-    "get_entities": "internal.get_entities",
+    "search": "internal.search",
+    "intelligence_search": "internal.search",
     "get_active_plans": "internal.get_plans",
     "get_briefing": "internal.get_briefing",
     "get_observation_cursor": "internal.get_cursor",

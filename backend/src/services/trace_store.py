@@ -27,22 +27,10 @@ class TraceStore:
 
     def __init__(
         self,
-        elasticsearch_url: str = "",
         db_factory: Callable[[], AsyncSession] | None = None,
     ):
-        self._es_url = elasticsearch_url
-        self._es = None
         self._db_factory = db_factory
         self._fallback: deque[dict] = deque(maxlen=500)
-
-        if elasticsearch_url:
-            try:
-                from elasticsearch import AsyncElasticsearch
-
-                self._es = AsyncElasticsearch(elasticsearch_url)
-                logger.info("TraceStore using Elasticsearch at %s", elasticsearch_url)
-            except ImportError:
-                logger.warning("elasticsearch package not installed, using DB only")
 
     async def store_trace(self, trace_dict: dict, user_id: str, workspace_id: str = "") -> str:
         """Persist a completed trace. Returns trace_id."""
@@ -55,17 +43,6 @@ class TraceStore:
             except Exception:
                 logger.warning("Failed to persist trace to DB", exc_info=True)
                 self._fallback.append(trace_dict)
-
-        # Secondary: index to Elasticsearch
-        if self._es:
-            try:
-                await self._es.index(
-                    index="jarvis-traces",
-                    id=trace_id,
-                    document=trace_dict,
-                )
-            except Exception:
-                logger.debug("Failed to index trace to ES", exc_info=True)
 
         # Fallback: in-memory if no DB
         if not self._db_factory:
@@ -176,13 +153,6 @@ class TraceStore:
             except Exception:
                 logger.debug("DB trace lookup failed for %s", trace_id, exc_info=True)
 
-        if self._es:
-            try:
-                result = await self._es.get(index="jarvis-traces", id=trace_id)
-                return result["_source"]
-            except Exception:
-                logger.debug("Trace %s not found in ES", trace_id)
-
         for t in self._fallback:
             if t.get("trace_id") == trace_id:
                 return t
@@ -217,12 +187,6 @@ class TraceStore:
                 )
             except Exception:
                 logger.debug("DB trace search failed", exc_info=True)
-
-        if self._es:
-            try:
-                return await self._search_es(user_id, trigger, agent_name, time_range_hours, limit)
-            except Exception:
-                logger.debug("ES search failed", exc_info=True)
 
         return self._search_fallback(user_id, trigger, agent_name, time_range_hours, limit)
 
@@ -259,40 +223,6 @@ class TraceStore:
             result = await db.execute(stmt)
             traces = result.scalars().all()
             return [_trace_to_dict(t) for t in traces]
-
-    async def _search_es(
-        self,
-        user_id: str | None,
-        trigger: str | None,
-        agent_name: str | None,
-        time_range_hours: int,
-        limit: int,
-    ) -> list[dict]:
-        must = []
-        if user_id:
-            must.append({"term": {"user_id": user_id}})
-        if trigger:
-            must.append({"term": {"trigger": trigger}})
-        if agent_name:
-            must.append(
-                {
-                    "nested": {
-                        "path": "spans",
-                        "query": {"term": {"spans.agent_name": agent_name}},
-                    }
-                }
-            )
-        must.append({"range": {"started_at": {"gte": f"now-{time_range_hours}h"}}})
-
-        result = await self._es.search(
-            index="jarvis-traces",
-            body={
-                "query": {"bool": {"must": must}} if must else {"match_all": {}},
-                "sort": [{"started_at": "desc"}],
-                "size": limit,
-            },
-        )
-        return [hit["_source"] for hit in result["hits"]["hits"]]
 
     def _search_fallback(
         self,

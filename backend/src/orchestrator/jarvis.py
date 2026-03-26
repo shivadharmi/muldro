@@ -172,10 +172,7 @@ class JarvisOrchestrator:
         self._db_factory = db_factory
         self._services = services
         self._client = get_anthropic_client(settings)
-        self._trace_store = TraceStore(
-            elasticsearch_url=settings.elasticsearch_url,
-            db_factory=db_factory,
-        )
+        self._trace_store = TraceStore(db_factory=db_factory)
         self._trace_manager = TraceManager(trace_store=self._trace_store)
         self._budget = BudgetTracker(
             daily_limit_usd=settings.daily_token_budget_usd,
@@ -1882,6 +1879,9 @@ class JarvisOrchestrator:
                     procedure_library=svc.procedure_library,
                     artifact_store=svc.artifact_store,
                     db=db,
+                    graph_engine=svc.graph_engine,
+                    tri_search=svc.tri_search,
+                    reranker=svc.reranker,
                 )
                 pack: ContextPack = await builder.build(
                     user_id=user_id,
@@ -2273,8 +2273,7 @@ class JarvisOrchestrator:
         # Internal tools served via MCP protocol (in-process Client)
         internal_tools = {
             "ingest_event",
-            "search_memory",
-            "get_entities",
+            "search",
             "update_entity",
             "plan_command",
             "get_active_plans",
@@ -2393,8 +2392,8 @@ class JarvisOrchestrator:
         """Call an internal tool via in-process FastMCP Client (MCP protocol).
 
         The composed server mounts intelligence tools under "intelligence_" namespace.
-        We map flat tool names (e.g. "search_memory") to namespaced names
-        (e.g. "intelligence_search_memory").
+        We map flat tool names (e.g. "search") to namespaced names
+        (e.g. "intelligence_search").
         """
         import json
 

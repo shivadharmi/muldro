@@ -53,7 +53,7 @@ APPROVAL_REQUIRED_ACTIONS = {
 AUTO_EXECUTE_ACTIONS = {
     "fetch_info",
     "summarize",
-    "search_memory",
+    "search",
     "add_to_brief",
     "acknowledge",
     "answer_directly",

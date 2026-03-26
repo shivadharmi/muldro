@@ -110,15 +110,6 @@ def create_app() -> FastAPI:
                 exc_info=True,
             )
 
-        # Ensure Elasticsearch indices exist
-        try:
-            from src.services.search_service import SearchService
-
-            search_svc = SearchService(settings)
-            await search_svc.ensure_indices()
-        except Exception:
-            logger.debug("ES index init skipped", exc_info=True)
-
         # Ensure Qdrant collections exist
         try:
             from src.services.vector_store import VectorStore

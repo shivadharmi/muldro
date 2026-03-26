@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import DateTime, Float, ForeignKey, Index, String, Text, func
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.models.base import Base, TimestampMixin
@@ -38,6 +38,7 @@ class NormalizedEvent(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(
         String(32), default="pending"
     )  # pending, processed, ignored
+    search_vector = mapped_column(TSVECTOR, nullable=True)
 
     __table_args__ = (
         Index("ix_events_user_occurred", "user_id", "occurred_at"),

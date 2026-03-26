@@ -31,18 +31,6 @@ class TestPostgres:
         finally:
             await conn.close()
 
-    async def test_pgvector_extension(self):
-        """pgvector extension is loaded and can cast vectors."""
-        conn = await asyncpg.connect(PG_DSN)
-        try:
-            # pgvector uses the vector type — verify it's available
-            result = await conn.fetchval(
-                "SELECT extname FROM pg_extension WHERE extname = 'vector'"
-            )
-            assert result == "vector", "pgvector extension not installed"
-        finally:
-            await conn.close()
-
     async def test_migrations_current(self):
         """All Alembic migrations have been applied."""
         result = subprocess.run(

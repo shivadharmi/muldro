@@ -167,8 +167,8 @@ When a step requires tool execution:
 Step action request
     │
     ├── Tier 1: Internal Intelligence Handlers (FastMCP)
-    │   Tools: ingest_event, search_memory, get_entities, plan_command,
-    │          create_task, get_goals, build_context, verify_run, etc.
+    │   Tools: ingest_event, search, plan_command,
+    │          build_context, verify_run, etc.
     │
     ├── Tier 2: MCP Bridge (External MCP Servers)
     │   Servers: Google Workspace, GitHub, Slack, Playwright, Filesystem

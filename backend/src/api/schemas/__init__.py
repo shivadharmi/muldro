@@ -113,6 +113,8 @@ class SearchResult(BaseModel):
     title: str
     summary: str | None = None
     score: float | None = None
+    source_db: str | None = None
+    why_matched: str | None = None
 
 
 class SearchResponse(BaseModel):
