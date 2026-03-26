@@ -50,9 +50,7 @@ def upgrade() -> None:
         ),
     )
     op.create_index("ix_dlq_user_status", "dead_letter_queue", ["user_id", "status"])
-    op.create_index(
-        "ix_dlq_operation_status", "dead_letter_queue", ["operation_type", "status"]
-    )
+    op.create_index("ix_dlq_operation_status", "dead_letter_queue", ["operation_type", "status"])
 
 
 def downgrade() -> None:

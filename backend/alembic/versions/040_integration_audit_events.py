@@ -60,15 +60,11 @@ def upgrade() -> None:
     op.create_index(
         "ix_iaud_ws_server", "integration_audit_events", ["workspace_id", "server_name"]
     )
-    op.create_index(
-        "ix_iaud_ws_action", "integration_audit_events", ["workspace_id", "action"]
-    )
+    op.create_index("ix_iaud_ws_action", "integration_audit_events", ["workspace_id", "action"])
     op.create_index(
         "ix_iaud_ws_occurred", "integration_audit_events", ["workspace_id", "occurred_at"]
     )
-    op.create_index(
-        "ix_iaud_ws_status", "integration_audit_events", ["workspace_id", "status"]
-    )
+    op.create_index("ix_iaud_ws_status", "integration_audit_events", ["workspace_id", "status"])
 
 
 def downgrade() -> None:

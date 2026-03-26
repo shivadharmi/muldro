@@ -34,7 +34,9 @@ def upgrade() -> None:
         op.drop_index("ix_inst_status", table_name="integration_installations")
 
         op.create_index(
-            "ix_inst_workspace", "integration_installations", ["workspace_id"],
+            "ix_inst_workspace",
+            "integration_installations",
+            ["workspace_id"],
         )
         op.create_index(
             "ix_inst_ws_server",
@@ -62,7 +64,9 @@ def downgrade() -> None:
         op.rename_table("integration_installations", "connector_installations")
 
         op.create_index(
-            "ix_inst_workspace", "connector_installations", ["workspace_id"],
+            "ix_inst_workspace",
+            "connector_installations",
+            ["workspace_id"],
         )
         op.create_index(
             "ix_inst_ws_server",

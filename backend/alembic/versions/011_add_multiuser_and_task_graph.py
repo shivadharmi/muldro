@@ -65,9 +65,7 @@ def upgrade() -> None:
             sa.ForeignKey("workspaces.workspace_id"),
             nullable=False,
         ),
-        sa.Column(
-            "user_id", sa.String(64), sa.ForeignKey("users.user_id"), nullable=False
-        ),
+        sa.Column("user_id", sa.String(64), sa.ForeignKey("users.user_id"), nullable=False),
         sa.Column("role", sa.String(32), server_default="owner", nullable=False),
         sa.Column("invited_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("joined_at", sa.DateTime(timezone=True), nullable=True),
@@ -97,9 +95,7 @@ def upgrade() -> None:
     op.create_table(
         "sessions",
         sa.Column("session_id", sa.String(64), primary_key=True),
-        sa.Column(
-            "user_id", sa.String(64), sa.ForeignKey("users.user_id"), nullable=False
-        ),
+        sa.Column("user_id", sa.String(64), sa.ForeignKey("users.user_id"), nullable=False),
         sa.Column("token_hash", sa.String(256), unique=True, nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("surface", sa.String(32), server_default="web", nullable=False),
@@ -115,9 +111,7 @@ def upgrade() -> None:
     op.create_table(
         "oauth_connections",
         sa.Column("connection_id", sa.String(64), primary_key=True),
-        sa.Column(
-            "user_id", sa.String(64), sa.ForeignKey("users.user_id"), nullable=False
-        ),
+        sa.Column("user_id", sa.String(64), sa.ForeignKey("users.user_id"), nullable=False),
         sa.Column("provider", sa.String(32), nullable=False),
         sa.Column("provider_user_id", sa.String(128), nullable=True),
         sa.Column("email", sa.String(256), nullable=True),
@@ -143,9 +137,7 @@ def upgrade() -> None:
     op.create_table(
         "user_settings",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
-        sa.Column(
-            "user_id", sa.String(64), sa.ForeignKey("users.user_id"), nullable=False
-        ),
+        sa.Column("user_id", sa.String(64), sa.ForeignKey("users.user_id"), nullable=False),
         sa.Column("category", sa.String(32), nullable=False),
         sa.Column("key", sa.String(64), nullable=False),
         sa.Column("value", JSONB(), nullable=True),

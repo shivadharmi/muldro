@@ -32,23 +32,8 @@ def upgrade() -> None:
 def downgrade() -> None:
     # Re-add columns (without data — embeddings would need regeneration)
     op.execute("CREATE EXTENSION IF NOT EXISTS vector")
-    op.execute(
-        "ALTER TABLE memories ADD COLUMN IF NOT EXISTS "
-        "embedding vector(1024)"
-    )
-    op.execute(
-        "ALTER TABLE memories ADD COLUMN IF NOT EXISTS "
-        "embed_model_version varchar(64)"
-    )
-    op.execute(
-        "ALTER TABLE memories ADD COLUMN IF NOT EXISTS "
-        "embedding_ref varchar(128)"
-    )
-    op.execute(
-        "ALTER TABLE entities ADD COLUMN IF NOT EXISTS "
-        "embedding vector(1024)"
-    )
-    op.execute(
-        "ALTER TABLE entities ADD COLUMN IF NOT EXISTS "
-        "embed_model_version varchar(64)"
-    )
+    op.execute("ALTER TABLE memories ADD COLUMN IF NOT EXISTS embedding vector(1024)")
+    op.execute("ALTER TABLE memories ADD COLUMN IF NOT EXISTS embed_model_version varchar(64)")
+    op.execute("ALTER TABLE memories ADD COLUMN IF NOT EXISTS embedding_ref varchar(128)")
+    op.execute("ALTER TABLE entities ADD COLUMN IF NOT EXISTS embedding vector(1024)")
+    op.execute("ALTER TABLE entities ADD COLUMN IF NOT EXISTS embed_model_version varchar(64)")

@@ -33,9 +33,7 @@ def upgrade() -> None:
     )
 
     # BrowserSession: add run_id
-    op.add_column(
-        "browser_sessions", sa.Column("run_id", sa.String(64), nullable=True)
-    )
+    op.add_column("browser_sessions", sa.Column("run_id", sa.String(64), nullable=True))
 
     # BrowserAction: add output_json
     op.add_column("browser_actions", sa.Column("output_json", JSONB, nullable=True))

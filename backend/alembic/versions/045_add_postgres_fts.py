@@ -66,10 +66,7 @@ FTS_TABLES = [
 def upgrade() -> None:
     for table, tsvector_expr, _cols in FTS_TABLES:
         # 1. Add tsvector column
-        op.execute(
-            f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS "
-            f"search_vector tsvector"
-        )
+        op.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS search_vector tsvector")
 
         # 2. Create GIN index
         op.execute(

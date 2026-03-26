@@ -144,7 +144,9 @@ def upgrade() -> None:
         "goals",
         sa.Column("priority", sa.String(16), server_default="medium", nullable=False),
     )
-    op.add_column("goals", sa.Column("success_criteria_json", sa.dialects.postgresql.JSONB, nullable=True))
+    op.add_column(
+        "goals", sa.Column("success_criteria_json", sa.dialects.postgresql.JSONB, nullable=True)
+    )
 
     # entities
     op.add_column(
@@ -152,7 +154,9 @@ def upgrade() -> None:
     )
 
     # triggers
-    op.add_column("triggers", sa.Column("cooldown_until", sa.DateTime(timezone=True), nullable=True))
+    op.add_column(
+        "triggers", sa.Column("cooldown_until", sa.DateTime(timezone=True), nullable=True)
+    )
     op.add_column(
         "triggers", sa.Column("last_evaluated_at", sa.DateTime(timezone=True), nullable=True)
     )

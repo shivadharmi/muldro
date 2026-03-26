@@ -73,9 +73,7 @@ def upgrade() -> None:
         ),
     )
     op.create_index("ix_model_calls_trace", "model_calls", ["trace_id"])
-    op.create_index(
-        "ix_model_calls_agent_created", "model_calls", ["agent_name", "created_at"]
-    )
+    op.create_index("ix_model_calls_agent_created", "model_calls", ["agent_name", "created_at"])
 
 
 def downgrade() -> None:
