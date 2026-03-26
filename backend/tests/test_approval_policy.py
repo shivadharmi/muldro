@@ -63,7 +63,7 @@ class TestToolPolicyCapabilityClassification:
 
     def test_t0_internal_tools(self):
         policy = ToolPolicy()
-        result = policy._classify_via_capability("search_memory", None)
+        result = policy._classify_via_capability("search", None)
         assert result is not None
         assert not result.is_write
         assert result.risk_level == "low"
