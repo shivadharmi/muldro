@@ -26,7 +26,6 @@ from src.models.events import NormalizedEvent
 if TYPE_CHECKING:
     from src.services.dead_letter import DeadLetterService
     from src.services.event_bus import EventBus
-    from src.services.goal_tracker import GoalTracker
     from src.services.memory_service import MemoryService
     from src.services.notifier import Notifier
     from src.services.planner import Planner
@@ -105,20 +104,16 @@ class EventProcessor:
         self,
         settings: Settings,
         db: AsyncSession,
-        on_event_processed: list | None = None,
         world_model: WorldModel | None = None,
         memory_service: MemoryService | None = None,
         dead_letter: DeadLetterService | None = None,
         event_bus: EventBus | None = None,
         notifier: Notifier | None = None,
         planner: Planner | None = None,
-        goal_tracker: GoalTracker | None = None,
     ):
         self._settings = settings
         self._db = db
         self._client = get_anthropic_client(settings)
-        # Optional async callbacks: called with (event_id, user_id) after processing
-        self._on_event_processed = on_event_processed or []
         # Optional context providers for enriched scoring
         self._world_model = world_model
         self._memory_service = memory_service
@@ -126,7 +121,6 @@ class EventProcessor:
         self._event_bus = event_bus
         self._notifier = notifier
         self._planner = planner
-        self._goal_tracker = goal_tracker
 
     async def process(self, raw: RawEvent, user_id: str, workspace_id: str = "") -> str | None:
         """Process a raw event. Returns event_id if stored, None if duplicate."""
@@ -208,27 +202,6 @@ class EventProcessor:
 
         # Initiative scoring — decide if Jarvis should proactively act
         await self._evaluate_initiative(event, user_id, workspace_id=workspace_id)
-
-        # Fire legacy callbacks (kept for backward compatibility)
-        for callback in self._on_event_processed:
-            try:
-                await callback(event_id, user_id)
-            except Exception as exc:
-                logger.warning(
-                    "Post-process callback failed for %s: %s",
-                    event_id,
-                    str(exc)[:200],
-                    exc_info=True,
-                )
-                if hasattr(self, "_dead_letter") and self._dead_letter:
-                    await self._dead_letter.enqueue(
-                        user_id=user_id,
-                        operation_type=f"callback:{callback.__name__}",
-                        error_type=type(exc).__name__,
-                        error_message=str(exc),
-                        source_id=event_id,
-                        payload={"event_id": event_id, "callback": callback.__name__},
-                    )
 
         return event_id
 
@@ -371,7 +344,6 @@ class EventProcessor:
                 db=self._db,
                 world_model=self._world_model,
                 memory_service=self._memory_service,
-                goal_tracker=self._goal_tracker,
             )
             result = await scorer.score(event, user_id)
 

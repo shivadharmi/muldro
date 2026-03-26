@@ -1,8 +1,10 @@
-"""Search endpoints — hybrid ES (BM25) + Qdrant (semantic) search."""
+"""Search endpoints — hybrid ES (BM25) + Qdrant (semantic) + unified search."""
 
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_current_user_id
+from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
 from src.api.schemas import SearchRequest, SearchResponse, SearchResult
 from src.config.settings import Settings, get_settings
 from src.services.search_service import SearchService
@@ -61,3 +63,22 @@ async def search(
         )
 
     return SearchResponse(results=results)
+
+
+class UnifiedSearchRequest(BaseModel):
+    query: str
+    types: list[str] | None = None
+    limit: int = 20
+
+
+@router.post("/v1/search/unified")
+async def unified_search(
+    req: UnifiedSearchRequest,
+    workspace_id: str = Depends(get_current_workspace_id),
+    db: AsyncSession = Depends(get_session),
+):
+    """Unified search across conversations, briefings, approvals, entities, memories, goals."""
+    from src.services.unified_search import UnifiedSearchService
+
+    svc = UnifiedSearchService(db, workspace_id)
+    return await svc.search(req.query, types=req.types, limit=req.limit)

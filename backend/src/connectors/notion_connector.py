@@ -16,6 +16,7 @@ NOTION_HEADERS = {"Notion-Version": "2022-06-28", "Content-Type": "application/j
 class NotionConnector(BaseConnector):
     """Polls Notion API for recently edited pages. MCP server is the primary write path."""
 
+    cursor_type: str = "since_timestamp"
     supports_actions: bool = True
     available_actions: list[str] = ["create_page", "update_page", "search"]
 

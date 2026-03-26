@@ -1,18 +1,19 @@
 """Meeting Prep workflow — look up next meeting, gather context, generate prep.
 
-Uses Google Workspace MCP server (preferred) or Calendar connector fallback
+Uses Google Workspace MCP server (preferred) or Calendar integration fallback
 for meeting data, world model for attendee entities, memory service for
 related context, and Claude for synthesis.
 """
 
 import logging
 
+from src.workflows.context import WorkflowContext
 from src.workflows.workflow_registry import Workflow, WorkflowStep
 
 logger = logging.getLogger(__name__)
 
 
-async def _poll_calendar_via_mcp() -> dict | None:
+async def _poll_calendar_via_mcp(ctx: WorkflowContext) -> dict | None:
     """Try listing upcoming calendar events via Google Workspace MCP server."""
     from src.connectors.mcp_bridge import call_mcp_tool, is_mcp_tool
 
@@ -22,16 +23,21 @@ async def _poll_calendar_via_mcp() -> dict | None:
         "calendar_list_events",
     ):
         if is_mcp_tool(tool_name):
-            return await call_mcp_tool(tool_name, {"time_min": "now", "max_results": 5})
+            return await call_mcp_tool(
+                tool_name,
+                {"time_min": "now", "max_results": 5},
+                user_id=ctx.user_id,
+                workspace_id=ctx.workspace_id,
+            )
     return None
 
 
-async def find_next_meeting(context: dict) -> dict:
-    """Find the next upcoming calendar meeting — MCP first, connector fallback."""
+async def find_next_meeting(ctx: WorkflowContext) -> dict:
+    """Find the next upcoming calendar meeting — MCP first, integration fallback."""
     from datetime import datetime, timezone
 
     # Try MCP bridge
-    mcp_result = await _poll_calendar_via_mcp()
+    mcp_result = await _poll_calendar_via_mcp(ctx)
     if mcp_result and mcp_result.get("status") == "ok":
         logger.info("Fetched calendar events via MCP bridge")
         return {
@@ -42,19 +48,16 @@ async def find_next_meeting(context: dict) -> dict:
     # Fallback to direct connector
     from src.connectors.base import CONNECTOR_REGISTRY
 
-    credentials = context.get("credentials", {})
-    settings = context.get("settings")
-
     cal_cls = CONNECTOR_REGISTRY.get("calendar")
     if not cal_cls:
         return {"meeting": None, "error": "No calendar source available"}
 
-    connector = cal_cls(settings) if settings else cal_cls.__new__(cal_cls)
+    connector = cal_cls(ctx.settings) if ctx.settings else cal_cls.__new__(cal_cls)
 
     events, _ = await connector.poll(
-        user_id=context["user_id"],
+        user_id=ctx.user_id,
         cursor=None,
-        credentials=credentials,
+        credentials=ctx.credentials,
     )
 
     if not events:
@@ -82,93 +85,90 @@ async def find_next_meeting(context: dict) -> dict:
     }
 
 
-async def gather_attendee_context(context: dict) -> dict:
+async def gather_attendee_context(ctx: WorkflowContext) -> dict:
     """Look up attendee entities and related memories."""
-    meeting = context.get("meeting")
+    meeting = ctx.get("meeting")
     if not meeting:
         return {"attendees": [], "memories": []}
 
-    services = context.get("services", {})
-    user_id = context["user_id"]
+    services = ctx.services
 
     actor = meeting.get("actor", {})
     attendee_emails = []
     if actor and actor.get("email"):
         attendee_emails.append(actor["email"])
 
-    workspace_id = context.get("workspace_id", "")
-
     attendees = []
-    world_model = services.get("world_model")
+    world_model = services.world_model if services else None
     if world_model and attendee_emails:
         for email in attendee_emails[:10]:
-            entity = await world_model.find_entity(user_id, email, workspace_id=workspace_id)
+            entity = await world_model.find_entity(
+                ctx.user_id, email, workspace_id=ctx.workspace_id
+            )
             if entity:
                 attendees.append(entity)
 
     memories = []
-    memory_service = services.get("memory_service")
+    memory_service = services.memory_service if services else None
     if memory_service:
         title = meeting.get("title", "")
         if title:
             memories = await memory_service.retrieve(
-                user_id=user_id,
+                user_id=ctx.user_id,
                 query=title,
                 max_results=5,
-                workspace_id=workspace_id,
+                workspace_id=ctx.workspace_id,
             )
 
     return {"attendees": attendees, "memories": memories}
 
 
-async def generate_prep(context: dict) -> dict:
+async def generate_prep(ctx: WorkflowContext) -> dict:
     """Generate meeting prep document using the Presenter."""
-    meeting = context.get("meeting")
+    meeting = ctx.get("meeting")
     if not meeting:
         return {"prep": None, "note": "No meeting to prepare for"}
 
-    services = context.get("services", {})
-    user_id = context["user_id"]
-    workspace_id = context.get("workspace_id", "")
-
-    presenter = services.get("presenter")
+    services = ctx.services
+    presenter = services.presenter if services else None
     if not presenter:
         return {"prep": None, "error": "Presenter service not available"}
 
     entity_id = meeting.get("entity_id", "")
     prep = await presenter.generate_meeting_prep(
         meeting_id=entity_id,
-        user_id=user_id,
+        user_id=ctx.user_id,
         next_meeting=not entity_id,
-        workspace_id=workspace_id,
+        workspace_id=ctx.workspace_id,
     )
 
     return {"prep": prep}
 
 
-async def notify_user(context: dict) -> dict:
+async def notify_user(ctx: WorkflowContext) -> dict:
     """Notify user that meeting prep is ready."""
-    prep = context.get("prep")
+    prep = ctx.get("prep")
     if not prep:
         return {"notified": False, "reason": "No prep generated"}
 
-    services = context.get("services", {})
-    user_id = context["user_id"]
-    notifier = services.get("notifier")
-
+    services = ctx.services
+    notifier = services.notifier if services else None
     if not notifier:
         return {"notified": False, "reason": "No notifier available"}
 
-    meeting = context.get("meeting", {})
-    title = meeting.get("title", "Upcoming meeting")
+    meeting = ctx.get("meeting", {})
+    title = meeting.get("title", "Upcoming meeting") if isinstance(meeting, dict) else "Meeting"
 
     try:
         await notifier.notify(
-            user_id=user_id,
+            user_id=ctx.user_id,
             notification_type="info_update",
             title=f"Meeting Prep: {title}",
             body=f"Prep ready for {title}",
-            data={"meeting_id": meeting.get("entity_id"), "prep": prep},
+            data={
+                "meeting_id": meeting.get("entity_id") if isinstance(meeting, dict) else None,
+                "prep": prep,
+            },
         )
         return {"notified": True}
     except Exception:

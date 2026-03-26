@@ -15,6 +15,7 @@ LINEAR_API_URL = "https://api.linear.app/graphql"
 class LinearConnector(BaseConnector):
     """Polls Linear GraphQL API for issue changes. MCP server is the primary write path."""
 
+    cursor_type: str = "since_timestamp"
     supports_actions: bool = True
     available_actions: list[str] = ["create_issue", "update_issue", "comment"]
 

@@ -30,6 +30,7 @@ router = APIRouter()
 class ChatRequest(BaseModel):
     message: str
     surface: str = "web"
+    mode: str = "ask"  # ask, plan, execute
     context: dict | None = None
     conversation_id: str | None = None
 
@@ -143,6 +144,12 @@ async def chat_stream(
         except Exception:
             logger.warning("Failed to save user message", exc_info=True)
 
+    # Pre-generate the assistant message ID so it can be sent early via SSE
+    # and reused when persisting in the finally block.
+    from ulid import ULID as _ULID
+
+    assistant_message_id = f"msg_{_ULID()}"
+
     final_response_text = ""
     final_trace_id = None
     final_decision: PlannerOutput | None = None
@@ -156,11 +163,16 @@ async def chat_stream(
                 cid_data = json.dumps({"event": "conversation", "conversation_id": conversation_id})
                 yield f"event: conversation\ndata: {cid_data}\n\n"
 
+            # Send the backend message_id so the frontend can reference the real ID
+            mid_data = json.dumps({"event": "message_id", "message_id": assistant_message_id})
+            yield f"event: message_id\ndata: {mid_data}\n\n"
+
             async for event in orchestrator.process_message_stream(
                 message=req.message,
                 user_id=user_id,
                 workspace_id=workspace_id,
                 surface=req.surface,
+                mode=req.mode,
                 context=req.context,
                 conversation_id=conversation_id,
             ):
@@ -250,10 +262,8 @@ async def chat_stream(
                                 tc.result_preview = preview[:500] if len(preview) > 500 else preview
                             break
 
-                # Tool events are persisted to DB above but not streamed to client
-                if event_type not in ("tool_call", "tool_result"):
-                    data = json.dumps(event, default=str)
-                    yield f"event: {event_type}\ndata: {data}\n\n"
+                data = json.dumps(event, default=str)
+                yield f"event: {event_type}\ndata: {data}\n\n"
         except Exception as e:
             logger.error("Chat stream error: %s", e, exc_info=True)
             error_data = json.dumps({"event": "error", "message": str(e)})
@@ -263,8 +273,6 @@ async def chat_stream(
             if conversation_id and final_response_text:
                 try:
                     from datetime import datetime, timezone
-
-                    from ulid import ULID
 
                     from src.models.conversations import Conversation, Message
                     from src.models.database import get_session_factory
@@ -283,7 +291,7 @@ async def chat_stream(
                     async with get_session_factory()() as db:
                         db.add(
                             Message(
-                                message_id=f"msg_{ULID()}",
+                                message_id=assistant_message_id,
                                 conversation_id=conversation_id,
                                 workspace_id=workspace_id,
                                 role="assistant",

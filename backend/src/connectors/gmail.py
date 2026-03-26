@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 class GmailConnector(BaseConnector):
     """Polls Gmail via Google API using historyId for incremental fetch."""
 
+    cursor_type: str = "history_id"
     supports_actions: bool = True
     available_actions: list[str] = [
         "list_unread",

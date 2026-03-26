@@ -24,6 +24,25 @@ from src.services.embedding_service import EmbeddingService
 
 logger = logging.getLogger(__name__)
 
+
+def _vec_to_pg(embedding) -> str:
+    """Convert an embedding (list or numpy array) to pgvector-compatible string.
+
+    numpy str() uses spaces: '[-0.1  0.2  0.3]'
+    pgvector needs commas:   '[-0.1, 0.2, 0.3]'
+    """
+    if embedding is None:
+        return "[]"
+    if isinstance(embedding, str):
+        return embedding
+    # Handle numpy arrays and plain lists uniformly
+    try:
+        values = list(embedding)
+    except TypeError:
+        return str(embedding)
+    return "[" + ",".join(str(v) for v in values) + "]"
+
+
 MEMORY_EXTRACTION_PROMPT = """\
 You are Jarvis's memory extraction engine. Given text from an event or \
 interaction, extract facts worth remembering long-term.
@@ -195,6 +214,88 @@ class MemoryService:
 
         return memory_ids
 
+    async def store_goal_memory(
+        self,
+        user_id: str,
+        workspace_id: str,
+        title: str,
+        description: str | None = None,
+        target_date: str | None = None,
+        priority: str = "medium",
+        entity_ids: list[str] | None = None,
+    ) -> str:
+        """Store a goal as a memory with memory_type='goal'.
+
+        Returns the memory_id.
+        """
+        parts = [f"Goal: {title}"]
+        if description:
+            parts.append(description)
+        if target_date:
+            parts.append(f"Target date: {target_date}")
+        parts.append(f"Priority: {priority}")
+        fact_text = ". ".join(parts)
+
+        embedding = await self._embedder.embed_text(fact_text)
+        memory_id = f"mem_{ULID()}"
+        memory = Memory(
+            memory_id=memory_id,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            memory_type="goal",
+            scope="planning",
+            fact_text=fact_text,
+            embedding=embedding,
+            confidence=0.9,
+            stability_score=0.5,
+            source_event_ids=[],
+            provenance={"source": "user_goal", "priority": priority},
+            ttl_days=None,
+            status="active",
+            entity_ids=entity_ids,
+        )
+        self._db.add(memory)
+        await self._db.flush()
+        logger.info("Goal memory stored: %s '%s'", memory_id, title)
+        return memory_id
+
+    async def store_instruction_memory(
+        self,
+        user_id: str,
+        workspace_id: str,
+        instruction_text: str,
+        instruction_type: str = "preference",
+    ) -> str:
+        """Store a user instruction as a preference memory.
+
+        Returns the memory_id.
+        """
+        fact_text = f"Instruction: {instruction_text}"
+        embedding = await self._embedder.embed_text(fact_text)
+        memory_id = f"mem_{ULID()}"
+        memory = Memory(
+            memory_id=memory_id,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            memory_type="preference",
+            scope="general",
+            fact_text=fact_text,
+            embedding=embedding,
+            confidence=0.95,
+            stability_score=0.8,
+            source_event_ids=[],
+            provenance={
+                "source": "user_instruction",
+                "instruction_type": instruction_type,
+            },
+            ttl_days=None,
+            status="active",
+        )
+        self._db.add(memory)
+        await self._db.flush()
+        logger.info("Instruction memory stored: %s '%s'", memory_id, instruction_text[:80])
+        return memory_id
+
     async def retrieve(
         self,
         user_id: str,
@@ -308,7 +409,7 @@ class MemoryService:
                 "user_id": user_id,
                 "workspace_id": workspace_id,
                 "new_id": new_memory_id,
-                "embedding": str(embedding),
+                "embedding": _vec_to_pg(embedding),
             },
         )
         candidates = result.all()
@@ -410,7 +511,11 @@ class MemoryService:
                     ) AS similarity
                 """)
                 sim_result = await self._db.execute(
-                    sql, {"embedding1": str(mem1.embedding), "embedding2": str(mem2.embedding)}
+                    sql,
+                    {
+                        "embedding1": _vec_to_pg(mem1.embedding),
+                        "embedding2": _vec_to_pg(mem2.embedding),
+                    },
                 )
                 similarity = sim_result.scalar_one()
 
@@ -500,7 +605,7 @@ class MemoryService:
         params: dict = {
             "user_id": user_id,
             "workspace_id": workspace_id,
-            "embedding": str(query_embedding),
+            "embedding": _vec_to_pg(query_embedding),
             "limit": max_results,
         }
 
@@ -614,12 +719,14 @@ class MemoryService:
                 system=MEMORY_EXTRACTION_PROMPT,
                 messages=[{"role": "user", "content": source_text}],
             )
-            text = response.content[0].text
+            text = response.content[0].text.strip()
             if text.startswith("```"):
-                text = text.split("\n", 1)[1].rsplit("```", 1)[0]
+                text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            if not text or text[0] not in "{[":
+                return {"memories": []}
             return json.loads(text)
         except Exception:
-            logger.warning("Memory extraction failed", exc_info=True)
+            logger.debug("Memory extraction returned non-JSON", exc_info=True)
             return {"memories": []}
 
     async def _call_preference_extraction(self, source_text: str) -> dict:
@@ -631,12 +738,14 @@ class MemoryService:
                 system=PREFERENCE_EXTRACTION_PROMPT,
                 messages=[{"role": "user", "content": source_text}],
             )
-            text = response.content[0].text
+            text = response.content[0].text.strip()
             if text.startswith("```"):
-                text = text.split("\n", 1)[1].rsplit("```", 1)[0]
+                text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            if not text or text[0] not in "{[":
+                return {"preferences": []}
             return json.loads(text)
         except Exception:
-            logger.warning("Preference extraction failed", exc_info=True)
+            logger.debug("Preference extraction returned non-JSON", exc_info=True)
             return {"preferences": []}
 
     async def _is_duplicate(self, user_id: str, fact_text: str, workspace_id: str = "") -> bool:
@@ -671,7 +780,12 @@ class MemoryService:
                 LIMIT 1
             """)
             result = await self._db.execute(
-                sql, {"user_id": user_id, "workspace_id": workspace_id, "embedding": str(embedding)}
+                sql,
+                {
+                    "user_id": user_id,
+                    "workspace_id": workspace_id,
+                    "embedding": _vec_to_pg(embedding),
+                },
             )
             if result.scalar_one_or_none() is not None:
                 return True

@@ -108,3 +108,17 @@ export function MarkdownRenderer({ content }: { content: string }) {
     </div>
   );
 }
+
+const inlineComponents: Components = {
+  ...components,
+  p: ({ children }) => <span>{children}</span>,
+};
+
+/** Compact markdown for short text (summaries, descriptions). No block-level spacing. */
+export function InlineMarkdown({ content }: { content: string }) {
+  return (
+    <ReactMarkdown remarkPlugins={[remarkGfm]} components={inlineComponents}>
+      {content}
+    </ReactMarkdown>
+  );
+}

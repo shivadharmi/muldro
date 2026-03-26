@@ -51,19 +51,50 @@ class EventBus:
         user_id: str = "",
         metadata: dict | None = None,
     ) -> str:
-        """Publish an event to a stream. Returns the event_id."""
+        """Publish an event to a stream. Returns the event_id.
+
+        Dual-publishes: durable via Redis Streams (``xadd``) AND real-time
+        via Redis Pub/Sub (``publish``) so SSE subscribers see events
+        immediately.
+        """
         event_id = f"be_{ULID()}"
+        created_at = datetime.now(timezone.utc).isoformat()
         data = {
             "event_id": event_id,
             "event_type": event_type,
             "user_id": user_id,
             "payload": json.dumps(payload),
             "metadata": json.dumps(metadata or {}),
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": created_at,
         }
         msg_id = await self._redis.xadd(stream, data)
         logger.debug("Published %s to %s (msg=%s)", event_type, stream, msg_id)
+
+        # Dual-publish to Pub/Sub for real-time SSE subscribers
+        try:
+            from src.orchestrator.contracts import RealtimeEventPayload
+
+            rt = RealtimeEventPayload(
+                event_id=event_id,
+                event_type=event_type,
+                user_id=user_id,
+                payload=payload,
+                metadata=metadata or {},
+                created_at=created_at,
+            )
+            await self._redis.publish(stream, rt.model_dump_json())
+        except Exception:
+            logger.debug("Pub/Sub dual-publish failed for %s", event_type, exc_info=True)
+
         return event_id
+
+    async def publish_to_channel(self, channel: str, data: str) -> None:
+        """Publish a pre-serialized JSON string to a Redis Pub/Sub channel.
+
+        Used for surface pushes and other real-time messages that do not
+        need durable Streams storage.
+        """
+        await self._redis.publish(channel, data)
 
     async def create_consumer_group(self, stream: str, group: str, start_id: str = "0") -> None:
         """Create a consumer group if it doesn't exist."""

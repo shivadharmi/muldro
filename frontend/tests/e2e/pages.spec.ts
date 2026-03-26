@@ -94,9 +94,9 @@ test.describe("Pages load and call correct APIs", () => {
     await page.waitForLoadState("networkidle");
   });
 
-  test("Connectors page calls /api/connectors", async ({ page }) => {
-    const calls = await collectAPICalls(page, () => page.goto("/connectors"));
-    expect(calls.some((c) => c.includes("/api/connectors"))).toBeTruthy();
+  test("Integrations page calls /api/integrations", async ({ page }) => {
+    const calls = await collectAPICalls(page, () => page.goto("/integrations"));
+    expect(calls.some((c) => c.includes("/api/integrations"))).toBeTruthy();
   });
 
   test("Executions page calls /api/executions", async ({ page }) => {
@@ -280,13 +280,13 @@ test.describe("Settings interaction", () => {
   });
 });
 
-test.describe("Connectors interaction", () => {
-  test("connectors page lists connected services", async ({ page }) => {
-    await page.goto("/connectors");
+test.describe("Integrations interaction", () => {
+  test("integrations page lists connected services", async ({ page }) => {
+    await page.goto("/integrations");
     await page.waitForLoadState("networkidle");
 
     const body = await page.textContent("body");
-    expect(body?.toLowerCase()).toMatch(/connector|google|github|connect/);
+    expect(body?.toLowerCase()).toMatch(/integration|google|github|connect/);
   });
 });
 

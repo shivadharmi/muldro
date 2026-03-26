@@ -1,10 +1,13 @@
 """Centralized tool risk classification and input summarization.
 
 Consolidates risk/write/blocked classification and approval summary
-generation that was previously scattered across hooks.py.
+generation. Uses the capability catalog for capability-aware classification
+with trust-tier context, falling back to hardcoded sets when DB unavailable.
 """
 
 import logging
+
+from src.integrations.capabilities import CAPABILITY_CATALOG, get_capability_for_tool
 
 logger = logging.getLogger(__name__)
 
@@ -136,14 +139,61 @@ class ToolClassification:
 class ToolPolicy:
     """Classifies tools and summarizes inputs for approvals."""
 
-    async def classify(self, tool_name: str, *, db_factory=None) -> ToolClassification:
-        """Classify a tool — DB-first with hardcoded fallback."""
+    async def classify(
+        self,
+        tool_name: str,
+        *,
+        db_factory=None,
+        trust_tier: str | None = None,
+    ) -> ToolClassification:
+        """Classify a tool — capability-aware, DB-first with hardcoded fallback.
+
+        Args:
+            tool_name: The tool to classify.
+            db_factory: DB session factory for registry lookup.
+            trust_tier: Trust tier of the server (T0-T3). Higher tiers get
+                        stricter classification.
+        """
+        # Try capability-based classification first
+        cap_result = self._classify_via_capability(tool_name, trust_tier)
+        if cap_result:
+            return cap_result
+
         if db_factory:
             try:
                 return await self._classify_via_registry(tool_name, db_factory)
             except Exception:
                 pass
         return self._classify_fallback(tool_name)
+
+    def _classify_via_capability(
+        self, tool_name: str, trust_tier: str | None
+    ) -> ToolClassification | None:
+        """Classify using the capability catalog and trust tier."""
+        capability = get_capability_for_tool(tool_name)
+        if not capability:
+            return None
+
+        meta = CAPABILITY_CATALOG.get(capability)
+        if not meta:
+            return None
+
+        # Read-only capabilities are always safe
+        if meta.read_only:
+            return ToolClassification(False, False, "low")
+
+        # Trust tier escalation: T3 (user-added) tools always require approval
+        risk = meta.risk_level
+        if trust_tier == "T3":
+            return ToolClassification(False, True, "high" if risk == "low" else risk)
+        if trust_tier == "T2":
+            is_write = risk in ("medium", "high", "critical")
+            return ToolClassification(False, is_write, risk)
+
+        # T0/T1 or unknown tier: use catalog risk
+        is_write = not meta.read_only and risk in ("medium", "high", "critical")
+        is_blocked = risk == "critical"
+        return ToolClassification(is_blocked, is_write, risk)
 
     async def _classify_via_registry(self, tool_name: str, db_factory) -> ToolClassification:
         from src.services.tool_registry import ToolRegistry

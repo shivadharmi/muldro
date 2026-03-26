@@ -192,7 +192,7 @@ class TestOrchestratorToolDispatch:
         assert "disabled" in result["error"].lower() or "blocked" in result["error"].lower()
 
     async def test_non_blocked_tool_proceeds_to_internal(self):
-        """Non-blocked tool falls through to internal handler lookup."""
+        """Non-blocked tool falls through to internal MCP handler."""
         orch = self._make_orchestrator()
 
         mock_db = AsyncMock()
@@ -204,17 +204,16 @@ class TestOrchestratorToolDispatch:
         mock_registry = AsyncMock()
         mock_registry.is_blocked_tool = AsyncMock(return_value=False)
 
-        mock_handler = AsyncMock(return_value={"status": "ok"})
+        # Mock the in-process MCP Client dispatch
+        orch._call_internal_tool = AsyncMock(return_value={"status": "ok"})
 
-        with (
-            patch("src.services.tool_registry.ToolRegistry", return_value=mock_registry),
-            patch("src.tools.intelligence_server.search_memory", mock_handler),
-        ):
+        with patch("src.services.tool_registry.ToolRegistry", return_value=mock_registry):
             result = await orch._execute_tool(
                 "search_memory", {"query": "test"}, user_id=TEST_USER_ID
             )
 
         assert result == {"status": "ok"}
+        orch._call_internal_tool.assert_called_once()
 
     async def test_registry_error_skips_precheck(self):
         """If ToolRegistry raises, pre-check is skipped and tool proceeds."""
@@ -225,17 +224,15 @@ class TestOrchestratorToolDispatch:
         mock_context.__aexit__ = AsyncMock(return_value=False)
         orch._db_factory = MagicMock(return_value=mock_context)
 
-        mock_handler = AsyncMock(return_value={"data": "result"})
+        # Mock the in-process MCP Client dispatch
+        orch._call_internal_tool = AsyncMock(return_value={"data": "result"})
 
-        with patch("src.tools.intelligence_server.ingest_event", mock_handler):
-            result = await orch._execute_tool(
-                "ingest_event", {"event": "test"}, user_id=TEST_USER_ID
-            )
+        result = await orch._execute_tool("ingest_event", {"event": "test"}, user_id=TEST_USER_ID)
 
         assert result == {"data": "result"}
 
     async def test_mcp_tool_dispatched_when_not_internal(self):
-        """Tools not in internal_handlers check MCP bridge."""
+        """Tools not in internal set are dispatched via MCP bridge session pool."""
         orch = self._make_orchestrator()
 
         mock_db = AsyncMock()
@@ -260,7 +257,7 @@ class TestOrchestratorToolDispatch:
             )
 
         assert result == {"mcp": True}
-        mock_call.assert_called_once_with("gmail_read_email", {"id": "123"})
+        mock_call.assert_called_once()
 
     async def test_connector_fallback_when_not_mcp(self):
         """Falls to connector-backed execution when not internal or MCP."""

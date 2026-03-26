@@ -4,12 +4,10 @@ import Link from "next/link";
 
 export function GreetingHero({
   headline,
-  briefingId,
   approvalCount,
   sourceCount,
 }: {
   headline: string | null;
-  briefingId: string | null;
   approvalCount: number;
   sourceCount: number;
 }) {
@@ -45,27 +43,18 @@ export function GreetingHero({
           >
             Talk to Jarvis
           </Link>
-          {briefingId && (
-            <Link
-              href="/briefings"
-              className="px-3 py-1.5 bg-surface-2 text-t-secondary text-xs font-medium rounded-[var(--radius-md)] hover:bg-surface-3 transition-colors"
-            >
-              View Briefing
-            </Link>
-          )}
           {approvalCount > 0 && (
-            <Link
-              href="/approvals"
-              className="px-3 py-1.5 bg-j-warning-soft text-j-warning text-xs font-medium rounded-[var(--radius-md)] hover:opacity-80 transition-opacity"
-            >
-              Approvals ({approvalCount})
-            </Link>
+            <span className="px-3 py-1.5 bg-j-warning-soft text-j-warning text-xs font-medium rounded-[var(--radius-md)]">
+              {approvalCount} pending approval{approvalCount !== 1 ? "s" : ""}
+            </span>
           )}
         </div>
 
         <div className="flex items-center gap-1.5 text-[11px] text-t-muted">
           <span className="w-1.5 h-1.5 rounded-full bg-j-primary animate-pulse-live" />
-          Jarvis is monitoring {sourceCount} source{sourceCount !== 1 ? "s" : ""}
+          {sourceCount > 0
+            ? `Jarvis is monitoring ${sourceCount} source${sourceCount !== 1 ? "s" : ""}`
+            : "Connect sources to get started"}
         </div>
       </div>
     </div>

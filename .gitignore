@@ -39,3 +39,6 @@ Screenshot 2026-03-14 at 5.22.44 AM.png
 server.log
 client_secret.json
 test-results/
+references/
+prompts/
+pytest-of-sivasankarreddybogala/

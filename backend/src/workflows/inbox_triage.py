@@ -1,12 +1,13 @@
 """Inbox Triage workflow — fetch, classify, group, draft, approve, send.
 
-Uses Google Workspace MCP server (preferred) or Gmail connector fallback
+Uses Google Workspace MCP server (preferred) or Gmail integration fallback
 for real email operations, and Claude for classification and draft generation.
 """
 
 import json
 import logging
 
+from src.workflows.context import WorkflowContext
 from src.workflows.workflow_registry import Workflow, WorkflowStep
 
 logger = logging.getLogger(__name__)
@@ -45,22 +46,32 @@ Rules:
 """
 
 
-async def _list_unread_via_mcp(max_results: int = 20) -> dict | None:
+async def _list_unread_via_mcp(ctx: WorkflowContext, max_results: int = 20) -> dict | None:
     """Try listing unread emails via Google Workspace MCP server."""
     from src.connectors.mcp_bridge import call_mcp_tool, is_mcp_tool
 
-    # Google Workspace MCP namespaces tools as google_workspace_<tool>
     for tool_name in (
         "google_workspace_gmail_list_unread",
         "google-workspace_gmail_list_unread",
         "gmail_list_unread",
     ):
         if is_mcp_tool(tool_name):
-            return await call_mcp_tool(tool_name, {"max_results": max_results})
+            return await call_mcp_tool(
+                tool_name,
+                {"max_results": max_results},
+                user_id=ctx.user_id,
+                workspace_id=ctx.workspace_id,
+            )
     return None
 
 
-async def _send_via_mcp(to: str, subject: str, body: str, thread_id: str | None) -> dict | None:
+async def _send_via_mcp(
+    ctx: WorkflowContext,
+    to: str,
+    subject: str,
+    body: str,
+    thread_id: str | None,
+) -> dict | None:
     """Try sending email via Google Workspace MCP server."""
     from src.connectors.mcp_bridge import call_mcp_tool, is_mcp_tool
 
@@ -73,16 +84,21 @@ async def _send_via_mcp(to: str, subject: str, body: str, thread_id: str | None)
             params = {"to": to, "subject": subject, "body": body}
             if thread_id:
                 params["thread_id"] = thread_id
-            return await call_mcp_tool(tool_name, params)
+            return await call_mcp_tool(
+                tool_name,
+                params,
+                user_id=ctx.user_id,
+                workspace_id=ctx.workspace_id,
+            )
     return None
 
 
-async def fetch_unread(context: dict) -> dict:
-    """Fetch unread emails — MCP first, connector fallback."""
-    max_results = context.get("max_results", 20)
+async def fetch_unread(ctx: WorkflowContext) -> dict:
+    """Fetch unread emails — MCP first, integration fallback."""
+    max_results = ctx.get("max_results", 20)
 
     # Try MCP bridge
-    mcp_result = await _list_unread_via_mcp(max_results)
+    mcp_result = await _list_unread_via_mcp(ctx, max_results)
     if mcp_result and mcp_result.get("status") == "ok":
         logger.info("Fetched unread emails via MCP bridge")
         return {
@@ -94,16 +110,13 @@ async def fetch_unread(context: dict) -> dict:
     # Fallback to direct connector
     from src.connectors.base import CONNECTOR_REGISTRY
 
-    credentials = context.get("credentials", {})
-    settings = context.get("settings")
-
     gmail_cls = CONNECTOR_REGISTRY.get("gmail")
     if not gmail_cls:
         return {"emails": [], "count": 0, "error": "No Gmail source available"}
 
-    connector = gmail_cls(settings) if settings else gmail_cls.__new__(gmail_cls)
+    connector = gmail_cls(ctx.settings) if ctx.settings else gmail_cls.__new__(gmail_cls)
     result = await connector.execute_action(
-        "list_unread", {"max_results": max_results}, credentials
+        "list_unread", {"max_results": max_results}, ctx.credentials
     )
 
     if result.get("status") != "ok":
@@ -116,23 +129,21 @@ async def fetch_unread(context: dict) -> dict:
     }
 
 
-async def classify_emails(context: dict) -> dict:
+async def classify_emails(ctx: WorkflowContext) -> dict:
     """Classify emails by urgency and type using Claude."""
-    emails = context.get("emails", [])
+    emails = ctx.get("emails", [])
     if not emails:
         return {"classified": [], "urgent_count": 0, "total": 0}
 
-    settings = context.get("settings")
-    if not settings:
+    if not ctx.settings:
         return {"classified": [], "urgent_count": 0, "total": len(emails)}
 
     from src.config.settings import get_anthropic_client
 
-    client = get_anthropic_client(settings)
+    client = get_anthropic_client(ctx.settings)
 
-    # Build email summaries for classification
     email_summaries = []
-    for e in emails[:30]:  # cap at 30 for context window
+    for e in emails[:30]:
         email_summaries.append(
             f"ID: {e['message_id']}\n"
             f"From: {e.get('from', '')}\n"
@@ -142,7 +153,7 @@ async def classify_emails(context: dict) -> dict:
 
     try:
         response = await client.messages.create(
-            model=settings.resolved_model,
+            model=ctx.settings.resolved_model,
             max_tokens=2048,
             system=CLASSIFY_PROMPT,
             messages=[{"role": "user", "content": "\n---\n".join(email_summaries)}],
@@ -173,10 +184,10 @@ async def classify_emails(context: dict) -> dict:
     }
 
 
-async def group_emails(context: dict) -> dict:
+async def group_emails(ctx: WorkflowContext) -> dict:
     """Group emails by thread/topic."""
-    classified = context.get("classified", [])
-    emails = context.get("emails", [])
+    classified = ctx.get("classified", [])
+    emails = ctx.get("emails", [])
 
     email_by_id = {e["message_id"]: e for e in emails}
     threads: dict[str, list[dict]] = {}
@@ -203,21 +214,20 @@ async def group_emails(context: dict) -> dict:
     return {"groups": groups, "group_count": len(groups)}
 
 
-async def draft_responses(context: dict) -> dict:
+async def draft_responses(ctx: WorkflowContext) -> dict:
     """Draft responses for emails that need replies using Claude."""
-    action_required = context.get("action_required", [])
-    emails = context.get("emails", [])
+    action_required = ctx.get("action_required", [])
+    emails = ctx.get("emails", [])
 
     if not action_required:
         return {"drafts": [], "draft_count": 0}
 
-    settings = context.get("settings")
-    if not settings:
+    if not ctx.settings:
         return {"drafts": [], "draft_count": 0}
 
     from src.config.settings import get_anthropic_client
 
-    client = get_anthropic_client(settings)
+    client = get_anthropic_client(ctx.settings)
 
     email_by_id = {e["message_id"]: e for e in emails}
 
@@ -236,7 +246,7 @@ async def draft_responses(context: dict) -> dict:
 
     try:
         response = await client.messages.create(
-            model=settings.resolved_model,
+            model=ctx.settings.resolved_model,
             max_tokens=4096,
             system=DRAFT_PROMPT,
             messages=[{"role": "user", "content": "\n---\n".join(to_draft)}],
@@ -252,12 +262,10 @@ async def draft_responses(context: dict) -> dict:
     return {"drafts": drafts, "draft_count": len(drafts)}
 
 
-async def send_approved(context: dict) -> dict:
-    """Send approved draft responses — MCP first, connector fallback."""
-    drafts = context.get("drafts", [])
-    approved = context.get("approved_draft_ids", [])
-    credentials = context.get("credentials", {})
-    settings = context.get("settings")
+async def send_approved(ctx: WorkflowContext) -> dict:
+    """Send approved draft responses — MCP first, integration fallback."""
+    drafts = ctx.get("drafts", [])
+    approved = ctx.get("approved_draft_ids", [])
 
     if not drafts or not approved:
         return {"sent_count": 0, "skipped": len(drafts)}
@@ -275,7 +283,7 @@ async def send_approved(context: dict) -> dict:
         thread_id = draft.get("thread_id")
 
         # Try MCP bridge first
-        mcp_result = await _send_via_mcp(to, subject, body, thread_id)
+        mcp_result = await _send_via_mcp(ctx, to, subject, body, thread_id)
         if mcp_result and mcp_result.get("status") == "ok":
             sent += 1
             continue
@@ -288,11 +296,11 @@ async def send_approved(context: dict) -> dict:
             errors.append({"message_id": msg_id, "error": "No Gmail source available"})
             continue
 
-        connector = gmail_cls(settings) if settings else gmail_cls.__new__(gmail_cls)
+        connector = gmail_cls(ctx.settings) if ctx.settings else gmail_cls.__new__(gmail_cls)
         result = await connector.execute_action(
             "send_email",
             {"to": to, "subject": subject, "body": body, "thread_id": thread_id},
-            credentials,
+            ctx.credentials,
         )
 
         if result.get("status") == "ok":

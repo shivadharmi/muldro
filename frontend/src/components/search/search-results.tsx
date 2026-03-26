@@ -2,6 +2,7 @@ import type { SearchResult } from "@/lib/types";
 import { Card, CardBody } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
+import { InlineMarkdown } from "@/components/jarvis/markdown-renderer";
 import Link from "next/link";
 
 const TYPE_VARIANT: Record<string, "blue" | "green" | "purple"> = {
@@ -41,7 +42,9 @@ export function SearchResults({ results }: { results: SearchResult[] }) {
                   <div>
                     <p className="text-sm font-medium">{r.title}</p>
                     {r.summary && (
-                      <p className="text-xs text-t-secondary mt-1">{r.summary}</p>
+                      <div className="text-xs text-t-secondary mt-1">
+                        <InlineMarkdown content={r.summary} />
+                      </div>
                     )}
                   </div>
                 </div>

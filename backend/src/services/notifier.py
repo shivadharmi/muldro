@@ -88,13 +88,17 @@ class Notifier:
             interruptibility=data.get("interruptibility", 0.5) if data else 0.5,
         )
 
+        payload = dict(data or {})
+        if workspace_id and "workspace_id" not in payload:
+            payload["workspace_id"] = workspace_id
+
         notification = Notification(
             notification_id=f"notif_{ULID()}",
             user_id=user_id,
             type=notification_type,
             title=title,
             body=body,
-            data=data or {},
+            data=payload,
             created_at=datetime.now(timezone.utc).isoformat(),
         )
 
@@ -110,7 +114,7 @@ class Notifier:
                     channel=notification_type,
                     title=title,
                     body=body,
-                    payload_json=data,
+                    payload_json=payload,
                     priority_score=priority,
                     status="pending",
                 )
@@ -291,12 +295,15 @@ class Notifier:
                 return {"status": "skipped", "reason": "slack_mcp_not_available"}
 
             text = f"*{notification.title}*\n{notification.body or ''}"
+            workspace_id = str(notification.data.get("workspace_id", "") or "")
             result = await call_mcp_tool(
                 tool_name,
                 {
                     "text": text,
                     "channel": notification.data.get("slack_channel", "#jarvis"),
                 },
+                user_id=notification.user_id,
+                workspace_id=workspace_id,
             )
             return {"status": "sent", "slack_result": result}
         except Exception as e:
@@ -309,6 +316,7 @@ class Notifier:
             from src.connectors.mcp_bridge import call_mcp_tool, is_mcp_tool
 
             if is_mcp_tool("email_send"):
+                workspace_id = str(notification.data.get("workspace_id", "") or "")
                 result = await call_mcp_tool(
                     "email_send",
                     {
@@ -316,6 +324,8 @@ class Notifier:
                         "subject": notification.title,
                         "body": notification.body,
                     },
+                    user_id=notification.user_id,
+                    workspace_id=workspace_id,
                 )
                 return {"status": "sent", "via": "mcp", "result": result}
         except Exception:
@@ -344,7 +354,9 @@ class Notifier:
         """Push notification to web dashboard via WebSocket/Redis pub/sub."""
         if not self._ws_sender:
             if self._redis:
-                # Fallback: publish to Redis for WebSocket subscribers
+                channel = f"jarvis:a2ui:{notification.user_id}"
+
+                # Publish notification message
                 message = json.dumps(
                     {
                         "type": "notification",
@@ -356,7 +368,79 @@ class Notifier:
                         "created_at": notification.created_at,
                     }
                 )
-                await self._redis.publish(f"jarvis:a2ui:{notification.user_id}", message)
+                await self._redis.publish(channel, message)
+
+                # Also push a typed surface for approval notifications so
+                # they appear on the workspace dashboard in real time.
+                if notification.type == "approval_request":
+                    try:
+                        from src.orchestrator.contracts import (
+                            WorkspaceSurfaceMetadata,
+                            WorkspaceSurfacePush,
+                        )
+                        from src.ui import renderer as r
+
+                        approval_id = (notification.data or {}).get("approval_id", "")
+                        risk_level = (notification.data or {}).get("risk_level", "medium")
+                        risk_variant = (
+                            "warning" if risk_level in ("high", "critical") else "default"
+                        )
+
+                        children = [
+                            r.card(
+                                "apr_card",
+                                [
+                                    r.heading("apr_title", notification.title),
+                                    r.badge("apr_risk", risk_level, variant=risk_variant),
+                                    r.text("apr_body", notification.body or ""),
+                                    r.row(
+                                        "apr_actions",
+                                        [
+                                            r.button(
+                                                f"approve_{approval_id}",
+                                                "Approve",
+                                                variant="primary",
+                                                action_payload={
+                                                    "action": "approve",
+                                                    "id": approval_id,
+                                                },
+                                            ),
+                                            r.button(
+                                                f"reject_{approval_id}",
+                                                "Reject",
+                                                variant="danger",
+                                                action_payload={
+                                                    "action": "reject",
+                                                    "id": approval_id,
+                                                },
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                        ]
+
+                        surface = WorkspaceSurfacePush(
+                            id=f"notif_surf_{ULID()}",
+                            children=[c.model_dump(mode="json") for c in children],
+                            metadata=WorkspaceSurfaceMetadata(
+                                kind="approval",
+                                title=notification.title,
+                                decision="approval_requested",
+                                reasoning=notification.body or "",
+                            ),
+                        )
+                        ws_msg = json.dumps(
+                            {"type": "surface", "surface": surface.model_dump(mode="json")}
+                        )
+                        await self._redis.publish(channel, ws_msg)
+                    except Exception:
+                        logger.debug(
+                            "Failed to push approval surface for %s",
+                            notification.notification_id,
+                            exc_info=True,
+                        )
+
                 return {"status": "published"}
             return {"status": "skipped", "reason": "no_ws_sender"}
 

@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
+from src.integrations.capabilities import TOOL_TO_CAPABILITY
 from src.models.tool_definitions import ToolDefinition
 
 logger = logging.getLogger(__name__)
@@ -18,6 +19,7 @@ def _t(
     connector: str | None = None,
     enabled: bool = True,
     canonical: str | None = None,
+    capability: str | None = None,
 ) -> dict:
     return {
         "name": name,
@@ -26,6 +28,7 @@ def _t(
         "connector_type": connector,
         "enabled": enabled,
         "canonical_name": canonical,
+        "capability": capability,
     }
 
 
@@ -115,6 +118,7 @@ _DEFAULT_TOOLS = [
     _t("send_telegram", "medium", True, "telegram"),
     _t("send_approval_prompt", "medium", True, "telegram"),
     # Research
+    _t("web_search", "low", False, "browser"),
     _t("perplexity_search", "low", False, "browser"),
     # Browser
     _t("browser_open", "medium", False, "browser"),
@@ -237,32 +241,65 @@ class ToolRegistry:
         self._db = db
         self._cache: dict[str, ToolDefinition] = {}
 
-    async def seed_defaults(self, workspace_id: str = "") -> int:
-        """Seed default tool definitions if they don't exist. Returns count added."""
-        added = 0
-        for tool_data in _DEFAULT_TOOLS:
-            existing = await self._db.execute(
-                select(ToolDefinition).where(ToolDefinition.name == tool_data["name"])
-            )
-            if existing.scalar_one_or_none():
-                continue
-            tool = ToolDefinition(
-                tool_id=f"tool_{ULID()}",
-                workspace_id=workspace_id,
-                name=tool_data["name"],
-                risk_level=tool_data.get("risk_level", "low"),
-                requires_approval=tool_data.get("requires_approval", False),
-                connector_type=tool_data.get("connector_type"),
-                enabled=tool_data.get("enabled", True),
-                canonical_name=tool_data.get("canonical_name"),
-            )
-            self._db.add(tool)
-            added += 1
+    async def seed_defaults(self, workspace_id: str | None = None) -> int:
+        """Seed or update default tool definitions. Returns count created/updated.
 
-        if added:
+        Creates new tools that don't exist. For existing tools, syncs
+        risk_level, requires_approval, connector_type, and capability
+        from _DEFAULT_TOOLS so code changes propagate on restart.
+        """
+        # Build lookup of existing tools by name
+        result = await self._db.execute(select(ToolDefinition))
+        existing = {t.name: t for t in result.scalars().all()}
+
+        changed = 0
+        for tool_data in _DEFAULT_TOOLS:
+            name = tool_data["name"]
+            capability = tool_data.get("capability") or TOOL_TO_CAPABILITY.get(name)
+            risk = tool_data.get("risk_level", "low")
+            approval = tool_data.get("requires_approval", False)
+            connector = tool_data.get("connector_type")
+
+            if name not in existing:
+                tool = ToolDefinition(
+                    tool_id=f"tool_{ULID()}",
+                    workspace_id=workspace_id,
+                    name=name,
+                    risk_level=risk,
+                    requires_approval=approval,
+                    connector_type=connector,
+                    enabled=tool_data.get("enabled", True),
+                    canonical_name=tool_data.get("canonical_name"),
+                    capability=capability,
+                )
+                self._db.add(tool)
+                changed += 1
+                continue
+
+            # Sync mutable fields if they diverged
+            tool = existing[name]
+            needs_update = False
+
+            if tool.risk_level != risk:
+                tool.risk_level = risk
+                needs_update = True
+            if tool.requires_approval != approval:
+                tool.requires_approval = approval
+                needs_update = True
+            if tool.connector_type != connector:
+                tool.connector_type = connector
+                needs_update = True
+            if tool.capability != capability:
+                tool.capability = capability
+                needs_update = True
+
+            if needs_update:
+                changed += 1
+
+        if changed:
             await self._db.flush()
-            logger.info("Seeded %d tool definitions", added)
-        return added
+            logger.info("Seeded/updated %d tool definitions", changed)
+        return changed
 
     async def register_tool(
         self,

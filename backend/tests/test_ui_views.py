@@ -135,7 +135,7 @@ class TestDashboardView:
             pending_approvals=[],
             recent_events=[],
             budget={"used": 2.5, "limit": 5.0},
-            connector_health=[],
+            integration_health=[],
         )
         assert isinstance(s, A2UISurface)
         assert "dashboard" in s.id

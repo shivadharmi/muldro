@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.orchestrator.services import ServiceContainer
 from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID, make_mock_settings
 
 # ── Tracing Tests ────────────────────────────────────────────────────────
@@ -367,7 +368,7 @@ class TestOrchestrator:
         orchestrator = JarvisOrchestrator(
             settings=settings,
             db_factory=db_factory,
-            services={},
+            services=ServiceContainer(),
         )
 
         result = await orchestrator.process_message(
@@ -380,36 +381,20 @@ class TestOrchestrator:
 
     @patch("src.orchestrator.jarvis.get_anthropic_client")
     async def test_extract_decision_from_json(self, mock_get_client):
-        from src.orchestrator.jarvis import JarvisOrchestrator
-
-        mock_get_client.return_value = AsyncMock()
-        settings = make_mock_settings(
-            daily_token_budget_usd=5.0,
-            use_bedrock=False,
-            telegram_bot_token="",
-        )
-        orchestrator = JarvisOrchestrator(settings=settings, db_factory=MagicMock(), services={})
+        from src.orchestrator.intent_classifier import extract_decision
 
         # Test JSON extraction — returns PlannerOutput
         text = 'Here is my analysis:\n{"decision": "create_task", "priority": "high"}\nDone.'
-        result = orchestrator._extract_decision(text)
+        result = extract_decision(text)
         assert result.decision == "create_task"
         assert result.priority == "high"
 
     @patch("src.orchestrator.jarvis.get_anthropic_client")
     async def test_extract_decision_fallback(self, mock_get_client):
-        from src.orchestrator.jarvis import JarvisOrchestrator
-
-        mock_get_client.return_value = AsyncMock()
-        settings = make_mock_settings(
-            daily_token_budget_usd=5.0,
-            use_bedrock=False,
-            telegram_bot_token="",
-        )
-        orchestrator = JarvisOrchestrator(settings=settings, db_factory=MagicMock(), services={})
+        from src.orchestrator.intent_classifier import extract_decision
 
         # No JSON in response — fallback to PlannerOutput defaults
-        result = orchestrator._extract_decision("Just some plain text response")
+        result = extract_decision("Just some plain text response")
         assert result.decision == "acknowledge"
         assert result.reasoning == "Just some plain text response"[:500]
 
@@ -499,39 +484,59 @@ class TestA2UIRenderer:
 
 
 class TestPerception:
-    def test_enable_disable_source(self):
-        from src.orchestrator.perception import PerceptionCoordinator
+    def test_policy_service_effective_interval(self):
+        """Policy service computes effective interval from base + backoff."""
+        from src.models.perception_state import PerceptionState
+        from src.services.perception_policy import PerceptionPolicyService
 
-        coord = PerceptionCoordinator(orchestrator=MagicMock(), user_id=TEST_USER_ID)
-        coord.enable_source("gmail")
-        assert "gmail" in coord._enabled_sources
+        state = PerceptionState(
+            state_id="pst_test",
+            workspace_id="ws_test",
+            user_id=TEST_USER_ID,
+            source="gmail",
+            mode="poll",
+            base_interval_s=300,
+            effective_interval_s=300,
+            consecutive_failures=0,
+        )
+        svc = PerceptionPolicyService(AsyncMock())
+        assert svc._compute_effective_interval(state) == 300
 
-        coord.disable_source("gmail")
-        assert "gmail" not in coord._enabled_sources
+    def test_policy_service_backoff(self):
+        """Failures double the effective interval."""
+        from src.models.perception_state import PerceptionState
+        from src.services.perception_policy import PerceptionPolicyService
 
-    def test_get_due_sources_all_due_when_never_run(self):
-        from src.orchestrator.perception import PerceptionCoordinator
+        state = PerceptionState(
+            state_id="pst_test",
+            workspace_id="ws_test",
+            user_id=TEST_USER_ID,
+            source="gmail",
+            mode="poll",
+            base_interval_s=300,
+            effective_interval_s=300,
+            consecutive_failures=1,
+        )
+        svc = PerceptionPolicyService(AsyncMock())
+        assert svc._compute_effective_interval(state) == 600
 
-        coord = PerceptionCoordinator(orchestrator=MagicMock(), user_id=TEST_USER_ID)
-        coord.enable_source("gmail")
-        coord.enable_source("calendar")
+    def test_policy_service_budget_multiplier(self):
+        """Budget multiplier stretches next_run_at."""
+        from src.models.perception_state import PerceptionState
+        from src.services.perception_policy import PerceptionPolicyService
 
-        due = coord.get_due_sources()
-        assert set(due) == {"gmail", "calendar"}
-
-    def test_interval_multiplier_slows_checks(self):
-        from datetime import timedelta
-
-        from src.orchestrator.perception import PerceptionCoordinator
-
-        coord = PerceptionCoordinator(orchestrator=MagicMock(), user_id=TEST_USER_ID)
-        coord.enable_source("gmail")
-        # Simulate recent run (1 minute ago)
-        coord._last_run["gmail"] = datetime.now(timezone.utc) - timedelta(minutes=1)
-
-        # With default multiplier, gmail (5min interval) is not due
-        assert coord.get_due_sources() == []
-
-        # Even with 3x multiplier, still not due (would need 15min)
-        coord.set_interval_multiplier(3)
-        assert coord.get_due_sources() == []
+        state = PerceptionState(
+            state_id="pst_test",
+            workspace_id="ws_test",
+            user_id=TEST_USER_ID,
+            source="gmail",
+            mode="poll",
+            base_interval_s=300,
+            effective_interval_s=300,
+            last_run_at=datetime.now(timezone.utc),
+        )
+        svc = PerceptionPolicyService(AsyncMock())
+        next_run = svc._compute_next_run(state, budget_multiplier=3)
+        delta = (next_run - datetime.now(timezone.utc)).total_seconds()
+        # 300 * 3 = 900s
+        assert 899 <= delta <= 901

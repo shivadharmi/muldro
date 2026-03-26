@@ -11,12 +11,10 @@ except ImportError:
 
 
 @pytest.fixture
-async def redis():
+def redis():
     if fakeredis_aio is None:
         pytest.skip("fakeredis not installed")
-    r = fakeredis_aio.FakeRedis(decode_responses=True)
-    yield r
-    await r.aclose()
+    return fakeredis_aio.FakeRedis(decode_responses=True)
 
 
 @pytest.fixture

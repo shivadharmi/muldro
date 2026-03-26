@@ -11,10 +11,11 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from src.services.artifact_store import ArtifactStore
-    from src.services.goal_tracker import GoalTracker
+    from src.services.graph_engine import GraphEngine
     from src.services.memory_service import MemoryService
     from src.services.procedure_library import ProcedureLibrary
     from src.services.tool_registry import ToolRegistry
+    from src.services.vector_store import VectorStore
     from src.services.world_model import WorldModel
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,7 @@ class ContextPack(BaseModel):
     task_summary: str | None = None
     goals: list[dict] = []
     entities: list[dict] = []
+    graph_relationships: list[dict] = []  # B5: Neo4j entity relationships
     recent_events: list[dict] = []
     related_runs: list[dict] = []
     procedures: list[dict] = []
@@ -79,19 +81,21 @@ class ContextBuilder:
         self,
         world_model: WorldModel | None = None,
         memory_service: MemoryService | None = None,
-        goal_tracker: GoalTracker | None = None,
         procedure_library: ProcedureLibrary | None = None,
         artifact_store: ArtifactStore | None = None,
         tool_registry: ToolRegistry | None = None,
         db: AsyncSession | None = None,
+        graph_engine: GraphEngine | None = None,
+        vector_store: VectorStore | None = None,
     ):
         self._world_model = world_model
         self._memory_service = memory_service
-        self._goal_tracker = goal_tracker
         self._procedure_library = procedure_library
         self._artifact_store = artifact_store
         self._tool_registry = tool_registry
         self._db = db
+        self._graph_engine = graph_engine
+        self._vector_store = vector_store
 
     async def build(
         self,
@@ -119,6 +123,16 @@ class ContextBuilder:
             except Exception:
                 logger.debug("Entity lookup failed", exc_info=True)
 
+        # B5: Neo4j graph relationships for discovered entities
+        if self._graph_engine and entity_ids:
+            try:
+                for eid in entity_ids[:3]:  # limit to top 3 to control cost
+                    related = await self._graph_engine.get_related_people(user_id, eid)
+                    for r in related[:5]:
+                        pack.graph_relationships.append(r)
+            except Exception:
+                logger.debug("Graph relationship lookup failed", exc_info=True)
+
         # Memory — pass entity_ids for entity-overlap ranking boost
         if self._memory_service and query:
             try:
@@ -136,27 +150,60 @@ class ContextBuilder:
             except Exception:
                 logger.debug("Memory retrieval failed", exc_info=True)
 
-        # Goals
-        if self._goal_tracker:
+        # D3: Explicit preference fetch — ensures ALL active preferences are
+        # included even when they don't semantically match the current query
+        if self._memory_service:
             try:
-                goals = await self._goal_tracker.list_goals(user_id, status="active")
+                all_prefs = await self._memory_service.get_user_preferences(
+                    user_id, workspace_id=workspace_id
+                )
+                existing_ids = {p.get("memory_id") for p in pack.preferences}
+                for p in all_prefs:
+                    pid = p.get("memory_id") or p.get("id", "")
+                    if pid and pid not in existing_ids:
+                        pack.preferences.append(
+                            {"memory_id": pid, "fact_text": p.get("fact_text", ""), **p}
+                        )
+            except Exception:
+                logger.debug("Explicit preference fetch failed", exc_info=True)
+
+        # Goals — retrieved from memory system (memory_type="goal")
+        if self._memory_service:
+            try:
+                goal_memories = await self._memory_service.retrieve(
+                    user_id,
+                    query=query,
+                    memory_types=["goal"],
+                    max_results=5,
+                    workspace_id=workspace_id,
+                )
                 pack.goals = [
                     {
-                        "goal_id": g.goal_id,
-                        "title": g.title,
-                        "progress": g.progress,
-                        "priority": getattr(g, "priority", "medium"),
+                        "memory_id": g.get("memory_id", ""),
+                        "title": g.get("fact_text", ""),
+                        "confidence": g.get("confidence", 0.5),
+                        "priority": (g.get("provenance") or {}).get("priority", "medium"),
                     }
-                    for g in goals[:5]
+                    for g in goal_memories
                 ]
             except Exception:
-                logger.debug("Goal fetch failed", exc_info=True)
+                logger.debug("Goal memory fetch failed", exc_info=True)
 
-        # Procedures
-        if self._procedure_library and task_type:
+        # Procedures — surface learned workflows to the Planner
+        if self._procedure_library:
             try:
-                procs = await self._procedure_library.find_procedures(user_id, task_type=task_type)
-                pack.procedures = [{"name": p.name, "steps": p.steps_json} for p in procs[:3]]
+                procs = await self._procedure_library.get_procedures(
+                    user_id, status="active", workspace_id=workspace_id
+                )
+                pack.procedures = [
+                    {
+                        "name": p.name,
+                        "steps": p.task_template,
+                        "confidence": p.confidence,
+                        "usage_count": p.usage_count,
+                    }
+                    for p in procs[:3]
+                ]
             except Exception:
                 logger.debug("Procedure lookup failed", exc_info=True)
 
@@ -275,6 +322,14 @@ class ContextBuilder:
                     parts.append(f"interactions={interactions}")
                 ent_lines.append(" ".join(parts))
             sections.append("## Relevant Entities\n" + "\n".join(ent_lines))
+
+        if pack.graph_relationships:
+            rel_lines = []
+            for r in pack.graph_relationships[:10]:
+                name = r.get("name") or r.get("canonical_name", "?")
+                rtype = r.get("relation_type", "related_to")
+                rel_lines.append(f"- {name} ({rtype})")
+            sections.append("## Entity Relationships\n" + "\n".join(rel_lines))
 
         if pack.preferences:
             pref_lines = [f"- {p.get('fact_text', '')}" for p in pack.preferences]

@@ -19,6 +19,7 @@ function getWsUrl(userId: string): string {
 interface UseJarvisWsOptions {
   userId: string;
   onSurface?: (surface: A2UISurface) => void;
+  onSurfaceUpdate?: (surfaceId: string, surface: A2UISurface) => void;
   onNotification?: (msg: JarvisMessage) => void;
   enabled?: boolean;
 }
@@ -26,6 +27,7 @@ interface UseJarvisWsOptions {
 export function useJarvisWs({
   userId,
   onSurface,
+  onSurfaceUpdate,
   onNotification,
   enabled = true,
 }: UseJarvisWsOptions) {
@@ -35,10 +37,14 @@ export function useJarvisWs({
 
   // Store callbacks in refs so the WebSocket effect doesn't re-run when they change
   const onSurfaceRef = useRef(onSurface);
+  const onSurfaceUpdateRef = useRef(onSurfaceUpdate);
   const onNotificationRef = useRef(onNotification);
   useEffect(() => {
     onSurfaceRef.current = onSurface;
   }, [onSurface]);
+  useEffect(() => {
+    onSurfaceUpdateRef.current = onSurfaceUpdate;
+  }, [onSurfaceUpdate]);
   useEffect(() => {
     onNotificationRef.current = onNotification;
   }, [onNotification]);
@@ -82,6 +88,8 @@ export function useJarvisWs({
             ws.close();
           } else if (msg.type === "surface" && onSurfaceRef.current) {
             onSurfaceRef.current(msg.surface);
+          } else if (msg.type === "surface_update" && onSurfaceUpdateRef.current) {
+            onSurfaceUpdateRef.current(msg.surface_id, msg.payload);
           } else if (msg.type === "heartbeat") {
             // no-op
           } else if (onNotificationRef.current) {

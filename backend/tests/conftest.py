@@ -1,7 +1,11 @@
 """Shared test fixtures for Jarvis backend tests."""
 
+import asyncio
+import inspect
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
+
+import pytest
 
 from src.services.event_processor import RawEvent
 
@@ -61,3 +65,32 @@ def make_mock_settings(**overrides) -> MagicMock:
     for k, v in defaults.items():
         setattr(settings, k, v)
     return settings
+
+
+def pytest_configure(config):
+    """Register local markers used by tests.
+
+    The CI/local environment for this kata may not always provide pytest-asyncio.
+    We still register the marker to avoid unknown-mark warnings.
+    """
+    config.addinivalue_line("markers", "asyncio: mark test as async")
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_pyfunc_call(pyfuncitem):
+    """Run async test functions without requiring external pytest plugins.
+
+    If pytest-asyncio is installed, it can still handle tests first; this
+    fallback only triggers for coroutine test functions that reach this hook.
+    """
+    test_fn = pyfuncitem.obj
+    if not inspect.iscoroutinefunction(test_fn):
+        return None
+
+    kwargs = {
+        name: pyfuncitem.funcargs[name]
+        for name in pyfuncitem._fixtureinfo.argnames
+        if name in pyfuncitem.funcargs
+    }
+    asyncio.run(test_fn(**kwargs))
+    return True

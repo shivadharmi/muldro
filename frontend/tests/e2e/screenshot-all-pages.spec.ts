@@ -196,12 +196,12 @@ test.describe("authenticated pages", () => {
     }).catch(() => {});
   });
 
-  // ── Connectors ─────────────────────────────────────────────
+  // ── Integrations ─────────────────────────────────────────────
 
-  test("connectors page", async ({ page }) => {
-    await page.goto("/connectors");
+  test("integrations page", async ({ page }) => {
+    await page.goto("/integrations");
     await page.waitForSelector("h1");
-    await screenshot(page, "12-connectors");
+    await screenshot(page, "12-integrations");
   });
 
   // ── Entities ───────────────────────────────────────────────

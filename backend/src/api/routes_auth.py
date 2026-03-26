@@ -4,12 +4,17 @@ import logging
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote, urlencode
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_current_user, get_current_user_id, get_session
+from src.api.deps import (
+    get_current_user,
+    get_current_user_id,
+    get_current_workspace_id,
+    get_session,
+)
 from src.config.settings import Settings, get_settings
 from src.models.users import User
 from src.services.auth_service import AuthService
@@ -132,6 +137,67 @@ async def verify_magic_link(
 
 
 # ── OAuth ────────────────────────────────────────────────────
+
+
+@router.get("/v1/auth/providers")
+async def list_auth_providers(
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+    settings: Settings = Depends(get_settings),
+):
+    """List all supported OAuth providers with configuration and connection status."""
+    from src.integrations.auth_providers import SUPPORTED_PROVIDERS
+    from src.models.database import get_session_factory
+    from src.services.oauth_manager import OAuthManager
+
+    db_factory = get_session_factory()
+
+    # Check which providers have active tokens
+    connected_providers: dict[str, dict] = {}
+    try:
+        oauth_mgr = OAuthManager(
+            db_factory,
+            encryption_key=settings.oauth_encryption_key,
+        )
+        for provider_name in SUPPORTED_PROVIDERS:
+            # Map sub-providers to their OAuth parent
+            oauth_name = _oauth_provider_name(provider_name)
+            try:
+                token = await oauth_mgr.get_valid_token(user_id, oauth_name)
+                if token:
+                    connected_providers[provider_name] = {"connected": True}
+            except Exception:
+                pass
+    except Exception:
+        pass  # OAuthManager not available (no encryption key)
+
+    providers = []
+    for name, meta in SUPPORTED_PROVIDERS.items():
+        client_id = getattr(settings, f"{name}_oauth_client_id", "")
+        is_connected = name in connected_providers
+        # gmail and calendar share google OAuth
+        if name in ("gmail", "calendar", "drive"):
+            is_connected = "google" in connected_providers
+
+        providers.append(
+            {
+                "name": name,
+                "display_name": meta.display_name,
+                "type": meta.provider_type,
+                "configured": bool(client_id),
+                "connected": is_connected,
+                "scopes": meta.default_scopes,
+            }
+        )
+
+    return {"providers": providers}
+
+
+def _oauth_provider_name(provider: str) -> str:
+    """Map provider name to OAuth provider name (gmail/calendar/drive share google)."""
+    if provider in ("gmail", "calendar", "drive"):
+        return "google"
+    return provider
 
 
 @router.get("/v1/auth/{provider}/authorize", response_model=OAuthUrlResponse)
@@ -287,13 +353,14 @@ async def oauth_authorize(
 @router.get("/v1/auth/oauth/{provider}/callback")
 async def oauth_callback(
     provider: str,
+    background_tasks: BackgroundTasks,
     code: str = Query(...),
     state: str = Query(""),
     settings: Settings = Depends(get_settings),
 ):
-    """Handle OAuth callback — exchange code for tokens, store as connector.
+    """Handle OAuth callback — exchange code for tokens, store as integration.
 
-    This is a connector OAuth flow, not a login flow.
+    This is an integration OAuth flow, not a login flow.
     Exchanges the authorization code for access/refresh tokens,
     stores them encrypted via OAuthManager, and redirects to the frontend.
     """
@@ -363,18 +430,21 @@ async def oauth_callback(
             workspace_id=workspace_id,
         )
 
-        # Register connectors for the Google services
-        await _ensure_connector(
+        # Register integrations for the Google services
+        await _ensure_integration(
             db_factory, user_id, "gmail", userinfo.get("email"), workspace_id=workspace_id
         )
-        await _ensure_connector(
+        await _ensure_integration(
             db_factory, user_id, "calendar", userinfo.get("email"), workspace_id=workspace_id
         )
 
         logger.info(
-            "Google connector linked for %s (%s)",
+            "Google integration linked for %s (%s)",
             user_id,
             userinfo.get("email", "unknown"),
+        )
+        background_tasks.add_task(
+            _trigger_initial_observation, user_id, ["gmail", "calendar"], workspace_id
         )
 
     elif provider == "github":
@@ -418,9 +488,10 @@ async def oauth_callback(
             workspace_id=workspace_id,
         )
 
-        await _ensure_connector(db_factory, user_id, "github", workspace_id=workspace_id)
+        await _ensure_integration(db_factory, user_id, "github", workspace_id=workspace_id)
 
-        logger.info("GitHub connector linked for %s", user_id)
+        logger.info("GitHub integration linked for %s", user_id)
+        background_tasks.add_task(_trigger_initial_observation, user_id, ["github"], workspace_id)
 
     elif provider == "linear":
         client_id = settings.linear_oauth_client_id
@@ -470,8 +541,9 @@ async def oauth_callback(
             scopes=token_data.get("scope", "").split() if token_data.get("scope") else None,
             workspace_id=workspace_id,
         )
-        await _ensure_connector(db_factory, user_id, "linear", workspace_id=workspace_id)
-        logger.info("Linear connector linked for %s", user_id)
+        await _ensure_integration(db_factory, user_id, "linear", workspace_id=workspace_id)
+        logger.info("Linear integration linked for %s", user_id)
+        background_tasks.add_task(_trigger_initial_observation, user_id, ["linear"], workspace_id)
 
     elif provider == "notion":
         client_id = settings.notion_oauth_client_id
@@ -522,8 +594,9 @@ async def oauth_callback(
             expires_at=None,
             workspace_id=workspace_id,
         )
-        await _ensure_connector(db_factory, user_id, "notion", workspace_id=workspace_id)
-        logger.info("Notion connector linked for %s", user_id)
+        await _ensure_integration(db_factory, user_id, "notion", workspace_id=workspace_id)
+        logger.info("Notion integration linked for %s", user_id)
+        background_tasks.add_task(_trigger_initial_observation, user_id, ["notion"], workspace_id)
 
     elif provider == "jira":
         client_id = settings.jira_oauth_client_id
@@ -585,32 +658,35 @@ async def oauth_callback(
             scopes=token_data.get("scope", "").split() if token_data.get("scope") else None,
             workspace_id=workspace_id,
         )
-        await _ensure_connector(
+        await _ensure_integration(
             db_factory,
             user_id,
             "jira",
             workspace_id=workspace_id,
         )
-        # Store cloudId in connector config for API calls
+        # Store cloudId in installation config for API calls
         if cloud_id:
             from sqlalchemy import select as sa_select
 
-            from src.models.connectors import Connector
+            from src.models.integration_installation import IntegrationInstallation
 
             async with db_factory() as _db:
                 result = await _db.execute(
-                    sa_select(Connector).where(
-                        Connector.user_id == user_id, Connector.provider == "jira"
+                    sa_select(IntegrationInstallation).where(
+                        IntegrationInstallation.user_id == user_id,
+                        IntegrationInstallation.server_name == "jira",
+                        IntegrationInstallation.workspace_id == workspace_id,
                     )
                 )
-                conn = result.scalar_one_or_none()
-                if conn:
-                    config = conn.config or {}
+                inst = result.scalar_one_or_none()
+                if inst:
+                    config = inst.config or {}
                     config["cloud_id"] = cloud_id
-                    conn.config = config
+                    inst.config = config
                     await _db.commit()
 
-        logger.info("Jira connector linked for %s (cloudId=%s)", user_id, cloud_id)
+        logger.info("Jira integration linked for %s (cloudId=%s)", user_id, cloud_id)
+        background_tasks.add_task(_trigger_initial_observation, user_id, ["jira"], workspace_id)
 
     elif provider == "linkedin":
         client_id = settings.linkedin_oauth_client_id
@@ -659,8 +735,8 @@ async def oauth_callback(
             expires_at=expires_at,
             workspace_id=workspace_id,
         )
-        await _ensure_connector(db_factory, user_id, "linkedin", workspace_id=workspace_id)
-        logger.info("LinkedIn connector linked for %s", user_id)
+        await _ensure_integration(db_factory, user_id, "linkedin", workspace_id=workspace_id)
+        logger.info("LinkedIn integration linked for %s", user_id)
 
     elif provider == "twitter":
         client_id = settings.twitter_oauth_client_id
@@ -736,62 +812,160 @@ async def oauth_callback(
             scopes=token_data.get("scope", "").split() if token_data.get("scope") else None,
             workspace_id=workspace_id,
         )
-        await _ensure_connector(db_factory, user_id, "twitter", workspace_id=workspace_id)
-        logger.info("Twitter connector linked for %s", user_id)
+        await _ensure_integration(db_factory, user_id, "twitter", workspace_id=workspace_id)
+        logger.info("Twitter integration linked for %s", user_id)
 
     else:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
 
-    # Redirect to frontend connectors page with success status
+    # Refresh MCP session for this provider so new token is used immediately
+    try:
+        from src.connectors.mcp_bridge import refresh_server_auth
+
+        # Map provider to MCP server names that use it
+        _provider_servers = {
+            "google": ["google-workspace"],
+            "github": ["github"],
+            "slack": ["slack"],
+            "linear": ["linear"],
+            "notion": ["notion"],
+            "jira": ["atlassian"],
+            "linkedin": [],
+            "twitter": [],
+        }
+        for server_name in _provider_servers.get(provider, []):
+            background_tasks.add_task(
+                refresh_server_auth,
+                server_name,
+                user_id,
+                workspace_id=workspace_id,
+            )
+    except Exception:
+        logger.debug("MCP session refresh skipped", exc_info=True)
+
+    # Redirect to frontend integrations page with success status
     frontend_url = settings.frontend_url.rstrip("/")
     params = urlencode({"provider": provider, "status": "connected"})
-    return RedirectResponse(url=f"{frontend_url}/connectors?{params}")
+    return RedirectResponse(url=f"{frontend_url}/integrations?{params}")
 
 
-async def _ensure_connector(
+async def _trigger_initial_observation(user_id: str, sources: list[str], workspace_id: str) -> None:
+    """Run initial perception cycle for newly connected sources (background)."""
+    try:
+        from src.config.settings import get_settings
+        from src.models.database import get_session_factory
+        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.runtime import build as build_runtime
+        from src.tools import intelligence_server
+
+        settings = get_settings()
+        db_factory = get_session_factory()
+
+        # Build a short-lived ServiceContainer for this background task
+        svc_db = db_factory()
+        try:
+            svc = build_runtime(settings, svc_db)
+            intelligence_server.configure(db_factory, settings, svc)
+            orchestrator = JarvisOrchestrator(
+                settings=settings,
+                db_factory=db_factory,
+                services=svc,
+            )
+            for source in sources:
+                try:
+                    await orchestrator.run_perception_cycle(
+                        source, user_id=user_id, workspace_id=workspace_id
+                    )
+                    logger.info("Initial observation completed for %s/%s", user_id, source)
+                except Exception:
+                    logger.warning(
+                        "Initial observation failed for %s/%s",
+                        user_id,
+                        source,
+                        exc_info=True,
+                    )
+        finally:
+            await svc_db.close()
+    except Exception:
+        logger.warning("Initial observation dispatch failed", exc_info=True)
+
+
+async def _ensure_integration(
     db_factory,
     user_id: str,
     provider: str,
     account_email: str | None = None,
     workspace_id: str = "",
 ) -> None:
-    """Create or reactivate a connector record after OAuth."""
+    """Create or reactivate an IntegrationInstallation after OAuth."""
     from sqlalchemy import select as sa_select
-    from ulid import ULID
 
-    from src.models.connectors import Connector
+    from src.models.ids import generate_id
+    from src.models.integration_installation import IntegrationInstallation
 
     try:
         async with db_factory() as db:
             result = await db.execute(
-                sa_select(Connector).where(
-                    Connector.user_id == user_id, Connector.provider == provider
+                sa_select(IntegrationInstallation).where(
+                    IntegrationInstallation.user_id == user_id,
+                    IntegrationInstallation.server_name == provider,
+                    IntegrationInstallation.workspace_id == workspace_id,
                 )
             )
             existing = result.scalar_one_or_none()
             if existing:
                 existing.status = "active"
+                existing.enabled = True
             else:
                 db.add(
-                    Connector(
-                        connector_id=f"conn_{ULID()}",
+                    IntegrationInstallation(
+                        install_id=generate_id("inst"),
                         user_id=user_id,
                         workspace_id=workspace_id,
-                        provider=provider,
+                        server_name=provider,
+                        display_name=provider.replace("_", " ").title(),
+                        transport="native",
+                        auth_provider="oauth",
                         status="active",
+                        health_status="unknown",
                         config={"account_email": account_email} if account_email else {},
+                        enabled=True,
                     )
                 )
             await db.commit()
+
+        # Enable schedules tied to this integration (observation + globals on first)
+        await _enable_integration_schedules(db_factory, provider, workspace_id=workspace_id)
     except Exception:
-        logger.warning("Failed to ensure connector %s for %s", provider, user_id, exc_info=True)
+        logger.warning("Failed to ensure integration %s for %s", provider, user_id, exc_info=True)
+
+
+async def _enable_integration_schedules(
+    db_factory,
+    provider: str,
+    workspace_id: str = "",
+) -> None:
+    """Enable seeded schedules when an integration is authorized."""
+    try:
+        from src.services.schedule_seeder import enable_schedules_for_connector
+
+        async with db_factory() as db:
+            enabled = await enable_schedules_for_connector(
+                db,
+                provider,
+                workspace_id=workspace_id,
+            )
+            if enabled:
+                await db.commit()
+    except Exception:
+        logger.debug("Failed to enable schedules for %s", provider, exc_info=True)
 
 
 def _error_redirect(settings: Settings, message: str) -> RedirectResponse:
     """Redirect to frontend with an error message."""
     frontend_url = settings.frontend_url.rstrip("/")
     params = urlencode({"error": message})
-    return RedirectResponse(url=f"{frontend_url}/connectors?{params}")
+    return RedirectResponse(url=f"{frontend_url}/integrations?{params}")
 
 
 # ── Session Management ───────────────────────────────────────

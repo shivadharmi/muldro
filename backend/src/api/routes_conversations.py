@@ -350,3 +350,123 @@ async def get_message(
         raise HTTPException(status_code=404, detail="Message not found")
 
     return _message_to_response(msg)
+
+
+@router.get("/v1/conversations/messages/{message_id}/context")
+async def get_message_context_by_id(
+    message_id: str,
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Context sidebar data for a message (by message_id only).
+
+    Convenience route used by the frontend ContextTab which doesn't always
+    have the conversation_id at hand.
+    """
+    from src.api.schemas.command_context import ContextSidebarData
+    from src.models.conversations import Message
+    from src.services.evidence_bundle import EvidenceBundleService
+
+    result = await db.execute(
+        select(Message)
+        .join(Conversation, Message.conversation_id == Conversation.conversation_id)
+        .where(
+            Message.message_id == message_id,
+            Message.workspace_id == workspace_id,
+            Conversation.user_id == user_id,
+        )
+    )
+    msg = result.scalar_one_or_none()
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    svc = EvidenceBundleService(db, workspace_id)
+    evidence = await svc.build_for_message(msg.conversation_id, message_id)
+
+    return ContextSidebarData(
+        message_id=message_id,
+        conversation_id=msg.conversation_id,
+        evidence=evidence,
+    ).model_dump()
+
+
+@router.get("/v1/conversations/messages/{message_id}/evidence")
+async def get_message_evidence(
+    message_id: str,
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Evidence bundle for a message (entities, memories, sources, route info)."""
+    from src.models.conversations import Message
+    from src.services.evidence_bundle import EvidenceBundleService
+
+    result = await db.execute(
+        select(Message)
+        .join(Conversation, Message.conversation_id == Conversation.conversation_id)
+        .where(
+            Message.message_id == message_id,
+            Message.workspace_id == workspace_id,
+            Conversation.user_id == user_id,
+        )
+    )
+    msg = result.scalar_one_or_none()
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    svc = EvidenceBundleService(db, workspace_id)
+    evidence = await svc.build_for_message(msg.conversation_id, message_id)
+
+    # Enhance with run-level evidence if trace links to a run
+    if msg.trace_id:
+        from src.models.task_graph import TaskRun
+
+        run_result = await db.execute(
+            select(TaskRun.run_id)
+            .where(
+                TaskRun.trace_id == msg.trace_id,
+                TaskRun.workspace_id == workspace_id,
+            )
+            .limit(1)
+        )
+        run_row = run_result.first()
+        if run_row:
+            run_evidence = await svc.build_for_run(run_row[0])
+            evidence.sources.extend(run_evidence.sources)
+            evidence.route_info = evidence.route_info or run_evidence.route_info
+
+    return evidence
+
+
+@router.get("/v1/conversations/{conversation_id}/messages/{message_id}/context")
+async def get_message_context(
+    conversation_id: str,
+    message_id: str,
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get context sidebar data for a specific message (evidence, entities, sources)."""
+    from src.api.schemas.command_context import ContextSidebarData
+    from src.services.evidence_bundle import EvidenceBundleService
+
+    # Verify conversation ownership
+    convo_result = await db.execute(
+        select(Conversation.conversation_id).where(
+            Conversation.conversation_id == conversation_id,
+            Conversation.workspace_id == workspace_id,
+            Conversation.user_id == user_id,
+        )
+    )
+    if not convo_result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    svc = EvidenceBundleService(db, workspace_id)
+    evidence = await svc.build_for_message(conversation_id, message_id)
+
+    return ContextSidebarData(
+        message_id=message_id,
+        conversation_id=conversation_id,
+        evidence=evidence,
+    ).model_dump()

@@ -13,6 +13,8 @@ logger = logging.getLogger(__name__)
 class SlackConnector(BaseConnector):
     """Polls Slack Web API for messages in configured channels."""
 
+    cursor_type: str = "oldest_ts"
+
     async def poll(
         self, user_id: str, cursor: str | None, credentials: dict
     ) -> tuple[list[RawEvent], str | None]:

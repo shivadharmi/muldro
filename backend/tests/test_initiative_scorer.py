@@ -141,13 +141,13 @@ class TestBoosts:
 class TestGoalRelevance:
     @pytest.mark.asyncio
     async def test_goal_relevant_event_scores_higher(self):
-        """Events related to active goals should score higher."""
-        goal_tracker = MagicMock()
-        goal_tracker.get_active_goals = AsyncMock(
-            return_value=[{"title": "Launch product beta", "status": "active"}]
+        """Events related to active goals (via memory) should score higher."""
+        memory_service = MagicMock()
+        memory_service.retrieve = AsyncMock(
+            return_value=[{"fact_text": "Goal: Launch product beta", "memory_type": "goal"}]
         )
 
-        scorer = InitiativeScorer(db=MagicMock(), goal_tracker=goal_tracker)
+        scorer = InitiativeScorer(db=MagicMock(), memory_service=memory_service)
         event = _make_event(
             importance=0.5,
             urgency=0.5,
@@ -160,10 +160,10 @@ class TestGoalRelevance:
     @pytest.mark.asyncio
     async def test_no_goals_returns_zero(self):
         """No active goals should return zero goal_relevance."""
-        goal_tracker = MagicMock()
-        goal_tracker.get_active_goals = AsyncMock(return_value=[])
+        memory_service = MagicMock()
+        memory_service.retrieve = AsyncMock(return_value=[])
 
-        scorer = InitiativeScorer(db=MagicMock(), goal_tracker=goal_tracker)
+        scorer = InitiativeScorer(db=MagicMock(), memory_service=memory_service)
         event = _make_event()
         result = await scorer.score(event, "usr_1")
 

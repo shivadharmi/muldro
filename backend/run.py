@@ -48,6 +48,7 @@ def main():
                     svc_db = db_factory()
                     services = build_runtime(settings, svc_db)
                     intelligence_server.configure(db_factory, settings, services)
+
                     return JarvisOrchestrator(
                         settings=settings,
                         db_factory=db_factory,

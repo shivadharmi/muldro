@@ -12,6 +12,19 @@ import pytest
 from src.tools import intelligence_server
 
 
+def _mock_ctx():
+    """Create a mock FastMCP Context for tool invocation."""
+    ctx = AsyncMock()
+    ctx.info = AsyncMock()
+    ctx.error = AsyncMock()
+    ctx.warning = AsyncMock()
+    ctx.debug = AsyncMock()
+    ctx.report_progress = AsyncMock()
+    ctx.get_state = AsyncMock(return_value=None)
+    ctx.set_state = AsyncMock()
+    return ctx
+
+
 @pytest.fixture(autouse=True)
 def configure_intelligence_server():
     """Configure the intelligence server with mocked dependencies."""
@@ -55,7 +68,7 @@ class TestIngestEvent:
         ctx = configure_intelligence_server
         processor = AsyncMock()
         processor.process = AsyncMock(return_value={"event_id": "evt_123", "importance_score": 0.8})
-        ctx["services"].__getitem__ = MagicMock(return_value=processor)
+        ctx["services"].event_processor = processor
 
         result = await intelligence_server.ingest_event(
             user_id="usr_1",
@@ -64,6 +77,7 @@ class TestIngestEvent:
             entity_type="message_thread",
             entity_id="thread_1",
             title="Test email",
+            ctx=_mock_ctx(),
             workspace_id="ws_1",
         )
 
@@ -92,6 +106,7 @@ class TestUpdateExecution:
             result = await intelligence_server.update_execution(
                 execution_id="run_123",
                 status="completed",
+                ctx=_mock_ctx(),
                 workspace_id="ws_1",
             )
 
@@ -118,10 +133,11 @@ class TestUpdateExecution:
             result = await intelligence_server.update_execution(
                 execution_id="run_123",
                 status="running",
+                ctx=_mock_ctx(),
                 workspace_id="ws_1",
             )
             assert result["status"] == "error"
-            assert "Invalid" in result["error"]
+            assert "Invalid" in result.get("message", result.get("error", ""))
 
 
 class TestGetBriefing:
@@ -140,10 +156,10 @@ class TestGetBriefing:
         mock_briefing.recommended_actions = []
         mock_briefing.full_text = "text"
         presenter.generate_briefing = AsyncMock(return_value=mock_briefing)
-        ctx["services"].__getitem__ = MagicMock(return_value=presenter)
+        ctx["services"].presenter = presenter
 
         result = await intelligence_server.get_briefing(
-            user_id="usr_1", date="2025-06-15", workspace_id="ws_1"
+            user_id="usr_1", ctx=_mock_ctx(), date="2025-06-15", workspace_id="ws_1"
         )
 
         assert result["status"] == "ok"
@@ -170,10 +186,10 @@ class TestSearchMemory:
         ctx = configure_intelligence_server
         memory_svc = AsyncMock()
         memory_svc.retrieve = AsyncMock(return_value=[{"fact": "test"}])
-        ctx["services"].__getitem__ = MagicMock(return_value=memory_svc)
+        ctx["services"].memory_service = memory_svc
 
         result = await intelligence_server.search_memory(
-            user_id="usr_1", query="test query", workspace_id="ws_1"
+            user_id="usr_1", query="test query", ctx=_mock_ctx(), workspace_id="ws_1"
         )
 
         assert result["count"] == 1

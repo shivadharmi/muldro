@@ -17,7 +17,7 @@ class Agent(Base, TimestampMixin):
     system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
     model_tier: Mapped[str] = mapped_column(String(16), nullable=False, default="sonnet")
     # opus, sonnet, haiku
-    tool_scope: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    capability_scope: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     max_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=4096)
     temperature: Mapped[float] = mapped_column(Float, nullable=False, default=0.3)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)

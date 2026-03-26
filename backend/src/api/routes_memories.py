@@ -80,3 +80,174 @@ async def list_memories(
             for m in rows
         ]
     )
+
+
+@router.get("/v1/memories/{memory_id}/provenance")
+async def get_memory_provenance(
+    memory_id: str,
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+    db: AsyncSession = Depends(get_session),
+):
+    """Get provenance information for a memory."""
+    from src.services.memory_influence import MemoryInfluenceService
+
+    svc = MemoryInfluenceService(db, workspace_id)
+    provenance = await svc.get_provenance(memory_id)
+    if not provenance:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404, detail=f"Memory {memory_id} not found")
+
+    return {
+        "memory_id": provenance.memory_id,
+        "source_event_id": provenance.source_event_id,
+        "created_by_agent": provenance.created_by_agent,
+        "created_at": provenance.created_at.isoformat() if provenance.created_at else None,
+        "access_count": provenance.access_count,
+        "last_accessed_at": (
+            provenance.last_accessed_at.isoformat() if provenance.last_accessed_at else None
+        ),
+        "influenced_plan_ids": provenance.influenced_plan_ids,
+        "influenced_briefing_ids": provenance.influenced_briefing_ids,
+    }
+
+
+@router.get("/v1/memories/{memory_id}/influence")
+async def get_memory_influence(
+    memory_id: str,
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+    db: AsyncSession = Depends(get_session),
+):
+    """Get influence references for a memory."""
+    from src.services.memory_influence import MemoryInfluenceService
+
+    svc = MemoryInfluenceService(db, workspace_id)
+    refs = await svc.get_influence_refs(memory_id)
+    return {
+        "memory_id": memory_id,
+        "references": [
+            {
+                "ref_type": r.ref_type,
+                "ref_id": r.ref_id,
+                "used_at": r.used_at.isoformat() if r.used_at else None,
+                "context": r.context,
+            }
+            for r in refs
+        ],
+    }
+
+
+@router.get("/v1/memories/conflicts")
+async def get_memory_conflicts(
+    limit: int = Query(10, ge=1, le=50),
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+    db: AsyncSession = Depends(get_session),
+):
+    """Detect potentially conflicting memories."""
+    from src.services.memory_influence import MemoryInfluenceService
+
+    svc = MemoryInfluenceService(db, workspace_id)
+    conflicts = await svc.detect_conflicts(user_id, limit)
+    return {
+        "conflicts": [
+            {
+                "memory_a_id": c.memory_a_id,
+                "memory_a_text": c.memory_a_text,
+                "memory_b_id": c.memory_b_id,
+                "memory_b_text": c.memory_b_text,
+                "conflict_type": c.conflict_type,
+            }
+            for c in conflicts
+        ],
+    }
+
+
+@router.get("/v1/memories/review")
+async def get_review_queue(
+    limit: int = Query(20, ge=1, le=100),
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+    db: AsyncSession = Depends(get_session),
+):
+    """Get memories that need human review."""
+    from src.services.memory_influence import MemoryInfluenceService
+
+    svc = MemoryInfluenceService(db, workspace_id)
+    memories = await svc.get_review_queue(user_id, limit)
+    return {
+        "review_queue": [
+            MemoryItem(
+                memory_id=m.memory_id,
+                memory_type=m.memory_type,
+                scope=m.scope,
+                fact_text=m.fact_text,
+                confidence=m.confidence,
+                status=m.status,
+                last_accessed_at=(m.last_accessed_at.isoformat() if m.last_accessed_at else None),
+                is_stale=_is_stale(m.last_accessed_at),
+                entity_ids=m.entity_ids or [],
+                access_count=getattr(m, "access_count", 0) or 0,
+                created_at=m.created_at.isoformat() if m.created_at else None,
+            ).model_dump()
+            for m in memories
+        ],
+    }
+
+
+@router.post("/v1/memories/{memory_id}/archive")
+async def archive_memory(
+    memory_id: str,
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+    db: AsyncSession = Depends(get_session),
+):
+    """Archive a memory (soft delete)."""
+    from src.services.memory_influence import MemoryInfluenceService
+
+    svc = MemoryInfluenceService(db, workspace_id)
+    await svc.archive_memory(memory_id)
+    await db.commit()
+    return {"status": "archived", "memory_id": memory_id}
+
+
+@router.get("/v1/memories/stats")
+async def get_memory_stats(
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+    db: AsyncSession = Depends(get_session),
+):
+    """Get memory statistics for the current user."""
+    from src.services.memory_influence import MemoryInfluenceService
+
+    svc = MemoryInfluenceService(db, workspace_id)
+    stats = await svc.get_stats(user_id)
+    return stats
+
+
+@router.delete("/v1/memories/{memory_id}")
+async def delete_memory(
+    memory_id: str,
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+    db: AsyncSession = Depends(get_session),
+):
+    """Archive a memory via DELETE (set status to expired). Used to remove instructions/goals."""
+    result = await db.execute(
+        select(Memory).where(
+            Memory.memory_id == memory_id,
+            Memory.user_id == user_id,
+            Memory.workspace_id == workspace_id,
+        )
+    )
+    memory = result.scalar_one_or_none()
+    if not memory:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404, detail="Memory not found")
+
+    memory.status = "expired"
+    await db.commit()
+    return {"status": "archived", "memory_id": memory_id}

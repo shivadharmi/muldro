@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 class JiraConnector(BaseConnector):
     """Polls Jira REST API v3 for issue changes. MCP server is the primary write path."""
 
+    cursor_type: str = "since_timestamp"
     supports_actions: bool = True
     available_actions: list[str] = ["create_issue", "update_issue", "transition", "comment"]
 

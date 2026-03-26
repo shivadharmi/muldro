@@ -98,14 +98,12 @@ class Settings(BaseSettings):
     linear_oauth_client_secret: str = ""
     linear_oauth_redirect_uri: str = "http://localhost:8000/v1/auth/linear/callback"
     linear_access_token: str = ""  # For MCP server (mcp-server-linear)
-    linear_api_key: str = ""  # Legacy alias
 
     # Notion OAuth
     notion_oauth_client_id: str = ""
     notion_oauth_client_secret: str = ""
     notion_oauth_redirect_uri: str = "http://localhost:8000/v1/auth/notion/callback"
     notion_token: str = ""  # For MCP server (@notionhq/notion-mcp-server)
-    notion_api_key: str = ""  # Legacy alias
 
     # Jira (Atlassian) OAuth
     jira_oauth_client_id: str = ""

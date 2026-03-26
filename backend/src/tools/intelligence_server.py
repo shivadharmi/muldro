@@ -11,11 +11,13 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
-from fastmcp import FastMCP
+from fastmcp import Context, FastMCP
+from fastmcp.server.providers.local_provider.decorators.tools import ToolAnnotations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
+from src.integrations.mcp_errors import make_error_response
 from src.models.approvals import Approval
 from src.models.observation_cursor import ObservationCursor
 
@@ -30,11 +32,10 @@ _settings = None
 _services = None
 
 
-def configure(db_factory, settings, services: dict):
+def configure(db_factory, settings, services):
     """Configure the intelligence server with runtime dependencies.
 
-    Called once during orchestrator startup. Services dict should contain:
-    event_processor, world_model, memory_service, planner, governor, presenter, audit
+    Called once during orchestrator startup. Services should be a ServiceContainer.
     """
     global _db_factory, _settings, _services
     _db_factory = db_factory
@@ -53,7 +54,10 @@ async def _get_db() -> AsyncGenerator[AsyncSession, None]:
 # ── Event Ingestion ──────────────────────────────────────────────────────
 
 
-@intelligence.tool()
+@intelligence.tool(
+    tags={"observer", "write"},
+    annotations=ToolAnnotations(readOnlyHint=False, idempotentHint=False),
+)
 async def ingest_event(
     user_id: str,
     source: str,
@@ -61,6 +65,7 @@ async def ingest_event(
     entity_type: str,
     entity_id: str,
     title: str,
+    ctx: Context,
     summary: str = "",
     actor_email: str = "",
     actor_name: str = "",
@@ -101,10 +106,11 @@ async def ingest_event(
                 raw_payload=None,
             )
 
-            processor = _services["event_processor"]
+            processor = _services.event_processor
             result = await processor.process(user_id, raw, workspace_id=workspace_id)
             await db.commit()
 
+            await ctx.info(f"Ingested event from {source}: {title}")
             return {
                 "status": "ingested",
                 "event_id": result.get("event_id"),
@@ -113,16 +119,20 @@ async def ingest_event(
         except Exception as e:
             logger.error("ingest_event failed: %s", e, exc_info=True)
             await db.rollback()
-            return {"status": "error", "error": str(e)}
+            return make_error_response(e)
 
 
 # ── Memory Search ────────────────────────────────────────────────────────
 
 
-@intelligence.tool()
+@intelligence.tool(
+    tags={"librarian", "read"},
+    annotations=ToolAnnotations(readOnlyHint=True),
+)
 async def search_memory(
     user_id: str,
     query: str,
+    ctx: Context,
     scope: str = "all",
     memory_type: str = "",
     limit: int = 10,
@@ -136,7 +146,7 @@ async def search_memory(
     """
     async with _get_db():
         try:
-            memory_svc = _services["memory_service"]
+            memory_svc = _services.memory_service
             memory_types = [memory_type] if memory_type else None
             results = await memory_svc.retrieve(
                 user_id,
@@ -157,9 +167,13 @@ async def search_memory(
 # ── Entity Management ────────────────────────────────────────────────────
 
 
-@intelligence.tool()
+@intelligence.tool(
+    tags={"librarian", "read"},
+    annotations=ToolAnnotations(readOnlyHint=True),
+)
 async def get_entities(
     user_id: str,
+    ctx: Context,
     query: str = "",
     entity_type: str = "",
     limit: int = 20,
@@ -171,7 +185,7 @@ async def get_entities(
     """
     async with _get_db() as db:
         try:
-            world_model = _services["world_model"]
+            world_model = _services.world_model
             if query:
                 entities = await world_model.find_entity(user_id, query, workspace_id=workspace_id)
                 return {
@@ -207,9 +221,14 @@ async def get_entities(
             return {"entities": [], "count": 0, "error": str(e)}
 
 
-@intelligence.tool()
+@intelligence.tool(
+    tags={"librarian", "write"},
+    annotations=ToolAnnotations(readOnlyHint=False, idempotentHint=True),
+)
 async def update_entity(
     entity_id: str,
+    ctx: Context,
+    user_id: str = "",
     attributes: str = "",
     add_alias: str = "",
     workspace_id: str = "",
@@ -256,15 +275,22 @@ async def update_entity(
         except Exception as e:
             logger.error("update_entity failed: %s", e, exc_info=True)
             await db.rollback()
-            return {"status": "error", "error": str(e)}
+            return make_error_response(e)
 
 
 # ── Planning ─────────────────────────────────────────────────────────────
 
 
-@intelligence.tool()
+@intelligence.tool(
+    tags={"planner", "write"},
+    annotations=ToolAnnotations(readOnlyHint=False, idempotentHint=False),
+)
 async def plan_command(
-    user_id: str, command: str, context: str = "", workspace_id: str = ""
+    user_id: str,
+    command: str,
+    ctx: Context,
+    context: str = "",
+    workspace_id: str = "",
 ) -> dict:
     """Process a natural language command through the Jarvis planner.
 
@@ -272,10 +298,12 @@ async def plan_command(
     """
     async with _get_db():
         try:
-            planner = _services["planner"]
+            await ctx.report_progress(0, 2, "Planning command...")
+            planner = _services.planner
             plan = await planner.plan_for_command(
                 command, user_id, context=context, workspace_id=workspace_id
             )
+            await ctx.report_progress(2, 2, "Plan created")
             # Serialize Plan ORM object to dict
             return {
                 "status": "ok",
@@ -290,8 +318,16 @@ async def plan_command(
             return {"status": "error", "decision": "error", "error": str(e)}
 
 
-@intelligence.tool()
-async def get_active_plans(user_id: str, limit: int = 10, workspace_id: str = "") -> dict:
+@intelligence.tool(
+    tags={"planner", "read"},
+    annotations=ToolAnnotations(readOnlyHint=True),
+)
+async def get_active_plans(
+    user_id: str,
+    ctx: Context,
+    limit: int = 10,
+    workspace_id: str = "",
+) -> dict:
     """Get currently active plans (not completed/failed/cancelled)."""
     async with _get_db() as db:
         try:
@@ -327,10 +363,14 @@ async def get_active_plans(user_id: str, limit: int = 10, workspace_id: str = ""
 # ── Policy Evaluation ────────────────────────────────────────────────────
 
 
-@intelligence.tool()
+@intelligence.tool(
+    tags={"governor", "read"},
+    annotations=ToolAnnotations(readOnlyHint=True),
+)
 async def evaluate_policy(
     user_id: str,
     plan_id: str,
+    ctx: Context,
     workspace_id: str = "",
 ) -> dict:
     """Evaluate governance policy for a plan.
@@ -339,20 +379,28 @@ async def evaluate_policy(
     """
     async with _get_db():
         try:
-            governor = _services["governor"]
+            governor = _services.governor
             result = await governor.evaluate_plan(plan_id, user_id, workspace_id=workspace_id)
             return result.model_dump()
         except Exception as e:
             logger.error("evaluate_policy failed: %s", e, exc_info=True)
-            return {"status": "error", "error": str(e)}
+            return make_error_response(e)
 
 
 # ── Approvals ────────────────────────────────────────────────────────────
 
 
-@intelligence.tool()
+@intelligence.tool(
+    tags={"governor", "write"},
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True),
+)
 async def approve_action(
-    user_id: str, approval_id: str, decision: str, reason: str = "", workspace_id: str = ""
+    user_id: str,
+    approval_id: str,
+    decision: str,
+    ctx: Context,
+    reason: str = "",
+    workspace_id: str = "",
 ) -> dict:
     """Approve or reject a pending action.
 
@@ -378,7 +426,7 @@ async def approve_action(
             await db.commit()
 
             # Log to audit
-            audit = _services.get("audit")
+            audit = _services.audit
             if audit:
                 await audit.log(
                     user_id=user_id,
@@ -388,18 +436,27 @@ async def approve_action(
                     policy_decision=decision,
                 )
 
+            await ctx.info(f"Approval {approval_id} {decision}")
             return {"status": decision, "approval_id": approval_id}
         except Exception as e:
             logger.error("approve_action failed: %s", e, exc_info=True)
             await db.rollback()
-            return {"status": "error", "error": str(e)}
+            return make_error_response(e)
 
 
 # ── Preference Extraction ────────────────────────────────────────────────
 
 
-@intelligence.tool()
-async def extract_preferences(user_id: str, source_text: str, workspace_id: str = "") -> dict:
+@intelligence.tool(
+    tags={"persona", "write"},
+    annotations=ToolAnnotations(readOnlyHint=False, idempotentHint=False),
+)
+async def extract_preferences(
+    user_id: str,
+    source_text: str,
+    ctx: Context,
+    workspace_id: str = "",
+) -> dict:
     """Extract user preferences from interaction text.
 
     The Persona agent calls this to store learned preferences as memories.
@@ -407,7 +464,7 @@ async def extract_preferences(user_id: str, source_text: str, workspace_id: str 
     """
     async with _get_db():
         try:
-            memory_service = _services.get("memory_service")
+            memory_service = _services.memory_service
             if not memory_service:
                 return {"status": "error", "error": "Memory service not available"}
 
@@ -424,14 +481,22 @@ async def extract_preferences(user_id: str, source_text: str, workspace_id: str 
             }
         except Exception as e:
             logger.error("extract_preferences failed: %s", e, exc_info=True)
-            return {"status": "error", "error": str(e)}
+            return make_error_response(e)
 
 
 # ── Briefing ─────────────────────────────────────────────────────────────
 
 
-@intelligence.tool()
-async def get_briefing(user_id: str, date: str = "today", workspace_id: str = "") -> dict:
+@intelligence.tool(
+    tags={"presenter", "read"},
+    annotations=ToolAnnotations(readOnlyHint=True),
+)
+async def get_briefing(
+    user_id: str,
+    ctx: Context,
+    date: str = "today",
+    workspace_id: str = "",
+) -> dict:
     """Generate or fetch the daily briefing.
 
     date: 'today' or ISO date string (YYYY-MM-DD)
@@ -440,11 +505,14 @@ async def get_briefing(user_id: str, date: str = "today", workspace_id: str = ""
         try:
             from datetime import date as date_type
 
+            await ctx.report_progress(0, 3, "Loading briefing data...")
             briefing_date = date_type.today() if date == "today" else date_type.fromisoformat(date)
-            presenter = _services["presenter"]
+            presenter = _services.presenter
+            await ctx.report_progress(1, 3, "Generating briefing...")
             briefing = await presenter.generate_briefing(
                 user_id, briefing_date, workspace_id=workspace_id
             )
+            await ctx.report_progress(3, 3, "Briefing ready")
             return {
                 "status": "ok",
                 "briefing_id": briefing.briefing_id,
@@ -458,14 +526,22 @@ async def get_briefing(user_id: str, date: str = "today", workspace_id: str = ""
             }
         except Exception as e:
             logger.error("get_briefing failed: %s", e, exc_info=True)
-            return {"status": "error", "error": str(e)}
+            return make_error_response(e)
 
 
 # ── Observation Cursors ──────────────────────────────────────────────────
 
 
-@intelligence.tool()
-async def get_observation_cursor(user_id: str, source: str, workspace_id: str = "") -> dict:
+@intelligence.tool(
+    tags={"observer", "read"},
+    annotations=ToolAnnotations(readOnlyHint=True),
+)
+async def get_observation_cursor(
+    user_id: str,
+    source: str,
+    ctx: Context,
+    workspace_id: str = "",
+) -> dict:
     """Get the last observation checkpoint for a data source.
 
     source: gmail, calendar, slack, github
@@ -493,12 +569,16 @@ async def get_observation_cursor(user_id: str, source: str, workspace_id: str = 
             return {"source": source, "cursor_value": None, "error": str(e)}
 
 
-@intelligence.tool()
+@intelligence.tool(
+    tags={"observer", "write"},
+    annotations=ToolAnnotations(readOnlyHint=False, idempotentHint=True),
+)
 async def update_observation_cursor(
     user_id: str,
     source: str,
     cursor_type: str,
     cursor_value: str,
+    ctx: Context,
     workspace_id: str = "",
 ) -> dict:
     """Update the observation checkpoint after a successful observation cycle.
@@ -539,16 +619,20 @@ async def update_observation_cursor(
         except Exception as e:
             logger.error("update_observation_cursor failed: %s", e, exc_info=True)
             await db.rollback()
-            return {"status": "error", "error": str(e)}
+            return make_error_response(e)
 
 
 # ── Observation Reporting ────────────────────────────────────────────────
 
 
-@intelligence.tool()
+@intelligence.tool(
+    tags={"observer", "write"},
+    annotations=ToolAnnotations(readOnlyHint=False, idempotentHint=True),
+)
 async def report_observation(
     user_id: str,
     source: str,
+    ctx: Context,
     items_found: int = 0,
     items_ingested: int = 0,
     status: str = "ok",
@@ -577,8 +661,8 @@ async def report_observation(
                 obs.error_message = error_message if error_message else None
             else:
                 obs = ObservationStatus(
-                    observation_id=f"obs_{ULID()}",
                     user_id=user_id,
+                    workspace_id=workspace_id,
                     source=source,
                     last_observed_at=now,
                     items_found=items_found,
@@ -594,16 +678,21 @@ async def report_observation(
         except Exception as e:
             logger.error("report_observation failed: %s", e, exc_info=True)
             await db.rollback()
-            return {"status": "error", "error": str(e)}
+            return make_error_response(e)
 
 
 # ── Execution Tracking ───────────────────────────────────────────────────
 
 
-@intelligence.tool()
+@intelligence.tool(
+    tags={"operator", "write"},
+    annotations=ToolAnnotations(readOnlyHint=False, idempotentHint=True),
+)
 async def update_execution(
     execution_id: str,
     status: str,
+    ctx: Context,
+    user_id: str = "",
     result_summary: str = "",
     error_message: str = "",
     workspace_id: str = "",
@@ -631,7 +720,7 @@ async def update_execution(
             try:
                 transition_run(run, status)
             except InvalidTransitionError as e:
-                return {"status": "error", "error": str(e)}
+                return make_error_response(e)
             if status == "completed":
                 run.completed_at = datetime.now(timezone.utc)
             if error_message:
@@ -647,117 +736,68 @@ async def update_execution(
         except Exception as e:
             logger.error("update_execution failed: %s", e, exc_info=True)
             await db.rollback()
-            return {"status": "error", "error": str(e)}
+            return make_error_response(e)
 
 
-# ── Task Management ─────────────────────────────────────────────────
-
-
-@intelligence.tool()
-async def create_task(
+@intelligence.tool(
+    tags={"planner", "read"},
+    annotations=ToolAnnotations(readOnlyHint=True),
+)
+async def get_goal_memories(
     user_id: str,
-    title: str,
-    description: str = "",
-    task_type: str = "general",
-    priority: str = "medium",
-    goal_id: str = "",
-    workspace_id: str = "",
-) -> dict:
-    """Create a standalone task in the task system.
-
-    task_type: general, draft_email, research, meeting_prep, etc.
-    priority: low, medium, high, critical
-    """
-    async with _get_db() as db:
-        try:
-            from src.services.task_service import TaskService
-
-            svc = TaskService(db)
-            task = await svc.create_task(
-                user_id=user_id,
-                title=title,
-                description=description or None,
-                task_type=task_type,
-                priority=priority,
-                goal_id=goal_id or None,
-                workspace_id=workspace_id,
-            )
-            await db.commit()
-            return {
-                "status": "created",
-                "task_id": task.task_id,
-                "title": task.title,
-            }
-        except Exception as e:
-            logger.error("create_task failed: %s", e, exc_info=True)
-            await db.rollback()
-            return {"status": "error", "error": str(e)}
-
-
-@intelligence.tool()
-async def get_task(user_id: str, task_id: str, workspace_id: str = "") -> dict:
-    """Get details of a standalone task by ID."""
-    async with _get_db() as db:
-        try:
-            from src.services.task_service import TaskService
-
-            svc = TaskService(db)
-            task = await svc.get_task(task_id, user_id, workspace_id=workspace_id)
-            if not task:
-                return {"status": "not_found", "task_id": task_id}
-            return {
-                "task_id": task.task_id,
-                "title": task.title,
-                "description": task.description,
-                "status": task.status,
-                "priority": task.priority,
-                "task_type": task.task_type,
-                "goal_id": task.goal_id,
-            }
-        except Exception as e:
-            logger.error("get_task failed: %s", e, exc_info=True)
-            return {"status": "error", "error": str(e)}
-
-
-@intelligence.tool()
-async def get_goals(
-    user_id: str,
-    status: str = "active",
+    ctx: Context,
     limit: int = 10,
     workspace_id: str = "",
 ) -> dict:
-    """Get user goals, optionally filtered by status."""
-    async with _get_db():
+    """Get active user goals stored as memories.
+
+    Goals are stored as memories with memory_type='goal' and scope='planning'.
+    Returns goal text, confidence, and entity links.
+    """
+    async with _get_db() as db:
         try:
-            goal_tracker = _services.get("goal_tracker")
-            if not goal_tracker:
-                return {
-                    "goals": [],
-                    "error": "Goal tracker not available",
-                }
-            goals = await goal_tracker.list_goals(user_id, status=status, workspace_id=workspace_id)
+            from sqlalchemy import select
+
+            from src.models.memory import Memory
+
+            result = await db.execute(
+                select(Memory)
+                .where(
+                    Memory.user_id == user_id,
+                    Memory.workspace_id == workspace_id,
+                    Memory.memory_type == "goal",
+                    Memory.status == "active",
+                )
+                .order_by(Memory.created_at.desc())
+                .limit(limit)
+            )
+            goals = result.scalars().all()
             return {
                 "goals": [
                     {
-                        "goal_id": g.goal_id,
-                        "title": g.title,
-                        "status": g.status,
-                        "progress": g.progress,
-                        "priority": getattr(g, "priority", "medium"),
+                        "memory_id": g.memory_id,
+                        "text": g.fact_text,
+                        "confidence": g.confidence,
+                        "entity_ids": g.entity_ids or [],
+                        "created_at": g.created_at.isoformat() if g.created_at else None,
                     }
-                    for g in goals[:limit]
+                    for g in goals
                 ],
-                "count": min(len(goals), limit),
+                "count": len(goals),
             }
         except Exception as e:
-            logger.error("get_goals failed: %s", e, exc_info=True)
+            logger.error("get_goal_memories failed: %s", e, exc_info=True)
             return {"goals": [], "error": str(e)}
 
 
-@intelligence.tool()
+@intelligence.tool(
+    tags={"librarian", "read"},
+    annotations=ToolAnnotations(readOnlyHint=True),
+)
 async def build_context(
     user_id: str,
     query: str,
+    ctx: Context,
     task_type: str = "",
     workspace_id: str = "",
 ) -> dict:
@@ -770,20 +810,23 @@ async def build_context(
         try:
             from src.services.context_builder import ContextBuilder
 
+            await ctx.report_progress(0, 4, "Initializing context builder...")
             builder = ContextBuilder(
-                world_model=_services.get("world_model"),
-                memory_service=_services.get("memory_service"),
-                goal_tracker=_services.get("goal_tracker"),
-                procedure_library=_services.get("procedure_library"),
-                artifact_store=_services.get("artifact_store"),
+                world_model=_services.world_model,
+                memory_service=_services.memory_service,
+                procedure_library=_services.procedure_library,
+                artifact_store=_services.artifact_store,
             )
+            await ctx.report_progress(1, 4, "Gathering entities and memories...")
             pack = await builder.build(
                 user_id,
                 query,
                 task_type=task_type or None,
                 workspace_id=workspace_id,
             )
+            await ctx.report_progress(3, 4, "Formatting context prompt...")
             prompt_text = ContextBuilder.to_prompt(pack)
+            await ctx.report_progress(4, 4, "Context ready")
             return {
                 "context_prompt": prompt_text,
                 "entity_count": len(pack.entities),
@@ -795,9 +838,14 @@ async def build_context(
             return {"context_prompt": "", "error": str(e)}
 
 
-@intelligence.tool()
+@intelligence.tool(
+    tags={"operator", "read"},
+    annotations=ToolAnnotations(readOnlyHint=True),
+)
 async def verify_run(
     run_id: str,
+    ctx: Context,
+    user_id: str = "",
     workspace_id: str = "",
 ) -> dict:
     """Verify a completed run against success conditions.
@@ -847,3 +895,64 @@ async def verify_run(
         except Exception as e:
             logger.error("verify_run failed: %s", e, exc_info=True)
             return {"verdict": "skipped", "error": str(e)}
+
+
+# ── MCP Resources — Live Data ───────────────────────────────────────────
+
+
+@intelligence.resource("entities://{workspace_id}/recent")
+async def recent_entities_resource(workspace_id: str) -> str:
+    """Recent entities from the world model."""
+    import json
+
+    async with _get_db() as db:
+        from src.models.entities import Entity
+
+        result = await db.execute(
+            select(Entity)
+            .where(Entity.workspace_id == workspace_id)
+            .order_by(Entity.updated_at.desc())
+            .limit(20)
+        )
+        entities = result.scalars().all()
+        return json.dumps(
+            [
+                {
+                    "entity_id": e.entity_id,
+                    "name": e.canonical_name,
+                    "type": e.entity_type,
+                }
+                for e in entities
+            ]
+        )
+
+
+@intelligence.resource("plans://{workspace_id}/active")
+async def active_plans_resource(workspace_id: str) -> str:
+    """Currently active plans."""
+    import json
+
+    async with _get_db() as db:
+        from src.models.plans import Plan
+
+        result = await db.execute(
+            select(Plan)
+            .where(
+                Plan.workspace_id == workspace_id,
+                Plan.status.notin_(["completed", "failed", "cancelled"]),
+            )
+            .order_by(Plan.created_at.desc())
+            .limit(10)
+        )
+        plans = result.scalars().all()
+        return json.dumps(
+            [
+                {
+                    "plan_id": p.plan_id,
+                    "goal": p.goal,
+                    "priority": p.priority,
+                    "status": p.status,
+                }
+                for p in plans
+            ]
+        )

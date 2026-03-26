@@ -11,8 +11,8 @@ The frontend is Next.js App Router at `frontend/src/`. Pages go in `frontend/src
 
 1. **Ask the user**: What does this page display? What API endpoints does it call?
 2. **Read existing pages** for patterns:
-   - `frontend/src/app/tasks/page.tsx` — CRUD list + detail
-   - `frontend/src/app/briefings/page.tsx` — read-only viewer
+   - `frontend/src/app/settings/page.tsx` — form-based settings
+   - `frontend/src/app/search/page.tsx` — search viewer
    - `frontend/src/app/chat/page.tsx` — WebSocket chat
 3. **Create the page** at `frontend/src/app/{name}/page.tsx`:
    - Use `"use client"` directive for interactive pages

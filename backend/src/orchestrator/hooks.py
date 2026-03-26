@@ -25,15 +25,23 @@ async def governor_pre_tool_hook(
     workspace_id: str = "",
     db_factory=None,
     services: dict | None = None,
+    trust_tier: str | None = None,
+    run_id: str | None = None,
 ) -> dict:
     """Pre-tool-use hook: enforce Governor policy before external writes.
+
+    Args:
+        trust_tier: Trust tier of the MCP server (T0-T3). Passed from
+            the capability resolver for trust-aware classification.
+        run_id: Current TaskRun ID (if available) — links tool-level
+            approvals to execution context for resume after approval.
 
     Returns:
         {"allowed": True} to proceed
         {"allowed": False, "reason": "..."} to block
         {"allowed": False, "approval_required": True, "approval_id": "..."} for approval gate
     """
-    classification = await _policy.classify(tool_name, db_factory=db_factory)
+    classification = await _policy.classify(tool_name, db_factory=db_factory, trust_tier=trust_tier)
 
     # Blocked tools never pass
     if classification.is_blocked:
@@ -65,8 +73,35 @@ async def governor_pre_tool_hook(
                         summary=_policy.summarize_input(tool_name, tool_input),
                         risk_level=classification.risk_level,
                         requested_by=user_id,
+                        run_id=run_id,
+                        artifact_refs={
+                            "tool_name": tool_name,
+                            "tool_params": tool_input,
+                        },
                     )
                     await db.commit()
+
+                    # Notify user about pending approval
+                    notifier = getattr(services, "notifier", None) if services else None
+                    if notifier:
+                        try:
+                            await notifier.notify(
+                                user_id=user_id,
+                                notification_type="approval_request",
+                                title=f"Approve: {tool_name}",
+                                body=_policy.summarize_input(tool_name, tool_input),
+                                data={
+                                    "approval_id": approval.approval_id,
+                                    "risk_level": classification.risk_level,
+                                },
+                                workspace_id=workspace_id,
+                            )
+                        except Exception:
+                            logger.warning(
+                                "Failed to notify for approval %s",
+                                approval.approval_id,
+                                exc_info=True,
+                            )
 
                     return {
                         "allowed": False,

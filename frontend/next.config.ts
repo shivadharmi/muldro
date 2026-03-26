@@ -1,6 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Disable built-in compression so SSE streams aren't buffered by gzip.
+  // In production, Nginx or CloudFront handles compression at the edge.
+  compress: false,
   async rewrites() {
     // Note: /api/jarvis/chat is handled by Route Handler (src/app/api/jarvis/chat/route.ts)
     // for unbuffered SSE streaming. Other /api/* paths proxy through rewrites.

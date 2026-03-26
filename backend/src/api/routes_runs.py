@@ -59,6 +59,15 @@ class RunTraceResponse(BaseModel):
     final_result: str | None = None
 
 
+class CheckpointResponse(BaseModel):
+    checkpoint_id: str
+    run_id: str
+    step_id: str | None = None
+    state_snapshot: dict | None = None
+    reason: str | None = None
+    created_at: str | None = None
+
+
 class ArtifactResponse(BaseModel):
     artifact_id: str
     artifact_type: str
@@ -212,6 +221,46 @@ async def get_run_trace(
     )
 
 
+@router.get("/v1/runs/{run_id}/checkpoints", response_model=list[CheckpointResponse])
+async def get_run_checkpoints(
+    run_id: str,
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+    db=Depends(get_session),
+):
+    """Get execution checkpoints for a run."""
+    from src.models.task_graph import TaskCheckpoint, TaskRun
+
+    exists = await db.execute(
+        select(TaskRun.run_id).where(
+            TaskRun.run_id == run_id,
+            TaskRun.user_id == user_id,
+            TaskRun.workspace_id == workspace_id,
+        )
+    )
+    if not exists.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    result = await db.execute(
+        select(TaskCheckpoint)
+        .where(TaskCheckpoint.run_id == run_id)
+        .order_by(TaskCheckpoint.created_at)
+    )
+    checkpoints = result.scalars().all()
+
+    return [
+        CheckpointResponse(
+            checkpoint_id=c.checkpoint_id,
+            run_id=c.run_id,
+            step_id=c.step_id,
+            state_snapshot=c.state_snapshot,
+            reason=c.reason,
+            created_at=c.created_at.isoformat() if c.created_at else None,
+        )
+        for c in checkpoints
+    ]
+
+
 @router.get("/v1/runs/{run_id}/artifacts", response_model=list[ArtifactResponse])
 async def get_run_artifacts(
     run_id: str,
@@ -280,9 +329,9 @@ async def resume_run(
             detail=f"Run is not paused (status={run.status})",
         )
 
-    from src.services.graph_executor import GraphExecutor
+    from src.services.graph_executor import create_graph_executor
 
-    executor = GraphExecutor(settings=settings, db=db)
+    executor = await create_graph_executor(settings=settings, db=db, workspace_id=workspace_id)
     run = await executor.resume_run(run_id)
 
     return RunResponse(

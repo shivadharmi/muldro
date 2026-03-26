@@ -7,13 +7,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from ulid import ULID
 
 from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
 from src.api.schemas import ApprovalDecisionRequest, ApprovalDetailResponse, ApprovalResponse
 from src.config.settings import Settings, get_settings
 from src.models.approvals import Approval
 from src.models.plans import Plan
-from src.models.task_graph import TaskRun
+from src.models.task_graph import TaskRun, TaskStep
 from src.services.audit import AuditService
 from src.services.operator import Operator
 
@@ -127,10 +128,31 @@ async def approve_action(
     approval.approved_by = user_id
 
     # Update run status via state machine (awaiting_approval -> running)
-    run_result = await db.execute(select(TaskRun).where(TaskRun.run_id == approval.execution_id))
+    effective_run_id = approval.run_id or approval.execution_id
+    run_result = await db.execute(select(TaskRun).where(TaskRun.run_id == effective_run_id))
     run = run_result.scalar_one_or_none()
-    if run:
+    if run and run.status == "awaiting_approval":
         transition_run(run, "running")
+
+    # Emit approval_resolved runtime event
+    try:
+        from src.models.runtime_event import RuntimeEvent
+
+        db.add(
+            RuntimeEvent(
+                workspace_id=workspace_id,
+                run_id=approval.run_id,
+                step_id=approval.step_id,
+                event_type="approval_resolved",
+                payload={
+                    "approval_id": approval_id,
+                    "decision": "approved",
+                    "reason": req.reason if req else None,
+                },
+            )
+        )
+    except Exception:
+        pass
 
     audit = AuditService(db)
     await audit.log(
@@ -165,9 +187,9 @@ async def approve_action(
 
     # Resume the run (either step-level approval gate or plan-level)
     if approval.run_id:
-        from src.services.graph_executor import GraphExecutor
+        from src.services.graph_executor import create_graph_executor
 
-        executor = GraphExecutor(settings=settings, db=db)
+        executor = await create_graph_executor(settings=settings, db=db, workspace_id=workspace_id)
         try:
             from src.models.task_graph import TaskStep
 
@@ -193,6 +215,58 @@ async def approve_action(
             await operator.execute_plan(run.run_id, user_id)
         except Exception:
             logger.exception("Execution failed after approval: %s", run.run_id)
+    elif approval.artifact_refs and approval.artifact_refs.get("tool_name"):
+        # B1: Tool-level approval resume — create a background TaskRun to
+        # re-execute the approved tool with the original parameters.
+        try:
+            from src.models.plans import Plan, PlanTask
+
+            tool_name = approval.artifact_refs["tool_name"]
+            tool_params = approval.artifact_refs.get("tool_params", {})
+            plan_id = f"plan_{ULID()}"
+            plan = Plan(
+                plan_id=plan_id,
+                user_id=user_id,
+                workspace_id=workspace_id,
+                trigger_type="approval_resume",
+                goal=f"Execute approved tool: {tool_name}",
+                priority="high",
+                decision="create_task",
+                status="created",
+            )
+            plan.tasks = [
+                PlanTask(
+                    task_id=f"ptask_{ULID()}",
+                    plan_id=plan_id,
+                    workspace_id=workspace_id,
+                    task_type=tool_name,
+                    input_data=tool_params,
+                    status="pending",
+                )
+            ]
+            db.add(plan)
+
+            bg_run = TaskRun(
+                run_id=f"run_{ULID()}",
+                plan_id=plan_id,
+                user_id=user_id,
+                workspace_id=workspace_id,
+                source="approval_resume",
+                status="pending",
+                trace_id=None,
+            )
+            db.add(bg_run)
+            await db.commit()
+            logger.info(
+                "Tool-level approval resumed: %s → run %s",
+                approval.approval_id,
+                bg_run.run_id,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to create resume run for tool approval: %s",
+                approval.approval_id,
+            )
 
     return ApprovalResponse(
         approval_id=approval.approval_id,
@@ -226,21 +300,55 @@ async def reject_action(
     approval.decision_reason = req.reason if req else None
     approval.approved_by = user_id
 
-    # Cancel the run via state machine
-    run_result = await db.execute(select(TaskRun).where(TaskRun.run_id == approval.execution_id))
+    # Emit approval_resolved runtime event
+    try:
+        from src.models.runtime_event import RuntimeEvent
+
+        db.add(
+            RuntimeEvent(
+                workspace_id=workspace_id,
+                run_id=approval.run_id,
+                step_id=approval.step_id,
+                event_type="approval_resolved",
+                payload={
+                    "approval_id": approval_id,
+                    "decision": "rejected",
+                    "reason": req.reason if req else None,
+                },
+            )
+        )
+    except Exception:
+        pass
+
+    # Cancel the run and transition the step
+    effective_run_id = approval.run_id or approval.execution_id
+    run_result = await db.execute(select(TaskRun).where(TaskRun.run_id == effective_run_id))
     run = run_result.scalar_one_or_none()
-    if run:
-        transition_run(run, "cancelled")
+    if run and run.status in ("awaiting_approval", "running", "paused"):
+        # Transition the waiting step to cancelled
+        if approval.step_id:
+            from src.services.execution_state import transition_step
 
-    # If approval has a run_id, cancel the run
-    if approval.run_id:
-        from src.services.graph_executor import GraphExecutor
+            step_result = await db.execute(
+                select(TaskStep).where(
+                    TaskStep.step_id == approval.step_id,
+                    TaskStep.run_id == effective_run_id,
+                )
+            )
+            step = step_result.scalar_one_or_none()
+            if step and step.status == "waiting_approval":
+                transition_step(step, "cancelled")
 
-        executor = GraphExecutor(settings=settings, db=db)
+        # Cancel the full run via graph executor (handles all remaining steps)
+        from src.services.graph_executor import create_graph_executor
+
+        executor = await create_graph_executor(settings=settings, db=db, workspace_id=workspace_id)
         try:
-            await executor.cancel_run(approval.run_id)
+            await executor.cancel_run(effective_run_id)
         except Exception:
-            logger.warning("Failed to cancel run %s", approval.run_id, exc_info=True)
+            # Fallback: direct state transition
+            transition_run(run, "cancelled")
+            logger.warning("Failed to cancel run %s via executor", effective_run_id, exc_info=True)
 
     audit = AuditService(db)
     await audit.log(
@@ -334,6 +442,39 @@ async def edit_approval(
         risk_level=approval.risk_level,
         created_at=approval.created_at,
     )
+
+
+@router.get("/v1/approvals/{approval_id}/impact")
+async def get_approval_impact(
+    approval_id: str,
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+    db: AsyncSession = Depends(get_session),
+):
+    """Get impact analysis for a pending approval."""
+    from src.services.approval_impact import ApprovalImpactService
+
+    svc = ApprovalImpactService(db, workspace_id)
+    impact = await svc.get_impact(approval_id)
+    affected = await svc.get_affected_entities(approval_id)
+
+    return {
+        "approval_id": approval_id,
+        "risk_level": impact.risk_level,
+        "reversibility": impact.reversibility,
+        "reversibility_detail": impact.reversibility_detail,
+        "policy_explanation": impact.policy_explanation,
+        "downstream_effects": impact.downstream_effects,
+        "affected_entities": [
+            {
+                "entity_id": e.entity_id,
+                "name": e.name,
+                "entity_type": e.entity_type,
+                "impact_type": e.impact_type,
+            }
+            for e in affected
+        ],
+    }
 
 
 async def _get_approval(

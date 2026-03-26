@@ -15,6 +15,7 @@ TWITTER_API = "https://api.twitter.com/2"
 class TwitterConnector(BaseConnector):
     """Twitter/X REST v2 API connector. No mature MCP server — native only."""
 
+    cursor_type: str = "newest_id"
     supports_actions: bool = True
     available_actions: list[str] = ["create_tweet", "reply", "retweet"]
 

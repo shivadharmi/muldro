@@ -4,9 +4,6 @@
  */
 
 import type {
-  AgentRoute,
-  AgentPerformance,
-  AggregateMetrics,
   Approval,
   ApprovalDetail,
   Artifact,
@@ -15,31 +12,14 @@ import type {
   BriefingFeedbackSummary,
   CanvasDashboard,
   CommandResponse,
-  DLQStats,
-  ExecutionItem,
-  Goal,
-  GoalCreateInput,
-  HeartbeatResult,
   MeetingPrep,
   MemoryItem,
   Notification,
-  ObservationStatus,
-  RunDetail,
-  RunStep,
-  Schedule,
-  ScheduleCreateInput,
-  ScheduleUpdateInput,
   SearchResponse,
-  StandaloneTask,
-  StandaloneTaskCreateInput,
   SystemDashboard,
-  Task,
-  TaskDetail,
-  TraceSummary,
-  TraceDetail,
-  Workflow,
 } from "./types";
 
+import type { A2UISurface } from "./a2ui-types";
 import { getStoredToken } from "./auth";
 
 // ── Typed API Error ─────────────────────────────────────────────
@@ -163,24 +143,6 @@ export function setPolicyMode(mode: string): Promise<{ mode: string }> {
   });
 }
 
-// ── Connectors ──────────────────────────────────────────────
-
-export function fetchConnectors(): Promise<{ connectors: Array<Record<string, unknown>> }> {
-  return api("/connectors");
-}
-
-export function createConnector(provider: string): Promise<Record<string, unknown>> {
-  return post("/connectors", { provider });
-}
-
-export function deleteConnector(id: string): Promise<void> {
-  return del(`/connectors/${id}`);
-}
-
-export function testConnector(id: string): Promise<Record<string, unknown>> {
-  return post(`/connectors/${id}/test`, {});
-}
-
 // ── SSE Chat ────────────────────────────────────────────────────
 
 export interface ChatSSEEvent {
@@ -194,6 +156,7 @@ export interface ChatSSEEvent {
   blocked?: boolean;
   latency_ms?: number;
   message?: string;
+  message_id?: string;
   decision?: PlannerOutput;
   trace_id?: string;
   input_tokens?: number;
@@ -203,16 +166,23 @@ export interface ChatSSEEvent {
   cost_usd?: number;
   is_thinking?: boolean;
   conversation_id?: string;
+  // A2UI surface fields (event: "surface")
+  type?: string;
+  id?: string;
+  children?: unknown[];
+  metadata?: Record<string, unknown>;
 }
 
 export async function streamChat(
   message: string,
   onEvent: (event: ChatSSEEvent) => void,
   signal?: AbortSignal,
-  conversationId?: string | null
+  conversationId?: string | null,
+  mode?: string,
 ): Promise<void> {
   const body: Record<string, unknown> = { message, surface: "web" };
   if (conversationId) body.conversation_id = conversationId;
+  if (mode) body.mode = mode;
 
   const res = await fetch("/api/jarvis/chat", {
     method: "POST",
@@ -288,23 +258,7 @@ export function fetchCanvasDashboard(): Promise<CanvasDashboard> {
   return api("/canvas/dashboard");
 }
 
-export function fetchMetrics(): Promise<Record<string, unknown>> {
-  return api("/system/metrics");
-}
-
-export function fetchDLQStats(): Promise<DLQStats> {
-  return api("/system/dlq");
-}
-
-export function triggerHeartbeat(): Promise<HeartbeatResult> {
-  return post("/system/heartbeat", {});
-}
-
 // ── Observations ────────────────────────────────────────────────
-
-export function fetchObservationStatus(): Promise<ObservationStatus[]> {
-  return api("/observations/status");
-}
 
 // ── Approvals ───────────────────────────────────────────────────
 
@@ -334,41 +288,63 @@ export function rejectAction(id: string, reason?: string): Promise<ApprovalDetai
 
 // ── Tasks ───────────────────────────────────────────────────────
 
-export function fetchTasks(): Promise<Task[]> {
-  return api("/tasks");
-}
-
-export function fetchTask(id: string): Promise<TaskDetail> {
-  return api(`/tasks/${id}`);
-}
-
 // ── Schedules ───────────────────────────────────────────────────
 
-export function fetchSchedules(): Promise<Schedule[]> {
-  return api("/schedules");
-}
-
-export function createSchedule(input: ScheduleCreateInput): Promise<Schedule> {
-  return post("/schedules", input);
-}
-
-export function updateSchedule(id: string, input: ScheduleUpdateInput): Promise<Schedule> {
-  return patch(`/schedules/${id}`, input);
-}
-
-export function deleteSchedule(id: string): Promise<void> {
-  return del(`/schedules/${id}`);
-}
-
-export function pauseSchedule(id: string): Promise<Schedule> {
-  return post(`/schedules/${id}/pause`, {});
-}
-
-export function resumeSchedule(id: string): Promise<Schedule> {
-  return post(`/schedules/${id}/resume`, {});
-}
-
 // ── Briefings ───────────────────────────────────────────────────
+
+export interface HomeFeedData {
+  since_last_visit: string | null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  priority_items: any[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  live_activity: any[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  recommended_actions: any[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  recent_intelligence: any[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  capability_health: any[];
+}
+
+export function fetchHomeFeed(): Promise<HomeFeedData> {
+  return api("/home");
+}
+
+export interface BriefingListItem {
+  briefing_id: string;
+  headline: string | null;
+  date: string | null;
+  status: string | null;
+  domain: string | null;
+  confidence: number | null;
+  created_at: string | null;
+}
+
+export interface BriefingDetailData {
+  briefing_id: string;
+  headline: string | null;
+  full_text: string | null;
+  date: string | null;
+  confidence: number | null;
+  evidence: import("./types/context").EvidenceBundle | undefined;
+  related_items: Array<{ item_type: string; item_id: string; title: string; status: string }>;
+  actions: Array<{ action: string; label: string }>;
+}
+
+export function fetchBriefingList(limit = 50): Promise<BriefingListItem[]> {
+  return api(`/briefings?limit=${limit}`);
+}
+
+export function fetchBriefingDetail(briefingId: string): Promise<BriefingDetailData | null> {
+  return api(`/briefings/detail/${briefingId}`);
+}
+
+export function briefingAction(
+  briefingId: string,
+  action: string
+): Promise<{ status: string }> {
+  return post(`/briefings/${briefingId}/${action}`, {});
+}
 
 export function fetchBriefing(date: string): Promise<Briefing> {
   return api(`/briefings/${date}`);
@@ -391,7 +367,36 @@ export function searchKnowledge(query: string, scope?: string): Promise<SearchRe
   return post("/search", { query, scope: scope || "all" });
 }
 
+export interface UnifiedSearchResponse {
+  total_count: number;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  groups: Record<string, any[]>;
+}
+
+export function searchUnified(query: string, limit = 20): Promise<UnifiedSearchResponse> {
+  return post("/search/unified", { query, limit });
+}
+
 // ── Auth ────────────────────────────────────────────────────────
+
+export interface AuthProvider {
+  name: string;
+  display_name: string;
+  type: string;
+  configured: boolean;
+  connected: boolean;
+  scopes: string[];
+}
+
+export function fetchAuthProviders(): Promise<{ providers: AuthProvider[] }> {
+  return api("/auth/providers");
+}
+
+export function getAuthUrl(
+  provider: string,
+): Promise<{ url: string; provider: string }> {
+  return api(`/auth/${provider}/authorize`);
+}
 
 export function getGoogleAuthUrl(): Promise<{ url: string }> {
   return api("/auth/google/authorize");
@@ -410,88 +415,33 @@ export function fetchMemories(
   return api(`/memories${qs ? `?${qs}` : ""}`);
 }
 
-// ── Executions ─────────────────────────────────────────────────
-
-export function fetchExecutions(params?: {
-  status?: string;
-  source?: string;
-  limit?: number;
-}): Promise<ExecutionItem[]> {
-  const qs = new URLSearchParams();
-  if (params?.status) qs.set("status", params.status);
-  if (params?.source) qs.set("source", params.source);
-  if (params?.limit) qs.set("limit", String(params.limit));
-  const q = qs.toString();
-  return api(`/executions${q ? `?${q}` : ""}`);
-}
-
-export function fetchExecution(id: string): Promise<ExecutionItem> {
-  return api(`/executions/${id}`);
-}
-
-// ── Traces ─────────────────────────────────────────────────────
-
-export function fetchTraces(
-  hours?: number,
-  trigger?: string,
-  agentName?: string,
-  limit?: number
-): Promise<{ traces: TraceSummary[]; count: number }> {
-  const params = new URLSearchParams();
-  if (hours) params.set("time_range_hours", String(hours));
-  if (trigger) params.set("trigger", trigger);
-  if (agentName) params.set("agent_name", agentName);
-  if (limit) params.set("limit", String(limit));
-  const qs = params.toString();
-  return api(`/traces${qs ? `?${qs}` : ""}`);
-}
-
-export function fetchTraceDetail(traceId: string): Promise<TraceDetail> {
-  return api(`/traces/${traceId}`);
-}
-
-export function fetchAgentPerformance(hours?: number): Promise<{
-  agents: Record<string, AgentPerformance>;
-  time_range_hours: number;
-}> {
-  const qs = hours ? `?time_range_hours=${hours}` : "";
-  return api(`/traces/performance${qs}`);
-}
-
-export function fetchAggregateMetrics(hours?: number): Promise<AggregateMetrics> {
-  const qs = hours ? `?time_range_hours=${hours}` : "";
-  return api(`/traces/metrics${qs}`);
-}
-
-// ── Triggers ───────────────────────────────────────────────────
-
-export function fetchTriggers(): Promise<{ triggers: Array<Record<string, unknown>> }> {
-  return api("/triggers");
-}
-
-export function createTrigger(input: Record<string, unknown>): Promise<Record<string, unknown>> {
-  return post("/triggers", input);
-}
-
-export function deleteTrigger(id: string): Promise<void> {
-  return del(`/triggers/${id}`);
-}
-
-export function toggleTrigger(
-  id: string,
-  enabled: boolean
-): Promise<Record<string, unknown>> {
-  return patch(`/triggers/${id}`, { enabled });
-}
 
 // ── UI Surfaces ─────────────────────────────────────────────────
 
-export function fetchSurfaces(userId: string) {
-  return api(`/ui/surfaces/${userId}`);
+export function fetchSurfaces() {
+  return api("/ui/surfaces");
 }
 
-export function fetchSurface(userId: string, surfaceId: string) {
-  return api(`/ui/surfaces/${userId}/${surfaceId}`);
+export function fetchSurface(surfaceId: string) {
+  return api(`/ui/surfaces/${surfaceId}`);
+}
+
+export function fetchWorkspaceSurfaces(): Promise<{ surfaces: A2UISurface[]; count: number }> {
+  return api("/workspace/surfaces");
+}
+
+// ── Message Context / Evidence ──────────────────────────────────
+
+export function fetchMessageContext(messageId: string) {
+  return api<import("@/lib/types/context").ContextSidebarData>(
+    `/conversations/messages/${messageId}/context`
+  );
+}
+
+export function fetchMessageEvidence(messageId: string) {
+  return api<import("@/lib/types/context").EvidenceBundle>(
+    `/conversations/messages/${messageId}/evidence`
+  );
 }
 
 // ── Conversations ───────────────────────────────────────────────
@@ -609,73 +559,6 @@ export function deleteConversation(id: string): Promise<void> {
   return del(`/conversations/${id}`);
 }
 
-// ── Standalone Tasks ────────────────────────────────────────────
-
-export function createTask(input: StandaloneTaskCreateInput): Promise<StandaloneTask> {
-  return post("/tasks", input);
-}
-
-export function fetchStandaloneTasks(params?: {
-  status?: string;
-  goal_id?: string;
-  task_type?: string;
-  priority?: string;
-}): Promise<StandaloneTask[]> {
-  const qs = new URLSearchParams();
-  if (params?.status) qs.set("status", params.status);
-  if (params?.goal_id) qs.set("goal_id", params.goal_id);
-  if (params?.task_type) qs.set("task_type", params.task_type);
-  if (params?.priority) qs.set("priority", params.priority);
-  const q = qs.toString();
-  return api(`/tasks${q ? `?${q}` : ""}`);
-}
-
-export function startTask(id: string): Promise<StandaloneTask> {
-  return post(`/tasks/${id}/start`, {});
-}
-
-export function cancelTask(id: string): Promise<StandaloneTask> {
-  return post(`/tasks/${id}/cancel`, {});
-}
-
-export function resumeTask(id: string): Promise<StandaloneTask> {
-  return post(`/tasks/${id}/resume`, {});
-}
-
-export function addTaskDependency(
-  taskId: string,
-  dependsOnTaskId: string,
-  dependencyType?: string
-): Promise<Record<string, unknown>> {
-  return post(`/tasks/${taskId}/dependencies`, {
-    depends_on_task_id: dependsOnTaskId,
-    dependency_type: dependencyType || "blocks",
-  });
-}
-
-// ── Goals ───────────────────────────────────────────────────────
-
-export async function fetchGoals(status?: string): Promise<Goal[]> {
-  const qs = status ? `?status=${status}` : "";
-  const data = await api<{ goals: Goal[] }>(`/goals${qs}`);
-  return data.goals ?? [];
-}
-
-export function createGoal(input: GoalCreateInput): Promise<Goal> {
-  return post("/goals", input);
-}
-
-export function updateGoal(
-  id: string,
-  input: Partial<GoalCreateInput & { status: string; progress: number }>
-): Promise<Goal> {
-  return patch(`/goals/${id}`, input);
-}
-
-export function deleteGoal(id: string): Promise<void> {
-  return del(`/goals/${id}`);
-}
-
 // ── Notifications ───────────────────────────────────────────────
 
 export function fetchNotifications(
@@ -695,19 +578,6 @@ export function markNotificationRead(id: string): Promise<void> {
 
 export function dismissNotification(id: string): Promise<void> {
   return post(`/notifications/${id}/dismiss`, {});
-}
-
-// ── Workflows ───────────────────────────────────────────────────
-
-export function fetchWorkflows(): Promise<Workflow[]> {
-  return api("/workflows");
-}
-
-export function startWorkflow(
-  name: string,
-  params?: Record<string, unknown>
-): Promise<Record<string, unknown>> {
-  return post(`/workflows/${name}/start`, params || {});
 }
 
 // ── Artifacts ───────────────────────────────────────────────────
@@ -762,46 +632,6 @@ export function subscribeToEvents(
     });
 }
 
-// ── Runs ────────────────────────────────────────────────────────
-
-export function fetchRun(runId: string): Promise<RunDetail> {
-  return api(`/runs/${runId}`);
-}
-
-export function fetchRunSteps(runId: string): Promise<RunStep[]> {
-  return api(`/runs/${runId}/steps`);
-}
-
-export function fetchRunTrace(runId: string): Promise<TraceDetail> {
-  return api(`/runs/${runId}/trace`);
-}
-
-export function resumeRun(runId: string): Promise<RunDetail> {
-  return post(`/runs/${runId}/resume`, {});
-}
-
-export function fetchRunArtifacts(runId: string): Promise<Artifact[]> {
-  return api(`/runs/${runId}/artifacts`);
-}
-
-// ── Routes ──────────────────────────────────────────────────────
-
-export function fetchRoutes(): Promise<AgentRoute[]> {
-  return api("/routes");
-}
-
-export function createRoute(input: Partial<AgentRoute>): Promise<AgentRoute> {
-  return post("/routes", input);
-}
-
-export function updateRoute(id: string, data: Partial<AgentRoute>): Promise<AgentRoute> {
-  return patch(`/routes/${id}`, data);
-}
-
-export function deleteRoute(id: string): Promise<void> {
-  return del(`/routes/${id}`);
-}
-
 // ── Budget ──────────────────────────────────────────────────────
 
 export function fetchBudget(): Promise<{ daily_limit_usd: number }> {
@@ -825,39 +655,31 @@ export function generateMeetingPrep(
   return post("/meetings/prep", { meeting_id: meetingId, next });
 }
 
-// ── Agents ────────────────────────────────────────────────────────
+// ── Integrations / MCP ──────────────────────────────────────────
 
-export interface AgentRecord {
-  agent_id: string;
-  name: string;
-  display_name: string | null;
-  description: string | null;
-  system_prompt: string | null;
-  model_tier: string;
-  tool_scope: string[] | null;
-  max_tokens: number;
-  temperature: number;
+export interface Installation {
+  install_id: string;
+  server_name: string;
+  display_name: string;
+  transport: string;
+  status: string;
+  health_status: string;
+  trust_id: string | null;
+  auth_provider: string | null;
   enabled: boolean;
-  calls_today: number;
-  success_rate: number;
-  avg_latency_ms: number;
-  last_invoked_at: string | null;
+  created_at: string | null;
 }
 
-export function fetchAgents(): Promise<AgentRecord[]> {
-  return api("/agents");
+export function fetchInstallations(): Promise<Installation[]> {
+  return api("/integrations");
 }
 
-export function updateAgent(
-  agentId: string,
-  data: Partial<AgentRecord>
-): Promise<AgentRecord> {
-  return patch(`/agents/${agentId}`, data);
+export function deleteInstallation(installId: string): Promise<void> {
+  return del(`/integrations/${installId}`);
 }
 
-export function toggleAgent(
-  agentId: string,
-  enabled: boolean
-): Promise<AgentRecord> {
-  return post(`/agents/${agentId}/${enabled ? "enable" : "disable"}`, {});
+export function checkInstallationHealth(
+  installId: string
+): Promise<{ install_id?: string; server_name?: string; health_status: string }> {
+  return api(`/integrations/${installId}/health`);
 }

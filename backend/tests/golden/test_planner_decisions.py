@@ -6,11 +6,8 @@ output matches expected patterns for well-defined inputs.
 """
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-from tests.conftest import make_mock_settings
 
 GOLDEN_CASES = [
     {
@@ -143,36 +140,13 @@ GOLDEN_CASES = [
 
 
 @pytest.mark.parametrize("case", GOLDEN_CASES, ids=lambda c: c["name"])
-@patch("src.orchestrator.jarvis.get_anthropic_client")
-async def test_planner_golden(mock_get_client, case):
+async def test_planner_golden(case):
     """Verify planner makes correct structured decisions for golden cases."""
-    from src.orchestrator.jarvis import JarvisOrchestrator
+    from src.orchestrator.intent_classifier import extract_decision
 
-    mock_client = AsyncMock()
-    mock_get_client.return_value = mock_client
+    decision = extract_decision(case["mock_response"])
 
-    # Mock Claude to return the expected response
-    mock_response = MagicMock()
-    mock_response.content = [MagicMock(type="text", text=case["mock_response"])]
-    mock_response.usage = MagicMock(input_tokens=500, output_tokens=200)
-    mock_client.messages.create = AsyncMock(return_value=mock_response)
-
-    settings = make_mock_settings(
-        daily_token_budget_usd=5.0,
-        use_bedrock=False,
-        telegram_bot_token="",
-    )
-
-    orchestrator = JarvisOrchestrator(
-        settings=settings,
-        db_factory=MagicMock(),
-        services={},
-    )
-
-    # Extract decision from mock response
-    decision = orchestrator._extract_decision(case["mock_response"])
-
-    # Verify decision matches expected — _extract_decision returns PlannerOutput
+    # Verify decision matches expected — extract_decision returns PlannerOutput
     assert decision.decision == case["expected_decision"], (
         f"Expected decision '{case['expected_decision']}' but got '{decision.decision}'"
     )

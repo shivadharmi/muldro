@@ -46,7 +46,8 @@ class TestSeedDefaults:
     async def test_seed_defaults(self, registry, mock_db):
         """Seeds all default tools when none exist."""
         result_mock = MagicMock()
-        result_mock.scalar_one_or_none.return_value = None
+        result_mock.scalars.return_value = result_mock
+        result_mock.all.return_value = []
         mock_db.execute = AsyncMock(return_value=result_mock)
 
         added = await registry.seed_defaults()
@@ -56,10 +57,22 @@ class TestSeedDefaults:
 
     @pytest.mark.asyncio
     async def test_seed_defaults_skips_existing(self, registry, mock_db):
-        """Skips tools that already exist in the DB."""
-        existing = _make_tool_def(name="gmail_send")
+        """Skips tools that already exist (with matching fields)."""
+        from src.integrations.capabilities import TOOL_TO_CAPABILITY
+
+        # Simulate all default tools already existing with matching fields
+        existing_tools = []
+        for td in _DEFAULT_TOOLS:
+            t = _make_tool_def(name=td["name"])
+            t.risk_level = td.get("risk_level", "low")
+            t.requires_approval = td.get("requires_approval", False)
+            t.connector_type = td.get("connector_type")
+            t.capability = td.get("capability") or TOOL_TO_CAPABILITY.get(td["name"])
+            existing_tools.append(t)
+
         result_mock = MagicMock()
-        result_mock.scalar_one_or_none.return_value = existing
+        result_mock.scalars.return_value = result_mock
+        result_mock.all.return_value = existing_tools
         mock_db.execute = AsyncMock(return_value=result_mock)
 
         added = await registry.seed_defaults()

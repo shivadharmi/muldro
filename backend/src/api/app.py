@@ -6,8 +6,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.routes_agent_routes import router as agent_routes_router
-from src.api.routes_agents import router as agents_router
 from src.api.routes_approvals import router as approvals_router
 from src.api.routes_artifacts import router as artifacts_router
 from src.api.routes_auth import router as auth_router
@@ -15,14 +13,14 @@ from src.api.routes_briefings import router as briefings_router
 from src.api.routes_canvas import router as canvas_router
 from src.api.routes_chat import router as chat_router
 from src.api.routes_command import router as command_router
-from src.api.routes_connectors import router as connectors_router
 from src.api.routes_conversations import router as conversations_router
 from src.api.routes_events import router as events_router
-from src.api.routes_executions import router as executions_router
 from src.api.routes_feedback import router as feedback_router
-from src.api.routes_goals import router as goals_router
 from src.api.routes_graph import router as graph_router
 from src.api.routes_health import router as health_router
+from src.api.routes_home import router as home_router
+from src.api.routes_integrations import router as integrations_router
+from src.api.routes_mcp import router as mcp_router
 from src.api.routes_meetings import router as meetings_router
 from src.api.routes_memories import router as memories_router
 from src.api.routes_metrics import router as metrics_router
@@ -30,16 +28,13 @@ from src.api.routes_notifications import router as notifications_router
 from src.api.routes_observation import router as observation_router
 from src.api.routes_realtime import router as realtime_router
 from src.api.routes_runs import router as runs_router
-from src.api.routes_schedules import router as schedules_router
+from src.api.routes_runtime import router as runtime_router
 from src.api.routes_search import router as search_router
 from src.api.routes_settings import router as settings_router
 from src.api.routes_system import router as system_router
-from src.api.routes_tasks import router as tasks_router
 from src.api.routes_traces import router as traces_router
-from src.api.routes_triggers import router as triggers_router
 from src.api.routes_ui import router as ui_router
 from src.api.routes_webhooks import router as webhooks_router
-from src.api.routes_workflows import router as workflows_router
 from src.api.routes_ws import router as ws_router
 from src.api.schemas import HealthResponse
 from src.config.settings import get_settings
@@ -70,7 +65,10 @@ def create_app() -> FastAPI:
 
         app.state.surface_registry = SurfaceRegistry(redis=app.state.redis)
 
-        # Seed default tool definitions and agent configurations
+        # Seed global defaults (tools, agents, routes) — not per-user.
+        # Per-user defaults (schedules, trust records, installations) are
+        # provisioned at signup via workspace_provisioner.provision_workspace().
+        # Each seed runs independently so one failure doesn't block the others.
         try:
             from src.models.database import get_session_factory
             from src.services.agent_registry import AgentRegistry
@@ -78,40 +76,34 @@ def create_app() -> FastAPI:
             from src.services.tool_registry import ToolRegistry
 
             async with get_session_factory()() as db:
-                tool_count = await ToolRegistry(db).seed_defaults()
-                agent_count = await AgentRegistry(db).seed_defaults()
-                route_count = await RouteResolver(db).seed_defaults()
+                needs_commit = False
 
-                from sqlalchemy import select as sa_select
-
-                from src.models.users import User, WorkspaceMember
-                from src.services.schedule_seeder import seed_default_schedules
-
-                user_rows = await db.execute(sa_select(User.user_id))
-                user_ids = [row[0] for row in user_rows.all()]
-
-                # Build user → workspace mapping for schedule seeding
-                wm_rows = await db.execute(
-                    sa_select(WorkspaceMember.user_id, WorkspaceMember.workspace_id)
-                )
-                user_workspace = {r[0]: r[1] for r in wm_rows.all()}
-
-                sched_count = 0
-                for uid in user_ids:
-                    sched_count += await seed_default_schedules(
-                        db,
-                        user_id=uid,
-                        workspace_id=user_workspace.get(uid, ""),
-                    )
-
-                if tool_count or agent_count or route_count or sched_count:
-                    await db.commit()
+                try:
+                    tool_count = await ToolRegistry(db).seed_defaults()
                     if tool_count:
+                        needs_commit = True
                         logger.info("Seeded %d tool definitions", tool_count)
+                except Exception:
+                    logger.warning("Tool seed failed (FK or schema issue)", exc_info=True)
+
+                try:
+                    agent_count = await AgentRegistry(db).seed_defaults()
                     if agent_count:
+                        needs_commit = True
                         logger.info("Seeded %d agent definitions", agent_count)
-                    if sched_count:
-                        logger.info("Seeded %d default schedules", sched_count)
+                except Exception:
+                    logger.warning("Agent seed failed", exc_info=True)
+
+                try:
+                    route_count = await RouteResolver(db).seed_defaults()
+                    if route_count:
+                        needs_commit = True
+                        logger.info("Seeded %d agent routes", route_count)
+                except Exception:
+                    logger.warning("Route seed failed", exc_info=True)
+
+                if needs_commit:
+                    await db.commit()
         except Exception:
             logger.debug(
                 "Registry seed skipped (DB not ready)",
@@ -136,11 +128,13 @@ def create_app() -> FastAPI:
         except Exception:
             logger.debug("Qdrant collection init skipped", exc_info=True)
 
-        # Initialize MCP bridge to external servers (Google Workspace, GitHub, Slack, etc.)
+        # Initialize MCP bridge with session pool (replaces old gateway layer).
+        # Auth is resolved per-user from OAuthManager at call time.
         try:
             from src.connectors.mcp_bridge import initialize_mcp_bridge
 
-            await initialize_mcp_bridge()
+            oauth_manager = getattr(app.state, "oauth_manager", None)
+            await initialize_mcp_bridge(oauth_manager=oauth_manager)
         except Exception:
             logger.debug("MCP bridge init skipped", exc_info=True)
 
@@ -220,7 +214,6 @@ def create_app() -> FastAPI:
     app.include_router(command_router, tags=["command"])
     app.include_router(briefings_router, tags=["briefings"])
     app.include_router(approvals_router, tags=["approvals"])
-    app.include_router(tasks_router, tags=["tasks"])
     app.include_router(search_router, tags=["search"])
     app.include_router(meetings_router, tags=["meetings"])
     app.include_router(canvas_router, tags=["canvas"])
@@ -229,14 +222,11 @@ def create_app() -> FastAPI:
     # Event ingestion
     app.include_router(events_router, tags=["events"])
 
-    # Legacy webhook route (backwards compat)
+    # Webhook ingestion
     app.include_router(webhooks_router, tags=["webhooks"])
 
     # Observation health tracking
     app.include_router(observation_router, tags=["observations"])
-
-    # Schedules (backend-owned dynamic scheduling)
-    app.include_router(schedules_router, tags=["schedules"])
 
     # System routes (heartbeat, maintenance, metrics)
     app.include_router(system_router, tags=["system"])
@@ -256,29 +246,17 @@ def create_app() -> FastAPI:
     # User settings
     app.include_router(settings_router, tags=["settings"])
 
-    # Connectors
-    app.include_router(connectors_router, tags=["connectors"])
-
     # Prometheus metrics
     app.include_router(metrics_router, tags=["metrics"])
 
     # Memories
     app.include_router(memories_router, tags=["memories"])
 
-    # Executions
-    app.include_router(executions_router, tags=["executions"])
-
-    # Triggers
-    app.include_router(triggers_router, tags=["triggers"])
-
-    # Traces (observability)
+    # Traces (observability — internal debugging)
     app.include_router(traces_router, tags=["traces"])
 
     # Conversations (chat session persistence)
     app.include_router(conversations_router, tags=["conversations"])
-
-    # Goals
-    app.include_router(goals_router, tags=["goals"])
 
     # Artifacts
     app.include_router(artifacts_router, tags=["artifacts"])
@@ -289,17 +267,21 @@ def create_app() -> FastAPI:
     # Notifications
     app.include_router(notifications_router, tags=["notifications"])
 
-    # Workflows
-    app.include_router(workflows_router, tags=["workflows"])
-
     # Runs (task execution runs)
     app.include_router(runs_router, tags=["runs"])
-    # Agent management
-    app.include_router(agents_router, tags=["agents"])
-    app.include_router(agent_routes_router, tags=["agent-routes"])
 
     # Knowledge graph (Neo4j)
     app.include_router(graph_router, tags=["graph"])
+
+    # Integration platform
+    app.include_router(integrations_router, tags=["integrations"])
+    app.include_router(mcp_router, tags=["mcp"])
+
+    # Home feed
+    app.include_router(home_router, tags=["home"])
+
+    # Runtime projections
+    app.include_router(runtime_router, tags=["runtime"])
 
     return app
 

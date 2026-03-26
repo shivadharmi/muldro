@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { streamChat, type ChatSSEEvent, type ConversationMessage, type PlannerOutput } from "@/lib/api";
+import { useCommandStore } from "@/stores/command-store";
+import { useShellStore } from "@/stores/shell-store";
 import { CommandInput } from "./command-input";
 import { MarkdownRenderer } from "./markdown-renderer";
 
@@ -44,6 +46,7 @@ interface ChatPanelProps {
   initialMessages?: ConversationMessage[];
   onConversationCreated?: (id: string) => void;
   onMessageSent?: () => void;
+  onSurface?: (surface: { id: string; children: unknown[]; metadata: Record<string, unknown> }) => void;
 }
 
 function backendMessagesToChat(messages: ConversationMessage[]): ChatMessage[] {
@@ -99,26 +102,68 @@ export function ChatPanel({
   initialMessages,
   onConversationCreated,
   onMessageSent,
+  onSurface,
 }: ChatPanelProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // Restore messages from cache on mount, fall back to initialMessages
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    const { cachedMessages, conversationId: cachedConvoId } = useCommandStore.getState();
+    // Restore if we have cached messages for the same (or no) conversation
+    if (cachedMessages.length > 0 && (!conversationId || cachedConvoId === conversationId)) {
+      return cachedMessages.map((snap) => ({
+        id: snap.id,
+        role: snap.role,
+        content: snap.content,
+        timestamp: snap.timestamp,
+        agents: [],
+        streaming: false,
+      }));
+    }
+    if (initialMessages) {
+      return backendMessagesToChat(initialMessages);
+    }
+    return [];
+  });
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const activeConvoRef = useRef<string | null>(conversationId ?? null);
 
-  // Sync conversationId to ref
+  // Sync conversationId to ref + store
   useEffect(() => {
     activeConvoRef.current = conversationId ?? null;
+    useCommandStore.getState().setConversationId(conversationId ?? null);
   }, [conversationId]);
 
-  // Load initial messages when conversation changes
+  // Reset messages when conversation changes:
+  // - sidebar selection: initialMessages populated → render them
+  // - new chat: conversationId becomes null → clear messages
   useEffect(() => {
-    if (initialMessages) {
+    if (initialMessages && initialMessages.length > 0) {
       setMessages(backendMessagesToChat(initialMessages));
-    } else {
-      setMessages([]);
     }
   }, [initialMessages]);
+
+  // Clear messages when switching to a new (blank) conversation
+  const prevConvoRef = useRef<string | null | undefined>(conversationId);
+  useEffect(() => {
+    if (prevConvoRef.current !== undefined && prevConvoRef.current !== null && conversationId === null) {
+      // Had a conversation before, now null → user clicked "New Chat"
+      setMessages([]);
+    }
+    prevConvoRef.current = conversationId;
+  }, [conversationId]);
+
+  // Save message snapshots to store for cross-route restoration
+  useEffect(() => {
+    if (messages.length === 0) return;
+    const snapshots = messages.map((m) => ({
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      timestamp: m.timestamp,
+    }));
+    useCommandStore.getState().setCachedMessages(snapshots);
+  }, [messages]);
 
   const scrollToBottom = useCallback(() => {
     requestAnimationFrame(() => {
@@ -138,7 +183,7 @@ export function ChatPanel({
       agents: [],
     };
 
-    const assistantId = crypto.randomUUID();
+    let assistantId = crypto.randomUUID();
     const assistantMsg: ChatMessage = {
       id: assistantId,
       role: "assistant",
@@ -179,6 +224,13 @@ export function ChatPanel({
                 traceId: event.trace_id,
               }));
               break;
+
+            case "message_id": {
+              const newId = event.message_id || assistantId;
+              updateAssistant((m) => ({ ...m, id: newId }));
+              assistantId = newId; // keep closure in sync
+              break;
+            }
 
             case "agent_start":
               updateAssistant((m) => ({
@@ -270,6 +322,16 @@ export function ChatPanel({
               }));
               break;
 
+            case "surface":
+              if (onSurface && event.id && event.metadata) {
+                onSurface({
+                  id: event.id,
+                  children: event.children ?? [],
+                  metadata: event.metadata,
+                });
+              }
+              break;
+
             case "done":
               updateAssistant((m) => ({
                 ...m,
@@ -280,7 +342,8 @@ export function ChatPanel({
           }
         },
         abort.signal,
-        activeConvoRef.current
+        activeConvoRef.current,
+        useCommandStore.getState().mode,
       );
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
@@ -297,6 +360,7 @@ export function ChatPanel({
       onMessageSent?.();
     }
   };
+
 
   return (
     <div className="flex flex-col h-full">
@@ -338,6 +402,10 @@ function UserBubble({ content }: { content: string }) {
 }
 
 function AssistantMessage({ msg }: { msg: ChatMessage }) {
+  const focusedId = useCommandStore((s) => s.focusedMessageId);
+  const setFocused = useCommandStore((s) => s.setFocusedMessageId);
+  const isFocused = focusedId === msg.id;
+
   // Auto-expand running agents by computing expanded set from state + running agents
   const [manualExpanded, setManualExpanded] = useState<Set<string>>(new Set());
 
@@ -361,8 +429,20 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
     });
   };
 
+  const handleFocus = () => {
+    if (msg.streaming) return;
+    const next = isFocused ? null : msg.id;
+    setFocused(next);
+    if (next && !useShellStore.getState().rightSidebarOpen) {
+      useShellStore.getState().toggleRightSidebar();
+    }
+  };
+
   return (
-    <div className="flex justify-start">
+    <div
+      className={`flex justify-start cursor-pointer transition-all ${isFocused ? "ring-1 ring-accent-primary/40 rounded-lg" : ""}`}
+      onClick={handleFocus}
+    >
       <div className="max-w-[95%] w-full space-y-2">
         {/* Agent pipeline visualization */}
         {msg.agents.length > 0 && (

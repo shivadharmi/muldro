@@ -2,21 +2,21 @@
 
 import logging
 
+from src.workflows.context import WorkflowContext
 from src.workflows.workflow_registry import Workflow, WorkflowStep
 
 logger = logging.getLogger(__name__)
 
 
-async def search_memory_and_web(context: dict) -> dict:
+async def search_memory_and_web(ctx: WorkflowContext) -> dict:
     """Search memory and web for relevant information."""
-    query = context.get("query", "")
-    user_id = context.get("user_id", "")
+    query = ctx.get("query", "")
 
     memory_results: list[dict] = []
     web_results: list[dict] = []
 
     # Search memory via MemoryService
-    if user_id and query:
+    if ctx.user_id and query:
         try:
             from src.config.settings import get_settings
             from src.models.database import get_session_factory
@@ -27,7 +27,7 @@ async def search_memory_and_web(context: dict) -> dict:
                 from src.services.memory_service import MemoryService
 
                 ms = MemoryService(settings=settings, db=db)
-                memories = await ms.retrieve(user_id, query, max_results=10)
+                memories = await ms.retrieve(ctx.user_id, query, max_results=10)
                 memory_results = [
                     {"fact": m.get("fact_text", ""), "type": m.get("memory_type", "")}
                     for m in memories
@@ -36,7 +36,7 @@ async def search_memory_and_web(context: dict) -> dict:
             logger.debug("Memory search failed in research workflow", exc_info=True)
 
     # Search entities via WorldModel
-    if user_id and query:
+    if ctx.user_id and query:
         try:
             from src.config.settings import get_settings
             from src.models.database import get_session_factory
@@ -47,7 +47,7 @@ async def search_memory_and_web(context: dict) -> dict:
                 from src.services.world_model import WorldModel
 
                 wm = WorldModel(settings=settings, db=db)
-                entities = await wm.find_entity(user_id, query[:100])
+                entities = await wm.find_entity(ctx.user_id, query[:100])
                 web_results = [
                     {"name": e.get("canonical_name", ""), "type": e.get("entity_type", "")}
                     for e in entities[:5]
@@ -61,7 +61,12 @@ async def search_memory_and_web(context: dict) -> dict:
             from src.connectors.mcp_bridge import call_mcp_tool, is_mcp_tool
 
             if is_mcp_tool("web_search"):
-                result = await call_mcp_tool("web_search", {"query": query})
+                result = await call_mcp_tool(
+                    "web_search",
+                    {"query": query},
+                    user_id=ctx.user_id,
+                    workspace_id=ctx.workspace_id,
+                )
                 if isinstance(result, dict):
                     web_results.extend(result.get("results", [])[:5])
         except Exception:
@@ -70,22 +75,21 @@ async def search_memory_and_web(context: dict) -> dict:
     return {"memory_results": memory_results, "web_results": web_results, "query": query}
 
 
-async def cross_reference(context: dict) -> dict:
+async def cross_reference(ctx: WorkflowContext) -> dict:
     """Cross-reference findings from memory and web sources."""
-    memory_results = context.get("memory_results", [])
-    web_results = context.get("web_results", [])
+    memory_results = ctx.get("memory_results", [])
+    web_results = ctx.get("web_results", [])
 
     if not memory_results and not web_results:
         return {"cross_referenced": [], "confidence": 0.0}
 
-    # Use Claude to cross-reference findings
     try:
         from src.config.settings import get_anthropic_client, get_settings
 
         settings = get_settings()
         client = get_anthropic_client(settings)
 
-        prompt_parts = [f"Query: {context.get('query', '')}"]
+        prompt_parts = [f"Query: {ctx.get('query', '')}"]
         if memory_results:
             prompt_parts.append(f"Memory findings: {memory_results[:5]}")
         if web_results:
@@ -110,7 +114,6 @@ async def cross_reference(context: dict) -> dict:
         return json.loads(text)
     except Exception:
         logger.debug("Cross-reference via Claude failed", exc_info=True)
-        # Fallback: merge without analysis
         all_findings = [
             {"finding": m.get("fact", ""), "sources": ["memory"], "confidence": 0.7}
             for m in memory_results[:3]
@@ -118,10 +121,10 @@ async def cross_reference(context: dict) -> dict:
         return {"cross_referenced": all_findings, "confidence": 0.5}
 
 
-async def generate_report(context: dict) -> dict:
+async def generate_report(ctx: WorkflowContext) -> dict:
     """Generate a structured research report from cross-referenced findings."""
-    findings = context.get("cross_referenced", [])
-    query = context.get("query", "")
+    findings = ctx.get("cross_referenced", [])
+    query = ctx.get("query", "")
 
     if not findings:
         return {"report": "No findings to report.", "artifact_id": None}
@@ -161,12 +164,11 @@ async def generate_report(context: dict) -> dict:
         return {"report": "\n".join(lines), "artifact_id": None}
 
 
-async def push_view(context: dict) -> dict:
+async def push_view(ctx: WorkflowContext) -> dict:
     """Push the research report to the user's active surface via SSE."""
-    report = context.get("report", "")
-    user_id = context.get("user_id", "")
+    report = ctx.get("report", "")
 
-    if user_id and report:
+    if ctx.user_id and report:
         try:
             import json
 
@@ -178,7 +180,7 @@ async def push_view(context: dict) -> dict:
             r = aioredis.from_url(settings.redis_url, decode_responses=True)
             try:
                 await r.publish(
-                    f"jarvis:realtime:{user_id}",
+                    f"jarvis:realtime:{ctx.user_id}",
                     json.dumps(
                         {
                             "event_type": "surface.updated",

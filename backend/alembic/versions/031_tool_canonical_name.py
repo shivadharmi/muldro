@@ -7,8 +7,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "031_tool_canonical_name"
-down_revision = "030_memory_access_count"
+revision = "031"
+down_revision = "030"
 branch_labels = None
 depends_on = None
 

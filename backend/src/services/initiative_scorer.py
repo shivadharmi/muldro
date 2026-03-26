@@ -15,7 +15,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 if TYPE_CHECKING:
     from src.models.events import NormalizedEvent
-    from src.services.goal_tracker import GoalTracker
     from src.services.memory_service import MemoryService
     from src.services.world_model import WorldModel
 
@@ -52,14 +51,12 @@ class InitiativeScorer:
         db: AsyncSession,
         world_model: "WorldModel | None" = None,
         memory_service: "MemoryService | None" = None,
-        goal_tracker: "GoalTracker | None" = None,
         auto_plan_threshold: float = DEFAULT_AUTO_PLAN_THRESHOLD,
         notify_threshold: float = 0.50,
     ):
         self._db = db
         self._world_model = world_model
         self._memory_service = memory_service
-        self._goal_tracker = goal_tracker
         self._auto_plan_threshold = auto_plan_threshold
         self._notify_threshold = notify_threshold
 
@@ -116,24 +113,26 @@ class InitiativeScorer:
         )
 
     async def _compute_goal_relevance(self, event: "NormalizedEvent", user_id: str) -> float:
-        """Check if the event relates to any active goals."""
-        if not self._goal_tracker:
+        """Check if the event relates to any active goals (stored as memories)."""
+        if not self._memory_service:
             return 0.0
 
         try:
-            goals = await self._goal_tracker.get_active_goals(user_id)
-            if not goals:
+            event_text = f"{event.title or ''} {event.summary or ''}"
+            goal_memories = await self._memory_service.retrieve(
+                user_id, query=event_text, memory_types=["goal"], max_results=5
+            )
+            if not goal_memories:
                 return 0.0
 
-            event_text = f"{event.title or ''} {event.summary or ''}".lower()
+            event_lower = event_text.lower()
             max_relevance = 0.0
-            for goal in goals:
-                title = (goal.get("title") or "").lower()
+            for goal in goal_memories:
+                title = (goal.get("fact_text") or "").lower()
                 if not title:
                     continue
-                # Simple keyword overlap check
                 words = title.split()
-                matches = sum(1 for w in words if w in event_text)
+                matches = sum(1 for w in words if w in event_lower)
                 if words:
                     relevance = min(1.0, matches / max(len(words), 1))
                     max_relevance = max(max_relevance, relevance)

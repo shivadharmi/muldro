@@ -20,9 +20,8 @@ from src.config.settings import Settings, get_settings
 from src.models.approvals import Approval
 from src.models.briefings import Briefing
 from src.models.events import NormalizedEvent
-from src.models.goals import Goal
+from src.models.memory import Memory
 from src.models.plans import Plan, PlanTask
-from src.models.tasks import Task
 from src.models.traces import Trace
 
 router = APIRouter()
@@ -143,38 +142,29 @@ async def get_dashboard(
         for t in traces
     ]
 
-    # Active goals (top 3)
-    goals_result = await db.execute(
-        select(Goal)
-        .where(Goal.workspace_id == workspace_id, Goal.status == "active")
-        .order_by(Goal.priority.desc(), Goal.created_at.desc())
+    # Active goals (from memory system, memory_type="goal")
+    goal_mem_result = await db.execute(
+        select(Memory)
+        .where(
+            Memory.workspace_id == workspace_id,
+            Memory.memory_type == "goal",
+            Memory.status == "active",
+        )
+        .order_by(Memory.created_at.desc())
         .limit(3)
     )
-    goals = goals_result.scalars().all()
-    dashboard_goals = []
-    for g in goals:
-        task_count = (
-            await db.scalar(select(func.count()).select_from(Task).where(Task.goal_id == g.goal_id))
-            or 0
+    goal_memories = goal_mem_result.scalars().all()
+    dashboard_goals = [
+        DashboardGoal(
+            goal_id=g.memory_id,
+            title=g.fact_text,
+            progress=0.0,
+            priority=(g.provenance or {}).get("priority", "medium"),
+            task_count=0,
+            completed_task_count=0,
         )
-        completed_task_count = (
-            await db.scalar(
-                select(func.count())
-                .select_from(Task)
-                .where(Task.goal_id == g.goal_id, Task.status == "completed")
-            )
-            or 0
-        )
-        dashboard_goals.append(
-            DashboardGoal(
-                goal_id=g.goal_id,
-                title=g.title,
-                progress=g.progress,
-                priority=g.priority,
-                task_count=task_count,
-                completed_task_count=completed_task_count,
-            )
-        )
+        for g in goal_memories
+    ]
 
     # Recent events (last 8)
     events_result = await db.execute(

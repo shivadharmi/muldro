@@ -41,7 +41,7 @@ def build(settings: Settings, db: AsyncSession) -> ServiceContainer:
     try:
         from src.services.memory_service import MemoryService
 
-        svc.memory_service = MemoryService(settings, db)
+        svc.memory_service = MemoryService(settings=settings, db=db)
     except Exception as exc:
         raise RuntimeBuildError(f"Tier 1 failure: MemoryService — {exc}") from exc
 
@@ -140,10 +140,51 @@ def build(settings: Settings, db: AsyncSession) -> ServiceContainer:
     try:
         from src.services.graph_executor import GraphExecutor
 
+        event_bus = None
+        try:
+            from src.services.event_bus import EventBus
+
+            event_bus = EventBus(settings.redis_url)
+        except Exception:
+            logger.debug("EventBus unavailable for GraphExecutor", exc_info=True)
+
+        notifier = None
+        try:
+            from src.services.notifier import Notifier
+
+            notifier = Notifier(db, settings)
+        except Exception:
+            logger.debug("Notifier unavailable for GraphExecutor", exc_info=True)
+
+        verifier = None
+        try:
+            from src.services.verifier import Verifier
+
+            verifier = Verifier(db, settings)
+        except Exception:
+            logger.debug("Verifier unavailable for GraphExecutor", exc_info=True)
+
+        context_builder = None
+        try:
+            from src.services.context_builder import ContextBuilder
+
+            context_builder = ContextBuilder(
+                world_model=svc.world_model,
+                memory_service=svc.memory_service,
+                tool_registry=tool_registry,
+                db=db,
+            )
+        except Exception:
+            logger.debug("ContextBuilder unavailable for GraphExecutor", exc_info=True)
+
         svc.graph_executor = GraphExecutor(
             settings=settings,
             db=db,
+            event_bus=event_bus,
+            notifier=notifier,
             tool_registry=tool_registry,
+            verifier=verifier,
+            context_builder=context_builder,
             memory_service=svc.memory_service,
         )
     except Exception:
@@ -162,11 +203,13 @@ def build(settings: Settings, db: AsyncSession) -> ServiceContainer:
 
     # ── Wire OAuthManager ──────────────────────────────────────────
     try:
+        from src.models.database import get_session_factory
         from src.services.oauth_manager import OAuthManager
 
         svc.oauth_manager = OAuthManager(
-            db_factory=None,  # ConnectorManager has its own db session
+            db_factory=get_session_factory(),
             settings=settings,
+            encryption_key=settings.oauth_encryption_key,
         )
     except Exception:
         logger.debug("Tier 3: OAuthManager unavailable", exc_info=True)

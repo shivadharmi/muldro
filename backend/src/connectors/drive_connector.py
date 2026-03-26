@@ -17,6 +17,7 @@ DRIVE_START_PAGE_URL = "https://www.googleapis.com/drive/v3/changes/startPageTok
 class DriveConnector(BaseConnector):
     """Polls Google Drive API for recent file changes using change tokens."""
 
+    cursor_type: str = "page_token"
     supports_actions: bool = True
     available_actions: list[str] = ["create_file", "share_file"]
 

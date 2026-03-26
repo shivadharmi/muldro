@@ -156,6 +156,65 @@ async def aggregate_metrics(
     return AggregateMetricsResponse(**metrics)
 
 
+class DecisionLogEntry(BaseModel):
+    log_id: str
+    trace_id: str
+    span_id: str | None = None
+    agent_name: str
+    tool_name: str | None = None
+    input_summary: str | None = None
+    output_summary: str | None = None
+    decision: str | None = None
+    tokens_used: int = 0
+    latency_ms: int = 0
+    error: str | None = None
+    created_at: str | None = None
+
+
+@router.get("/v1/traces/{trace_id}/decisions", response_model=list[DecisionLogEntry])
+async def get_trace_decisions(
+    trace_id: str,
+    agent_name: str | None = None,
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+):
+    """Get agent decision log entries for a trace."""
+    from sqlalchemy import select
+
+    from src.models.agent_decision_log import AgentDecisionLog
+    from src.models.database import get_session_factory
+
+    async with get_session_factory()() as db:
+        stmt = select(AgentDecisionLog).where(
+            AgentDecisionLog.trace_id == trace_id,
+            AgentDecisionLog.workspace_id == workspace_id,
+        )
+        if agent_name:
+            stmt = stmt.where(AgentDecisionLog.agent_name == agent_name)
+        stmt = stmt.order_by(AgentDecisionLog.created_at)
+
+        result = await db.execute(stmt)
+        entries = result.scalars().all()
+
+    return [
+        DecisionLogEntry(
+            log_id=e.log_id,
+            trace_id=e.trace_id,
+            span_id=e.span_id,
+            agent_name=e.agent_name,
+            tool_name=e.tool_name,
+            input_summary=e.input_summary,
+            output_summary=e.output_summary,
+            decision=e.decision,
+            tokens_used=e.tokens_used,
+            latency_ms=e.latency_ms,
+            error=e.error,
+            created_at=e.created_at.isoformat() if e.created_at else None,
+        )
+        for e in entries
+    ]
+
+
 @router.get("/v1/traces/{trace_id}", response_model=TraceDetailResponse)
 async def get_trace(
     trace_id: str,

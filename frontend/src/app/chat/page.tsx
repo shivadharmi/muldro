@@ -1,47 +1,96 @@
 "use client";
 
-import { useCallback, useState } from "react";
-import { A2UIRenderer } from "@/components/a2ui/renderer";
-import { handleA2UIAction } from "@/components/a2ui/action-handler";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChatPanel } from "@/components/jarvis/chat-panel";
 import { SessionSidebar } from "@/components/jarvis/session-sidebar";
+import { A2UIRenderer } from "@/components/a2ui/renderer";
+import { handleA2UIAction } from "@/components/a2ui/action-handler";
+import { CommandWorkspace } from "@/components/feature/command/command-workspace";
 import { useAuth } from "@/lib/auth";
 import { useJarvisWs } from "@/hooks/use-jarvis-ws";
-import { useSurfaceState } from "@/hooks/use-surface-state";
+import { useSurfaceStore } from "@/stores/surface-store";
+import { useCommandStore } from "@/stores/command-store";
+import { useWsActionStore } from "@/stores/ws-action-store";
 import { fetchConversationMessages, type ConversationMessage } from "@/lib/api";
+import type { A2UISurface } from "@/lib/a2ui-types";
+import type { SurfaceKind } from "@/lib/types/surfaces";
 
 export default function ChatPage() {
   const { user } = useAuth();
   const userId = user?.user_id ?? "";
 
-  const { surfaces, upsertSurface } = useSurfaceState();
-  const [activeConversationId, setActiveConversationId] = useState<
-    string | null
-  >(null);
-  const [initialMessages, setInitialMessages] = useState<
-    ConversationMessage[]
-  >([]);
+  const allSurfaces = useSurfaceStore((s) => s.surfaces);
+  const inlineSurfaces = useMemo(
+    () => allSurfaces.filter((sf) => sf.position === "inline"),
+    [allSurfaces]
+  );
+  const addSurface = useSurfaceStore((s) => s.addSurface);
+  const removeSurface = useSurfaceStore((s) => s.removeSurface);
+  const setPosition = useSurfaceStore((s) => s.setPosition);
+
+  const { mode, setMode } = useCommandStore();
+  const setGlobalSendAction = useWsActionStore((s) => s.setSendAction);
+
+  // Single store: WebSocket surfaces go to useSurfaceStore only
+  const handleWsSurface = useCallback(
+    (ws: A2UISurface) => {
+      addSurface({
+        id: ws.id,
+        kind: (ws.metadata?.kind as SurfaceKind) || "summary",
+        title: String(ws.metadata?.title ?? "Surface"),
+        data: { ...(ws.metadata ?? {}), a2ui_surface: ws },
+        created_at: new Date().toISOString(),
+        pinned: false,
+        position: "inline",
+        schema_version: 1,
+        source_message_id: (ws.metadata?.source_message_id as string) ?? null,
+        source_run_id: (ws.metadata?.source_run_id as string) ?? null,
+        source_artifact_id: (ws.metadata?.source_artifact_id as string) ?? null,
+      });
+    },
+    [addSurface]
+  );
+
+  const handleWsSurfaceUpdate = useCallback(
+    (_surfaceId: string, ws: A2UISurface) => {
+      addSurface({
+        id: ws.id,
+        kind: (ws.metadata?.kind as SurfaceKind) || "summary",
+        title: String(ws.metadata?.title ?? "Surface"),
+        data: { ...(ws.metadata ?? {}), a2ui_surface: ws },
+        created_at: new Date().toISOString(),
+        pinned: false,
+        position: "inline",
+        schema_version: 1,
+        source_message_id: (ws.metadata?.source_message_id as string) ?? null,
+        source_run_id: (ws.metadata?.source_run_id as string) ?? null,
+        source_artifact_id: (ws.metadata?.source_artifact_id as string) ?? null,
+      });
+    },
+    [addSurface]
+  );
+
+  // Restore active conversation from global store (survives navigation)
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(
+    () => useCommandStore.getState().conversationId
+  );
+  const [initialMessages, setInitialMessages] = useState<ConversationMessage[]>([]);
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
-  const [showSessions, setShowSessions] = useState(false);
-  const [showContext, setShowContext] = useState(false);
 
   const { connected, sendAction } = useJarvisWs({
     userId,
-    onSurface: upsertSurface,
+    onSurface: handleWsSurface,
+    onSurfaceUpdate: handleWsSurfaceUpdate,
     enabled: !!user,
   });
 
-  const handleAction = useCallback(
-    (actionType: string, payload: Record<string, unknown>) => {
-      handleA2UIAction(sendAction, actionType, payload);
-    },
-    [sendAction]
-  );
+  useEffect(() => {
+    setGlobalSendAction(() => sendAction);
+  }, [sendAction, setGlobalSendAction]);
 
   const handleSelectConversation = useCallback(
     async (conversationId: string) => {
       setActiveConversationId(conversationId);
-      setShowSessions(false);
       try {
         const data = await fetchConversationMessages(conversationId);
         setInitialMessages(data.messages);
@@ -55,7 +104,8 @@ export default function ChatPage() {
   const handleNewChat = useCallback(() => {
     setActiveConversationId(null);
     setInitialMessages([]);
-    setShowSessions(false);
+    useCommandStore.getState().setCachedMessages([]);
+    useCommandStore.getState().setConversationId(null);
   }, []);
 
   const handleConversationCreated = useCallback((id: string) => {
@@ -67,62 +117,73 @@ export default function ChatPage() {
     setSidebarRefreshKey((k) => k + 1);
   }, []);
 
+  // Handle surfaces arriving through the SSE chat stream (direct delivery,
+  // no WebSocket/Redis dependency)
+  const handleSSESurface = useCallback(
+    (surface: { id: string; children: unknown[]; metadata: Record<string, unknown> }) => {
+      addSurface({
+        id: surface.id,
+        kind: (surface.metadata?.kind as SurfaceKind) || "summary",
+        title: String(surface.metadata?.title ?? "Surface"),
+        data: {
+          ...(surface.metadata ?? {}),
+          a2ui_surface: {
+            type: "surface" as const,
+            id: surface.id,
+            children: surface.children as A2UISurface["children"],
+            metadata: surface.metadata,
+          },
+        },
+        created_at: new Date().toISOString(),
+        pinned: false,
+        position: "inline",
+        schema_version: 1,
+        source_message_id: (surface.metadata?.source_message_id as string) ?? null,
+        source_run_id: (surface.metadata?.source_run_id as string) ?? null,
+        source_artifact_id: null,
+      });
+    },
+    [addSurface]
+  );
+
   if (!user) return null;
 
+  const MODES = [
+    { value: "ask" as const, label: "Ask" },
+    { value: "plan" as const, label: "Plan" },
+    { value: "execute" as const, label: "Execute" },
+  ];
+
   return (
-    <div className="flex h-screen relative">
-      {/* A. Collapsible Session Panel (left) */}
-      <div
-        className={`
-          ${showSessions ? "w-[280px]" : "w-0"}
-          transition-[width] duration-200 overflow-hidden
-          border-r border-b-secondary bg-surface-0 shrink-0
-          hidden md:block
-        `}
-      >
+    <CommandWorkspace
+      sessionRail={
         <SessionSidebar
           activeConversationId={activeConversationId}
           onSelectConversation={handleSelectConversation}
           onNewChat={handleNewChat}
           refreshKey={sidebarRefreshKey}
         />
-      </div>
-
-      {/* Mobile session panel */}
-      {showSessions && (
-        <>
-          <div
-            className="fixed inset-0 bg-black/30 z-20 md:hidden"
-            onClick={() => setShowSessions(false)}
-          />
-          <div className="fixed inset-y-0 left-0 z-30 w-[280px] bg-surface-0 border-r border-b-secondary md:hidden">
-            <SessionSidebar
-              activeConversationId={activeConversationId}
-              onSelectConversation={handleSelectConversation}
-              onNewChat={handleNewChat}
-              refreshKey={sidebarRefreshKey}
-            />
-          </div>
-        </>
-      )}
-
-      {/* B. Full-Width Chat (center) */}
-      <div className="flex-1 flex flex-col min-w-0">
-        {/* Chat header */}
-        <div className="px-4 py-2.5 border-b border-b-secondary flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setShowSessions(!showSessions)}
-              className="p-1.5 rounded-[var(--radius-sm)] hover:bg-surface-2 text-t-tertiary hover:text-t-primary transition-colors cursor-pointer"
-              aria-label="Toggle sessions"
-            >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <path d="M3 4h10M3 8h10M3 12h6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-              </svg>
-            </button>
-            <h2 className="text-sm font-medium text-t-primary">Chat</h2>
-          </div>
-          <div className="flex items-center gap-3">
+      }
+      commandPanel={
+        <div className="flex flex-col h-full">
+          {/* Command header with mode + connection */}
+          <div className="px-4 py-2.5 border-b border-b-secondary flex items-center justify-between shrink-0">
+            <div className="flex items-center gap-2">
+              {MODES.map((m) => (
+                <button
+                  key={m.value}
+                  type="button"
+                  onClick={() => setMode(m.value)}
+                  className={`px-2.5 py-1 text-xs rounded-full transition-colors cursor-pointer ${
+                    mode === m.value
+                      ? "bg-accent-primary text-white"
+                      : "text-t-tertiary hover:text-t-secondary hover:bg-surface-1"
+                  }`}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
             <div className="flex items-center gap-1.5 text-xs">
               <span
                 className={`w-2 h-2 rounded-full ${
@@ -134,49 +195,81 @@ export default function ChatPage() {
               </span>
             </div>
           </div>
-        </div>
 
-        {/* A2UI Surfaces — rendered inline above chat when present */}
-        {surfaces.length > 0 && (
-          <div className="border-b border-b-secondary overflow-y-auto max-h-[40vh] p-4 space-y-4 bg-surface-0">
-            {surfaces.map((surface) => (
-              <A2UIRenderer
+          {/* Chat panel */}
+          <ChatPanel
+            conversationId={activeConversationId}
+            initialMessages={initialMessages}
+            onConversationCreated={handleConversationCreated}
+            onMessageSent={handleMessageSent}
+            onSurface={handleSSESurface}
+          />
+        </div>
+      }
+      surfaces={
+        inlineSurfaces.length > 0 ? (
+          <div className="p-3 space-y-3">
+            {/* Surface panel header */}
+            <div className="flex items-center justify-between px-1">
+              <span className="text-xs font-medium text-t-secondary">
+                Surfaces ({inlineSurfaces.length})
+              </span>
+            </div>
+
+            {/* Surface cards */}
+            {inlineSurfaces.map((surface) => (
+              <div
                 key={surface.id}
-                surface={surface}
-                onAction={handleAction}
-              />
+                className="rounded-xl border border-b-primary bg-surface-0 overflow-hidden"
+              >
+                {/* Mini header: title + controls */}
+                <div className="flex items-center justify-between px-3 py-2 border-b border-b-primary bg-surface-1/50">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-xs font-medium text-t-primary truncate">
+                      {surface.title}
+                    </span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface-2 text-t-tertiary capitalize shrink-0">
+                      {surface.kind}
+                    </span>
+                  </div>
+                  <div className="flex gap-0.5 shrink-0">
+                    <button
+                      onClick={() => setPosition(surface.id, "center-pane")}
+                      title="Expand"
+                      className="p-1 rounded text-t-tertiary hover:text-t-primary hover:bg-surface-2 transition-colors cursor-pointer text-xs"
+                    >
+                      &#9634;
+                    </button>
+                    <button
+                      onClick={() => removeSurface(surface.id)}
+                      title="Dismiss"
+                      className="p-1 rounded text-t-tertiary hover:text-red-400 hover:bg-surface-2 transition-colors cursor-pointer text-xs"
+                    >
+                      &#10005;
+                    </button>
+                  </div>
+                </div>
+
+                {/* A2UI content */}
+                <div className="p-3">
+                  {surface.data?.a2ui_surface ? (
+                    <A2UIRenderer
+                      surface={surface.data.a2ui_surface as A2UISurface}
+                      onAction={(action, payload) =>
+                        handleA2UIAction(sendAction, action, payload)
+                      }
+                    />
+                  ) : (
+                    <p className="text-xs text-t-tertiary">
+                      {surface.title}
+                    </p>
+                  )}
+                </div>
+              </div>
             ))}
           </div>
-        )}
-
-        {/* Chat messages — full width */}
-        <ChatPanel
-          conversationId={activeConversationId}
-          initialMessages={initialMessages}
-          onConversationCreated={handleConversationCreated}
-          onMessageSent={handleMessageSent}
-        />
-      </div>
-
-      {/* C. Context Panel (right, triggered) */}
-      {showContext && (
-        <div className="w-80 border-l border-b-secondary bg-surface-1 overflow-y-auto p-4 shrink-0">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-semibold text-t-primary">Context</h3>
-            <button
-              onClick={() => setShowContext(false)}
-              className="p-1 rounded hover:bg-surface-2 text-t-muted cursor-pointer"
-            >
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                <path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-              </svg>
-            </button>
-          </div>
-          <p className="text-xs text-t-muted">
-            Context panel shows memories referenced, trace links, and entity cards for Jarvis responses.
-          </p>
-        </div>
-      )}
-    </div>
+        ) : undefined
+      }
+    />
   );
 }

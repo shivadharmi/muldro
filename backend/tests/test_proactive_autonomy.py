@@ -10,8 +10,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.services.event_processor import EventProcessor
-from src.services.schedule_seeder import DEFAULT_SCHEDULES, seed_default_schedules
-from tests.conftest import TEST_USER_ID
+from src.services.schedule_seeder import (
+    DEFAULT_SCHEDULES,
+    enable_schedules_for_connector,
+    seed_default_schedules,
+)
+from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID
 
 # ── Trigger Action Execution ──────────────────────────────────
 
@@ -186,16 +190,14 @@ class TestInitiativeAutoPlanning:
         memory_service = MagicMock()
         memory_service.retrieve = AsyncMock(return_value=[])
 
-        # Goal tracker with relevant goal → goal_relevance boost
-        goal_tracker = MagicMock()
-        goal_tracker.get_active_goals = AsyncMock(
-            return_value=[{"title": "Test Event follow-up", "status": "active"}]
+        # Memory service also returns goal memories for initiative scoring
+        memory_service.retrieve = AsyncMock(
+            return_value=[{"fact_text": "Goal: Test Event follow-up", "memory_type": "goal"}]
         )
 
         proc = _make_processor(
             notifier=notifier,
             memory_service=memory_service,
-            goal_tracker=goal_tracker,
         )
         # Score: 0.30*0.8 + 0.25*0.6 + 0.20*goal + 0.15*0 + 0.10*0.9
         # = 0.24 + 0.15 + goal + 0 + 0.09 = ~0.55+ with goal relevance
@@ -245,6 +247,7 @@ class TestScheduleSeeder:
         """Should seed all 7 schedules when none exist."""
         db = MagicMock()
         result_mock = MagicMock()
+        result_mock.scalars.return_value = result_mock
         result_mock.all.return_value = []
         db.execute = AsyncMock(return_value=result_mock)
         db.add = MagicMock()
@@ -257,13 +260,25 @@ class TestScheduleSeeder:
 
     @pytest.mark.asyncio
     async def test_seed_skips_existing(self):
-        """Should skip schedules that already exist."""
+        """Should skip schedules that already exist (with matching fields)."""
+        from src.services.schedule_seeder import DEFAULT_SCHEDULES
+
         db = MagicMock()
+        # Simulate 2 existing schedules with matching fields
+        existing_scheds = []
+        for sd in DEFAULT_SCHEDULES:
+            if sd["name"] in ("morning_briefing", "observe_gmail"):
+                s = MagicMock()
+                s.name = sd["name"]
+                s.cron_expr = sd.get("cron_expr")
+                s.action_type = sd["action_type"]
+                s.action_config = sd.get("action_config")
+                s.priority = sd.get("priority", "medium")
+                existing_scheds.append(s)
+
         result_mock = MagicMock()
-        result_mock.all.return_value = [
-            ("morning_briefing",),
-            ("observe_gmail",),
-        ]
+        result_mock.scalars.return_value = result_mock
+        result_mock.all.return_value = existing_scheds
         db.execute = AsyncMock(return_value=result_mock)
         db.add = MagicMock()
         db.flush = AsyncMock()
@@ -277,6 +292,7 @@ class TestScheduleSeeder:
         """Seeded schedules should compute next_run_at from cron."""
         db = MagicMock()
         result_mock = MagicMock()
+        result_mock.scalars.return_value = result_mock
         result_mock.all.return_value = []
         db.execute = AsyncMock(return_value=result_mock)
         db.add = MagicMock()
@@ -288,86 +304,153 @@ class TestScheduleSeeder:
         first_added = db.add.call_args_list[0][0][0]
         assert first_added.next_run_at is not None
 
-
-# ── Perception Coordinator Wiring ─────────────────────────────
-
-
-class TestPerceptionWiring:
     @pytest.mark.asyncio
-    async def test_scheduler_inits_perception(self):
-        """Scheduler should initialize perception coordinator on startup."""
-        from src.services.scheduler import SchedulerLoop
+    async def test_all_seeded_schedules_disabled(self):
+        """All seeded schedules should be disabled by default."""
+        db = MagicMock()
+        result_mock = MagicMock()
+        result_mock.all.return_value = []
+        db.execute = AsyncMock(return_value=result_mock)
+        db.add = MagicMock()
+        db.flush = AsyncMock()
 
-        orchestrator = MagicMock()
-        # Mock the async context manager for restore_cursors
-        mock_db = MagicMock()
-        mock_result = MagicMock()
-        mock_result.scalars.return_value.all.return_value = []
-        mock_db.execute = AsyncMock(return_value=mock_result)
-        mock_db.close = AsyncMock()
+        await seed_default_schedules(db, user_id=TEST_USER_ID)
 
-        db_ctx = AsyncMock()
-        db_ctx.__aenter__ = AsyncMock(return_value=mock_db)
-        db_ctx.__aexit__ = AsyncMock(return_value=False)
-        orchestrator._db_factory = MagicMock(return_value=db_ctx)
+        for call in db.add.call_args_list:
+            schedule = call[0][0]
+            assert schedule.enabled is False, f"{schedule.name} should be disabled"
 
-        scheduler = SchedulerLoop(MagicMock(), orchestrator=orchestrator, user_ids=[TEST_USER_ID])
-        await scheduler._init_perception()
+    @pytest.mark.asyncio
+    async def test_seed_scopes_to_workspace(self):
+        """Schedules from workspace A should not prevent seeding in workspace B."""
+        db = MagicMock()
+        result_empty = MagicMock()
+        result_empty.scalars.return_value = result_empty
+        result_empty.all.return_value = []
+        db.execute = AsyncMock(return_value=result_empty)
+        db.add = MagicMock()
+        db.flush = AsyncMock()
 
-        assert len(scheduler._perception) == 1
-        coord = scheduler._perception[TEST_USER_ID]
-        assert "gmail" in coord._enabled_sources
-        assert "calendar" in coord._enabled_sources
+        # Seed workspace A
+        count_a = await seed_default_schedules(
+            db,
+            user_id=TEST_USER_ID,
+            workspace_id="ws_a",
+        )
+        assert count_a == 7
 
+        # Reset mocks for workspace B — DB still returns empty for ws_b query
+        db.add.reset_mock()
+        db.flush.reset_mock()
+        db.execute = AsyncMock(return_value=result_empty)
+
+        count_b = await seed_default_schedules(
+            db,
+            user_id="usr_other",
+            workspace_id="ws_b",
+        )
+        assert count_b == 7  # Should seed all 7, not skip
+
+    @pytest.mark.asyncio
+    async def test_enable_connector_scopes_to_workspace(self):
+        """Enabling schedules for a connector should scope to the target workspace."""
+        db = MagicMock()
+
+        # Query 1: no existing observe_* enabled in this workspace
+        result_no_existing = MagicMock()
+        result_no_existing.first.return_value = None
+
+        # Query 2: schedules to enable
+        observe_sched = MagicMock()
+        observe_sched.name = "observe_gmail"
+        observe_sched.enabled = False
+        observe_sched.next_run_at = None
+        observe_sched.cron_expr = "*/5 * * * *"
+        observe_sched.workspace_id = TEST_WORKSPACE_ID
+        observe_sched.user_id = TEST_USER_ID
+
+        briefing_sched = MagicMock()
+        briefing_sched.name = "morning_briefing"
+        briefing_sched.enabled = False
+        briefing_sched.next_run_at = None
+        briefing_sched.cron_expr = "0 7 * * *"
+        briefing_sched.workspace_id = TEST_WORKSPACE_ID
+        briefing_sched.user_id = TEST_USER_ID
+
+        result_schedules = MagicMock()
+        result_schedules.scalars.return_value = result_schedules
+        result_schedules.all.return_value = [observe_sched, briefing_sched]
+
+        # Query 3: PerceptionState schedule lookup
+        result_sched_obj = MagicMock()
+        result_sched_obj.scalar_one_or_none.return_value = observe_sched
+
+        db.execute = AsyncMock(
+            side_effect=[result_no_existing, result_schedules, result_sched_obj],
+        )
+        db.flush = AsyncMock()
+
+        enabled = await enable_schedules_for_connector(
+            db,
+            "gmail",
+            workspace_id=TEST_WORKSPACE_ID,
+        )
+        assert "observe_gmail" in enabled
+        assert "morning_briefing" in enabled
+        # Verify schedules were actually enabled
+        assert observe_sched.enabled is True
+        assert briefing_sched.enabled is True
+
+
+# ── Perception Policy Service ─────────────────────────────────
+
+
+class TestPerceptionPolicyWiring:
     @pytest.mark.asyncio
     async def test_scheduler_no_orchestrator_no_perception(self):
-        """Without orchestrator, perception should not be initialized."""
+        """Without orchestrator, _tick_perception should be a no-op."""
         from src.services.scheduler import SchedulerLoop
 
         scheduler = SchedulerLoop(MagicMock(), orchestrator=None)
-        await scheduler._init_perception()
+        # Should not raise or do anything
+        await scheduler._tick_perception(MagicMock())
 
-        assert scheduler._perception == {}
+    def test_policy_service_computes_effective_interval(self):
+        """Policy service should compute effective interval from base + backoff."""
+        from src.models.perception_state import PerceptionState
+        from src.services.perception_policy import PerceptionPolicyService
 
+        state = PerceptionState(
+            state_id="pst_test",
+            workspace_id="ws_test",
+            user_id=TEST_USER_ID,
+            source="gmail",
+            mode="poll",
+            base_interval_s=300,
+            effective_interval_s=300,
+            consecutive_failures=2,
+        )
+        svc = PerceptionPolicyService(AsyncMock())
+        # 300 * 2^2 = 1200
+        assert svc._compute_effective_interval(state) == 1200
 
-# ── Perception Coordinator ────────────────────────────────────
+    def test_budget_multiplier_stretches_interval(self):
+        """Budget multiplier should stretch the next_run_at interval."""
+        from src.models.perception_state import PerceptionState
+        from src.services.perception_policy import PerceptionPolicyService
 
-
-class TestPerceptionCoordinator:
-    def test_get_due_sources(self):
-        from src.orchestrator.perception import PerceptionCoordinator
-
-        coordinator = PerceptionCoordinator(MagicMock(), user_id=TEST_USER_ID)
-        coordinator.enable_source("gmail")
-        coordinator.enable_source("calendar")
-
-        # First call: both should be due (never run)
-        due = coordinator.get_due_sources()
-        assert "gmail" in due
-        assert "calendar" in due
-
-    def test_disable_source(self):
-        from src.orchestrator.perception import PerceptionCoordinator
-
-        coordinator = PerceptionCoordinator(MagicMock(), user_id=TEST_USER_ID)
-        coordinator.enable_source("gmail")
-        coordinator.disable_source("gmail")
-
-        due = coordinator.get_due_sources()
-        assert "gmail" not in due
-
-    def test_interval_multiplier(self):
-        from datetime import timedelta
-
-        from src.orchestrator.perception import PerceptionCoordinator
-
-        coordinator = PerceptionCoordinator(MagicMock(), user_id=TEST_USER_ID)
-        coordinator.enable_source("gmail")
-        coordinator.set_interval_multiplier(3)
-
-        # Simulate recent run
-        coordinator._last_run["gmail"] = datetime.now(timezone.utc) - timedelta(seconds=400)
-
-        # With 3x multiplier, 300s * 3 = 900s, so 400s ago is not due
-        due = coordinator.get_due_sources()
-        assert "gmail" not in due
+        state = PerceptionState(
+            state_id="pst_test",
+            workspace_id="ws_test",
+            user_id=TEST_USER_ID,
+            source="gmail",
+            mode="poll",
+            base_interval_s=300,
+            effective_interval_s=300,
+            last_run_at=datetime.now(timezone.utc),
+        )
+        svc = PerceptionPolicyService(AsyncMock())
+        next_run = svc._compute_next_run(state, budget_multiplier=3)
+        delta = (next_run - datetime.now(timezone.utc)).total_seconds()
+        # 300 * 3 = 900s
+        assert 899 <= delta <= 901

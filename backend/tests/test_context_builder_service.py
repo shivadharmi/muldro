@@ -22,13 +22,6 @@ def mock_memory_service():
 
 
 @pytest.fixture
-def mock_goal_tracker():
-    gt = AsyncMock()
-    gt.list_goals = AsyncMock(return_value=[])
-    return gt
-
-
-@pytest.fixture
 def mock_procedure_library():
     pl = AsyncMock()
     pl.find_procedures = AsyncMock(return_value=[])
@@ -46,14 +39,12 @@ def mock_artifact_store():
 def builder(
     mock_world_model,
     mock_memory_service,
-    mock_goal_tracker,
     mock_procedure_library,
     mock_artifact_store,
 ):
     return ContextBuilder(
         world_model=mock_world_model,
         memory_service=mock_memory_service,
-        goal_tracker=mock_goal_tracker,
         procedure_library=mock_procedure_library,
         artifact_store=mock_artifact_store,
     )
@@ -64,24 +55,12 @@ def empty_builder():
     return ContextBuilder()
 
 
-def _make_goal(
-    goal_id="goal_001",
-    title="Ship MVP",
-    progress=0.5,
-    priority="high",
-):
-    g = MagicMock()
-    g.goal_id = goal_id
-    g.title = title
-    g.progress = progress
-    g.priority = priority
-    return g
-
-
 def _make_procedure(name="email_procedure", steps=None):
     p = MagicMock()
     p.name = name
-    p.steps_json = steps or ["step1", "step2"]
+    p.task_template = steps or [{"task_type": "tool_call", "input_template": {}}]
+    p.confidence = 0.8
+    p.usage_count = 3
     return p
 
 
@@ -140,18 +119,24 @@ class TestBuildWithEntities:
 
 class TestBuildWithGoals:
     @pytest.mark.asyncio
-    async def test_build_with_goals(self, builder, mock_goal_tracker):
-        goals = [
-            _make_goal("goal_001", "Ship MVP", 0.5, "high"),
-            _make_goal("goal_002", "Hire CTO", 0.2, "medium"),
+    async def test_build_with_goal_memories(self, builder, mock_memory_service):
+        """Goals are now stored as memories with memory_type='goal'."""
+        # First call returns regular memories (episodic/preference), second returns goals
+        mock_memory_service.retrieve.side_effect = [
+            [],  # regular memory retrieval
+            [
+                {
+                    "memory_id": "mem_001",
+                    "fact_text": "Goal: Ship MVP. Priority: high",
+                    "confidence": 0.9,
+                    "provenance": {"priority": "high"},
+                },
+            ],
         ]
-        mock_goal_tracker.list_goals.return_value = goals
 
         pack = await builder.build("usr_1", "progress update")
-        assert len(pack.goals) == 2
-        assert pack.goals[0]["title"] == "Ship MVP"
-        assert pack.goals[0]["progress"] == 0.5
-        assert pack.goals[0]["priority"] == "high"
+        assert len(pack.goals) == 1
+        assert "Ship MVP" in pack.goals[0]["title"]
 
     @pytest.mark.asyncio
     async def test_build_with_memory(self, builder, mock_memory_service):
@@ -175,11 +160,12 @@ class TestBuildWithGoals:
     @pytest.mark.asyncio
     async def test_build_with_procedures(self, builder, mock_procedure_library):
         procs = [_make_procedure("email_send_procedure")]
-        mock_procedure_library.find_procedures.return_value = procs
+        mock_procedure_library.get_procedures.return_value = procs
 
-        pack = await builder.build("usr_1", "send email", task_type="send_email")
+        pack = await builder.build("usr_1", "send email")
         assert len(pack.procedures) == 1
         assert pack.procedures[0]["name"] == "email_send_procedure"
+        assert pack.procedures[0]["confidence"] == 0.8
 
     @pytest.mark.asyncio
     async def test_build_with_artifacts(self, builder, mock_artifact_store):
@@ -265,7 +251,6 @@ class TestBuildHandlesServiceFailures:
     async def test_build_handles_entity_failure(self, builder, mock_world_model):
         mock_world_model.find_entity.side_effect = Exception("DB down")
         pack = await builder.build("usr_1", "test query")
-        # Should not raise, entities just empty
         assert pack.entities == []
 
     @pytest.mark.asyncio
@@ -276,24 +261,16 @@ class TestBuildHandlesServiceFailures:
         assert pack.preferences == []
 
     @pytest.mark.asyncio
-    async def test_build_handles_goal_failure(self, builder, mock_goal_tracker):
-        mock_goal_tracker.list_goals.side_effect = Exception("Goal service down")
-        pack = await builder.build("usr_1", "test query")
-        assert pack.goals == []
-
-    @pytest.mark.asyncio
     async def test_build_handles_all_failures(
         self,
         builder,
         mock_world_model,
         mock_memory_service,
-        mock_goal_tracker,
         mock_procedure_library,
         mock_artifact_store,
     ):
         mock_world_model.find_entity.side_effect = Exception("fail")
         mock_memory_service.retrieve.side_effect = Exception("fail")
-        mock_goal_tracker.list_goals.side_effect = Exception("fail")
         mock_procedure_library.find_procedures.side_effect = Exception("fail")
         mock_artifact_store.search.side_effect = Exception("fail")
 
