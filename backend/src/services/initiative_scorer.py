@@ -1,10 +1,8 @@
 """InitiativeScorer — decides when Jarvis should proactively act.
 
 Computes a composite "initiative score" from event importance, urgency,
-goal relevance, and entity context. When the score exceeds the auto-plan
-threshold, Jarvis creates a plan without being asked.
-
-This is the core of Phase 7: Proactive Autonomy.
+goal relevance, and entity context. When the score exceeds the threshold,
+high-priority events are flagged for the perception cycle to handle.
 """
 
 import logging
@@ -38,7 +36,7 @@ class InitiativeResult:
     """Result of initiative scoring."""
 
     score: float
-    should_plan: bool
+    is_high_priority: bool
     should_notify: bool
     signals: dict
 
@@ -94,20 +92,20 @@ class InitiativeScorer:
             score = min(1.0, score + 0.10)
             signals["boosted_by"] = signals.get("boosted_by", "") + ",deadline"
 
-        should_plan = score >= self._auto_plan_threshold
+        is_high_priority = score >= self._auto_plan_threshold
         should_notify = score >= self._notify_threshold
 
         logger.info(
             "Initiative score for %s: %.3f (plan=%s, notify=%s)",
             event.event_id,
             score,
-            should_plan,
+            is_high_priority,
             should_notify,
         )
 
         return InitiativeResult(
             score=score,
-            should_plan=should_plan,
+            is_high_priority=is_high_priority,
             should_notify=should_notify,
             signals=signals,
         )

@@ -36,7 +36,6 @@ POLICY_CASES = [
     # Internal tools -> auto execute
     {"tool": "ingest_event", "agent": "observer", **_R},
     {"tool": "update_execution", "agent": "operator", **_R},
-    {"tool": "plan_command", "agent": "planner", **_R},
 ]
 
 

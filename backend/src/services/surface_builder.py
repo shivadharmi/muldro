@@ -1,8 +1,7 @@
 """Unified surface builder — converts DB state into A2UI surfaces.
 
-Queries the same data as routes_canvas.py and home_feed.py, but returns
-pre-built A2UISurface objects with populated children[] using renderer.py
-builders. The frontend renders these directly via A2UIRenderer.
+Returns pre-built A2UISurface objects with populated children[] using
+renderer.py builders. The frontend renders these directly via A2UIRenderer.
 """
 
 import logging

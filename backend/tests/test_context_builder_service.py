@@ -22,13 +22,6 @@ def mock_memory_service():
 
 
 @pytest.fixture
-def mock_procedure_library():
-    pl = AsyncMock()
-    pl.find_procedures = AsyncMock(return_value=[])
-    return pl
-
-
-@pytest.fixture
 def mock_artifact_store():
     ast = AsyncMock()
     ast.search = AsyncMock(return_value=[])
@@ -39,13 +32,11 @@ def mock_artifact_store():
 def builder(
     mock_world_model,
     mock_memory_service,
-    mock_procedure_library,
     mock_artifact_store,
 ):
     return ContextBuilder(
         world_model=mock_world_model,
         memory_service=mock_memory_service,
-        procedure_library=mock_procedure_library,
         artifact_store=mock_artifact_store,
     )
 
@@ -53,15 +44,6 @@ def builder(
 @pytest.fixture
 def empty_builder():
     return ContextBuilder()
-
-
-def _make_procedure(name="email_procedure", steps=None):
-    p = MagicMock()
-    p.name = name
-    p.task_template = steps or [{"task_type": "tool_call", "input_template": {}}]
-    p.confidence = 0.8
-    p.usage_count = 3
-    return p
 
 
 def _make_artifact(
@@ -85,7 +67,6 @@ class TestBuildEmptyContext:
         assert pack.goals == []
         assert pack.recent_events == []
         assert pack.preferences == []
-        assert pack.procedures == []
         assert pack.artifacts == []
 
     @pytest.mark.asyncio
@@ -158,16 +139,6 @@ class TestBuildWithGoals:
         assert pack.preferences[0]["fact_text"] == "Prefers concise emails"
 
     @pytest.mark.asyncio
-    async def test_build_with_procedures(self, builder, mock_procedure_library):
-        procs = [_make_procedure("email_send_procedure")]
-        mock_procedure_library.get_procedures.return_value = procs
-
-        pack = await builder.build("usr_1", "send email")
-        assert len(pack.procedures) == 1
-        assert pack.procedures[0]["name"] == "email_send_procedure"
-        assert pack.procedures[0]["confidence"] == 0.8
-
-    @pytest.mark.asyncio
     async def test_build_with_artifacts(self, builder, mock_artifact_store):
         artifacts = [_make_artifact()]
         mock_artifact_store.search.return_value = artifacts
@@ -229,7 +200,6 @@ class TestToPromptFormatting:
             ],
             preferences=[{"fact_text": "Likes bullet points"}],
             recent_events=[{"fact_text": "Met BigCo yesterday"}],
-            procedures=[{"name": "deal_review"}],
             artifacts=[{"artifact_type": "doc", "title": "Term Sheet"}],
             constraints=["Max 500 words"],
             risks=["Deal may fall through"],
@@ -240,7 +210,6 @@ class TestToPromptFormatting:
         assert "## Relevant Entities" in prompt
         assert "## User Preferences" in prompt
         assert "## Recent Context" in prompt
-        assert "## Known Procedures" in prompt
         assert "## Artifacts" in prompt
         assert "## Constraints" in prompt
         assert "## Risks" in prompt
@@ -266,12 +235,10 @@ class TestBuildHandlesServiceFailures:
         builder,
         mock_world_model,
         mock_memory_service,
-        mock_procedure_library,
         mock_artifact_store,
     ):
         mock_world_model.find_entity.side_effect = Exception("fail")
         mock_memory_service.retrieve.side_effect = Exception("fail")
-        mock_procedure_library.find_procedures.side_effect = Exception("fail")
         mock_artifact_store.search.side_effect = Exception("fail")
 
         pack = await builder.build("usr_1", "query", task_type="send_email")
@@ -279,5 +246,4 @@ class TestBuildHandlesServiceFailures:
         assert pack.entities == []
         assert pack.goals == []
         assert pack.recent_events == []
-        assert pack.procedures == []
         assert pack.artifacts == []

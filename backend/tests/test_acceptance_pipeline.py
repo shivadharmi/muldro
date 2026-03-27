@@ -43,14 +43,13 @@ client = TestClient(app)
 
 
 # ---------------------------------------------------------------------------
-# 1. Important email → event scored → command creates plan with draft_reply
+# 1. Important email → event ingested and scored
 # ---------------------------------------------------------------------------
 
 
 @patch("src.api.routes_events._make_event_processor")
-def test_email_ingested_then_command_creates_draft_plan(mock_make_processor):
-    """Ingest a high-priority email, then issue a command that creates a draft_reply plan."""
-    # Step 1: Ingest the email event
+def test_email_ingested_and_scored(mock_make_processor):
+    """Ingest a high-priority email event via the events API."""
     mock_processor = MagicMock()
     mock_processor.process = AsyncMock(return_value="evt_email_hp_001")
     mock_make_processor.return_value = mock_processor
@@ -69,46 +68,7 @@ def test_email_ingested_then_command_creates_draft_plan(mock_make_processor):
     )
     assert ingest_resp.status_code == 200
     assert ingest_resp.json()["event_id"] == "evt_email_hp_001"
-
-    # Step 2: Issue a command to draft a reply
-    mock_plan = MagicMock()
-    mock_plan.plan_id = "plan_draft_001"
-    mock_plan.decision = "draft_reply"
-    mock_plan.goal = "Draft reply to investor about term sheet"
-    mock_plan.priority = "high"
-    mock_plan.risk_level = "medium"
-    mock_plan.execution_mode = "approval_required"
-    mock_plan.status = "created"
-    mock_plan.tasks = [
-        MagicMock(
-            task_id="ptask_001",
-            task_type="draft_email",
-            status="pending",
-            input_data={"to": "partner@vc.com", "subject": "Re: Series A term sheet"},
-        )
-    ]
-
-    with (
-        patch("src.api.routes_command.WorldModel"),
-        patch("src.api.routes_command.Planner") as mock_planner_cls,
-    ):
-        mock_planner = MagicMock()
-        mock_planner.plan_for_command = AsyncMock(return_value=mock_plan)
-        mock_planner_cls.return_value = mock_planner
-
-        cmd_resp = client.post(
-            "/v1/jarvis/command",
-            json={
-                "command": "Draft a reply to the investor about the term sheet",
-                "context": "The investor sent a term sheet for Series A",
-            },
-        )
-
-    assert cmd_resp.status_code == 200
-    cmd_data = cmd_resp.json()
-    assert cmd_data["plan_id"] == "plan_draft_001"
-    assert cmd_data["decision"] == "draft_reply"
-    assert "term sheet" in cmd_data["summary"].lower()
+    mock_processor.process.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -324,8 +284,7 @@ def test_observation_report_then_status():
 
 
 @patch("src.api.routes_approvals.AuditService")
-@patch("src.api.routes_approvals.Operator")
-def test_rejection_audit_trail(mock_op_cls, mock_audit_cls):
+def test_rejection_audit_trail(mock_audit_cls):
     """Rejecting an approval cancels execution and creates audit entries."""
     mock_approval = MagicMock(spec=Approval)
     mock_approval.approval_id = "apr_pipeline_001"
@@ -394,7 +353,5 @@ def test_rejection_audit_trail(mock_op_cls, mock_audit_cls):
         assert audit_kwargs["approval_id"] == "apr_pipeline_001"
         assert audit_kwargs["execution_id"] == "exec_pipeline_001"
 
-        # Operator.execute_plan never called
-        mock_op_cls.return_value.execute_plan.assert_not_called()
     finally:
         app.dependency_overrides.pop(deps.get_session, None)

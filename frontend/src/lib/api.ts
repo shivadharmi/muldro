@@ -10,8 +10,6 @@ import type {
   Briefing,
   BriefingFeedbackInput,
   BriefingFeedbackSummary,
-  CanvasDashboard,
-  CommandResponse,
   MeetingPrep,
   MemoryItem,
   Notification,
@@ -85,12 +83,6 @@ function patch<T>(path: string, body: unknown): Promise<T> {
 
 function del(path: string): Promise<void> {
   return api<void>(path, { method: "DELETE" });
-}
-
-// ── Command ─────────────────────────────────────────────────────
-
-export function sendCommand(message: string): Promise<CommandResponse> {
-  return post("/jarvis/command", { command: message });
 }
 
 // ── Auth ────────────────────────────────────────────────────
@@ -254,10 +246,6 @@ export function fetchSystemDashboard(): Promise<SystemDashboard> {
   return api("/system/dashboard");
 }
 
-export function fetchCanvasDashboard(): Promise<CanvasDashboard> {
-  return api("/canvas/dashboard");
-}
-
 // ── Observations ────────────────────────────────────────────────
 
 // ── Approvals ───────────────────────────────────────────────────
@@ -291,24 +279,6 @@ export function rejectAction(id: string, reason?: string): Promise<ApprovalDetai
 // ── Schedules ───────────────────────────────────────────────────
 
 // ── Briefings ───────────────────────────────────────────────────
-
-export interface HomeFeedData {
-  since_last_visit: string | null;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  priority_items: any[];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  live_activity: any[];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  recommended_actions: any[];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  recent_intelligence: any[];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  capability_health: any[];
-}
-
-export function fetchHomeFeed(): Promise<HomeFeedData> {
-  return api("/home");
-}
 
 export interface BriefingListItem {
   briefing_id: string;

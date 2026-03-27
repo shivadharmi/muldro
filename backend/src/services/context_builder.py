@@ -13,7 +13,6 @@ if TYPE_CHECKING:
     from src.services.artifact_store import ArtifactStore
     from src.services.graph_engine import GraphEngine
     from src.services.memory_service import MemoryService
-    from src.services.procedure_library import ProcedureLibrary
     from src.services.reranker_service import RerankerService
     from src.services.tool_registry import ToolRegistry
     from src.services.tri_search import TriSearchService
@@ -68,7 +67,6 @@ class ContextPack(BaseModel):
     graph_relationships: list[dict] = []  # B5: Neo4j entity relationships
     recent_events: list[dict] = []
     related_runs: list[dict] = []
-    procedures: list[dict] = []
     preferences: list[dict] = []
     artifacts: list[dict] = []
     constraints: list[str] = []
@@ -83,7 +81,6 @@ class ContextBuilder:
         self,
         world_model: WorldModel | None = None,
         memory_service: MemoryService | None = None,
-        procedure_library: ProcedureLibrary | None = None,
         artifact_store: ArtifactStore | None = None,
         tool_registry: ToolRegistry | None = None,
         db: AsyncSession | None = None,
@@ -94,7 +91,6 @@ class ContextBuilder:
     ):
         self._world_model = world_model
         self._memory_service = memory_service
-        self._procedure_library = procedure_library
         self._artifact_store = artifact_store
         self._tool_registry = tool_registry
         self._db = db
@@ -140,7 +136,7 @@ class ContextBuilder:
                 pack.preferences = [
                     r for r in grouped.get("memory", []) if r.get("memory_type") == "preference"
                 ]
-                # Still fetch goals, procedures, artifacts separately below
+                # Still fetch goals, artifacts separately below
             except Exception:
                 logger.debug(
                     "TriSearch context assembly failed, using individual services",
@@ -233,24 +229,6 @@ class ContextBuilder:
             except Exception:
                 logger.debug("Goal memory fetch failed", exc_info=True)
 
-        # Procedures — surface learned workflows to the Planner
-        if self._procedure_library:
-            try:
-                procs = await self._procedure_library.get_procedures(
-                    user_id, status="active", workspace_id=workspace_id
-                )
-                pack.procedures = [
-                    {
-                        "name": p.name,
-                        "steps": p.task_template,
-                        "confidence": p.confidence,
-                        "usage_count": p.usage_count,
-                    }
-                    for p in procs[:3]
-                ]
-            except Exception:
-                logger.debug("Procedure lookup failed", exc_info=True)
-
         # Artifacts
         if self._artifact_store and query:
             try:
@@ -332,7 +310,7 @@ class ContextBuilder:
         """Convert a context pack into a prompt string for system context injection.
 
         Applies priority-based truncation if the total exceeds max_tokens.
-        Priority order: goals > entities > events > preferences > artifacts > procedures.
+        Priority order: goals > entities > events > preferences > artifacts.
         Rough estimate: 1 token ≈ 4 characters.
         """
         max_chars = max_tokens * 4
@@ -383,10 +361,6 @@ class ContextBuilder:
             evt_lines = [f"- {e.get('fact_text', '')}" for e in pack.recent_events]
             sections.append("## Recent Context\n" + "\n".join(evt_lines))
 
-        if pack.procedures:
-            proc_lines = [f"- Procedure: {p.get('name', 'unnamed')}" for p in pack.procedures]
-            sections.append("## Known Procedures\n" + "\n".join(proc_lines))
-
         if pack.artifacts:
             art_lines = [
                 f"- [{a.get('artifact_type', '?')}] {a.get('title', 'untitled')}"
@@ -427,7 +401,6 @@ class ContextBuilder:
         "entities": (2000, "summarize"),
         "graph_relationships": (None, "verbatim"),
         "recent_events": (1500, "summarize"),
-        "procedures": (800, "summarize"),
         "artifacts": (None, "verbatim"),
         "related_runs": (None, "verbatim"),
         "tool_options": (None, "verbatim"),

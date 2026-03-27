@@ -39,13 +39,6 @@ class SearchInput(BaseModel):
     limit: int = Field(default=20, ge=1, le=100, description="Maximum results")
 
 
-class PlanCommandInput(BaseModel):
-    """Process a command through the Jarvis planner."""
-
-    command: str = Field(description="The command or task to plan")
-    context: str = Field(default="", description="Additional context for planning")
-
-
 class EvaluatePolicyInput(BaseModel):
     """Evaluate governance policy for a plan.
 
@@ -177,7 +170,6 @@ class ReportGovernorVerdictInput(BaseModel):
 TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
     "ingest_event": IngestEventInput,
     "search": SearchInput,
-    "plan_command": PlanCommandInput,
     "evaluate_policy": EvaluatePolicyInput,
     "get_briefing": GetBriefingInput,
     "get_observation_cursor": GetObservationCursorInput,

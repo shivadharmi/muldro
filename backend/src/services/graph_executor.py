@@ -142,8 +142,20 @@ class GraphExecutor:
         self._connector_credentials_fn = connector_credentials_fn
         self._memory_service = memory_service
 
-    async def create_run(self, plan_id: str, user_id: str, workspace_id: str = "") -> TaskRun:
-        """Create a TaskRun from a Plan, building the step DAG."""
+    async def create_run(
+        self,
+        plan_id: str,
+        user_id: str,
+        workspace_id: str = "",
+        source: str = "plan",
+    ) -> TaskRun:
+        """Create a TaskRun from a Plan, building the step DAG.
+
+        Args:
+            source: Origin of the run. "plan" for user-initiated,
+                    "background" for perception-generated plans queued
+                    for deferred execution by the scheduler.
+        """
         result = await self._db.execute(select(Plan).where(Plan.plan_id == plan_id))
         plan = result.scalar_one_or_none()
         if not plan:
@@ -155,7 +167,7 @@ class GraphExecutor:
             plan_id=plan_id,
             user_id=user_id,
             workspace_id=workspace_id,
-            source="plan",
+            source=source,
             status="pending",
         )
         self._db.add(run)

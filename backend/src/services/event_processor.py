@@ -29,7 +29,6 @@ if TYPE_CHECKING:
     from src.services.event_bus import EventBus
     from src.services.memory_service import MemoryService
     from src.services.notifier import Notifier
-    from src.services.planner import Planner
     from src.services.world_model import WorldModel
 
 logger = logging.getLogger(__name__)
@@ -110,7 +109,6 @@ class EventProcessor:
         dead_letter: DeadLetterService | None = None,
         event_bus: EventBus | None = None,
         notifier: Notifier | None = None,
-        planner: Planner | None = None,
     ):
         self._settings = settings
         self._db = db
@@ -121,7 +119,6 @@ class EventProcessor:
         self._dead_letter = dead_letter
         self._event_bus = event_bus
         self._notifier = notifier
-        self._planner = planner
         self._semaphore = asyncio.Semaphore(settings.event_processor_concurrency)
 
     async def process(self, raw: RawEvent, user_id: str, workspace_id: str = "") -> str | None:
@@ -310,20 +307,6 @@ class EventProcessor:
                     "urgency": event.urgency_score or 0.5,
                 },
             )
-        elif action_type == "plan" and self._planner:
-            context = (
-                f"Triggered by: {trigger.name}\n"
-                f"Event: {event.title or event.event_type}\n"
-                f"Source: {event.source}\n"
-                f"Summary: {event.summary or 'N/A'}"
-            )
-            instructions = action_config.get(
-                "instructions",
-                f"Handle event: {event.title or event.summary or event.event_type}",
-            )
-            await self._planner.plan_for_command(
-                instructions, user_id, context=context, workspace_id=workspace_id
-            )
         elif action_type == "escalate" and self._notifier:
             await self._notifier.notify(
                 user_id=user_id,
@@ -359,20 +342,17 @@ class EventProcessor:
             )
             result = await scorer.score(event, user_id)
 
-            if result.should_plan and self._planner:
+            if result.is_high_priority:
                 logger.info(
-                    "Auto-planning for event %s (score=%.3f)",
+                    "High-priority event %s (score=%.3f) — handled by perception cycle",
                     event.event_id,
                     result.score,
-                )
-                await self._planner.plan_for_event(
-                    event.event_id, user_id, workspace_id=workspace_id
                 )
 
                 if self._event_bus:
                     await self._event_bus.publish(
                         self._event_bus.event_stream(user_id),
-                        "initiative.auto_plan",
+                        "initiative.high_priority",
                         {
                             "event_id": event.event_id,
                             "score": result.score,

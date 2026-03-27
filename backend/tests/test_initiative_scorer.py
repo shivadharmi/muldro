@@ -59,7 +59,7 @@ class TestBasicScoring:
         result = await scorer.score(event, "usr_1")
 
         assert isinstance(result, InitiativeResult)
-        assert result.should_plan is False
+        assert result.is_high_priority is False
         assert result.score < DEFAULT_AUTO_PLAN_THRESHOLD
 
     @pytest.mark.asyncio
@@ -76,7 +76,7 @@ class TestBasicScoring:
         )
         result = await scorer.score(event, "usr_1")
 
-        assert result.should_plan is True
+        assert result.is_high_priority is True
         assert result.score >= DEFAULT_AUTO_PLAN_THRESHOLD
 
     @pytest.mark.asyncio
@@ -87,7 +87,7 @@ class TestBasicScoring:
         result = await scorer.score(event, "usr_1")
 
         assert result.should_notify is True
-        assert result.should_plan is False
+        assert result.is_high_priority is False
 
     @pytest.mark.asyncio
     async def test_result_includes_signals(self):
@@ -255,7 +255,7 @@ class TestCustomThresholds:
         event = _make_event(importance=0.6, urgency=0.6)
         result = await scorer.score(event, "usr_1")
 
-        assert result.should_plan is True
+        assert result.is_high_priority is True
 
     @pytest.mark.asyncio
     async def test_custom_notify_threshold(self):

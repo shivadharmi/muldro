@@ -24,12 +24,21 @@ class Plan(Base, TimestampMixin):
     execution_mode: Mapped[str] = mapped_column(String(32), default="approval_required")
     success_conditions: Mapped[dict | None] = mapped_column(JSONB)
     status: Mapped[str] = mapped_column(String(32), default="created")
+    idempotency_key: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
     tasks: Mapped[list["PlanTask"]] = relationship(
         back_populates="plan", cascade="all, delete-orphan"
     )
 
-    __table_args__ = (Index("ix_plans_user_created", "user_id", "created_at"),)
+    __table_args__ = (
+        Index("ix_plans_user_created", "user_id", "created_at"),
+        Index(
+            "ix_plans_idempotency_key",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=(idempotency_key.isnot(None)),
+        ),
+    )
 
 
 class PlanTask(Base):

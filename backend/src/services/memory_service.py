@@ -333,6 +333,53 @@ class MemoryService:
         )
         return memory_id
 
+    async def store_briefing_memory(
+        self,
+        user_id: str,
+        workspace_id: str,
+        text: str,
+        source: str = "perception",
+    ) -> str:
+        """Store a briefing item as a short-lived memory (24h TTL).
+
+        Briefing items are surfaced in the next daily briefing and then expire.
+        Returns the memory_id.
+        """
+        embedding = await self._embedder.embed_text(text)
+        memory_id = f"mem_{ULID()}"
+        memory = Memory(
+            memory_id=memory_id,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            memory_type="briefing_item",
+            scope="planning",
+            fact_text=text,
+            confidence=0.8,
+            stability_score=0.3,
+            source_event_ids=[],
+            provenance={"source": source},
+            ttl_days=1,
+            status="active",
+        )
+        self._db.add(memory)
+        await self._db.flush()
+
+        if self._vector_store and embedding:
+            await self._vector_store.upsert(
+                "memories",
+                memory_id,
+                embedding,
+                {
+                    "memory_type": "briefing_item",
+                    "fact_text": text,
+                    "user_id": user_id,
+                },
+                user_id,
+            )
+
+        logger.info("Briefing memory stored: %s '%s'", memory_id, text[:80])
+        return memory_id
+
     async def retrieve(
         self,
         user_id: str,

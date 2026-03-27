@@ -16,7 +16,6 @@ from src.models.approvals import Approval
 from src.models.plans import Plan
 from src.models.task_graph import TaskRun, TaskStep
 from src.services.audit import AuditService
-from src.services.operator import Operator
 
 logger = logging.getLogger(__name__)
 
@@ -209,10 +208,12 @@ async def approve_action(
         except Exception:
             logger.exception("Resume failed after approval: %s", approval.run_id)
     elif run and run.plan_id:
-        # Plan-level approval: trigger execution via Operator
-        operator = Operator(settings=settings, db=db)
+        # Plan-level approval: trigger execution via GraphExecutor directly
         try:
-            await operator.execute_plan(run.run_id, user_id)
+            executor = await create_graph_executor(
+                settings=settings, db=db, workspace_id=workspace_id
+            )
+            await executor.execute_run(run.run_id)
         except Exception:
             logger.exception("Execution failed after approval: %s", run.run_id)
     elif approval.artifact_refs and approval.artifact_refs.get("tool_name"):

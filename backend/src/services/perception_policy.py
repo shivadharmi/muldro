@@ -14,7 +14,9 @@ Hard guardrails this service enforces:
 """
 
 import logging
+import re
 from datetime import datetime, timedelta, timezone
+from typing import Literal
 
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,6 +24,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.models.perception_state import PerceptionState
 
 logger = logging.getLogger(__name__)
+
+ErrorClass = Literal["transient", "permanent", "unknown"]
 
 # ---------------------------------------------------------------------------
 # Guardrail constants
@@ -39,6 +43,71 @@ DEFAULT_INTERVALS: dict[str, int] = {
     "slack": 300,
     "github": 600,
 }
+
+# Error-class-aware circuit breaker thresholds
+TRANSIENT_FAILURE_THRESHOLD = 6  # double normal — transient errors self-heal
+PERMANENT_FAILURE_THRESHOLD = 1  # open immediately — retrying won't help
+
+# Regex patterns for error classification
+_TRANSIENT_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"timeout", re.IGNORECASE),
+    re.compile(r"timed?\s*out", re.IGNORECASE),
+    re.compile(r"\b429\b"),
+    re.compile(r"rate.?limit", re.IGNORECASE),
+    re.compile(r"\b503\b"),
+    re.compile(r"service.?unavailable", re.IGNORECASE),
+    re.compile(r"\b502\b"),
+    re.compile(r"bad.?gateway", re.IGNORECASE),
+    re.compile(r"\b504\b"),
+    re.compile(r"gateway.?timeout", re.IGNORECASE),
+    re.compile(r"connection.?(reset|refused|aborted)", re.IGNORECASE),
+    re.compile(r"temporary.?failure", re.IGNORECASE),
+    re.compile(r"ECONNRESET|ECONNREFUSED|ETIMEDOUT", re.IGNORECASE),
+]
+
+_PERMANENT_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"\b401\b"),
+    re.compile(r"unauthorized", re.IGNORECASE),
+    re.compile(r"\b403\b"),
+    re.compile(r"forbidden", re.IGNORECASE),
+    re.compile(r"revoked", re.IGNORECASE),
+    re.compile(r"invalid.?(token|credential|key|grant)", re.IGNORECASE),
+    re.compile(r"token.?expired", re.IGNORECASE),
+    re.compile(r"access.?denied", re.IGNORECASE),
+    re.compile(r"not.?authorized", re.IGNORECASE),
+    re.compile(r"permission.?denied", re.IGNORECASE),
+    re.compile(r"scope.?not.?granted", re.IGNORECASE),
+]
+
+
+def classify_error(error: str) -> ErrorClass:
+    """Classify an error string into transient, permanent, or unknown.
+
+    Pattern-matches against known error signatures to determine whether
+    retrying is likely to succeed (transient), will never succeed (permanent),
+    or is uncertain (unknown).
+    """
+    if not error:
+        return "unknown"
+
+    for pat in _PERMANENT_PATTERNS:
+        if pat.search(error):
+            return "permanent"
+
+    for pat in _TRANSIENT_PATTERNS:
+        if pat.search(error):
+            return "transient"
+
+    return "unknown"
+
+
+def _threshold_for_error_class(error_class: ErrorClass) -> int:
+    """Return the circuit breaker failure threshold for an error class."""
+    if error_class == "permanent":
+        return PERMANENT_FAILURE_THRESHOLD
+    if error_class == "transient":
+        return TRANSIENT_FAILURE_THRESHOLD
+    return CIRCUIT_FAILURE_THRESHOLD
 
 
 class PerceptionPolicyService:
@@ -179,20 +248,31 @@ class PerceptionPolicyService:
         return state
 
     async def record_failure(self, state: PerceptionState, error: str) -> PerceptionState:
-        """After a failed perception cycle."""
+        """After a failed perception cycle.
+
+        Uses error classification to determine circuit breaker behaviour:
+        - Permanent errors (401, revoked token) → open circuit immediately
+        - Transient errors (timeout, 429, 503) → higher threshold (6 failures)
+        - Unknown errors → default threshold (3 failures)
+        """
         now = datetime.now(timezone.utc)
+        error_class = classify_error(error)
+        threshold = _threshold_for_error_class(error_class)
+
         state.consecutive_failures += 1
         state.last_error = error[:512]
         state.pending_run = False
 
-        if state.consecutive_failures >= CIRCUIT_FAILURE_THRESHOLD:
+        if state.consecutive_failures >= threshold:
             state.circuit_state = "open"
             state.circuit_opened_at = now
             logger.warning(
-                "Circuit opened for %s/%s after %d failures",
+                "Circuit opened for %s/%s after %d failures (error_class=%s, threshold=%d)",
                 state.user_id,
                 state.source,
                 state.consecutive_failures,
+                error_class,
+                threshold,
             )
         else:
             state.effective_interval_s = self._compute_effective_interval(state)

@@ -228,6 +228,8 @@ class JarvisOrchestrator:
         decision: PlannerOutput,
         user_id: str,
         workspace_id: str,
+        trigger_type: str = "user_message",
+        idempotency_key: str | None = None,
     ) -> PlannerOutput:
         """Persist a Plan + PlanTasks to DB, returning decision with plan_id populated.
 
@@ -235,6 +237,11 @@ class JarvisOrchestrator:
         records.  This method bridges that gap so the Governor can call
         evaluate_policy(plan_id) and the Operator can execute_plan via
         GraphExecutor — both of which require a DB-backed Plan.
+
+        Args:
+            trigger_type: Origin — "user_message" (interactive) or "perception"
+                          (autonomous observation).
+            idempotency_key: Optional dedup key to prevent duplicate perception plans.
         """
         from src.models.plans import Plan, PlanTask
 
@@ -242,6 +249,23 @@ class JarvisOrchestrator:
 
         try:
             async with self._db_factory() as db:
+                # Idempotency check — skip if an active plan with this key exists
+                if idempotency_key:
+                    from sqlalchemy import select
+
+                    existing = await db.execute(
+                        select(Plan.plan_id).where(
+                            Plan.idempotency_key == idempotency_key,
+                            Plan.status.notin_(["completed", "failed", "cancelled"]),
+                        )
+                    )
+                    if existing.scalar_one_or_none():
+                        logger.info(
+                            "Skipping duplicate plan: idempotency_key=%s",
+                            idempotency_key,
+                        )
+                        return decision
+
                 tasks = [
                     PlanTask(
                         task_id=f"ptask_{ULID()}",
@@ -258,8 +282,9 @@ class JarvisOrchestrator:
                     plan_id=plan_id,
                     user_id=user_id,
                     workspace_id=workspace_id,
-                    trigger_type="user_message",
+                    trigger_type=trigger_type,
                     trigger_ref=None,
+                    idempotency_key=idempotency_key,
                     goal=decision.goal or "",
                     priority=decision.priority,
                     decision=decision.decision,
@@ -1252,12 +1277,63 @@ class JarvisOrchestrator:
                     "cost_usd": round(evt.cost_usd, 6),
                 }
 
+    async def run_cross_source_synthesis(
+        self,
+        source_names: list[str],
+        user_id: str,
+        workspace_id: str,
+    ) -> dict:
+        """Internal cross-source synthesis — no user-facing artifacts.
+
+        Called by the scheduler when 2+ perception sources have new events
+        in the same tick.  Asks the Planner to find cross-cutting insights
+        and queues any resulting plans for background execution.
+
+        Unlike process_message(), this does NOT create a lightweight run,
+        Presenter formatting, or A2UI surface push.
+        """
+        trace = self._trace_manager.start_trace("cross_source_synthesis")
+        try:
+            planner_result = await self._call_agent(
+                "planner",
+                message=(
+                    f"Synthesize recent observations across these sources: "
+                    f"{', '.join(source_names)}. "
+                    f"Identify cross-cutting insights, connections between "
+                    f"events, or actions that span multiple sources."
+                ),
+                user_id=user_id,
+                trace=trace,
+                workspace_id=workspace_id,
+            )
+            # Queue any actionable plans from the synthesis
+            decision = await self._queue_perception_plan(
+                planner_result,
+                "synthesis",
+                user_id,
+                workspace_id,
+                trace.trace_id,
+            )
+            return {
+                "status": "completed",
+                "decision": decision.decision if decision else "none",
+            }
+        except Exception as e:
+            logger.warning("Cross-source synthesis failed: %s", e, exc_info=True)
+            return {"status": "error", "error": str(e)}
+        finally:
+            await self._trace_manager.finish_trace(
+                trace.trace_id, user_id=user_id, workspace_id=workspace_id
+            )
+
     async def run_perception_cycle(self, source: str, user_id: str, workspace_id: str = "") -> dict:
         """Run a perception cycle for a specific data source.
 
         Step 1: Poll the connector directly (no Claude call — just API fetch).
         Step 2: If new events found, Librarian extracts entities/memories.
         Step 3: Planner evaluates importance and creates plans if needed.
+        Step 4: Apply perception policy from planner response.
+        Step 5: Extract decision and queue execution if actionable.
         """
         trace = self._trace_manager.start_trace(f"perception_{source}")
 
@@ -1328,6 +1404,15 @@ class JarvisOrchestrator:
                 planner_result, source, user_id, workspace_id, len(raw_events)
             )
 
+            # Step 5: Extract decision and queue execution if actionable
+            perception_decision = await self._queue_perception_plan(
+                planner_result,
+                source,
+                user_id,
+                workspace_id,
+                trace.trace_id,
+            )
+
             # Publish perception completed event
             await self._publish_event(
                 "perception_completed",
@@ -1336,6 +1421,7 @@ class JarvisOrchestrator:
                     "source": source,
                     "trace_id": trace.trace_id,
                     "event_count": len(raw_events),
+                    "decision": perception_decision.decision if perception_decision else None,
                 },
                 trace_id=trace.trace_id,
             )
@@ -1347,10 +1433,34 @@ class JarvisOrchestrator:
                 "events": len(raw_events),
                 "librarian": librarian_result,
                 "planner": planner_result,
+                "decision": perception_decision.decision if perception_decision else None,
+                "plan_id": perception_decision.plan_id if perception_decision else None,
             }
 
         except Exception as e:
             logger.error("perception_cycle failed: %s", e, exc_info=True)
+            # DLQ: capture cycle-level failures for inspection/retry
+            try:
+                from src.services.dead_letter import DeadLetterService
+
+                async with self._db_factory() as db:
+                    dlq = DeadLetterService(db)
+                    await dlq.enqueue(
+                        user_id=user_id,
+                        operation_type="perception_cycle",
+                        error_type=type(e).__name__,
+                        error_message=str(e),
+                        source_id=f"perception:{source}",
+                        payload={
+                            "source": source,
+                            "trace_id": trace.trace_id,
+                            "workspace_id": workspace_id,
+                        },
+                        workspace_id=workspace_id,
+                    )
+                    await db.commit()
+            except Exception:
+                logger.debug("DLQ enqueue failed for perception %s", source, exc_info=True)
             return {"status": "error", "source": source, "error": str(e)}
         finally:
             await self._trace_manager.finish_trace(
@@ -1440,7 +1550,6 @@ class JarvisOrchestrator:
                 dead_letter=dead_letter,
                 event_bus=event_bus,
                 notifier=self._services.notifier,
-                planner=self._services.planner,
             )
             for raw in raw_events:
                 try:
@@ -1876,7 +1985,6 @@ class JarvisOrchestrator:
                 builder = ContextBuilder(
                     world_model=svc.world_model,
                     memory_service=svc.memory_service,
-                    procedure_library=svc.procedure_library,
                     artifact_store=svc.artifact_store,
                     db=db,
                     graph_engine=svc.graph_engine,
@@ -1936,6 +2044,143 @@ class JarvisOrchestrator:
                 await db.commit()
         except Exception:
             logger.debug("Failed to apply perception policy", exc_info=True)
+
+    # Decisions from perception that should trigger execution or inline handling
+    PERCEPTION_ACTIONABLE_DECISIONS = {
+        "create_task",
+        "draft_reply",
+        "research",
+        "watcher_create",
+        "schedule_reminder",
+        "set_goal",
+        "set_instruction",
+        "add_to_brief",
+    }
+
+    # Subset handled inline (fast, no pipeline needed)
+    _PERCEPTION_INLINE_DECISIONS = {
+        "schedule_reminder",
+        "set_goal",
+        "set_instruction",
+        "add_to_brief",
+    }
+
+    async def _queue_perception_plan(
+        self,
+        planner_result: str,
+        source: str,
+        user_id: str,
+        workspace_id: str,
+        trace_id: str,
+    ) -> PlannerOutput | None:
+        """Extract a structured decision from the Planner's perception response
+        and queue actionable plans for background execution.
+
+        Lightweight decisions (set_goal, schedule_reminder, etc.) are handled
+        inline.  Heavier decisions with tasks (create_task, draft_reply) are
+        persisted as Plan + background TaskRun so the scheduler's
+        _tick_background_tasks() picks them up on the next 30s tick.
+
+        Returns the extracted PlannerOutput, or None if no action was needed.
+        """
+        import hashlib
+
+        decision = extract_decision(planner_result)
+
+        if decision.decision not in self.PERCEPTION_ACTIONABLE_DECISIONS:
+            logger.debug(
+                "Perception decision '%s' from %s — no action needed",
+                decision.decision,
+                source,
+            )
+            return decision
+
+        # Handle lightweight decisions inline (fast, no pipeline)
+        if decision.decision in self._PERCEPTION_INLINE_DECISIONS:
+            try:
+                if decision.decision == "set_goal":
+                    await self._handle_set_goal(decision, user_id, workspace_id)
+                elif decision.decision == "set_instruction":
+                    await self._handle_set_instruction(decision, user_id, workspace_id)
+                elif decision.decision == "schedule_reminder":
+                    await self._handle_schedule_reminder(decision, user_id, workspace_id)
+                elif decision.decision == "add_to_brief":
+                    await self._handle_add_to_brief(decision, user_id, workspace_id)
+                logger.info(
+                    "Perception inline handler: %s from %s",
+                    decision.decision,
+                    source,
+                )
+            except Exception:
+                logger.warning(
+                    "Perception inline handler failed: %s",
+                    decision.decision,
+                    exc_info=True,
+                )
+            return decision
+
+        # For decisions with tasks, persist plan and queue for background execution
+        if not decision.tasks:
+            logger.debug(
+                "Perception decision '%s' from %s has no tasks — skipping",
+                decision.decision,
+                source,
+            )
+            return decision
+
+        # Compute idempotency key to prevent duplicate plans from re-observed events
+        goal_hash = hashlib.sha256((decision.goal or "").encode()).hexdigest()[:16]
+        idempotency_key = f"perception:{source}:{decision.decision}:{goal_hash}"
+
+        # Persist Plan + PlanTasks
+        decision = await self._persist_plan_record(
+            decision,
+            user_id,
+            workspace_id,
+            trigger_type="perception",
+            idempotency_key=idempotency_key,
+        )
+
+        if not decision.plan_id:
+            logger.debug(
+                "Plan not persisted (idempotent skip or error) for %s",
+                source,
+            )
+            return decision
+
+        # Create a background TaskRun with steps for the scheduler to execute
+        try:
+            async with self._db_factory() as db:
+                from src.services.graph_executor import create_graph_executor
+
+                executor = await create_graph_executor(
+                    settings=self._settings,
+                    db=db,
+                    workspace_id=workspace_id,
+                )
+                run = await executor.create_run(
+                    plan_id=decision.plan_id,
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    source="background",
+                )
+                await db.commit()
+
+                logger.info(
+                    "Perception queued plan %s → run %s (%d tasks) from %s",
+                    decision.plan_id,
+                    run.run_id,
+                    len(decision.tasks),
+                    source,
+                )
+        except Exception:
+            logger.warning(
+                "Failed to create background run for perception plan %s",
+                decision.plan_id,
+                exc_info=True,
+            )
+
+        return decision
 
     async def _bump_perception_for_sources(
         self, sources: list[str], user_id: str, workspace_id: str
@@ -2153,13 +2398,10 @@ class JarvisOrchestrator:
 
         text = decision.goal or decision.reasoning or "Briefing item"
         try:
-            memory_id = await memory_svc.store(
+            memory_id = await memory_svc.store_briefing_memory(
                 user_id=user_id,
                 workspace_id=workspace_id,
-                fact_text=text,
-                memory_type="briefing_item",
-                scope="planning",
-                source_event_ids=[],
+                text=text,
             )
             logger.info("Briefing item stored as memory %s: %s", memory_id, text[:80])
             return {"status": "stored", "memory_id": memory_id, "text": text}
@@ -2275,7 +2517,6 @@ class JarvisOrchestrator:
             "ingest_event",
             "search",
             "update_entity",
-            "plan_command",
             "get_active_plans",
             "evaluate_policy",
             "approve_action",
@@ -2554,7 +2795,6 @@ class JarvisOrchestrator:
                 context_builder = ContextBuilder(
                     world_model=svc.world_model,
                     memory_service=svc.memory_service,
-                    procedure_library=svc.procedure_library,
                     artifact_store=svc.artifact_store,
                 )
 
@@ -2633,13 +2873,28 @@ class JarvisOrchestrator:
 
     @staticmethod
     def _check_step_condition(condition: dict, decision: dict) -> bool:
-        """Check if a pipeline step's condition is satisfied."""
+        """Check if a pipeline step's condition is satisfied.
+
+        Supported condition types (mirrors RouteResolver._matches_conditions):
+          has_key:        value exists in decision dict
+          not_has_key:    value does NOT exist in decision dict
+          has_truthy_key: value exists AND is truthy (not None/empty/False)
+          field:<name>:   decision[name] == value
+          <key>: <value>: decision[key] == value (direct equality)
+        """
         for key, value in condition.items():
             if key == "has_key":
                 if value not in decision:
                     return False
             elif key == "not_has_key":
                 if value in decision:
+                    return False
+            elif key == "has_truthy_key":
+                if not decision.get(value):
+                    return False
+            elif key.startswith("field:"):
+                field_name = key[len("field:") :]
+                if decision.get(field_name) != value:
                     return False
             else:
                 if decision.get(key) != value:

@@ -6,7 +6,7 @@ MCP servers use different naming conventions:
 - GitHub MCP: snake_case (issue_write, create_pull_request)
 - Slack MCP: snake_case prefixed (slack_reply_to_thread)
 - FastMCP namespaced: {server_key}_{tool_name} (google_workspace_sendGmailDraft)
-- Internal Jarvis: snake_case (search_memory, plan_command)
+- Internal Jarvis: snake_case (search, ingest_event)
 
 This module normalizes all names to canonical snake_case and maintains a
 bidirectional map for dispatching (canonical → raw MCP name).

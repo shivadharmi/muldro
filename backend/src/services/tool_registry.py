@@ -104,7 +104,6 @@ _DEFAULT_TOOLS = [
     # Internal intelligence tools (write)
     _t("ingest_event", "low", False, "internal"),
     _t("update_entity", "low", False, "internal"),
-    _t("plan_command", "low", False, "internal"),
     _t("evaluate_policy", "low", False, "internal"),
     _t("approve_action", "medium", True, "internal"),
     _t("update_observation_cursor", "low", False, "internal"),

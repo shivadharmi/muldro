@@ -142,7 +142,7 @@ async def test_load_as_sub_agents(mock_db):
     mock_agent.name = "planner"
     mock_agent.system_prompt = "Plan things"
     mock_agent.model_tier = "opus"
-    mock_agent.capability_scope = ["internal.plan_command", "internal.search_memory"]
+    mock_agent.capability_scope = ["internal.get_plans", "internal.search"]
     mock_agent.max_tokens = 8192
     mock_agent.temperature = 0.3
     mock_agent.enabled = True
@@ -157,7 +157,7 @@ async def test_load_as_sub_agents(mock_db):
     assert "planner" in agents
     assert isinstance(agents["planner"], SubAgent)
     assert agents["planner"].model_tier == "opus"
-    assert agents["planner"].capability_scope == {"internal.plan_command", "internal.search_memory"}
+    assert agents["planner"].capability_scope == {"internal.get_plans", "internal.search"}
     assert agents["planner"].max_tokens == 8192
 
 

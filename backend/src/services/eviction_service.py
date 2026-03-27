@@ -1,7 +1,7 @@
 """EvictionService — hard-delete expired data with cascade cleanup.
 
 Runs periodically from SchedulerLoop._tick_eviction().
-Handles: memories, working_memory, sessions, ui_surfaces, approvals, events.
+Handles: memories, sessions, ui_surfaces, approvals, events.
 Cascades to: Qdrant vectors, Neo4j entity graph.
 
 Postgres FTS (tsvector columns) is cleaned automatically when rows are deleted
@@ -59,7 +59,6 @@ class EvictionService:
         """Execute all eviction passes. Returns {table: deleted_count}."""
         results: dict[str, int] = {}
         results["memories"] = await self._evict_memories()
-        results["working_memory"] = await self._evict_working_memory()
         results["sessions"] = await self._evict_sessions()
         results["ui_surfaces"] = await self._evict_surfaces()
         results["approvals"] = await self._evict_approvals()
@@ -157,23 +156,6 @@ class EvictionService:
 
         logger.info("Evicted %d low-stability memories", len(memory_ids))
         return len(memory_ids)
-
-    # ------------------------------------------------------------------
-    # Working memory eviction
-    # ------------------------------------------------------------------
-
-    async def _evict_working_memory(self) -> int:
-        """Hard-delete expired working memory entries."""
-        from src.models.working_memory import WorkingMemoryEntry
-
-        now = datetime.now(timezone.utc)
-        result = await self._db.execute(
-            delete(WorkingMemoryEntry).where(WorkingMemoryEntry.expires_at < now)
-        )
-        count = result.rowcount or 0
-        if count:
-            await self._db.flush()
-        return count
 
     # ------------------------------------------------------------------
     # Session eviction

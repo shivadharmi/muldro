@@ -240,43 +240,6 @@ async def update_entity(
 
 
 @intelligence.tool(
-    tags={"planner", "write"},
-    annotations=ToolAnnotations(readOnlyHint=False, idempotentHint=False),
-)
-async def plan_command(
-    user_id: str,
-    command: str,
-    ctx: Context,
-    context: str = "",
-    workspace_id: str = "",
-) -> dict:
-    """Process a natural language command through the Jarvis planner.
-
-    Returns a structured task graph with decision, priority, risk level, and tasks.
-    """
-    async with _get_db():
-        try:
-            await ctx.report_progress(0, 2, "Planning command...")
-            planner = _services.planner
-            plan = await planner.plan_for_command(
-                command, user_id, context=context, workspace_id=workspace_id
-            )
-            await ctx.report_progress(2, 2, "Plan created")
-            # Serialize Plan ORM object to dict
-            return {
-                "status": "ok",
-                "plan_id": plan.plan_id,
-                "goal": plan.goal or "",
-                "priority": plan.priority or "medium",
-                "status_": plan.status or "planned",
-                "task_count": len(plan.tasks) if hasattr(plan, "tasks") else 0,
-            }
-        except Exception as e:
-            logger.error("plan_command failed: %s", e, exc_info=True)
-            return {"status": "error", "decision": "error", "error": str(e)}
-
-
-@intelligence.tool(
     tags={"planner", "read"},
     annotations=ToolAnnotations(readOnlyHint=True),
 )
@@ -777,7 +740,7 @@ async def build_context(
     """Build a rich context pack for a query/task.
 
     Returns assembled context from entities, memories, goals,
-    procedures, and artifacts.
+    and artifacts.
     """
     async with _get_db():
         try:
@@ -787,7 +750,6 @@ async def build_context(
             builder = ContextBuilder(
                 world_model=_services.world_model,
                 memory_service=_services.memory_service,
-                procedure_library=_services.procedure_library,
                 artifact_store=_services.artifact_store,
             )
             await ctx.report_progress(1, 4, "Gathering entities and memories...")

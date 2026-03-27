@@ -118,23 +118,6 @@ class TestEvictLowStability:
         assert vector_store.delete.call_count == 2
 
 
-class TestEvictWorkingMemory:
-    """Test working memory eviction."""
-
-    @pytest.mark.asyncio
-    async def test_evicts_expired_entries(self):
-        db = AsyncMock()
-        mock_result = MagicMock()
-        mock_result.rowcount = 5
-        db.execute.return_value = mock_result
-
-        svc = _make_eviction_service(db)
-        count = await svc._evict_working_memory()
-
-        assert count == 5
-        db.flush.assert_awaited_once()
-
-
 class TestEvictSessions:
     """Test session eviction."""
 
@@ -260,7 +243,6 @@ class TestRunFullEviction:
         results = await svc.run_full_eviction()
 
         assert "memories" in results
-        assert "working_memory" in results
         assert "sessions" in results
         assert "ui_surfaces" in results
         assert "approvals" in results

@@ -20,7 +20,6 @@ class StreamConsumerManager:
     Subscribes to per-user event streams and dispatches to handlers:
     - entity_extractor: Extract entities from processed events
     - memory_extractor: Extract memories from event summaries
-    - planner: Auto-plan for high-importance events
     - trigger_evaluator: Evaluate user-defined triggers
 
     Each consumer group runs in its own asyncio task for parallel
@@ -31,7 +30,6 @@ class StreamConsumerManager:
     CONSUMER_GROUPS = (
         "entity_extractor",
         "memory_extractor",
-        "planner",
         "trigger_evaluator",
     )
     HANDLER_CONCURRENCY = 3  # max concurrent handler invocations per group
@@ -75,7 +73,6 @@ class StreamConsumerManager:
         handler_map = {
             "entity_extractor": self._handle_entity_extraction,
             "memory_extractor": self._handle_memory_extraction,
-            "planner": self._handle_proactive_planning,
             "trigger_evaluator": self._handle_trigger_evaluation,
         }
 
@@ -231,32 +228,6 @@ class StreamConsumerManager:
                 event_id,
                 len(memory_ids),
             )
-
-    async def _handle_proactive_planning(self, event) -> None:
-        """Auto-trigger planning for high-importance events."""
-        event_id = event.payload.get("event_id", "")
-        user_id = event.user_id
-        importance = event.payload.get("importance_score", 0)
-
-        if not event_id or importance < 0.7:
-            return
-
-        from src.models.database import get_session_factory
-        from src.services.planner import Planner
-
-        factory = get_session_factory()
-        async with factory() as db:
-            workspace_id = await resolve_workspace_id(db, user_id)
-            planner = Planner(settings=self._settings, db=db)
-            plan = await planner.plan_for_event(event_id, user_id, workspace_id=workspace_id)
-            await db.commit()
-            if plan:
-                logger.info(
-                    "Proactive plan for event %s: %s (decision=%s)",
-                    event_id,
-                    plan.plan_id,
-                    plan.decision,
-                )
 
     async def _handle_trigger_evaluation(self, event) -> None:
         """Evaluate event against user-defined triggers."""

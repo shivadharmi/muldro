@@ -24,7 +24,6 @@ from src.models.observation_cursor import ObservationCursor
 from src.models.org_allowlist import OrgAllowlist
 from src.models.perception_state import PerceptionState
 from src.models.plans import Plan, PlanTask
-from src.models.procedures import Procedure
 from src.models.runtime_event import RuntimeEvent
 from src.models.schedules import Schedule
 from src.models.server_trust import ServerTrustRecord
@@ -45,7 +44,6 @@ from src.models.users import (
     WorkspaceMember,
 )
 from src.models.webhook_subscription import WebhookSubscription
-from src.models.working_memory import WorkingMemoryEntry
 
 __all__ = [
     "Agent",
@@ -87,10 +85,8 @@ __all__ = [
     "TrustScore",
     # Triggers
     "Trigger",
-    # Artifacts & procedures
+    # Artifacts
     "Artifact",
-    "Procedure",
-    "WorkingMemoryEntry",
     # Browser automation
     "BrowserAction",
     # Tool definitions
