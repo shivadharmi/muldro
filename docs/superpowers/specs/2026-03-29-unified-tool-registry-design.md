@@ -8,7 +8,7 @@
 
 ## 1. Problem Statement
 
-Adding or removing a single tool (like `search`) requires touching 7 files with 3 naming systems. Miss any one and you get a silent failure.
+Adding or removing a single tool (like `search`) requires touching 8 files with 3 naming systems. Miss any one and you get a silent failure.
 
 ### 1.1 Current File Fragmentation
 
@@ -21,6 +21,7 @@ Adding or removing a single tool (like `search`) requires touching 7 files with 
 | `services/tool_registry.py` | `_DEFAULT_TOOLS` list | Risk levels, approval rules |
 | `services/governor.py` | `AUTO_EXECUTE_ACTIONS` set | Governor bypass |
 | `orchestrator/jarvis.py` | `internal_tools` set in `_execute_tool()` | Dispatch routing |
+| `orchestrator/tool_policy.py` | `FALLBACK_WRITE_TOOLS` + `FALLBACK_BLOCKED_TOOLS` + `_HIGH_RISK_TOOLS` | Risk classification fallback |
 
 ### 1.2 Three Naming Systems Coexist
 
@@ -760,3 +761,125 @@ All paths relative to `backend/src/`:
 5. Zero name normalization — real MCP names used everywhere
 6. All tests pass after migration
 7. Net reduction of ~600 lines
+
+---
+
+## 9. Verified Tool Inventory (from reading every source file)
+
+This section was added after tracing every tool through every file to find the actual state vs assumed state.
+
+### 9.1 Intelligence Server Tools (`intelligence_server.py`)
+
+FastMCP server name: `"jarvis-intelligence"`, mounted as namespace `"intelligence"` in `server.py`.
+When called via `_call_internal_tool()`, names are prefixed: `search` -> `intelligence_search`.
+
+| # | Function name | MCP name (after mount) | In `TOOL_INPUT_MODELS`? | In `internal_tools` set? | Capability |
+|---|---|---|---|---|---|
+| 1 | `ingest_event` | `intelligence_ingest_event` | YES | YES | `internal.ingest_event` |
+| 2 | `search` | `intelligence_search` | YES | YES | `internal.search` |
+| 3 | `update_entity` | `intelligence_update_entity` | YES | YES | `internal.update_entity` |
+| 4 | `get_active_plans` | `intelligence_get_active_plans` | YES | YES | `internal.get_plans` |
+| 5 | `evaluate_policy` | `intelligence_evaluate_policy` | YES | YES | `internal.evaluate_policy` |
+| 6 | `approve_action` | `intelligence_approve_action` | YES | YES | `internal.approve_action` |
+| 7 | `extract_preferences` | `intelligence_extract_preferences` | YES | YES | `internal.extract_preferences` |
+| 8 | `get_briefing` | `intelligence_get_briefing` | YES | YES | `internal.get_briefing` |
+| 9 | `get_observation_cursor` | `intelligence_get_observation_cursor` | YES | YES | `internal.get_cursor` |
+| 10 | `update_observation_cursor` | `intelligence_update_observation_cursor` | YES | YES | `internal.update_cursor` |
+| 11 | `report_observation` | `intelligence_report_observation` | YES | YES | `internal.report_observation` |
+| 12 | `update_execution` | `intelligence_update_execution` | YES | YES | `internal.update_execution` |
+| 13 | `get_goal_memories` | `intelligence_get_goal_memories` | **NO** | **NO** | *unmapped* |
+| 14 | `build_context` | `intelligence_build_context` | YES | YES | `internal.build_context` |
+| 15 | `verify_run` | `intelligence_verify_run` | YES | YES | `internal.verify_run` |
+
+### 9.2 Communication Server Tools (`communication_server.py`)
+
+FastMCP server name: `"jarvis-communication"`, mounted as namespace `"communication"` in `server.py`.
+When called via `_call_internal_tool()`, names SHOULD be prefixed `communication_` but the current code hardcodes `intelligence_` prefix.
+
+| # | Function name | MCP name (after mount) | In `TOOL_INPUT_MODELS`? | In `internal_tools` set? | Capability |
+|---|---|---|---|---|---|
+| 16 | `send_telegram` | `communication_send_telegram` | **NO** | **NO** | `internal.send_telegram` |
+| 17 | `send_approval_prompt` | `communication_send_approval_prompt` | **NO** | **NO** | `internal.send_approval` |
+| 18 | `push_ui_update` | `communication_push_ui_update` | **NO** | **NO** | `internal.push_ui` |
+
+### 9.3 Orphan Schemas in `tool_schemas.py` (no MCP implementation)
+
+| Pydantic model | Key in `TOOL_INPUT_MODELS` | In `internal_tools` set? | Status |
+|---|---|---|---|
+| `CreateTaskInput` | `create_task` | YES | **Orphan** — standalone tasks removed in product redesign |
+| `GetTaskInput` | `get_task` | YES | **Orphan** — standalone tasks removed |
+| `GetGoalsInput` | `get_goals` | YES | **Orphan** — goals removed, replaced by `get_goal_memories` |
+| `ReportGovernorVerdictInput` | `report_governor_verdict` | **NO** | Special-case dispatch (returns input as-is, not an MCP tool) |
+
+### 9.4 Native Connector Tools (hardcoded in `jarvis.py`)
+
+These have manually written JSON schemas in `_build_native_connector_tools()` and dispatch via `_try_native_connector()` using `_NATIVE_TOOL_MAP`.
+
+| Tool name | Connector | Action | Capability |
+|---|---|---|---|
+| `gmail_list_unread` | gmail | list_unread | `email.list` |
+| `gmail_get_message` | gmail | get_message | `email.read` |
+| `gmail_send_email` | gmail | send_email | `email.send` |
+| `gmail_create_draft` | gmail | create_draft | `email.draft` |
+| `gmail_archive` | gmail | archive | `email.delete` |
+| `gmail_mark_read` | gmail | mark_read | `email.read` |
+
+### 9.5 External MCP Servers (`seed_installations.py`)
+
+9 servers seeded. Tool names are NOT known until `list_tools()` runs at runtime.
+
+| Server name | Package | Transport | Naming convention | Scopes granted |
+|---|---|---|---|---|
+| `google-workspace` | `uvx google-workspace-mcp` | stdio | camelCase | email.*, calendar.*, doc.drive_* |
+| `github` | `ghcr.io/github/github-mcp-server` (Docker) | stdio | snake_case | issue.*, repo.* |
+| `slack` | `npx slack-mcp-server` | stdio | prefixed snake (`slack_*`) | messaging.* |
+| `playwright` | `npx @playwright/mcp --headless` | stdio | snake_case (`browser_*`) | browser.* |
+| `filesystem` | `npx @modelcontextprotocol/server-filesystem` | stdio | unknown | (none) |
+| `linear` | `npx mcp-server-linear` | stdio | prefixed snake (`linear_*`) | workflow.* |
+| `notion` | `npx @notionhq/notion-mcp-server` | stdio | kebab-case | doc.* |
+| `atlassian` | `npx mcp-remote@latest` → Rovo MCP | stdio | camelCase | issue.* |
+| `twilio` | `npx @twilio-alpha/mcp` | stdio | unknown | messaging.send |
+
+**External tool names in `TOOL_TO_CAPABILITY` and `_DEFAULT_TOOLS` are ASSUMED** based on MCP server documentation, not verified by actually running `list_tools()`. Some may be wrong.
+
+### 9.6 Composed Server Architecture (`server.py`)
+
+```python
+jarvis_tools = FastMCP("jarvis-tools")
+jarvis_tools.mount(intelligence, namespace="intelligence")  # 15 tools -> intelligence_*
+jarvis_tools.mount(communication, namespace="communication")  # 3 tools -> communication_*
+```
+
+The `_call_internal_tool()` method hardcodes `intelligence_` prefix (line 2651 of jarvis.py):
+```python
+namespaced = f"intelligence_{tool_name}"
+```
+This means communication server tools CANNOT be called via this path. They would need `communication_` prefix.
+
+### 9.7 Critical Bugs Found
+
+1. **`get_goal_memories` is invisible** — exists in `intelligence_server.py` (line 682) but has no Pydantic model in `tool_schemas.py`, no entry in `internal_tools` set, and no capability mapping. Claude cannot see or call this tool.
+
+2. **Communication tools have no dispatch path** — `send_telegram`, `send_approval_prompt`, `push_ui_update` are NOT in the `internal_tools` set. Even if they were, `_call_internal_tool()` hardcodes `intelligence_` prefix but these tools need `communication_` prefix. They appear in `agents.py` capability scopes, `tool_registry.py`, and `capabilities.py` but cannot actually be dispatched.
+
+3. **3 orphan schemas waste Claude's tool budget** — `create_task`, `get_task`, `get_goals` are presented to Claude as callable tools, Claude CAN call them (they're in `internal_tools`), but their MCP implementations don't exist (removed in product redesign). Calling them will fail with an MCP error.
+
+4. **`get_goals` vs `get_goal_memories`** — `get_goals` (schema exists, implementation removed) should have been replaced by `get_goal_memories` (implementation exists, schema missing). The rename was incomplete.
+
+5. **`tool_policy.py` adds a 8th file** — Contains `FALLBACK_WRITE_TOOLS` (54 entries), `FALLBACK_BLOCKED_TOOLS` (6 entries), and `_HIGH_RISK_TOOLS` (11 entries) that must be kept in sync with the other 7 files.
+
+### 9.8 Count Summary
+
+| Category | Count |
+|---|---|
+| Intelligence server tools (implemented) | 15 |
+| Communication server tools (implemented) | 3 |
+| Total internal MCP tools | **18** |
+| Orphan schemas (no implementation) | 3 (`create_task`, `get_task`, `get_goals`) |
+| Special dispatch (not MCP) | 1 (`report_governor_verdict`) |
+| Native connector tools | 6 (all Gmail) |
+| External MCP servers seeded | 9 |
+| Entries in `TOOL_TO_CAPABILITY` | ~190 |
+| Entries in `_DEFAULT_TOOLS` (tool_registry) | ~140 |
+| Entries in `FALLBACK_WRITE_TOOLS` (tool_policy) | ~54 |
+| Files with tool identity data | **8** |
