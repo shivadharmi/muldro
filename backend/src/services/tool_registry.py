@@ -98,8 +98,6 @@ _DEFAULT_TOOLS = [
     _t("get_briefing", "low", False, "internal"),
     _t("get_observation_cursor", "low", False, "internal"),
     _t("report_observation", "low", False, "internal"),
-    _t("get_task", "low", False, "internal"),
-    _t("get_goals", "low", False, "internal"),
     _t("build_context", "low", False, "internal"),
     # Internal intelligence tools (write)
     _t("ingest_event", "low", False, "internal"),
@@ -108,7 +106,6 @@ _DEFAULT_TOOLS = [
     _t("approve_action", "medium", True, "internal"),
     _t("update_observation_cursor", "low", False, "internal"),
     _t("extract_preferences", "low", False, "internal"),
-    _t("create_task", "low", False, "internal"),
     _t("verify_run", "low", False, "internal"),
     _t("update_execution", "low", False, "internal"),
     # Communication / UI

@@ -2526,9 +2526,6 @@ class JarvisOrchestrator:
             "report_observation",
             "update_execution",
             "extract_preferences",
-            "create_task",
-            "get_task",
-            "get_goals",
             "build_context",
             "verify_run",
         }

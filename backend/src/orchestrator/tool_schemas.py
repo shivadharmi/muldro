@@ -116,29 +116,6 @@ class ExtractPreferencesInput(BaseModel):
     source_text: str = Field(description="Text to analyze for preference signals")
 
 
-class CreateTaskInput(BaseModel):
-    """Create a standalone task in the task system."""
-
-    title: str = Field(description="Task title")
-    description: str = Field(default="", description="Detailed task description")
-    task_type: str = Field(default="general", description="Task type: general, follow_up, research")
-    priority: str = Field(default="medium", description="Priority: low, medium, high, critical")
-    goal_id: str = Field(default="", description="Optional parent goal ID")
-
-
-class GetTaskInput(BaseModel):
-    """Get details of a task by ID."""
-
-    task_id: str = Field(description="Task ID to retrieve")
-
-
-class GetGoalsInput(BaseModel):
-    """Get user goals, optionally filtered by status."""
-
-    status: str = Field(default="active", description="Filter by status: active, completed, all")
-    limit: int = Field(default=10, ge=1, le=50, description="Maximum goals to return")
-
-
 class BuildContextInput(BaseModel):
     """Build a rich context pack for a query/task."""
 
@@ -180,9 +157,6 @@ TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
     "update_entity": UpdateEntityInput,
     "get_active_plans": GetActivePlansInput,
     "extract_preferences": ExtractPreferencesInput,
-    "create_task": CreateTaskInput,
-    "get_task": GetTaskInput,
-    "get_goals": GetGoalsInput,
     "build_context": BuildContextInput,
     "verify_run": VerifyRunInput,
     "report_governor_verdict": ReportGovernorVerdictInput,
