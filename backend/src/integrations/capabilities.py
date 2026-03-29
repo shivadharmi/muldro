@@ -137,6 +137,7 @@ CAPABILITY_CATALOG: dict[str, CapabilityMeta] = {
     # Internal intelligence
     "internal.search": _cap(CapabilityFamily.INTERNAL, True),
     "internal.get_plans": _cap(CapabilityFamily.INTERNAL, True),
+    "internal.get_goals": _cap(CapabilityFamily.INTERNAL, True),
     "internal.get_briefing": _cap(CapabilityFamily.INTERNAL, True),
     "internal.get_cursor": _cap(CapabilityFamily.INTERNAL, True),
     "internal.report_observation": _cap(CapabilityFamily.INTERNAL, False),
@@ -322,6 +323,7 @@ TOOL_TO_CAPABILITY: dict[str, str] = {
     "search": "internal.search",
     "intelligence_search": "internal.search",
     "get_active_plans": "internal.get_plans",
+    "get_goal_memories": "internal.get_goals",
     "get_briefing": "internal.get_briefing",
     "get_observation_cursor": "internal.get_cursor",
     "report_observation": "internal.report_observation",

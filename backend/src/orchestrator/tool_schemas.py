@@ -116,6 +116,16 @@ class ExtractPreferencesInput(BaseModel):
     source_text: str = Field(description="Text to analyze for preference signals")
 
 
+class GetGoalMemoriesInput(BaseModel):
+    """Get active user goals stored as memories.
+
+    Goals are stored as memories with memory_type='goal' and scope='planning'.
+    Returns goal text, confidence, and entity links.
+    """
+
+    limit: int = Field(default=10, ge=1, le=50, description="Maximum goals to return")
+
+
 class BuildContextInput(BaseModel):
     """Build a rich context pack for a query/task."""
 
@@ -157,6 +167,7 @@ TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
     "update_entity": UpdateEntityInput,
     "get_active_plans": GetActivePlansInput,
     "extract_preferences": ExtractPreferencesInput,
+    "get_goal_memories": GetGoalMemoriesInput,
     "build_context": BuildContextInput,
     "verify_run": VerifyRunInput,
     "report_governor_verdict": ReportGovernorVerdictInput,

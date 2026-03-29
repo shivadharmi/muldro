@@ -2518,6 +2518,7 @@ class JarvisOrchestrator:
             "search",
             "update_entity",
             "get_active_plans",
+            "get_goal_memories",
             "evaluate_policy",
             "approve_action",
             "get_briefing",
