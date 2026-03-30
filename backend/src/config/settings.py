@@ -163,6 +163,9 @@ class Settings(BaseSettings):
     # Registry validation
     skip_registry_validation: bool = False  # JARVIS_SKIP_REGISTRY_VALIDATION
 
+    # Unified tool registry dispatch (Phase 11)
+    use_unified_dispatch: bool = False  # JARVIS_USE_UNIFIED_DISPATCH
+
     @property
     def resolved_model(self) -> str:
         """Return the model ID appropriate for the configured backend (direct API or Bedrock)."""

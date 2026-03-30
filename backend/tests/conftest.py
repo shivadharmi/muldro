@@ -63,6 +63,7 @@ def make_mock_settings(**overrides) -> MagicMock:
         event_processor_concurrency=5,
         max_perception_per_tick=5,
         webhook_lag_threshold=5000,
+        use_unified_dispatch=False,
     )
     defaults.update(overrides)
     for k, v in defaults.items():

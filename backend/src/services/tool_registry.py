@@ -343,7 +343,7 @@ class ToolRegistry:
                 continue
             seen.add(name)
 
-            backend = "external_mcp"
+            backend = "composite" if seed.server == "_composite" else "external_mcp"
             source = "seed"
             server = seed.server
             capability = seed.capability

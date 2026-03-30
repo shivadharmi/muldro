@@ -92,7 +92,7 @@ class TestSeedDefaults:
         # Add external seeds
         for seed in EXTERNAL_TOOL_SEEDS:
             t = _make_tool_def(name=seed.name)
-            t.backend = "external_mcp"
+            t.backend = "composite" if seed.server == "_composite" else "external_mcp"
             t.source = "seed"
             t.server = seed.server
             t.capability = seed.capability
@@ -120,6 +120,27 @@ class TestSeedDefaults:
         added = await registry.seed_defaults()
         assert added == 0
         mock_db.add.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_seed_defaults_composite_backend(self, registry, mock_db):
+        """web_search tool should get backend='composite', not 'external_mcp'."""
+        result_mock = MagicMock()
+        result_mock.scalars.return_value = result_mock
+        result_mock.all.return_value = []
+        mock_db.execute = AsyncMock(return_value=result_mock)
+
+        await registry.seed_defaults()
+
+        # Find the web_search add call
+        for call in mock_db.add.call_args_list:
+            tool_def = call[0][0]
+            if tool_def.name == "web_search":
+                assert tool_def.backend == "composite", (
+                    f"web_search should have backend='composite', got '{tool_def.backend}'"
+                )
+                return
+
+        pytest.fail("web_search tool was not seeded")
 
 
 class TestRegisterTool:
