@@ -68,11 +68,13 @@ class UserMCPSessionPool:
         circuit_breaker: MCPCircuitBreaker | None = None,
         normalizer: ToolNameNormalizer | None = None,
         ttl_seconds: float = SESSION_TTL_SECONDS,
+        use_unified_dispatch: bool = False,
     ) -> None:
         self._oauth_manager = oauth_manager
         self._circuit_breaker = circuit_breaker or MCPCircuitBreaker()
         self._normalizer = normalizer or get_normalizer()
         self._ttl_seconds = ttl_seconds
+        self._use_unified_dispatch = use_unified_dispatch
         # (workspace_id, server_name, user_id) → SessionEntry
         self._sessions: dict[tuple[str, str, str], SessionEntry] = {}
         self._lock = asyncio.Lock()
@@ -138,23 +140,49 @@ class UserMCPSessionPool:
             # Connect and discover tools
             client = await client_ctx.__aenter__()
             raw_tools = await client.list_tools()
-            tool_dicts = [{"name": t.name, "description": t.description or ""} for t in raw_tools]
-            tool_mapping = self._normalizer.register_server_tools(server_name, tool_dicts)
-            self._server_tools[(workspace_id, server_name)] = tool_mapping
-            for t in raw_tools:
-                canonical = self._normalizer.normalize(t.name, server_name)
-                input_schema = (
-                    getattr(t, "inputSchema", None)
-                    or getattr(t, "input_schema", None)
-                    or {"type": "object", "properties": {}}
-                )
-                self._tool_metadata[canonical] = {
-                    "name": canonical,
-                    "server": server_name,
-                    "description": t.description or "",
-                    "input_schema": input_schema,
-                    "_workspace_id": workspace_id,
-                }
+
+            if self._use_unified_dispatch:
+                # Skip normalization — store real MCP names end-to-end
+                tool_mapping = {}
+                for t in raw_tools:
+                    tool_mapping[t.name] = t.name  # identity mapping
+                    input_schema = (
+                        getattr(t, "inputSchema", None)
+                        or getattr(t, "input_schema", None)
+                        or {"type": "object", "properties": {}}
+                    )
+                    self._tool_metadata[t.name] = {
+                        "name": t.name,
+                        "server": server_name,
+                        "description": t.description or "",
+                        "input_schema": input_schema,
+                        "_workspace_id": workspace_id,
+                    }
+                self._server_tools[(workspace_id, server_name)] = tool_mapping
+
+                # Register unknown discovered tools in DB with safe defaults
+                await self._register_discovered_tools(raw_tools, server_name, workspace_id)
+            else:
+                # Legacy path: normalize tool names
+                tool_dicts = [
+                    {"name": t.name, "description": t.description or ""} for t in raw_tools
+                ]
+                tool_mapping = self._normalizer.register_server_tools(server_name, tool_dicts)
+                self._server_tools[(workspace_id, server_name)] = tool_mapping
+                for t in raw_tools:
+                    canonical = self._normalizer.normalize(t.name, server_name)
+                    input_schema = (
+                        getattr(t, "inputSchema", None)
+                        or getattr(t, "input_schema", None)
+                        or {"type": "object", "properties": {}}
+                    )
+                    self._tool_metadata[canonical] = {
+                        "name": canonical,
+                        "server": server_name,
+                        "description": t.description or "",
+                        "input_schema": input_schema,
+                        "_workspace_id": workspace_id,
+                    }
 
             entry = SessionEntry(
                 client=client,
@@ -172,6 +200,55 @@ class UserMCPSessionPool:
                 len(tool_mapping),
             )
             return entry
+
+    async def _register_discovered_tools(
+        self, raw_tools: list, server_name: str, workspace_id: str
+    ) -> None:
+        """Register unknown discovered tools in DB with safe defaults.
+
+        Unknown tools get capability=None, making them invisible to agents
+        until an admin maps their capability. Safe by design.
+        """
+        try:
+            from ulid import ULID
+
+            from src.models.database import get_session_factory
+            from src.models.tool_definitions import ToolDefinition
+            from src.services.tool_registry import ToolRegistry
+
+            async with get_session_factory()() as db:
+                registry = ToolRegistry(db)
+                for t in raw_tools:
+                    existing = await registry.get_tool(t.name)
+                    if not existing:
+                        new_tool = ToolDefinition(
+                            tool_id=f"tool_{ULID()}",
+                            workspace_id=workspace_id or None,
+                            name=t.name,
+                            server=server_name,
+                            backend="external_mcp",
+                            source="discovered",
+                            capability=None,
+                            risk_level="medium",
+                            requires_approval=True,
+                            description=t.description or "",
+                            input_schema=(
+                                getattr(t, "inputSchema", None)
+                                or getattr(t, "input_schema", None)
+                                or {"type": "object", "properties": {}}
+                            ),
+                            enabled=True,
+                            verified=True,
+                        )
+                        db.add(new_tool)
+                        logger.info(
+                            "Registered discovered tool: %s from %s",
+                            t.name,
+                            server_name,
+                        )
+                await db.commit()
+        except Exception:
+            logger.debug("Failed to register discovered tools", exc_info=True)
 
     async def call_tool(
         self,
@@ -216,7 +293,10 @@ class UserMCPSessionPool:
             return make_error_response(e, tool_name=tool_name)
 
         # Resolve canonical → raw MCP tool name
-        raw_name = session.tools.get(tool_name) or tool_name
+        if self._use_unified_dispatch:
+            raw_name = tool_name
+        else:
+            raw_name = session.tools.get(tool_name) or tool_name
 
         last_error: Exception | None = None
         for attempt in range(max_retries):

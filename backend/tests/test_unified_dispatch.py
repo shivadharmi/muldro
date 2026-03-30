@@ -491,3 +491,139 @@ class TestIsAutoExecuteTool:
             result = await governor.is_auto_execute_tool("nonexistent")
 
         assert result is False
+
+
+class TestSessionPoolDeNormalization:
+    """Tests for Phase 12: session pool skips normalization when flag ON."""
+
+    def _make_pool(self, unified=True):
+        """Create a UserMCPSessionPool with mocked normalizer."""
+        from src.integrations.session_pool import UserMCPSessionPool
+
+        normalizer = MagicMock()
+        pool = UserMCPSessionPool(
+            normalizer=normalizer,
+            use_unified_dispatch=unified,
+        )
+        return pool, normalizer
+
+    @pytest.mark.asyncio
+    async def test_unified_stores_real_names(self):
+        """When flag ON, tool names stored as-is (no normalization)."""
+        pool, normalizer = self._make_pool(unified=True)
+        pool.register_server_config("notion", {"command": "npx", "args": ["notion-mcp"]})
+
+        mock_client = AsyncMock()
+        mock_tool = MagicMock()
+        mock_tool.name = "API-post-page"
+        mock_tool.description = "Create a page"
+        mock_tool.inputSchema = {"type": "object", "properties": {"title": {"type": "string"}}}
+        mock_client.list_tools = AsyncMock(return_value=[mock_tool])
+
+        with patch("src.integrations.session_pool.Client") as mock_client_cls:
+            mock_ctx = MagicMock()
+            mock_ctx.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_ctx.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_ctx
+
+            # Mock _register_discovered_tools to avoid DB access in test
+            pool._register_discovered_tools = AsyncMock()
+
+            session = await pool.get_or_create_session("notion", "usr_1")
+
+        # Normalizer should NOT have been called
+        normalizer.register_server_tools.assert_not_called()
+        normalizer.normalize.assert_not_called()
+
+        # Tool stored under real name
+        assert "API-post-page" in session.tools
+        assert pool._tool_metadata.get("API-post-page") is not None
+        assert pool._tool_metadata["API-post-page"]["name"] == "API-post-page"
+
+    @pytest.mark.asyncio
+    async def test_legacy_still_normalizes(self):
+        """When flag OFF, normalization still happens."""
+        pool, normalizer = self._make_pool(unified=False)
+        pool.register_server_config("notion", {"command": "npx", "args": ["notion-mcp"]})
+
+        normalizer.register_server_tools.return_value = {"api_post_page": "API-post-page"}
+        normalizer.normalize.return_value = "api_post_page"
+
+        mock_client = AsyncMock()
+        mock_tool = MagicMock()
+        mock_tool.name = "API-post-page"
+        mock_tool.description = "Create a page"
+        mock_tool.inputSchema = {"type": "object"}
+        mock_client.list_tools = AsyncMock(return_value=[mock_tool])
+
+        with patch("src.integrations.session_pool.Client") as mock_client_cls:
+            mock_ctx = MagicMock()
+            mock_ctx.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_ctx.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_ctx
+
+            await pool.get_or_create_session("notion", "usr_1")
+
+        # Normalizer SHOULD have been called
+        normalizer.register_server_tools.assert_called_once()
+        normalizer.normalize.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_unified_call_tool_skips_translation(self):
+        """When flag ON, call_tool uses tool_name directly (no canonical→raw)."""
+        pool, _ = self._make_pool(unified=True)
+
+        mock_client = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.content = [MagicMock(text='{"status": "ok"}')]
+        mock_client.call_tool = AsyncMock(return_value=mock_result)
+
+        from src.integrations.session_pool import SessionEntry
+
+        session = SessionEntry(
+            client=mock_client,
+            client_ctx=MagicMock(),
+            server_name="notion",
+            user_id="usr_1",
+            tools={"API-post-page": "API-post-page"},
+        )
+        pool._sessions[("", "notion", "usr_1")] = session
+
+        result = await pool.call_tool(
+            "API-post-page",
+            {"title": "Test"},
+            user_id="usr_1",
+            server_name="notion",
+        )
+
+        mock_client.call_tool.assert_called_once_with("API-post-page", {"title": "Test"})
+        assert result["status"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_unified_registers_unknown_tools(self):
+        """When flag ON, unknown discovered tools are registered in DB."""
+        pool, _ = self._make_pool(unified=True)
+        pool.register_server_config("notion", {"command": "npx", "args": ["notion-mcp"]})
+
+        mock_client = AsyncMock()
+        mock_tool = MagicMock()
+        mock_tool.name = "API-new-unknown-tool"
+        mock_tool.description = "A new tool"
+        mock_tool.inputSchema = {"type": "object"}
+        mock_client.list_tools = AsyncMock(return_value=[mock_tool])
+
+        with patch("src.integrations.session_pool.Client") as mock_client_cls:
+            mock_ctx = MagicMock()
+            mock_ctx.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_ctx.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_ctx
+
+            # Mock _register_discovered_tools and verify it was called
+            pool._register_discovered_tools = AsyncMock()
+            await pool.get_or_create_session("notion", "usr_1")
+
+        pool._register_discovered_tools.assert_called_once()
+        call_args = pool._register_discovered_tools.call_args
+        raw_tools = call_args[0][0]
+        assert len(raw_tools) == 1
+        assert raw_tools[0].name == "API-new-unknown-tool"

@@ -99,10 +99,14 @@ async def initialize_mcp_bridge(
         return
 
     # Create session pool
+    from src.config.settings import get_settings
+
+    settings = get_settings()
     _session_pool = UserMCPSessionPool(
         oauth_manager=oauth_manager,
         circuit_breaker=_circuit_breaker,
         normalizer=get_normalizer(),
+        use_unified_dispatch=settings.use_unified_dispatch,
     )
 
     # Create and initialize workspace pool from DB
