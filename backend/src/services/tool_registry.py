@@ -2,12 +2,14 @@
 
 import logging
 
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
 from src.integrations.capabilities import TOOL_TO_CAPABILITY
 from src.models.tool_definitions import ToolDefinition
+from src.tools.catalog import EXTERNAL_TOOL_SEEDS, INTERNAL_TOOLS
 
 logger = logging.getLogger(__name__)
 
@@ -226,6 +228,20 @@ _DEFAULT_TOOLS = [
 ]
 
 
+def _schema_for_claude(model_cls: type[BaseModel]) -> dict:
+    """Generate input schema excluding runtime-injected fields.
+
+    User_id and workspace_id are injected at runtime by the orchestrator,
+    so they should not be presented to Claude in the tool schema.
+    """
+    schema = model_cls.model_json_schema()
+    for field in ("user_id", "workspace_id"):
+        schema.get("properties", {}).pop(field, None)
+        if "required" in schema and field in schema["required"]:
+            schema["required"].remove(field)
+    return schema
+
+
 class ToolRegistry:
     """DB-backed registry of all available tools and their metadata."""
 
@@ -236,9 +252,14 @@ class ToolRegistry:
     async def seed_defaults(self, workspace_id: str | None = None) -> int:
         """Seed or update default tool definitions. Returns count created/updated.
 
-        Creates new tools that don't exist. For existing tools, syncs
-        risk_level, requires_approval, connector_type, and capability
-        from _DEFAULT_TOOLS so code changes propagate on restart.
+        Three-pass seeding strategy (Phase 9):
+        1. Seed from INTERNAL_TOOLS catalog (19 tools)
+        2. Seed from EXTERNAL_TOOL_SEEDS catalog (137 tools)
+        3. Fallback to _DEFAULT_TOOLS for tools not in catalog (backward compat)
+
+        Catalog-sourced entries TAKE PRECEDENCE over _DEFAULT_TOOLS.
+        For existing tools, syncs backend, source, server, capability,
+        risk_level, requires_approval, and verified fields.
         """
         # Build lookup of existing tools by name
         result = await self._db.execute(select(ToolDefinition))
@@ -246,21 +267,163 @@ class ToolRegistry:
 
         seen: set[str] = set()
         changed = 0
+
+        # Pass 1: Seed from INTERNAL_TOOLS catalog
+        for tool in INTERNAL_TOOLS:
+            name = tool.name
+            if name in seen:
+                continue
+            seen.add(name)
+
+            backend = "internal_mcp"
+            source = "internal"
+            server = tool.server
+            capability = tool.capability
+            risk = tool.risk_level
+            approval = tool.requires_approval
+            verified = True  # Internal tools are always verified
+            input_schema = _schema_for_claude(tool.input_model)
+
+            if name not in existing:
+                new_tool = ToolDefinition(
+                    tool_id=f"tool_{ULID()}",
+                    workspace_id=workspace_id,
+                    name=name,
+                    backend=backend,
+                    source=source,
+                    server=server,
+                    risk_level=risk,
+                    requires_approval=approval,
+                    connector_type="internal",
+                    capability=capability,
+                    verified=verified,
+                    input_schema=input_schema,
+                    enabled=True,
+                )
+                self._db.add(new_tool)
+                changed += 1
+                continue
+
+            # Sync mutable fields if they diverged
+            tool_def = existing[name]
+            needs_update = False
+
+            if tool_def.backend != backend:
+                tool_def.backend = backend
+                needs_update = True
+            if tool_def.source != source:
+                tool_def.source = source
+                needs_update = True
+            if tool_def.server != server:
+                tool_def.server = server
+                needs_update = True
+            if tool_def.capability != capability:
+                tool_def.capability = capability
+                needs_update = True
+            if tool_def.risk_level != risk:
+                tool_def.risk_level = risk
+                needs_update = True
+            if tool_def.requires_approval != approval:
+                tool_def.requires_approval = approval
+                needs_update = True
+            if tool_def.verified != verified:
+                tool_def.verified = verified
+                needs_update = True
+            if tool_def.input_schema != input_schema:
+                tool_def.input_schema = input_schema
+                needs_update = True
+
+            if needs_update:
+                changed += 1
+
+        # Pass 2: Seed from EXTERNAL_TOOL_SEEDS catalog
+        for seed in EXTERNAL_TOOL_SEEDS:
+            name = seed.name
+            if name in seen:
+                continue
+            seen.add(name)
+
+            backend = "external_mcp"
+            source = "seed"
+            server = seed.server
+            capability = seed.capability
+            risk = seed.risk_level
+            approval = seed.requires_approval
+            verified = seed.verified
+            connector = seed.server  # Use server name as connector_type for backward compat
+
+            if name not in existing:
+                new_tool = ToolDefinition(
+                    tool_id=f"tool_{ULID()}",
+                    workspace_id=workspace_id,
+                    name=name,
+                    backend=backend,
+                    source=source,
+                    server=server,
+                    risk_level=risk,
+                    requires_approval=approval,
+                    connector_type=connector,
+                    capability=capability,
+                    verified=verified,
+                    enabled=True,
+                )
+                self._db.add(new_tool)
+                changed += 1
+                continue
+
+            # Sync mutable fields if they diverged
+            tool_def = existing[name]
+            needs_update = False
+
+            if tool_def.backend != backend:
+                tool_def.backend = backend
+                needs_update = True
+            if tool_def.source != source:
+                tool_def.source = source
+                needs_update = True
+            if tool_def.server != server:
+                tool_def.server = server
+                needs_update = True
+            if tool_def.capability != capability:
+                tool_def.capability = capability
+                needs_update = True
+            if tool_def.risk_level != risk:
+                tool_def.risk_level = risk
+                needs_update = True
+            if tool_def.requires_approval != approval:
+                tool_def.requires_approval = approval
+                needs_update = True
+            if tool_def.verified != verified:
+                tool_def.verified = verified
+                needs_update = True
+
+            if needs_update:
+                changed += 1
+
+        # Pass 3: Fallback to _DEFAULT_TOOLS for tools not in catalog
+        # This preserves backward compatibility with native connector aliases
+        # and other tools not yet migrated to the catalog.
+        # This pass will be removed in Phase 17.
         for tool_data in _DEFAULT_TOOLS:
             name = tool_data["name"]
             if name in seen:
                 continue
             seen.add(name)
+
             capability = tool_data.get("capability") or TOOL_TO_CAPABILITY.get(name)
             risk = tool_data.get("risk_level", "low")
             approval = tool_data.get("requires_approval", False)
             connector = tool_data.get("connector_type")
+            backend = "external_mcp"  # Default for non-catalog tools
+            source = "seed"  # Default for non-catalog tools
 
             if name not in existing:
                 tool = ToolDefinition(
                     tool_id=f"tool_{ULID()}",
                     workspace_id=workspace_id,
                     name=name,
+                    backend=backend,
+                    source=source,
                     risk_level=risk,
                     requires_approval=approval,
                     connector_type=connector,
