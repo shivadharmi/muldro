@@ -2636,11 +2636,28 @@ class JarvisOrchestrator:
         "gmail_mark_read": ("gmail", "mark_read"),
     }
 
+    async def _call_composite_tool(
+        self, tool_name: str, tool_input: dict, user_id: str = "", workspace_id: str = ""
+    ) -> dict:
+        """Dispatch composite tools (multi-MCP orchestration)."""
+        if tool_name == "web_search":
+            from src.browser.web_search import web_search
+
+            return await web_search(
+                query=tool_input.get("query", ""),
+                num_results=tool_input.get("num_results", 10),
+                user_id=user_id,
+                workspace_id=workspace_id,
+            )
+        return {"error": f"Unknown composite tool: {tool_name}"}
+
     # Cached in-process MCP client for internal tools
     _internal_client = None
     _internal_client_ctx = None
 
-    async def _call_internal_tool(self, tool_name: str, tool_input: dict) -> dict:
+    async def _call_internal_tool(
+        self, tool_name: str, tool_input: dict, server_prefix: str | None = None
+    ) -> dict:
         """Call an internal tool via in-process FastMCP Client (MCP protocol).
 
         The composed server mounts tools under namespaced prefixes:
@@ -2661,8 +2678,11 @@ class JarvisOrchestrator:
             self._internal_client = await self._internal_client_ctx.__aenter__()
 
         # Map flat name to namespaced name (server-specific prefix)
-        prefix = _INTERNAL_TOOL_SERVER.get(tool_name, "intelligence")
-        namespaced = f"{prefix}_{tool_name}"
+        if server_prefix is not None:
+            namespaced = f"{server_prefix}_{tool_name}"
+        else:
+            prefix = _INTERNAL_TOOL_SERVER.get(tool_name, "intelligence")
+            namespaced = f"{prefix}_{tool_name}"
         result = await self._internal_client.call_tool(namespaced, tool_input)
 
         # Extract result from CallToolResult
