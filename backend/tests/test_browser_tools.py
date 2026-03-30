@@ -15,31 +15,36 @@ _PATCH_IS = "src.connectors.mcp_bridge.is_mcp_tool"
 
 
 class TestCapabilityMappings:
-    """Verify Playwright MCP tool names are mapped to capabilities."""
+    """Verify Playwright MCP tool names are mapped to capabilities in catalog."""
+
+    def _get_cap(self, tool_name: str) -> str | None:
+        from src.tools.catalog import EXTERNAL_TOOL_SEEDS, INTERNAL_TOOLS
+
+        for t in INTERNAL_TOOLS:
+            if t.name == tool_name:
+                return t.capability
+        for s in EXTERNAL_TOOL_SEEDS:
+            if s.name == tool_name:
+                return s.capability
+        return None
 
     def test_browser_navigate_maps_to_browser_open(self):
-        from src.integrations.capabilities import TOOL_TO_CAPABILITY
-
-        assert TOOL_TO_CAPABILITY["browser_navigate"] == "browser.open"
+        assert self._get_cap("browser_navigate") == "browser.open"
 
     def test_web_search_maps_to_search_web(self):
-        from src.integrations.capabilities import TOOL_TO_CAPABILITY
-
-        assert TOOL_TO_CAPABILITY["web_search"] == "search.web"
+        assert self._get_cap("web_search") == "search.web"
 
     def test_browser_tabs_mapped(self):
-        from src.integrations.capabilities import TOOL_TO_CAPABILITY
-
-        assert TOOL_TO_CAPABILITY["browser_tabs"] == "browser.open"
+        assert self._get_cap("browser_tabs") == "browser.open"
 
     def test_browser_press_key_mapped(self):
-        from src.integrations.capabilities import TOOL_TO_CAPABILITY
-
-        assert TOOL_TO_CAPABILITY["browser_press_key"] == "browser.type"
+        assert self._get_cap("browser_press_key") == "browser.type"
 
     def test_all_playwright_mcp_tools_mapped(self):
         """All known @playwright/mcp tool names have capability mappings."""
-        from src.integrations.capabilities import TOOL_TO_CAPABILITY
+        from src.tools.catalog import EXTERNAL_TOOL_SEEDS
+
+        catalog_names = {s.name for s in EXTERNAL_TOOL_SEEDS}
 
         playwright_tools = [
             "browser_navigate",
@@ -64,7 +69,7 @@ class TestCapabilityMappings:
             "browser_fill_form",
         ]
         for tool_name in playwright_tools:
-            assert tool_name in TOOL_TO_CAPABILITY, f"{tool_name} not mapped"
+            assert tool_name in catalog_names, f"{tool_name} not mapped"
 
 
 # ── Agent capability scope tests ───────────────────────────────────────────

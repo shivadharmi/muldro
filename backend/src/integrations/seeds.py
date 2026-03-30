@@ -4,13 +4,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.integrations.capabilities import (
     CAPABILITY_CATALOG,
-    TOOL_TO_CAPABILITY,
     CapabilityFamily,
     get_family_for_capability,
 )
 from src.models.capability_binding import CapabilityBinding
 from src.models.ids import generate_id
 from src.models.server_trust import ServerTrustRecord
+from src.tools.catalog import EXTERNAL_TOOL_SEEDS, INTERNAL_TOOLS
 
 # Default T0/T1 trust records
 _DEFAULT_TRUST_RECORDS: list[dict] = [
@@ -133,7 +133,7 @@ async def seed_trust_records(db: AsyncSession, workspace_id: str) -> list[Server
 
 
 async def seed_capability_bindings(db: AsyncSession, workspace_id: str) -> list[CapabilityBinding]:
-    """Seed or update capability bindings from TOOL_TO_CAPABILITY mapping.
+    """Seed or update capability bindings from tool catalog.
 
     For existing bindings, syncs priority, backend_ref, and trust_id
     from current defaults so code changes propagate on restart.
@@ -160,10 +160,17 @@ async def seed_capability_bindings(db: AsyncSession, workspace_id: str) -> list[
         (b.capability, b.backend_type): b for b in existing_result.scalars().all()
     }
 
+    # Build tool_name → capability mapping from catalog
+    tool_to_capability: dict[str, str] = {}
+    for tool in INTERNAL_TOOLS:
+        tool_to_capability[tool.name] = tool.capability
+    for seed in EXTERNAL_TOOL_SEEDS:
+        tool_to_capability[seed.name] = seed.capability
+
     changed = []
     seen_caps: set[tuple[str, str]] = set()  # (capability, backend_type)
 
-    for tool_name, capability in TOOL_TO_CAPABILITY.items():
+    for tool_name, capability in tool_to_capability.items():
         family = get_family_for_capability(capability)
         if not family:
             continue

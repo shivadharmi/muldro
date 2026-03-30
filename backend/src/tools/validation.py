@@ -43,7 +43,7 @@ def validate_registry(
 
         agent_scopes = AGENT_CAPABILITY_SCOPES
     if tool_input_models is None:
-        from src.orchestrator.tool_schemas import TOOL_INPUT_MODELS
+        from src.tools.schemas import TOOL_INPUT_MODELS
 
         tool_input_models = TOOL_INPUT_MODELS
 

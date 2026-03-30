@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.services.tool_registry import _DEFAULT_TOOLS, ToolRegistry
+from src.services.tool_registry import ToolRegistry
 from src.tools.catalog import EXTERNAL_TOOL_SEEDS, INTERNAL_TOOLS, get_internal_tool_names
 
 
@@ -51,16 +51,15 @@ def _make_tool_def(
 class TestSeedDefaults:
     @pytest.mark.asyncio
     async def test_seed_defaults(self, registry, mock_db):
-        """Seeds all tools from catalog + fallback when none exist (3-pass)."""
+        """Seeds all tools from catalog (2-pass) when none exist."""
         result_mock = MagicMock()
         result_mock.scalars.return_value = result_mock
         result_mock.all.return_value = []
         mock_db.execute = AsyncMock(return_value=result_mock)
 
-        # Calculate expected total: catalog tools + fallback from _DEFAULT_TOOLS
+        # Calculate expected total: internal + external catalog tools
         catalog_names = get_internal_tool_names() | {s.name for s in EXTERNAL_TOOL_SEEDS}
-        fallback_names = {t["name"] for t in _DEFAULT_TOOLS} - catalog_names
-        total_unique = len(catalog_names) + len(fallback_names)
+        total_unique = len(catalog_names)
 
         added = await registry.seed_defaults()
         assert added == total_unique
@@ -70,10 +69,9 @@ class TestSeedDefaults:
     @pytest.mark.asyncio
     async def test_seed_defaults_skips_existing(self, registry, mock_db):
         """Skips tools that already exist (with matching fields)."""
-        from src.integrations.capabilities import TOOL_TO_CAPABILITY
         from src.services.tool_registry import _schema_for_claude
 
-        # Simulate all catalog + fallback tools already existing with matching fields
+        # Simulate all catalog tools already existing with matching fields
         existing_tools = []
 
         # Add internal tools
@@ -100,17 +98,6 @@ class TestSeedDefaults:
             t.requires_approval = seed.requires_approval
             t.verified = seed.verified
             existing_tools.append(t)
-
-        # Add fallback tools (not in catalog)
-        catalog_names = get_internal_tool_names() | {s.name for s in EXTERNAL_TOOL_SEEDS}
-        for td in _DEFAULT_TOOLS:
-            if td["name"] not in catalog_names:
-                t = _make_tool_def(name=td["name"])
-                t.risk_level = td.get("risk_level", "low")
-                t.requires_approval = td.get("requires_approval", False)
-                t.connector_type = td.get("connector_type")
-                t.capability = td.get("capability") or TOOL_TO_CAPABILITY.get(td["name"])
-                existing_tools.append(t)
 
         result_mock = MagicMock()
         result_mock.scalars.return_value = result_mock

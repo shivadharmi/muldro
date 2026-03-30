@@ -37,13 +37,13 @@ from src.orchestrator.intent_classifier import (
 )
 from src.orchestrator.prompts import JARVIS_DECISION_FRAMEWORK, JARVIS_SOUL_CORE
 from src.orchestrator.services import ServiceContainer
-from src.orchestrator.tool_schemas import build_tool_definitions
 from src.orchestrator.tracing import TraceManager
 from src.services.agent_registry import AgentRegistry
 from src.services.context_builder import ContextBuilder, ContextPack
 from src.services.execution_state import transition_run, transition_step
 from src.services.route_resolver import RouteResolver
 from src.services.trace_store import TraceStore
+from src.tools.schemas import build_tool_definitions
 
 logger = logging.getLogger(__name__)
 
@@ -500,7 +500,7 @@ class JarvisOrchestrator:
     @staticmethod
     def _internal_tool_names() -> set[str]:
         """Return the set of internal (non-MCP) tool names."""
-        from src.orchestrator.tool_schemas import TOOL_INPUT_MODELS
+        from src.tools.schemas import TOOL_INPUT_MODELS
 
         return set(TOOL_INPUT_MODELS.keys())
 

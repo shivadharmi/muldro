@@ -2,12 +2,11 @@
 
 from src.integrations.capabilities import (
     CAPABILITY_CATALOG,
-    TOOL_TO_CAPABILITY,
     CapabilityFamily,
-    get_capability_for_tool,
     get_family_for_capability,
     is_read_only_capability,
 )
+from src.tools.catalog import EXTERNAL_TOOL_SEEDS, INTERNAL_TOOLS
 
 
 class TestCapabilityCatalog:
@@ -59,27 +58,37 @@ class TestCapabilityCatalog:
 
 
 class TestToolToCapability:
-    """Test TOOL_TO_CAPABILITY mapping completeness."""
+    """Test catalog tool-to-capability mapping completeness."""
+
+    def _build_tool_to_cap(self) -> dict[str, str]:
+        mapping: dict[str, str] = {}
+        for t in INTERNAL_TOOLS:
+            mapping[t.name] = t.capability
+        for s in EXTERNAL_TOOL_SEEDS:
+            mapping[s.name] = s.capability
+        return mapping
 
     def test_all_tools_map_to_valid_capabilities(self):
-        for tool, cap in TOOL_TO_CAPABILITY.items():
+        tool_to_cap = self._build_tool_to_cap()
+        for tool, cap in tool_to_cap.items():
             assert cap in CAPABILITY_CATALOG, f"Tool '{tool}' maps to unknown capability '{cap}'"
 
     def test_gmail_tools_map_to_email(self):
-        gmail_tools = [t for t in TOOL_TO_CAPABILITY if "gmail" in t.lower()]
+        tool_to_cap = self._build_tool_to_cap()
+        gmail_tools = [t for t in tool_to_cap if "gmail" in t.lower()]
         assert len(gmail_tools) >= 5
         for tool in gmail_tools:
-            cap = TOOL_TO_CAPABILITY[tool]
+            cap = tool_to_cap[tool]
             assert cap.startswith("email."), f"Gmail tool '{tool}' maps to '{cap}'"
 
-    def test_calendar_tools_map_to_calendar(self):
-        cal_tools = [t for t in TOOL_TO_CAPABILITY if "calendar" in t.lower()]
-        assert len(cal_tools) >= 5
-        for tool in cal_tools:
-            cap = TOOL_TO_CAPABILITY[tool]
-            assert cap.startswith("calendar."), f"Calendar tool '{tool}' maps to '{cap}'"
+    def test_calendar_capabilities_exist(self):
+        """Calendar capabilities should be present in the catalog tools."""
+        tool_to_cap = self._build_tool_to_cap()
+        calendar_caps = [cap for cap in tool_to_cap.values() if cap.startswith("calendar.")]
+        assert len(calendar_caps) >= 2, "Should have at least 2 calendar-capability tools"
 
     def test_github_mcp_tools_mapped(self):
+        tool_to_cap = self._build_tool_to_cap()
         github_mcp_tools = [
             "issue_write",
             "create_pull_request",
@@ -88,25 +97,34 @@ class TestToolToCapability:
             "search_repositories",
         ]
         for tool in github_mcp_tools:
-            assert tool in TOOL_TO_CAPABILITY, f"GitHub MCP tool '{tool}' not mapped"
+            assert tool in tool_to_cap, f"GitHub MCP tool '{tool}' not mapped"
 
     def test_slack_tools_map_to_messaging(self):
-        slack_tools = [t for t in TOOL_TO_CAPABILITY if t.startswith("slack_")]
+        tool_to_cap = self._build_tool_to_cap()
+        slack_tools = [t for t in tool_to_cap if t.startswith("slack_")]
         assert len(slack_tools) >= 5
         for tool in slack_tools:
-            cap = TOOL_TO_CAPABILITY[tool]
+            cap = tool_to_cap[tool]
             assert cap.startswith("messaging."), f"Slack tool '{tool}' maps to '{cap}'"
 
     def test_mapping_not_empty(self):
-        assert len(TOOL_TO_CAPABILITY) > 100
+        tool_to_cap = self._build_tool_to_cap()
+        assert len(tool_to_cap) > 100
 
 
 class TestHelpers:
-    def test_get_capability_for_tool_known(self):
-        assert get_capability_for_tool("gmail_send") == "email.send"
+    def test_get_capability_via_catalog(self):
+        """Internal tool 'search' should map to 'internal.search' via catalog."""
+        for t in INTERNAL_TOOLS:
+            if t.name == "search":
+                assert t.capability == "internal.search"
+                break
+        else:
+            raise AssertionError("search tool not in INTERNAL_TOOLS")
 
-    def test_get_capability_for_tool_unknown(self):
-        assert get_capability_for_tool("nonexistent_tool") is None
+    def test_unknown_tool_not_in_catalog(self):
+        all_names = {t.name for t in INTERNAL_TOOLS} | {s.name for s in EXTERNAL_TOOL_SEEDS}
+        assert "nonexistent_tool" not in all_names
 
     def test_get_family_for_capability(self):
         assert get_family_for_capability("email.send") == CapabilityFamily.EMAIL

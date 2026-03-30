@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from src.integrations.session_pool import UserMCPSessionPool
-from src.integrations.tool_normalizer import ToolNameNormalizer, get_normalizer
 
 logger = logging.getLogger(__name__)
 
@@ -40,10 +39,8 @@ class WorkspaceMCPPool:
     def __init__(
         self,
         session_pool: UserMCPSessionPool,
-        normalizer: ToolNameNormalizer | None = None,
     ) -> None:
         self._session_pool = session_pool
-        self._normalizer = normalizer or get_normalizer()
         # workspace_id → {server_name → ServerEntry}
         self._workspaces: dict[str, dict[str, ServerEntry]] = {}
         self._lock = asyncio.Lock()

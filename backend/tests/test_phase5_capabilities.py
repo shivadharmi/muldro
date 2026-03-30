@@ -2,11 +2,26 @@
 
 from src.integrations.capabilities import (
     CAPABILITY_CATALOG,
-    TOOL_TO_CAPABILITY,
     CapabilityFamily,
-    get_capability_for_tool,
 )
 from src.orchestrator.agents import AGENT_CAPABILITY_SCOPES
+from src.tools.catalog import EXTERNAL_TOOL_SEEDS, INTERNAL_TOOLS
+
+
+def _get_cap(tool_name: str) -> str | None:
+    """Look up tool capability from catalog."""
+    for t in INTERNAL_TOOLS:
+        if t.name == tool_name:
+            return t.capability
+    for s in EXTERNAL_TOOL_SEEDS:
+        if s.name == tool_name:
+            return s.capability
+    return None
+
+
+def _all_catalog_names() -> set[str]:
+    """Return all tool names from the catalog."""
+    return {t.name for t in INTERNAL_TOOLS} | {s.name for s in EXTERNAL_TOOL_SEEDS}
 
 
 class TestFilesystemCapabilities:
@@ -44,7 +59,7 @@ class TestFilesystemCapabilities:
             "list_allowed_directories": "filesystem.list",
         }
         for tool, cap in expected_mappings.items():
-            actual = get_capability_for_tool(tool)
+            actual = _get_cap(tool)
             assert actual == cap, f"{tool} should map to {cap}, got {actual}"
 
 
@@ -64,12 +79,13 @@ class TestNewBrowserCapabilities:
             "browser_fill_form": "browser.type",
         }
         for tool, cap in expected.items():
-            actual = get_capability_for_tool(tool)
+            actual = _get_cap(tool)
             assert actual == cap, f"{tool} should map to {cap}, got {actual}"
 
     def test_phantom_tools_removed(self):
-        assert "browser_pdf_save" not in TOOL_TO_CAPABILITY, "browser_pdf_save is phantom"
-        assert "browser_wait" not in TOOL_TO_CAPABILITY, "browser_wait is wrong name"
+        names = _all_catalog_names()
+        assert "browser_pdf_save" not in names, "browser_pdf_save is phantom"
+        assert "browser_wait" not in names, "browser_wait is wrong name"
 
 
 class TestNewWorkflowCapabilities:
@@ -117,7 +133,7 @@ class TestNewWorkflowCapabilities:
             "linear_auth_callback": "workflow.auth",
         }
         for tool, cap in expected.items():
-            actual = get_capability_for_tool(tool)
+            actual = _get_cap(tool)
             assert actual == cap, f"{tool} should map to {cap}, got {actual}"
 
 
@@ -163,7 +179,7 @@ class TestNewDocCapabilities:
             "API-post-search": "doc.search",
         }
         for tool, cap in expected.items():
-            actual = get_capability_for_tool(tool)
+            actual = _get_cap(tool)
             assert actual == cap, f"{tool} should map to {cap}, got {actual}"
 
 

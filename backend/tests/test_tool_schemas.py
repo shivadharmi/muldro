@@ -1,6 +1,6 @@
 """Tests for tool schema registry — verifies orphan tools are removed."""
 
-from src.orchestrator.tool_schemas import TOOL_INPUT_MODELS, build_tool_definitions
+from src.tools.schemas import TOOL_INPUT_MODELS, build_tool_definitions
 
 
 class TestToolInputModels:

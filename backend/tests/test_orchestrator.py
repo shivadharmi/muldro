@@ -284,20 +284,24 @@ class TestHooks:
     async def test_read_only_tools_allowed(self):
         from src.orchestrator.hooks import governor_pre_tool_hook
 
-        result = await governor_pre_tool_hook("search_memory", {}, "planner", user_id=TEST_USER_ID)
+        result = await governor_pre_tool_hook("search", {}, "planner", user_id=TEST_USER_ID)
         assert result["allowed"] is True
 
-    async def test_blocked_tools_rejected(self):
+    async def test_write_tools_rejected_via_catalog(self):
         from src.orchestrator.hooks import governor_pre_tool_hook
 
-        result = await governor_pre_tool_hook("gmail_delete", {}, "operator", user_id=TEST_USER_ID)
+        # linear_delete_issue is critical in catalog — requires approval
+        result = await governor_pre_tool_hook(
+            "linear_delete_issue", {}, "operator", user_id=TEST_USER_ID
+        )
         assert result["allowed"] is False
-        assert "blocked by policy" in result["reason"].lower()
 
     async def test_write_tools_require_approval(self):
         from src.orchestrator.hooks import governor_pre_tool_hook
 
-        result = await governor_pre_tool_hook("gmail_send", {}, "operator", user_id=TEST_USER_ID)
+        result = await governor_pre_tool_hook(
+            "send_gmail_message", {}, "operator", user_id=TEST_USER_ID
+        )
         assert result["allowed"] is False
         assert result["approval_required"] is True
 

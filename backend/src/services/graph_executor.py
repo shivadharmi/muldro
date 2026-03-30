@@ -503,10 +503,19 @@ class GraphExecutor:
         # Check 2: workspace approval policies (capability-pattern based)
         if not needs_approval and task_type and run.workspace_id:
             try:
-                from src.integrations.capabilities import get_capability_for_tool
                 from src.services.approval_policy_engine import ApprovalPolicyEngine
+                from src.tools.catalog import EXTERNAL_TOOL_SEEDS, INTERNAL_TOOLS
 
-                capability = get_capability_for_tool(task_type)
+                capability = None
+                for _t in INTERNAL_TOOLS:
+                    if _t.name == task_type:
+                        capability = _t.capability
+                        break
+                if capability is None:
+                    for _s in EXTERNAL_TOOL_SEEDS:
+                        if _s.name == task_type:
+                            capability = _s.capability
+                            break
                 engine = ApprovalPolicyEngine(self._db, run.workspace_id)
                 decision = await engine.check(
                     capability=capability,

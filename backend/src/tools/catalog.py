@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel
 
-from src.orchestrator.tool_schemas import (
+from src.tools.schemas import (
     ApproveActionInput,
     BuildContextInput,
     EvaluatePolicyInput,

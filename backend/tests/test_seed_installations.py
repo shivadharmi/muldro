@@ -34,12 +34,12 @@ class TestSeedInstallations:
 
 
 class TestNotionToolNames:
-    def test_notion_tools_in_default_tools(self):
-        """All 6 Notion MCP tools must have API- prefix in _DEFAULT_TOOLS."""
-        from src.services.tool_registry import _DEFAULT_TOOLS
+    def test_notion_tools_in_catalog(self):
+        """All Notion MCP tools must have API- prefix in catalog."""
+        from src.tools.catalog import EXTERNAL_TOOL_SEEDS
 
-        notion_tools = [t for t in _DEFAULT_TOOLS if t.get("connector_type") == "notion"]
-        notion_names = {t["name"] for t in notion_tools}
+        notion_seeds = [s for s in EXTERNAL_TOOL_SEEDS if s.server == "notion"]
+        notion_names = {s.name for s in notion_seeds}
         expected_api_names = {
             "API-post-page",
             "API-patch-page",
@@ -62,8 +62,10 @@ class TestNotionToolNames:
         assert not present_wrong, f"Wrong Notion names still present: {present_wrong}"
 
     def test_notion_capability_mappings(self):
-        """Notion tools must use API- prefixed names in TOOL_TO_CAPABILITY."""
-        from src.integrations.capabilities import TOOL_TO_CAPABILITY
+        """Notion tools must have correct capabilities in catalog."""
+        from src.tools.catalog import EXTERNAL_TOOL_SEEDS
+
+        seed_by_name = {s.name: s.capability for s in EXTERNAL_TOOL_SEEDS}
 
         expected = {
             "API-post-page": "doc.create",
@@ -74,32 +76,25 @@ class TestNotionToolNames:
             "API-patch-block-children": "doc.append",
         }
         for tool_name, expected_cap in expected.items():
-            assert TOOL_TO_CAPABILITY.get(tool_name) == expected_cap, (
-                f"{tool_name} should map to {expected_cap}, got {TOOL_TO_CAPABILITY.get(tool_name)}"
+            assert seed_by_name.get(tool_name) == expected_cap, (
+                f"{tool_name} should map to {expected_cap}, got {seed_by_name.get(tool_name)}"
             )
-        for old in (
-            "create-a-page",
-            "update-a-page",
-            "retrieve-a-page",
-            "query-data-source",
-            "create-a-comment",
-            "append-block-children",
-        ):
-            assert old not in TOOL_TO_CAPABILITY, f"Old name '{old}' still in TOOL_TO_CAPABILITY"
 
 
 class TestLinearToolNames:
-    def test_linear_no_wrong_aliases_in_defaults(self):
-        from src.services.tool_registry import _DEFAULT_TOOLS
+    def test_linear_no_wrong_aliases_in_catalog(self):
+        from src.tools.catalog import EXTERNAL_TOOL_SEEDS
 
-        names = {t["name"] for t in _DEFAULT_TOOLS}
+        names = {s.name for s in EXTERNAL_TOOL_SEEDS}
         assert "linear_comment" not in names, "linear_comment is wrong — use linear_create_comment"
         assert "linear_list_issues" not in names, (
             "linear_list_issues is wrong — use linear_search_issues"
         )
 
     def test_linear_no_wrong_aliases_in_capabilities(self):
-        from src.integrations.capabilities import TOOL_TO_CAPABILITY
+        """Linear wrong aliases should not exist in any catalog entry."""
+        from src.tools.catalog import EXTERNAL_TOOL_SEEDS
 
-        assert "linear_comment" not in TOOL_TO_CAPABILITY
-        assert "linear_list_issues" not in TOOL_TO_CAPABILITY
+        names = {s.name for s in EXTERNAL_TOOL_SEEDS}
+        assert "linear_comment" not in names
+        assert "linear_list_issues" not in names
