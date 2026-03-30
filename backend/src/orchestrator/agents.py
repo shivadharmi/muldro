@@ -219,6 +219,21 @@ class SubAgent:
 
         return False
 
+    async def can_use_tool_unified(self, tool_name: str, db) -> bool:
+        """Registry-driven capability check. One lookup, no normalizer.
+
+        Used when JARVIS_USE_UNIFIED_DISPATCH is enabled.
+        """
+        if not self.capability_scope:
+            return False
+        from src.services.tool_registry import ToolRegistry
+
+        registry = ToolRegistry(db)
+        tool = await registry.get_tool(tool_name)
+        if tool and tool.capability:
+            return tool.capability in self.capability_scope
+        return False
+
 
 def create_sub_agents() -> dict[str, SubAgent]:
     """Create all 8 sub-agent definitions."""

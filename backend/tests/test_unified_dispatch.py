@@ -308,6 +308,75 @@ class TestExecuteToolUnified:
         assert result.get("blocked") is True
 
 
+class TestCanUseToolUnified:
+    """Tests for SubAgent.can_use_tool_unified() — registry-driven."""
+
+    @pytest.mark.asyncio
+    async def test_matching_capability_returns_true(self):
+        """Tool with matching capability in agent's scope returns True."""
+        from src.orchestrator.agents import SubAgent
+
+        agent = SubAgent(
+            name="researcher",
+            prompt="test",
+            model_tier="sonnet",
+            capability_scope={"internal.search", "search.web"},
+        )
+        tool = _make_tool_record(name="search", capability="internal.search")
+
+        mock_registry = MagicMock()
+        mock_registry.get_tool = AsyncMock(return_value=tool)
+
+        mock_db = AsyncMock()
+        with patch("src.services.tool_registry.ToolRegistry", return_value=mock_registry):
+            result = await agent.can_use_tool_unified("search", mock_db)
+
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_non_matching_capability_returns_false(self):
+        """Tool with capability NOT in agent's scope returns False."""
+        from src.orchestrator.agents import SubAgent
+
+        agent = SubAgent(
+            name="librarian",
+            prompt="test",
+            model_tier="sonnet",
+            capability_scope={"internal.update_entity"},
+        )
+        tool = _make_tool_record(name="search", capability="internal.search")
+
+        mock_registry = MagicMock()
+        mock_registry.get_tool = AsyncMock(return_value=tool)
+
+        mock_db = AsyncMock()
+        with patch("src.services.tool_registry.ToolRegistry", return_value=mock_registry):
+            result = await agent.can_use_tool_unified("search", mock_db)
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_unknown_tool_returns_false(self):
+        """Unknown tool returns False."""
+        from src.orchestrator.agents import SubAgent
+
+        agent = SubAgent(
+            name="researcher",
+            prompt="test",
+            model_tier="sonnet",
+            capability_scope={"internal.search"},
+        )
+
+        mock_registry = MagicMock()
+        mock_registry.get_tool = AsyncMock(return_value=None)
+
+        mock_db = AsyncMock()
+        with patch("src.services.tool_registry.ToolRegistry", return_value=mock_registry):
+            result = await agent.can_use_tool_unified("nonexistent", mock_db)
+
+        assert result is False
+
+
 class TestFlagGating:
     """Tests for flag-based routing in _execute_tool()."""
 

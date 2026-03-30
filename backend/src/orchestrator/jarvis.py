@@ -626,6 +626,29 @@ class JarvisOrchestrator:
             )
         return [t for t in tools if agent.can_use_tool(t["name"])]
 
+    async def _get_tools_for_agent_unified(
+        self, agent: SubAgent, workspace_id: str = ""
+    ) -> list[dict]:
+        """Filter tool definitions using registry-driven capability check.
+
+        Used when JARVIS_USE_UNIFIED_DISPATCH is enabled.
+        """
+        from src.connectors.mcp_bridge import list_mcp_tools
+
+        tools = list(self._tools)
+        for mcp_tool in list_mcp_tools(workspace_id=workspace_id):
+            schema = mcp_tool.get("input_schema", {})
+            tools.append(
+                {
+                    "name": mcp_tool["name"],
+                    "description": mcp_tool.get("description", "External MCP tool"),
+                    "input_schema": schema if schema else {"type": "object", "properties": {}},
+                }
+            )
+
+        async with self._db_factory() as db:
+            return [t for t in tools if await agent.can_use_tool_unified(t["name"], db)]
+
     def _get_model_for_agent(self, agent: SubAgent) -> str:
         """Get the Claude model ID for an agent's tier."""
         if self._settings.use_bedrock:
@@ -1217,9 +1240,14 @@ class JarvisOrchestrator:
             return
 
         model = self._get_model_for_agent(agent)
-        tools = self._apply_cache_control_to_tools(
-            self._get_tools_for_agent(agent, workspace_id=workspace_id)
-        )
+        if self._settings.use_unified_dispatch:
+            tools = self._apply_cache_control_to_tools(
+                await self._get_tools_for_agent_unified(agent, workspace_id=workspace_id)
+            )
+        else:
+            tools = self._apply_cache_control_to_tools(
+                self._get_tools_for_agent(agent, workspace_id=workspace_id)
+            )
         context_block = await self._assemble_context(
             agent_name, message, user_id=user_id, workspace_id=workspace_id
         )
@@ -2433,9 +2461,14 @@ class JarvisOrchestrator:
             raise ValueError(f"Unknown agent: {agent_name}")
 
         model = self._get_model_for_agent(agent)
-        tools = self._apply_cache_control_to_tools(
-            self._get_tools_for_agent(agent, workspace_id=workspace_id)
-        )
+        if self._settings.use_unified_dispatch:
+            tools = self._apply_cache_control_to_tools(
+                await self._get_tools_for_agent_unified(agent, workspace_id=workspace_id)
+            )
+        else:
+            tools = self._apply_cache_control_to_tools(
+                self._get_tools_for_agent(agent, workspace_id=workspace_id)
+            )
         context_block = await self._assemble_context(
             agent_name, message, user_id=user_id, workspace_id=workspace_id
         )
