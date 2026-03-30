@@ -473,9 +473,6 @@ class JarvisOrchestrator:
         """
         tools = self._build_internal_tool_definitions()
 
-        # Append native connector actions as tools (Gmail, Calendar, etc.)
-        tools.extend(self._build_native_connector_tools())
-
         # Composite web_search tool (uses Playwright MCP internally)
         tools.append(
             {
@@ -504,97 +501,6 @@ class JarvisOrchestrator:
         )
 
         return tools
-
-    @staticmethod
-    def _build_native_connector_tools() -> list[dict]:
-        """Build Claude tool definitions for native connector actions.
-
-        These tools use Jarvis's built-in connectors (with OAuth tokens from the DB)
-        instead of MCP servers that need separate credential files.
-        """
-        return [
-            {
-                "name": "gmail_list_unread",
-                "description": "List unread emails from Gmail inbox.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "max_results": {
-                            "type": "integer",
-                            "description": "Max emails to return (default 20)",
-                            "default": 20,
-                        },
-                        "query": {
-                            "type": "string",
-                            "description": "Gmail search query (default: is:inbox is:unread)",
-                        },
-                    },
-                },
-            },
-            {
-                "name": "gmail_get_message",
-                "description": "Get full details of a specific Gmail message by ID.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "message_id": {"type": "string", "description": "Gmail message ID"},
-                    },
-                    "required": ["message_id"],
-                },
-            },
-            {
-                "name": "gmail_send_email",
-                "description": "Send an email via Gmail.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "to": {"type": "string", "description": "Recipient email address"},
-                        "subject": {"type": "string", "description": "Email subject"},
-                        "body": {"type": "string", "description": "Email body text"},
-                        "thread_id": {
-                            "type": "string",
-                            "description": "Thread ID for replies (optional)",
-                        },
-                    },
-                    "required": ["to", "subject", "body"],
-                },
-            },
-            {
-                "name": "gmail_create_draft",
-                "description": "Create an email draft in Gmail.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "to": {"type": "string", "description": "Recipient email"},
-                        "subject": {"type": "string", "description": "Email subject"},
-                        "body": {"type": "string", "description": "Email body"},
-                    },
-                    "required": ["to", "subject", "body"],
-                },
-            },
-            {
-                "name": "gmail_archive",
-                "description": "Archive a Gmail message (remove from inbox).",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "message_id": {"type": "string", "description": "Gmail message ID"},
-                    },
-                    "required": ["message_id"],
-                },
-            },
-            {
-                "name": "gmail_mark_read",
-                "description": "Mark a Gmail message as read.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "message_id": {"type": "string", "description": "Gmail message ID"},
-                    },
-                    "required": ["message_id"],
-                },
-            },
-        ]
 
     def _build_internal_tool_definitions(self) -> list[dict]:
         """Build Claude tool definitions from Pydantic models in tool_schemas."""
@@ -2605,29 +2511,7 @@ class JarvisOrchestrator:
                 )
                 return {"error": f"Tool execution failed for {tool_name}: {e}"}
 
-        # 2. Try native connector dispatch (gmail_*, calendar_*, etc.)
-        native_result = await self._try_native_connector(tool_name, tool_input, user_id)
-        if native_result is not None:
-            await self._publish_event("tool.completed", user_id, {"tool": tool_name})
-            return native_result
-
-        # 3. Try capability resolver (routes to best backend: native, MCP official, user MCP)
-        try:
-            from src.connectors.mcp_bridge import get_session_pool
-            from src.integrations.capability_resolver import CapabilityResolver
-
-            async with self._db_factory() as db:
-                session_pool = get_session_pool()
-                resolver = CapabilityResolver(db, session_pool, workspace_id)
-                capability = resolver.resolve_tool_to_capability(tool_name)
-                if capability:
-                    result = await resolver.execute(tool_name, tool_input, user_id=user_id)
-                    await self._publish_event("tool.completed", user_id, {"tool": tool_name})
-                    return result
-        except Exception as e:
-            logger.debug("Capability resolver failed for %s: %s", tool_name, e)
-
-        # 3. Try MCP bridge directly (session pool, circuit-breaker protected)
+        # 2. Try MCP bridge directly (session pool, circuit-breaker protected)
         from src.connectors.mcp_bridge import call_mcp_tool, is_mcp_tool
 
         if is_mcp_tool(tool_name, workspace_id=workspace_id):
@@ -2662,16 +2546,6 @@ class JarvisOrchestrator:
                 {"tool": tool_name, "error": str(e)[:200]},
             )
             return {"error": f"Tool execution failed for {tool_name}: {e}"}
-
-    # Native connector tool name → (connector_type, action) mapping
-    _NATIVE_TOOL_MAP: dict[str, tuple[str, str]] = {
-        "gmail_list_unread": ("gmail", "list_unread"),
-        "gmail_get_message": ("gmail", "get_message"),
-        "gmail_send_email": ("gmail", "send_email"),
-        "gmail_create_draft": ("gmail", "create_draft"),
-        "gmail_archive": ("gmail", "archive"),
-        "gmail_mark_read": ("gmail", "mark_read"),
-    }
 
     async def _call_composite_tool(
         self, tool_name: str, tool_input: dict, user_id: str = "", workspace_id: str = ""
@@ -2739,54 +2613,6 @@ class JarvisOrchestrator:
             except (json.JSONDecodeError, TypeError):
                 return {"status": "ok", "result": text}
         return {"status": "ok", "result": text}
-
-    async def _try_native_connector(
-        self, tool_name: str, tool_input: dict, user_id: str
-    ) -> dict | None:
-        """Try to execute a tool via native connector. Returns None if not a native tool."""
-        mapping = self._NATIVE_TOOL_MAP.get(tool_name)
-        if not mapping:
-            return None
-
-        connector_type, action = mapping
-
-        from src.connectors.base import CONNECTOR_REGISTRY
-
-        connector_cls = CONNECTOR_REGISTRY.get(connector_type)
-        if not connector_cls:
-            return {"error": f"No native connector for: {connector_type}"}
-
-        # Get OAuth credentials
-        credentials = {}
-        oauth = self._services.oauth_manager
-        if oauth:
-            try:
-                provider_map = {
-                    "gmail": "google",
-                    "calendar": "google",
-                    "drive": "google",
-                    "github": "github",
-                    "slack": "slack",
-                }
-                oauth_provider = provider_map.get(connector_type, connector_type)
-                token = await oauth.get_valid_token(user_id, oauth_provider)
-                if token:
-                    credentials = {"access_token": token}
-            except Exception:
-                logger.warning("No credentials for native connector %s", connector_type)
-
-        if not credentials:
-            return {
-                "error": f"No OAuth credentials for {connector_type}. "
-                f"Please connect {connector_type} first."
-            }
-
-        connector = connector_cls(self._settings)
-        try:
-            return await connector.execute_action(action, tool_input, credentials)
-        except Exception as e:
-            logger.error("Native connector %s.%s failed: %s", connector_type, action, e)
-            return {"error": f"{connector_type}.{action} failed: {e}"}
 
     async def _execute_connector_tool(self, tool_name: str, tool_input: dict, user_id: str) -> dict:
         """Execute a tool via its connector, resolved from the ToolRegistry."""

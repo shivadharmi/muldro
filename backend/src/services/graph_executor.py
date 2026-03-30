@@ -719,20 +719,7 @@ class GraphExecutor:
             workspace_id=run.workspace_id,
         )
 
-        # 1. Try capability resolver (routes to best backend)
-        try:
-            from src.integrations.capabilities import get_capability_for_tool
-            from src.integrations.capability_resolver import CapabilityResolver
-
-            capability = get_capability_for_tool(task_type)
-            if capability:
-                resolver = CapabilityResolver(self._db, None, run.workspace_id)
-                raw = await resolver.execute(task_type, input_data, user_id=run.user_id)
-                return raw
-        except Exception:
-            logger.debug("Capability resolver failed for %s, falling back", task_type)
-
-        # 2. Try MCP bridge (external MCP servers)
+        # 1. Try MCP bridge (external MCP servers)
         from src.connectors.mcp_bridge import call_mcp_tool, is_mcp_tool
 
         if is_mcp_tool(task_type, workspace_id=run.workspace_id):
@@ -744,7 +731,7 @@ class GraphExecutor:
             )
             return raw
 
-        # 3. Try connector dispatch via ToolRegistry
+        # 2. Try connector dispatch via ToolRegistry
         if self._tool_registry:
             tool_def = await self._tool_registry.get_tool(task_type)
             if tool_def:
@@ -755,13 +742,13 @@ class GraphExecutor:
                     )
                     return raw
 
-        # 4. Built-in Claude handlers for specific types
+        # 3. Built-in Claude handlers for specific types
         if task_type in ("draft_email", "draft_reply"):
             return await self._draft_action(input_data, run, context_prompt)
         if task_type == "summarize":
             return await self._summarize_action(input_data, context_prompt)
 
-        # 5. Generic Claude handler — catch-all for any unrecognized
+        # 4. Generic Claude handler — catch-all for any unrecognized
         #    task_type. Claude interprets the task semantically using the
         #    enriched context prompt from ContextBuilder.
         return await self._generic_claude_action(task_type, input_data, context_prompt)
