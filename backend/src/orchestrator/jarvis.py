@@ -2488,6 +2488,10 @@ class JarvisOrchestrator:
         2. MCP bridge (external MCP servers)
         3. Connector-backed tools (dispatched via connector.execute_action)
         """
+        # Phase 11: unified dispatch (flag-gated)
+        if self._settings.use_unified_dispatch:
+            return await self._execute_tool_unified(tool_name, tool_input, user_id, workspace_id)
+
         # 0. Pre-dispatch: ToolRegistry classification
         try:
             from src.services.tool_registry import ToolRegistry
@@ -2809,6 +2813,72 @@ class JarvisOrchestrator:
                 action = tool_name[len(connector_type) + 1 :]
 
             return await connector.execute_action(action, tool_input, credentials)
+
+    async def _execute_tool_unified(
+        self, tool_name: str, tool_input: dict, user_id: str, workspace_id: str = ""
+    ) -> dict:
+        """Registry-driven dispatch: one lookup, one match on backend.
+
+        Replaces the 6-step cascade when JARVIS_USE_UNIFIED_DISPATCH is enabled.
+        """
+        from src.services.tool_registry import ToolRegistry
+
+        async with self._db_factory() as db:
+            registry = ToolRegistry(db)
+            tool = await registry.get_tool(tool_name)
+
+        if not tool:
+            return {"error": f"Unknown tool: {tool_name}"}
+        if not tool.enabled:
+            return {"error": f"Tool '{tool_name}' is disabled", "blocked": True}
+
+        # _special server returns input as-is (report_governor_verdict)
+        if tool.backend == "internal_mcp" and tool.server == "_special":
+            return tool_input
+
+        # Inject workspace_id so tools always have it
+        if workspace_id and "workspace_id" not in tool_input:
+            tool_input = {**tool_input, "workspace_id": workspace_id}
+
+        await self._publish_event("tool.started", user_id, {"tool": tool_name})
+
+        try:
+            match tool.backend:
+                case "internal_mcp":
+                    result = await self._call_internal_tool(
+                        tool_name,
+                        {**tool_input, "user_id": user_id},
+                        server_prefix=tool.server,
+                    )
+                case "external_mcp":
+                    from src.connectors.mcp_bridge import call_mcp_tool
+
+                    result = await call_mcp_tool(
+                        tool_name,
+                        tool_input,
+                        user_id=user_id,
+                        workspace_id=workspace_id,
+                    )
+                case "composite":
+                    result = await self._call_composite_tool(
+                        tool_name,
+                        tool_input,
+                        user_id=user_id,
+                        workspace_id=workspace_id,
+                    )
+                case _:
+                    result = {"error": f"Unknown backend '{tool.backend}' for tool '{tool_name}'"}
+
+            await self._publish_event("tool.completed", user_id, {"tool": tool_name})
+            return result
+        except Exception as e:
+            logger.warning("Tool %s failed: %s", tool_name, e)
+            await self._publish_event(
+                "tool.failed",
+                user_id,
+                {"tool": tool_name, "error": str(e)[:200]},
+            )
+            return {"error": f"Tool execution failed for {tool_name}: {e}"}
 
     async def _execute_plan_via_graph(self, plan_id: str, user_id: str, trace=None) -> dict:
         """Bridge: create a run from a plan and execute it via GraphExecutor.
