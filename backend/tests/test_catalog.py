@@ -3,10 +3,13 @@
 from pydantic import BaseModel
 
 from src.tools.catalog import (
+    EXTERNAL_TOOL_SEEDS,
     INTERNAL_TOOLS,
     get_internal_tool_by_name,
     get_internal_tool_names,
     get_internal_tools_for_server,
+    get_seeds_for_server,
+    get_verified_seeds,
 )
 
 
@@ -165,3 +168,147 @@ def test_special_tool_properties():
     assert tool.capability == "internal.evaluate_policy"
     assert tool.risk_level == "low"
     assert not tool.requires_approval
+
+
+# ── External Tool Seed Tests ───────────────────────────────────────
+
+
+def test_external_tool_seeds_count():
+    """Verify exactly 137 external tool seeds are registered."""
+    assert len(EXTERNAL_TOOL_SEEDS) == 137
+
+
+def test_verified_seeds_count():
+    """Verify exactly 82 seeds are verified."""
+    verified = get_verified_seeds()
+    assert len(verified) == 82
+
+
+def test_no_duplicate_external_names_per_server():
+    """Verify no duplicate tool names within same server."""
+    servers = set(seed.server for seed in EXTERNAL_TOOL_SEEDS)
+    for server in servers:
+        seeds = get_seeds_for_server(server)
+        names = [seed.name for seed in seeds]
+        assert len(names) == len(set(names)), f"Duplicate names in {server}: {names}"
+
+
+def test_all_seeds_have_capabilities():
+    """Verify every seed has a non-empty capability."""
+    for seed in EXTERNAL_TOOL_SEEDS:
+        assert seed.capability, f"{seed.name} has empty capability"
+        assert "." in seed.capability, f"{seed.name} capability should contain '.'"
+
+
+def test_notion_seeds_api_prefix():
+    """Verify Notion seeds all start with API- prefix."""
+    notion_seeds = get_seeds_for_server("notion")
+    assert len(notion_seeds) == 22
+    for seed in notion_seeds:
+        assert seed.name.startswith("API-"), f"Notion tool {seed.name} should start with 'API-'"
+
+
+def test_linear_seeds_prefix():
+    """Verify Linear seeds all start with linear_ prefix."""
+    linear_seeds = get_seeds_for_server("linear")
+    assert len(linear_seeds) == 24
+    for seed in linear_seeds:
+        assert seed.name.startswith("linear_"), (
+            f"Linear tool {seed.name} should start with 'linear_'"
+        )
+
+
+def test_seeds_for_server_counts():
+    """Verify per-server tool counts match expected."""
+    expected_counts = {
+        "google-workspace": 11,
+        "github": 22,
+        "slack": 8,
+        "notion": 22,
+        "linear": 24,
+        "playwright": 22,
+        "filesystem": 14,
+        "atlassian": 13,
+        "_composite": 1,
+    }
+    for server, expected_count in expected_counts.items():
+        actual_count = len(get_seeds_for_server(server))
+        assert actual_count == expected_count, (
+            f"Server {server}: expected {expected_count}, got {actual_count}"
+        )
+
+
+def test_get_seeds_for_server_helper():
+    """Verify get_seeds_for_server returns correct tools."""
+    slack_seeds = get_seeds_for_server("slack")
+    assert len(slack_seeds) == 8
+    names = {seed.name for seed in slack_seeds}
+    assert "slack_post_message" in names
+    assert "slack_list_channels" in names
+
+    # Test empty result
+    empty = get_seeds_for_server("nonexistent_server")
+    assert empty == []
+
+
+def test_get_verified_seeds_helper():
+    """Verify get_verified_seeds only returns verified=True entries."""
+    verified = get_verified_seeds()
+    assert len(verified) == 82
+
+    # All returned seeds should be verified
+    for seed in verified:
+        assert seed.verified is True
+
+    # Verify expected servers are present in verified seeds
+    verified_servers = {seed.server for seed in verified}
+    expected_verified = {"notion", "linear", "playwright", "filesystem"}
+    assert expected_verified.issubset(verified_servers)
+
+    # Verify unverified servers are NOT in verified seeds
+    unverified_servers = {"google-workspace", "github", "slack", "atlassian", "_composite"}
+    assert verified_servers.isdisjoint(unverified_servers)
+
+
+def test_seed_server_names_match_installations():
+    """Verify server names match seed_installations.py conventions."""
+    # These are the exact server names used in seed_installations.py
+    expected_servers = {
+        "google-workspace",
+        "github",
+        "slack",
+        "notion",
+        "linear",
+        "playwright",
+        "filesystem",
+        "atlassian",
+        "_composite",  # special case for composite tools
+    }
+    actual_servers = {seed.server for seed in EXTERNAL_TOOL_SEEDS}
+    assert actual_servers == expected_servers
+
+
+def test_high_risk_tools_require_approval():
+    """Verify high and critical risk tools require approval."""
+    for seed in EXTERNAL_TOOL_SEEDS:
+        if seed.risk_level in ("high", "critical"):
+            assert seed.requires_approval, (
+                f"{seed.name} has {seed.risk_level} risk but doesn't require approval"
+            )
+
+
+def test_verified_tool_servers():
+    """Verify exactly 4 servers have verified tools."""
+    verified = get_verified_seeds()
+    verified_servers = {seed.server for seed in verified}
+    assert verified_servers == {"notion", "linear", "playwright", "filesystem"}
+
+
+def test_composite_tools():
+    """Verify _composite server has correct structure."""
+    composite = get_seeds_for_server("_composite")
+    assert len(composite) == 1
+    assert composite[0].name == "web_search"
+    assert composite[0].capability == "search.web"
+    assert composite[0].risk_level == "low"
+    assert composite[0].requires_approval is False
