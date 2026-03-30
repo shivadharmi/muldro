@@ -17,18 +17,13 @@ async def _poll_calendar_via_mcp(ctx: WorkflowContext) -> dict | None:
     """Try listing upcoming calendar events via Google Workspace MCP server."""
     from src.connectors.mcp_bridge import call_mcp_tool, is_mcp_tool
 
-    for tool_name in (
-        "google_workspace_calendar_list_events",
-        "google-workspace_calendar_list_events",
-        "calendar_list_events",
-    ):
-        if is_mcp_tool(tool_name):
-            return await call_mcp_tool(
-                tool_name,
-                {"time_min": "now", "max_results": 5},
-                user_id=ctx.user_id,
-                workspace_id=ctx.workspace_id,
-            )
+    if is_mcp_tool("get_events"):
+        return await call_mcp_tool(
+            "get_events",
+            {"time_min": "now", "max_results": 5},
+            user_id=ctx.user_id,
+            workspace_id=ctx.workspace_id,
+        )
     return None
 
 
