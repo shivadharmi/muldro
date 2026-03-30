@@ -118,16 +118,16 @@ jarvis/
 │   ├── src/
 │   │   ├── api/            # 30 REST/SSE routers (/v1/ prefix, ~128 endpoints)
 │   │   ├── config/         # Settings (pydantic-settings, JARVIS_ env prefix)
-│   │   ├── connectors/     # Gmail, MCP bridge, 15 integration types
+│   │   ├── connectors/     # MCP bridge, perception connectors
 │   │   ├── interface/      # Telegram bot
-│   │   ├── models/         # 53 SQLAlchemy tables (all workspace-scoped)
+│   │   ├── models/         # 51 SQLAlchemy tables (all workspace-scoped)
 │   │   ├── orchestrator/   # JarvisOrchestrator, agents, hooks, tracing, budget, contracts
 │   │   ├── services/       # Business logic (planner, governor, operator, tri_search, etc.)
-│   │   ├── tools/          # FastMCP intelligence server + MCP config
+│   │   ├── tools/          # Tool catalog, schemas, validation, FastMCP servers
 │   │   ├── ui/             # A2UI renderer + contracts
 │   │   └── workflows/      # inbox_triage, meeting_prep, research
-│   ├── tests/              # ~1196 tests (pytest + pytest-asyncio)
-│   └── alembic/            # 48 database migrations
+│   ├── tests/              # ~1131 tests (pytest + pytest-asyncio)
+│   └── alembic/            # 51 database migrations
 ├── frontend/               # Next.js + A2UI renderer + chat panel (7 pages)
 ├── infra/                  # Terraform (AWS: EC2, VPC, Route53, IAM, SSM)
 ├── docs/architecture/      # Detailed architecture documentation
@@ -154,7 +154,7 @@ jarvis/
 
 ## Key Features
 
-- **Multi-tenant workspace isolation**: All 53 data tables scoped by `workspace_id` with CASCADE deletes
+- **Multi-tenant workspace isolation**: All 51 data tables scoped by `workspace_id` with CASCADE deletes
 - **Real-time streaming**: Claude API streaming with extended thinking (Opus) + SSE to frontend
 - **Full cost tracking**: Cache tokens (1.25x write, 0.1x read), thinking tokens, per-agent cost breakdown
 - **Graduated trust**: TrustEngine scores + time-based policy overrides for autonomous operation
@@ -167,4 +167,4 @@ jarvis/
 
 ## Status
 
-~1196 tests passing, 48 migrations, 53 tables, ~128 API endpoints, all lint clean.
+~1131 tests passing, 51 migrations, 51 tables, ~128 API endpoints, all lint clean. Unified tool registry with 163 cataloged tools (100 live-verified).

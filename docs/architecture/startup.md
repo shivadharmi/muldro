@@ -38,15 +38,19 @@ sequenceDiagram
     APP->>APP: Initialize SurfaceRegistry
 
     Note over APP,DB: Seed Configuration
-    APP->>DB: ToolRegistry.seed_defaults() (tool definitions)
+    APP->>DB: ToolRegistry.seed_defaults() (163 tools from catalog.py)
     APP->>DB: AgentRegistry.seed_defaults() (8 agents)
     APP->>DB: RouteResolver.seed_defaults() (16 routes)
-    APP->>DB: ScheduleSeeder.seed_default_schedules() (7 schedules)
+
+    Note over APP,DB: Validate Registry
+    APP->>APP: validate_registry() (6 cross-checks)
+    Note over APP: Capabilities known, scopes valid, schemas present
 
     Note over APP,MCP: Connect External Tools
     APP->>MCP: initialize_mcp_bridge()
-    MCP->>MCP: Connect to Google/GitHub/Slack/Playwright/FS
+    MCP->>MCP: Connect to configured MCP servers
     MCP->>MCP: list_tools() on each server
+    MCP->>DB: Register discovered unknown tools (capability=None)
     MCP-->>APP: Tools discovered
 
     Note over APP,REC: Recover In-Flight State

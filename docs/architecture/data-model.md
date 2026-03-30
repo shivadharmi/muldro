@@ -275,7 +275,7 @@ Data is distributed across 5 infrastructure services. Postgres is always the sou
 ```mermaid
 graph LR
     subgraph "Source of Truth"
-        PG[(Postgres 17<br/>53 tables, tsvector FTS)]
+        PG[(Postgres 17<br/>51 tables, tsvector FTS)]
     end
 
     subgraph "Vector Search"
@@ -366,7 +366,7 @@ graph LR
 
 ## Migrations
 
-The project uses Alembic for database migrations. As of the current state, there are 48 migrations covering all schema changes from initial setup through the complete system redesign, including FTS tsvector columns (045) and pgvector column removal (046).
+The project uses Alembic for database migrations. As of the current state, there are 51 migrations covering all schema changes from initial setup through the unified tool registry (050-051).
 
 ```bash
 # From backend/

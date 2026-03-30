@@ -159,7 +159,7 @@
 
 ## 13. Full Workspace Isolation
 
-**Decision:** All 53 data tables are scoped by `workspace_id` (NOT NULL FK). Two resolution paths: API (session-based, zero queries) vs background (DB lookup via WorkspaceMember). Enables future multi-workspace support.
+**Decision:** All 51 data tables are scoped by `workspace_id` (NOT NULL FK). Two resolution paths: API (session-based, zero queries) vs background (DB lookup via WorkspaceMember). Enables future multi-workspace support.
 
 **Rationale:**
 - **Security** - Data isolation is enforced at the schema level, not application logic

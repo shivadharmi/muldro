@@ -184,7 +184,7 @@ Every external write requires approval in v1. An audit log with correlation IDs 
 
 ## Multi-Tenant Workspace Isolation
 
-All 53 data tables have a `workspace_id` column (`String(64)`, NOT NULL FK to `workspaces` with CASCADE delete). This enforces strict multi-tenant isolation at the database level.
+All 51 data tables have a `workspace_id` column (`String(64)`, NOT NULL FK to `workspaces` with CASCADE delete). This enforces strict multi-tenant isolation at the database level.
 
 - **API routes** resolve the workspace via the `get_current_workspace_id()` dependency.
 - **Background services** resolve the workspace via `resolve_workspace_id(db, user_id)`.
