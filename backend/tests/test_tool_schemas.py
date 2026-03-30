@@ -10,10 +10,13 @@ class TestToolInputModels:
         present = orphans & set(TOOL_INPUT_MODELS.keys())
         assert present == set(), f"Orphan tools still in TOOL_INPUT_MODELS: {present}"
 
-    def test_tool_count_is_16(self):
-        """After removing 3 orphans and adding get_goal_memories, exactly 16 tools should remain."""
-        assert len(TOOL_INPUT_MODELS) == 16, (
-            f"Expected 16 tools, got {len(TOOL_INPUT_MODELS)}: {sorted(TOOL_INPUT_MODELS.keys())}"
+    def test_tool_count_is_19(self):
+        """After removing 3 orphans, adding get_goal_memories, and adding 3 communication tools.
+
+        Exactly 19 tools should remain.
+        """
+        assert len(TOOL_INPUT_MODELS) == 19, (
+            f"Expected 19 tools, got {len(TOOL_INPUT_MODELS)}: {sorted(TOOL_INPUT_MODELS.keys())}"
         )
 
     def test_all_models_have_docstrings(self):
@@ -38,7 +41,7 @@ class TestToolInputModels:
             )
 
     def test_expected_tools_present(self):
-        """Verify the 16 expected internal tools are all present."""
+        """Verify the 19 expected internal tools are all present."""
         expected = {
             "ingest_event",
             "search",
@@ -56,6 +59,9 @@ class TestToolInputModels:
             "verify_run",
             "report_governor_verdict",
             "get_goal_memories",
+            "send_telegram",
+            "send_approval_prompt",
+            "push_ui_update",
         }
         actual = set(TOOL_INPUT_MODELS.keys())
         missing = expected - actual

@@ -152,6 +152,40 @@ class ReportGovernorVerdictInput(BaseModel):
     conditions: list[str] = Field(default_factory=list, description="Conditions for approval")
 
 
+class SendTelegramInput(BaseModel):
+    """Send a message to the user via Telegram.
+
+    Supports Markdown formatting and optional inline keyboard buttons.
+    """
+
+    text: str = Field(description="Message text (supports Markdown)")
+    parse_mode: str = Field(default="Markdown", description="Format: Markdown or HTML")
+    reply_markup: str = Field(
+        default="", description="JSON string of inline keyboard markup (optional)"
+    )
+
+
+class SendApprovalPromptInput(BaseModel):
+    """Send an approval request with interactive Approve/Reject buttons via Telegram."""
+
+    approval_id: str = Field(description="ID of the pending approval")
+    title: str = Field(description="Approval request title")
+    summary: str = Field(description="Summary of what needs approval")
+    risk_level: str = Field(default="medium", description="Risk level: low, medium, high, critical")
+
+
+class PushUiUpdateInput(BaseModel):
+    """Push a dynamic UI update to the web frontend via Redis pub/sub.
+
+    Delivers A2UI surface payloads to connected browser sessions.
+    """
+
+    surface_id: str = Field(
+        description="UI surface identifier (e.g., 'daily_brief', 'approval_detail')"
+    )
+    payload: str = Field(description="JSON string of the A2UI surface payload")
+
+
 # ── Registry ───────────────────────────────────────────────────────
 
 TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
@@ -171,6 +205,9 @@ TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
     "build_context": BuildContextInput,
     "verify_run": VerifyRunInput,
     "report_governor_verdict": ReportGovernorVerdictInput,
+    "send_telegram": SendTelegramInput,
+    "send_approval_prompt": SendApprovalPromptInput,
+    "push_ui_update": PushUiUpdateInput,
 }
 
 

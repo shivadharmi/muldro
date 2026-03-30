@@ -78,6 +78,15 @@ BEDROCK_MODEL_TIERS = {
 # Agents that benefit from context enrichment (read-heavy agents)
 CONTEXT_ENRICHED_AGENTS = {"planner", "presenter", "researcher", "librarian"}
 
+# Server prefix mapping for internal tools — default is "intelligence".
+# Communication tools live on the "communication" MCP server.
+# Stopgap: Phase 11 replaces this with registry lookup.
+_INTERNAL_TOOL_SERVER: dict[str, str] = {
+    "send_telegram": "communication",
+    "send_approval_prompt": "communication",
+    "push_ui_update": "communication",
+}
+
 # Intent classification constants imported from intent_classifier module
 
 
@@ -2529,6 +2538,10 @@ class JarvisOrchestrator:
             "extract_preferences",
             "build_context",
             "verify_run",
+            "report_governor_verdict",
+            "send_telegram",
+            "send_approval_prompt",
+            "push_ui_update",
         }
 
         # Inject workspace_id so tools always have it, even if the model omitted it
@@ -2630,9 +2643,11 @@ class JarvisOrchestrator:
     async def _call_internal_tool(self, tool_name: str, tool_input: dict) -> dict:
         """Call an internal tool via in-process FastMCP Client (MCP protocol).
 
-        The composed server mounts intelligence tools under "intelligence_" namespace.
-        We map flat tool names (e.g. "search") to namespaced names
-        (e.g. "intelligence_search").
+        The composed server mounts tools under namespaced prefixes:
+        - intelligence tools: "intelligence_" prefix
+        - communication tools: "communication_" prefix
+        We map flat tool names (e.g. "search", "send_telegram") to namespaced names
+        (e.g. "intelligence_search", "communication_send_telegram").
         """
         import json
 
@@ -2645,8 +2660,9 @@ class JarvisOrchestrator:
             self._internal_client_ctx = Client(jarvis_tools)
             self._internal_client = await self._internal_client_ctx.__aenter__()
 
-        # Map flat name to namespaced name (intelligence_ prefix)
-        namespaced = f"intelligence_{tool_name}"
+        # Map flat name to namespaced name (server-specific prefix)
+        prefix = _INTERNAL_TOOL_SERVER.get(tool_name, "intelligence")
+        namespaced = f"{prefix}_{tool_name}"
         result = await self._internal_client.call_tool(namespaced, tool_input)
 
         # Extract result from CallToolResult
