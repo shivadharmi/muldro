@@ -35,8 +35,9 @@ graph TB
     end
 
     subgraph TOOLS["Tool Layer"]
-        INT[Internal FastMCP<br/>19 intelligence tools]
-        MCP[MCP Bridge<br/>Google · GitHub · Slack<br/>Playwright · Filesystem]
+        CAT[Tool Catalog<br/>163 tools · catalog.py]
+        INT[Internal FastMCP<br/>19 tools · 2 servers]
+        MCP[MCP Bridge<br/>Google · GitHub · Slack<br/>Notion · Linear · Playwright · Filesystem]
     end
 
     subgraph SVC["Services"]

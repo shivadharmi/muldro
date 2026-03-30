@@ -217,7 +217,7 @@ This avoids startup overhead when only serving health checks or API endpoints th
 | **Qdrant** | 1.12 | No | Postgres FTS only; no semantic vector search |
 | **Neo4j** | 5 Community | No | No graph traversal; Postgres entity tables still provide flat queries |
 | **MinIO / S3** | - | No | No artifact file storage (metadata still tracked in Postgres) |
-| **MCP servers** | - | No | Tools unavailable; connector fallback used |
+| **MCP servers** | - | No | External tools unavailable; internal tools still work |
 | **Telegram** | - | No | Web-only operation |
 
 *Redis is technically optional but strongly recommended. Without it, event streaming, distributed locking, task queuing, and real-time features are degraded or disabled.

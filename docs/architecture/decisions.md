@@ -74,17 +74,18 @@
 
 **Trade-off:** Slightly lower embedding quality than some specialized providers. Acceptable because embeddings are used for similarity search (dedup, retrieval ranking), not as primary classification.
 
-## 6. 3-Tier Tool Dispatch
+## 6. Unified Registry Dispatch
 
-**Decision:** Resolve tools through three tiers: internal handlers -> MCP bridge -> ToolRegistry/connector fallback.
+**Decision:** All tools served through MCP. One registry lookup dispatches to `internal_mcp`, `external_mcp`, or `composite` backend. Tool identity in 2 files (`catalog.py` + `intelligence_server.py`). Real MCP names used everywhere — no normalization.
 
 **Rationale:**
-- **Graceful degradation** - If MCP servers are down, connectors still work
-- **MCP-first** - Modern protocol with automatic tool discovery
-- **Internal isolation** - Intelligence tools don't depend on MCP infrastructure
-- **Extensibility** - New MCP servers auto-discovered, new connectors plug into Tier 3
+- **Single source of truth** - Adding a tool: 1-2 files, not 8
+- **No name normalization** - Real MCP names flow end-to-end (eliminates collision bugs like `search` vs Notion's `search`)
+- **Auto-discovery** - Unknown MCP tools registered on connect with safe defaults (`capability=None` → invisible)
+- **Startup validation** - 6 cross-checks catch inconsistencies before runtime
+- **Capability-based auth** - Agents have capability scopes, not tool lists. Adding a tool with `email.send` capability automatically grants it to all agents with `email.send` in scope.
 
-**Trade-off:** Resolution logic is more complex. Mitigated by clear tier ordering and circuit breakers per MCP server.
+**Trade-off:** DB lookup per dispatch (mitigated by ToolRegistry cache). No offline fallback if DB is down (acceptable — Postgres is a hard dependency anyway).
 
 ## 7. Budget Degradation (Not Hard-Stop)
 

@@ -41,9 +41,9 @@ graph TB
     end
 
     subgraph "Tool Layer"
-        INT[Internal FastMCP<br/>Intelligence Server]
+        CAT[Tool Catalog<br/>163 tools, 2 files]
+        INT[Internal FastMCP<br/>Intelligence + Communication]
         MCP[MCP Bridge<br/>External Servers]
-        CON[Connector Fallback]
     end
 
     subgraph "Services"
@@ -74,7 +74,7 @@ graph TB
     OBS & LIB & PLN & GOV & OPR & PRS & RES & PER --> INT
     OBS & LIB & PLN & GOV & OPR & PRS & RES & PER --> MCP
     INT --> EP & WM & MS & PL & GV & GE & NT
-    MCP --> CON
+    ORCH --> CAT
     EP & WM & MS & PL & GV & GE & NT & IS & RR --> PG
     EP & NT & IS --> RD
     WM --> N4J

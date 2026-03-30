@@ -159,27 +159,26 @@ All execution boundaries use typed contracts from `src/orchestrator/contracts.py
 
 These contracts ensure structured data flows between GraphExecutor, tool dispatch, and memory writeback.
 
-## 3-Tier Tool Dispatch
+## Unified Registry Dispatch
 
-When a step requires tool execution:
+When a step requires tool execution, one registry lookup determines the dispatch path:
 
 ```
 Step action request
     │
-    ├── Tier 1: Internal Intelligence Handlers (FastMCP)
-    │   Tools: ingest_event, search, plan_command,
-    │          build_context, verify_run, etc.
-    │
-    ├── Tier 2: MCP Bridge (External MCP Servers)
-    │   Servers: Google Workspace, GitHub, Slack, Playwright, Filesystem
-    │   Discovered dynamically via tool listing
-    │
-    └── Tier 3: ToolRegistry / Connector Fallback
-        DB-backed tool definitions with connector dispatch
-        Maps tool_name -> connector_type -> execute_action()
+    └── ToolRegistry.get_tool(name) → match backend:
+        │
+        ├── internal_mcp → In-process FastMCP (intelligence + communication servers)
+        │   19 tools: search, ingest_event, send_telegram, etc.
+        │
+        ├── external_mcp → MCP Bridge (external servers)
+        │   Google Workspace, GitHub, Slack, Notion, Linear,
+        │   Playwright, Filesystem — real MCP names, no normalization
+        │
+        └── composite → Multi-MCP orchestration (e.g., web_search)
 ```
 
-If a tier doesn't handle the tool, it falls through to the next tier.
+Tool identity is defined in `catalog.py` (163 seeds). Unknown MCP tools auto-register on discovery.
 
 ## Checkpoints
 
