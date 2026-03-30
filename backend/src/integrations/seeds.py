@@ -1,10 +1,7 @@
-"""Seed default trust records and capability bindings for a workspace."""
+"""Seed default trust records for a workspace."""
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.integrations.capabilities import (
-    CapabilityFamily,
-)
 from src.models.ids import generate_id
 from src.models.server_trust import ServerTrustRecord
 
@@ -126,90 +123,3 @@ async def seed_trust_records(db: AsyncSession, workspace_id: str) -> list[Server
     if changed:
         await db.flush()
     return changed
-
-
-def _infer_connector(tool_name: str, family: CapabilityFamily) -> str:
-    """Infer connector type from tool name prefix or family."""
-    prefixes = {
-        "gmail_": "gmail",
-        "sendGmail": "gmail",
-        "createGmail": "gmail",
-        "listGmail": "gmail",
-        "readGmail": "gmail",
-        "searchGmail": "gmail",
-        "deleteGmail": "gmail",
-        "calendar_": "calendar",
-        "createCalendar": "calendar",
-        "updateCalendar": "calendar",
-        "deleteCalendar": "calendar",
-        "listCalendar": "calendar",
-        "getCalendar": "calendar",
-        "github_": "github",
-        "slack_": "slack",
-        "linear_": "linear",
-        "notion_": "notion",
-        "jira_": "jira",
-        "browser_": "browser",
-        "drive_": "drive",
-        "whatsapp_": "whatsapp",
-        "sms_": "sms",
-        "linkedin_": "linkedin",
-        "twitter_": "twitter",
-        "perplexity_": "browser",
-    }
-    for prefix, connector in prefixes.items():
-        if tool_name.startswith(prefix):
-            return connector
-
-    # Jira MCP tools (camelCase)
-    if "Jira" in tool_name:
-        return "jira"
-
-    # GitHub MCP tools (no prefix)
-    github_tools = {
-        "issue_write",
-        "issue_read",
-        "add_issue_comment",
-        "create_pull_request",
-        "merge_pull_request",
-        "update_pull_request",
-        "pull_request_read",
-        "pull_request_review_write",
-        "sub_issue_write",
-        "list_issues",
-        "search_issues",
-        "search_code",
-        "search_repositories",
-        "search_users",
-        "search_orgs",
-        "get_diff",
-        "get_reviews",
-        "get_check_runs",
-        "get_files",
-        "list_pull_requests",
-        "search_pull_requests",
-        "get_sub_issues",
-    }
-    if tool_name in github_tools:
-        return "github"
-
-    # Notion MCP (kebab-case)
-    notion_tools = {
-        "create-a-page",
-        "update-a-page",
-        "retrieve-a-page",
-        "search",
-        "query-data-source",
-        "create-a-comment",
-        "append-block-children",
-    }
-    if tool_name in notion_tools:
-        return "notion"
-
-    # Family-based fallback
-    family_to_connector: dict[CapabilityFamily, str] = {
-        CapabilityFamily.INTERNAL: "internal",
-        CapabilityFamily.BROWSER: "browser",
-        CapabilityFamily.SEARCH: "browser",
-    }
-    return family_to_connector.get(family, "internal")
