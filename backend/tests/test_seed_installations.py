@@ -8,10 +8,18 @@ class TestSeedInstallations:
         return next(s for s in _DEFAULT_INSTALLATIONS if s["server_name"] == server_name)
 
     def test_google_workspace_executable(self):
-        """Google Workspace seed must use google-workspace-worker, not google-workspace-mcp."""
+        """Google Workspace seed must use workspace-mcp with correct tool tier."""
         seed = self._get_seed("google-workspace")
-        assert seed["args"] == ["google-workspace-worker"], (
-            f"Wrong executable: {seed['args']} — should be ['google-workspace-worker']"
+        expected = [
+            "workspace-mcp",
+            "--tool-tier",
+            "complete",
+            "--tools",
+            "gmail",
+            "calendar",
+        ]
+        assert seed["args"] == expected, (
+            f"Wrong executable: {seed['args']} — expected workspace-mcp with complete tier"
         )
 
     def test_slack_env_vars(self):

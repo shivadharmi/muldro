@@ -33,7 +33,7 @@ class TestCapabilityResolverStatic:
     def test_resolve_tool_to_capability(self):
         # Test without DB — just the static mapping
         assert "email.send" == TOOL_TO_CAPABILITY.get("gmail_send")
-        assert "email.list" == TOOL_TO_CAPABILITY.get("listGmailMessages")
+        assert "email.list" == TOOL_TO_CAPABILITY.get("list_gmail_labels")
         assert "messaging.send" == TOOL_TO_CAPABILITY.get("slack_send_message")
         assert "issue.create" == TOOL_TO_CAPABILITY.get("github_create_issue")
 

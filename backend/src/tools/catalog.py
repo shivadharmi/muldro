@@ -321,18 +321,28 @@ def _ext(
 # itself low-risk. Tool-granularity risk is more accurate than capability-granularity.
 EXTERNAL_TOOL_SEEDS: list[ExternalToolSeed] = [
     # _ext(name, capability, server, risk, approval, verified)
-    # google-workspace (11 tools, verified=False)
-    _ext("sendGmailDraft", "email.send", "google-workspace", "high", True, False),
-    _ext("createGmailDraft", "email.draft", "google-workspace", "medium", True, False),
-    _ext("listGmailMessages", "email.list", "google-workspace", "low", False, False),
-    _ext("readGmailMessage", "email.read", "google-workspace", "low", False, False),
-    _ext("searchGmail", "email.search", "google-workspace", "low", False, False),
-    _ext("deleteGmailMessage", "email.delete", "google-workspace", "critical", True, False),
-    _ext("createCalendarEvent", "calendar.create", "google-workspace", "medium", True, False),
-    _ext("updateCalendarEvent", "calendar.update", "google-workspace", "medium", True, False),
-    _ext("deleteCalendarEvent", "calendar.delete", "google-workspace", "critical", True, False),
-    _ext("listCalendarEvents", "calendar.list", "google-workspace", "low", False, False),
-    _ext("getCalendarEvent", "calendar.get", "google-workspace", "low", False, False),
+    # google-workspace (18 tools, verified=True)
+    # Complete tier, gmail + calendar. Real names confirmed via list_tools() 2026-03-30.
+    _ext("search_gmail_messages", "email.search", "google-workspace", "low", False, True),
+    _ext("get_gmail_message_content", "email.read", "google-workspace", "low", False, True),
+    _ext("get_gmail_messages_content_batch", "email.read", "google-workspace", "low", False, True),
+    _ext("send_gmail_message", "email.send", "google-workspace", "high", True, True),
+    _ext("draft_gmail_message", "email.draft", "google-workspace", "medium", True, True),
+    _ext("modify_gmail_message_labels", "email.send", "google-workspace", "medium", True, True),
+    _ext(
+        "batch_modify_gmail_message_labels", "email.send", "google-workspace", "medium", True, True
+    ),
+    _ext("get_gmail_thread_content", "email.read", "google-workspace", "low", False, True),
+    _ext("get_gmail_threads_content_batch", "email.read", "google-workspace", "low", False, True),
+    _ext("get_gmail_attachment_content", "email.read", "google-workspace", "low", False, True),
+    _ext("list_gmail_labels", "email.list", "google-workspace", "low", False, True),
+    _ext("list_gmail_filters", "email.list", "google-workspace", "low", False, True),
+    _ext("manage_gmail_filter", "email.send", "google-workspace", "medium", True, True),
+    _ext("manage_gmail_label", "email.send", "google-workspace", "medium", True, True),
+    _ext("get_events", "calendar.list", "google-workspace", "low", False, True),
+    _ext("list_calendars", "calendar.list", "google-workspace", "low", False, True),
+    _ext("manage_event", "calendar.create", "google-workspace", "medium", True, True),
+    _ext("query_freebusy", "calendar.get", "google-workspace", "low", False, True),
     # github (22 tools, verified=False)
     _ext("issue_write", "issue.create", "github", "medium", True, False),
     _ext("issue_read", "issue.get", "github", "low", False, False),

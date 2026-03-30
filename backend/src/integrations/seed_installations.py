@@ -22,10 +22,10 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
         "display_name": "Google Workspace",
         "transport": "stdio",
         "command": "uvx",
-        "args": ["google-workspace-worker"],
+        "args": ["workspace-mcp", "--tool-tier", "complete", "--tools", "gmail", "calendar"],
         "env_template": {
-            "GOOGLE_OAUTH_CREDENTIALS_PATH": "Path to OAuth credentials JSON",
-            "GOOGLE_OAUTH_TOKEN_PATH": "Path to OAuth token JSON",
+            "GOOGLE_OAUTH_CLIENT_ID": "Google OAuth client ID",
+            "GOOGLE_OAUTH_CLIENT_SECRET": "Google OAuth client secret",
         },
         "auth_provider": "oauth",
         "scopes_granted": [
