@@ -160,6 +160,9 @@ class Settings(BaseSettings):
     neo4j_user: str = "neo4j"
     neo4j_password: str = ""
 
+    # Registry validation
+    skip_registry_validation: bool = False  # JARVIS_SKIP_REGISTRY_VALIDATION
+
     @property
     def resolved_model(self) -> str:
         """Return the model ID appropriate for the configured backend (direct API or Bedrock)."""

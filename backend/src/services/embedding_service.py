@@ -32,6 +32,8 @@ class EmbeddingService:
 
     async def embed_text(self, text: str) -> list[float] | None:
         """Generate an embedding vector for a single text string."""
+        if not text or not text.strip():
+            return None
         results = await self._embed_batch([text])
         if results is None:
             return None

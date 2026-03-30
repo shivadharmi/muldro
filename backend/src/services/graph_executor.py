@@ -99,7 +99,7 @@ async def create_graph_executor(
     try:
         from src.services.verifier import Verifier
 
-        verifier = Verifier(db, settings)
+        verifier = Verifier(settings, db)
     except Exception:
         logger.debug("Verifier unavailable for GraphExecutor", exc_info=True)
 
@@ -230,6 +230,10 @@ class GraphExecutor:
                     if dep_task_id in task_id_to_step_id:
                         depends_on_step_ids.append(task_id_to_step_id[dep_task_id])
 
+            step_input = dict(task.input_data) if task.input_data else {}
+            if task.task_type and "task_type" not in step_input:
+                step_input["task_type"] = task.task_type
+
             step = TaskStep(
                 step_id=step_id,
                 run_id=run.run_id,
@@ -238,7 +242,7 @@ class GraphExecutor:
                 plan_task_id=task.task_id,
                 depends_on=depends_on_step_ids or None,
                 status="pending",
-                input_data=task.input_data,
+                input_data=step_input or None,
             )
             self._db.add(step)
 
@@ -461,16 +465,17 @@ class GraphExecutor:
                 # Must be waiting for approval or external event
                 break
 
-            # Execute ready steps (parallel if multiple)
+            # Execute ready steps sequentially (shared AsyncSession is not
+            # safe for concurrent coroutines — parallel gather caused silent
+            # step failures and permanently stuck runs).
             run.current_step_ids = [s.step_id for s in ready_steps]
             await self._db.flush()
 
-            if len(ready_steps) == 1:
-                await self._execute_step(run, ready_steps[0])
-            else:
-                # Run independent steps concurrently
-                tasks = [self._execute_step(run, step) for step in ready_steps]
-                await asyncio.gather(*tasks, return_exceptions=True)
+            for step in ready_steps:
+                try:
+                    await self._execute_step(run, step)
+                except Exception:
+                    logger.error("Step %s raised unexpectedly", step.step_id, exc_info=True)
 
             # Check if run was paused by an approval gate
             await self._db.refresh(run)
@@ -609,6 +614,7 @@ class GraphExecutor:
             transition_step(step, "completed")
             step.output_data = output
             step.completed_at = datetime.now(timezone.utc)
+            await self._db.flush()
 
             result = StepResult(
                 step_id=step.step_id,
@@ -755,15 +761,10 @@ class GraphExecutor:
         if task_type == "summarize":
             return await self._summarize_action(input_data, context_prompt)
 
-        # 5. Generic Claude handler — any task with a goal/context gets
-        #    routed to Claude for intelligent handling
-        goal = input_data.get("goal", input_data.get("context", ""))
-        if goal:
-            return await self._generic_claude_action(task_type, input_data, context_prompt)
-
-        # 6. Stub — log so we know what's unhandled
-        logger.info("Step %s: no handler for task_type '%s', stub", step.step_id, task_type)
-        return {"status": "completed", "note": f"Task type '{task_type}' executed"}
+        # 5. Generic Claude handler — catch-all for any unrecognized
+        #    task_type. Claude interprets the task semantically using the
+        #    enriched context prompt from ContextBuilder.
+        return await self._generic_claude_action(task_type, input_data, context_prompt)
 
     async def _build_step_context(self, run: TaskRun, step: TaskStep) -> str:
         """Build context prompt for a step using ContextBuilder."""
@@ -913,7 +914,9 @@ class GraphExecutor:
     ) -> dict:
         """Handle any task type by routing to Claude with structured instructions."""
         goal = input_data.get("goal", input_data.get("context", ""))
-        parts = [f"Task type: {task_type}", f"Goal: {goal}"]
+        parts = [f"Task type: {task_type}"]
+        if goal:
+            parts.append(f"Goal: {goal}")
         for key, value in input_data.items():
             if key not in ("task_type", "goal", "context"):
                 parts.append(f"{key}: {value}")
@@ -942,20 +945,27 @@ class GraphExecutor:
             return {"status": "completed", "result": text}
 
     async def _get_ready_steps(self, run_id: str) -> list[TaskStep]:
-        """Get steps whose dependencies are all completed."""
+        """Get steps whose dependencies are all completed.
+
+        Also picks up steps already in 'ready' state (e.g. from a previous
+        iteration where execution failed before the step could start).
+        """
         all_steps = await self._get_all_steps(run_id)
         completed_ids = {s.step_id for s in all_steps if s.status == "completed"}
 
         ready = []
+        needs_flush = False
         for step in all_steps:
-            if step.status not in ("pending",):
-                continue
-            deps = step.depends_on or []
-            if all(dep_id in completed_ids for dep_id in deps):
-                transition_step(step, "ready")
+            if step.status == "ready":
                 ready.append(step)
+            elif step.status == "pending":
+                deps = step.depends_on or []
+                if all(dep_id in completed_ids for dep_id in deps):
+                    transition_step(step, "ready")
+                    ready.append(step)
+                    needs_flush = True
 
-        if ready:
+        if needs_flush:
             await self._db.flush()
         return ready
 
@@ -1038,6 +1048,7 @@ class GraphExecutor:
                 user_id=run.user_id,
                 source_text="\n".join(parts),
                 source_event_ids=[run.run_id],
+                workspace_id=run.workspace_id,
             )
         except Exception:
             logger.debug("Memory writeback failed", exc_info=True)
@@ -1117,7 +1128,7 @@ class GraphExecutor:
                 channel = f"jarvis:run_progress:{run_id}"
                 await redis.publish(channel, json.dumps(data))
             finally:
-                await redis.close()
+                await redis.aclose()
         except Exception:
             logger.debug("Failed to publish run progress", exc_info=True)
 

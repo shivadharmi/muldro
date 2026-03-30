@@ -307,8 +307,14 @@ class SchedulerLoop:
                     return
 
                 for run in pending:
+                    # Capture IDs before execution — if the session enters
+                    # PendingRollbackError state, lazy attribute access fails.
+                    run_id = run.run_id
+                    plan_id = run.plan_id
+                    user_id = run.user_id
+                    ws_id = run.workspace_id or ""
+
                     try:
-                        workspace_id = run.workspace_id or ""
                         from src.services.graph_executor import (
                             create_graph_executor,
                         )
@@ -316,29 +322,30 @@ class SchedulerLoop:
                         executor = await create_graph_executor(
                             settings=self._settings,
                             db=db,
-                            workspace_id=workspace_id,
+                            workspace_id=ws_id,
                         )
 
                         # Ensure steps exist before execution (defensive)
                         step_check = await db.execute(
-                            select(TaskStep.step_id).where(TaskStep.run_id == run.run_id).limit(1)
+                            select(TaskStep.step_id).where(TaskStep.run_id == run_id).limit(1)
                         )
-                        if not step_check.scalar_one_or_none() and run.plan_id:
-                            await executor.populate_run_steps(run.run_id, run.plan_id)
+                        if not step_check.scalar_one_or_none() and plan_id:
+                            await executor.populate_run_steps(run_id, plan_id)
                             await db.flush()
 
-                        completed = await executor.execute_run(
-                            run.run_id,
-                        )
+                        completed = await executor.execute_run(run_id)
                         logger.info(
                             "Background task %s completed: %s",
-                            run.run_id,
+                            run_id,
                             completed.status,
                         )
                     except Exception as e:
+                        # Rollback poisoned session before any further DB access
+                        await db.rollback()
+
                         logger.warning(
                             "Background task %s failed: %s",
-                            run.run_id,
+                            run_id,
                             e,
                         )
                         run.retry_count = (run.retry_count or 0) + 1
@@ -362,21 +369,21 @@ class SchedulerLoop:
 
                                 dlq = DeadLetterService(db)
                                 await dlq.enqueue(
-                                    user_id=run.user_id,
+                                    user_id=user_id,
                                     operation_type="background_task",
                                     error_type=type(e).__name__,
                                     error_message=str(e),
-                                    source_id=run.run_id,
+                                    source_id=run_id,
                                     payload={
-                                        "plan_id": run.plan_id,
-                                        "run_id": run.run_id,
+                                        "plan_id": plan_id,
+                                        "run_id": run_id,
                                     },
-                                    workspace_id=run.workspace_id,
+                                    workspace_id=ws_id,
                                 )
                             except Exception:
                                 logger.debug(
                                     "DLQ enqueue failed for run %s",
-                                    run.run_id,
+                                    run_id,
                                     exc_info=True,
                                 )
                         else:
@@ -392,7 +399,7 @@ class SchedulerLoop:
                                 run.status = "pending"
                             logger.info(
                                 "Background task %s retry %d/%d",
-                                run.run_id,
+                                run_id,
                                 run.retry_count,
                                 max_retries,
                             )

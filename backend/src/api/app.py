@@ -107,6 +107,27 @@ def create_app() -> FastAPI:
                 exc_info=True,
             )
 
+        # Validate tool registry consistency
+        try:
+            from src.tools.validation import validate_registry
+
+            if settings.skip_registry_validation:
+                logger.warning("Registry validation SKIPPED (JARVIS_SKIP_REGISTRY_VALIDATION=true)")
+            else:
+                errors = validate_registry()
+                if errors:
+                    for err in errors:
+                        logger.error("Registry validation: %s", err)
+                    logger.error(
+                        "Registry validation found %d errors — fix or set "
+                        "JARVIS_SKIP_REGISTRY_VALIDATION=true",
+                        len(errors),
+                    )
+                else:
+                    logger.info("Registry validation passed")
+        except Exception:
+            logger.warning("Registry validation failed to run", exc_info=True)
+
         # Ensure Qdrant collections exist
         try:
             from src.services.vector_store import VectorStore
