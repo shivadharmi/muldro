@@ -24,24 +24,29 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-async def _check_backpressure(request: Request, settings: Settings = Depends(get_settings)):
-    """Reject webhooks when event stream consumer lag is too high."""
+async def _check_backpressure(
+    request: Request,
+    user_id: str = Depends(get_current_user_id),
+    settings: Settings = Depends(get_settings),
+):
+    """Reject webhooks when the current user's event stream lag is too high.
+
+    Scoped to the requesting user's stream to avoid throttling healthy tenants
+    because another tenant is backlogged.
+    """
     redis = getattr(request.app.state, "redis", None)
     if redis and settings.webhook_lag_threshold > 0:
         from src.services.event_bus import EventBus
 
         bus = EventBus(redis)
-        # Check lag on the first user stream (heuristic — typically one user in self-hosted)
-        # For multi-tenant, would iterate known user streams
         try:
-            streams = await redis.keys("jarvis:events:*")
-            for stream in streams[:1]:
-                lag = await bus.get_stream_lag(stream)
-                if lag > settings.webhook_lag_threshold:
-                    raise HTTPException(
-                        status_code=429,
-                        detail=f"Event queue backlogged ({lag} pending), retry later",
-                    )
+            stream = bus.agent_stream(user_id)
+            lag = await bus.get_stream_lag(stream)
+            if lag > settings.webhook_lag_threshold:
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Event queue backlogged ({lag} pending), retry later",
+                )
         except HTTPException:
             raise
         except Exception:

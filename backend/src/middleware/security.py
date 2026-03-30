@@ -20,6 +20,13 @@ logger = logging.getLogger(__name__)
 MAX_REQUEST_BODY_BYTES = 1_048_576
 
 
+class _RequestTooLargeError(Exception):
+    """Raised by counting receive() when chunked body exceeds size limit."""
+
+    def __init__(self, size: int):
+        self.size = size
+
+
 class RateLimiter:
     """Simple in-memory sliding window rate limiter.
 
@@ -148,6 +155,7 @@ class RequestSizeLimitMiddleware:
             await self.app(scope, receive, send)
             return
 
+        # Fast path: reject if Content-Length header exceeds limit
         headers = dict(scope.get("headers", []))
         content_length = headers.get(b"content-length", b"").decode("utf-8")
 
@@ -157,7 +165,27 @@ class RequestSizeLimitMiddleware:
             await _send_json_response(send, 413, {"detail": "Request body too large"})
             return
 
-        await self.app(scope, receive, send)
+        # Streaming guard: count bytes from receive() for chunked/headerless bodies.
+        # Without this, clients omitting Content-Length bypass the size limit entirely.
+        bytes_received = 0
+        max_bytes = self._max_bytes
+
+        async def _counting_receive() -> dict:
+            nonlocal bytes_received
+            message = await receive()
+            if message.get("type") == "http.request":
+                body = message.get("body", b"")
+                bytes_received += len(body)
+                if bytes_received > max_bytes:
+                    raise _RequestTooLargeError(bytes_received)
+            return message
+
+        try:
+            await self.app(scope, _counting_receive, send)
+        except _RequestTooLargeError as exc:
+            path = scope.get("path", "")
+            logger.warning("Chunked request too large: %d bytes from %s", exc.size, path)
+            await _send_json_response(send, 413, {"detail": "Request body too large"})
 
 
 def per_endpoint_rate_limit(max_rpm: int = 10):
