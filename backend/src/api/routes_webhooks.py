@@ -40,7 +40,7 @@ async def _check_backpressure(
 
         bus = EventBus(redis)
         try:
-            stream = bus.agent_stream(user_id)
+            stream = bus.event_stream(user_id)
             lag = await bus.get_stream_lag(stream)
             if lag > settings.webhook_lag_threshold:
                 raise HTTPException(
