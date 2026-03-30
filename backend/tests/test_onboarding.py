@@ -116,5 +116,5 @@ class TestOnboarding:
         result = await svc.activate("mcat_001", TEST_USER_ID)
 
         assert result.status == "activated"
-        # trust + installation + 1 capability binding = 3 adds
-        assert db.add.call_count == 3
+        # trust + installation = 2 adds (capability bindings removed)
+        assert db.add.call_count == 2

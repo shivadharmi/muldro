@@ -273,17 +273,7 @@ async def _explore_external_server(
                 raw_tools = await client.list_tools()
                 report.tool_count = len(raw_tools)
 
-                # Also load normalizer to show canonical names
-                from src.integrations.tool_normalizer import ToolNameNormalizer
-
-                normalizer = ToolNameNormalizer()
-                tool_dicts = [
-                    {"name": t.name, "description": t.description or ""}
-                    for t in raw_tools
-                ]
-                mappings = normalizer.register_server_tools(server_name, tool_dicts)
-
-                # Also load capability mapping
+                # Load capability mapping
                 from src.integrations.capabilities import TOOL_TO_CAPABILITY
 
                 for t in raw_tools:
@@ -295,16 +285,13 @@ async def _explore_external_server(
                     if hasattr(input_schema, "model_dump"):
                         input_schema = input_schema.model_dump()
 
-                    canonical = normalizer.normalize(t.name, server_name=server_name)
                     capability = TOOL_TO_CAPABILITY.get(t.name, "")
-                    if not capability:
-                        capability = TOOL_TO_CAPABILITY.get(canonical, "")
 
                     tool_info = ToolInfo(
                         name=t.name,
                         description=(t.description or "")[:200],
                         server=server_name,
-                        canonical_name=canonical,
+                        canonical_name=t.name,  # No normalization needed
                         capability=capability,
                         input_schema=input_schema,
                     )
@@ -339,7 +326,7 @@ def cross_reference(reports: list[ServerReport]) -> dict:
     - Tools with schema but no capability
     """
     from src.integrations.capabilities import TOOL_TO_CAPABILITY
-    from src.orchestrator.tool_schemas import TOOL_INPUT_MODELS
+    from src.tools.schemas import TOOL_INPUT_MODELS
     from src.services.tool_registry import _DEFAULT_TOOLS
 
     # Collect all discovered tool names
@@ -494,7 +481,7 @@ def print_report(reports: list[ServerReport], xref: dict, as_json: bool = False)
 
 def explore_tool_schemas() -> ServerReport:
     """Load tool schemas from tool_schemas.py and report what Claude sees."""
-    from src.orchestrator.tool_schemas import TOOL_INPUT_MODELS, build_tool_definitions
+    from src.tools.schemas import TOOL_INPUT_MODELS, build_tool_definitions
 
     report = ServerReport(
         server_name="tool-schemas (Claude API format)",

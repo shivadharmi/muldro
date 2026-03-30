@@ -27,7 +27,6 @@ class ToolDefinition(Base, TimestampMixin):
     connector_type: Mapped[str | None] = mapped_column(String(32))
     # gmail, calendar, slack, github, drive, browser, internal
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    canonical_name: Mapped[str | None] = mapped_column(String(128))
     capability: Mapped[str | None] = mapped_column(String(128))
     # Unified registry columns (Phase 8)
     server: Mapped[str | None] = mapped_column(String(64))
@@ -38,13 +37,6 @@ class ToolDefinition(Base, TimestampMixin):
     __table_args__ = (
         Index("ix_tool_defs_connector", "connector_type"),
         Index("ix_tool_defs_risk", "risk_level"),
-        Index(
-            "ix_tool_defs_canonical",
-            "workspace_id",
-            "canonical_name",
-            unique=True,
-            postgresql_where="canonical_name IS NOT NULL",
-        ),
         Index("ix_tool_defs_capability", "workspace_id", "capability"),
         Index("ix_tool_defs_ws_name", "workspace_id", "name", unique=True),
         Index("ix_tool_defs_server", "workspace_id", "server"),

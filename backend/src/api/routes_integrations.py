@@ -68,19 +68,6 @@ class TrustRecordResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class CapabilityBindingResponse(BaseModel):
-    binding_id: str
-    capability: str
-    family: str
-    backend_type: str
-    backend_ref: str
-    tool_name: str
-    priority: int
-    enabled: bool
-
-    model_config = {"from_attributes": True}
-
-
 class HealthCheckResponse(BaseModel):
     install_id: str | None = None
     server_name: str | None = None
@@ -301,36 +288,4 @@ async def list_trust_records(
             created_at=r.created_at.isoformat() if r.created_at else None,
         )
         for r in records
-    ]
-
-
-@router.get("/capabilities/bindings", response_model=list[CapabilityBindingResponse])
-async def list_capability_bindings(
-    family: str | None = None,
-    workspace_id: str = Depends(get_current_workspace_id),
-    db: AsyncSession = Depends(get_db),
-):
-    from sqlalchemy import select as sa_select
-
-    from src.models.capability_binding import CapabilityBinding
-
-    stmt = sa_select(CapabilityBinding).where(CapabilityBinding.workspace_id == workspace_id)
-    if family:
-        stmt = stmt.where(CapabilityBinding.family == family)
-    stmt = stmt.order_by(CapabilityBinding.capability, CapabilityBinding.priority)
-
-    result = await db.execute(stmt)
-    bindings = result.scalars().all()
-    return [
-        CapabilityBindingResponse(
-            binding_id=b.binding_id,
-            capability=b.capability,
-            family=b.family,
-            backend_type=b.backend_type,
-            backend_ref=b.backend_ref,
-            tool_name=b.tool_name,
-            priority=b.priority,
-            enabled=b.enabled,
-        )
-        for b in bindings
     ]

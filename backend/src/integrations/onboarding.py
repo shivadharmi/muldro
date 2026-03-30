@@ -17,7 +17,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.integrations.manifest_inspector import InspectionResult, inspect_manifest
-from src.models.capability_binding import CapabilityBinding
 from src.models.integration_installation import IntegrationInstallation
 from src.models.mcp_server_catalog import MCPServerCatalog
 from src.models.org_allowlist import OrgAllowlist
@@ -250,31 +249,6 @@ class MCPOnboardingService:
         self._db.add(installation)
         await self._db.flush()
 
-        # Clean up orphaned capability bindings from previous activations
-        old_bindings = await self._db.execute(
-            select(CapabilityBinding).where(
-                CapabilityBinding.workspace_id == self._workspace_id,
-                CapabilityBinding.backend_ref == catalog_entry.server_name,
-            )
-        )
-        for old in old_bindings.scalars().all():
-            await self._db.delete(old)
-
-        # Create capability bindings for discovered capabilities
-        for cap in catalog_entry.capabilities or []:
-            binding = CapabilityBinding(
-                workspace_id=self._workspace_id,
-                capability=cap,
-                family=cap.split(".")[0] if "." in cap else "unknown",
-                backend_type="mcp_user",
-                backend_ref=catalog_entry.server_name,
-                tool_name=cap,
-                priority=30,  # user MCP gets lowest priority
-                enabled=True,
-                trust_id=trust_record.trust_id,
-            )
-            self._db.add(binding)
-
         catalog_entry.status = "active"
         catalog_entry.verified = False
 
@@ -329,16 +303,6 @@ class MCPOnboardingService:
         )
         for trust in trust_result.scalars().all():
             trust.status = "revoked"
-
-        # Disable capability bindings
-        binding_result = await self._db.execute(
-            select(CapabilityBinding).where(
-                CapabilityBinding.workspace_id == self._workspace_id,
-                CapabilityBinding.backend_ref == catalog_entry.server_name,
-            )
-        )
-        for binding in binding_result.scalars().all():
-            binding.enabled = False
 
         catalog_entry.status = "revoked"
 
