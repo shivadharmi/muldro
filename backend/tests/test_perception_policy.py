@@ -12,8 +12,11 @@ from src.services.perception_policy import (
     DEFAULT_INTERVALS,
     MAX_INTERVAL_S,
     MIN_INTERVAL_S,
+    PERMANENT_FAILURE_THRESHOLD,
     STARVATION_CEILING_S,
+    TRANSIENT_FAILURE_THRESHOLD,
     PerceptionPolicyService,
+    classify_error,
 )
 
 # ---------------------------------------------------------------------------
@@ -219,7 +222,8 @@ class TestRecordFailure:
         state = _make_state(consecutive_failures=CIRCUIT_FAILURE_THRESHOLD - 1)
         svc = PerceptionPolicyService(db)
 
-        result = await svc.record_failure(state, "connection_refused")
+        # Use "unknown"-classified error so default threshold (3) applies
+        result = await svc.record_failure(state, "unknown internal error")
 
         assert result.circuit_state == "open"
         assert result.circuit_opened_at is not None
@@ -428,3 +432,104 @@ class TestDefaultIntervals:
 
     def test_calendar_default(self):
         assert DEFAULT_INTERVALS["calendar"] == 900
+
+
+# ---------------------------------------------------------------------------
+# Error classification (Phase 5)
+# ---------------------------------------------------------------------------
+
+
+class TestClassifyError:
+    def test_transient_timeout(self):
+        assert classify_error("Connection timed out after 60s") == "transient"
+
+    def test_transient_rate_limit(self):
+        assert classify_error("HTTP 429 Too Many Requests") == "transient"
+
+    def test_transient_503(self):
+        assert classify_error("503 Service Unavailable") == "transient"
+
+    def test_transient_502(self):
+        assert classify_error("502 Bad Gateway") == "transient"
+
+    def test_transient_connection_reset(self):
+        assert classify_error("ECONNRESET: connection reset by peer") == "transient"
+
+    def test_permanent_401(self):
+        assert classify_error("HTTP 401 Unauthorized") == "permanent"
+
+    def test_permanent_403(self):
+        assert classify_error("HTTP 403 Forbidden") == "permanent"
+
+    def test_permanent_revoked_token(self):
+        assert classify_error("OAuth token has been revoked") == "permanent"
+
+    def test_permanent_invalid_credentials(self):
+        assert classify_error("invalid_credentials: token expired") == "permanent"
+
+    def test_permanent_access_denied(self):
+        assert classify_error("Access denied for resource") == "permanent"
+
+    def test_unknown_generic_error(self):
+        assert classify_error("Something unexpected happened") == "unknown"
+
+    def test_unknown_empty_string(self):
+        assert classify_error("") == "unknown"
+
+    def test_permanent_takes_priority_over_transient(self):
+        """When error matches both patterns, permanent wins (checked first)."""
+        # An error like "401 timeout" should be permanent since 401 is checked first
+        assert classify_error("401 Unauthorized timeout") == "permanent"
+
+
+class TestErrorClassAwareCircuitBreaker:
+    @pytest.mark.asyncio
+    async def test_permanent_error_opens_circuit_immediately(self):
+        """Permanent errors should open the circuit after just 1 failure."""
+        db = _mock_db()
+        state = _make_state(consecutive_failures=0)
+        svc = PerceptionPolicyService(db)
+
+        result = await svc.record_failure(state, "HTTP 401 Unauthorized")
+
+        assert result.consecutive_failures == PERMANENT_FAILURE_THRESHOLD
+        assert result.circuit_state == "open"
+        assert result.circuit_opened_at is not None
+
+    @pytest.mark.asyncio
+    async def test_transient_error_needs_more_failures(self):
+        """Transient errors should NOT open circuit at default threshold (3)."""
+        db = _mock_db()
+        state = _make_state(consecutive_failures=CIRCUIT_FAILURE_THRESHOLD - 1)
+        svc = PerceptionPolicyService(db)
+
+        result = await svc.record_failure(state, "Connection timed out")
+
+        # At 3 failures (default threshold), transient should NOT open
+        # because transient threshold is 6
+        assert result.consecutive_failures == CIRCUIT_FAILURE_THRESHOLD
+        assert result.circuit_state == "closed"
+
+    @pytest.mark.asyncio
+    async def test_transient_opens_at_double_threshold(self):
+        """Transient errors should open circuit at TRANSIENT_FAILURE_THRESHOLD."""
+        db = _mock_db()
+        state = _make_state(consecutive_failures=TRANSIENT_FAILURE_THRESHOLD - 1)
+        svc = PerceptionPolicyService(db)
+
+        result = await svc.record_failure(state, "503 Service Unavailable")
+
+        assert result.consecutive_failures == TRANSIENT_FAILURE_THRESHOLD
+        assert result.circuit_state == "open"
+
+    @pytest.mark.asyncio
+    async def test_unknown_error_uses_default_threshold(self):
+        """Unknown errors should use the default CIRCUIT_FAILURE_THRESHOLD."""
+        db = _mock_db()
+        state = _make_state(consecutive_failures=CIRCUIT_FAILURE_THRESHOLD - 1)
+        svc = PerceptionPolicyService(db)
+
+        result = await svc.record_failure(state, "Something weird happened")
+
+        assert result.consecutive_failures == CIRCUIT_FAILURE_THRESHOLD
+        assert result.circuit_state == "open"

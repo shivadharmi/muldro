@@ -37,13 +37,13 @@ class TestTracing:
             span.span_id,
             input_tokens=100,
             output_tokens=50,
-            tools_called=["plan_command"],
+            tools_called=["search"],
             decision="create_task",
         )
         assert span.ended_at is not None
         assert span.input_tokens == 100
         assert span.output_tokens == 50
-        assert span.tools_called == ["plan_command"]
+        assert span.tools_called == ["search"]
         assert span.decision == "create_task"
         assert span.duration_ms() >= 0
 
@@ -217,21 +217,53 @@ class TestAgents:
 
         assert AGENTS["persona"].model_tier == "haiku"
 
-    def test_tool_scoping(self):
+    @pytest.mark.asyncio
+    async def test_tool_scoping(self):
+        from unittest.mock import AsyncMock, MagicMock
+
         from src.orchestrator.agents import AGENTS
 
-        # Observer can ingest events but not send email
-        assert AGENTS["observer"].can_use_tool("ingest_event") is True
-        assert AGENTS["observer"].can_use_tool("gmail_send") is False
+        mock_db = AsyncMock()
 
-        # Operator can send email but not plan
-        assert AGENTS["operator"].can_use_tool("gmail_send") is True
-        assert AGENTS["operator"].can_use_tool("plan_command") is False
+        # Helper to mock tool registry
+        def make_tool(name, capability):
+            tool = MagicMock()
+            tool.name = name
+            tool.capability = capability
+            return tool
 
-        # Researcher is read-only (no write tools)
-        assert AGENTS["researcher"].can_use_tool("search_memory") is True
-        assert AGENTS["researcher"].can_use_tool("gmail_send") is False
-        assert AGENTS["researcher"].can_use_tool("slack_post_message") is False
+        # Mock registry
+        from unittest.mock import patch
+
+        with patch("src.services.tool_registry.ToolRegistry") as mock_reg_cls:
+            mock_reg = MagicMock()
+            mock_reg.get_tool = AsyncMock(
+                side_effect=lambda name: {
+                    "ingest_event": make_tool("ingest_event", "internal.ingest_event"),
+                    "gmail_send": make_tool(
+                        "gmail_send", "email.send"
+                    ),  # email.send, not gmail.send
+                    "get_active_plans": make_tool("get_active_plans", "internal.get_active_plans"),
+                    "search": make_tool("search", "internal.search"),
+                    "slack_post_message": make_tool(
+                        "slack_post_message", "messaging.send"
+                    ),  # messaging.send
+                }.get(name)
+            )
+            mock_reg_cls.return_value = mock_reg
+
+            # Observer can ingest events but not send email
+            assert await AGENTS["observer"].can_use_tool("ingest_event", mock_db) is True
+            assert await AGENTS["observer"].can_use_tool("gmail_send", mock_db) is False
+
+            # Operator can send email but not plan
+            assert await AGENTS["operator"].can_use_tool("gmail_send", mock_db) is True
+            assert await AGENTS["operator"].can_use_tool("get_active_plans", mock_db) is False
+
+            # Researcher is read-only (no write tools)
+            assert await AGENTS["researcher"].can_use_tool("search", mock_db) is True
+            assert await AGENTS["researcher"].can_use_tool("gmail_send", mock_db) is False
+            assert await AGENTS["researcher"].can_use_tool("slack_post_message", mock_db) is False
 
     def test_planner_has_higher_max_tokens(self):
         from src.orchestrator.agents import AGENTS
@@ -252,20 +284,24 @@ class TestHooks:
     async def test_read_only_tools_allowed(self):
         from src.orchestrator.hooks import governor_pre_tool_hook
 
-        result = await governor_pre_tool_hook("search_memory", {}, "planner", user_id=TEST_USER_ID)
+        result = await governor_pre_tool_hook("search", {}, "planner", user_id=TEST_USER_ID)
         assert result["allowed"] is True
 
-    async def test_blocked_tools_rejected(self):
+    async def test_write_tools_rejected_via_catalog(self):
         from src.orchestrator.hooks import governor_pre_tool_hook
 
-        result = await governor_pre_tool_hook("gmail_delete", {}, "operator", user_id=TEST_USER_ID)
+        # linear_delete_issue is critical in catalog — requires approval
+        result = await governor_pre_tool_hook(
+            "linear_delete_issue", {}, "operator", user_id=TEST_USER_ID
+        )
         assert result["allowed"] is False
-        assert "blocked by policy" in result["reason"].lower()
 
     async def test_write_tools_require_approval(self):
         from src.orchestrator.hooks import governor_pre_tool_hook
 
-        result = await governor_pre_tool_hook("gmail_send", {}, "operator", user_id=TEST_USER_ID)
+        result = await governor_pre_tool_hook(
+            "send_gmail_message", {}, "operator", user_id=TEST_USER_ID
+        )
         assert result["allowed"] is False
         assert result["approval_required"] is True
 
@@ -330,6 +366,8 @@ class TestPrompts:
 class TestOrchestrator:
     @patch("src.orchestrator.jarvis.get_anthropic_client")
     async def test_process_message_routes_to_planner(self, mock_get_client):
+        from unittest.mock import AsyncMock
+
         from src.orchestrator.jarvis import JarvisOrchestrator
 
         mock_client = AsyncMock()
@@ -370,6 +408,11 @@ class TestOrchestrator:
             db_factory=db_factory,
             services=ServiceContainer(),
         )
+
+        # Mock _get_tools_for_agent to avoid DB queries
+        from unittest.mock import AsyncMock
+
+        orchestrator._get_tools_for_agent = AsyncMock(return_value=[])
 
         result = await orchestrator.process_message(
             "What should I focus on?",

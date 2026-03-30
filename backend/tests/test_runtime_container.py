@@ -36,13 +36,10 @@ class TestRuntimeBuild:
 
         # Tier 2 — should be present when all deps available
         assert svc.event_processor is not None
-        assert svc.planner is not None
         assert svc.governor is not None
         assert svc.presenter is not None
         assert svc.audit is not None
-        assert svc.working_memory is not None
         assert svc.graph_executor is not None
-        assert svc.operator is not None
 
     def test_tier1_failure_raises(self, settings, mock_db):
         """Tier 1 failure should raise RuntimeBuildError, not silently degrade."""
@@ -56,9 +53,9 @@ class TestRuntimeBuild:
         """Tier 2 failure should degrade gracefully, not raise."""
         from src.runtime import build
 
-        with patch("src.services.planner.Planner.__init__", side_effect=Exception("boom")):
+        with patch("src.services.governor.Governor.__init__", side_effect=Exception("boom")):
             svc = build(settings, mock_db)
-            assert svc.planner is None
+            assert svc.governor is None
             # Other services should still be populated
             assert svc.world_model is not None
 
@@ -71,13 +68,12 @@ class TestRuntimeBuild:
             assert svc.vector_store is None
             assert svc.world_model is not None
 
-    def test_graph_executor_and_operator_wired(self, settings, mock_db):
-        """GraphExecutor and Operator should be wired into ServiceContainer."""
+    def test_graph_executor_wired(self, settings, mock_db):
+        """GraphExecutor should be wired into ServiceContainer."""
         from src.runtime import build
 
         svc = build(settings, mock_db)
         assert svc.graph_executor is not None
-        assert svc.operator is not None
 
     def test_service_container_attribute_access(self, settings, mock_db):
         """ServiceContainer should support typed attribute access."""

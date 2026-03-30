@@ -14,7 +14,7 @@ class ToolDefinition(Base, TimestampMixin):
     workspace_id: Mapped[str | None] = mapped_column(
         String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=True
     )
-    name: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
     version: Mapped[str] = mapped_column(String(32), default="1.0")
     description: Mapped[str | None] = mapped_column(Text)
     input_schema: Mapped[dict | None] = mapped_column(JSONB)
@@ -27,18 +27,30 @@ class ToolDefinition(Base, TimestampMixin):
     connector_type: Mapped[str | None] = mapped_column(String(32))
     # gmail, calendar, slack, github, drive, browser, internal
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    canonical_name: Mapped[str | None] = mapped_column(String(128))
     capability: Mapped[str | None] = mapped_column(String(128))
+    # Unified registry columns (Phase 8)
+    server: Mapped[str | None] = mapped_column(String(64))
+    backend: Mapped[str] = mapped_column(String(32), default="external_mcp")
+    source: Mapped[str] = mapped_column(String(32), default="seed")
+    verified: Mapped[bool] = mapped_column(Boolean, default=False)
 
     __table_args__ = (
         Index("ix_tool_defs_connector", "connector_type"),
         Index("ix_tool_defs_risk", "risk_level"),
-        Index(
-            "ix_tool_defs_canonical",
-            "workspace_id",
-            "canonical_name",
-            unique=True,
-            postgresql_where="canonical_name IS NOT NULL",
-        ),
         Index("ix_tool_defs_capability", "workspace_id", "capability"),
+        # Two-part uniqueness: workspace-scoped tools use (workspace_id, name),
+        # global tools (workspace_id IS NULL) use a partial index on name alone.
+        # PostgreSQL treats NULL as distinct in unique indexes, so a single
+        # UNIQUE(workspace_id, name) would allow duplicate global tool names.
+        Index(
+            "ix_tool_defs_ws_name",
+            "workspace_id",
+            "name",
+            unique=True,
+            postgresql_where="workspace_id IS NOT NULL",
+        ),
+        Index(
+            "ix_tool_defs_global_name", "name", unique=True, postgresql_where="workspace_id IS NULL"
+        ),
+        Index("ix_tool_defs_server", "workspace_id", "server"),
     )

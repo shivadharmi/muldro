@@ -762,23 +762,6 @@ class TestUISurfacesAndCanvas:
         resp = await client.get("/v1/ui/surfaces/usr_01JTEST00000000000000000000/surf_nonexistent")
         assert resp.status_code == 404
 
-    async def test_canvas_dashboard(self, client: httpx.AsyncClient):
-        resp = await client.get("/v1/canvas/dashboard")
-        assert resp.status_code == 200
-
-
-# ── 2.23 Command ────────────────────────────────────────────────
-
-
-class TestCommand:
-    async def test_command(self, client: httpx.AsyncClient):
-        resp = await client.post(
-            "/v1/jarvis/command",
-            json={"command": "status", "context": "e2e test"},
-        )
-        # May need Anthropic key — accept 200 or 500/503
-        assert resp.status_code in (200, 500, 503)
-
 
 # ── 2.24 Meetings ───────────────────────────────────────────────
 

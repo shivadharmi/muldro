@@ -35,7 +35,7 @@ export const AGENT_CONFIGS: AgentConfig[] = [
     model_tier: "opus",
     max_tokens: 8192,
     temperature: 0.3,
-    tools: ["plan_command", "get_active_plans", "search_memory", "get_entities"],
+    tools: ["get_active_plans", "search"],
   },
   {
     name: "governor",

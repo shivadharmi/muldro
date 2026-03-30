@@ -44,7 +44,6 @@ ID_PREFIXES = {
     "ts": "trust_score",
     "watcher": "watcher",
     "trs": "server_trust",
-    "capb": "capability_binding",
     "inst": "installation",
     "revt": "runtime_event",
     "apol": "approval_policy",

@@ -55,10 +55,18 @@ class BudgetStatus:
 
 
 class BudgetTracker:
-    """Tracks token usage and enforces daily budget limits."""
+    """Tracks token usage and enforces daily budget limits.
 
-    def __init__(self, daily_limit_usd: float = 5.0):
+    Uses Redis as a hot counter (INCRBYFLOAT) for multi-instance accuracy.
+    DB remains the source of truth; Redis is a fast approximation.
+    """
+
+    _REDIS_KEY_PREFIX = "jarvis:budget"
+    _REDIS_TTL = 86_400  # 24 hours
+
+    def __init__(self, daily_limit_usd: float = 5.0, redis=None):
         self.daily_limit_usd = daily_limit_usd
+        self._redis = redis
         self._today_spend: float = 0.0
         self._today_date: str = ""
 
@@ -129,15 +137,24 @@ class BudgetTracker:
         db.add(usage)
         await db.flush()
 
-        # Update in-memory daily counter (hydrate from DB on day change)
+        # Update daily counter — Redis (multi-instance safe) or in-memory fallback
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        if self._today_date != today:
-            self._today_date = today
+        if self._redis and workspace_id:
             try:
-                self._today_spend = await self.get_daily_spend(db)
+                rkey = f"{self._REDIS_KEY_PREFIX}:{workspace_id}:{today}"
+                self._today_spend = float(await self._redis.incrbyfloat(rkey, cost))
+                await self._redis.expire(rkey, self._REDIS_TTL)
             except Exception:
-                self._today_spend = 0.0
-        self._today_spend += cost
+                logger.debug("Redis budget counter failed, using in-memory")
+                self._today_spend += cost
+        else:
+            if self._today_date != today:
+                self._today_date = today
+                try:
+                    self._today_spend = await self.get_daily_spend(db, workspace_id=workspace_id)
+                except Exception:
+                    self._today_spend = 0.0
+            self._today_spend += cost
 
         logger.info(
             "token_usage_recorded",
@@ -156,17 +173,30 @@ class BudgetTracker:
         )
         return usage
 
-    async def get_daily_spend(self, db: AsyncSession) -> float:
+    async def get_daily_spend(self, db: AsyncSession, *, workspace_id: str = "") -> float:
+        # Fast path: read from Redis if available
+        if self._redis and workspace_id:
+            try:
+                today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                rkey = f"{self._REDIS_KEY_PREFIX}:{workspace_id}:{today}"
+                val = await self._redis.get(rkey)
+                if val is not None:
+                    return float(val)
+            except Exception:
+                pass  # fall through to DB
+
+        # DB: source of truth
         today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        result = await db.execute(
-            select(func.coalesce(func.sum(TokenUsage.cost_usd), 0.0)).where(
-                TokenUsage.created_at >= today_start
-            )
+        query = select(func.coalesce(func.sum(TokenUsage.cost_usd), 0.0)).where(
+            TokenUsage.created_at >= today_start
         )
+        if workspace_id:
+            query = query.where(TokenUsage.workspace_id == workspace_id)
+        result = await db.execute(query)
         return float(result.scalar_one())
 
-    async def get_budget_status(self, db: AsyncSession) -> BudgetStatus:
-        daily_spend = await self.get_daily_spend(db)
+    async def get_budget_status(self, db: AsyncSession, *, workspace_id: str = "") -> BudgetStatus:
+        daily_spend = await self.get_daily_spend(db, workspace_id=workspace_id)
         remaining = max(0.0, self.daily_limit_usd - daily_spend)
         percent_used = (daily_spend / self.daily_limit_usd * 100) if self.daily_limit_usd else 0
 

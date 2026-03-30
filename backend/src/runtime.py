@@ -2,9 +2,10 @@
 
 All service wiring happens here. Three tiers control startup behaviour:
   Tier 1 (fail fast): WorldModel, MemoryService, EmbeddingService
-  Tier 2 (log + degrade): EventProcessor, Planner, Governor, Presenter,
-                          AuditService, WorkingMemoryService, ToolRegistry
-  Tier 3 (optional): VectorStore, SearchService, EventCorrelator
+  Tier 2 (log + degrade): EventProcessor, Governor, Presenter,
+                          AuditService, ToolRegistry, GraphExecutor
+  Tier 3 (optional): VectorStore, GraphEngine, RerankerService,
+                      TriSearchService, EventCorrelator, OAuthManager, Notifier
 """
 
 import logging
@@ -66,18 +67,6 @@ def build(settings: Settings, db: AsyncSession) -> ServiceContainer:
         logger.warning("Tier 2: EventProcessor unavailable", exc_info=True)
 
     try:
-        from src.services.planner import Planner
-
-        svc.planner = Planner(
-            settings,
-            db,
-            world_model=svc.world_model,
-            memory_service=svc.memory_service,
-        )
-    except Exception:
-        logger.warning("Tier 2: Planner unavailable", exc_info=True)
-
-    try:
         from src.services.governor import Governor
 
         svc.governor = Governor(db)
@@ -99,13 +88,6 @@ def build(settings: Settings, db: AsyncSession) -> ServiceContainer:
         logger.warning("Tier 2: AuditService unavailable", exc_info=True)
 
     try:
-        from src.services.working_memory import WorkingMemoryService
-
-        svc.working_memory = WorkingMemoryService(db)
-    except Exception:
-        logger.warning("Tier 2: WorkingMemoryService unavailable", exc_info=True)
-
-    try:
         from src.services.tool_registry import ToolRegistry
 
         svc.extras["tool_registry"] = ToolRegistry(db)
@@ -121,11 +103,33 @@ def build(settings: Settings, db: AsyncSession) -> ServiceContainer:
         logger.debug("Tier 3: VectorStore unavailable", exc_info=True)
 
     try:
-        from src.services.search_service import SearchService
+        from src.services.graph_engine import GraphEngine
 
-        svc.search_service = SearchService(settings, vector_store=svc.vector_store)
+        if settings.neo4j_url:
+            svc.graph_engine = GraphEngine(settings)
     except Exception:
-        logger.debug("Tier 3: SearchService unavailable", exc_info=True)
+        logger.debug("Tier 3: GraphEngine unavailable", exc_info=True)
+
+    try:
+        from src.services.reranker_service import RerankerService
+
+        if settings.reranker_enabled:
+            svc.reranker = RerankerService(settings)
+    except Exception:
+        logger.debug("Tier 3: RerankerService unavailable", exc_info=True)
+
+    try:
+        from src.services.tri_search import TriSearchService
+
+        svc.tri_search = TriSearchService(
+            settings=settings,
+            vector_store=svc.vector_store,
+            graph_engine=svc.graph_engine,
+            reranker=svc.reranker,
+            embedder=svc.extras.get("embedding_service"),
+        )
+    except Exception:
+        logger.debug("Tier 3: TriSearchService unavailable", exc_info=True)
 
     try:
         from src.services.event_correlator import EventCorrelator
@@ -133,6 +137,13 @@ def build(settings: Settings, db: AsyncSession) -> ServiceContainer:
         svc.extras["event_correlator"] = EventCorrelator(db)
     except Exception:
         logger.debug("Tier 3: EventCorrelator unavailable", exc_info=True)
+
+    try:
+        from src.services.artifact_store import ArtifactStore
+
+        svc.artifact_store = ArtifactStore(settings)
+    except Exception:
+        logger.debug("Tier 3: ArtifactStore unavailable", exc_info=True)
 
     # ── Wire execution layer ───────────────────────────────────────
     tool_registry = svc.extras.get("tool_registry")
@@ -153,6 +164,7 @@ def build(settings: Settings, db: AsyncSession) -> ServiceContainer:
             from src.services.notifier import Notifier
 
             notifier = Notifier(db, settings)
+            svc.notifier = notifier
         except Exception:
             logger.debug("Notifier unavailable for GraphExecutor", exc_info=True)
 
@@ -190,17 +202,6 @@ def build(settings: Settings, db: AsyncSession) -> ServiceContainer:
     except Exception:
         logger.warning("Tier 2: GraphExecutor unavailable", exc_info=True)
 
-    try:
-        from src.services.operator import Operator
-
-        svc.operator = Operator(
-            settings=settings,
-            db=db,
-            graph_executor=svc.graph_executor,
-        )
-    except Exception:
-        logger.warning("Tier 2: Operator unavailable", exc_info=True)
-
     # ── Wire OAuthManager ──────────────────────────────────────────
     try:
         from src.models.database import get_session_factory
@@ -223,15 +224,12 @@ def _log_summary(svc: ServiceContainer) -> None:
     tier1 = ["world_model", "memory_service"]
     tier2 = [
         "event_processor",
-        "planner",
         "governor",
         "presenter",
         "audit",
-        "working_memory",
         "graph_executor",
-        "operator",
     ]
-    tier3 = ["vector_store", "search_service"]
+    tier3 = ["vector_store", "graph_engine", "reranker", "tri_search", "artifact_store"]
 
     populated = []
     missing = []

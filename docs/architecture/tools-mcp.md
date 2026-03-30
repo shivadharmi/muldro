@@ -1,245 +1,167 @@
 # Tool Resolution & MCP Architecture
 
-## 3-Tier Tool Dispatch
+## Unified Registry Dispatch
 
-When an agent requests a tool, the orchestrator resolves it through three tiers:
-internal intelligence handlers -> MCP bridge -> ToolRegistry/Connector fallback.
-All tool calls are workspace-scoped; the workspace_id is resolved from the authenticated user context and threaded through every dispatch layer.
+All tools are served through MCP. When an agent requests a tool, the orchestrator does one registry lookup and one match on `backend`:
 
 ```mermaid
 sequenceDiagram
     participant A as Agent (Claude)
     participant O as Orchestrator
     participant H as Governor Pre-Hook
-    participant T1 as Tier 1: Internal FastMCP
-    participant T2 as Tier 2: MCP Bridge
-    participant T3 as Tier 3: ToolRegistry
+    participant R as ToolRegistry (DB)
+    participant I as Internal FastMCP
+    participant M as MCP Bridge
+    participant C as Composite Handler
     participant AU as Audit Post-Hook
 
     A->>O: tool_use(name, input)
 
-    Note over O,H: Pre-dispatch: ToolRegistry check + Classification
-    O->>O: ToolRegistry pre-dispatch check (validate tool exists, agent scope)
+    Note over O,H: Pre-dispatch: Governor hook classifies tool
     O->>H: governor_pre_tool_hook(name, input, agent)
-    alt READ_ONLY tool
+    alt READ_ONLY tool (low risk, no approval)
         H-->>O: {allowed: true}
-    else WRITE tool
+    else WRITE tool (requires approval)
         H->>H: Create Approval record
-        H-->>O: {allowed: false, approval_required: true, approval_id}
+        H-->>O: {allowed: false, approval_required: true}
         O-->>A: "Tool blocked, approval required"
-    else BLOCKED tool
-        H-->>O: {allowed: false, reason: blocked}
-        O-->>A: "Tool is permanently blocked"
     end
 
-    Note over O,T1: Tier 1: Internal Handlers
-    O->>T1: Check internal_handlers dict
-    alt Handler exists
-        T1-->>O: result
-    else Not found
-        Note over O,T2: Tier 2: MCP Bridge
-        O->>T2: call_mcp_tool(name, input)
-        alt MCP tool available
-            T2-->>O: {status: success, result}
-        else Not found
-            Note over O,T3: Tier 3: Connector Fallback
-            O->>T3: ToolRegistry lookup + connector dispatch
-            T3-->>O: result
-        end
+    Note over O,R: One registry lookup
+    O->>R: get_tool(name) → backend, server, enabled
+    alt Unknown or disabled
+        R-->>O: None or enabled=false
+        O-->>A: error
+    end
+
+    Note over O,I: Match on backend
+    alt backend = "internal_mcp"
+        O->>I: _call_internal_tool(name, input, server_prefix)
+        I-->>O: result
+    else backend = "external_mcp"
+        O->>M: call_mcp_tool(name, input) — real MCP name, no normalization
+        M-->>O: result
+    else backend = "composite"
+        O->>C: _call_composite_tool(name, input) — e.g., web_search
+        C-->>O: result
+    else server = "_special"
+        O-->>O: return input as-is (report_governor_verdict)
     end
 
     O->>AU: audit_post_tool_hook(name, input, result, trace)
-    AU->>AU: Write AgentDecisionLog
     O-->>A: tool_result
 ```
 
-## Tier 1: Internal Intelligence Handlers
+## Tool Catalog (Single Source of Truth)
 
-FastMCP tools wrapping the intelligence services layer:
+Tool identity lives in 2 files:
+- **`src/tools/catalog.py`** — Definitions (`InternalToolDef` + `ExternalToolSeed`)
+- **`src/tools/intelligence_server.py`** — MCP function implementations
 
-| Tool | Purpose |
-|------|---------|
-| `ingest_event` | Normalize, score, dedup raw events |
-| `search_memory` | Semantic knowledge search |
-| `get_entities` | Entity retrieval by query/type |
-| `update_entity` | Create/update entity |
-| `plan_command` | Create plan from command |
-| `get_active_plans` | List in-flight plans |
-| `evaluate_policy` | Governor policy check |
-| `approve_action` | Process approval decision |
-| `get_briefing` | Retrieve daily briefing |
-| `get_observation_cursor` | Read source cursor |
-| `update_observation_cursor` | Write source cursor |
-| `report_observation` | Record observation results |
-| `update_execution` | Update execution status |
-| `extract_preferences` | Learn user preferences |
-| `create_task` | Create standalone task |
-| `get_task` | Retrieve task details |
-| `get_goals` | List user goals |
-| `build_context` | Assemble context pack |
-| `verify_run` | Verify execution output |
+### Internal Tools (19)
 
-### ToolRegistry Pre-Dispatch
+Defined as `InternalToolDef` entries in `catalog.py`. Served via in-process FastMCP.
 
-Before entering the tier cascade, `_execute_tool()` performs a ToolRegistry pre-dispatch check:
+| Tool | Server | Purpose |
+|------|--------|---------|
+| `ingest_event` | intelligence | Normalize, score, dedup raw events |
+| `search` | intelligence | Unified search via TriSearch (Qdrant + FTS + Neo4j) |
+| `update_entity` | intelligence | Create/update entity |
+| `get_active_plans` | intelligence | List in-flight plans |
+| `evaluate_policy` | intelligence | Governor policy check |
+| `approve_action` | intelligence | Process approval decision |
+| `get_briefing` | intelligence | Retrieve daily briefing |
+| `get_observation_cursor` | intelligence | Read source cursor |
+| `update_observation_cursor` | intelligence | Write source cursor |
+| `report_observation` | intelligence | Record observation results |
+| `update_execution` | intelligence | Update execution status |
+| `extract_preferences` | intelligence | Learn user preferences |
+| `get_goal_memories` | intelligence | Retrieve goal memories |
+| `build_context` | intelligence | Assemble context pack |
+| `verify_run` | intelligence | Verify execution output |
+| `send_telegram` | communication | Send Telegram message |
+| `send_approval_prompt` | communication | Send approval prompt |
+| `push_ui_update` | communication | Push A2UI surface update |
+| `report_governor_verdict` | _special | Return input as-is (inline dispatch) |
 
-1. Look up tool definition in ToolRegistry by name
-2. Validate the calling agent has the tool in its `tool_scope`
-3. If the tool is disabled or unknown, return an error immediately
+### External Tool Seeds (144)
 
-In `hooks.py`, the governor pre-hook uses ToolRegistry lookup to classify tools (read/write/blocked) with a hardcoded fallback set for tools not yet registered in the database.
+Defined as `ExternalToolSeed` entries in `catalog.py`. Served via external MCP servers.
 
-## Tier 2: External MCP Servers
+| Server | Tools | Verified | Naming |
+|--------|-------|----------|--------|
+| Google Workspace | 18 | Yes | snake_case (`search_gmail_messages`, `get_events`, etc.) |
+| GitHub | 22 | No | snake_case (`create_pull_request`, `list_issues`, etc.) |
+| Slack | 8 | No | snake_case (`slack_post_message`, `slack_get_channel_history`) |
+| Notion | 22 | Yes | `API-` kebab-case (`API-post-page`, `API-patch-page`) |
+| Linear | 24 | Yes | `linear_` snake_case (`linear_create_issue`, `linear_get_issue`) |
+| Playwright | 22 | Yes | `browser_` snake_case (`browser_navigate`, `browser_snapshot`) |
+| Filesystem | 14 | Yes | snake_case (`read_text_file`, `write_file`, `search_files`) |
+| Atlassian | 13 | No | camelCase (`getJiraIssue`, `createJiraIssue`) |
+| Composite | 1 | N/A | `web_search` (multi-MCP orchestration) |
 
-Connected via the `MCP Bridge` singleton (`src/connectors/mcp_bridge.py`). The bridge supports five external server types: Google Workspace, GitHub, Slack, Playwright, and Filesystem.
+### Unknown Discovered Tools
 
-| Server | Transport | Tools Provided |
-|--------|-----------|---------------|
-| **Google Workspace** | stdio (`uvx google-workspace-mcp`) | gmail_*, calendar_*, drive_*, docs_*, sheets_*, tasks_*, contacts_* |
-| **GitHub** | stdio (`npx @modelcontextprotocol/server-github`) | Repo search, PR review, issues, code analysis |
-| **Slack** | stdio (`npx slack-mcp-server`) | Messages, threads, channels, reactions (also used for Slack notification delivery) |
-| **Playwright** | stdio (`npx @playwright/mcp --headless`) | Navigate, click, fill, screenshot, extract |
-| **Filesystem** | stdio (`npx @modelcontextprotocol/server-filesystem`) | Read, write, edit, directory ops, search |
+When an MCP server connects and reports tools not in the catalog, they auto-register:
+- `capability=None` → invisible to all agents until admin maps capability
+- `source="discovered"`, `risk_level="medium"`, `requires_approval=True`
+- Safe by design — deny by default
 
-Notable MCP-provided tools include `web_search` (available via external MCP servers for research workflows) and Slack delivery (used by the Notifier for Slack-surface notifications via the MCP bridge rather than direct API calls).
+## Authorization: Capability-Based
 
-### MCP Bridge Lifecycle
+Agents have capability scopes (not tool lists). `SubAgent.can_use_tool()` does one registry lookup:
 
 ```
-App startup → initialize_mcp_bridge()
-    → Connect to configured MCP servers
-    → list_tools() on each server
-    → Build _available_tools dict (name → schema)
-    → Log discovered tool count
-
-App shutdown → shutdown_mcp_bridge()
-    → Disconnect all MCP clients
+tool_name → ToolRegistry.get_tool() → tool.capability → check agent scope
 ```
 
-### Circuit Breaker
+| Agent | Capability Scope Summary |
+|-------|-------------------------|
+| Observer | email.*, calendar.*, doc.*, messaging.*, issue.*, workflow.*, filesystem.read/list/search + internal cursor/observation tools |
+| Librarian | internal.update_entity, internal.search |
+| Planner | internal.get_plans, internal.get_goals, internal.search |
+| Governor | internal.evaluate_policy, internal.approve_action |
+| Operator | email.send/draft, calendar.create/update/delete, messaging.send/reply, issue.*, workflow.*, doc.create/update + internal.update_execution |
+| Presenter | internal.get_briefing, internal.search, internal.send_telegram, internal.push_ui, messaging.send |
+| Researcher | internal.search + all read capabilities + search.web, browser.* |
+| Persona | internal.search, internal.extract_preferences |
 
-Each external MCP server has its own circuit breaker:
-- Tracks consecutive failures
-- Opens circuit on failure threshold
-- Returns error immediately when open
-- Resets after cooldown period
+## Governor Tool Policy
 
-## Tier 3: ToolRegistry / Connector Fallback
+Two separate policy layers:
 
-DB-backed tool definitions (`tool_definitions` table) with connector dispatch:
+1. **Decision-level** (`AUTO_EXECUTE_DECISIONS` in governor.py): "Should this Planner decision skip approval?" — applies to decision types like `search`, `summarize`, `acknowledge`
+2. **Tool-level** (`Governor.is_auto_execute_tool()`): "Should this specific tool call require approval?" — derives from registry `risk_level` + `requires_approval`
 
-1. Look up tool in ToolRegistry by name
-2. Get `connector_type` (gmail, calendar, slack, github, drive, browser, internal)
-3. Instantiate appropriate connector
-4. Call `execute_action()` with credentials from OAuth manager
-5. Return result
+## MCP Bridge
 
-## Approval Flow
+Connected via `src/connectors/mcp_bridge.py`. Session pool manages per-user authenticated connections with circuit breaking.
 
-```mermaid
-sequenceDiagram
-    participant A as Agent
-    participant G as Governor Pre-Hook
-    participant DB as Postgres
-    participant NT as Notifier
-    participant U as User
-    participant OP as Operator
-    participant AU as Audit Log
+### Session Pool
 
-    A->>G: Write tool call (e.g., gmail_send)
-    G->>G: Classify as WRITE tool
+- Per `(workspace_id, server_name, user_id)` sessions
+- Real MCP names stored and dispatched directly — no normalization
+- Circuit breaker per server (consecutive failure tracking, cooldown)
+- Retry with exponential backoff for transient errors
 
-    G->>DB: Create Approval record
-    Note over DB: apr_ ID, status=pending, expires_at=+24h
+### Startup Flow
 
-    G->>NT: Notify user of approval request
-    NT->>U: Telegram inline buttons / Web UI
-
-    alt User approves
-        U->>DB: Update status=approved
-        DB-->>OP: Approval granted
-        OP->>A: Retry tool execution
-        A->>A: Tool executes successfully
-        A->>AU: Log to AgentDecisionLog
-    else User rejects
-        U->>DB: Update status=rejected
-        DB-->>A: Tool blocked
-    else Expires (24h)
-        DB->>DB: Status → expired (via recovery)
-    end
 ```
-
-## Tool Classification
-
-### Write Tools (Require Approval)
-
-| Category | Tools |
-|----------|-------|
-| Gmail | send, draft, create_draft, reply |
-| Calendar | create_event, update_event |
-| Slack | post_message, send_message, react, update_message |
-| GitHub | create_issue, comment, create_pr, merge_pr |
-| Telegram | send_telegram, send_approval_prompt |
-
-### Read-Only Tools (Always Allowed)
-
-| Category | Tools |
-|----------|-------|
-| Intelligence | search_memory, get_entities, get_active_plans, get_briefing |
-| Gmail/Calendar/Drive | list, read, search operations |
-| Cursors | get_observation_cursor, report_observation |
-
-### Blocked Tools (Never Allowed)
-
-| Tools |
-|-------|
-| gmail_delete, drive_delete, calendar_delete_event |
-
-### Risk Classification
-
-| Risk Level | Examples |
-|-----------|----------|
-| **High** | gmail_send, github_merge_pr, slack_post_message |
-| **Medium** | Most write tools (create_draft, update_event) |
-| **Critical** | All blocked tools |
-
-## Per-Agent Tool Scopes
-
-Each agent has a curated set of allowed tools, enforced at two levels:
-
-1. **Tool filtering** (`_get_tools_for_agent()`) - Only scoped tools included in Claude API call
-2. **Governor pre-hook** - Second gate for write tools regardless of scope
-
-| Agent | Tool Scope Summary |
-|-------|-------------------|
-| Observer | Gmail/Calendar/Drive/Slack/GitHub read + cursor tools |
-| Librarian | update_entity, get_entities, search_memory |
-| Planner | plan_command, get_active_plans, search_memory, get_entities |
-| Governor | evaluate_policy, approve_action |
-| Operator | All write tools + execution tracking |
-| Presenter | get_briefing, search_memory, send_telegram, push_ui_update |
-| Researcher | All read tools + Perplexity + Playwright |
-| Persona | search_memory, extract_preferences |
+App startup → seed_defaults() (163 tools from catalog)
+            → validate_registry() (6 cross-checks)
+            → initialize_mcp_bridge()
+            → Connect to configured MCP servers
+            → list_tools() on each server
+            → Register discovered tools in DB
+```
 
 ## Audit Logging
 
 Every tool invocation is logged via the audit post-hook:
 
-```python
-AgentDecisionLog:
-    log_id: str         # Unique ID
-    trace_id: str       # Correlation
-    span_id: str        # Agent span
-    agent_name: str     # Which agent called the tool
-    tool_name: str      # Tool invoked
-    input_summary: str  # Truncated input (500 chars)
-    output_summary: str # Truncated output (500 chars)
-    tokens_used: int    # Token cost of this call
-    latency_ms: int     # Duration
 ```
-
-This enables:
-- Compliance auditing of all external writes
-- Cost attribution per agent per tool
-- Latency monitoring and optimization
-- Debugging tool failures with full context
+AgentDecisionLog:
+    log_id, trace_id, span_id, agent_name,
+    tool_name, input_summary (500 chars),
+    output_summary (500 chars), tokens_used, latency_ms
+```

@@ -63,16 +63,16 @@ async def test_extract_stores_with_embedding(mock_get_client, mock_embed_cls, se
 
     assert len(ids) == 1
     assert ids[0].startswith("mem_")
-    # Verify embedding was set on the Memory object
+    # Verify Memory object was added to DB (embedding now in Qdrant, not model)
     add_call = mock_db.add.call_args[0][0]
-    assert add_call.embedding == fake_embedding
+    assert add_call.fact_text == "Alice is CFO at Acme Corp"
 
 
 @patch("src.services.memory_service.EmbeddingService")
 @patch("src.services.memory_service.get_anthropic_client")
 @pytest.mark.asyncio
 async def test_semantic_retrieve_with_embedding(mock_get_client, mock_embed_cls, settings, mock_db):
-    """Should use semantic search when query embedding succeeds."""
+    """Should use Qdrant semantic search when query embedding succeeds."""
     mock_get_client.return_value = MagicMock()
 
     fake_embedding = [0.2] * 1024
@@ -80,24 +80,40 @@ async def test_semantic_retrieve_with_embedding(mock_get_client, mock_embed_cls,
     mock_embedder.embed_text = AsyncMock(return_value=fake_embedding)
     mock_embed_cls.return_value = mock_embedder
 
-    # Mock the raw SQL result for semantic search
-    mock_row = MagicMock()
-    mock_row.memory_id = "mem_001"
-    mock_row.memory_type = "semantic"
-    mock_row.fact_text = "Alice is CFO at Acme Corp"
-    mock_row.confidence = 0.9
-    mock_row.scope = "general"
-    mock_row.relevance = 0.95
-    mock_row.entity_ids = None
-    mock_row.stability_score = 0.0
-    mock_row.recency = 0.8
-    mock_row.entity_overlap = 0.0
+    # Mock Qdrant vector_store.search results
+    mock_vector_store = AsyncMock()
+    mock_vector_store.search = AsyncMock(
+        return_value=[
+            {
+                "id": "mem_001",
+                "score": 0.95,
+                "payload": {
+                    "_original_id": "mem_001",
+                    "fact_text": "Alice is CFO at Acme Corp",
+                },
+            }
+        ]
+    )
+
+    # Mock Postgres batch-fetch of Memory rows
+    from datetime import datetime, timezone
+
+    mock_mem = MagicMock()
+    mock_mem.memory_id = "mem_001"
+    mock_mem.memory_type = "semantic"
+    mock_mem.fact_text = "Alice is CFO at Acme Corp"
+    mock_mem.confidence = 0.9
+    mock_mem.scope = "general"
+    mock_mem.entity_ids = None
+    mock_mem.stability_score = 0.0
+    mock_mem.last_accessed_at = None
+    mock_mem.created_at = datetime.now(timezone.utc)
 
     mock_result = MagicMock()
-    mock_result.all.return_value = [mock_row]
+    mock_result.scalars.return_value.all.return_value = [mock_mem]
     mock_db.execute = AsyncMock(return_value=mock_result)
 
-    service = MemoryService(settings=settings, db=mock_db)
+    service = MemoryService(settings=settings, db=mock_db, vector_store=mock_vector_store)
     results = await service.retrieve(TEST_USER_ID, "Who is Alice?")
 
     assert len(results) == 1

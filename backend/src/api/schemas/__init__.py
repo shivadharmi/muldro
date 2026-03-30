@@ -113,6 +113,8 @@ class SearchResult(BaseModel):
     title: str
     summary: str | None = None
     score: float | None = None
+    source_db: str | None = None
+    why_matched: str | None = None
 
 
 class SearchResponse(BaseModel):
@@ -157,74 +159,6 @@ class EventIngestResponse(BaseModel):
     event_id: str | None = None
     status: str
     importance_score: float | None = None
-
-
-# ── Canvas Dashboard ─────────────────────────────────────────────
-
-
-class DashboardApproval(BaseModel):
-    approval_id: str
-    title: str
-    summary: str | None = None
-    risk_level: str = "medium"
-    approval_type: str = ""
-    created_at: datetime | None = None
-
-
-class DashboardTask(BaseModel):
-    task_id: str
-    goal: str
-    priority: str
-    status: str
-    decision: str
-    step_count: int = 0
-    steps_completed: int = 0
-    created_at: datetime | None = None
-
-
-class DashboardMeeting(BaseModel):
-    event_id: str
-    title: str
-    starts_at: datetime | None = None
-    attendee_count: int = 0
-    location: str | None = None
-
-
-class DashboardTrace(BaseModel):
-    trace_id: str
-    trigger: str
-    agents_invoked: list[str] = []
-    duration_ms: int | None = None
-    total_cost_usd: float = 0.0
-
-
-class DashboardGoal(BaseModel):
-    goal_id: str
-    title: str
-    progress: float = 0.0
-    priority: str = "medium"
-    task_count: int = 0
-    completed_task_count: int = 0
-
-
-class DashboardEvent(BaseModel):
-    source: str
-    event_type: str
-    title: str | None = None
-    occurred_at: datetime | None = None
-
-
-class DashboardResponse(BaseModel):
-    headline: str | None = None
-    date: date
-    pending_approvals: list[DashboardApproval] = []
-    active_tasks: list[DashboardTask] = []
-    upcoming_meetings: list[DashboardMeeting] = []
-    recommended_actions: list[str] = []
-    briefing_id: str | None = None
-    recent_traces: list[DashboardTrace] = []
-    active_goals: list[DashboardGoal] = []
-    recent_events: list[DashboardEvent] = []
 
 
 # ── Approval Detail ──────────────────────────────────────────────
@@ -272,21 +206,21 @@ class TaskDetailResponse(BaseModel):
 # ── Observation ──────────────────────────────────────────────────
 
 
-class ObservationReportRequest(BaseModel):
+class PerceptionReportRequest(BaseModel):
     source: str
-    items_found: int = 0
-    items_ingested: int = 0
-    status: str = "ok"
+    event_count: int = 0
+    status: str = "ok"  # ok | error
     error_message: str | None = None
 
 
-class ObservationStatusResponse(BaseModel):
+class PerceptionStatusResponse(BaseModel):
     source: str
-    last_observed_at: datetime | None = None
-    items_found: int = 0
-    items_ingested: int = 0
-    status: str = "ok"
+    last_run_at: datetime | None = None
+    event_count: int = 0
+    circuit_state: str = "closed"  # closed | open | half_open
     error_message: str | None = None
+    consecutive_failures: int = 0
+    total_runs: int = 0
     is_stale: bool = False
 
 

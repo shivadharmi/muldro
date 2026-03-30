@@ -153,27 +153,25 @@ async def _get_observation_info(user_id: str, workspace_id: str) -> dict:
     """Get observation health status per source."""
     try:
         from src.models.database import get_session_factory
-        from src.models.observation import ObservationStatus
+        from src.models.perception_state import PerceptionState
 
         async with get_session_factory()() as db:
             result = await db.execute(
-                select(ObservationStatus).where(
-                    ObservationStatus.user_id == user_id,
-                    ObservationStatus.workspace_id == workspace_id,
+                select(PerceptionState).where(
+                    PerceptionState.user_id == user_id,
+                    PerceptionState.workspace_id == workspace_id,
                 )
             )
-            observations = result.scalars().all()
+            states = result.scalars().all()
 
             return {
-                obs.source: {
-                    "last_observed_at": (
-                        obs.last_observed_at.isoformat() if obs.last_observed_at else None
-                    ),
-                    "status": obs.status,
-                    "items_found": obs.items_found,
-                    "items_ingested": obs.items_ingested,
+                ps.source: {
+                    "last_run_at": (ps.last_run_at.isoformat() if ps.last_run_at else None),
+                    "circuit_state": ps.circuit_state,
+                    "event_count": ps.last_event_count,
+                    "consecutive_failures": ps.consecutive_failures,
                 }
-                for obs in observations
+                for ps in states
             }
     except Exception as e:
         logger.error("Failed to get observation info: %s", e)

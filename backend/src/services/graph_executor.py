@@ -99,7 +99,7 @@ async def create_graph_executor(
     try:
         from src.services.verifier import Verifier
 
-        verifier = Verifier(db, settings)
+        verifier = Verifier(settings, db)
     except Exception:
         logger.debug("Verifier unavailable for GraphExecutor", exc_info=True)
 
@@ -142,8 +142,20 @@ class GraphExecutor:
         self._connector_credentials_fn = connector_credentials_fn
         self._memory_service = memory_service
 
-    async def create_run(self, plan_id: str, user_id: str, workspace_id: str = "") -> TaskRun:
-        """Create a TaskRun from a Plan, building the step DAG."""
+    async def create_run(
+        self,
+        plan_id: str,
+        user_id: str,
+        workspace_id: str = "",
+        source: str = "plan",
+    ) -> TaskRun:
+        """Create a TaskRun from a Plan, building the step DAG.
+
+        Args:
+            source: Origin of the run. "plan" for user-initiated,
+                    "background" for perception-generated plans queued
+                    for deferred execution by the scheduler.
+        """
         result = await self._db.execute(select(Plan).where(Plan.plan_id == plan_id))
         plan = result.scalar_one_or_none()
         if not plan:
@@ -155,7 +167,7 @@ class GraphExecutor:
             plan_id=plan_id,
             user_id=user_id,
             workspace_id=workspace_id,
-            source="plan",
+            source=source,
             status="pending",
         )
         self._db.add(run)
@@ -218,6 +230,10 @@ class GraphExecutor:
                     if dep_task_id in task_id_to_step_id:
                         depends_on_step_ids.append(task_id_to_step_id[dep_task_id])
 
+            step_input = dict(task.input_data) if task.input_data else {}
+            if task.task_type and "task_type" not in step_input:
+                step_input["task_type"] = task.task_type
+
             step = TaskStep(
                 step_id=step_id,
                 run_id=run.run_id,
@@ -226,7 +242,7 @@ class GraphExecutor:
                 plan_task_id=task.task_id,
                 depends_on=depends_on_step_ids or None,
                 status="pending",
-                input_data=task.input_data,
+                input_data=step_input or None,
             )
             self._db.add(step)
 
@@ -271,7 +287,26 @@ class GraphExecutor:
         )
 
         try:
-            await self._execute_dag(run)
+            # Enforce timeout for background runs to prevent indefinite hangs
+            timeout = run.timeout_seconds or (600 if run.source == "background" else None)
+            if timeout:
+                await asyncio.wait_for(self._execute_dag(run), timeout=timeout)
+            else:
+                await self._execute_dag(run)
+        except asyncio.TimeoutError:
+            transition_run(run, "timed_out")
+            run.completed_at = datetime.now(timezone.utc)
+            run.error = {
+                "type": "TimeoutError",
+                "message": f"Run timed out after {timeout}s",
+            }
+            logger.warning("Run %s timed out after %ds", run_id, timeout)
+            await self._emit_event(
+                "run.timed_out",
+                run.user_id,
+                {"run_id": run_id, "timeout": timeout},
+                workspace_id=run.workspace_id,
+            )
         except Exception as exc:
             transition_run(run, "failed")
             run.completed_at = datetime.now(timezone.utc)
@@ -299,14 +334,40 @@ class GraphExecutor:
         return run
 
     async def resume_run(self, run_id: str) -> TaskRun:
-        """Resume a paused run from its last checkpoint."""
+        """Resume a paused/awaiting run from its last checkpoint.
+
+        If the run has been paused for >30 minutes and a ContextBuilder is
+        available, the context is refreshed before resuming to avoid
+        stale data from the original run creation.
+        """
         result = await self._db.execute(select(TaskRun).where(TaskRun.run_id == run_id))
         run = result.scalar_one_or_none()
         if not run:
             raise ValueError(f"Run not found: {run_id}")
 
-        if run.status not in ("paused", "awaiting_approval"):
-            raise ValueError(f"Run {run_id} is not paused (status={run.status})")
+        resumable = ("paused", "awaiting_approval", "awaiting_input")
+        if run.status not in resumable:
+            raise ValueError(f"Run {run_id} is not resumable (status={run.status})")
+
+        # Refresh stale context if paused for >30 minutes
+        pause_duration = (
+            datetime.now(timezone.utc) - (run.started_at or run.created_at)
+        ).total_seconds()
+        if pause_duration > 1800 and hasattr(self, "_context_builder") and self._context_builder:
+            try:
+                fresh_pack = await self._context_builder.build(
+                    user_id=run.user_id,
+                    query=(run.context_pack_json or {}).get("task_summary", "")[:500],
+                    workspace_id=run.workspace_id,
+                )
+                run.context_pack_json = fresh_pack.model_dump()
+                logger.info(
+                    "Refreshed stale context for run %s (paused %ds)",
+                    run_id,
+                    int(pause_duration),
+                )
+            except Exception:
+                logger.debug("Context refresh failed, using cached", exc_info=True)
 
         transition_run(run, "running")
         await self._db.flush()
@@ -404,16 +465,17 @@ class GraphExecutor:
                 # Must be waiting for approval or external event
                 break
 
-            # Execute ready steps (parallel if multiple)
+            # Execute ready steps sequentially (shared AsyncSession is not
+            # safe for concurrent coroutines — parallel gather caused silent
+            # step failures and permanently stuck runs).
             run.current_step_ids = [s.step_id for s in ready_steps]
             await self._db.flush()
 
-            if len(ready_steps) == 1:
-                await self._execute_step(run, ready_steps[0])
-            else:
-                # Run independent steps concurrently
-                tasks = [self._execute_step(run, step) for step in ready_steps]
-                await asyncio.gather(*tasks, return_exceptions=True)
+            for step in ready_steps:
+                try:
+                    await self._execute_step(run, step)
+                except Exception:
+                    logger.error("Step %s raised unexpectedly", step.step_id, exc_info=True)
 
             # Check if run was paused by an approval gate
             await self._db.refresh(run)
@@ -441,10 +503,19 @@ class GraphExecutor:
         # Check 2: workspace approval policies (capability-pattern based)
         if not needs_approval and task_type and run.workspace_id:
             try:
-                from src.integrations.capabilities import get_capability_for_tool
                 from src.services.approval_policy_engine import ApprovalPolicyEngine
+                from src.tools.catalog import EXTERNAL_TOOL_SEEDS, INTERNAL_TOOLS
 
-                capability = get_capability_for_tool(task_type)
+                capability = None
+                for _t in INTERNAL_TOOLS:
+                    if _t.name == task_type:
+                        capability = _t.capability
+                        break
+                if capability is None:
+                    for _s in EXTERNAL_TOOL_SEEDS:
+                        if _s.name == task_type:
+                            capability = _s.capability
+                            break
                 engine = ApprovalPolicyEngine(self._db, run.workspace_id)
                 decision = await engine.check(
                     capability=capability,
@@ -526,6 +597,12 @@ class GraphExecutor:
             workspace_id=run.workspace_id,
         )
 
+        # Resolve step output references: {task_id}.output.field → actual value
+        resolved_input = await self._resolve_step_references(step, run.run_id)
+        if resolved_input != (step.input_data or {}):
+            step.input_data = resolved_input
+            await self._db.flush()
+
         t0 = time.monotonic()
         try:
             output = await self._run_step_action(step, run)
@@ -546,6 +623,7 @@ class GraphExecutor:
             transition_step(step, "completed")
             step.output_data = output
             step.completed_at = datetime.now(timezone.utc)
+            await self._db.flush()
 
             result = StepResult(
                 step_id=step.step_id,
@@ -650,20 +728,7 @@ class GraphExecutor:
             workspace_id=run.workspace_id,
         )
 
-        # 1. Try capability resolver (routes to best backend)
-        try:
-            from src.integrations.capabilities import get_capability_for_tool
-            from src.integrations.capability_resolver import CapabilityResolver
-
-            capability = get_capability_for_tool(task_type)
-            if capability:
-                resolver = CapabilityResolver(self._db, None, run.workspace_id)
-                raw = await resolver.execute(task_type, input_data, user_id=run.user_id)
-                return raw
-        except Exception:
-            logger.debug("Capability resolver failed for %s, falling back", task_type)
-
-        # 2. Try MCP bridge (external MCP servers)
+        # 1. Try MCP bridge (external MCP servers)
         from src.connectors.mcp_bridge import call_mcp_tool, is_mcp_tool
 
         if is_mcp_tool(task_type, workspace_id=run.workspace_id):
@@ -675,7 +740,7 @@ class GraphExecutor:
             )
             return raw
 
-        # 3. Try connector dispatch via ToolRegistry
+        # 2. Try connector dispatch via ToolRegistry
         if self._tool_registry:
             tool_def = await self._tool_registry.get_tool(task_type)
             if tool_def:
@@ -686,21 +751,16 @@ class GraphExecutor:
                     )
                     return raw
 
-        # 4. Built-in Claude handlers for specific types
+        # 3. Built-in Claude handlers for specific types
         if task_type in ("draft_email", "draft_reply"):
             return await self._draft_action(input_data, run, context_prompt)
         if task_type == "summarize":
             return await self._summarize_action(input_data, context_prompt)
 
-        # 5. Generic Claude handler — any task with a goal/context gets
-        #    routed to Claude for intelligent handling
-        goal = input_data.get("goal", input_data.get("context", ""))
-        if goal:
-            return await self._generic_claude_action(task_type, input_data, context_prompt)
-
-        # 6. Stub — log so we know what's unhandled
-        logger.info("Step %s: no handler for task_type '%s', stub", step.step_id, task_type)
-        return {"status": "completed", "note": f"Task type '{task_type}' executed"}
+        # 4. Generic Claude handler — catch-all for any unrecognized
+        #    task_type. Claude interprets the task semantically using the
+        #    enriched context prompt from ContextBuilder.
+        return await self._generic_claude_action(task_type, input_data, context_prompt)
 
     async def _build_step_context(self, run: TaskRun, step: TaskStep) -> str:
         """Build context prompt for a step using ContextBuilder."""
@@ -850,7 +910,9 @@ class GraphExecutor:
     ) -> dict:
         """Handle any task type by routing to Claude with structured instructions."""
         goal = input_data.get("goal", input_data.get("context", ""))
-        parts = [f"Task type: {task_type}", f"Goal: {goal}"]
+        parts = [f"Task type: {task_type}"]
+        if goal:
+            parts.append(f"Goal: {goal}")
         for key, value in input_data.items():
             if key not in ("task_type", "goal", "context"):
                 parts.append(f"{key}: {value}")
@@ -879,20 +941,27 @@ class GraphExecutor:
             return {"status": "completed", "result": text}
 
     async def _get_ready_steps(self, run_id: str) -> list[TaskStep]:
-        """Get steps whose dependencies are all completed."""
+        """Get steps whose dependencies are all completed.
+
+        Also picks up steps already in 'ready' state (e.g. from a previous
+        iteration where execution failed before the step could start).
+        """
         all_steps = await self._get_all_steps(run_id)
         completed_ids = {s.step_id for s in all_steps if s.status == "completed"}
 
         ready = []
+        needs_flush = False
         for step in all_steps:
-            if step.status not in ("pending",):
-                continue
-            deps = step.depends_on or []
-            if all(dep_id in completed_ids for dep_id in deps):
-                transition_step(step, "ready")
+            if step.status == "ready":
                 ready.append(step)
+            elif step.status == "pending":
+                deps = step.depends_on or []
+                if all(dep_id in completed_ids for dep_id in deps):
+                    transition_step(step, "ready")
+                    ready.append(step)
+                    needs_flush = True
 
-        if ready:
+        if needs_flush:
             await self._db.flush()
         return ready
 
@@ -903,21 +972,60 @@ class GraphExecutor:
         )
         return list(result.scalars().all())
 
+    async def _resolve_step_references(self, step: TaskStep, run_id: str) -> dict:
+        """Resolve {task_id}.output.field references in step input_data.
+
+        Enables declarative wiring between DAG steps: a downstream step
+        can reference an upstream step's output by task_id.
+        """
+        input_data = dict(step.input_data or {})
+        all_steps = await self._get_all_steps(run_id)
+        outputs_by_task = {s.task_id: s.output_data for s in all_steps if s.output_data}
+
+        def resolve(value):
+            if isinstance(value, str) and value.startswith("{") and "}.output." in value:
+                ref, _, field = value[1:].partition("}.output.")
+                source = outputs_by_task.get(ref)
+                if source and isinstance(source, dict):
+                    return source.get(field, value)
+            return value
+
+        return {k: resolve(v) for k, v in input_data.items()}
+
     async def _checkpoint(self, run: TaskRun, step_id: str | None, reason: str) -> None:
-        """Save a checkpoint."""
+        """Save a rich checkpoint with completed step outputs."""
+        # Collect completed step outputs for checkpoint context
+        completed_outputs = {}
+        try:
+            all_steps = await self._get_all_steps(run.run_id)
+            completed_outputs = {
+                s.step_id: {
+                    "task_id": s.task_id,
+                    "status": s.status,
+                    "output_summary": str(s.output_data)[:500] if s.output_data else None,
+                }
+                for s in all_steps
+                if s.status == "completed"
+            }
+        except Exception:
+            pass  # Non-critical — checkpoint still saved without outputs
+
+        snapshot = {
+            "status": run.status,
+            "current_step_ids": run.current_step_ids,
+            "completed_steps": completed_outputs,
+            "checkpoint_at": datetime.now(timezone.utc).isoformat(),
+        }
         checkpoint = TaskCheckpoint(
             checkpoint_id=f"ckpt_{ULID()}",
             run_id=run.run_id,
             workspace_id=run.workspace_id,
             step_id=step_id,
             reason=reason,
-            state_snapshot={
-                "status": run.status,
-                "current_step_ids": run.current_step_ids,
-            },
+            state_snapshot=snapshot,
         )
         self._db.add(checkpoint)
-        run.checkpoint = checkpoint.state_snapshot
+        run.checkpoint = snapshot
         await self._db.flush()
 
     async def _writeback_memories(self, run: TaskRun) -> None:
@@ -936,6 +1044,7 @@ class GraphExecutor:
                 user_id=run.user_id,
                 source_text="\n".join(parts),
                 source_event_ids=[run.run_id],
+                workspace_id=run.workspace_id,
             )
         except Exception:
             logger.debug("Memory writeback failed", exc_info=True)
@@ -1015,7 +1124,7 @@ class GraphExecutor:
                 channel = f"jarvis:run_progress:{run_id}"
                 await redis.publish(channel, json.dumps(data))
             finally:
-                await redis.close()
+                await redis.aclose()
         except Exception:
             logger.debug("Failed to publish run progress", exc_info=True)
 

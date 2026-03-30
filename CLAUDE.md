@@ -27,12 +27,12 @@ User <-> Telegram Bot / Next.js Frontend (A2UI)
 **Key paths:**
 - Orchestrator + agents: `backend/src/orchestrator/` (jarvis.py, agents.py, agent_loop.py, hooks.py, prompts.py, tracing.py, budget.py, perception.py, recovery.py, intent_classifier.py, api_circuit_breaker.py)
 - Services (business logic): `backend/src/services/` (planner, governor, operator, presenter, memory_service, world_model, event_processor, etc.)
-- MCP tool servers: `backend/src/tools/` (intelligence_server.py, communication_server.py, mcp_config.py)
+- Tool layer: `backend/src/tools/` (catalog.py, schemas.py, validation.py, intelligence_server.py, communication_server.py, server.py)
 - Runtime contracts: `backend/src/orchestrator/contracts.py` (PlannerOutput, PolicyDecision, StepResult, ToolCallRequest, DomainEvent, WorkspaceSurfaceMetadata, WorkspaceSurfacePush)
 - A2UI component system: `backend/src/ui/` (contracts.py, renderer.py, views.py)
 - A2UI surface builder: `backend/src/services/surface_builder.py` (SurfaceService)
 - API routes: `backend/src/api/` (30 routers, all `/v1/` prefixed)
-- SQLAlchemy models: `backend/src/models/` (54 tables, all workspace-scoped)
+- SQLAlchemy models: `backend/src/models/` (51 tables, all workspace-scoped)
 - Frontend: `frontend/src/` (Next.js + A2UI renderer + chat split-pane, 7 pages)
 - Infra: `infra/` (Terraform for AWS) + `docker-compose.yml` (local dev)
 
@@ -41,7 +41,7 @@ User <-> Telegram Bot / Next.js Frontend (A2UI)
 ### Backend (run from `backend/`)
 
 ```bash
-# Infrastructure (Postgres, Redis, MinIO, Elasticsearch, Qdrant, Neo4j)
+# Infrastructure (Postgres, Redis, MinIO, Qdrant, Neo4j)
 docker compose up -d
 
 # Run backend API server (port 8000)
@@ -81,7 +81,7 @@ npm run lint    # eslint
 
 ## Configuration
 
-All backend settings via env vars with `JARVIS_` prefix (pydantic-settings in `src/config/settings.py`). Key vars: `JARVIS_DATABASE_URL`, `JARVIS_REDIS_URL`, `JARVIS_ANTHROPIC_API_KEY`, `JARVIS_USE_BEDROCK`, `JARVIS_TELEGRAM_BOT_TOKEN`, `JARVIS_TELEGRAM_CHAT_ID`, `JARVIS_LOG_JSON`, `JARVIS_DAILY_TOKEN_BUDGET_USD`. Uses `.env` file.
+All backend settings via env vars with `JARVIS_` prefix (pydantic-settings in `src/config/settings.py`). Key vars: `JARVIS_DATABASE_URL`, `JARVIS_REDIS_URL`, `JARVIS_ANTHROPIC_API_KEY`, `JARVIS_USE_BEDROCK`, `JARVIS_TELEGRAM_BOT_TOKEN`, `JARVIS_TELEGRAM_CHAT_ID`, `JARVIS_LOG_JSON`, `JARVIS_DAILY_TOKEN_BUDGET_USD`, `JARVIS_RERANKER_MODEL`, `JARVIS_RERANKER_ENABLED`, `JARVIS_SKIP_REGISTRY_VALIDATION`. Uses `.env` file.
 
 ## Coding Standards
 
@@ -135,12 +135,12 @@ The `RouteResolver` (`src/services/route_resolver.py`) maps Planner decisions to
 |----------|----------|---------|
 | `create_task` | Governor → Operator (execute_plan) | GraphExecutor DAG |
 | `draft_reply` | Governor → Operator (execute_plan) | `_draft_action` → Gmail draft |
-| `read_source` | Observer → Presenter | Tool calls (gmail_*, calendar_*) |
-| `research` | Researcher | search_memory, web tools |
+| `read_source` | Observer → Presenter | MCP tool calls (data source tools) |
+| `research` | Researcher | search, web tools |
 | `observe` | Observer | Background observation |
 | `remember` | Librarian | Entity/memory updates |
 | `add_to_brief` | Librarian | Stores as `briefing_item` memory |
-| `search_memory` | Researcher | Knowledge search |
+| `search_memory` | Researcher | Knowledge search (via `search` tool) |
 | `watcher_create` | Observer | Watcher setup |
 | `goal_update` | Planner | Goal modification |
 | `set_goal` | (direct handler) | `_handle_set_goal` → memory |
@@ -153,6 +153,34 @@ The `RouteResolver` (`src/services/route_resolver.py`) maps Planner decisions to
 **Direct handlers** (`set_goal`, `set_instruction`, `schedule_reminder`, `add_to_brief`) execute before pipeline resolution in both `process_message` and `process_message_stream`.
 
 **Route conditions:** `has_key`, `has_truthy_key`, `not_has_key`, `field:<name>`, direct key=value.
+
+## Unified Tool Registry
+
+Tool identity lives in 2 files: `src/tools/catalog.py` (definitions) + `src/tools/intelligence_server.py` (implementations). All tools are served through MCP — no native connectors.
+
+**Adding tools:**
+- New internal tool: edit `catalog.py` (add `InternalToolDef`) + `intelligence_server.py` (add MCP function)
+- New external tool seed: edit `catalog.py` (add `ExternalToolSeed`)
+- Unknown MCP tools: auto-registered on discovery with `capability=None` (invisible until admin maps capability)
+
+**Dispatch:** One `ToolRegistry.get_tool()` lookup → match on `backend`:
+- `internal_mcp` → `_call_internal_tool()` with `server_prefix` from registry
+- `external_mcp` → `call_mcp_tool()` with real MCP name (no normalization)
+- `composite` → `_call_composite_tool()` (e.g., `web_search`)
+- `_special` → return input as-is (e.g., `report_governor_verdict`)
+
+**Authorization:** `SubAgent.can_use_tool()` does one registry lookup for capability, checks against agent's `capability_scope`. No normalizer chain.
+
+**Governor tool policy:** `Governor.is_auto_execute_tool()` derives from registry `risk_level` + `requires_approval`. `AUTO_EXECUTE_DECISIONS` is separate (decision-level, not tool-level).
+
+**Startup:** `seed_defaults()` reads from `INTERNAL_TOOLS` + `EXTERNAL_TOOL_SEEDS` in catalog.py → upserts into `tool_definitions` table. `validate_registry()` runs 6 cross-checks. `JARVIS_SKIP_REGISTRY_VALIDATION=true` disables validation in emergencies.
+
+**Key files:**
+- Catalog: `src/tools/catalog.py` (InternalToolDef, ExternalToolSeed, INTERNAL_TOOLS, EXTERNAL_TOOL_SEEDS)
+- Schemas: `src/tools/schemas.py` (Pydantic input models for internal tools)
+- Validation: `src/tools/validation.py` (startup cross-checks)
+- Registry: `src/services/tool_registry.py` (ToolRegistry — DB CRUD + seed from catalog)
+- Capabilities: `src/integrations/capabilities.py` (CAPABILITY_CATALOG, CapabilityFamily — taxonomy only)
 
 ## Agent Prompt Architecture
 
@@ -265,7 +293,7 @@ The system learns from execution outcomes and synthesizes across perception sour
 
 ## Multi-Tenant Workspace Isolation
 
-All 54 data tables are scoped by `workspace_id` (NOT NULL FK to `workspaces`). Only 5 tables are user-level: `users`, `workspaces`, `workspace_members`, `sessions`, `magic_links`. Global tables: `agents`, `agent_routes`, `user_settings`.
+All 51 data tables are scoped by `workspace_id` (NOT NULL FK to `workspaces`). Only 5 tables are user-level: `users`, `workspaces`, `workspace_members`, `sessions`, `magic_links`. Global tables: `agents`, `agent_routes`, `user_settings`.
 
 - API routes: resolve workspace via `get_current_workspace_id()` dependency (reads from session, zero queries)
 - Background services: resolve via `resolve_workspace_id(db, user_id)` helper (queries WorkspaceMember)
@@ -281,7 +309,7 @@ All 54 data tables are scoped by `workspace_id` (NOT NULL FK to `workspaces`). O
 - Do not let the planner output free-form text — always structured JSON
 - Do not skip the Governor for external writes
 - Do not store secrets in memory or model context
-- Do not over-engineer — Postgres + Redis is the core stack
+- Do not over-engineer — Postgres + Redis + Qdrant is the core stack
 - Do not use bare `db = db_factory()` — always `async with db_factory() as db:` + `await db.commit()`
 - Do not mutate TaskRun/TaskStep status directly — use `transition_run()` / `transition_step()`
 - Do not hardcode user IDs — resolve from auth context
@@ -298,3 +326,10 @@ All 54 data tables are scoped by `workspace_id` (NOT NULL FK to `workspaces`). O
 - Do not import `classify_intent`/`extract_decision`/`intent_to_decision` from `jarvis.py` — they moved to `src/orchestrator/intent_classifier.py`
 - Do not create tool-level approvals without `run_id` and `artifact_refs` — the approval resume path needs these to re-execute the tool after user approval
 - Do not skip `workspace_id` when calling `_assemble_context()` or `ContextBuilder.build()` — preferences and related runs are workspace-scoped
+- Do not add tool definitions to multiple files — use `catalog.py` only (`InternalToolDef` or `ExternalToolSeed`)
+- Do not hardcode tool names in agent prompts — agents discover tools via the MCP tool list passed in the Claude API request
+- Do not normalize MCP tool names — use real names everywhere (no camelCase→snake_case conversion)
+- Do not use deleted modules: `tool_normalizer.py`, `tool_policy.py`, `capability_resolver.py`, `tool_schemas.py` (moved to `src/tools/schemas.py`)
+- Do not use `TOOL_TO_CAPABILITY` dict or `get_capability_for_tool()` — they were deleted. Use registry `capability` column via `ToolRegistry.get_tool()`
+- Do not use `_DEFAULT_TOOLS` or `CANONICAL_ALIASES` — they were deleted. Use `catalog.py` seeds
+- Do not use native connector dispatch (`_NATIVE_TOOL_MAP`, `_try_native_connector`) — deleted. All tools go through MCP

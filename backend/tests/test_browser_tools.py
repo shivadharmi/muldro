@@ -15,31 +15,36 @@ _PATCH_IS = "src.connectors.mcp_bridge.is_mcp_tool"
 
 
 class TestCapabilityMappings:
-    """Verify Playwright MCP tool names are mapped to capabilities."""
+    """Verify Playwright MCP tool names are mapped to capabilities in catalog."""
+
+    def _get_cap(self, tool_name: str) -> str | None:
+        from src.tools.catalog import EXTERNAL_TOOL_SEEDS, INTERNAL_TOOLS
+
+        for t in INTERNAL_TOOLS:
+            if t.name == tool_name:
+                return t.capability
+        for s in EXTERNAL_TOOL_SEEDS:
+            if s.name == tool_name:
+                return s.capability
+        return None
 
     def test_browser_navigate_maps_to_browser_open(self):
-        from src.integrations.capabilities import TOOL_TO_CAPABILITY
-
-        assert TOOL_TO_CAPABILITY["browser_navigate"] == "browser.open"
+        assert self._get_cap("browser_navigate") == "browser.open"
 
     def test_web_search_maps_to_search_web(self):
-        from src.integrations.capabilities import TOOL_TO_CAPABILITY
-
-        assert TOOL_TO_CAPABILITY["web_search"] == "search.web"
+        assert self._get_cap("web_search") == "search.web"
 
     def test_browser_tabs_mapped(self):
-        from src.integrations.capabilities import TOOL_TO_CAPABILITY
-
-        assert TOOL_TO_CAPABILITY["browser_tabs"] == "browser.open"
+        assert self._get_cap("browser_tabs") == "browser.open"
 
     def test_browser_press_key_mapped(self):
-        from src.integrations.capabilities import TOOL_TO_CAPABILITY
-
-        assert TOOL_TO_CAPABILITY["browser_press_key"] == "browser.type"
+        assert self._get_cap("browser_press_key") == "browser.type"
 
     def test_all_playwright_mcp_tools_mapped(self):
         """All known @playwright/mcp tool names have capability mappings."""
-        from src.integrations.capabilities import TOOL_TO_CAPABILITY
+        from src.tools.catalog import EXTERNAL_TOOL_SEEDS
+
+        catalog_names = {s.name for s in EXTERNAL_TOOL_SEEDS}
 
         playwright_tools = [
             "browser_navigate",
@@ -50,15 +55,21 @@ class TestCapabilityMappings:
             "browser_drag",
             "browser_handle_dialog",
             "browser_file_upload",
-            "browser_wait",
             "browser_close",
             "browser_resize",
-            "browser_pdf_save",
             "browser_network_requests",
             "browser_console_messages",
+            # New Phase 5 tools
+            "browser_evaluate",
+            "browser_run_code",
+            "browser_install",
+            "browser_navigate_back",
+            "browser_take_screenshot",
+            "browser_wait_for",
+            "browser_fill_form",
         ]
         for tool_name in playwright_tools:
-            assert tool_name in TOOL_TO_CAPABILITY, f"{tool_name} not mapped"
+            assert tool_name in catalog_names, f"{tool_name} not mapped"
 
 
 # ── Agent capability scope tests ───────────────────────────────────────────
@@ -67,36 +78,101 @@ class TestCapabilityMappings:
 class TestResearcherAgentScope:
     """Verify the Researcher agent can use web search and browser tools."""
 
-    def test_researcher_can_use_web_search(self):
+    @pytest.mark.asyncio
+    async def test_researcher_can_use_web_search(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
         from src.orchestrator.agents import AGENTS
 
         researcher = AGENTS["researcher"]
-        assert researcher.can_use_tool("web_search")
+        mock_db = AsyncMock()
 
-    def test_researcher_can_use_browser_navigate(self):
+        with patch("src.services.tool_registry.ToolRegistry") as mock_reg_cls:
+            mock_reg = MagicMock()
+            tool = MagicMock()
+            tool.name = "web_search"
+            tool.capability = "search.web"
+            mock_reg.get_tool = AsyncMock(return_value=tool)
+            mock_reg_cls.return_value = mock_reg
+
+            assert await researcher.can_use_tool("web_search", mock_db)
+
+    @pytest.mark.asyncio
+    async def test_researcher_can_use_browser_navigate(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
         from src.orchestrator.agents import AGENTS
 
         researcher = AGENTS["researcher"]
-        assert researcher.can_use_tool("browser_navigate")
+        mock_db = AsyncMock()
 
-    def test_researcher_can_use_browser_snapshot(self):
+        with patch("src.services.tool_registry.ToolRegistry") as mock_reg_cls:
+            mock_reg = MagicMock()
+            tool = MagicMock()
+            tool.name = "browser_navigate"
+            tool.capability = "browser.open"
+            mock_reg.get_tool = AsyncMock(return_value=tool)
+            mock_reg_cls.return_value = mock_reg
+
+            assert await researcher.can_use_tool("browser_navigate", mock_db)
+
+    @pytest.mark.asyncio
+    async def test_researcher_can_use_browser_snapshot(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
         from src.orchestrator.agents import AGENTS
 
         researcher = AGENTS["researcher"]
-        assert researcher.can_use_tool("browser_snapshot")
+        mock_db = AsyncMock()
 
-    def test_researcher_can_use_browser_screenshot(self):
+        with patch("src.services.tool_registry.ToolRegistry") as mock_reg_cls:
+            mock_reg = MagicMock()
+            tool = MagicMock()
+            tool.name = "browser_snapshot"
+            tool.capability = "browser.snapshot"
+            mock_reg.get_tool = AsyncMock(return_value=tool)
+            mock_reg_cls.return_value = mock_reg
+
+            assert await researcher.can_use_tool("browser_snapshot", mock_db)
+
+    @pytest.mark.asyncio
+    async def test_researcher_can_use_browser_screenshot(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
         from src.orchestrator.agents import AGENTS
 
         researcher = AGENTS["researcher"]
-        assert researcher.can_use_tool("browser_screenshot")
+        mock_db = AsyncMock()
 
-    def test_researcher_cannot_use_browser_submit(self):
+        with patch("src.services.tool_registry.ToolRegistry") as mock_reg_cls:
+            mock_reg = MagicMock()
+            tool = MagicMock()
+            tool.name = "browser_screenshot"
+            tool.capability = "browser.screenshot"
+            mock_reg.get_tool = AsyncMock(return_value=tool)
+            mock_reg_cls.return_value = mock_reg
+
+            assert await researcher.can_use_tool("browser_screenshot", mock_db)
+
+    @pytest.mark.asyncio
+    async def test_researcher_cannot_use_browser_submit(self):
         """Researcher is read-only — no write-capable browser tools."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
         from src.orchestrator.agents import AGENTS
 
         researcher = AGENTS["researcher"]
-        assert not researcher.can_use_tool("browser_file_upload")
+        mock_db = AsyncMock()
+
+        with patch("src.services.tool_registry.ToolRegistry") as mock_reg_cls:
+            mock_reg = MagicMock()
+            tool = MagicMock()
+            tool.name = "browser_file_upload"
+            tool.capability = "browser.file_upload"
+            mock_reg.get_tool = AsyncMock(return_value=tool)
+            mock_reg_cls.return_value = mock_reg
+
+            assert not await researcher.can_use_tool("browser_file_upload", mock_db)
 
 
 # ── web_search function tests ─────────────────────────────────────────────

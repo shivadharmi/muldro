@@ -24,6 +24,7 @@ def _make_processor(**kwargs):
     """Build an EventProcessor with mocked dependencies."""
     settings = MagicMock()
     settings.anthropic_model = "claude-sonnet-4-20250514"
+    settings.event_processor_concurrency = 5
     db = MagicMock()
     db.add = MagicMock()
     db.commit = AsyncMock()
@@ -95,11 +96,9 @@ class TestTriggerActionExecution:
         assert call_kwargs["notification_type"] == "info_update"
 
     @pytest.mark.asyncio
-    async def test_plan_action_creates_plan(self):
-        """trigger action_type='plan' should call planner."""
-        planner = MagicMock()
-        planner.plan_for_command = AsyncMock()
-        proc = _make_processor(planner=planner)
+    async def test_plan_action_falls_through_to_debug_log(self):
+        """trigger action_type='plan' should fall through (planner removed)."""
+        proc = _make_processor()
 
         trigger = _make_trigger(
             action_type="plan",
@@ -107,12 +106,8 @@ class TestTriggerActionExecution:
         )
         event = _make_event_model()
 
+        # Should not raise — falls through to the else/debug branch
         await proc._execute_trigger_action(trigger, event, "usr_1")
-
-        planner.plan_for_command.assert_called_once()
-        args = planner.plan_for_command.call_args[0]
-        assert args[0] == "Check for updates"
-        assert args[1] == "usr_1"
 
     @pytest.mark.asyncio
     async def test_escalate_action_sends_critical_alert(self):
@@ -147,13 +142,13 @@ class TestTriggerActionExecution:
 
 class TestInitiativeAutoPlanning:
     @pytest.mark.asyncio
-    async def test_high_score_triggers_auto_plan(self):
-        """Events with high initiative score should auto-create plans."""
-        planner = MagicMock()
-        planner.plan_for_event = AsyncMock()
+    async def test_high_score_logs_high_priority(self):
+        """High initiative score should log high-priority (planning handled by perception cycle)."""
+        event_bus = MagicMock()
+        event_bus.publish = AsyncMock()
+        event_bus.event_stream = MagicMock(return_value="jarvis:events:usr_1")
 
-        proc = _make_processor(planner=planner)
-        # Priority person + deadline boosts push score above threshold
+        proc = _make_processor(event_bus=event_bus)
         event = _make_event_model(
             importance_score=0.95,
             urgency_score=0.90,
@@ -165,20 +160,23 @@ class TestInitiativeAutoPlanning:
 
         await proc._evaluate_initiative(event, "usr_1")
 
-        planner.plan_for_event.assert_called_once_with("evt_test", "usr_1", workspace_id="")
+        # Should publish high_priority event (not auto_plan)
+        event_bus.publish.assert_called_once()
+        call_args = event_bus.publish.call_args[0]
+        assert call_args[1] == "initiative.high_priority"
 
     @pytest.mark.asyncio
-    async def test_low_score_no_auto_plan(self):
-        """Events with low initiative score should NOT auto-plan."""
-        planner = MagicMock()
-        planner.plan_for_event = AsyncMock()
+    async def test_low_score_no_event_published(self):
+        """Events with low initiative score should NOT trigger any action."""
+        event_bus = MagicMock()
+        event_bus.publish = AsyncMock()
 
-        proc = _make_processor(planner=planner)
+        proc = _make_processor(event_bus=event_bus)
         event = _make_event_model(importance_score=0.2, urgency_score=0.1)
 
         await proc._evaluate_initiative(event, "usr_1")
 
-        planner.plan_for_event.assert_not_called()
+        event_bus.publish.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_medium_score_proactive_notification(self):

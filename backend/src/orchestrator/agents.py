@@ -48,6 +48,10 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "workflow.list",
         "workflow.get",
         "workflow.search",
+        "workflow.get_teams",
+        "filesystem.read",
+        "filesystem.list",
+        "filesystem.search",
         "internal.ingest_event",
         "internal.report_observation",
         "internal.get_cursor",
@@ -55,14 +59,12 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
     },
     "librarian": {
         "internal.update_entity",
-        "internal.get_entities",
-        "internal.search_memory",
+        "internal.search",
     },
     "planner": {
-        "internal.plan_command",
         "internal.get_plans",
-        "internal.search_memory",
-        "internal.get_entities",
+        "internal.get_goals",
+        "internal.search",
     },
     "governor": {
         "internal.evaluate_policy",
@@ -74,6 +76,7 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "email.reply",
         "calendar.create",
         "calendar.update",
+        "calendar.delete",
         "messaging.send",
         "messaging.reply",
         "messaging.react",
@@ -93,6 +96,9 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "workflow.update_issue",
         "workflow.transition",
         "workflow.comment",
+        "workflow.delete",
+        "workflow.delete_comment",
+        "workflow.delete_milestone",
         "doc.create",
         "doc.update",
         "doc.comment",
@@ -101,16 +107,14 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
     },
     "presenter": {
         "internal.get_briefing",
-        "internal.search_memory",
-        "internal.get_entities",
+        "internal.search",
         "internal.send_telegram",
         "internal.send_approval",
         "internal.push_ui",
         "messaging.send",
     },
     "researcher": {
-        "internal.search_memory",
-        "internal.get_entities",
+        "internal.search",
         "email.list",
         "email.read",
         "email.search",
@@ -137,6 +141,9 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "workflow.list",
         "workflow.get",
         "workflow.search",
+        "filesystem.read",
+        "filesystem.list",
+        "filesystem.search",
         "search.web",
         "browser.open",
         "browser.snapshot",
@@ -144,7 +151,7 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "browser.screenshot",
     },
     "persona": {
-        "internal.search_memory",
+        "internal.search",
         "internal.extract_preferences",
     },
 }
@@ -183,33 +190,16 @@ class SubAgent:
     temperature: float = 0.3
     thinking: ThinkingConfig = field(default_factory=ThinkingConfig)
 
-    def can_use_tool(self, tool_name: str) -> bool:
-        """Check if this agent is allowed to use a specific tool.
-
-        Resolves the tool's canonical capability and checks against
-        this agent's capability_scope. Handles namespaced MCP tool names
-        (e.g. google_workspace_gmail_list → gmail_list).
-        """
+    async def can_use_tool(self, tool_name: str, db, workspace_id: str | None = None) -> bool:
+        """Registry-driven capability check. One lookup, no normalizer."""
         if not self.capability_scope:
             return False
-        from src.integrations.capabilities import get_capability_for_tool
+        from src.services.tool_registry import ToolRegistry
 
-        # Try direct match first
-        cap = get_capability_for_tool(tool_name)
-        if cap is not None:
-            return cap in self.capability_scope
-
-        # Normalize the tool name (handles camelCase, kebab-case, server prefixes)
-        # and retry capability lookup on the canonical form
-        from src.integrations.tool_normalizer import get_normalizer
-
-        normalizer = get_normalizer()
-        canonical = normalizer.normalize(tool_name)
-        if canonical != tool_name:
-            cap = get_capability_for_tool(canonical)
-            if cap is not None:
-                return cap in self.capability_scope
-
+        registry = ToolRegistry(db, workspace_id=workspace_id)
+        tool = await registry.get_tool(tool_name)
+        if tool and tool.capability:
+            return tool.capability in self.capability_scope
         return False
 
 

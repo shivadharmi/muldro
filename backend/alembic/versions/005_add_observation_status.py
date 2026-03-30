@@ -44,9 +44,7 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(
-        "ix_obs_user_source", "observation_status", ["user_id", "source"], unique=True
-    )
+    op.create_index("ix_obs_user_source", "observation_status", ["user_id", "source"], unique=True)
 
 
 def downgrade() -> None:

@@ -23,8 +23,7 @@ def upgrade() -> None:
 
     # Create HNSW index for fast cosine similarity search
     op.execute(
-        "CREATE INDEX ix_memories_embedding ON memories "
-        "USING hnsw (embedding vector_cosine_ops)"
+        "CREATE INDEX ix_memories_embedding ON memories USING hnsw (embedding vector_cosine_ops)"
     )
 
 

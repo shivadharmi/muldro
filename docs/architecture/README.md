@@ -11,9 +11,9 @@ Comprehensive architecture reference for the Jarvis Personal AI Operating System
 | [Event System](event-system.md) | Event ingestion, scoring, initiative scoring, triggers, proactive intelligence |
 | [Execution Engine](execution.md) | DAG executor, state machine, checkpoints, approval gates, verification |
 | [Perception](perception.md) | Ambient observation cycles, cursor-based fetch, budget-aware scheduling |
-| [Services Reference](services.md) | All 69 services with dependencies, methods, and interactions |
-| [Data Model](data-model.md) | 54 SQLAlchemy tables, ER diagram, ULID scheme, vector embeddings |
-| [Tools & MCP](tools-mcp.md) | 3-tier tool dispatch, MCP bridge, approval flow, external MCP servers |
+| [Services Reference](services.md) | All services with dependencies, methods, and interactions |
+| [Data Model](data-model.md) | 51 SQLAlchemy tables, ER diagram, ULID scheme, vector embeddings |
+| [Tools & MCP](tools-mcp.md) | Unified registry dispatch, tool catalog, MCP bridge, approval flow |
 | [Startup & Recovery](startup.md) | Boot sequence, scheduling, worker streams, startup recovery |
 | [Design Decisions](decisions.md) | Key architectural choices and their rationale |
 

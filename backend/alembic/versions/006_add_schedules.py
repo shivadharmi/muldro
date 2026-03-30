@@ -50,9 +50,7 @@ def upgrade() -> None:
             nullable=False,
         ),
     )
-    op.create_index(
-        "ix_sched_user_next", "schedules", ["user_id", "enabled", "next_run_at"]
-    )
+    op.create_index("ix_sched_user_next", "schedules", ["user_id", "enabled", "next_run_at"])
     # Schedules are seeded per-user at runtime via schedule_seeder.py
 
 

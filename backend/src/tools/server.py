@@ -14,7 +14,7 @@ from src.tools.intelligence_server import intelligence
 jarvis_tools = FastMCP("jarvis-tools")
 
 # Mount sub-servers with namespaces to avoid tool name collisions.
-# Tools become: intelligence_search_memory, communication_send_telegram, etc.
+# Tools become: intelligence_search, communication_send_telegram, etc.
 jarvis_tools.mount(intelligence, namespace="intelligence")
 jarvis_tools.mount(communication, namespace="communication")
 

@@ -1,6 +1,7 @@
 "use client";
 
 import type { A2UIComponent, A2UISurface } from "@/lib/a2ui-types";
+import { ErrorBoundary } from "@/components/error-boundary";
 import { A2UIAlert } from "./components/alert";
 import { A2UIAvatar } from "./components/avatar";
 import { A2UIBadge } from "./components/badge";
@@ -36,8 +37,27 @@ interface RendererProps {
   onAction: (action: string, payload: Record<string, unknown>) => void;
 }
 
-/** Maps A2UI component types to React implementations. */
+/** Maps A2UI component types to React implementations, wrapped in ErrorBoundary. */
 function renderComponent(
+  component: A2UIComponent,
+  onAction: (action: string, payload: Record<string, unknown>) => void
+): React.ReactNode {
+  return (
+    <ErrorBoundary
+      key={`eb-${component.id}`}
+      fallback={
+        <div className="p-2 text-xs text-t-tertiary border border-yellow-500/30 rounded">
+          Failed to render {component.type ?? "unknown"} component
+        </div>
+      }
+    >
+      {renderComponentInner(component, onAction)}
+    </ErrorBoundary>
+  );
+}
+
+/** Inner render dispatch — errors caught by the wrapping ErrorBoundary. */
+function renderComponentInner(
   component: A2UIComponent,
   onAction: (action: string, payload: Record<string, unknown>) => void
 ): React.ReactNode {

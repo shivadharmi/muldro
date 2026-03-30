@@ -68,9 +68,7 @@ def upgrade() -> None:
         ["workspace_id", "server_name"],
         unique=True,
     )
-    op.create_index(
-        "ix_inst_status", "connector_installations", ["workspace_id", "status"]
-    )
+    op.create_index("ix_inst_status", "connector_installations", ["workspace_id", "status"])
 
 
 def downgrade() -> None:

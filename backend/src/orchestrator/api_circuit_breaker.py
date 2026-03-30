@@ -42,6 +42,7 @@ class AnthropicCircuitBreaker:
     failure_threshold: int = 5
     cooldown_seconds: float = 120.0
     _circuits: dict[str, ModelCircuit] = field(default_factory=dict)
+    _half_open_testing: dict[str, bool] = field(default_factory=dict)
 
     def _get_circuit(self, model: str) -> ModelCircuit:
         if model not in self._circuits:
@@ -58,7 +59,12 @@ class AnthropicCircuitBreaker:
 
     def is_available(self, model: str) -> bool:
         state = self.get_state(model)
-        return state in (CircuitState.CLOSED, CircuitState.HALF_OPEN)
+        if state == CircuitState.HALF_OPEN:
+            if self._half_open_testing.get(model, False):
+                return False  # already testing with one request
+            self._half_open_testing[model] = True
+            return True
+        return state == CircuitState.CLOSED
 
     def record_success(self, model: str) -> None:
         circuit = self._get_circuit(model)
@@ -68,6 +74,7 @@ class AnthropicCircuitBreaker:
         circuit.failure_count = 0
         circuit.last_success_at = time.monotonic()
         circuit.total_calls += 1
+        self._half_open_testing[model] = False
 
     def record_failure(self, model: str) -> None:
         circuit = self._get_circuit(model)
@@ -75,6 +82,8 @@ class AnthropicCircuitBreaker:
         circuit.total_failures += 1
         circuit.total_calls += 1
         circuit.last_failure_at = time.monotonic()
+        # Always clear half-open probe lock on failure
+        self._half_open_testing[model] = False
 
         if circuit.failure_count >= self.failure_threshold:
             if circuit.state != CircuitState.OPEN:
@@ -88,6 +97,16 @@ class AnthropicCircuitBreaker:
                         "total_failures": circuit.total_failures,
                     },
                 )
+
+    def reset_half_open_probe(self, model: str) -> None:
+        """Unconditionally release the half-open probe lock.
+
+        Call from a finally block to guarantee the probe lock is cleared
+        even if the caller is cancelled or exits through an unexpected path.
+        """
+        if self._half_open_testing.get(model, False):
+            self._half_open_testing[model] = False
+            logger.debug("half_open_probe_reset", extra={"model": model})
 
     def get_status(self) -> dict[str, dict]:
         return {

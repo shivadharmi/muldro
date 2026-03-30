@@ -15,22 +15,23 @@
 
 ## 2. Multi-Store Architecture with Postgres as Source of Truth
 
-**Decision:** Use 6 infrastructure services (Postgres, Redis, Elasticsearch, Qdrant, Neo4j, MinIO/S3) with Postgres as the canonical source of truth and all others as projections or specialized stores.
+**Decision:** Use 5 infrastructure services (Postgres, Redis, Qdrant, Neo4j, MinIO/S3) with Postgres as the canonical source of truth and all others as projections or specialized stores.
 
 **Rationale:**
-- **Postgres as source of truth** - ACID guarantees, JSONB flexibility, pgvector for basic vector ops
-- **Elasticsearch for full-text** - BM25 ranking, phrase queries, and keyword matching that Postgres `ILIKE` can't efficiently handle at scale
-- **Qdrant for vector search** - Dedicated vector DB outperforms pgvector for high-volume RAG; supports multi-collection hybrid search
+- **Postgres as source of truth** - ACID guarantees, JSONB flexibility, native tsvector FTS with GIN indexes for keyword search
+- **Qdrant for vector search** - Dedicated vector DB for high-volume RAG; supports multi-collection semantic search
 - **Neo4j for graph traversal** - Multi-hop entity queries, shortest-path, community detection are graph-native operations that would be expensive recursive CTEs in Postgres
 - **MinIO/S3 for objects** - Documents, screenshots, and media don't belong in Postgres; S3-compatible storage with presigned URLs
 - **Redis for operational concerns** - Streams (event bus), caching, distributed locks, pubsub, surface tracking — all latency-sensitive ops that shouldn't hit Postgres
 
-**Key principle:** Every secondary store can be rebuilt from Postgres. If Elasticsearch, Qdrant, or Neo4j go down, the system degrades gracefully (no full-text search, no semantic search, no graph traversal) but continues operating.
+**Key principle:** Every secondary store can be rebuilt from Postgres. If Qdrant or Neo4j go down, the system degrades gracefully (Postgres FTS provides keyword search, entity tables provide flat queries) but continues operating.
 
-**Trade-off:** Operational complexity of 6 services. Mitigated by:
+**Previous decision (reversed):** Elasticsearch was originally included for BM25 full-text search but was removed in favor of Postgres native tsvector + GIN indexes. The operational complexity of a separate search cluster was not justified given Postgres's capable FTS implementation. pgvector embedding columns on Postgres tables were also removed (migration 046) in favor of Qdrant-only vector storage.
+
+**Trade-off:** Operational complexity of 5 services. Mitigated by:
 - All secondary services are optional (graceful degradation)
 - Docker Compose provides all services for local dev
-- `SearchService` handles ES+Qdrant together, `GraphSyncService` handles Neo4j sync
+- `TriSearchService` coordinates Qdrant + Postgres FTS + Neo4j, `GraphSyncService` handles Neo4j sync
 - Single configuration point via pydantic-settings
 
 ## 3. Approval Gates on All External Writes
@@ -63,27 +64,28 @@
 
 ## 5. Bedrock Titan V2 for Embeddings
 
-**Decision:** Use AWS Bedrock Titan V2 (1024 dimensions) for all vector embeddings.
+**Decision:** Use AWS Bedrock Titan V2 (1024 dimensions) for all vector embeddings, stored exclusively in Qdrant.
 
 **Rationale:**
 - **Cost-effective** - Significantly cheaper than OpenAI or Voyage for embedding generation
 - **1024 dimensions** - Good balance between quality and storage/query performance
-- **AWS ecosystem** - Consistent with Bedrock for Claude API, simplifies auth/billing
-- **pgvector HNSW** - Native Postgres indexing, no separate vector DB infrastructure
+- **AWS ecosystem** - Consistent with Bedrock for Claude API and Reranker, simplifies auth/billing
+- **Qdrant-only storage** - Dedicated vector DB outperforms pgvector; pgvector columns removed in migration 046
 
 **Trade-off:** Slightly lower embedding quality than some specialized providers. Acceptable because embeddings are used for similarity search (dedup, retrieval ranking), not as primary classification.
 
-## 6. 3-Tier Tool Dispatch
+## 6. Unified Registry Dispatch
 
-**Decision:** Resolve tools through three tiers: internal handlers -> MCP bridge -> ToolRegistry/connector fallback.
+**Decision:** All tools served through MCP. One registry lookup dispatches to `internal_mcp`, `external_mcp`, or `composite` backend. Tool identity in 2 files (`catalog.py` + `intelligence_server.py`). Real MCP names used everywhere — no normalization.
 
 **Rationale:**
-- **Graceful degradation** - If MCP servers are down, connectors still work
-- **MCP-first** - Modern protocol with automatic tool discovery
-- **Internal isolation** - Intelligence tools don't depend on MCP infrastructure
-- **Extensibility** - New MCP servers auto-discovered, new connectors plug into Tier 3
+- **Single source of truth** - Adding a tool: 1-2 files, not 8
+- **No name normalization** - Real MCP names flow end-to-end (eliminates collision bugs like `search` vs Notion's `search`)
+- **Auto-discovery** - Unknown MCP tools registered on connect with safe defaults (`capability=None` → invisible)
+- **Startup validation** - 6 cross-checks catch inconsistencies before runtime
+- **Capability-based auth** - Agents have capability scopes, not tool lists. Adding a tool with `email.send` capability automatically grants it to all agents with `email.send` in scope.
 
-**Trade-off:** Resolution logic is more complex. Mitigated by clear tier ordering and circuit breakers per MCP server.
+**Trade-off:** DB lookup per dispatch (mitigated by ToolRegistry cache). No offline fallback if DB is down (acceptable — Postgres is a hard dependency anyway).
 
 ## 7. Budget Degradation (Not Hard-Stop)
 
@@ -158,7 +160,7 @@
 
 ## 13. Full Workspace Isolation
 
-**Decision:** All 54 data tables are scoped by `workspace_id` (NOT NULL FK). Two resolution paths: API (session-based, zero queries) vs background (DB lookup via WorkspaceMember). Enables future multi-workspace support.
+**Decision:** All 51 data tables are scoped by `workspace_id` (NOT NULL FK). Two resolution paths: API (session-based, zero queries) vs background (DB lookup via WorkspaceMember). Enables future multi-workspace support.
 
 **Rationale:**
 - **Security** - Data isolation is enforced at the schema level, not application logic

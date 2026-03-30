@@ -1,40 +1,6 @@
-"""Tests for tool name normalization — canonical names, deduplication, resolve."""
+"""Tests for tool name normalization — agent scope deduplication and catalog consistency."""
 
-from unittest.mock import AsyncMock
-
-from src.services.tool_registry import CANONICAL_ALIASES, ToolRegistry
-
-
-class TestResolveCanonical:
-    def test_known_aliases_resolve(self):
-        db = AsyncMock()
-        registry = ToolRegistry(db)
-
-        assert registry.resolve_canonical("gmail_send_email") == "gmail_send"
-        assert registry.resolve_canonical("gmail_draft") == "gmail_create_draft"
-        assert registry.resolve_canonical("calendar_create") == "calendar_create_event"
-        assert registry.resolve_canonical("calendar_update") == "calendar_update_event"
-        assert registry.resolve_canonical("slack_post_message") == "slack_send_message"
-        assert registry.resolve_canonical("calendar_delete") == "calendar_delete_event"
-
-    def test_unknown_tool_returns_itself(self):
-        db = AsyncMock()
-        registry = ToolRegistry(db)
-
-        assert registry.resolve_canonical("unknown_tool") == "unknown_tool"
-        assert registry.resolve_canonical("gmail_send") == "gmail_send"
-
-    def test_canonical_aliases_map_completeness(self):
-        """All aliases should point to tools that exist in _DEFAULT_TOOLS."""
-        from src.services.tool_registry import _DEFAULT_TOOLS
-
-        tool_names = {t["name"] for t in _DEFAULT_TOOLS}
-
-        for alias, canonical in CANONICAL_ALIASES.items():
-            assert canonical in tool_names, (
-                f"Alias '{alias}' points to '{canonical}' which is not in _DEFAULT_TOOLS"
-            )
-            assert alias in tool_names, f"Alias '{alias}' is not in _DEFAULT_TOOLS"
+from src.tools.catalog import EXTERNAL_TOOL_SEEDS, INTERNAL_TOOLS
 
 
 class TestAgentScopeDeduplication:
@@ -59,21 +25,21 @@ class TestAgentScopeDeduplication:
         assert "doc.create" in scope
 
 
-class TestDefaultToolsCanonicalNames:
-    def test_alias_tools_have_canonical_name_set(self):
-        from src.services.tool_registry import _DEFAULT_TOOLS
+class TestCatalogToolsHaveCapabilities:
+    def test_all_internal_tools_have_capabilities(self):
+        """Every internal tool should have a non-empty capability."""
+        for tool in INTERNAL_TOOLS:
+            assert tool.capability, f"Internal tool '{tool.name}' has no capability"
 
-        alias_tools = {t["name"]: t for t in _DEFAULT_TOOLS if t.get("canonical_name")}
+    def test_all_external_seeds_have_capabilities(self):
+        """Every external tool seed should have a non-empty capability."""
+        for seed in EXTERNAL_TOOL_SEEDS:
+            assert seed.capability, f"External seed '{seed.name}' has no capability"
 
-        # Known aliases should have canonical_name set
-        assert alias_tools["gmail_send_email"]["canonical_name"] == "gmail_send"
-        assert alias_tools["gmail_draft"]["canonical_name"] == "gmail_create_draft"
-        assert alias_tools["slack_post_message"]["canonical_name"] == "slack_send_message"
-
-    def test_missing_tools_now_registered(self):
-        """push_ui_update and perplexity_search should be in _DEFAULT_TOOLS."""
-        from src.services.tool_registry import _DEFAULT_TOOLS
-
-        tool_names = {t["name"] for t in _DEFAULT_TOOLS}
-        assert "push_ui_update" in tool_names
-        assert "perplexity_search" in tool_names
+    def test_catalog_has_expected_tools(self):
+        """push_ui_update and web_search should be in the catalog."""
+        internal_names = {t.name for t in INTERNAL_TOOLS}
+        external_names = {s.name for s in EXTERNAL_TOOL_SEEDS}
+        all_names = internal_names | external_names
+        assert "push_ui_update" in all_names
+        assert "web_search" in all_names

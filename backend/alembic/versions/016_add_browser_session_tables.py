@@ -41,9 +41,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("session_id"),
     )
     op.create_index("ix_browser_sessions_user_id", "browser_sessions", ["user_id"])
-    op.create_index(
-        "ix_browser_sessions_user_status", "browser_sessions", ["user_id", "status"]
-    )
+    op.create_index("ix_browser_sessions_user_status", "browser_sessions", ["user_id", "status"])
 
     # browser_actions table
     op.create_table(
@@ -71,9 +69,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("action_id"),
     )
     op.create_index("ix_browser_actions_session_id", "browser_actions", ["session_id"])
-    op.create_index(
-        "ix_browser_actions_session", "browser_actions", ["session_id", "created_at"]
-    )
+    op.create_index("ix_browser_actions_session", "browser_actions", ["session_id", "created_at"])
 
 
 def downgrade() -> None:

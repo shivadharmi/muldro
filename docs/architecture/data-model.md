@@ -62,7 +62,7 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
-| `entities` | `ent_` | entity_type, canonical_name, attributes (JSONB), importance_score, embedding (1024-dim), last_seen_at, interaction_count | 15 entity types |
+| `entities` | `ent_` | entity_type, canonical_name, attributes (JSONB), importance_score, search_tsv (tsvector), last_seen_at, interaction_count | 15 entity types |
 | `entity_aliases` | - | entity_id (FK), alias_type, alias_value | Cascade delete |
 | `entity_relationships` | `rel_` | from_entity_id, relation_type, to_entity_id, strength, active | 17 relation types |
 
@@ -70,7 +70,7 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
-| `memories` | `mem_` | memory_type, fact_text, embedding (1024-dim), confidence, stability_score, refresh_count, last_accessed_at, superseded_by, entity_ids (ARRAY), status | GIN index on entity_ids |
+| `memories` | `mem_` | memory_type, fact_text, search_tsv (tsvector), confidence, stability_score, refresh_count, last_accessed_at, superseded_by, entity_ids (ARRAY), status | GIN index on entity_ids + search_tsv |
 
 ### Plans & Execution (5 tables)
 
@@ -111,13 +111,14 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 | `notifications` | `notif_` | channel, title, body, priority_score, status (5 states), sent_at, read_at, follow_up_at, payload_json (JSONB) | |
 | `triggers` | `trg_` | name, conditions (JSONB), action_type, action_config (JSONB), status (4 states), fire_count, last_fired_at, cooldown_until | |
 
-### Scheduling & Observation (3 tables)
+### Scheduling & Observation (2 tables)
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
 | `schedules` | `sched_` | name, cron_expr, action_type, action_config (JSONB), enabled, next_run_at, run_count, priority | |
-| `observation_statuses` | - | source, last_observed_at, status, items_found, items_ingested | |
 | `observation_cursors` | - | source, cursor_value, poll_interval_seconds | |
+
+> **Note:** `observation_statuses` was consolidated into `perception_state` (see Perception & Runtime section below).
 
 ### Conversations (2 tables)
 
@@ -235,11 +236,14 @@ All IDs use ULID (Universally Unique Lexicographically Sortable Identifier) with
 |--------------|-------|
 | Provider | AWS Bedrock Titan V2 |
 | Dimensions | 1024 |
-| Index type | pgvector HNSW |
-| Used by | entities.embedding, memories.embedding |
+| Storage | Qdrant (4 collections) |
+| Full-text | Postgres tsvector + GIN indexes (7 tables) |
+| Reranking | Bedrock amazon.rerank-v1:0 |
+
+> **Note:** pgvector embedding columns were removed from Postgres (migration 046). All vector storage is now in Qdrant only. Full-text search uses native Postgres tsvector columns with GIN indexes.
 
 Embeddings enable:
-- Semantic memory search (cosine similarity)
+- Semantic memory search (cosine similarity via Qdrant)
 - Entity fuzzy dedup (>0.92 threshold)
 - Memory dedup (>0.92 threshold)
 - Memory consolidation (>0.95 threshold)
@@ -266,16 +270,15 @@ Key JSONB columns used for flexible structured data:
 
 ## Multi-Store Data Distribution
 
-Data is distributed across 6 infrastructure services. Postgres is always the source of truth; other stores are projections or specialized indexes.
+Data is distributed across 5 infrastructure services. Postgres is always the source of truth; other stores are projections or specialized indexes.
 
 ```mermaid
 graph LR
     subgraph "Source of Truth"
-        PG[(Postgres 17<br/>54 tables, pgvector)]
+        PG[(Postgres 17<br/>51 tables, tsvector FTS)]
     end
 
-    subgraph "Search Indexes"
-        ES[(Elasticsearch 8<br/>BM25 full-text)]
+    subgraph "Vector Search"
         QD[(Qdrant<br/>Vector similarity)]
     end
 
@@ -291,8 +294,7 @@ graph LR
         RD[(Redis 7<br/>Streams, cache, locks)]
     end
 
-    PG -->|SearchService indexes| ES
-    PG -->|SearchService embeds| QD
+    PG -->|MemoryService/WorldModel embeds| QD
     PG -->|GraphSyncService projects| N4J
     PG -->|ArtifactStore refs| S3
     PG -->|EventBus streams| RD
@@ -300,17 +302,17 @@ graph LR
 
 ### What Lives Where
 
-| Data | Postgres | Elasticsearch | Qdrant | Neo4j | S3/MinIO | Redis |
-|------|----------|--------------|--------|-------|----------|-------|
-| Events | rows (source of truth) | BM25 index | vector index | - | - | streams |
-| Entities | rows + pgvector embedding | BM25 index | vector index | nodes + edges | - | cache |
-| Memories | rows + pgvector embedding | BM25 index | vector index | - | - | - |
-| Artifacts | metadata + S3 key | BM25 index | vector index | - | file content | - |
-| Traces | rows (primary) | search index | - | - | - | - |
-| Plans/Runs | rows | - | - | - | - | progress pubsub |
-| Approvals | rows | - | - | - | - | notification streams |
-| Agent config | rows | - | - | - | - | - |
-| Sessions | rows | - | - | - | - | surface tracking |
+| Data | Postgres | Qdrant | Neo4j | S3/MinIO | Redis |
+|------|----------|--------|-------|----------|-------|
+| Events | rows + tsvector FTS | vector index | - | - | streams |
+| Entities | rows + tsvector FTS | vector index | nodes + edges | - | cache |
+| Memories | rows + tsvector FTS | vector index | - | - | - |
+| Artifacts | metadata + S3 key | vector index | - | file content | - |
+| Traces | rows (primary) | - | - | - | - |
+| Plans/Runs | rows | - | - | - | progress pubsub |
+| Approvals | rows + tsvector FTS | - | - | - | notification streams |
+| Agent config | rows | - | - | - | - |
+| Sessions | rows | - | - | - | surface tracking |
 
 ### Qdrant Collections (4)
 
@@ -321,15 +323,19 @@ graph LR
 | `events` | 1024 | user_id, source, event_type, title, summary | Event discovery |
 | `artifacts` | 1024 | user_id, artifact_type, title, mime_type | Artifact search |
 
-### Elasticsearch Indexes (5)
+### Postgres FTS Indexes (tsvector + GIN)
 
-| Index | Key Fields | Purpose |
-|-------|-----------|---------|
-| `jarvis-events` | user_id, event_type, source, title, summary, occurred_at | Event full-text search |
-| `jarvis-entities` | user_id, entity_type, canonical_name, attributes | Entity keyword search |
-| `jarvis-memories` | user_id, memory_type, fact_text, confidence | Memory phrase search |
-| `jarvis-artifacts` | user_id, artifact_type, title, mime_type | Artifact discovery |
-| `jarvis-traces` | user_id, trigger, agents_invoked, tools_called | Trace search |
+| Table | tsvector Column | Indexed Fields | Migration |
+|-------|----------------|---------------|-----------|
+| `memories` | `search_tsv` | fact_text | 045 |
+| `entities` | `search_tsv` | canonical_name, attributes | 045 |
+| `normalized_events` | `search_tsv` | title, summary | 045 |
+| `conversations` | `search_tsv` | title | 045 |
+| `briefings` | `search_tsv` | content | 045 |
+| `approvals` | `search_tsv` | title, justification | 045 |
+| `artifacts` | `search_tsv` | title | 045 |
+
+> **Note:** Elasticsearch was fully removed. All full-text search now uses Postgres native tsvector with GIN indexes, which provides comparable BM25-style keyword matching without the operational overhead of a separate search cluster.
 
 ### Neo4j Graph Schema
 
@@ -360,7 +366,7 @@ graph LR
 
 ## Migrations
 
-The project uses Alembic for database migrations. As of the current state, there are 44 migrations covering all schema changes from initial setup through the complete system redesign.
+The project uses Alembic for database migrations. As of the current state, there are 51 migrations covering all schema changes from initial setup through the unified tool registry (050-051).
 
 ```bash
 # From backend/

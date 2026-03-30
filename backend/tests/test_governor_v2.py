@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.services.governor import (
-    AUTO_EXECUTE_ACTIONS,
+    AUTO_EXECUTE_DECISIONS,
     BLOCKED_ACTIONS,
     Governor,
 )
@@ -121,7 +121,7 @@ class TestTrustIntegration:
 class TestDefaultPolicyRules:
     async def test_auto_execute_actions(self, mock_db, mock_settings_svc):
         gov = Governor(mock_db, settings_service=mock_settings_svc)
-        for action in AUTO_EXECUTE_ACTIONS:
+        for action in AUTO_EXECUTE_DECISIONS:
             plan = _make_plan(decision=action, risk="low")
             result = await gov._apply_policy(plan, TEST_USER_ID)
             assert result == "auto_execute", f"Expected auto_execute for {action}"

@@ -37,13 +37,13 @@ from src.orchestrator.intent_classifier import (
 )
 from src.orchestrator.prompts import JARVIS_DECISION_FRAMEWORK, JARVIS_SOUL_CORE
 from src.orchestrator.services import ServiceContainer
-from src.orchestrator.tool_schemas import build_tool_definitions
 from src.orchestrator.tracing import TraceManager
 from src.services.agent_registry import AgentRegistry
 from src.services.context_builder import ContextBuilder, ContextPack
 from src.services.execution_state import transition_run, transition_step
 from src.services.route_resolver import RouteResolver
 from src.services.trace_store import TraceStore
+from src.tools.schemas import build_tool_definitions
 
 logger = logging.getLogger(__name__)
 
@@ -172,12 +172,12 @@ class JarvisOrchestrator:
         self._db_factory = db_factory
         self._services = services
         self._client = get_anthropic_client(settings)
-        self._trace_store = TraceStore(
-            elasticsearch_url=settings.elasticsearch_url,
-            db_factory=db_factory,
-        )
+        self._trace_store = TraceStore(db_factory=db_factory)
         self._trace_manager = TraceManager(trace_store=self._trace_store)
-        self._budget = BudgetTracker(daily_limit_usd=settings.daily_token_budget_usd)
+        self._budget = BudgetTracker(
+            daily_limit_usd=settings.daily_token_budget_usd,
+            redis=getattr(services, "redis", None) if services else None,
+        )
         self._agents: dict[str, SubAgent] = dict(AGENTS)  # Start with hardcoded defaults
         self._tools = self._build_tool_definitions()
         self._event_bus = None  # Lazy-init when Redis available
@@ -228,6 +228,8 @@ class JarvisOrchestrator:
         decision: PlannerOutput,
         user_id: str,
         workspace_id: str,
+        trigger_type: str = "user_message",
+        idempotency_key: str | None = None,
     ) -> PlannerOutput:
         """Persist a Plan + PlanTasks to DB, returning decision with plan_id populated.
 
@@ -235,6 +237,11 @@ class JarvisOrchestrator:
         records.  This method bridges that gap so the Governor can call
         evaluate_policy(plan_id) and the Operator can execute_plan via
         GraphExecutor — both of which require a DB-backed Plan.
+
+        Args:
+            trigger_type: Origin — "user_message" (interactive) or "perception"
+                          (autonomous observation).
+            idempotency_key: Optional dedup key to prevent duplicate perception plans.
         """
         from src.models.plans import Plan, PlanTask
 
@@ -242,6 +249,23 @@ class JarvisOrchestrator:
 
         try:
             async with self._db_factory() as db:
+                # Idempotency check — skip if an active plan with this key exists
+                if idempotency_key:
+                    from sqlalchemy import select
+
+                    existing = await db.execute(
+                        select(Plan.plan_id).where(
+                            Plan.idempotency_key == idempotency_key,
+                            Plan.status.notin_(["completed", "failed", "cancelled"]),
+                        )
+                    )
+                    if existing.scalar_one_or_none():
+                        logger.info(
+                            "Skipping duplicate plan: idempotency_key=%s",
+                            idempotency_key,
+                        )
+                        return decision
+
                 tasks = [
                     PlanTask(
                         task_id=f"ptask_{ULID()}",
@@ -258,8 +282,9 @@ class JarvisOrchestrator:
                     plan_id=plan_id,
                     user_id=user_id,
                     workspace_id=workspace_id,
-                    trigger_type="user_message",
+                    trigger_type=trigger_type,
                     trigger_ref=None,
+                    idempotency_key=idempotency_key,
                     goal=decision.goal or "",
                     priority=decision.priority,
                     decision=decision.decision,
@@ -439,9 +464,6 @@ class JarvisOrchestrator:
         """
         tools = self._build_internal_tool_definitions()
 
-        # Append native connector actions as tools (Gmail, Calendar, etc.)
-        tools.extend(self._build_native_connector_tools())
-
         # Composite web_search tool (uses Playwright MCP internally)
         tools.append(
             {
@@ -471,97 +493,6 @@ class JarvisOrchestrator:
 
         return tools
 
-    @staticmethod
-    def _build_native_connector_tools() -> list[dict]:
-        """Build Claude tool definitions for native connector actions.
-
-        These tools use Jarvis's built-in connectors (with OAuth tokens from the DB)
-        instead of MCP servers that need separate credential files.
-        """
-        return [
-            {
-                "name": "gmail_list_unread",
-                "description": "List unread emails from Gmail inbox.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "max_results": {
-                            "type": "integer",
-                            "description": "Max emails to return (default 20)",
-                            "default": 20,
-                        },
-                        "query": {
-                            "type": "string",
-                            "description": "Gmail search query (default: is:inbox is:unread)",
-                        },
-                    },
-                },
-            },
-            {
-                "name": "gmail_get_message",
-                "description": "Get full details of a specific Gmail message by ID.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "message_id": {"type": "string", "description": "Gmail message ID"},
-                    },
-                    "required": ["message_id"],
-                },
-            },
-            {
-                "name": "gmail_send_email",
-                "description": "Send an email via Gmail.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "to": {"type": "string", "description": "Recipient email address"},
-                        "subject": {"type": "string", "description": "Email subject"},
-                        "body": {"type": "string", "description": "Email body text"},
-                        "thread_id": {
-                            "type": "string",
-                            "description": "Thread ID for replies (optional)",
-                        },
-                    },
-                    "required": ["to", "subject", "body"],
-                },
-            },
-            {
-                "name": "gmail_create_draft",
-                "description": "Create an email draft in Gmail.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "to": {"type": "string", "description": "Recipient email"},
-                        "subject": {"type": "string", "description": "Email subject"},
-                        "body": {"type": "string", "description": "Email body"},
-                    },
-                    "required": ["to", "subject", "body"],
-                },
-            },
-            {
-                "name": "gmail_archive",
-                "description": "Archive a Gmail message (remove from inbox).",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "message_id": {"type": "string", "description": "Gmail message ID"},
-                    },
-                    "required": ["message_id"],
-                },
-            },
-            {
-                "name": "gmail_mark_read",
-                "description": "Mark a Gmail message as read.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "message_id": {"type": "string", "description": "Gmail message ID"},
-                    },
-                    "required": ["message_id"],
-                },
-            },
-        ]
-
     def _build_internal_tool_definitions(self) -> list[dict]:
         """Build Claude tool definitions from Pydantic models in tool_schemas."""
         return build_tool_definitions()
@@ -569,15 +500,12 @@ class JarvisOrchestrator:
     @staticmethod
     def _internal_tool_names() -> set[str]:
         """Return the set of internal (non-MCP) tool names."""
-        from src.orchestrator.tool_schemas import TOOL_INPUT_MODELS
+        from src.tools.schemas import TOOL_INPUT_MODELS
 
         return set(TOOL_INPUT_MODELS.keys())
 
-    def _get_tools_for_agent(self, agent: SubAgent, workspace_id: str = "") -> list[dict]:
-        """Filter tool definitions to only those the agent can use.
-
-        Merges cached internal/native tools with workspace-scoped MCP tools.
-        """
+    async def _get_tools_for_agent(self, agent: SubAgent, workspace_id: str = "") -> list[dict]:
+        """Filter tool definitions using registry-driven capability check."""
         from src.connectors.mcp_bridge import list_mcp_tools
 
         tools = list(self._tools)
@@ -590,7 +518,13 @@ class JarvisOrchestrator:
                     "input_schema": schema if schema else {"type": "object", "properties": {}},
                 }
             )
-        return [t for t in tools if agent.can_use_tool(t["name"])]
+
+        async with self._db_factory() as db:
+            return [
+                t
+                for t in tools
+                if await agent.can_use_tool(t["name"], db, workspace_id=workspace_id or None)
+            ]
 
     def _get_model_for_agent(self, agent: SubAgent) -> str:
         """Get the Claude model ID for an agent's tier."""
@@ -1184,7 +1118,7 @@ class JarvisOrchestrator:
 
         model = self._get_model_for_agent(agent)
         tools = self._apply_cache_control_to_tools(
-            self._get_tools_for_agent(agent, workspace_id=workspace_id)
+            await self._get_tools_for_agent(agent, workspace_id=workspace_id)
         )
         context_block = await self._assemble_context(
             agent_name, message, user_id=user_id, workspace_id=workspace_id
@@ -1252,12 +1186,63 @@ class JarvisOrchestrator:
                     "cost_usd": round(evt.cost_usd, 6),
                 }
 
+    async def run_cross_source_synthesis(
+        self,
+        source_names: list[str],
+        user_id: str,
+        workspace_id: str,
+    ) -> dict:
+        """Internal cross-source synthesis — no user-facing artifacts.
+
+        Called by the scheduler when 2+ perception sources have new events
+        in the same tick.  Asks the Planner to find cross-cutting insights
+        and queues any resulting plans for background execution.
+
+        Unlike process_message(), this does NOT create a lightweight run,
+        Presenter formatting, or A2UI surface push.
+        """
+        trace = self._trace_manager.start_trace("cross_source_synthesis")
+        try:
+            planner_result = await self._call_agent(
+                "planner",
+                message=(
+                    f"Synthesize recent observations across these sources: "
+                    f"{', '.join(source_names)}. "
+                    f"Identify cross-cutting insights, connections between "
+                    f"events, or actions that span multiple sources."
+                ),
+                user_id=user_id,
+                trace=trace,
+                workspace_id=workspace_id,
+            )
+            # Queue any actionable plans from the synthesis
+            decision = await self._queue_perception_plan(
+                planner_result,
+                "synthesis",
+                user_id,
+                workspace_id,
+                trace.trace_id,
+            )
+            return {
+                "status": "completed",
+                "decision": decision.decision if decision else "none",
+            }
+        except Exception as e:
+            logger.warning("Cross-source synthesis failed: %s", e, exc_info=True)
+            return {"status": "error", "error": str(e)}
+        finally:
+            await self._trace_manager.finish_trace(
+                trace.trace_id, user_id=user_id, workspace_id=workspace_id
+            )
+
     async def run_perception_cycle(self, source: str, user_id: str, workspace_id: str = "") -> dict:
         """Run a perception cycle for a specific data source.
 
         Step 1: Poll the connector directly (no Claude call — just API fetch).
         Step 2: If new events found, Librarian extracts entities/memories.
         Step 3: Planner evaluates importance and creates plans if needed.
+        Step 4: Apply perception policy from planner response.
+        Step 5: Extract decision and queue execution if actionable.
         """
         trace = self._trace_manager.start_trace(f"perception_{source}")
 
@@ -1328,6 +1313,15 @@ class JarvisOrchestrator:
                 planner_result, source, user_id, workspace_id, len(raw_events)
             )
 
+            # Step 5: Extract decision and queue execution if actionable
+            perception_decision = await self._queue_perception_plan(
+                planner_result,
+                source,
+                user_id,
+                workspace_id,
+                trace.trace_id,
+            )
+
             # Publish perception completed event
             await self._publish_event(
                 "perception_completed",
@@ -1336,6 +1330,7 @@ class JarvisOrchestrator:
                     "source": source,
                     "trace_id": trace.trace_id,
                     "event_count": len(raw_events),
+                    "decision": perception_decision.decision if perception_decision else None,
                 },
                 trace_id=trace.trace_id,
             )
@@ -1347,10 +1342,34 @@ class JarvisOrchestrator:
                 "events": len(raw_events),
                 "librarian": librarian_result,
                 "planner": planner_result,
+                "decision": perception_decision.decision if perception_decision else None,
+                "plan_id": perception_decision.plan_id if perception_decision else None,
             }
 
         except Exception as e:
             logger.error("perception_cycle failed: %s", e, exc_info=True)
+            # DLQ: capture cycle-level failures for inspection/retry
+            try:
+                from src.services.dead_letter import DeadLetterService
+
+                async with self._db_factory() as db:
+                    dlq = DeadLetterService(db)
+                    await dlq.enqueue(
+                        user_id=user_id,
+                        operation_type="perception_cycle",
+                        error_type=type(e).__name__,
+                        error_message=str(e),
+                        source_id=f"perception:{source}",
+                        payload={
+                            "source": source,
+                            "trace_id": trace.trace_id,
+                            "workspace_id": workspace_id,
+                        },
+                        workspace_id=workspace_id,
+                    )
+                    await db.commit()
+            except Exception:
+                logger.debug("DLQ enqueue failed for perception %s", source, exc_info=True)
             return {"status": "error", "source": source, "error": str(e)}
         finally:
             await self._trace_manager.finish_trace(
@@ -1440,7 +1459,6 @@ class JarvisOrchestrator:
                 dead_letter=dead_letter,
                 event_bus=event_bus,
                 notifier=self._services.notifier,
-                planner=self._services.planner,
             )
             for raw in raw_events:
                 try:
@@ -1876,9 +1894,11 @@ class JarvisOrchestrator:
                 builder = ContextBuilder(
                     world_model=svc.world_model,
                     memory_service=svc.memory_service,
-                    procedure_library=svc.procedure_library,
                     artifact_store=svc.artifact_store,
                     db=db,
+                    graph_engine=svc.graph_engine,
+                    tri_search=svc.tri_search,
+                    reranker=svc.reranker,
                 )
                 pack: ContextPack = await builder.build(
                     user_id=user_id,
@@ -1933,6 +1953,143 @@ class JarvisOrchestrator:
                 await db.commit()
         except Exception:
             logger.debug("Failed to apply perception policy", exc_info=True)
+
+    # Decisions from perception that should trigger execution or inline handling
+    PERCEPTION_ACTIONABLE_DECISIONS = {
+        "create_task",
+        "draft_reply",
+        "research",
+        "watcher_create",
+        "schedule_reminder",
+        "set_goal",
+        "set_instruction",
+        "add_to_brief",
+    }
+
+    # Subset handled inline (fast, no pipeline needed)
+    _PERCEPTION_INLINE_DECISIONS = {
+        "schedule_reminder",
+        "set_goal",
+        "set_instruction",
+        "add_to_brief",
+    }
+
+    async def _queue_perception_plan(
+        self,
+        planner_result: str,
+        source: str,
+        user_id: str,
+        workspace_id: str,
+        trace_id: str,
+    ) -> PlannerOutput | None:
+        """Extract a structured decision from the Planner's perception response
+        and queue actionable plans for background execution.
+
+        Lightweight decisions (set_goal, schedule_reminder, etc.) are handled
+        inline.  Heavier decisions with tasks (create_task, draft_reply) are
+        persisted as Plan + background TaskRun so the scheduler's
+        _tick_background_tasks() picks them up on the next 30s tick.
+
+        Returns the extracted PlannerOutput, or None if no action was needed.
+        """
+        import hashlib
+
+        decision = extract_decision(planner_result)
+
+        if decision.decision not in self.PERCEPTION_ACTIONABLE_DECISIONS:
+            logger.debug(
+                "Perception decision '%s' from %s — no action needed",
+                decision.decision,
+                source,
+            )
+            return decision
+
+        # Handle lightweight decisions inline (fast, no pipeline)
+        if decision.decision in self._PERCEPTION_INLINE_DECISIONS:
+            try:
+                if decision.decision == "set_goal":
+                    await self._handle_set_goal(decision, user_id, workspace_id)
+                elif decision.decision == "set_instruction":
+                    await self._handle_set_instruction(decision, user_id, workspace_id)
+                elif decision.decision == "schedule_reminder":
+                    await self._handle_schedule_reminder(decision, user_id, workspace_id)
+                elif decision.decision == "add_to_brief":
+                    await self._handle_add_to_brief(decision, user_id, workspace_id)
+                logger.info(
+                    "Perception inline handler: %s from %s",
+                    decision.decision,
+                    source,
+                )
+            except Exception:
+                logger.warning(
+                    "Perception inline handler failed: %s",
+                    decision.decision,
+                    exc_info=True,
+                )
+            return decision
+
+        # For decisions with tasks, persist plan and queue for background execution
+        if not decision.tasks:
+            logger.debug(
+                "Perception decision '%s' from %s has no tasks — skipping",
+                decision.decision,
+                source,
+            )
+            return decision
+
+        # Compute idempotency key to prevent duplicate plans from re-observed events
+        goal_hash = hashlib.sha256((decision.goal or "").encode()).hexdigest()[:16]
+        idempotency_key = f"perception:{source}:{decision.decision}:{goal_hash}"
+
+        # Persist Plan + PlanTasks
+        decision = await self._persist_plan_record(
+            decision,
+            user_id,
+            workspace_id,
+            trigger_type="perception",
+            idempotency_key=idempotency_key,
+        )
+
+        if not decision.plan_id:
+            logger.debug(
+                "Plan not persisted (idempotent skip or error) for %s",
+                source,
+            )
+            return decision
+
+        # Create a background TaskRun with steps for the scheduler to execute
+        try:
+            async with self._db_factory() as db:
+                from src.services.graph_executor import create_graph_executor
+
+                executor = await create_graph_executor(
+                    settings=self._settings,
+                    db=db,
+                    workspace_id=workspace_id,
+                )
+                run = await executor.create_run(
+                    plan_id=decision.plan_id,
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    source="background",
+                )
+                await db.commit()
+
+                logger.info(
+                    "Perception queued plan %s → run %s (%d tasks) from %s",
+                    decision.plan_id,
+                    run.run_id,
+                    len(decision.tasks),
+                    source,
+                )
+        except Exception:
+            logger.warning(
+                "Failed to create background run for perception plan %s",
+                decision.plan_id,
+                exc_info=True,
+            )
+
+        return decision
 
     async def _bump_perception_for_sources(
         self, sources: list[str], user_id: str, workspace_id: str
@@ -2150,13 +2307,10 @@ class JarvisOrchestrator:
 
         text = decision.goal or decision.reasoning or "Briefing item"
         try:
-            memory_id = await memory_svc.store(
+            memory_id = await memory_svc.store_briefing_memory(
                 user_id=user_id,
                 workspace_id=workspace_id,
-                fact_text=text,
-                memory_type="briefing_item",
-                scope="planning",
-                source_event_ids=[],
+                text=text,
             )
             logger.info("Briefing item stored as memory %s: %s", memory_id, text[:80])
             return {"status": "stored", "memory_id": memory_id, "text": text}
@@ -2180,7 +2334,7 @@ class JarvisOrchestrator:
 
         model = self._get_model_for_agent(agent)
         tools = self._apply_cache_control_to_tools(
-            self._get_tools_for_agent(agent, workspace_id=workspace_id)
+            await self._get_tools_for_agent(agent, workspace_id=workspace_id)
         )
         context_block = await self._assemble_context(
             agent_name, message, user_id=user_id, workspace_id=workspace_id
@@ -2223,174 +2377,35 @@ class JarvisOrchestrator:
 
         return text
 
-    async def _execute_tool(
-        self, tool_name: str, tool_input: dict, user_id: str, workspace_id: str = ""
+    async def _call_composite_tool(
+        self, tool_name: str, tool_input: dict, user_id: str = "", workspace_id: str = ""
     ) -> dict:
-        """Execute a tool by name, using ToolRegistry for dispatch.
-
-        Resolution order:
-        0. Pre-dispatch: ToolRegistry blocked/risk/write classification
-        1. Internal intelligence tools (FastMCP handlers)
-        2. MCP bridge (external MCP servers)
-        3. Connector-backed tools (dispatched via connector.execute_action)
-        """
-        # 0. Pre-dispatch: ToolRegistry classification
-        try:
-            from src.services.tool_registry import ToolRegistry
-
-            async with self._db_factory() as db:
-                registry = ToolRegistry(db)
-                if await registry.is_blocked_tool(tool_name):
-                    return {"error": f"Tool '{tool_name}' is disabled", "blocked": True}
-        except Exception:
-            pass  # Fallback: skip pre-checks if registry unavailable
-
-        # Governor structured output: reporting tool returns input as-is
-        if tool_name == "report_governor_verdict":
-            return tool_input
-
-        # Composite web_search: uses Playwright MCP browser internally
+        """Dispatch composite tools (multi-MCP orchestration)."""
         if tool_name == "web_search":
-            try:
-                from src.browser.web_search import web_search
+            from src.browser.web_search import web_search
 
-                await self._publish_event("tool.started", user_id, {"tool": tool_name})
-                result = await web_search(
-                    query=tool_input.get("query", ""),
-                    num_results=tool_input.get("num_results", 10),
-                    user_id=user_id,
-                    workspace_id=workspace_id,
-                )
-                await self._publish_event("tool.completed", user_id, {"tool": tool_name})
-                return result
-            except Exception as e:
-                logger.warning("web_search failed: %s", e)
-                return {"status": "error", "error": str(e)[:200], "results": []}
-
-        # Internal tools served via MCP protocol (in-process Client)
-        internal_tools = {
-            "ingest_event",
-            "search_memory",
-            "get_entities",
-            "update_entity",
-            "plan_command",
-            "get_active_plans",
-            "evaluate_policy",
-            "approve_action",
-            "get_briefing",
-            "get_observation_cursor",
-            "update_observation_cursor",
-            "report_observation",
-            "update_execution",
-            "extract_preferences",
-            "create_task",
-            "get_task",
-            "get_goals",
-            "build_context",
-            "verify_run",
-        }
-
-        # Inject workspace_id so tools always have it, even if the model omitted it
-        if workspace_id and "workspace_id" not in tool_input:
-            tool_input = {**tool_input, "workspace_id": workspace_id}
-
-        # Emit tool.started event
-        await self._publish_event("tool.started", user_id, {"tool": tool_name})
-
-        # 1. Try internal tools via in-process MCP Client
-        if tool_name in internal_tools:
-            try:
-                result = await self._call_internal_tool(
-                    tool_name, {**tool_input, "user_id": user_id}
-                )
-                await self._publish_event("tool.completed", user_id, {"tool": tool_name})
-                return result
-            except Exception as e:
-                logger.warning("Internal tool %s failed: %s", tool_name, e)
-                await self._publish_event(
-                    "tool.failed",
-                    user_id,
-                    {"tool": tool_name, "error": str(e)[:200]},
-                )
-                return {"error": f"Tool execution failed for {tool_name}: {e}"}
-
-        # 2. Try native connector dispatch (gmail_*, calendar_*, etc.)
-        native_result = await self._try_native_connector(tool_name, tool_input, user_id)
-        if native_result is not None:
-            await self._publish_event("tool.completed", user_id, {"tool": tool_name})
-            return native_result
-
-        # 3. Try capability resolver (routes to best backend: native, MCP official, user MCP)
-        try:
-            from src.connectors.mcp_bridge import get_session_pool
-            from src.integrations.capability_resolver import CapabilityResolver
-
-            async with self._db_factory() as db:
-                session_pool = get_session_pool()
-                resolver = CapabilityResolver(db, session_pool, workspace_id)
-                capability = resolver.resolve_tool_to_capability(tool_name)
-                if capability:
-                    result = await resolver.execute(tool_name, tool_input, user_id=user_id)
-                    await self._publish_event("tool.completed", user_id, {"tool": tool_name})
-                    return result
-        except Exception as e:
-            logger.debug("Capability resolver failed for %s: %s", tool_name, e)
-
-        # 3. Try MCP bridge directly (session pool, circuit-breaker protected)
-        from src.connectors.mcp_bridge import call_mcp_tool, is_mcp_tool
-
-        if is_mcp_tool(tool_name, workspace_id=workspace_id):
-            try:
-                result = await call_mcp_tool(
-                    tool_name,
-                    tool_input,
-                    user_id=user_id,
-                    workspace_id=workspace_id,
-                )
-                await self._publish_event("tool.completed", user_id, {"tool": tool_name})
-                return result
-            except Exception as e:
-                await self._publish_event(
-                    "tool.failed",
-                    user_id,
-                    {"tool": tool_name, "error": str(e)[:200]},
-                )
-                raise
-
-        # 4. Fall back to ToolRegistry for connector-backed tools
-        try:
-            result = await self._execute_connector_tool(tool_name, tool_input, user_id=user_id)
-            await self._publish_event("tool.completed", user_id, {"tool": tool_name})
-            return result
-        except Exception as e:
-            logger.error("Connector tool %s failed: %s", tool_name, e, exc_info=True)
-            await self._publish_event(
-                "tool.failed",
-                user_id,
-                {"tool": tool_name, "error": str(e)[:200]},
+            return await web_search(
+                query=tool_input.get("query", ""),
+                num_results=tool_input.get("num_results", 10),
+                user_id=user_id,
+                workspace_id=workspace_id,
             )
-            return {"error": f"Tool execution failed for {tool_name}: {e}"}
-
-    # Native connector tool name → (connector_type, action) mapping
-    _NATIVE_TOOL_MAP: dict[str, tuple[str, str]] = {
-        "gmail_list_unread": ("gmail", "list_unread"),
-        "gmail_get_message": ("gmail", "get_message"),
-        "gmail_send_email": ("gmail", "send_email"),
-        "gmail_create_draft": ("gmail", "create_draft"),
-        "gmail_archive": ("gmail", "archive"),
-        "gmail_mark_read": ("gmail", "mark_read"),
-    }
+        return {"error": f"Unknown composite tool: {tool_name}"}
 
     # Cached in-process MCP client for internal tools
     _internal_client = None
     _internal_client_ctx = None
 
-    async def _call_internal_tool(self, tool_name: str, tool_input: dict) -> dict:
+    async def _call_internal_tool(
+        self, tool_name: str, tool_input: dict, server_prefix: str
+    ) -> dict:
         """Call an internal tool via in-process FastMCP Client (MCP protocol).
 
-        The composed server mounts intelligence tools under "intelligence_" namespace.
-        We map flat tool names (e.g. "search_memory") to namespaced names
-        (e.g. "intelligence_search_memory").
+        The composed server mounts tools under namespaced prefixes:
+        - intelligence tools: "intelligence_" prefix
+        - communication tools: "communication_" prefix
+        We map flat tool names (e.g. "search", "send_telegram") to namespaced names
+        (e.g. "intelligence_search", "communication_send_telegram").
         """
         import json
 
@@ -2403,8 +2418,8 @@ class JarvisOrchestrator:
             self._internal_client_ctx = Client(jarvis_tools)
             self._internal_client = await self._internal_client_ctx.__aenter__()
 
-        # Map flat name to namespaced name (intelligence_ prefix)
-        namespaced = f"intelligence_{tool_name}"
+        # Map flat name to namespaced name (server-specific prefix)
+        namespaced = f"{server_prefix}_{tool_name}"
         result = await self._internal_client.call_tool(namespaced, tool_input)
 
         # Extract result from CallToolResult
@@ -2425,112 +2440,68 @@ class JarvisOrchestrator:
                 return {"status": "ok", "result": text}
         return {"status": "ok", "result": text}
 
-    async def _try_native_connector(
-        self, tool_name: str, tool_input: dict, user_id: str
-    ) -> dict | None:
-        """Try to execute a tool via native connector. Returns None if not a native tool."""
-        mapping = self._NATIVE_TOOL_MAP.get(tool_name)
-        if not mapping:
-            return None
-
-        connector_type, action = mapping
-
-        from src.connectors.base import CONNECTOR_REGISTRY
-
-        connector_cls = CONNECTOR_REGISTRY.get(connector_type)
-        if not connector_cls:
-            return {"error": f"No native connector for: {connector_type}"}
-
-        # Get OAuth credentials
-        credentials = {}
-        oauth = self._services.oauth_manager
-        if oauth:
-            try:
-                provider_map = {
-                    "gmail": "google",
-                    "calendar": "google",
-                    "drive": "google",
-                    "github": "github",
-                    "slack": "slack",
-                }
-                oauth_provider = provider_map.get(connector_type, connector_type)
-                token = await oauth.get_valid_token(user_id, oauth_provider)
-                if token:
-                    credentials = {"access_token": token}
-            except Exception:
-                logger.warning("No credentials for native connector %s", connector_type)
-
-        if not credentials:
-            return {
-                "error": f"No OAuth credentials for {connector_type}. "
-                f"Please connect {connector_type} first."
-            }
-
-        connector = connector_cls(self._settings)
-        try:
-            return await connector.execute_action(action, tool_input, credentials)
-        except Exception as e:
-            logger.error("Native connector %s.%s failed: %s", connector_type, action, e)
-            return {"error": f"{connector_type}.{action} failed: {e}"}
-
-    async def _execute_connector_tool(self, tool_name: str, tool_input: dict, user_id: str) -> dict:
-        """Execute a tool via its connector, resolved from the ToolRegistry."""
-        from src.connectors.base import CONNECTOR_REGISTRY
+    async def _execute_tool(
+        self, tool_name: str, tool_input: dict, user_id: str, workspace_id: str = ""
+    ) -> dict:
+        """Registry-driven dispatch: one lookup, one match on backend."""
         from src.services.tool_registry import ToolRegistry
 
         async with self._db_factory() as db:
-            registry = ToolRegistry(db)
-            tool_def = await registry.get_tool(tool_name)
+            registry = ToolRegistry(db, workspace_id=workspace_id or None)
+            tool = await registry.get_tool(tool_name)
 
-            if not tool_def:
-                return {"error": f"Unknown tool: {tool_name}"}
+        if not tool:
+            return {"error": f"Unknown tool: {tool_name}"}
+        if not tool.enabled:
+            return {"error": f"Tool '{tool_name}' is disabled", "blocked": True}
 
-            if not tool_def.enabled:
-                return {"error": f"Tool '{tool_name}' is disabled"}
+        # _special server returns input as-is (report_governor_verdict)
+        if tool.backend == "internal_mcp" and tool.server == "_special":
+            return tool_input
 
-            connector_type = tool_def.connector_type
-            if not connector_type or connector_type == "internal":
-                return {"error": f"No connector handler for internal tool: {tool_name}"}
+        # Inject workspace_id so tools always have it
+        if workspace_id and "workspace_id" not in tool_input:
+            tool_input = {**tool_input, "workspace_id": workspace_id}
 
-            # Map connector_type to CONNECTOR_REGISTRY key
-            connector_cls = CONNECTOR_REGISTRY.get(connector_type)
-            if not connector_cls:
-                return {
-                    "error": f"No connector registered for type: {connector_type}",
-                    "available_connectors": list(CONNECTOR_REGISTRY.keys()),
-                }
+        await self._publish_event("tool.started", user_id, {"tool": tool_name})
 
-            # Get credentials from OAuth manager
-            oauth = self._services.oauth_manager
-            credentials = {}
-            if oauth:
-                try:
-                    # Map connector type to OAuth provider (e.g. gmail→google)
-                    provider_map = {
-                        "gmail": "google",
-                        "calendar": "google",
-                        "drive": "google",
-                        "github": "github",
-                        "slack": "slack",
-                        "linear": "linear",
-                        "notion": "notion",
-                        "jira": "jira",
-                    }
-                    oauth_provider = provider_map.get(connector_type, connector_type)
-                    access_token = await oauth.get_valid_token(user_id, oauth_provider)
-                    if access_token:
-                        credentials = {"access_token": access_token}
-                except Exception:
-                    logger.warning("No credentials for connector %s", connector_type)
+        try:
+            match tool.backend:
+                case "internal_mcp":
+                    result = await self._call_internal_tool(
+                        tool_name,
+                        {**tool_input, "user_id": user_id},
+                        server_prefix=tool.server,
+                    )
+                case "external_mcp":
+                    from src.connectors.mcp_bridge import call_mcp_tool
 
-            # Instantiate connector and execute action
-            connector = connector_cls(self._settings)
-            # Derive the action name from the tool name (e.g. gmail_send → send)
-            action = tool_name
-            if tool_name.startswith(f"{connector_type}_"):
-                action = tool_name[len(connector_type) + 1 :]
+                    result = await call_mcp_tool(
+                        tool_name,
+                        tool_input,
+                        user_id=user_id,
+                        workspace_id=workspace_id,
+                    )
+                case "composite":
+                    result = await self._call_composite_tool(
+                        tool_name,
+                        tool_input,
+                        user_id=user_id,
+                        workspace_id=workspace_id,
+                    )
+                case _:
+                    result = {"error": f"Unknown backend '{tool.backend}' for tool '{tool_name}'"}
 
-            return await connector.execute_action(action, tool_input, credentials)
+            await self._publish_event("tool.completed", user_id, {"tool": tool_name})
+            return result
+        except Exception as e:
+            logger.warning("Tool %s failed: %s", tool_name, e)
+            await self._publish_event(
+                "tool.failed",
+                user_id,
+                {"tool": tool_name, "error": str(e)[:200]},
+            )
+            return {"error": f"Tool execution failed for {tool_name}: {e}"}
 
     async def _execute_plan_via_graph(self, plan_id: str, user_id: str, trace=None) -> dict:
         """Bridge: create a run from a plan and execute it via GraphExecutor.
@@ -2551,7 +2522,6 @@ class JarvisOrchestrator:
                 context_builder = ContextBuilder(
                     world_model=svc.world_model,
                     memory_service=svc.memory_service,
-                    procedure_library=svc.procedure_library,
                     artifact_store=svc.artifact_store,
                 )
 
@@ -2630,13 +2600,28 @@ class JarvisOrchestrator:
 
     @staticmethod
     def _check_step_condition(condition: dict, decision: dict) -> bool:
-        """Check if a pipeline step's condition is satisfied."""
+        """Check if a pipeline step's condition is satisfied.
+
+        Supported condition types (mirrors RouteResolver._matches_conditions):
+          has_key:        value exists in decision dict
+          not_has_key:    value does NOT exist in decision dict
+          has_truthy_key: value exists AND is truthy (not None/empty/False)
+          field:<name>:   decision[name] == value
+          <key>: <value>: decision[key] == value (direct equality)
+        """
         for key, value in condition.items():
             if key == "has_key":
                 if value not in decision:
                     return False
             elif key == "not_has_key":
                 if value in decision:
+                    return False
+            elif key == "has_truthy_key":
+                if not decision.get(value):
+                    return False
+            elif key.startswith("field:"):
+                field_name = key[len("field:") :]
+                if decision.get(field_name) != value:
                     return False
             else:
                 if decision.get(key) != value:

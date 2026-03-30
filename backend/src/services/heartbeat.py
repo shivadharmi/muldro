@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.config.settings import Settings
 from src.models.approvals import Approval
 from src.models.memory import Memory
-from src.models.observation import ObservationStatus
+from src.models.perception_state import PerceptionState
 from src.models.plans import Plan
 from src.models.schedules import Schedule
 from src.models.task_graph import TaskRun
@@ -204,35 +204,36 @@ class HeartbeatService:
         now = datetime.now(timezone.utc)
 
         result = await self._db.execute(
-            select(ObservationStatus).where(ObservationStatus.user_id == user_id)
+            select(PerceptionState).where(PerceptionState.user_id == user_id)
         )
-        observations = list(result.scalars().all())
+        states = list(result.scalars().all())
 
         health = []
-        for obs in observations:
-            attr_name = self.STALE_THRESHOLDS.get(obs.source)
+        for ps in states:
+            attr_name = self.STALE_THRESHOLDS.get(ps.source)
             stale_minutes = (
                 getattr(self._settings, attr_name, self.DEFAULT_STALE_MINUTES)
                 if attr_name
                 else self.DEFAULT_STALE_MINUTES
             )
             threshold = now - timedelta(minutes=stale_minutes)
-            is_stale = obs.status == "error" or obs.last_observed_at < threshold
+            last_run = ps.last_run_at
+            is_stale = ps.circuit_state == "open" or last_run is None or last_run < threshold
 
-            if is_stale and obs.status != "stale":
-                obs.status = "stale"
+            status = "error" if ps.circuit_state == "open" else "ok"
+            if is_stale and ps.circuit_state != "open":
+                status = "stale"
 
             health.append(
                 {
-                    "source": obs.source,
-                    "last_observed_at": obs.last_observed_at.isoformat(),
-                    "status": obs.status,
+                    "source": ps.source,
+                    "last_observed_at": last_run.isoformat() if last_run else None,
+                    "status": status,
                     "is_stale": is_stale,
                 }
             )
 
         if any(h["is_stale"] for h in health):
-            await self._db.flush()
             stale = [h["source"] for h in health if h["is_stale"]]
             logger.warning("Stale observation sources for %s: %s", user_id, stale)
 
@@ -257,19 +258,19 @@ class HeartbeatService:
         )
         obs_schedules = list(result.scalars().all())
 
-        # Cross-reference with observation status
-        obs_result = await self._db.execute(
-            select(ObservationStatus).where(ObservationStatus.user_id == user_id)
+        # Cross-reference with perception state
+        ps_result = await self._db.execute(
+            select(PerceptionState).where(PerceptionState.user_id == user_id)
         )
-        obs_statuses = {obs.source: obs for obs in obs_result.scalars().all()}
+        ps_by_source = {ps.source: ps for ps in ps_result.scalars().all()}
 
         for sched in obs_schedules:
             source = (sched.action_config or {}).get("source", "")
-            obs = obs_statuses.get(source)
+            ps = ps_by_source.get(source)
 
             # Check for consistently empty observations (heuristic: high run_count but
-            # observation shows 0 items)
-            if obs and obs.items_found == 0 and sched.run_count >= 10:
+            # perception shows 0 items)
+            if ps and ps.last_event_count == 0 and sched.run_count >= 10:
                 proposals.append(
                     {
                         "schedule_id": sched.schedule_id,

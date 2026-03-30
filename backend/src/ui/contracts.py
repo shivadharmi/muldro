@@ -12,9 +12,12 @@ Component Types (25+):
   Specialized: ExecutionTrace, KanbanBoard, Calendar, CommandPalette
 """
 
+import logging
 from enum import Enum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+logger = logging.getLogger(__name__)
 
 
 class ComponentType(str, Enum):
@@ -68,6 +71,21 @@ class A2UIComponent(BaseModel):
     properties: dict = {}
     children: list["A2UIComponent"] = []
     actions: list[A2UIAction] = []
+
+    @field_validator("type")
+    @classmethod
+    def validate_component_type(cls, v: str) -> str:
+        valid_types = {ct.value for ct in ComponentType}
+        if v not in valid_types:
+            logger.warning("Unknown A2UI component type: %s", v)
+        return v
+
+    @field_validator("id")
+    @classmethod
+    def validate_id_not_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("Component id must not be empty")
+        return v
 
 
 class A2UISurface(BaseModel):

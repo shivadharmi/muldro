@@ -28,34 +28,15 @@ class IngestEventInput(BaseModel):
     )
 
 
-class SearchMemoryInput(BaseModel):
-    """Search Jarvis knowledge base: memories, entities, and events."""
+class SearchInput(BaseModel):
+    """Unified search across all knowledge: memories, entities, events via TriSearch."""
 
     query: str = Field(description="Natural language search query")
-    memory_type: Literal["all", "fact", "preference", "task_context", "episodic"] = Field(
-        default="all", description="Filter by memory type"
+    types: str = Field(
+        default="",
+        description="Comma-separated result type filter (e.g., 'memory,entity'). Empty = all.",
     )
-    scope: Literal["all", "memories", "entities", "events"] = Field(
-        default="all", description="Search scope: all, memories, entities, or events"
-    )
-    limit: int = Field(default=10, ge=1, le=50, description="Maximum results to return")
-
-
-class GetEntitiesInput(BaseModel):
-    """Get entities from the world model."""
-
-    query: str = Field(default="", description="Optional search query to filter entities")
-    entity_type: str = Field(
-        default="", description="Filter by entity type: person, project, company, task"
-    )
-    limit: int = Field(default=20, ge=1, le=100, description="Maximum entities to return")
-
-
-class PlanCommandInput(BaseModel):
-    """Process a command through the Jarvis planner."""
-
-    command: str = Field(description="The command or task to plan")
-    context: str = Field(default="", description="Additional context for planning")
+    limit: int = Field(default=20, ge=1, le=100, description="Maximum results")
 
 
 class EvaluatePolicyInput(BaseModel):
@@ -135,26 +116,13 @@ class ExtractPreferencesInput(BaseModel):
     source_text: str = Field(description="Text to analyze for preference signals")
 
 
-class CreateTaskInput(BaseModel):
-    """Create a standalone task in the task system."""
+class GetGoalMemoriesInput(BaseModel):
+    """Get active user goals stored as memories.
 
-    title: str = Field(description="Task title")
-    description: str = Field(default="", description="Detailed task description")
-    task_type: str = Field(default="general", description="Task type: general, follow_up, research")
-    priority: str = Field(default="medium", description="Priority: low, medium, high, critical")
-    goal_id: str = Field(default="", description="Optional parent goal ID")
+    Goals are stored as memories with memory_type='goal' and scope='planning'.
+    Returns goal text, confidence, and entity links.
+    """
 
-
-class GetTaskInput(BaseModel):
-    """Get details of a task by ID."""
-
-    task_id: str = Field(description="Task ID to retrieve")
-
-
-class GetGoalsInput(BaseModel):
-    """Get user goals, optionally filtered by status."""
-
-    status: str = Field(default="active", description="Filter by status: active, completed, all")
     limit: int = Field(default=10, ge=1, le=50, description="Maximum goals to return")
 
 
@@ -184,13 +152,45 @@ class ReportGovernorVerdictInput(BaseModel):
     conditions: list[str] = Field(default_factory=list, description="Conditions for approval")
 
 
+class SendTelegramInput(BaseModel):
+    """Send a message to the user via Telegram.
+
+    Supports Markdown formatting and optional inline keyboard buttons.
+    """
+
+    text: str = Field(description="Message text (supports Markdown)")
+    parse_mode: str = Field(default="Markdown", description="Format: Markdown or HTML")
+    reply_markup: str = Field(
+        default="", description="JSON string of inline keyboard markup (optional)"
+    )
+
+
+class SendApprovalPromptInput(BaseModel):
+    """Send an approval request with interactive Approve/Reject buttons via Telegram."""
+
+    approval_id: str = Field(description="ID of the pending approval")
+    title: str = Field(description="Approval request title")
+    summary: str = Field(description="Summary of what needs approval")
+    risk_level: str = Field(default="medium", description="Risk level: low, medium, high, critical")
+
+
+class PushUiUpdateInput(BaseModel):
+    """Push a dynamic UI update to the web frontend via Redis pub/sub.
+
+    Delivers A2UI surface payloads to connected browser sessions.
+    """
+
+    surface_id: str = Field(
+        description="UI surface identifier (e.g., 'daily_brief', 'approval_detail')"
+    )
+    payload: str = Field(description="JSON string of the A2UI surface payload")
+
+
 # ── Registry ───────────────────────────────────────────────────────
 
 TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
     "ingest_event": IngestEventInput,
-    "search_memory": SearchMemoryInput,
-    "get_entities": GetEntitiesInput,
-    "plan_command": PlanCommandInput,
+    "search": SearchInput,
     "evaluate_policy": EvaluatePolicyInput,
     "get_briefing": GetBriefingInput,
     "get_observation_cursor": GetObservationCursorInput,
@@ -201,12 +201,13 @@ TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
     "update_entity": UpdateEntityInput,
     "get_active_plans": GetActivePlansInput,
     "extract_preferences": ExtractPreferencesInput,
-    "create_task": CreateTaskInput,
-    "get_task": GetTaskInput,
-    "get_goals": GetGoalsInput,
+    "get_goal_memories": GetGoalMemoriesInput,
     "build_context": BuildContextInput,
     "verify_run": VerifyRunInput,
     "report_governor_verdict": ReportGovernorVerdictInput,
+    "send_telegram": SendTelegramInput,
+    "send_approval_prompt": SendApprovalPromptInput,
+    "push_ui_update": PushUiUpdateInput,
 }
 
 

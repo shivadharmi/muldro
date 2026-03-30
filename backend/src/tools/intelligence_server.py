@@ -122,103 +122,61 @@ async def ingest_event(
             return make_error_response(e)
 
 
-# ── Memory Search ────────────────────────────────────────────────────────
+# ── Unified Search ──────────────────────────────────────────────────────
 
 
 @intelligence.tool(
     tags={"librarian", "read"},
     annotations=ToolAnnotations(readOnlyHint=True),
 )
-async def search_memory(
+async def search(
     user_id: str,
     query: str,
     ctx: Context,
-    scope: str = "all",
-    memory_type: str = "",
-    limit: int = 10,
+    types: str = "",
+    limit: int = 20,
     workspace_id: str = "",
 ) -> dict:
-    """Search Jarvis's knowledge: memories, entities, events.
+    """Unified search across all knowledge: memories, entities, events.
 
-    Uses pgvector semantic search + keyword matching.
-    scope: all, memory, entities, events
-    memory_type: episodic, semantic, preference, relationship, task_context (optional filter)
+    Uses TriSearch: vector (Qdrant) + keyword (Postgres FTS) + graph (Neo4j).
+    types: comma-separated filter (e.g., "memory,entity"). Empty = all.
     """
-    async with _get_db():
+    async with _get_db() as db:
         try:
-            memory_svc = _services.memory_service
-            memory_types = [memory_type] if memory_type else None
-            results = await memory_svc.retrieve(
-                user_id,
-                query,
-                memory_types=memory_types,
-                max_results=limit,
-                workspace_id=workspace_id,
-            )
+            svc = _services
+            if svc and hasattr(svc, "tri_search") and svc.tri_search:
+                type_list = [t.strip() for t in types.split(",") if t.strip()] or None
+                results = await svc.tri_search.search(
+                    query=query,
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    db=db,
+                    types=type_list,
+                    limit=limit,
+                )
+                return {"results": results, "count": len(results)}
+            # Fallback to memory service if TriSearch not available
+            memory_svc = svc.memory_service if svc else None
+            if memory_svc:
+                results = await memory_svc.retrieve(
+                    user_id,
+                    query,
+                    max_results=limit,
+                    workspace_id=workspace_id,
+                )
+                return {"results": results, "count": len(results)}
             return {
-                "results": results,
-                "count": len(results),
+                "results": [],
+                "count": 0,
+                "error": "No search service available",
             }
         except Exception as e:
-            logger.error("search_memory failed: %s", e, exc_info=True)
+            logger.error("search failed: %s", e, exc_info=True)
             return {"results": [], "count": 0, "error": str(e)}
 
 
 # ── Entity Management ────────────────────────────────────────────────────
-
-
-@intelligence.tool(
-    tags={"librarian", "read"},
-    annotations=ToolAnnotations(readOnlyHint=True),
-)
-async def get_entities(
-    user_id: str,
-    ctx: Context,
-    query: str = "",
-    entity_type: str = "",
-    limit: int = 20,
-    workspace_id: str = "",
-) -> dict:
-    """Get entities from the world model.
-
-    Optionally filter by query (name search) and entity_type (person, organization, project).
-    """
-    async with _get_db() as db:
-        try:
-            world_model = _services.world_model
-            if query:
-                entities = await world_model.find_entity(user_id, query, workspace_id=workspace_id)
-                return {
-                    "entities": [entities] if entities else [],
-                    "count": 1 if entities else 0,
-                }
-            # List recent entities
-            from src.models.entities import Entity
-
-            stmt = select(Entity).where(
-                Entity.user_id == user_id,
-                Entity.workspace_id == workspace_id,
-            )
-            if entity_type:
-                stmt = stmt.where(Entity.entity_type == entity_type)
-            stmt = stmt.order_by(Entity.updated_at.desc()).limit(limit)
-            result = await db.execute(stmt)
-            entities = result.scalars().all()
-            return {
-                "entities": [
-                    {
-                        "entity_id": e.entity_id,
-                        "name": e.canonical_name,
-                        "type": e.entity_type,
-                        "attributes": e.attributes,
-                    }
-                    for e in entities
-                ],
-                "count": len(entities),
-            }
-        except Exception as e:
-            logger.error("get_entities failed: %s", e, exc_info=True)
-            return {"entities": [], "count": 0, "error": str(e)}
 
 
 @intelligence.tool(
@@ -279,43 +237,6 @@ async def update_entity(
 
 
 # ── Planning ─────────────────────────────────────────────────────────────
-
-
-@intelligence.tool(
-    tags={"planner", "write"},
-    annotations=ToolAnnotations(readOnlyHint=False, idempotentHint=False),
-)
-async def plan_command(
-    user_id: str,
-    command: str,
-    ctx: Context,
-    context: str = "",
-    workspace_id: str = "",
-) -> dict:
-    """Process a natural language command through the Jarvis planner.
-
-    Returns a structured task graph with decision, priority, risk level, and tasks.
-    """
-    async with _get_db():
-        try:
-            await ctx.report_progress(0, 2, "Planning command...")
-            planner = _services.planner
-            plan = await planner.plan_for_command(
-                command, user_id, context=context, workspace_id=workspace_id
-            )
-            await ctx.report_progress(2, 2, "Plan created")
-            # Serialize Plan ORM object to dict
-            return {
-                "status": "ok",
-                "plan_id": plan.plan_id,
-                "goal": plan.goal or "",
-                "priority": plan.priority or "medium",
-                "status_": plan.status or "planned",
-                "task_count": len(plan.tasks) if hasattr(plan, "tasks") else 0,
-            }
-        except Exception as e:
-            logger.error("plan_command failed: %s", e, exc_info=True)
-            return {"status": "error", "decision": "error", "error": str(e)}
 
 
 @intelligence.tool(
@@ -552,6 +473,7 @@ async def get_observation_cursor(
             result = await db.execute(
                 select(ObservationCursor).where(
                     ObservationCursor.user_id == user_id,
+                    ObservationCursor.workspace_id == workspace_id,
                     ObservationCursor.source == source,
                 )
             )
@@ -592,6 +514,7 @@ async def update_observation_cursor(
             result = await db.execute(
                 select(ObservationCursor).where(
                     ObservationCursor.user_id == user_id,
+                    ObservationCursor.workspace_id == workspace_id,
                     ObservationCursor.source == source,
                 )
             )
@@ -639,38 +562,51 @@ async def report_observation(
     error_message: str = "",
     workspace_id: str = "",
 ) -> dict:
-    """Report the results of an observation cycle for health tracking."""
+    """Report the results of an observation cycle for health tracking.
+
+    Writes to perception_state (consolidated from legacy observation_status).
+    """
     async with _get_db() as db:
         try:
-            from src.models.observation import ObservationStatus
+            from src.models.perception_state import PerceptionState
 
             result = await db.execute(
-                select(ObservationStatus).where(
-                    ObservationStatus.user_id == user_id,
-                    ObservationStatus.source == source,
+                select(PerceptionState).where(
+                    PerceptionState.user_id == user_id,
+                    PerceptionState.workspace_id == workspace_id,
+                    PerceptionState.source == source,
                 )
             )
-            obs = result.scalar_one_or_none()
+            ps = result.scalar_one_or_none()
             now = datetime.now(timezone.utc)
+            circuit = "open" if status == "error" else "closed"
 
-            if obs:
-                obs.last_observed_at = now
-                obs.items_found = items_found
-                obs.items_ingested = items_ingested
-                obs.status = status
-                obs.error_message = error_message if error_message else None
+            if ps:
+                ps.last_run_at = now
+                ps.last_event_count = items_found
+                ps.circuit_state = circuit
+                ps.last_error = error_message if error_message else None
+                if status == "error":
+                    ps.consecutive_failures += 1
+                else:
+                    ps.consecutive_failures = 0
+                ps.total_runs += 1
             else:
-                obs = ObservationStatus(
+                from src.models.ids import generate_id
+
+                ps = PerceptionState(
+                    state_id=generate_id("pst"),
                     user_id=user_id,
                     workspace_id=workspace_id,
                     source=source,
-                    last_observed_at=now,
-                    items_found=items_found,
-                    items_ingested=items_ingested,
-                    status=status,
-                    error_message=error_message if error_message else None,
+                    last_run_at=now,
+                    last_event_count=items_found,
+                    circuit_state=circuit,
+                    last_error=error_message if error_message else None,
+                    consecutive_failures=1 if status == "error" else 0,
+                    total_runs=1,
                 )
-                db.add(obs)
+                db.add(ps)
 
             await db.flush()
             await db.commit()
@@ -804,7 +740,7 @@ async def build_context(
     """Build a rich context pack for a query/task.
 
     Returns assembled context from entities, memories, goals,
-    procedures, and artifacts.
+    and artifacts.
     """
     async with _get_db():
         try:
@@ -814,7 +750,6 @@ async def build_context(
             builder = ContextBuilder(
                 world_model=_services.world_model,
                 memory_service=_services.memory_service,
-                procedure_library=_services.procedure_library,
                 artifact_store=_services.artifact_store,
             )
             await ctx.report_progress(1, 4, "Gathering entities and memories...")

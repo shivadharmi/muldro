@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Index, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Index, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.models.base import Base
@@ -21,7 +21,9 @@ class ApprovalPolicy(Base):
     policy_id: Mapped[str] = mapped_column(
         String(64), primary_key=True, default=lambda: generate_id("apol")
     )
-    workspace_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
+    )
     capability_pattern: Mapped[str] = mapped_column(
         String(128), nullable=False
     )  # e.g. "email.*", "messaging.send", "*"

@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from tests.conftest import make_mock_settings
 
 
-def _make_world_model(db=None, embedding_service=None):
+def _make_world_model(db=None, embedding_service=None, vector_store=None):
     from src.services.world_model import WorldModel
 
     settings = make_mock_settings()
@@ -16,6 +16,7 @@ def _make_world_model(db=None, embedding_service=None):
             settings=settings,
             db=db,
             embedding_service=embedding_service,
+            vector_store=vector_store,
         )
     return wm
 
@@ -67,7 +68,7 @@ class TestEntityFuzzyDedup:
         assert found is entity
 
     async def test_fuzzy_embedding_match(self):
-        """Embedding similarity > 0.92 returns matching entity."""
+        """Embedding similarity > 0.92 returns matching entity via Qdrant."""
         entity = _make_entity()
         db = AsyncMock()
 
@@ -75,20 +76,32 @@ class TestEntityFuzzyDedup:
         no_match = MagicMock()
         no_match.scalar_one_or_none.return_value = None
 
-        # Embedding query: returns entity_id
-        embedding_result = MagicMock()
-        embedding_result.scalar_one_or_none.return_value = "ent_001"
-
-        # Fetch entity by id
+        # Fetch entity by id (after Qdrant match)
         entity_result = MagicMock()
         entity_result.scalar_one_or_none.return_value = entity
 
-        db.execute = AsyncMock(side_effect=[no_match, embedding_result, entity_result])
+        db.execute = AsyncMock(side_effect=[no_match, entity_result])
 
         embed_svc = AsyncMock()
         embed_svc.embed = AsyncMock(return_value=[0.1] * 1024)
 
-        wm = _make_world_model(db=db, embedding_service=embed_svc)
+        # Mock Qdrant vector_store.find_similar
+        mock_vector_store = AsyncMock()
+        mock_vector_store.find_similar = AsyncMock(
+            return_value=[
+                {
+                    "id": "ent_001",
+                    "score": 0.95,
+                    "payload": {"_original_id": "ent_001"},
+                }
+            ]
+        )
+
+        wm = _make_world_model(
+            db=db,
+            embedding_service=embed_svc,
+            vector_store=mock_vector_store,
+        )
         found = await wm._find_by_name_or_alias("usr_1", "Jon Doe", None)
 
         assert found is entity
@@ -140,7 +153,7 @@ class TestEntityFuzzyDedup:
 
 class TestEntityEmbeddingOnUpsert:
     async def test_upsert_stores_embedding_on_create(self):
-        """New entity gets embedding stored."""
+        """New entity gets embedding stored in Qdrant (not on model)."""
         db = AsyncMock()
         db.add = MagicMock()
         db.commit = AsyncMock()
@@ -153,7 +166,10 @@ class TestEntityEmbeddingOnUpsert:
         embed_svc = AsyncMock()
         embed_svc.embed = AsyncMock(return_value=[0.5] * 1024)
 
-        wm = _make_world_model(db=db, embedding_service=embed_svc)
+        vs = AsyncMock()
+        vs.upsert = AsyncMock()
+
+        wm = _make_world_model(db=db, embedding_service=embed_svc, vector_store=vs)
 
         with patch.object(wm, "_emit_event", new_callable=AsyncMock):
             entity_id = await wm.upsert_entity(
@@ -163,14 +179,15 @@ class TestEntityEmbeddingOnUpsert:
             )
 
         assert entity_id.startswith("ent_")
-        # embed called for both fuzzy dedup lookup and entity creation
         assert embed_svc.embed.call_count >= 1
-        # Check that Entity was added with embedding
-        added_entity = db.add.call_args[0][0]
-        assert added_entity.embedding == [0.5] * 1024
+        # Embedding stored in Qdrant, not on the Entity model
+        vs.upsert.assert_called_once()
+        call_args = vs.upsert.call_args
+        assert call_args[0][0] == "entities"
+        assert call_args[0][1] == entity_id
 
     async def test_upsert_without_embedding_service(self):
-        """Upsert works fine without embedding_service."""
+        """Upsert works fine without embedding_service — no Qdrant upsert."""
         db = AsyncMock()
         db.add = MagicMock()
         db.commit = AsyncMock()
@@ -189,5 +206,6 @@ class TestEntityEmbeddingOnUpsert:
             )
 
         assert entity_id.startswith("ent_")
+        # Entity created in Postgres, no embedding column needed
         added_entity = db.add.call_args[0][0]
-        assert added_entity.embedding is None
+        assert added_entity.canonical_name == "Bob"

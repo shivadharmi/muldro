@@ -305,9 +305,7 @@ def upgrade() -> None:
             nullable=False,
         ),
     )
-    op.create_index(
-        "ix_approvals_user_status", "approvals", ["user_id", "status", "created_at"]
-    )
+    op.create_index("ix_approvals_user_status", "approvals", ["user_id", "status", "created_at"])
 
     # ── briefings ────────────────────────────────────────────────
     op.create_table(
@@ -410,9 +408,7 @@ def upgrade() -> None:
             nullable=False,
         ),
     )
-    op.create_index(
-        "ix_connector_accounts_connector", "connector_accounts", ["connector_id"]
-    )
+    op.create_index("ix_connector_accounts_connector", "connector_accounts", ["connector_id"])
 
 
 def downgrade() -> None:

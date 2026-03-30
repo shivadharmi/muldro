@@ -24,7 +24,7 @@ class TestPublishProgress:
 
         mock_redis = AsyncMock()
         mock_redis.publish = AsyncMock()
-        mock_redis.close = AsyncMock()
+        mock_redis.aclose = AsyncMock()
 
         with patch("redis.asyncio.from_url", return_value=mock_redis):
             await executor._publish_progress("run_001", {"step_id": "s1", "status": "completed"})
@@ -41,12 +41,12 @@ class TestPublishProgress:
 
         mock_redis = AsyncMock()
         mock_redis.publish = AsyncMock()
-        mock_redis.close = AsyncMock()
+        mock_redis.aclose = AsyncMock()
 
         with patch("redis.asyncio.from_url", return_value=mock_redis):
             await executor._publish_progress("run_002", {"event": "test"})
 
-        mock_redis.close.assert_called_once()
+        mock_redis.aclose.assert_called_once()
 
     async def test_publish_progress_tolerates_redis_error(self):
         executor = self._make_executor()

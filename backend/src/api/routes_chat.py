@@ -129,10 +129,11 @@ async def chat_stream(
             from src.models.conversations import Message
             from src.models.database import get_session_factory
 
+            user_msg_id = f"msg_{ULID()}"
             async with get_session_factory()() as db:
                 db.add(
                     Message(
-                        message_id=f"msg_{ULID()}",
+                        message_id=user_msg_id,
                         conversation_id=conversation_id,
                         workspace_id=workspace_id,
                         role="user",

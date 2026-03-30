@@ -50,16 +50,73 @@ class TestPersonaAgentConfig:
     def test_persona_uses_haiku(self):
         assert AGENTS["persona"].model_tier == "haiku"
 
-    def test_persona_has_search_memory_tool(self):
-        assert AGENTS["persona"].can_use_tool("search_memory")
+    @pytest.mark.asyncio
+    async def test_persona_has_search_tool(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
 
-    def test_persona_has_extract_preferences_tool(self):
-        assert AGENTS["persona"].can_use_tool("extract_preferences")
+        mock_db = AsyncMock()
 
-    def test_persona_cannot_use_write_tools(self):
-        assert not AGENTS["persona"].can_use_tool("gmail_send")
-        assert not AGENTS["persona"].can_use_tool("calendar_create")
-        assert not AGENTS["persona"].can_use_tool("ingest_event")
+        with patch("src.services.tool_registry.ToolRegistry") as mock_reg_cls:
+            mock_reg = MagicMock()
+            tool = MagicMock()
+            tool.name = "search"
+            tool.capability = "internal.search"
+            mock_reg.get_tool = AsyncMock(return_value=tool)
+            mock_reg_cls.return_value = mock_reg
+
+            assert await AGENTS["persona"].can_use_tool("search", mock_db)
+
+    @pytest.mark.asyncio
+    async def test_persona_has_extract_preferences_tool(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_db = AsyncMock()
+
+        with patch("src.services.tool_registry.ToolRegistry") as mock_reg_cls:
+            mock_reg = MagicMock()
+            tool = MagicMock()
+            tool.name = "extract_preferences"
+            tool.capability = "internal.extract_preferences"
+            mock_reg.get_tool = AsyncMock(return_value=tool)
+            mock_reg_cls.return_value = mock_reg
+
+            assert await AGENTS["persona"].can_use_tool("extract_preferences", mock_db)
+
+    @pytest.mark.asyncio
+    async def test_persona_cannot_use_write_tools(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_db = AsyncMock()
+
+        with patch("src.services.tool_registry.ToolRegistry") as mock_reg_cls:
+            mock_reg = MagicMock()
+
+            def get_tool(name):
+                tools = {
+                    "gmail_send": (
+                        "gmail.send",
+                        MagicMock(name="gmail_send", capability="gmail.send"),
+                    ),
+                    "calendar_create": (
+                        "calendar.create",
+                        MagicMock(name="calendar_create", capability="calendar.create"),
+                    ),
+                    "ingest_event": (
+                        "internal.ingest_event",
+                        MagicMock(name="ingest_event", capability="internal.ingest_event"),
+                    ),
+                }
+                if name in tools:
+                    cap, tool = tools[name]
+                    return tool
+                return None
+
+            mock_reg.get_tool = AsyncMock(side_effect=get_tool)
+            mock_reg_cls.return_value = mock_reg
+
+            assert not await AGENTS["persona"].can_use_tool("gmail_send", mock_db)
+            assert not await AGENTS["persona"].can_use_tool("calendar_create", mock_db)
+            assert not await AGENTS["persona"].can_use_tool("ingest_event", mock_db)
 
     def test_persona_prompt_mentions_preferences(self):
         agent = AGENTS["persona"]

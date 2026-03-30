@@ -50,18 +50,13 @@ async def _list_unread_via_mcp(ctx: WorkflowContext, max_results: int = 20) -> d
     """Try listing unread emails via Google Workspace MCP server."""
     from src.connectors.mcp_bridge import call_mcp_tool, is_mcp_tool
 
-    for tool_name in (
-        "google_workspace_gmail_list_unread",
-        "google-workspace_gmail_list_unread",
-        "gmail_list_unread",
-    ):
-        if is_mcp_tool(tool_name):
-            return await call_mcp_tool(
-                tool_name,
-                {"max_results": max_results},
-                user_id=ctx.user_id,
-                workspace_id=ctx.workspace_id,
-            )
+    if is_mcp_tool("search_gmail_messages"):
+        return await call_mcp_tool(
+            "search_gmail_messages",
+            {"query": "is:unread", "max_results": max_results},
+            user_id=ctx.user_id,
+            workspace_id=ctx.workspace_id,
+        )
     return None
 
 
@@ -75,21 +70,16 @@ async def _send_via_mcp(
     """Try sending email via Google Workspace MCP server."""
     from src.connectors.mcp_bridge import call_mcp_tool, is_mcp_tool
 
-    for tool_name in (
-        "google_workspace_gmail_send_email",
-        "google-workspace_gmail_send_email",
-        "gmail_send_email",
-    ):
-        if is_mcp_tool(tool_name):
-            params = {"to": to, "subject": subject, "body": body}
-            if thread_id:
-                params["thread_id"] = thread_id
-            return await call_mcp_tool(
-                tool_name,
-                params,
-                user_id=ctx.user_id,
-                workspace_id=ctx.workspace_id,
-            )
+    if is_mcp_tool("send_gmail_message"):
+        params = {"to": to, "subject": subject, "body": body}
+        if thread_id:
+            params["thread_id"] = thread_id
+        return await call_mcp_tool(
+            "send_gmail_message",
+            params,
+            user_id=ctx.user_id,
+            workspace_id=ctx.workspace_id,
+        )
     return None
 
 

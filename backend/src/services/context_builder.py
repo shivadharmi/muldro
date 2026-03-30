@@ -13,8 +13,9 @@ if TYPE_CHECKING:
     from src.services.artifact_store import ArtifactStore
     from src.services.graph_engine import GraphEngine
     from src.services.memory_service import MemoryService
-    from src.services.procedure_library import ProcedureLibrary
+    from src.services.reranker_service import RerankerService
     from src.services.tool_registry import ToolRegistry
+    from src.services.tri_search import TriSearchService
     from src.services.vector_store import VectorStore
     from src.services.world_model import WorldModel
 
@@ -66,7 +67,6 @@ class ContextPack(BaseModel):
     graph_relationships: list[dict] = []  # B5: Neo4j entity relationships
     recent_events: list[dict] = []
     related_runs: list[dict] = []
-    procedures: list[dict] = []
     preferences: list[dict] = []
     artifacts: list[dict] = []
     constraints: list[str] = []
@@ -81,21 +81,23 @@ class ContextBuilder:
         self,
         world_model: WorldModel | None = None,
         memory_service: MemoryService | None = None,
-        procedure_library: ProcedureLibrary | None = None,
         artifact_store: ArtifactStore | None = None,
         tool_registry: ToolRegistry | None = None,
         db: AsyncSession | None = None,
         graph_engine: GraphEngine | None = None,
         vector_store: VectorStore | None = None,
+        tri_search: TriSearchService | None = None,
+        reranker: RerankerService | None = None,
     ):
         self._world_model = world_model
         self._memory_service = memory_service
-        self._procedure_library = procedure_library
         self._artifact_store = artifact_store
         self._tool_registry = tool_registry
         self._db = db
         self._graph_engine = graph_engine
         self._vector_store = vector_store
+        self._tri_search = tri_search
+        self._reranker = reranker
 
     async def build(
         self,
@@ -106,6 +108,40 @@ class ContextBuilder:
     ) -> ContextPack:
         """Build a context pack for the given query/task."""
         pack = ContextPack(task_summary=query)
+
+        # Try TriSearch for unified context retrieval
+        if self._tri_search and self._db:
+            try:
+                grouped = await self._tri_search.search_for_context(
+                    query=query,
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    db=self._db,
+                    limit=20,
+                )
+                # Populate pack from grouped TriSearch results
+                pack.entities = [
+                    {
+                        "entity_id": r.get("id", ""),
+                        "entity_type": r.get("result_type", "entity"),
+                        "canonical_name": r.get("title", ""),
+                        **r,
+                    }
+                    for r in grouped.get("entity", [])
+                ][:10]
+                episodic = [
+                    r for r in grouped.get("memory", []) if r.get("memory_type") == "episodic"
+                ]
+                pack.recent_events = episodic
+                pack.preferences = [
+                    r for r in grouped.get("memory", []) if r.get("memory_type") == "preference"
+                ]
+                # Still fetch goals, artifacts separately below
+            except Exception:
+                logger.debug(
+                    "TriSearch context assembly failed, using individual services",
+                    exc_info=True,
+                )
 
         # Entities
         entity_ids: list[str] = []
@@ -150,12 +186,13 @@ class ContextBuilder:
             except Exception:
                 logger.debug("Memory retrieval failed", exc_info=True)
 
-        # D3: Explicit preference fetch — ensures ALL active preferences are
-        # included even when they don't semantically match the current query
+        # D3: Explicit preference fetch — ensures active preferences are
+        # included even when they don't semantically match the current query.
+        # Bounded to max_results=20 to prevent unbounded context growth.
         if self._memory_service:
             try:
                 all_prefs = await self._memory_service.get_user_preferences(
-                    user_id, workspace_id=workspace_id
+                    user_id, workspace_id=workspace_id, max_results=20
                 )
                 existing_ids = {p.get("memory_id") for p in pack.preferences}
                 for p in all_prefs:
@@ -166,6 +203,9 @@ class ContextBuilder:
                         )
             except Exception:
                 logger.debug("Explicit preference fetch failed", exc_info=True)
+
+        # Hard cap preferences after merge (semantic + explicit)
+        pack.preferences = pack.preferences[:25]
 
         # Goals — retrieved from memory system (memory_type="goal")
         if self._memory_service:
@@ -188,24 +228,6 @@ class ContextBuilder:
                 ]
             except Exception:
                 logger.debug("Goal memory fetch failed", exc_info=True)
-
-        # Procedures — surface learned workflows to the Planner
-        if self._procedure_library:
-            try:
-                procs = await self._procedure_library.get_procedures(
-                    user_id, status="active", workspace_id=workspace_id
-                )
-                pack.procedures = [
-                    {
-                        "name": p.name,
-                        "steps": p.task_template,
-                        "confidence": p.confidence,
-                        "usage_count": p.usage_count,
-                    }
-                    for p in procs[:3]
-                ]
-            except Exception:
-                logger.debug("Procedure lookup failed", exc_info=True)
 
         # Artifacts
         if self._artifact_store and query:
@@ -288,7 +310,7 @@ class ContextBuilder:
         """Convert a context pack into a prompt string for system context injection.
 
         Applies priority-based truncation if the total exceeds max_tokens.
-        Priority order: goals > entities > events > preferences > artifacts > procedures.
+        Priority order: goals > entities > events > preferences > artifacts.
         Rough estimate: 1 token ≈ 4 characters.
         """
         max_chars = max_tokens * 4
@@ -339,10 +361,6 @@ class ContextBuilder:
             evt_lines = [f"- {e.get('fact_text', '')}" for e in pack.recent_events]
             sections.append("## Recent Context\n" + "\n".join(evt_lines))
 
-        if pack.procedures:
-            proc_lines = [f"- Procedure: {p.get('name', 'unnamed')}" for p in pack.procedures]
-            sections.append("## Known Procedures\n" + "\n".join(proc_lines))
-
         if pack.artifacts:
             art_lines = [
                 f"- [{a.get('artifact_type', '?')}] {a.get('title', 'untitled')}"
@@ -370,3 +388,109 @@ class ContextBuilder:
         if len(result) > max_chars:
             result = result[:max_chars] + "\n\n[context truncated]"
         return result
+
+    # ------------------------------------------------------------------
+    # Haiku-summarized context compression (avoids lossy truncation)
+    # ------------------------------------------------------------------
+
+    # Section config: (summarize_if_over_chars, strategy)
+    # "verbatim" = keep as-is, "summarize" = compress via Haiku if oversized
+    SECTION_STRATEGIES: dict[str, tuple[int | None, str]] = {
+        "goals": (None, "verbatim"),
+        "preferences": (None, "verbatim"),
+        "entities": (2000, "summarize"),
+        "graph_relationships": (None, "verbatim"),
+        "recent_events": (1500, "summarize"),
+        "artifacts": (None, "verbatim"),
+        "related_runs": (None, "verbatim"),
+        "tool_options": (None, "verbatim"),
+        "constraints": (None, "verbatim"),
+        "risks": (None, "verbatim"),
+    }
+
+    @staticmethod
+    async def to_prompt_compressed(
+        pack: ContextPack,
+        client,
+        model: str,
+        max_tokens: int = 3000,
+    ) -> str:
+        """Compress context via Haiku summarization instead of raw truncation.
+
+        Sections that exceed their char limit and have strategy="summarize"
+        are compressed via a fast Haiku call. Goals, preferences, and other
+        verbatim sections are kept as-is to preserve individual facts.
+
+        Falls back to to_prompt() if no client is available.
+        """
+        import asyncio
+
+        if client is None:
+            return ContextBuilder.to_prompt(pack, max_tokens=max_tokens)
+
+        # First render all sections using the existing to_prompt logic
+        rendered = ContextBuilder.to_prompt(pack, max_tokens=max_tokens * 2)
+        sections = rendered.split("\n\n")
+
+        # Identify oversized sections that need summarization
+        summarize_tasks = []
+        section_indices = []
+        for i, section in enumerate(sections):
+            # Match section header to strategy
+            header = section.split("\n")[0].strip("# ").lower().replace(" ", "_")
+            config = ContextBuilder.SECTION_STRATEGIES.get(header)
+            if config:
+                char_limit, strategy = config
+                if strategy == "summarize" and char_limit and len(section) > char_limit:
+                    summarize_tasks.append(_summarize_section(client, model, header, section))
+                    section_indices.append(i)
+
+        # Run summarizations in parallel
+        if summarize_tasks:
+            summaries = await asyncio.gather(*summarize_tasks, return_exceptions=True)
+            for idx, summary in zip(section_indices, summaries):
+                if isinstance(summary, str):
+                    sections[idx] = summary
+
+        result = "\n\n".join(sections)
+        max_chars = max_tokens * 4
+        if len(result) > max_chars:
+            result = result[:max_chars] + "\n\n[context truncated]"
+        return result
+
+
+async def _summarize_section(
+    client, model: str, section_name: str, text: str, max_tokens: int = 300
+) -> str:
+    """Compress a context section via Haiku. Preserves all key facts."""
+    try:
+        response = await client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            temperature=0,
+            system=(
+                f"Summarize this {section_name.replace('_', ' ')} context concisely. "
+                "Preserve ALL names, dates, numbers, and key facts. "
+                "Output only the summary, no preamble."
+            ),
+            messages=[{"role": "user", "content": text}],
+        )
+        header = section_name.replace("_", " ").title()
+        return f"## {header}\n{response.content[0].text}"
+    except Exception:
+        logger.debug("Section summarization failed for %s", section_name, exc_info=True)
+        # Fallback: raw truncation
+        return text[:1200] + "..."
+
+
+def _rerank_by_relevance(items: list[dict]) -> list[dict]:
+    """Rerank items by combined static + semantic relevance score.
+
+    Used in the fallback path (non-TriSearch) to ensure the most
+    relevant items survive any downstream caps or truncation.
+    """
+    for item in items:
+        static = item.get("_static_rank", 0.5)
+        semantic = item.get("relevance_score", item.get("score", 0.5))
+        item["_combined_score"] = 0.6 * semantic + 0.4 * static
+    return sorted(items, key=lambda x: x.get("_combined_score", 0), reverse=True)

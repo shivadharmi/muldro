@@ -2,6 +2,9 @@
 
 Verifies the Governor correctly classifies tools as
 auto_execute, approval_required, or blocked.
+
+Uses catalog tool names (MCP server names and internal tool names)
+since the ToolPolicy fallback sets were removed in Phase 16-17.
 """
 
 import pytest
@@ -10,33 +13,30 @@ from tests.conftest import TEST_USER_ID
 
 _W = {"expected_allowed": False, "expected_approval": True}  # Write tool
 _R = {"expected_allowed": True}  # Read-only tool
-_B = {"expected_allowed": False, "expected_approval": False}  # Blocked tool
 
 POLICY_CASES = [
-    # Write tools -> approval required
-    {"tool": "gmail_send", "agent": "operator", **_W},
-    {"tool": "gmail_send_email", "agent": "operator", **_W},
-    {"tool": "gmail_draft", "agent": "operator", **_W},
-    {"tool": "calendar_create_event", "agent": "operator", **_W},
+    # Write tools -> approval required (catalog names)
+    {"tool": "send_gmail_message", "agent": "operator", **_W},
+    {"tool": "draft_gmail_message", "agent": "operator", **_W},
+    {"tool": "manage_event", "agent": "operator", **_W},
     {"tool": "slack_post_message", "agent": "operator", **_W},
-    {"tool": "github_comment", "agent": "operator", **_W},
+    {"tool": "add_issue_comment", "agent": "operator", **_W},
     {"tool": "send_telegram", "agent": "presenter", **_W},
-    # Read-only tools -> auto execute
-    {"tool": "search_memory", "agent": "planner", **_R},
-    {"tool": "get_entities", "agent": "librarian", **_R},
-    {"tool": "gmail_list", "agent": "observer", **_R},
-    {"tool": "gmail_read", "agent": "observer", **_R},
-    {"tool": "calendar_list", "agent": "observer", **_R},
+    {"tool": "issue_write", "agent": "operator", **_W},
+    {"tool": "create_pull_request", "agent": "operator", **_W},
+    # Read-only tools -> auto execute (catalog names)
+    {"tool": "search", "agent": "planner", **_R},
+    {"tool": "search_gmail_messages", "agent": "observer", **_R},
+    {"tool": "get_events", "agent": "observer", **_R},
     {"tool": "get_observation_cursor", "agent": "observer", **_R},
     {"tool": "report_observation", "agent": "observer", **_R},
-    {"tool": "slack_search", "agent": "researcher", **_R},
-    # Blocked tools -> always blocked
-    {"tool": "gmail_delete", "agent": "operator", **_B},
-    {"tool": "drive_delete", "agent": "operator", **_B},
+    {"tool": "slack_get_channel_history", "agent": "researcher", **_R},
     # Internal tools -> auto execute
     {"tool": "ingest_event", "agent": "observer", **_R},
     {"tool": "update_execution", "agent": "operator", **_R},
-    {"tool": "plan_command", "agent": "planner", **_R},
+    {"tool": "build_context", "agent": "planner", **_R},
+    # Unknown tools -> default allow (not in any registry)
+    {"tool": "totally_unknown_tool_xyz", "agent": "operator", **_R},
 ]
 
 

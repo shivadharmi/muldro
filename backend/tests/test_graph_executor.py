@@ -166,5 +166,5 @@ class TestResumeRun:
         mock_db.execute = AsyncMock(return_value=run_result)
 
         executor = GraphExecutor(settings, mock_db)
-        with pytest.raises(ValueError, match="not paused"):
+        with pytest.raises(ValueError, match="not resumable"):
             await executor.resume_run("run_001")

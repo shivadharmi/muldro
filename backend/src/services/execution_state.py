@@ -9,12 +9,13 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-# TaskRun allowed transitions (11 statuses)
+# TaskRun allowed transitions (12 statuses)
 RUN_TRANSITIONS: dict[str, set[str]] = {
     "pending": {"running", "cancelled", "blocked"},
     "running": {
         "paused",
         "awaiting_approval",
+        "awaiting_input",
         "completed",
         "failed",
         "cancelled",
@@ -22,6 +23,7 @@ RUN_TRANSITIONS: dict[str, set[str]] = {
     },
     "paused": {"running", "cancelled"},
     "awaiting_approval": {"running", "cancelled"},
+    "awaiting_input": {"running", "cancelled"},
     "blocked": {"pending", "cancelled"},
     "partially_completed": {"running", "completed", "failed", "cancelled"},
     "completed": {"archived"},
@@ -31,12 +33,20 @@ RUN_TRANSITIONS: dict[str, set[str]] = {
     "timed_out": {"pending", "cancelled"},
 }
 
-# TaskStep allowed transitions (9 statuses)
+# TaskStep allowed transitions (10 statuses)
 STEP_TRANSITIONS: dict[str, set[str]] = {
     "pending": {"ready", "skipped", "blocked"},
     "ready": {"running", "skipped"},
-    "running": {"completed", "failed", "waiting_approval", "skipped", "timed_out"},
+    "running": {
+        "completed",
+        "failed",
+        "waiting_approval",
+        "awaiting_input",
+        "skipped",
+        "timed_out",
+    },
     "waiting_approval": {"running", "skipped"},
+    "awaiting_input": {"running", "skipped", "cancelled"},
     "blocked": {"pending", "skipped"},
     "completed": set(),
     "failed": {"pending"},  # Retry: failed → pending

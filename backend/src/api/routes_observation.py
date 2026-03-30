@@ -1,4 +1,8 @@
-"""Observation health tracking endpoints."""
+"""Perception health tracking endpoints.
+
+Backed by PerceptionState — the single source of truth for observation scheduling,
+health, and circuit breaker state per source.
+"""
 
 from datetime import datetime, timedelta, timezone
 
@@ -7,9 +11,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
-from src.api.schemas import ObservationReportRequest, ObservationStatusResponse
+from src.api.schemas import PerceptionReportRequest, PerceptionStatusResponse
 from src.config.settings import Settings, get_settings
-from src.models.observation import ObservationStatus
+from src.models.ids import generate_id
+from src.models.perception_state import PerceptionState
 
 router = APIRouter()
 
@@ -21,94 +26,111 @@ STALE_THRESHOLDS_ATTR = {
 DEFAULT_STALE_MINUTES = 60
 
 
-@router.post("/v1/observations/report", response_model=ObservationStatusResponse)
+@router.post("/v1/observations/report", response_model=PerceptionStatusResponse)
 async def report_observation(
-    req: ObservationReportRequest,
+    req: PerceptionReportRequest,
     user_id: str = Depends(get_current_user_id),
     workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ):
-    """Upsert observation status after an observation cycle."""
+    """Upsert perception state after an observation cycle."""
     now = datetime.now(timezone.utc)
 
     result = await db.execute(
-        select(ObservationStatus).where(
-            ObservationStatus.user_id == user_id,
-            ObservationStatus.source == req.source,
+        select(PerceptionState).where(
+            PerceptionState.user_id == user_id,
+            PerceptionState.workspace_id == workspace_id,
+            PerceptionState.source == req.source,
         )
     )
-    obs = result.scalar_one_or_none()
+    ps = result.scalar_one_or_none()
 
-    if obs:
-        obs.last_observed_at = now
-        obs.items_found = req.items_found
-        obs.items_ingested = req.items_ingested
-        obs.status = req.status
-        obs.error_message = req.error_message
+    circuit = "open" if req.status == "error" else "closed"
+
+    if ps:
+        ps.last_run_at = now
+        ps.last_event_count = req.event_count
+        ps.circuit_state = circuit
+        ps.last_error = req.error_message
+        if req.status == "error":
+            ps.consecutive_failures += 1
+        else:
+            ps.consecutive_failures = 0
+        ps.total_runs += 1
     else:
-        obs = ObservationStatus(
+        ps = PerceptionState(
+            state_id=generate_id("pst"),
             user_id=user_id,
             workspace_id=workspace_id,
             source=req.source,
-            last_observed_at=now,
-            items_found=req.items_found,
-            items_ingested=req.items_ingested,
-            status=req.status,
-            error_message=req.error_message,
+            last_run_at=now,
+            last_event_count=req.event_count,
+            circuit_state=circuit,
+            last_error=req.error_message,
+            consecutive_failures=1 if req.status == "error" else 0,
+            total_runs=1,
         )
-        db.add(obs)
+        db.add(ps)
 
     await db.commit()
-    await db.refresh(obs)
+    await db.refresh(ps)
 
-    is_stale = _check_stale(obs, settings)
-
-    return ObservationStatusResponse(
-        source=obs.source,
-        last_observed_at=obs.last_observed_at,
-        items_found=obs.items_found,
-        items_ingested=obs.items_ingested,
-        status=obs.status,
-        error_message=obs.error_message,
-        is_stale=is_stale,
+    return PerceptionStatusResponse(
+        source=ps.source,
+        last_run_at=ps.last_run_at,
+        event_count=ps.last_event_count,
+        circuit_state=ps.circuit_state,
+        error_message=ps.last_error,
+        consecutive_failures=ps.consecutive_failures,
+        total_runs=ps.total_runs,
+        is_stale=_check_stale(ps, settings),
     )
 
 
-@router.get("/v1/observations/status", response_model=list[ObservationStatusResponse])
+@router.get("/v1/observations/status", response_model=list[PerceptionStatusResponse])
 async def get_observation_status(
     user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ):
-    """Return all observation sources with staleness computed."""
-    result = await db.execute(select(ObservationStatus).where(ObservationStatus.user_id == user_id))
-    observations = result.scalars().all()
+    """Return all perception sources with staleness computed."""
+    result = await db.execute(
+        select(PerceptionState).where(
+            PerceptionState.user_id == user_id,
+            PerceptionState.workspace_id == workspace_id,
+        )
+    )
+    states = result.scalars().all()
 
     return [
-        ObservationStatusResponse(
-            source=obs.source,
-            last_observed_at=obs.last_observed_at,
-            items_found=obs.items_found,
-            items_ingested=obs.items_ingested,
-            status=obs.status,
-            error_message=obs.error_message,
-            is_stale=_check_stale(obs, settings),
+        PerceptionStatusResponse(
+            source=ps.source,
+            last_run_at=ps.last_run_at,
+            event_count=ps.last_event_count,
+            circuit_state=ps.circuit_state,
+            error_message=ps.last_error,
+            consecutive_failures=ps.consecutive_failures,
+            total_runs=ps.total_runs,
+            is_stale=_check_stale(ps, settings),
         )
-        for obs in observations
+        for ps in states
     ]
 
 
-def _check_stale(obs: ObservationStatus, settings: Settings) -> bool:
-    """Check if an observation source is stale based on configured thresholds."""
-    if obs.status == "error":
+def _check_stale(ps: PerceptionState, settings: Settings) -> bool:
+    """Check if a perception source is stale based on configured thresholds."""
+    if ps.circuit_state == "open":
+        return True
+    if ps.last_run_at is None:
         return True
 
     now = datetime.now(timezone.utc)
-    attr_name = STALE_THRESHOLDS_ATTR.get(obs.source)
+    attr_name = STALE_THRESHOLDS_ATTR.get(ps.source)
     if attr_name:
         stale_minutes = getattr(settings, attr_name, DEFAULT_STALE_MINUTES)
     else:
         stale_minutes = DEFAULT_STALE_MINUTES
     threshold = now - timedelta(minutes=stale_minutes)
-    return obs.last_observed_at < threshold
+    return ps.last_run_at < threshold

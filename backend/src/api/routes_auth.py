@@ -16,6 +16,7 @@ from src.api.deps import (
     get_session,
 )
 from src.config.settings import Settings, get_settings
+from src.middleware.security import per_endpoint_rate_limit
 from src.models.users import User
 from src.services.auth_service import AuthService
 
@@ -65,7 +66,11 @@ class OAuthUrlResponse(BaseModel):
 # ── Magic Link ───────────────────────────────────────────────
 
 
-@router.post("/v1/auth/magic-link", response_model=MagicLinkResponse)
+@router.post(
+    "/v1/auth/magic-link",
+    response_model=MagicLinkResponse,
+    dependencies=[Depends(per_endpoint_rate_limit(5))],
+)
 async def send_magic_link(
     req: MagicLinkRequest,
     db: AsyncSession = Depends(get_session),

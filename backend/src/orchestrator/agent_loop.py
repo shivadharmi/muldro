@@ -244,6 +244,7 @@ async def agent_loop(
                         if thinking_enabled:
                             api_kwargs["temperature"] = agent.temperature
                             api_kwargs.pop("thinking", None)
+                            thinking_enabled = False
                         response = await _api_call_with_retry(client, api_kwargs, agent_name)
             else:
                 try:
@@ -257,6 +258,7 @@ async def agent_loop(
                         )
                         api_kwargs["temperature"] = agent.temperature
                         api_kwargs.pop("thinking", None)
+                        thinking_enabled = False
                         response = await _api_call_with_retry(client, api_kwargs, agent_name)
                     else:
                         raise
@@ -308,6 +310,7 @@ async def agent_loop(
                     tool_input,
                     agent_name,
                     user_id=user_id,
+                    workspace_id=workspace_id,
                     db_factory=db_factory,
                     services=services,
                     run_id=run_id,
@@ -429,8 +432,15 @@ async def agent_loop(
         yield LoopError(agent=agent_name, message=str(e))
     except Exception as e:
         logger.error("Agent %s failed: %s", agent_name, e, exc_info=True)
+        if circuit_breaker:
+            circuit_breaker.record_failure(model)
         text = f"[Agent {agent_name} error: {e}]"
         yield LoopError(agent=agent_name, message=str(e))
+    finally:
+        # Guarantee half-open probe lock is released even if the generator
+        # is abandoned (caller break/cancel) without hitting success/failure.
+        if circuit_breaker:
+            circuit_breaker.reset_half_open_probe(model)
 
     latency_ms = int((time.time() - start_time) * 1000)
 

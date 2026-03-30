@@ -1,8 +1,7 @@
 from datetime import date, datetime
 
-from pgvector.sqlalchemy import Vector
 from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.models.base import Base, TimestampMixin
@@ -25,7 +24,7 @@ class Entity(Base, TimestampMixin):
     interaction_count: Mapped[int] = mapped_column(Integer, default=0)
     importance_score: Mapped[float] = mapped_column(Float, default=0.0)
     confidence_score: Mapped[float] = mapped_column(Float, default=1.0)
-    embedding: Mapped[list | None] = mapped_column(Vector(1024))
+    search_vector = mapped_column(TSVECTOR, nullable=True)
 
     aliases: Mapped[list["EntityAlias"]] = relationship(
         back_populates="entity", cascade="all, delete-orphan"
@@ -83,4 +82,5 @@ class EntityRelationship(Base, TimestampMixin):
     __table_args__ = (
         Index("ix_relations_from", "from_entity_id", "relation_type"),
         Index("ix_relations_to", "to_entity_id", "relation_type"),
+        Index("ix_entity_rels_ws", "workspace_id"),
     )

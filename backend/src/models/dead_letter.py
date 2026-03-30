@@ -1,5 +1,7 @@
 """Dead-letter queue model — stores failed operations for retry or inspection."""
 
+from datetime import datetime
+
 from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -40,10 +42,10 @@ class DeadLetterEntry(Base, TimestampMixin):
     # The original payload for replay
     payload: Mapped[dict | None] = mapped_column(JSONB)
 
-    last_attempted_at: Mapped[str | None] = mapped_column(
+    last_attempted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
-    resolved_at: Mapped[str | None] = mapped_column(DateTime(timezone=True))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
         Index("ix_dlq_user_status", "user_id", "status"),

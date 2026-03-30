@@ -14,7 +14,6 @@ import os
 from typing import Any
 
 from src.integrations.session_pool import UserMCPSessionPool
-from src.integrations.tool_normalizer import get_normalizer
 from src.services.mcp_resilience import MCPCircuitBreaker
 
 logger = logging.getLogger(__name__)
@@ -102,7 +101,6 @@ async def initialize_mcp_bridge(
     _session_pool = UserMCPSessionPool(
         oauth_manager=oauth_manager,
         circuit_breaker=_circuit_breaker,
-        normalizer=get_normalizer(),
     )
 
     # Create and initialize workspace pool from DB

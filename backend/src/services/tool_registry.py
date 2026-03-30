@@ -2,295 +2,190 @@
 
 import logging
 
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
-from src.integrations.capabilities import TOOL_TO_CAPABILITY
 from src.models.tool_definitions import ToolDefinition
+from src.tools.catalog import EXTERNAL_TOOL_SEEDS, INTERNAL_TOOLS
 
 logger = logging.getLogger(__name__)
 
 
-def _t(
-    name: str,
-    risk: str = "low",
-    approval: bool = False,
-    connector: str | None = None,
-    enabled: bool = True,
-    canonical: str | None = None,
-    capability: str | None = None,
-) -> dict:
-    return {
-        "name": name,
-        "risk_level": risk,
-        "requires_approval": approval,
-        "connector_type": connector,
-        "enabled": enabled,
-        "canonical_name": canonical,
-        "capability": capability,
-    }
+def _schema_for_claude(model_cls: type[BaseModel]) -> dict:
+    """Generate input schema excluding runtime-injected fields.
 
-
-# Canonical name mappings — aliases point to canonical tool names.
-# resolve_canonical() uses these to normalize tool names at call time.
-CANONICAL_ALIASES: dict[str, str] = {
-    "gmail_send_email": "gmail_send",
-    "gmail_draft": "gmail_create_draft",
-    "calendar_create": "calendar_create_event",
-    "calendar_update": "calendar_update_event",
-    "calendar_delete": "calendar_delete_event",
-    "slack_post_message": "slack_send_message",
-}
-
-
-# Default tool definitions seeded on startup
-_DEFAULT_TOOLS = [
-    # Gmail writes
-    _t("gmail_send", "high", True, "gmail"),
-    _t("gmail_send_email", "high", True, "gmail", canonical="gmail_send"),
-    _t("gmail_draft", "medium", True, "gmail", canonical="gmail_create_draft"),
-    _t("gmail_create_draft", "medium", True, "gmail"),
-    _t("gmail_reply", "high", True, "gmail"),
-    # Gmail reads
-    _t("gmail_list", "low", False, "gmail"),
-    _t("gmail_read", "low", False, "gmail"),
-    _t("gmail_search", "low", False, "gmail"),
-    # Gmail blocked
-    _t("gmail_delete", "critical", True, "gmail", enabled=False),
-    # Calendar
-    _t("calendar_list", "low", False, "calendar"),
-    _t("calendar_get", "low", False, "calendar"),
-    _t("calendar_create", "medium", True, "calendar", canonical="calendar_create_event"),
-    _t("calendar_create_event", "medium", True, "calendar"),
-    _t("calendar_update", "medium", True, "calendar", canonical="calendar_update_event"),
-    _t("calendar_update_event", "medium", True, "calendar"),
-    _t(
-        "calendar_delete",
-        "critical",
-        True,
-        "calendar",
-        enabled=False,
-        canonical="calendar_delete_event",
-    ),
-    _t("calendar_delete_event", "critical", True, "calendar", enabled=False),
-    # Slack
-    _t("slack_post_message", "high", True, "slack", canonical="slack_send_message"),
-    _t("slack_send_message", "high", True, "slack"),
-    _t("slack_react", "medium", True, "slack"),
-    _t("slack_update_message", "medium", True, "slack"),
-    _t("slack_list_channels", "low", False, "slack"),
-    _t("slack_get_messages", "low", False, "slack"),
-    _t("slack_search", "low", False, "slack"),
-    # GitHub
-    _t("github_create_issue", "medium", True, "github"),
-    _t("github_comment", "medium", True, "github"),
-    _t("github_create_pr", "high", True, "github"),
-    _t("github_merge_pr", "high", True, "github"),
-    # Drive
-    _t("drive_list", "low", False, "drive"),
-    _t("drive_search", "low", False, "drive"),
-    _t("drive_create", "medium", True, "drive"),
-    _t("drive_delete", "critical", True, "drive", enabled=False),
-    # Internal intelligence tools (read-only)
-    _t("search_memory", "low", False, "internal"),
-    _t("get_entities", "low", False, "internal"),
-    _t("get_active_plans", "low", False, "internal"),
-    _t("get_briefing", "low", False, "internal"),
-    _t("get_observation_cursor", "low", False, "internal"),
-    _t("report_observation", "low", False, "internal"),
-    _t("get_task", "low", False, "internal"),
-    _t("get_goals", "low", False, "internal"),
-    _t("build_context", "low", False, "internal"),
-    # Internal intelligence tools (write)
-    _t("ingest_event", "low", False, "internal"),
-    _t("update_entity", "low", False, "internal"),
-    _t("plan_command", "low", False, "internal"),
-    _t("evaluate_policy", "low", False, "internal"),
-    _t("approve_action", "medium", True, "internal"),
-    _t("update_observation_cursor", "low", False, "internal"),
-    _t("extract_preferences", "low", False, "internal"),
-    _t("create_task", "low", False, "internal"),
-    _t("verify_run", "low", False, "internal"),
-    _t("update_execution", "low", False, "internal"),
-    # Communication / UI
-    _t("push_ui_update", "low", False, "internal"),
-    _t("send_telegram", "medium", True, "telegram"),
-    _t("send_approval_prompt", "medium", True, "telegram"),
-    # Research
-    _t("web_search", "low", False, "browser"),
-    _t("perplexity_search", "low", False, "browser"),
-    # Browser
-    _t("browser_open", "medium", False, "browser"),
-    _t("browser_snapshot", "low", False, "browser"),
-    _t("browser_extract", "low", False, "browser"),
-    _t("browser_click", "medium", False, "browser"),
-    _t("browser_type", "medium", False, "browser"),
-    _t("browser_submit", "high", True, "browser"),
-    _t("browser_screenshot", "low", False, "browser"),
-    # GitHub MCP raw tool names (official ghcr.io/github/github-mcp-server)
-    _t("issue_write", "medium", True, "github"),
-    _t("issue_read", "low", False, "github"),
-    _t("add_issue_comment", "medium", True, "github"),
-    _t("create_pull_request", "high", True, "github"),
-    _t("merge_pull_request", "high", True, "github"),
-    _t("update_pull_request", "medium", True, "github"),
-    _t("pull_request_read", "low", False, "github"),
-    _t("pull_request_review_write", "medium", True, "github"),
-    _t("sub_issue_write", "medium", True, "github"),
-    _t("list_issues", "low", False, "github"),
-    _t("search_issues", "low", False, "github"),
-    _t("search_code", "low", False, "github"),
-    _t("search_repositories", "low", False, "github"),
-    _t("search_users", "low", False, "github"),
-    _t("search_orgs", "low", False, "github"),
-    _t("get_diff", "low", False, "github"),
-    _t("get_reviews", "low", False, "github"),
-    _t("get_check_runs", "low", False, "github"),
-    _t("get_files", "low", False, "github"),
-    _t("list_pull_requests", "low", False, "github"),
-    _t("search_pull_requests", "low", False, "github"),
-    _t("get_sub_issues", "low", False, "github"),
-    # Slack MCP raw tool names (slack-mcp-server — already prefixed)
-    _t("slack_reply_to_thread", "high", True, "slack"),
-    _t("slack_add_reaction", "medium", True, "slack"),
-    _t("slack_get_channel_history", "low", False, "slack"),
-    _t("slack_get_thread_replies", "low", False, "slack"),
-    _t("slack_get_users", "low", False, "slack"),
-    _t("slack_get_user_profile", "low", False, "slack"),
-    # Google Workspace MCP raw tool names (camelCase)
-    _t("sendGmailDraft", "high", True, "gmail"),
-    _t("createGmailDraft", "medium", True, "gmail"),
-    _t("listGmailMessages", "low", False, "gmail"),
-    _t("readGmailMessage", "low", False, "gmail"),
-    _t("searchGmail", "low", False, "gmail"),
-    _t("deleteGmailMessage", "critical", True, "gmail", enabled=False),
-    _t("createCalendarEvent", "medium", True, "calendar"),
-    _t("updateCalendarEvent", "medium", True, "calendar"),
-    _t("deleteCalendarEvent", "critical", True, "calendar", enabled=False),
-    _t("listCalendarEvents", "low", False, "calendar"),
-    _t("getCalendarEvent", "low", False, "calendar"),
-    # Linear (native + MCP — mcp-server-linear tools already prefixed)
-    _t("linear_create_issue", "medium", True, "linear"),
-    _t("linear_update_issue", "medium", True, "linear"),
-    _t("linear_comment", "medium", True, "linear"),
-    _t("linear_list_issues", "low", False, "linear"),
-    _t("linear_get_issue", "low", False, "linear"),
-    # Linear MCP-specific tool names
-    _t("linear_edit_issue", "medium", True, "linear"),
-    _t("linear_create_comment", "medium", True, "linear"),
-    _t("linear_delete_issue", "critical", True, "linear", enabled=False),
-    _t("linear_search_issues", "low", False, "linear"),
-    _t("linear_get_teams", "low", False, "linear"),
-    # Notion (native connector names)
-    _t("notion_create_page", "medium", True, "notion"),
-    _t("notion_update_page", "medium", True, "notion"),
-    _t("notion_search", "low", False, "notion"),
-    _t("notion_get_page", "low", False, "notion"),
-    # Notion MCP raw tool names (@notionhq/notion-mcp-server, kebab-case)
-    _t("create-a-page", "medium", True, "notion"),
-    _t("update-a-page", "medium", True, "notion"),
-    _t("retrieve-a-page", "low", False, "notion"),
-    _t("search", "low", False, "notion"),
-    _t("query-data-source", "low", False, "notion"),
-    _t("create-a-comment", "medium", True, "notion"),
-    _t("append-block-children", "medium", True, "notion"),
-    # Jira (native connector names)
-    _t("jira_create_issue", "medium", True, "jira"),
-    _t("jira_update_issue", "medium", True, "jira"),
-    _t("jira_transition", "medium", True, "jira"),
-    _t("jira_comment", "medium", True, "jira"),
-    _t("jira_list_issues", "low", False, "jira"),
-    _t("jira_get_issue", "low", False, "jira"),
-    # Atlassian MCP raw tool names (official Rovo MCP, camelCase)
-    _t("getJiraIssue", "low", False, "jira"),
-    _t("searchJiraIssuesUsingJql", "low", False, "jira"),
-    _t("getVisibleJiraProjects", "low", False, "jira"),
-    _t("getJiraIssueTypeMetaWithFields", "low", False, "jira"),
-    _t("getJiraProjectIssueTypesMetadata", "low", False, "jira"),
-    _t("getTransitionsForJiraIssue", "low", False, "jira"),
-    _t("lookupJiraAccountId", "low", False, "jira"),
-    _t("getJiraIssueRemoteIssueLinks", "low", False, "jira"),
-    _t("createJiraIssue", "medium", True, "jira"),
-    _t("editJiraIssue", "medium", True, "jira"),
-    _t("transitionJiraIssue", "medium", True, "jira"),
-    _t("addCommentToJiraIssue", "medium", True, "jira"),
-    _t("addWorklogToJiraIssue", "medium", True, "jira"),
-    # WhatsApp
-    _t("whatsapp_send_message", "high", True, "whatsapp"),
-    _t("whatsapp_send_template", "high", True, "whatsapp"),
-    _t("whatsapp_mark_read", "low", False, "whatsapp"),
-    # SMS / Twilio
-    _t("sms_send_sms", "high", True, "sms"),
-    # LinkedIn
-    _t("linkedin_create_post", "high", True, "linkedin"),
-    _t("linkedin_share_article", "high", True, "linkedin"),
-    _t("linkedin_get_profile", "low", False, "linkedin"),
-    # Twitter / X
-    _t("twitter_create_tweet", "high", True, "twitter"),
-    _t("twitter_reply", "high", True, "twitter"),
-    _t("twitter_retweet", "medium", True, "twitter"),
-    _t("twitter_get_mentions", "low", False, "twitter"),
-]
+    User_id and workspace_id are injected at runtime by the orchestrator,
+    so they should not be presented to Claude in the tool schema.
+    """
+    schema = model_cls.model_json_schema()
+    for field in ("user_id", "workspace_id"):
+        schema.get("properties", {}).pop(field, None)
+        if "required" in schema and field in schema["required"]:
+            schema["required"].remove(field)
+    return schema
 
 
 class ToolRegistry:
     """DB-backed registry of all available tools and their metadata."""
 
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, workspace_id: str | None = None):
         self._db = db
+        self._workspace_id = workspace_id
         self._cache: dict[str, ToolDefinition] = {}
 
     async def seed_defaults(self, workspace_id: str | None = None) -> int:
         """Seed or update default tool definitions. Returns count created/updated.
 
-        Creates new tools that don't exist. For existing tools, syncs
-        risk_level, requires_approval, connector_type, and capability
-        from _DEFAULT_TOOLS so code changes propagate on restart.
+        Two-pass seeding strategy:
+        1. Seed from INTERNAL_TOOLS catalog (19 tools)
+        2. Seed from EXTERNAL_TOOL_SEEDS catalog (137+ tools)
+
+        For existing tools, syncs backend, source, server, capability,
+        risk_level, requires_approval, and verified fields.
         """
-        # Build lookup of existing tools by name
-        result = await self._db.execute(select(ToolDefinition))
+        # Build lookup of existing tools by name, scoped to workspace.
+        # Without scoping, multiple workspaces with the same tool name would
+        # collide in the dict, causing arbitrary row updates.
+        stmt = select(ToolDefinition)
+        if workspace_id is not None:
+            stmt = stmt.where(ToolDefinition.workspace_id == workspace_id)
+        else:
+            stmt = stmt.where(ToolDefinition.workspace_id.is_(None))
+        result = await self._db.execute(stmt)
         existing = {t.name: t for t in result.scalars().all()}
 
+        seen: set[str] = set()
         changed = 0
-        for tool_data in _DEFAULT_TOOLS:
-            name = tool_data["name"]
-            capability = tool_data.get("capability") or TOOL_TO_CAPABILITY.get(name)
-            risk = tool_data.get("risk_level", "low")
-            approval = tool_data.get("requires_approval", False)
-            connector = tool_data.get("connector_type")
+
+        # Pass 1: Seed from INTERNAL_TOOLS catalog
+        for tool in INTERNAL_TOOLS:
+            name = tool.name
+            if name in seen:
+                continue
+            seen.add(name)
+
+            backend = "internal_mcp"
+            source = "internal"
+            server = tool.server
+            capability = tool.capability
+            risk = tool.risk_level
+            approval = tool.requires_approval
+            verified = True  # Internal tools are always verified
+            input_schema = _schema_for_claude(tool.input_model)
 
             if name not in existing:
-                tool = ToolDefinition(
+                new_tool = ToolDefinition(
                     tool_id=f"tool_{ULID()}",
                     workspace_id=workspace_id,
                     name=name,
+                    backend=backend,
+                    source=source,
+                    server=server,
                     risk_level=risk,
                     requires_approval=approval,
-                    connector_type=connector,
-                    enabled=tool_data.get("enabled", True),
-                    canonical_name=tool_data.get("canonical_name"),
+                    connector_type="internal",
                     capability=capability,
+                    verified=verified,
+                    input_schema=input_schema,
+                    enabled=True,
                 )
-                self._db.add(tool)
+                self._db.add(new_tool)
                 changed += 1
                 continue
 
             # Sync mutable fields if they diverged
-            tool = existing[name]
+            tool_def = existing[name]
             needs_update = False
 
-            if tool.risk_level != risk:
-                tool.risk_level = risk
+            if tool_def.backend != backend:
+                tool_def.backend = backend
                 needs_update = True
-            if tool.requires_approval != approval:
-                tool.requires_approval = approval
+            if tool_def.source != source:
+                tool_def.source = source
                 needs_update = True
-            if tool.connector_type != connector:
-                tool.connector_type = connector
+            if tool_def.server != server:
+                tool_def.server = server
                 needs_update = True
-            if tool.capability != capability:
-                tool.capability = capability
+            if tool_def.capability != capability:
+                tool_def.capability = capability
+                needs_update = True
+            if tool_def.risk_level != risk:
+                tool_def.risk_level = risk
+                needs_update = True
+            if tool_def.requires_approval != approval:
+                tool_def.requires_approval = approval
+                needs_update = True
+            if tool_def.verified != verified:
+                tool_def.verified = verified
+                needs_update = True
+            if tool_def.input_schema != input_schema:
+                tool_def.input_schema = input_schema
+                needs_update = True
+
+            if needs_update:
+                changed += 1
+
+        # Pass 2: Seed from EXTERNAL_TOOL_SEEDS catalog
+        for seed in EXTERNAL_TOOL_SEEDS:
+            name = seed.name
+            if name in seen:
+                continue
+            seen.add(name)
+
+            backend = "composite" if seed.server == "_composite" else "external_mcp"
+            source = "seed"
+            server = seed.server
+            capability = seed.capability
+            risk = seed.risk_level
+            approval = seed.requires_approval
+            verified = seed.verified
+            connector = seed.server  # Use server name as connector_type for backward compat
+
+            if name not in existing:
+                new_tool = ToolDefinition(
+                    tool_id=f"tool_{ULID()}",
+                    workspace_id=workspace_id,
+                    name=name,
+                    backend=backend,
+                    source=source,
+                    server=server,
+                    risk_level=risk,
+                    requires_approval=approval,
+                    connector_type=connector,
+                    capability=capability,
+                    verified=verified,
+                    enabled=True,
+                )
+                self._db.add(new_tool)
+                changed += 1
+                continue
+
+            # Sync mutable fields if they diverged
+            tool_def = existing[name]
+            needs_update = False
+
+            if tool_def.backend != backend:
+                tool_def.backend = backend
+                needs_update = True
+            if tool_def.source != source:
+                tool_def.source = source
+                needs_update = True
+            if tool_def.server != server:
+                tool_def.server = server
+                needs_update = True
+            if tool_def.capability != capability:
+                tool_def.capability = capability
+                needs_update = True
+            if tool_def.risk_level != risk:
+                tool_def.risk_level = risk
+                needs_update = True
+            if tool_def.requires_approval != approval:
+                tool_def.requires_approval = approval
+                needs_update = True
+            if tool_def.verified != verified:
+                tool_def.verified = verified
                 needs_update = True
 
             if needs_update:
@@ -314,7 +209,13 @@ class ToolRegistry:
         idempotent: bool = False,
         workspace_id: str = "",
     ) -> ToolDefinition:
-        existing = await self._db.execute(select(ToolDefinition).where(ToolDefinition.name == name))
+        # Scope lookup by workspace to avoid MultipleResultsFound
+        stmt = select(ToolDefinition).where(ToolDefinition.name == name)
+        if workspace_id:
+            stmt = stmt.where(ToolDefinition.workspace_id == workspace_id)
+        else:
+            stmt = stmt.where(ToolDefinition.workspace_id.is_(None))
+        existing = await self._db.execute(stmt)
         tool = existing.scalar_one_or_none()
         if tool:
             tool.risk_level = risk_level
@@ -343,28 +244,24 @@ class ToolRegistry:
         self._cache[name] = tool
         return tool
 
-    def resolve_canonical(self, tool_name: str) -> str:
-        """Resolve a tool name to its canonical form.
-
-        Checks in-memory CANONICAL_ALIASES first, then falls back to DB
-        canonical_name field. Returns the original name if no alias found.
-        """
-        return CANONICAL_ALIASES.get(tool_name, tool_name)
-
-    async def resolve_canonical_db(self, tool_name: str) -> str:
-        """Resolve via DB lookup — for cases where in-memory map is insufficient."""
-        canonical = CANONICAL_ALIASES.get(tool_name)
-        if canonical:
-            return canonical
-        tool = await self.get_tool(tool_name)
-        if tool and tool.canonical_name:
-            return tool.canonical_name
-        return tool_name
-
     async def get_tool(self, name: str) -> ToolDefinition | None:
         if name in self._cache:
             return self._cache[name]
-        result = await self._db.execute(select(ToolDefinition).where(ToolDefinition.name == name))
+        # Scope by workspace: prefer workspace-specific over global (NULL).
+        # Without scoping, same-name tools in different workspaces cause
+        # MultipleResultsFound on scalar_one_or_none().
+        stmt = select(ToolDefinition).where(ToolDefinition.name == name)
+        if self._workspace_id:
+            stmt = stmt.where(
+                (ToolDefinition.workspace_id == self._workspace_id)
+                | (ToolDefinition.workspace_id.is_(None))
+            )
+            # Prefer workspace-specific over global
+            stmt = stmt.order_by(ToolDefinition.workspace_id.desc().nulls_last())
+        else:
+            stmt = stmt.where(ToolDefinition.workspace_id.is_(None))
+        stmt = stmt.limit(1)
+        result = await self._db.execute(stmt)
         tool = result.scalar_one_or_none()
         if tool:
             self._cache[name] = tool

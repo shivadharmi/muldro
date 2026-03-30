@@ -58,7 +58,7 @@ class SchedulerLoop:
         self._running = False
 
     async def _tick(self) -> None:
-        """One scheduler cycle: perception, follow-ups, background tasks, schedules."""
+        """One scheduler cycle: perception, follow-ups, background tasks, eviction, schedules."""
         factory = get_session_factory()
 
         # 1. Drive perception from perception_state table
@@ -70,7 +70,12 @@ class SchedulerLoop:
         # 3. Execute pending background tasks
         await self._tick_background_tasks(factory)
 
-        # 4. Process due schedules
+        # 4. Eviction — clean up expired data every 5th tick (~150s)
+        self._tick_count = getattr(self, "_tick_count", 0) + 1
+        if self._tick_count % 5 == 0:
+            await self._tick_eviction(factory)
+
+        # 5. Process due schedules
         async with factory() as db:
             now = datetime.now(timezone.utc)
 
@@ -167,6 +172,23 @@ class SchedulerLoop:
                 if not due_states:
                     return
 
+                # Rate limit: cap perception cycles per tick to avoid
+                # API exhaustion when many sources are due simultaneously
+                max_per_tick = self._settings.max_perception_per_tick
+                if len(due_states) > max_per_tick:
+                    # Priority: pending_run=True first (explicit user/agent requests),
+                    # then by next_run_at ascending (oldest first)
+                    due_states.sort(
+                        key=lambda s: (not s.pending_run, s.next_run_at or datetime.max)
+                    )
+                    logger.info(
+                        "Perception throttled: %d due, processing %d, deferring %d",
+                        len(due_states),
+                        max_per_tick,
+                        len(due_states) - max_per_tick,
+                    )
+                    due_states = due_states[:max_per_tick]
+
                 # C4: Clear pending_run BEFORE running cycles to prevent
                 # the next 30s tick from double-picking the same sources
                 for state in due_states:
@@ -221,23 +243,31 @@ class SchedulerLoop:
                     self._last_synthesis_at = now
                     try:
                         user_id = due_states[0].user_id
-                        ws_id = due_states[0].workspace_id or ""
+                        # Resolve workspace_id with fallback
+                        ws_id = ""
+                        for s in due_states:
+                            if s.workspace_id:
+                                ws_id = s.workspace_id
+                                break
+                        if not ws_id:
+                            try:
+                                ws_id = await self._resolve_workspace(user_id)
+                            except Exception:
+                                logger.warning(
+                                    "No workspace_id for cross-source synthesis, skipping"
+                                )
+                                ws_id = ""
                         source_names = [s.source for s in due_states]
-                        await self._orchestrator.process_message(
-                            message=(
-                                f"Synthesize recent observations across these sources: "
-                                f"{', '.join(source_names)}. "
-                                f"Identify any cross-cutting insights, connections between "
-                                f"events, or actions that span multiple sources."
-                            ),
-                            user_id=user_id,
-                            workspace_id=ws_id,
-                            surface="perception_synthesis",
-                        )
-                        logger.info(
-                            "Cross-source synthesis triggered for %d sources",
-                            sources_with_events,
-                        )
+                        if ws_id:
+                            await self._orchestrator.run_cross_source_synthesis(
+                                source_names=source_names,
+                                user_id=user_id,
+                                workspace_id=ws_id,
+                            )
+                            logger.info(
+                                "Cross-source synthesis triggered for %d sources",
+                                sources_with_events,
+                            )
                     except Exception:
                         logger.debug("Cross-source synthesis failed", exc_info=True)
         except Exception:
@@ -248,19 +278,25 @@ class SchedulerLoop:
     # ------------------------------------------------------------------
 
     async def _tick_background_tasks(self, factory) -> None:
-        """Execute pending background tasks queued by the orchestrator."""
+        """Execute pending background tasks queued by the orchestrator.
+
+        Picks up TaskRuns with source in ("background", "approval_resume")
+        and status="pending". Failed tasks are retried up to max_retries,
+        then moved to the dead-letter queue.
+        """
         if not self._orchestrator:
             return
 
         try:
-            from src.models.task_graph import TaskRun
+            from src.models.task_graph import TaskRun, TaskStep
+            from src.services.execution_state import transition_run
 
             async with factory() as db:
                 result = await db.execute(
                     select(TaskRun)
                     .where(
                         TaskRun.status == "pending",
-                        TaskRun.source == "background",
+                        TaskRun.source.in_(["background", "approval_resume"]),
                     )
                     .order_by(TaskRun.created_at.asc())
                     .limit(3)
@@ -271,8 +307,14 @@ class SchedulerLoop:
                     return
 
                 for run in pending:
+                    # Capture IDs before execution — if the session enters
+                    # PendingRollbackError state, lazy attribute access fails.
+                    run_id = run.run_id
+                    plan_id = run.plan_id
+                    user_id = run.user_id
+                    ws_id = run.workspace_id or ""
+
                     try:
-                        workspace_id = run.workspace_id or ""
                         from src.services.graph_executor import (
                             create_graph_executor,
                         )
@@ -280,22 +322,87 @@ class SchedulerLoop:
                         executor = await create_graph_executor(
                             settings=self._settings,
                             db=db,
-                            workspace_id=workspace_id,
+                            workspace_id=ws_id,
                         )
-                        completed = await executor.execute_run(
-                            run.run_id,
+
+                        # Ensure steps exist before execution (defensive)
+                        step_check = await db.execute(
+                            select(TaskStep.step_id).where(TaskStep.run_id == run_id).limit(1)
                         )
+                        if not step_check.scalar_one_or_none() and plan_id:
+                            await executor.populate_run_steps(run_id, plan_id)
+                            await db.flush()
+
+                        completed = await executor.execute_run(run_id)
                         logger.info(
                             "Background task %s completed: %s",
-                            run.run_id,
+                            run_id,
                             completed.status,
                         )
                     except Exception as e:
+                        # Rollback poisoned session before any further DB access
+                        await db.rollback()
+
                         logger.warning(
                             "Background task %s failed: %s",
-                            run.run_id,
+                            run_id,
                             e,
                         )
+                        run.retry_count = (run.retry_count or 0) + 1
+                        max_retries = run.max_retries or 3
+
+                        if run.retry_count >= max_retries:
+                            # Exhausted retries — mark failed and DLQ
+                            try:
+                                transition_run(run, "failed")
+                            except Exception:
+                                run.status = "failed"
+                            run.error = {
+                                "type": type(e).__name__,
+                                "message": str(e)[:500],
+                            }
+                            run.completed_at = datetime.now(timezone.utc)
+                            try:
+                                from src.services.dead_letter import (
+                                    DeadLetterService,
+                                )
+
+                                dlq = DeadLetterService(db)
+                                await dlq.enqueue(
+                                    user_id=user_id,
+                                    operation_type="background_task",
+                                    error_type=type(e).__name__,
+                                    error_message=str(e),
+                                    source_id=run_id,
+                                    payload={
+                                        "plan_id": plan_id,
+                                        "run_id": run_id,
+                                    },
+                                    workspace_id=ws_id,
+                                )
+                            except Exception:
+                                logger.debug(
+                                    "DLQ enqueue failed for run %s",
+                                    run_id,
+                                    exc_info=True,
+                                )
+                        else:
+                            # Retry: transition back to pending
+                            if run.status not in ("pending", "failed"):
+                                try:
+                                    transition_run(run, "failed")
+                                except Exception:
+                                    run.status = "failed"
+                            try:
+                                transition_run(run, "pending")
+                            except Exception:
+                                run.status = "pending"
+                            logger.info(
+                                "Background task %s retry %d/%d",
+                                run_id,
+                                run.retry_count,
+                                max_retries,
+                            )
 
                 await db.commit()
                 logger.info(
@@ -304,6 +411,44 @@ class SchedulerLoop:
                 )
         except Exception:
             logger.warning("Background task tick error", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Data eviction — hard-delete expired records
+    # ------------------------------------------------------------------
+
+    async def _tick_eviction(self, factory) -> None:
+        """Run eviction pass to hard-delete expired data with cascade cleanup."""
+        try:
+            async with factory() as db:
+                from src.services.eviction_service import EvictionService
+
+                vector_store = None
+                graph_engine = None
+
+                if self._settings.qdrant_url:
+                    from src.services.vector_store import VectorStore
+
+                    vector_store = VectorStore(self._settings)
+                    await vector_store.ensure_collections()
+
+                if self._settings.neo4j_url:
+                    from src.services.graph_engine import GraphEngine
+
+                    graph_engine = GraphEngine(self._settings)
+
+                svc = EvictionService(
+                    settings=self._settings,
+                    db=db,
+                    vector_store=vector_store,
+                    graph_engine=graph_engine,
+                )
+                await svc.run_full_eviction()
+                await db.commit()
+
+                if graph_engine:
+                    await graph_engine.close()
+        except Exception:
+            logger.warning("Eviction tick error", exc_info=True)
 
     # ------------------------------------------------------------------
     # Follow-up notifications
@@ -480,7 +625,7 @@ class SchedulerLoop:
             from src.services.alerting import AlertingService
             from src.services.trace_store import TraceStore
 
-            trace_store = TraceStore(elasticsearch_url=self._settings.elasticsearch_url)
+            trace_store = TraceStore()
             alerting = AlertingService(trace_store=trace_store)
             checks = await alerting.check_all_slos()
             logger.info(

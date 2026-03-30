@@ -261,13 +261,12 @@ def test_meeting_prep_returns_attendee_context(mock_presenter_cls):
 
 
 @patch("src.api.routes_approvals.AuditService")
-@patch("src.api.routes_approvals.Operator")
-def test_rejected_approval_cancels_execution_and_audits(mock_op_cls, mock_audit_cls):
+def test_rejected_approval_cancels_execution_and_audits(mock_audit_cls):
     """POST /v1/approvals/{id}/reject should:
     1. Mark approval as rejected
     2. Cancel the associated execution
     3. Record the rejection in the audit trail
-    4. NOT trigger any external write (Operator.execute_plan not called)
+    4. NOT trigger any external write (GraphExecutor not called)
     """
     # Set up mock approval (pending)
     mock_approval = MagicMock(spec=Approval)
@@ -342,9 +341,6 @@ def test_rejected_approval_cancels_execution_and_audits(mock_op_cls, mock_audit_
         assert audit_call.kwargs["action_type"] == "approval_rejected"
         assert audit_call.kwargs["approval_id"] == "apr_reject_001"
         assert audit_call.kwargs["execution_id"] == "exec_reject_001"
-
-        # Operator.execute_plan was NEVER called (no external write)
-        mock_op_cls.return_value.execute_plan.assert_not_called()
 
     finally:
         app.dependency_overrides.pop(deps.get_session, None)

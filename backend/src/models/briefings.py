@@ -1,7 +1,7 @@
 from datetime import date
 
 from sqlalchemy import Date, ForeignKey, Index, String, Text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.models.base import Base, TimestampMixin
@@ -22,5 +22,6 @@ class Briefing(Base, TimestampMixin):
     pending_approvals: Mapped[dict | None] = mapped_column(JSONB)
     recommended_actions: Mapped[dict | None] = mapped_column(JSONB)
     full_text: Mapped[str | None] = mapped_column(Text)
+    search_vector = mapped_column(TSVECTOR, nullable=True)
 
     __table_args__ = (Index("ix_briefings_user_date", "user_id", "briefing_date"),)

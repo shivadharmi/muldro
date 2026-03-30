@@ -109,7 +109,8 @@ class TestCircuitBreaker:
         state = _make_state(consecutive_failures=CIRCUIT_FAILURE_THRESHOLD - 1)
         svc = PerceptionPolicyService(db)
 
-        result = await svc.record_failure(state, "connection_refused")
+        # Use "unknown"-classified error so default threshold (3) applies
+        result = await svc.record_failure(state, "unknown internal error")
         assert result.circuit_state == "open"
         assert result.circuit_opened_at is not None
 
@@ -221,7 +222,9 @@ class TestSchedulerPerceptionTick:
         mock_cm.__aexit__ = AsyncMock(return_value=False)
         mock_factory.return_value = MagicMock(return_value=mock_cm)
 
-        scheduler = SchedulerLoop(MagicMock(), orchestrator=orchestrator)
+        mock_settings = MagicMock()
+        mock_settings.max_perception_per_tick = 5
+        scheduler = SchedulerLoop(mock_settings, orchestrator=orchestrator)
 
         mock_svc_instance = AsyncMock()
         mock_svc_instance.get_due_sources_all_users = AsyncMock(return_value=[state])
@@ -353,3 +356,45 @@ class TestIntentClassifierSources:
         assert "slack" in VALID_PERCEPTION_SOURCES
         assert "github" in VALID_PERCEPTION_SOURCES
         assert "twitter" not in VALID_PERCEPTION_SOURCES
+
+
+# ---------------------------------------------------------------------------
+# Cross-source synthesis uses internal path (Phase 4)
+# ---------------------------------------------------------------------------
+
+
+class TestCrossSynthesisInternalPath:
+    def test_run_cross_source_synthesis_exists(self):
+        """Verify run_cross_source_synthesis method exists on orchestrator."""
+        from src.orchestrator.jarvis import JarvisOrchestrator
+
+        assert hasattr(JarvisOrchestrator, "run_cross_source_synthesis")
+
+    def test_scheduler_uses_internal_synthesis_path(self):
+        """Cross-source synthesis should use run_cross_source_synthesis, not process_message."""
+        import inspect
+
+        from src.services.scheduler import SchedulerLoop
+
+        source = inspect.getsource(SchedulerLoop._tick_perception)
+        # Should use run_cross_source_synthesis, not process_message
+        assert "run_cross_source_synthesis" in source
+        assert "process_message(" not in source
+
+
+# ---------------------------------------------------------------------------
+# DLQ wiring in perception cycle (Phase 6)
+# ---------------------------------------------------------------------------
+
+
+class TestPerceptionCycleDLQ:
+    def test_perception_cycle_has_dlq_enqueue(self):
+        """run_perception_cycle's except block should enqueue to DLQ."""
+        import inspect
+
+        from src.orchestrator.jarvis import JarvisOrchestrator
+
+        source = inspect.getsource(JarvisOrchestrator.run_perception_cycle)
+        assert "DeadLetterService" in source
+        assert "dlq.enqueue" in source
+        assert "perception_cycle" in source

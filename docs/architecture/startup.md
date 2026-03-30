@@ -38,15 +38,19 @@ sequenceDiagram
     APP->>APP: Initialize SurfaceRegistry
 
     Note over APP,DB: Seed Configuration
-    APP->>DB: ToolRegistry.seed_defaults() (tool definitions)
+    APP->>DB: ToolRegistry.seed_defaults() (163 tools from catalog.py)
     APP->>DB: AgentRegistry.seed_defaults() (8 agents)
     APP->>DB: RouteResolver.seed_defaults() (16 routes)
-    APP->>DB: ScheduleSeeder.seed_default_schedules() (7 schedules)
+
+    Note over APP,DB: Validate Registry
+    APP->>APP: validate_registry() (6 cross-checks)
+    Note over APP: Capabilities known, scopes valid, schemas present
 
     Note over APP,MCP: Connect External Tools
     APP->>MCP: initialize_mcp_bridge()
-    MCP->>MCP: Connect to Google/GitHub/Slack/Playwright/FS
+    MCP->>MCP: Connect to configured MCP servers
     MCP->>MCP: list_tools() on each server
+    MCP->>DB: Register discovered unknown tools (capability=None)
     MCP-->>APP: Tools discovered
 
     Note over APP,REC: Recover In-Flight State
@@ -195,7 +199,8 @@ First POST /v1/jarvis/chat
     → _build_orchestrator()
     → Create long-lived DB session
     → Build: EventProcessor, WorldModel, MemoryService, Planner,
-             Governor, Presenter, Audit, VectorStore, SearchService
+             Governor, Presenter, Audit, VectorStore, GraphEngine,
+             RerankerService, TriSearchService
     → Configure intelligence server with services
     → load_agents_from_db()
     → Cache orchestrator for subsequent requests
@@ -207,13 +212,12 @@ This avoids startup overhead when only serving health checks or API endpoints th
 
 | Component | Version | Required | Fallback if Unavailable |
 |-----------|---------|----------|------------------------|
-| **PostgreSQL** | 17 (pgvector) | Yes | None (system won't start) |
+| **PostgreSQL** | 17 | Yes | None (system won't start) |
 | **Redis** | 7 | Yes* | In-memory cache/locks, no event streaming, no surface tracking |
-| **Elasticsearch** | 8.16 | No | Postgres-only search, in-memory trace fallback (maxlen=500) |
-| **Qdrant** | 1.12 | No | pgvector for dedup; no cross-collection semantic search |
+| **Qdrant** | 1.12 | No | Postgres FTS only; no semantic vector search |
 | **Neo4j** | 5 Community | No | No graph traversal; Postgres entity tables still provide flat queries |
 | **MinIO / S3** | - | No | No artifact file storage (metadata still tracked in Postgres) |
-| **MCP servers** | - | No | Tools unavailable; connector fallback used |
+| **MCP servers** | - | No | External tools unavailable; internal tools still work |
 | **Telegram** | - | No | Web-only operation |
 
 *Redis is technically optional but strongly recommended. Without it, event streaming, distributed locking, task queuing, and real-time features are degraded or disabled.
@@ -221,10 +225,9 @@ This avoids startup overhead when only serving health checks or API endpoints th
 ### Docker Compose Services
 
 ```yaml
-# docker-compose.yml provides all 6 infrastructure services:
+# docker-compose.yml provides all 5 infrastructure services:
 postgres:      pgvector/pgvector:pg17  (port 5432)
 redis:         redis:7-alpine          (port 6379)
-elasticsearch: elasticsearch:8.16.0    (port 9200)
 qdrant:        qdrant/qdrant:v1.12.0   (ports 6333, 6334)
 neo4j:         neo4j:5-community       (ports 7474, 7687)
 minio:         minio/minio             (ports 9000, 9001)

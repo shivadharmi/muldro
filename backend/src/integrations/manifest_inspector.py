@@ -11,7 +11,7 @@ import json
 import logging
 from dataclasses import dataclass
 
-from src.integrations.capabilities import CAPABILITY_CATALOG, get_capability_for_tool
+from src.integrations.capabilities import CAPABILITY_CATALOG
 
 logger = logging.getLogger(__name__)
 
@@ -91,14 +91,27 @@ def compute_manifest_hash(tools: list[dict]) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()[:32]
 
 
+def _get_capability_for_tool(tool_name: str) -> str | None:
+    """Look up the canonical capability for a tool name via the catalog."""
+    from src.tools.catalog import EXTERNAL_TOOL_SEEDS, INTERNAL_TOOLS
+
+    for tool in INTERNAL_TOOLS:
+        if tool.name == tool_name:
+            return tool.capability
+    for seed in EXTERNAL_TOOL_SEEDS:
+        if seed.name == tool_name:
+            return seed.capability
+    return None
+
+
 def classify_tool(tool: dict) -> ToolClassification:
     """Classify a single tool's risk level and capability."""
     name = tool.get("name", "")
     description = (tool.get("description", "") or "").lower()
     risk_factors: list[str] = []
 
-    # Check capability mapping
-    capability = get_capability_for_tool(name)
+    # Check capability mapping via catalog
+    capability = _get_capability_for_tool(name)
 
     # Determine read-only
     read_only = True

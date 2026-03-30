@@ -1,17 +1,12 @@
 "use client";
 
-import Link from "next/link";
+import type { SearchResult } from "@/lib/types";
 
-interface SearchResult {
-  result_type: string;
-  result_id: string;
-  title: string;
-  snippet: string;
-  score: number;
-  why_matched: string;
-  actions: { action: string; url: string }[];
-  metadata: Record<string, unknown>;
-}
+const SOURCE_DB_LABELS: Record<string, string> = {
+  qdrant: "Vector (Qdrant)",
+  postgres_fts: "Keyword (Postgres FTS)",
+  neo4j: "Graph (Neo4j)",
+};
 
 interface Props {
   result: SearchResult | null;
@@ -30,42 +25,33 @@ export function ResultDetailPane({ result }: Props) {
     <div className="p-4 space-y-3">
       <div>
         <span className="text-xs text-t-tertiary uppercase tracking-wider">
-          {result.result_type}
+          {result.type}
         </span>
         <h3 className="text-base font-medium text-t-primary mt-0.5">
           {result.title}
         </h3>
       </div>
 
-      {result.snippet && (
-        <p className="text-sm text-t-secondary">{result.snippet}</p>
+      {result.summary && (
+        <p className="text-sm text-t-secondary">{result.summary}</p>
       )}
 
-      <div className="text-xs text-t-tertiary">
-        Matched: {result.why_matched}
+      <div className="flex flex-wrap gap-2 text-xs">
+        {result.source_db && (
+          <span className="px-2 py-0.5 rounded bg-surface-2 text-t-secondary">
+            {SOURCE_DB_LABELS[result.source_db] ?? result.source_db}
+          </span>
+        )}
+        {result.score != null && (
+          <span className="px-2 py-0.5 rounded bg-surface-2 text-t-secondary">
+            Score: {result.score.toFixed(3)}
+          </span>
+        )}
       </div>
 
-      {Object.keys(result.metadata).length > 0 && (
-        <div className="text-xs text-t-tertiary space-y-0.5">
-          {Object.entries(result.metadata).map(([k, v]) => (
-            <div key={k}>
-              <span className="capitalize">{k}</span>: {String(v)}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {result.actions.length > 0 && (
-        <div className="flex gap-2 pt-2">
-          {result.actions.map((a, i) => (
-            <Link
-              key={i}
-              href={a.url}
-              className="px-3 py-1.5 text-xs rounded-[var(--radius-sm)] bg-accent-primary text-white hover:opacity-90 transition-opacity"
-            >
-              {a.action.charAt(0).toUpperCase() + a.action.slice(1)}
-            </Link>
-          ))}
+      {result.why_matched && (
+        <div className="text-xs text-t-tertiary">
+          Matched: {result.why_matched}
         </div>
       )}
     </div>

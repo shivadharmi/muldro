@@ -5,6 +5,7 @@ tables. Postgres remains source of truth; Neo4j enables multi-hop traversals,
 path finding, and community detection.
 """
 
+import json
 import logging
 
 from src.config.settings import Settings
@@ -39,6 +40,24 @@ class GraphEngine:
             await self._driver.close()
             self._driver = None
 
+    async def delete_entity(self, entity_id: str) -> None:
+        """Delete an entity node and all its relationships from Neo4j.
+
+        Uses DETACH DELETE to atomically remove the node and edges.
+        """
+        driver = await self._get_driver()
+        if not driver:
+            return
+
+        try:
+            async with driver.session() as session:
+                await session.run(
+                    "MATCH (e:Entity {entity_id: $entity_id}) DETACH DELETE e",
+                    entity_id=entity_id,
+                )
+        except Exception:
+            logger.warning("Neo4j delete_entity failed for %s", entity_id, exc_info=True)
+
     async def sync_entity(
         self,
         entity_id: str,
@@ -52,21 +71,24 @@ class GraphEngine:
         if not driver:
             return
 
-        async with driver.session() as session:
-            await session.run(
-                """
-                MERGE (e:Entity {entity_id: $entity_id})
-                SET e.entity_type = $entity_type,
-                    e.name = $name,
-                    e.user_id = $user_id,
-                    e.attributes = $attributes
-                """,
-                entity_id=entity_id,
-                entity_type=entity_type,
-                name=name,
-                user_id=user_id,
-                attributes=str(attributes or {}),
-            )
+        try:
+            async with driver.session() as session:
+                await session.run(
+                    """
+                    MERGE (e:Entity {entity_id: $entity_id})
+                    SET e.entity_type = $entity_type,
+                        e.name = $name,
+                        e.user_id = $user_id,
+                        e.attributes = $attributes
+                    """,
+                    entity_id=entity_id,
+                    entity_type=entity_type,
+                    name=name,
+                    user_id=user_id,
+                    attributes=json.dumps(attributes or {}, default=str),
+                )
+        except Exception:
+            logger.warning("Neo4j sync_entity failed for %s", entity_id, exc_info=True)
 
     async def sync_relationship(
         self,
@@ -81,20 +103,23 @@ class GraphEngine:
         if not driver:
             return
 
-        async with driver.session() as session:
-            await session.run(
-                """
-                MATCH (a:Entity {entity_id: $from_id})
-                MATCH (b:Entity {entity_id: $to_id})
-                MERGE (a)-[r:RELATES_TO {relation_id: $rel_id}]->(b)
-                SET r.relation_type = $rel_type, r.user_id = $user_id
-                """,
-                from_id=from_entity_id,
-                to_id=to_entity_id,
-                rel_id=relation_id,
-                rel_type=relation_type,
-                user_id=user_id,
-            )
+        try:
+            async with driver.session() as session:
+                await session.run(
+                    """
+                    MATCH (a:Entity {entity_id: $from_id})
+                    MATCH (b:Entity {entity_id: $to_id})
+                    MERGE (a)-[r:RELATES_TO {relation_id: $rel_id}]->(b)
+                    SET r.relation_type = $rel_type, r.user_id = $user_id
+                    """,
+                    from_id=from_entity_id,
+                    to_id=to_entity_id,
+                    rel_id=relation_id,
+                    rel_type=relation_type,
+                    user_id=user_id,
+                )
+        except Exception:
+            logger.warning("Neo4j sync_relationship failed for %s", relation_id, exc_info=True)
 
     async def traverse(
         self, entity_id: str, user_id: str, relation_types: list[str] | None = None, depth: int = 2
@@ -181,6 +206,39 @@ class GraphEngine:
                 """,
                 entity_id=entity_id,
                 user_id=user_id,
+            )
+            records = await result.data()
+            return records
+
+    async def search_entities(
+        self, user_id: str, query: str, entity_type: str | None = None, limit: int = 20
+    ) -> list[dict]:
+        """Search entities by name using Neo4j CONTAINS matching."""
+        driver = await self._get_driver()
+        if not driver:
+            return []
+
+        type_filter = ""
+        if entity_type:
+            type_filter = "AND e.entity_type = $entity_type"
+
+        async with driver.session() as session:
+            result = await session.run(
+                f"""
+                MATCH (e:Entity {{user_id: $user_id}})
+                WHERE toLower(e.name) CONTAINS toLower($search_query)
+                {type_filter}
+                RETURN e.entity_id AS entity_id,
+                       e.name AS name,
+                       e.entity_type AS entity_type,
+                       e.attributes AS attributes
+                ORDER BY e.name
+                LIMIT $limit
+                """,
+                user_id=user_id,
+                search_query=query,
+                entity_type=entity_type,
+                limit=limit,
             )
             records = await result.data()
             return records

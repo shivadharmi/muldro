@@ -8,8 +8,8 @@ Services are organized in dependency layers. Higher layers depend on lower layer
 
 | Layer | Services | Role |
 |-------|----------|------|
-| **L0 Infrastructure** | Postgres, Redis, Elasticsearch, Qdrant, Neo4j, MinIO/S3 | Storage, search, caching, streaming |
-| **L1 Data** | SQLAlchemy models, VectorStore, SearchService, GraphEngine, ArtifactStore, EventBus, Cache, Locking | Data access layer |
+| **L0 Infrastructure** | Postgres, Redis, Qdrant, Neo4j, MinIO/S3 | Storage, search, caching, streaming |
+| **L1 Data** | SQLAlchemy models, VectorStore, FTSService, TriSearchService, RerankerService, GraphEngine, ArtifactStore, EventBus, Cache, Locking | Data access layer |
 | **L2 Perception** | EventProcessor | Event normalization, scoring, dedup |
 | **L3 Knowledge** | WorldModel, MemoryService | Entity graph, long-term memory |
 | **L4 Planning** | Planner, InitiativeScorer, ContextBuilder, ProcedureLibrary | Structured task graphs, proactive scoring, context assembly |
@@ -46,17 +46,17 @@ Services are organized in dependency layers. Higher layers depend on lower layer
 **Purpose:** Maintains entity graph with 15 entity types and 17 relation types.
 
 **Constructor:**
-- `settings`, `db`, `event_bus?`, `embedding_service?`
+- `settings`, `db`, `event_bus?`, `embedding_service?`, `vector_store?`
 
 **Key Methods:**
 | Method | Description |
 |--------|-------------|
 | `extract_from_event(event_id, user_id)` | Claude extraction of entities + relationships from events |
-| `upsert_entity(...)` | Create/update entity with temporal tracking + fuzzy dedup |
+| `upsert_entity(...)` | Create/update entity with temporal tracking + fuzzy dedup + Qdrant upsert |
 | `add_relationship(from_id, type, to_id)` | Create entity relationship |
 | `find_entity(user_id, query)` | Search entities by name/alias, ordered by importance |
 
-**Calls:** EmbeddingService (pgvector), Claude API, EventBus
+**Calls:** EmbeddingService, VectorStore (Qdrant), Claude API, EventBus
 
 ---
 
@@ -67,13 +67,13 @@ Services are organized in dependency layers. Higher layers depend on lower layer
 **Purpose:** Long-term memory with 5 types (episodic, semantic, preference, relationship, task_context).
 
 **Constructor:**
-- `settings`, `db`, `event_bus?`
+- `settings`, `db`, `event_bus?`, `vector_store?`
 
 **Key Methods:**
 | Method | Description |
 |--------|-------------|
-| `extract_and_store(user_id, source_text, source_event_ids, entity_ids)` | Claude extraction + embedding + dedup + store |
-| `retrieve(user_id, query, memory_types, entity_refs, max_results)` | Composite-ranked retrieval |
+| `extract_and_store(user_id, source_text, source_event_ids, entity_ids)` | Claude extraction + embedding + Qdrant upsert + dedup + store |
+| `retrieve(user_id, query, memory_types, entity_refs, max_results)` | Composite-ranked retrieval via Qdrant |
 | `extract_preferences(user_id, source_text, source_event_ids)` | Preference-specific extraction |
 | `check_contradictions(user_id, new_fact, new_memory_id)` | Contradiction detection via Claude |
 | `consolidate_memories(user_id)` | Merge similar memories (>0.95 similarity) |
@@ -88,7 +88,7 @@ score = 0.40 * cosine_similarity   (relevance)
       + 0.10 * entity_overlap       (memory.entity_ids ∩ query entity_refs)
 ```
 
-**Calls:** Claude API, EmbeddingService (pgvector), EventBus
+**Calls:** Claude API, EmbeddingService, VectorStore (Qdrant), EventBus
 
 ---
 
@@ -138,15 +138,15 @@ score = 0.40 * cosine_similarity   (relevance)
 **Purpose:** Assembles rich context packs for agent prompts.
 
 **Constructor:**
-- `world_model?`, `memory_service?`, `procedure_library?`, `artifact_store?`
+- `world_model?`, `memory_service?`, `procedure_library?`, `artifact_store?`, `db?`, `graph_engine?`, `vector_store?`, `tri_search?`, `reranker?`
 
 **Key Methods:**
 | Method | Description |
 |--------|-------------|
-| `build(user_id, query, task_type)` | Gather entities, memories, goals, procedures into ContextPack. Populates `related_runs`, `tool_options`, `constraints`, and `risks`. |
+| `build(user_id, query, task_type)` | Gather entities, memories, goals, procedures into ContextPack. Uses TriSearch for unified retrieval when available. Populates `related_runs`, `tool_options`, `constraints`, and `risks`. |
 | `to_prompt(pack, max_tokens?)` | Convert ContextPack to markdown for system prompt injection. Accepts optional `max_tokens` for priority-based truncation (higher-priority sections preserved first). |
 
-**Calls:** WorldModel, MemoryService, ProcedureLibrary, ArtifactStore
+**Calls:** TriSearchService (preferred), WorldModel, MemoryService, ProcedureLibrary, ArtifactStore, GraphEngine, VectorStore
 
 ---
 
@@ -262,12 +262,12 @@ score = 0.40 * cosine_similarity   (relevance)
 **Purpose:** Persists orchestrator traces for search and replay.
 
 **Constructor:**
-- `elasticsearch_url=""`, `db_factory?`
+- `db_factory?`
 
 **Key Methods:**
 | Method | Description |
 |--------|-------------|
-| `store_trace(trace_dict, user_id)` | Write to Postgres (primary) + ES (secondary) + memory (fallback) |
+| `store_trace(trace_dict, user_id)` | Write to Postgres |
 | `get_trace(trace_id)` | Retrieve single trace |
 | `search_traces(user_id, trigger, agent_name, time_range_hours, limit)` | Filter traces |
 | `get_aggregate_metrics(user_id, time_range_hours)` | Success/failure rates |
@@ -314,6 +314,8 @@ score = 0.40 * cosine_similarity   (relevance)
 **Purpose:** Redis stream consumers for async event processing.
 
 **Consumer Groups:** entity_extractor, memory_extractor, planner, trigger_evaluator
+
+> Note: The `event_indexer` consumer group was removed when Elasticsearch was dropped. Entity extraction now syncs directly to Qdrant.
 
 ---
 
@@ -460,31 +462,52 @@ Invalid transitions raise `InvalidTransitionError`. All status changes in GraphE
 
 **Collections:** `memories` (1024-dim), `entities`, `events`, `artifacts`
 
-**Fallback:** Silent no-op if Qdrant unavailable; pgvector used for dedup operations.
+**Fallback:** Silent no-op if Qdrant unavailable; Postgres FTS provides keyword search.
 
 ---
 
-### SearchService (Hybrid Search)
+### TriSearchService (Unified Search)
 
-**File:** `src/services/search_service.py`
+**File:** `src/services/tri_search.py`
 
-**Purpose:** Hybrid search combining Elasticsearch BM25 + Qdrant semantic via Reciprocal Rank Fusion.
+**Purpose:** Unified search across Qdrant (vector) + Postgres FTS (keyword) + Neo4j (graph) with Bedrock reranking.
 
 **Constructor:**
-- `elasticsearch_url`, `vector_store`, `embedding_service`
+- `settings`, `vector_store?`, `graph_engine?`, `reranker?`, `embedder?`
 
 **Key Methods:**
 | Method | Description |
 |--------|-------------|
-| `search(user_id, query, types, limit)` | Hybrid search: ES BM25 + Qdrant semantic + RRF merge |
-| `index_event(event)` | Index to ES + Qdrant in parallel |
-| `index_entity(entity)` | Index to ES + Qdrant in parallel |
-| `index_memory(memory)` | Index to ES + Qdrant in parallel |
-| `index_artifact(artifact)` | Index to ES + Qdrant in parallel |
+| `search(query, user_id, workspace_id, db, types?, limit)` | Parallel search across all 3 backends + rerank |
+| `search_for_context(query, user_id, workspace_id, db, limit)` | Context-optimized search returning results grouped by type |
 
-**ES Indexes:** `jarvis-events`, `jarvis-entities`, `jarvis-memories`, `jarvis-artifacts`
+**Backends:** Qdrant (semantic), Postgres tsvector/GIN (keyword), Neo4j CONTAINS (graph entity)
 
-**Qdrant Collections:** Mirrors ES indexes with vector embeddings
+---
+
+### FTSService (Postgres Full-Text Search)
+
+**File:** `src/services/fts_service.py`
+
+**Purpose:** Keyword search using Postgres native tsvector columns with GIN indexes.
+
+**Indexed Tables:** memories, entities, events, conversations, briefings, approvals, artifacts
+
+---
+
+### RerankerService
+
+**File:** `src/services/reranker_service.py`
+
+**Purpose:** Reranks merged search results using Bedrock `amazon.rerank-v1:0`.
+
+**Constructor:**
+- `settings`
+
+**Key Methods:**
+| Method | Description |
+|--------|-------------|
+| `rerank(query, documents, limit)` | Rerank document list by relevance to query |
 
 ---
 
@@ -503,6 +526,7 @@ Invalid transitions raise `InvalidTransitionError`. All status changes in GraphE
 | `find_central_entities(user_id)` | Degree centrality ranking |
 | `detect_communities(user_id)` | Connected component clustering |
 | `get_subgraph(entity_ids)` | Extract subgraph |
+| `search_entities(user_id, query, entity_type?, limit)` | Name-based entity search via Neo4j CONTAINS matching (used by TriSearch) |
 
 **Fallback:** No-op if Neo4j unavailable; Postgres entity tables still provide flat queries.
 
@@ -623,13 +647,13 @@ graph TD
     EP --> IS[InitiativeScorer]
     EP --> PL[Planner]
     EP --> NT[Notifier]
-    EP --> SS[SearchService]
 
     IS --> WM
     IS --> MS
     CB[ContextBuilder] --> WM
     CB --> MS
     CB --> AS[ArtifactStore]
+    CB --> TS_SEARCH[TriSearchService]
 
     PL --> WM
     PL --> MS
@@ -653,13 +677,16 @@ graph TD
     WK --> MS
     WK --> PL
 
-    SS --> ES[(Elasticsearch)]
-    SS --> VS[VectorStore/Qdrant]
+    TS_SEARCH --> VS[VectorStore/Qdrant]
+    TS_SEARCH --> FTS[FTSService/Postgres]
+    TS_SEARCH --> N4J_E[GraphEngine/Neo4j]
+    TS_SEARCH --> RR[RerankerService/Bedrock]
+    WM --> VS
     WM --> GSS[GraphSyncService]
+    MS --> VS
     GSS --> N4J[(Neo4j)]
     AS --> S3[(MinIO/S3)]
     TS[TraceStore] --> PG[(Postgres)]
-    TS --> ES
     EB[EventBus] --> RD[(Redis)]
     NT --> SR[SurfaceRegistry] --> RD
 ```

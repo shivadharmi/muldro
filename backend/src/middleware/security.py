@@ -20,6 +20,13 @@ logger = logging.getLogger(__name__)
 MAX_REQUEST_BODY_BYTES = 1_048_576
 
 
+class _RequestTooLargeError(Exception):
+    """Raised by counting receive() when chunked body exceeds size limit."""
+
+    def __init__(self, size: int):
+        self.size = size
+
+
 class RateLimiter:
     """Simple in-memory sliding window rate limiter.
 
@@ -148,6 +155,7 @@ class RequestSizeLimitMiddleware:
             await self.app(scope, receive, send)
             return
 
+        # Fast path: reject if Content-Length header exceeds limit
         headers = dict(scope.get("headers", []))
         content_length = headers.get(b"content-length", b"").decode("utf-8")
 
@@ -157,7 +165,67 @@ class RequestSizeLimitMiddleware:
             await _send_json_response(send, 413, {"detail": "Request body too large"})
             return
 
-        await self.app(scope, receive, send)
+        # Streaming guard: count bytes from receive() for chunked/headerless bodies.
+        # Without this, clients omitting Content-Length bypass the size limit entirely.
+        bytes_received = 0
+        max_bytes = self._max_bytes
+
+        async def _counting_receive() -> dict:
+            nonlocal bytes_received
+            message = await receive()
+            if message.get("type") == "http.request":
+                body = message.get("body", b"")
+                bytes_received += len(body)
+                if bytes_received > max_bytes:
+                    raise _RequestTooLargeError(bytes_received)
+            return message
+
+        try:
+            await self.app(scope, _counting_receive, send)
+        except _RequestTooLargeError as exc:
+            path = scope.get("path", "")
+            logger.warning("Chunked request too large: %d bytes from %s", exc.size, path)
+            await _send_json_response(send, 413, {"detail": "Request body too large"})
+
+
+def per_endpoint_rate_limit(max_rpm: int = 10):
+    """FastAPI dependency factory for per-endpoint rate limiting.
+
+    Uses Redis when available, falls back to in-memory. Returns a Depends
+    callable that raises HTTPException(429) when the limit is exceeded.
+
+    Usage: @router.post("/path", dependencies=[Depends(per_endpoint_rate_limit(5))])
+    """
+    from starlette.requests import Request
+
+    _in_memory = RateLimiter(requests_per_minute=max_rpm)
+
+    async def _check(request: Request):
+        from fastapi import HTTPException
+
+        client = request.client
+        client_ip = client.host if client else "unknown"
+        route = request.scope.get("route")
+        path = route.path if route else request.url.path
+        key = f"ep:{path}:{client_ip}"
+
+        msg = "Rate limit exceeded. Try again later."
+        redis = getattr(request.app.state, "redis", None)
+        if redis is not None:
+            try:
+                rl = RedisRateLimiter(redis, requests_per_minute=max_rpm)
+                if not await rl.is_allowed(key):
+                    raise HTTPException(status_code=429, detail=msg)
+                return
+            except HTTPException:
+                raise
+            except Exception:
+                pass  # fall back to in-memory
+
+        if not _in_memory.is_allowed(key):
+            raise HTTPException(status_code=429, detail=msg)
+
+    return _check
 
 
 async def _send_json_response(send: Send, status: int, body: dict) -> None:

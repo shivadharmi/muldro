@@ -105,73 +105,6 @@ export interface SystemDashboard {
   runs: Record<string, unknown>;
 }
 
-// ── Canvas Dashboard ────────────────────────────────────────────
-
-export interface DashboardApproval {
-  approval_id: string;
-  title: string;
-  summary: string | null;
-  risk_level: string;
-  approval_type: string;
-  created_at: string | null;
-}
-
-export interface DashboardTask {
-  task_id: string;
-  goal: string;
-  priority: string;
-  status: string;
-  decision: string;
-  step_count: number;
-  steps_completed: number;
-  created_at: string | null;
-}
-
-export interface DashboardMeeting {
-  event_id: string;
-  title: string;
-  starts_at: string | null;
-  attendee_count: number;
-  location: string | null;
-}
-
-export interface DashboardTrace {
-  trace_id: string;
-  trigger: string;
-  agents_invoked: string[];
-  duration_ms: number | null;
-  total_cost_usd: number;
-}
-
-export interface DashboardGoal {
-  goal_id: string;
-  title: string;
-  progress: number;
-  priority: string;
-  task_count: number;
-  completed_task_count: number;
-}
-
-export interface DashboardEvent {
-  source: string;
-  event_type: string;
-  title: string | null;
-  occurred_at: string | null;
-}
-
-export interface CanvasDashboard {
-  headline: string | null;
-  date: string;
-  pending_approvals: DashboardApproval[];
-  active_tasks: DashboardTask[];
-  upcoming_meetings: DashboardMeeting[];
-  recommended_actions: string[];
-  briefing_id: string | null;
-  recent_traces: DashboardTrace[];
-  active_goals: DashboardGoal[];
-  recent_events: DashboardEvent[];
-}
-
 // ── Approvals ───────────────────────────────────────────────────
 
 export interface Approval {
@@ -316,6 +249,8 @@ export interface SearchResult {
   title: string;
   summary: string | null;
   score: number | null;
+  source_db: string | null;
+  why_matched: string | null;
 }
 
 export interface SearchResponse {
@@ -352,16 +287,6 @@ export interface HeartbeatResult {
   invalidated_plans: number;
   dlq_retried: number;
   timestamp: string;
-}
-
-// ── Command ─────────────────────────────────────────────────────
-
-export interface CommandResponse {
-  plan_id: string | null;
-  decision: string;
-  summary: string;
-  pending_approvals: Record<string, unknown>[] | null;
-  presentation?: string;
 }
 
 // ── Standalone Tasks ────────────────────────────────────────────

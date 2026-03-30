@@ -23,8 +23,12 @@ def upgrade() -> None:
         sa.Column("surface", sa.String(32), nullable=False),
         sa.Column("status", sa.String(16), server_default="active"),
         sa.Column("last_active_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
     )
     op.create_index("ix_conversations_user_id", "conversations", ["user_id"])
     op.create_index("ix_conversations_user_status", "conversations", ["user_id", "status"])
@@ -38,11 +42,17 @@ def upgrade() -> None:
         sa.Column("content", sa.Text(), nullable=False),
         sa.Column("metadata", sa.JSON(), nullable=True),
         sa.Column("surface", sa.String(32), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
     )
     op.create_index("ix_messages_conversation_id", "messages", ["conversation_id"])
-    op.create_index("ix_messages_conversation_created", "messages", ["conversation_id", "created_at"])
+    op.create_index(
+        "ix_messages_conversation_created", "messages", ["conversation_id", "created_at"]
+    )
 
     # Token Usage
     op.create_table(
@@ -56,7 +66,9 @@ def upgrade() -> None:
         sa.Column("trigger", sa.String(64), nullable=False),
         sa.Column("conversation_id", sa.String(64), nullable=True),
         sa.Column("trace_id", sa.String(64), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
     )
     op.create_index("ix_token_usage_agent_created", "token_usage", ["agent_name", "created_at"])
     op.create_index("ix_token_usage_trace", "token_usage", ["trace_id"])
@@ -75,7 +87,9 @@ def upgrade() -> None:
         sa.Column("tokens_used", sa.Integer(), server_default="0"),
         sa.Column("latency_ms", sa.Integer(), server_default="0"),
         sa.Column("error", sa.Text(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
     )
     op.create_index("ix_agent_decision_logs_trace_id", "agent_decision_logs", ["trace_id"])
     op.create_index(
@@ -92,11 +106,22 @@ def upgrade() -> None:
         sa.Column("source", sa.String(32), nullable=False),
         sa.Column("cursor_type", sa.String(32), nullable=False),
         sa.Column("cursor_value", sa.String(512), nullable=False),
-        sa.Column("last_observation_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "last_observation_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
     )
-    op.create_unique_constraint("uq_cursor_user_source", "observation_cursors", ["user_id", "source"])
+    op.create_unique_constraint(
+        "uq_cursor_user_source", "observation_cursors", ["user_id", "source"]
+    )
     op.create_index("ix_cursor_user_source", "observation_cursors", ["user_id", "source"])
 
 

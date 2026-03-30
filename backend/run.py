@@ -81,9 +81,7 @@ def main():
 
             stream_consumer = StreamConsumerManager(settings)
             scheduler = SchedulerLoop(settings, orchestrator=orchestrator, user_ids=user_ids)
-            logger.info(
-                "Worker thread starting (StreamConsumerManager + SchedulerLoop)"
-            )
+            logger.info("Worker thread starting (StreamConsumerManager + SchedulerLoop)")
             try:
                 loop.run_until_complete(
                     asyncio.gather(
@@ -157,7 +155,6 @@ def main():
         port=settings.port,
         reload=settings.debug,
     )
-
 
 
 if __name__ == "__main__":

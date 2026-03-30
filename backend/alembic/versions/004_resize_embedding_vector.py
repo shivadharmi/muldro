@@ -22,8 +22,7 @@ def upgrade() -> None:
     op.execute("ALTER TABLE memories ALTER COLUMN embedding TYPE vector(1024)")
     # Recreate HNSW index
     op.execute(
-        "CREATE INDEX ix_memories_embedding ON memories "
-        "USING hnsw (embedding vector_cosine_ops)"
+        "CREATE INDEX ix_memories_embedding ON memories USING hnsw (embedding vector_cosine_ops)"
     )
 
 
@@ -32,6 +31,5 @@ def downgrade() -> None:
     op.execute("UPDATE memories SET embedding = NULL")
     op.execute("ALTER TABLE memories ALTER COLUMN embedding TYPE vector(1536)")
     op.execute(
-        "CREATE INDEX ix_memories_embedding ON memories "
-        "USING hnsw (embedding vector_cosine_ops)"
+        "CREATE INDEX ix_memories_embedding ON memories USING hnsw (embedding vector_cosine_ops)"
     )

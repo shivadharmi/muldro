@@ -10,15 +10,12 @@ from src.api.routes_approvals import router as approvals_router
 from src.api.routes_artifacts import router as artifacts_router
 from src.api.routes_auth import router as auth_router
 from src.api.routes_briefings import router as briefings_router
-from src.api.routes_canvas import router as canvas_router
 from src.api.routes_chat import router as chat_router
-from src.api.routes_command import router as command_router
 from src.api.routes_conversations import router as conversations_router
 from src.api.routes_events import router as events_router
 from src.api.routes_feedback import router as feedback_router
 from src.api.routes_graph import router as graph_router
 from src.api.routes_health import router as health_router
-from src.api.routes_home import router as home_router
 from src.api.routes_integrations import router as integrations_router
 from src.api.routes_mcp import router as mcp_router
 from src.api.routes_meetings import router as meetings_router
@@ -110,14 +107,26 @@ def create_app() -> FastAPI:
                 exc_info=True,
             )
 
-        # Ensure Elasticsearch indices exist
+        # Validate tool registry consistency
         try:
-            from src.services.search_service import SearchService
+            from src.tools.validation import validate_registry
 
-            search_svc = SearchService(settings)
-            await search_svc.ensure_indices()
+            if settings.skip_registry_validation:
+                logger.warning("Registry validation SKIPPED (JARVIS_SKIP_REGISTRY_VALIDATION=true)")
+            else:
+                errors = validate_registry()
+                if errors:
+                    for err in errors:
+                        logger.error("Registry validation: %s", err)
+                    logger.error(
+                        "Registry validation found %d errors — fix or set "
+                        "JARVIS_SKIP_REGISTRY_VALIDATION=true",
+                        len(errors),
+                    )
+                else:
+                    logger.info("Registry validation passed")
         except Exception:
-            logger.debug("ES index init skipped", exc_info=True)
+            logger.warning("Registry validation failed to run", exc_info=True)
 
         # Ensure Qdrant collections exist
         try:
@@ -211,12 +220,10 @@ def create_app() -> FastAPI:
 
     # Core product routes
     app.include_router(chat_router, tags=["chat"])
-    app.include_router(command_router, tags=["command"])
     app.include_router(briefings_router, tags=["briefings"])
     app.include_router(approvals_router, tags=["approvals"])
     app.include_router(search_router, tags=["search"])
     app.include_router(meetings_router, tags=["meetings"])
-    app.include_router(canvas_router, tags=["canvas"])
     app.include_router(feedback_router, tags=["feedback"])
 
     # Event ingestion
@@ -276,9 +283,6 @@ def create_app() -> FastAPI:
     # Integration platform
     app.include_router(integrations_router, tags=["integrations"])
     app.include_router(mcp_router, tags=["mcp"])
-
-    # Home feed
-    app.include_router(home_router, tags=["home"])
 
     # Runtime projections
     app.include_router(runtime_router, tags=["runtime"])

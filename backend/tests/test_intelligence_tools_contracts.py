@@ -181,14 +181,16 @@ class TestGetDbSessionManagement:
         ctx["db_factory"].assert_called_once()
 
 
-class TestSearchMemory:
-    async def test_calls_memory_service_retrieve(self, configure_intelligence_server):
+class TestSearch:
+    async def test_calls_memory_service_fallback(self, configure_intelligence_server):
+        """search tool falls back to memory_service when TriSearch unavailable."""
         ctx = configure_intelligence_server
         memory_svc = AsyncMock()
         memory_svc.retrieve = AsyncMock(return_value=[{"fact": "test"}])
         ctx["services"].memory_service = memory_svc
+        ctx["services"].tri_search = None  # TriSearch not available
 
-        result = await intelligence_server.search_memory(
+        result = await intelligence_server.search(
             user_id="usr_1", query="test query", ctx=_mock_ctx(), workspace_id="ws_1"
         )
 
