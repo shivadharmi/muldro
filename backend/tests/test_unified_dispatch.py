@@ -430,3 +430,64 @@ class TestFlagGating:
             "search", {"q": "test"}, "usr_1", "ws_1"
         )
         assert result == {"status": "ok"}
+
+
+class TestIsAutoExecuteTool:
+    """Tests for Governor.is_auto_execute_tool() — registry-derived."""
+
+    @pytest.fixture
+    def governor(self):
+        from src.services.governor import Governor
+
+        db = AsyncMock()
+        return Governor(db=db)
+
+    @pytest.mark.asyncio
+    async def test_low_risk_no_approval_returns_true(self, governor):
+        """Low risk + no approval required = auto-execute."""
+        tool = _make_tool_record(risk_level="low", requires_approval=False)
+
+        mock_registry = MagicMock()
+        mock_registry.get_tool = AsyncMock(return_value=tool)
+
+        with patch("src.services.tool_registry.ToolRegistry", return_value=mock_registry):
+            result = await governor.is_auto_execute_tool("search")
+
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_high_risk_returns_false(self, governor):
+        """High risk = not auto-execute."""
+        tool = _make_tool_record(risk_level="high", requires_approval=True)
+
+        mock_registry = MagicMock()
+        mock_registry.get_tool = AsyncMock(return_value=tool)
+
+        with patch("src.services.tool_registry.ToolRegistry", return_value=mock_registry):
+            result = await governor.is_auto_execute_tool("sendGmailDraft")
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_low_risk_with_approval_returns_false(self, governor):
+        """Low risk but requires approval = not auto-execute."""
+        tool = _make_tool_record(risk_level="low", requires_approval=True)
+
+        mock_registry = MagicMock()
+        mock_registry.get_tool = AsyncMock(return_value=tool)
+
+        with patch("src.services.tool_registry.ToolRegistry", return_value=mock_registry):
+            result = await governor.is_auto_execute_tool("approve_action")
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_unknown_tool_returns_false(self, governor):
+        """Unknown tool = not auto-execute (safe default)."""
+        mock_registry = MagicMock()
+        mock_registry.get_tool = AsyncMock(return_value=None)
+
+        with patch("src.services.tool_registry.ToolRegistry", return_value=mock_registry):
+            result = await governor.is_auto_execute_tool("nonexistent")
+
+        assert result is False

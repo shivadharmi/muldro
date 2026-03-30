@@ -387,6 +387,20 @@ class Governor:
         # Default: require approval for safety
         return "approval_required"
 
+    async def is_auto_execute_tool(self, tool_name: str) -> bool:
+        """Check if a tool can auto-execute based on registry risk metadata.
+
+        Tool-level policy: derives from risk_level + requires_approval.
+        Decision-level policy (AUTO_EXECUTE_ACTIONS) is separate and unchanged.
+        """
+        from src.services.tool_registry import ToolRegistry
+
+        registry = ToolRegistry(self._db)
+        tool = await registry.get_tool(tool_name)
+        if not tool:
+            return False
+        return tool.risk_level == "low" and not tool.requires_approval
+
     async def _emit_event(self, event_type: str, user_id: str, payload: dict) -> None:
         """Publish a domain event (best-effort)."""
         if not self._event_bus:
