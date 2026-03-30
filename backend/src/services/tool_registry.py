@@ -30,8 +30,9 @@ def _schema_for_claude(model_cls: type[BaseModel]) -> dict:
 class ToolRegistry:
     """DB-backed registry of all available tools and their metadata."""
 
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, workspace_id: str | None = None):
         self._db = db
+        self._workspace_id = workspace_id
         self._cache: dict[str, ToolDefinition] = {}
 
     async def seed_defaults(self, workspace_id: str | None = None) -> int:
@@ -44,8 +45,15 @@ class ToolRegistry:
         For existing tools, syncs backend, source, server, capability,
         risk_level, requires_approval, and verified fields.
         """
-        # Build lookup of existing tools by name
-        result = await self._db.execute(select(ToolDefinition))
+        # Build lookup of existing tools by name, scoped to workspace.
+        # Without scoping, multiple workspaces with the same tool name would
+        # collide in the dict, causing arbitrary row updates.
+        stmt = select(ToolDefinition)
+        if workspace_id is not None:
+            stmt = stmt.where(ToolDefinition.workspace_id == workspace_id)
+        else:
+            stmt = stmt.where(ToolDefinition.workspace_id.is_(None))
+        result = await self._db.execute(stmt)
         existing = {t.name: t for t in result.scalars().all()}
 
         seen: set[str] = set()
@@ -201,7 +209,13 @@ class ToolRegistry:
         idempotent: bool = False,
         workspace_id: str = "",
     ) -> ToolDefinition:
-        existing = await self._db.execute(select(ToolDefinition).where(ToolDefinition.name == name))
+        # Scope lookup by workspace to avoid MultipleResultsFound
+        stmt = select(ToolDefinition).where(ToolDefinition.name == name)
+        if workspace_id:
+            stmt = stmt.where(ToolDefinition.workspace_id == workspace_id)
+        else:
+            stmt = stmt.where(ToolDefinition.workspace_id.is_(None))
+        existing = await self._db.execute(stmt)
         tool = existing.scalar_one_or_none()
         if tool:
             tool.risk_level = risk_level
@@ -233,7 +247,21 @@ class ToolRegistry:
     async def get_tool(self, name: str) -> ToolDefinition | None:
         if name in self._cache:
             return self._cache[name]
-        result = await self._db.execute(select(ToolDefinition).where(ToolDefinition.name == name))
+        # Scope by workspace: prefer workspace-specific over global (NULL).
+        # Without scoping, same-name tools in different workspaces cause
+        # MultipleResultsFound on scalar_one_or_none().
+        stmt = select(ToolDefinition).where(ToolDefinition.name == name)
+        if self._workspace_id:
+            stmt = stmt.where(
+                (ToolDefinition.workspace_id == self._workspace_id)
+                | (ToolDefinition.workspace_id.is_(None))
+            )
+            # Prefer workspace-specific over global
+            stmt = stmt.order_by(ToolDefinition.workspace_id.desc().nulls_last())
+        else:
+            stmt = stmt.where(ToolDefinition.workspace_id.is_(None))
+        stmt = stmt.limit(1)
+        result = await self._db.execute(stmt)
         tool = result.scalar_one_or_none()
         if tool:
             self._cache[name] = tool

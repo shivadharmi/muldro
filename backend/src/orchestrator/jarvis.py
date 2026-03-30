@@ -520,7 +520,11 @@ class JarvisOrchestrator:
             )
 
         async with self._db_factory() as db:
-            return [t for t in tools if await agent.can_use_tool(t["name"], db)]
+            return [
+                t
+                for t in tools
+                if await agent.can_use_tool(t["name"], db, workspace_id=workspace_id or None)
+            ]
 
     def _get_model_for_agent(self, agent: SubAgent) -> str:
         """Get the Claude model ID for an agent's tier."""
@@ -2443,7 +2447,7 @@ class JarvisOrchestrator:
         from src.services.tool_registry import ToolRegistry
 
         async with self._db_factory() as db:
-            registry = ToolRegistry(db)
+            registry = ToolRegistry(db, workspace_id=workspace_id or None)
             tool = await registry.get_tool(tool_name)
 
         if not tool:

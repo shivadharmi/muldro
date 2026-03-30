@@ -190,7 +190,7 @@ class UserMCPSessionPool:
             from src.services.tool_registry import ToolRegistry
 
             async with get_session_factory()() as db:
-                registry = ToolRegistry(db)
+                registry = ToolRegistry(db, workspace_id=workspace_id or None)
                 for t in raw_tools:
                     existing = await registry.get_tool(t.name)
                     if not existing:

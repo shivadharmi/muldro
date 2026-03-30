@@ -190,13 +190,13 @@ class SubAgent:
     temperature: float = 0.3
     thinking: ThinkingConfig = field(default_factory=ThinkingConfig)
 
-    async def can_use_tool(self, tool_name: str, db) -> bool:
+    async def can_use_tool(self, tool_name: str, db, workspace_id: str | None = None) -> bool:
         """Registry-driven capability check. One lookup, no normalizer."""
         if not self.capability_scope:
             return False
         from src.services.tool_registry import ToolRegistry
 
-        registry = ToolRegistry(db)
+        registry = ToolRegistry(db, workspace_id=workspace_id)
         tool = await registry.get_tool(tool_name)
         if tool and tool.capability:
             return tool.capability in self.capability_scope
