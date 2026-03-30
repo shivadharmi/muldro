@@ -38,6 +38,19 @@ class ToolDefinition(Base, TimestampMixin):
         Index("ix_tool_defs_connector", "connector_type"),
         Index("ix_tool_defs_risk", "risk_level"),
         Index("ix_tool_defs_capability", "workspace_id", "capability"),
-        Index("ix_tool_defs_ws_name", "workspace_id", "name", unique=True),
+        # Two-part uniqueness: workspace-scoped tools use (workspace_id, name),
+        # global tools (workspace_id IS NULL) use a partial index on name alone.
+        # PostgreSQL treats NULL as distinct in unique indexes, so a single
+        # UNIQUE(workspace_id, name) would allow duplicate global tool names.
+        Index(
+            "ix_tool_defs_ws_name",
+            "workspace_id",
+            "name",
+            unique=True,
+            postgresql_where="workspace_id IS NOT NULL",
+        ),
+        Index(
+            "ix_tool_defs_global_name", "name", unique=True, postgresql_where="workspace_id IS NULL"
+        ),
         Index("ix_tool_defs_server", "workspace_id", "server"),
     )

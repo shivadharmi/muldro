@@ -5,7 +5,7 @@ multi-backend dispatch routing. The unified registry replaces this entirely.
 The canonical_name column was used by the now-deleted tool name normalizer.
 
 Revision ID: 051
-Revises: 6c0964a4f941
+Revises: 050
 """
 
 from typing import Sequence, Union
@@ -14,7 +14,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "051"
-down_revision: Union[str, None] = "6c0964a4f941"
+down_revision: Union[str, None] = "050"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -27,8 +27,37 @@ def upgrade() -> None:
     op.drop_index("ix_tool_defs_canonical", table_name="tool_definitions")
     op.drop_column("tool_definitions", "canonical_name")
 
+    # Fix NULL workspace_id uniqueness: replace single unique index with
+    # two partial indexes. PostgreSQL treats NULL as distinct in unique indexes,
+    # so UNIQUE(workspace_id, name) allows duplicate global tool names.
+    op.drop_index("ix_tool_defs_ws_name", table_name="tool_definitions")
+    op.create_index(
+        "ix_tool_defs_ws_name",
+        "tool_definitions",
+        ["workspace_id", "name"],
+        unique=True,
+        postgresql_where=sa.text("workspace_id IS NOT NULL"),
+    )
+    op.create_index(
+        "ix_tool_defs_global_name",
+        "tool_definitions",
+        ["name"],
+        unique=True,
+        postgresql_where=sa.text("workspace_id IS NULL"),
+    )
+
 
 def downgrade() -> None:
+    # Restore single unique index (undo NULL-safe split)
+    op.drop_index("ix_tool_defs_global_name", table_name="tool_definitions")
+    op.drop_index("ix_tool_defs_ws_name", table_name="tool_definitions")
+    op.create_index(
+        "ix_tool_defs_ws_name",
+        "tool_definitions",
+        ["workspace_id", "name"],
+        unique=True,
+    )
+
     # Restore canonical_name column
     op.add_column(
         "tool_definitions",

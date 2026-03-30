@@ -257,7 +257,7 @@ class WorkspaceMCPPool:
             for server_name, entry in servers.items():
                 try:
                     tools = self._session_pool.get_all_tools(workspace_id=ws_id)
-                    status = "healthy" if tools else "healthy"
+                    status = "healthy" if tools else "unhealthy"
                     entry.health_status = status
                 except Exception:
                     entry.health_status = "unhealthy"
