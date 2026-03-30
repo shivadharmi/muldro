@@ -78,15 +78,6 @@ BEDROCK_MODEL_TIERS = {
 # Agents that benefit from context enrichment (read-heavy agents)
 CONTEXT_ENRICHED_AGENTS = {"planner", "presenter", "researcher", "librarian"}
 
-# Server prefix mapping for internal tools — default is "intelligence".
-# Communication tools live on the "communication" MCP server.
-# Stopgap: Phase 11 replaces this with registry lookup.
-_INTERNAL_TOOL_SERVER: dict[str, str] = {
-    "send_telegram": "communication",
-    "send_approval_prompt": "communication",
-    "push_ui_update": "communication",
-}
-
 # Intent classification constants imported from intent_classifier module
 
 
@@ -513,32 +504,8 @@ class JarvisOrchestrator:
 
         return set(TOOL_INPUT_MODELS.keys())
 
-    def _get_tools_for_agent(self, agent: SubAgent, workspace_id: str = "") -> list[dict]:
-        """Filter tool definitions to only those the agent can use.
-
-        Merges cached internal/native tools with workspace-scoped MCP tools.
-        """
-        from src.connectors.mcp_bridge import list_mcp_tools
-
-        tools = list(self._tools)
-        for mcp_tool in list_mcp_tools(workspace_id=workspace_id):
-            schema = mcp_tool.get("input_schema", {})
-            tools.append(
-                {
-                    "name": mcp_tool["name"],
-                    "description": mcp_tool.get("description", "External MCP tool"),
-                    "input_schema": schema if schema else {"type": "object", "properties": {}},
-                }
-            )
-        return [t for t in tools if agent.can_use_tool(t["name"])]
-
-    async def _get_tools_for_agent_unified(
-        self, agent: SubAgent, workspace_id: str = ""
-    ) -> list[dict]:
-        """Filter tool definitions using registry-driven capability check.
-
-        Used when JARVIS_USE_UNIFIED_DISPATCH is enabled.
-        """
+    async def _get_tools_for_agent(self, agent: SubAgent, workspace_id: str = "") -> list[dict]:
+        """Filter tool definitions using registry-driven capability check."""
         from src.connectors.mcp_bridge import list_mcp_tools
 
         tools = list(self._tools)
@@ -553,7 +520,7 @@ class JarvisOrchestrator:
             )
 
         async with self._db_factory() as db:
-            return [t for t in tools if await agent.can_use_tool_unified(t["name"], db)]
+            return [t for t in tools if await agent.can_use_tool(t["name"], db)]
 
     def _get_model_for_agent(self, agent: SubAgent) -> str:
         """Get the Claude model ID for an agent's tier."""
@@ -1146,14 +1113,9 @@ class JarvisOrchestrator:
             return
 
         model = self._get_model_for_agent(agent)
-        if self._settings.use_unified_dispatch:
-            tools = self._apply_cache_control_to_tools(
-                await self._get_tools_for_agent_unified(agent, workspace_id=workspace_id)
-            )
-        else:
-            tools = self._apply_cache_control_to_tools(
-                self._get_tools_for_agent(agent, workspace_id=workspace_id)
-            )
+        tools = self._apply_cache_control_to_tools(
+            await self._get_tools_for_agent(agent, workspace_id=workspace_id)
+        )
         context_block = await self._assemble_context(
             agent_name, message, user_id=user_id, workspace_id=workspace_id
         )
@@ -2367,14 +2329,9 @@ class JarvisOrchestrator:
             raise ValueError(f"Unknown agent: {agent_name}")
 
         model = self._get_model_for_agent(agent)
-        if self._settings.use_unified_dispatch:
-            tools = self._apply_cache_control_to_tools(
-                await self._get_tools_for_agent_unified(agent, workspace_id=workspace_id)
-            )
-        else:
-            tools = self._apply_cache_control_to_tools(
-                self._get_tools_for_agent(agent, workspace_id=workspace_id)
-            )
+        tools = self._apply_cache_control_to_tools(
+            await self._get_tools_for_agent(agent, workspace_id=workspace_id)
+        )
         context_block = await self._assemble_context(
             agent_name, message, user_id=user_id, workspace_id=workspace_id
         )
@@ -2416,137 +2373,6 @@ class JarvisOrchestrator:
 
         return text
 
-    async def _execute_tool(
-        self, tool_name: str, tool_input: dict, user_id: str, workspace_id: str = ""
-    ) -> dict:
-        """Execute a tool by name, using ToolRegistry for dispatch.
-
-        Resolution order:
-        0. Pre-dispatch: ToolRegistry blocked/risk/write classification
-        1. Internal intelligence tools (FastMCP handlers)
-        2. MCP bridge (external MCP servers)
-        3. Connector-backed tools (dispatched via connector.execute_action)
-        """
-        # Phase 11: unified dispatch (flag-gated)
-        if self._settings.use_unified_dispatch:
-            return await self._execute_tool_unified(tool_name, tool_input, user_id, workspace_id)
-
-        # 0. Pre-dispatch: ToolRegistry classification
-        try:
-            from src.services.tool_registry import ToolRegistry
-
-            async with self._db_factory() as db:
-                registry = ToolRegistry(db)
-                if await registry.is_blocked_tool(tool_name):
-                    return {"error": f"Tool '{tool_name}' is disabled", "blocked": True}
-        except Exception:
-            pass  # Fallback: skip pre-checks if registry unavailable
-
-        # Governor structured output: reporting tool returns input as-is
-        if tool_name == "report_governor_verdict":
-            return tool_input
-
-        # Composite web_search: uses Playwright MCP browser internally
-        if tool_name == "web_search":
-            try:
-                from src.browser.web_search import web_search
-
-                await self._publish_event("tool.started", user_id, {"tool": tool_name})
-                result = await web_search(
-                    query=tool_input.get("query", ""),
-                    num_results=tool_input.get("num_results", 10),
-                    user_id=user_id,
-                    workspace_id=workspace_id,
-                )
-                await self._publish_event("tool.completed", user_id, {"tool": tool_name})
-                return result
-            except Exception as e:
-                logger.warning("web_search failed: %s", e)
-                return {"status": "error", "error": str(e)[:200], "results": []}
-
-        # Internal tools served via MCP protocol (in-process Client)
-        internal_tools = {
-            "ingest_event",
-            "search",
-            "update_entity",
-            "get_active_plans",
-            "get_goal_memories",
-            "evaluate_policy",
-            "approve_action",
-            "get_briefing",
-            "get_observation_cursor",
-            "update_observation_cursor",
-            "report_observation",
-            "update_execution",
-            "extract_preferences",
-            "build_context",
-            "verify_run",
-            "report_governor_verdict",
-            "send_telegram",
-            "send_approval_prompt",
-            "push_ui_update",
-        }
-
-        # Inject workspace_id so tools always have it, even if the model omitted it
-        if workspace_id and "workspace_id" not in tool_input:
-            tool_input = {**tool_input, "workspace_id": workspace_id}
-
-        # Emit tool.started event
-        await self._publish_event("tool.started", user_id, {"tool": tool_name})
-
-        # 1. Try internal tools via in-process MCP Client
-        if tool_name in internal_tools:
-            try:
-                result = await self._call_internal_tool(
-                    tool_name, {**tool_input, "user_id": user_id}
-                )
-                await self._publish_event("tool.completed", user_id, {"tool": tool_name})
-                return result
-            except Exception as e:
-                logger.warning("Internal tool %s failed: %s", tool_name, e)
-                await self._publish_event(
-                    "tool.failed",
-                    user_id,
-                    {"tool": tool_name, "error": str(e)[:200]},
-                )
-                return {"error": f"Tool execution failed for {tool_name}: {e}"}
-
-        # 2. Try MCP bridge directly (session pool, circuit-breaker protected)
-        from src.connectors.mcp_bridge import call_mcp_tool, is_mcp_tool
-
-        if is_mcp_tool(tool_name, workspace_id=workspace_id):
-            try:
-                result = await call_mcp_tool(
-                    tool_name,
-                    tool_input,
-                    user_id=user_id,
-                    workspace_id=workspace_id,
-                )
-                await self._publish_event("tool.completed", user_id, {"tool": tool_name})
-                return result
-            except Exception as e:
-                logger.error("MCP tool %s failed: %s", tool_name, e, exc_info=True)
-                await self._publish_event(
-                    "tool.failed",
-                    user_id,
-                    {"tool": tool_name, "error": str(e)[:200]},
-                )
-                return {"error": f"MCP tool '{tool_name}' failed: {e}", "status": "error"}
-
-        # 4. Fall back to ToolRegistry for connector-backed tools
-        try:
-            result = await self._execute_connector_tool(tool_name, tool_input, user_id=user_id)
-            await self._publish_event("tool.completed", user_id, {"tool": tool_name})
-            return result
-        except Exception as e:
-            logger.error("Connector tool %s failed: %s", tool_name, e, exc_info=True)
-            await self._publish_event(
-                "tool.failed",
-                user_id,
-                {"tool": tool_name, "error": str(e)[:200]},
-            )
-            return {"error": f"Tool execution failed for {tool_name}: {e}"}
-
     async def _call_composite_tool(
         self, tool_name: str, tool_input: dict, user_id: str = "", workspace_id: str = ""
     ) -> dict:
@@ -2567,7 +2393,7 @@ class JarvisOrchestrator:
     _internal_client_ctx = None
 
     async def _call_internal_tool(
-        self, tool_name: str, tool_input: dict, server_prefix: str | None = None
+        self, tool_name: str, tool_input: dict, server_prefix: str
     ) -> dict:
         """Call an internal tool via in-process FastMCP Client (MCP protocol).
 
@@ -2589,11 +2415,7 @@ class JarvisOrchestrator:
             self._internal_client = await self._internal_client_ctx.__aenter__()
 
         # Map flat name to namespaced name (server-specific prefix)
-        if server_prefix is not None:
-            namespaced = f"{server_prefix}_{tool_name}"
-        else:
-            prefix = _INTERNAL_TOOL_SERVER.get(tool_name, "intelligence")
-            namespaced = f"{prefix}_{tool_name}"
+        namespaced = f"{server_prefix}_{tool_name}"
         result = await self._internal_client.call_tool(namespaced, tool_input)
 
         # Extract result from CallToolResult
@@ -2614,72 +2436,10 @@ class JarvisOrchestrator:
                 return {"status": "ok", "result": text}
         return {"status": "ok", "result": text}
 
-    async def _execute_connector_tool(self, tool_name: str, tool_input: dict, user_id: str) -> dict:
-        """Execute a tool via its connector, resolved from the ToolRegistry."""
-        from src.connectors.base import CONNECTOR_REGISTRY
-        from src.services.tool_registry import ToolRegistry
-
-        async with self._db_factory() as db:
-            registry = ToolRegistry(db)
-            tool_def = await registry.get_tool(tool_name)
-
-            if not tool_def:
-                return {"error": f"Unknown tool: {tool_name}"}
-
-            if not tool_def.enabled:
-                return {"error": f"Tool '{tool_name}' is disabled"}
-
-            connector_type = tool_def.connector_type
-            if not connector_type or connector_type == "internal":
-                return {"error": f"No connector handler for internal tool: {tool_name}"}
-
-            # Map connector_type to CONNECTOR_REGISTRY key
-            connector_cls = CONNECTOR_REGISTRY.get(connector_type)
-            if not connector_cls:
-                return {
-                    "error": f"No connector registered for type: {connector_type}",
-                    "available_connectors": list(CONNECTOR_REGISTRY.keys()),
-                }
-
-            # Get credentials from OAuth manager
-            oauth = self._services.oauth_manager
-            credentials = {}
-            if oauth:
-                try:
-                    # Map connector type to OAuth provider (e.g. gmail→google)
-                    provider_map = {
-                        "gmail": "google",
-                        "calendar": "google",
-                        "drive": "google",
-                        "github": "github",
-                        "slack": "slack",
-                        "linear": "linear",
-                        "notion": "notion",
-                        "jira": "jira",
-                    }
-                    oauth_provider = provider_map.get(connector_type, connector_type)
-                    access_token = await oauth.get_valid_token(user_id, oauth_provider)
-                    if access_token:
-                        credentials = {"access_token": access_token}
-                except Exception:
-                    logger.warning("No credentials for connector %s", connector_type)
-
-            # Instantiate connector and execute action
-            connector = connector_cls(self._settings)
-            # Derive the action name from the tool name (e.g. gmail_send → send)
-            action = tool_name
-            if tool_name.startswith(f"{connector_type}_"):
-                action = tool_name[len(connector_type) + 1 :]
-
-            return await connector.execute_action(action, tool_input, credentials)
-
-    async def _execute_tool_unified(
+    async def _execute_tool(
         self, tool_name: str, tool_input: dict, user_id: str, workspace_id: str = ""
     ) -> dict:
-        """Registry-driven dispatch: one lookup, one match on backend.
-
-        Replaces the 6-step cascade when JARVIS_USE_UNIFIED_DISPATCH is enabled.
-        """
+        """Registry-driven dispatch: one lookup, one match on backend."""
         from src.services.tool_registry import ToolRegistry
 
         async with self._db_factory() as db:

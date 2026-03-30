@@ -50,7 +50,7 @@ APPROVAL_REQUIRED_ACTIONS = {
     "post_message",
 }
 
-AUTO_EXECUTE_ACTIONS = {
+AUTO_EXECUTE_DECISIONS = {
     "fetch_info",
     "summarize",
     "search",
@@ -373,7 +373,7 @@ class Governor:
                 return "auto_execute"
             return "approval_required"
 
-        if decision in AUTO_EXECUTE_ACTIONS:
+        if decision in AUTO_EXECUTE_DECISIONS:
             return "auto_execute"
 
         # Check task types for external actions
@@ -391,7 +391,7 @@ class Governor:
         """Check if a tool can auto-execute based on registry risk metadata.
 
         Tool-level policy: derives from risk_level + requires_approval.
-        Decision-level policy (AUTO_EXECUTE_ACTIONS) is separate and unchanged.
+        Decision-level policy (AUTO_EXECUTE_DECISIONS) is separate and unchanged.
         """
         from src.services.tool_registry import ToolRegistry
 

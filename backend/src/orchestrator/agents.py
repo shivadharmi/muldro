@@ -190,40 +190,8 @@ class SubAgent:
     temperature: float = 0.3
     thinking: ThinkingConfig = field(default_factory=ThinkingConfig)
 
-    def can_use_tool(self, tool_name: str) -> bool:
-        """Check if this agent is allowed to use a specific tool.
-
-        Resolves the tool's canonical capability and checks against
-        this agent's capability_scope. Handles namespaced MCP tool names
-        (e.g. google_workspace_gmail_list → gmail_list).
-        """
-        if not self.capability_scope:
-            return False
-        from src.integrations.capabilities import get_capability_for_tool
-
-        # Try direct match first
-        cap = get_capability_for_tool(tool_name)
-        if cap is not None:
-            return cap in self.capability_scope
-
-        # Normalize the tool name (handles camelCase, kebab-case, server prefixes)
-        # and retry capability lookup on the canonical form
-        from src.integrations.tool_normalizer import get_normalizer
-
-        normalizer = get_normalizer()
-        canonical = normalizer.normalize(tool_name)
-        if canonical != tool_name:
-            cap = get_capability_for_tool(canonical)
-            if cap is not None:
-                return cap in self.capability_scope
-
-        return False
-
-    async def can_use_tool_unified(self, tool_name: str, db) -> bool:
-        """Registry-driven capability check. One lookup, no normalizer.
-
-        Used when JARVIS_USE_UNIFIED_DISPATCH is enabled.
-        """
+    async def can_use_tool(self, tool_name: str, db) -> bool:
+        """Registry-driven capability check. One lookup, no normalizer."""
         if not self.capability_scope:
             return False
         from src.services.tool_registry import ToolRegistry

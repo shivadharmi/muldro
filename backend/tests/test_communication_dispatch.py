@@ -31,7 +31,9 @@ class TestInternalToolServerMapping:
         mock_client.call_tool = AsyncMock(return_value=mock_result)
         orchestrator._internal_client = mock_client
 
-        await orchestrator._call_internal_tool("search", {"query": "test"})
+        await orchestrator._call_internal_tool(
+            "search", {"query": "test"}, server_prefix="intelligence"
+        )
         mock_client.call_tool.assert_called_once_with("intelligence_search", {"query": "test"})
 
     async def test_communication_tool_uses_communication_prefix(self, orchestrator):
@@ -42,7 +44,9 @@ class TestInternalToolServerMapping:
         mock_client.call_tool = AsyncMock(return_value=mock_result)
         orchestrator._internal_client = mock_client
 
-        await orchestrator._call_internal_tool("send_telegram", {"text": "hello"})
+        await orchestrator._call_internal_tool(
+            "send_telegram", {"text": "hello"}, server_prefix="communication"
+        )
         mock_client.call_tool.assert_called_once_with(
             "communication_send_telegram", {"text": "hello"}
         )
@@ -58,6 +62,7 @@ class TestInternalToolServerMapping:
         await orchestrator._call_internal_tool(
             "send_approval_prompt",
             {"approval_id": "apr_001", "title": "Test", "summary": "test"},
+            server_prefix="communication",
         )
         mock_client.call_tool.assert_called_once_with(
             "communication_send_approval_prompt",
@@ -75,6 +80,7 @@ class TestInternalToolServerMapping:
         await orchestrator._call_internal_tool(
             "push_ui_update",
             {"surface_id": "daily_brief", "payload": "{}", "user_id": "usr_001"},
+            server_prefix="communication",
         )
         mock_client.call_tool.assert_called_once_with(
             "communication_push_ui_update",

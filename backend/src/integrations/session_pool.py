@@ -15,7 +15,6 @@ from typing import Any
 from fastmcp import Client
 from fastmcp.client.auth import BearerAuth
 
-from src.integrations.tool_normalizer import ToolNameNormalizer, get_normalizer
 from src.services.mcp_resilience import MCPCircuitBreaker
 
 logger = logging.getLogger(__name__)
@@ -53,10 +52,10 @@ class SessionEntry:
 
 
 class UserMCPSessionPool:
-    """Pool of per-user MCP Client instances with auth, normalization, and circuit breaking.
+    """Pool of per-user MCP Client instances with auth and circuit breaking.
 
     Usage:
-        pool = UserMCPSessionPool(oauth_manager, circuit_breaker, normalizer)
+        pool = UserMCPSessionPool(oauth_manager, circuit_breaker)
         result = await pool.call_tool(
             "gmail_send", {...}, user_id="usr_1", server_name="google-workspace",
         )
@@ -66,15 +65,11 @@ class UserMCPSessionPool:
         self,
         oauth_manager: Any | None = None,
         circuit_breaker: MCPCircuitBreaker | None = None,
-        normalizer: ToolNameNormalizer | None = None,
         ttl_seconds: float = SESSION_TTL_SECONDS,
-        use_unified_dispatch: bool = False,
     ) -> None:
         self._oauth_manager = oauth_manager
         self._circuit_breaker = circuit_breaker or MCPCircuitBreaker()
-        self._normalizer = normalizer or get_normalizer()
         self._ttl_seconds = ttl_seconds
-        self._use_unified_dispatch = use_unified_dispatch
         # (workspace_id, server_name, user_id) → SessionEntry
         self._sessions: dict[tuple[str, str, str], SessionEntry] = {}
         self._lock = asyncio.Lock()
@@ -141,48 +136,26 @@ class UserMCPSessionPool:
             client = await client_ctx.__aenter__()
             raw_tools = await client.list_tools()
 
-            if self._use_unified_dispatch:
-                # Skip normalization — store real MCP names end-to-end
-                tool_mapping = {}
-                for t in raw_tools:
-                    tool_mapping[t.name] = t.name  # identity mapping
-                    input_schema = (
-                        getattr(t, "inputSchema", None)
-                        or getattr(t, "input_schema", None)
-                        or {"type": "object", "properties": {}}
-                    )
-                    self._tool_metadata[t.name] = {
-                        "name": t.name,
-                        "server": server_name,
-                        "description": t.description or "",
-                        "input_schema": input_schema,
-                        "_workspace_id": workspace_id,
-                    }
-                self._server_tools[(workspace_id, server_name)] = tool_mapping
+            # Skip normalization — store real MCP names end-to-end
+            tool_mapping = {}
+            for t in raw_tools:
+                tool_mapping[t.name] = t.name  # identity mapping
+                input_schema = (
+                    getattr(t, "inputSchema", None)
+                    or getattr(t, "input_schema", None)
+                    or {"type": "object", "properties": {}}
+                )
+                self._tool_metadata[t.name] = {
+                    "name": t.name,
+                    "server": server_name,
+                    "description": t.description or "",
+                    "input_schema": input_schema,
+                    "_workspace_id": workspace_id,
+                }
+            self._server_tools[(workspace_id, server_name)] = tool_mapping
 
-                # Register unknown discovered tools in DB with safe defaults
-                await self._register_discovered_tools(raw_tools, server_name, workspace_id)
-            else:
-                # Legacy path: normalize tool names
-                tool_dicts = [
-                    {"name": t.name, "description": t.description or ""} for t in raw_tools
-                ]
-                tool_mapping = self._normalizer.register_server_tools(server_name, tool_dicts)
-                self._server_tools[(workspace_id, server_name)] = tool_mapping
-                for t in raw_tools:
-                    canonical = self._normalizer.normalize(t.name, server_name)
-                    input_schema = (
-                        getattr(t, "inputSchema", None)
-                        or getattr(t, "input_schema", None)
-                        or {"type": "object", "properties": {}}
-                    )
-                    self._tool_metadata[canonical] = {
-                        "name": canonical,
-                        "server": server_name,
-                        "description": t.description or "",
-                        "input_schema": input_schema,
-                        "_workspace_id": workspace_id,
-                    }
+            # Register unknown discovered tools in DB with safe defaults
+            await self._register_discovered_tools(raw_tools, server_name, workspace_id)
 
             entry = SessionEntry(
                 client=client,
@@ -293,10 +266,7 @@ class UserMCPSessionPool:
             return make_error_response(e, tool_name=tool_name)
 
         # Resolve canonical → raw MCP tool name
-        if self._use_unified_dispatch:
-            raw_name = tool_name
-        else:
-            raw_name = session.tools.get(tool_name) or tool_name
+        raw_name = tool_name
 
         last_error: Exception | None = None
         for attempt in range(max_retries):

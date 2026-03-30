@@ -73,36 +73,101 @@ class TestCapabilityMappings:
 class TestResearcherAgentScope:
     """Verify the Researcher agent can use web search and browser tools."""
 
-    def test_researcher_can_use_web_search(self):
+    @pytest.mark.asyncio
+    async def test_researcher_can_use_web_search(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
         from src.orchestrator.agents import AGENTS
 
         researcher = AGENTS["researcher"]
-        assert researcher.can_use_tool("web_search")
+        mock_db = AsyncMock()
 
-    def test_researcher_can_use_browser_navigate(self):
+        with patch("src.services.tool_registry.ToolRegistry") as mock_reg_cls:
+            mock_reg = MagicMock()
+            tool = MagicMock()
+            tool.name = "web_search"
+            tool.capability = "search.web"
+            mock_reg.get_tool = AsyncMock(return_value=tool)
+            mock_reg_cls.return_value = mock_reg
+
+            assert await researcher.can_use_tool("web_search", mock_db)
+
+    @pytest.mark.asyncio
+    async def test_researcher_can_use_browser_navigate(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
         from src.orchestrator.agents import AGENTS
 
         researcher = AGENTS["researcher"]
-        assert researcher.can_use_tool("browser_navigate")
+        mock_db = AsyncMock()
 
-    def test_researcher_can_use_browser_snapshot(self):
+        with patch("src.services.tool_registry.ToolRegistry") as mock_reg_cls:
+            mock_reg = MagicMock()
+            tool = MagicMock()
+            tool.name = "browser_navigate"
+            tool.capability = "browser.open"
+            mock_reg.get_tool = AsyncMock(return_value=tool)
+            mock_reg_cls.return_value = mock_reg
+
+            assert await researcher.can_use_tool("browser_navigate", mock_db)
+
+    @pytest.mark.asyncio
+    async def test_researcher_can_use_browser_snapshot(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
         from src.orchestrator.agents import AGENTS
 
         researcher = AGENTS["researcher"]
-        assert researcher.can_use_tool("browser_snapshot")
+        mock_db = AsyncMock()
 
-    def test_researcher_can_use_browser_screenshot(self):
+        with patch("src.services.tool_registry.ToolRegistry") as mock_reg_cls:
+            mock_reg = MagicMock()
+            tool = MagicMock()
+            tool.name = "browser_snapshot"
+            tool.capability = "browser.snapshot"
+            mock_reg.get_tool = AsyncMock(return_value=tool)
+            mock_reg_cls.return_value = mock_reg
+
+            assert await researcher.can_use_tool("browser_snapshot", mock_db)
+
+    @pytest.mark.asyncio
+    async def test_researcher_can_use_browser_screenshot(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
         from src.orchestrator.agents import AGENTS
 
         researcher = AGENTS["researcher"]
-        assert researcher.can_use_tool("browser_screenshot")
+        mock_db = AsyncMock()
 
-    def test_researcher_cannot_use_browser_submit(self):
+        with patch("src.services.tool_registry.ToolRegistry") as mock_reg_cls:
+            mock_reg = MagicMock()
+            tool = MagicMock()
+            tool.name = "browser_screenshot"
+            tool.capability = "browser.screenshot"
+            mock_reg.get_tool = AsyncMock(return_value=tool)
+            mock_reg_cls.return_value = mock_reg
+
+            assert await researcher.can_use_tool("browser_screenshot", mock_db)
+
+    @pytest.mark.asyncio
+    async def test_researcher_cannot_use_browser_submit(self):
         """Researcher is read-only — no write-capable browser tools."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
         from src.orchestrator.agents import AGENTS
 
         researcher = AGENTS["researcher"]
-        assert not researcher.can_use_tool("browser_file_upload")
+        mock_db = AsyncMock()
+
+        with patch("src.services.tool_registry.ToolRegistry") as mock_reg_cls:
+            mock_reg = MagicMock()
+            tool = MagicMock()
+            tool.name = "browser_file_upload"
+            tool.capability = "browser.file_upload"
+            mock_reg.get_tool = AsyncMock(return_value=tool)
+            mock_reg_cls.return_value = mock_reg
+
+            assert not await researcher.can_use_tool("browser_file_upload", mock_db)
 
 
 # ── web_search function tests ─────────────────────────────────────────────
