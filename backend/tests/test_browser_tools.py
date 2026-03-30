@@ -50,12 +50,18 @@ class TestCapabilityMappings:
             "browser_drag",
             "browser_handle_dialog",
             "browser_file_upload",
-            "browser_wait",
             "browser_close",
             "browser_resize",
-            "browser_pdf_save",
             "browser_network_requests",
             "browser_console_messages",
+            # New Phase 5 tools
+            "browser_evaluate",
+            "browser_run_code",
+            "browser_install",
+            "browser_navigate_back",
+            "browser_take_screenshot",
+            "browser_wait_for",
+            "browser_fill_form",
         ]
         for tool_name in playwright_tools:
             assert tool_name in TOOL_TO_CAPABILITY, f"{tool_name} not mapped"
