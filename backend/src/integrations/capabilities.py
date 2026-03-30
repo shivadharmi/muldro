@@ -246,8 +246,6 @@ TOOL_TO_CAPABILITY: dict[str, str] = {
     # Linear native
     "linear_create_issue": "workflow.create_issue",
     "linear_update_issue": "workflow.update_issue",
-    "linear_comment": "workflow.comment",
-    "linear_list_issues": "workflow.list",
     "linear_get_issue": "workflow.get",
     # Linear MCP
     "linear_edit_issue": "workflow.update_issue",
@@ -260,13 +258,13 @@ TOOL_TO_CAPABILITY: dict[str, str] = {
     "notion_update_page": "doc.update",
     "notion_search": "doc.search",
     "notion_get_page": "doc.get",
-    # Notion MCP (kebab-case)
-    "create-a-page": "doc.create",
-    "update-a-page": "doc.update",
-    "retrieve-a-page": "doc.get",
-    "query-data-source": "doc.query",
-    "create-a-comment": "doc.comment",
-    "append-block-children": "doc.append",
+    # Notion MCP (API-prefixed)
+    "API-post-page": "doc.create",
+    "API-patch-page": "doc.update",
+    "API-retrieve-a-page": "doc.get",
+    "API-query-data-source": "doc.query",
+    "API-create-a-comment": "doc.comment",
+    "API-patch-block-children": "doc.append",
     # Jira native
     "jira_create_issue": "issue.create",
     "jira_update_issue": "issue.update",

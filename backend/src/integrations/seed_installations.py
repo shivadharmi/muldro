@@ -22,7 +22,7 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
         "display_name": "Google Workspace",
         "transport": "stdio",
         "command": "uvx",
-        "args": ["google-workspace-mcp"],
+        "args": ["google-workspace-worker"],
         "env_template": {
             "GOOGLE_OAUTH_CREDENTIALS_PATH": "Path to OAuth credentials JSON",
             "GOOGLE_OAUTH_TOKEN_PATH": "Path to OAuth token JSON",
@@ -79,7 +79,8 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
         "command": "npx",
         "args": ["-y", "slack-mcp-server"],
         "env_template": {
-            "SLACK_BOT_TOKEN": "Slack bot OAuth token",
+            "SLACK_MCP_XOXP_TOKEN": "Slack user OAuth token (xoxp-...)",
+            "SLACK_MCP_XOXB_TOKEN": "Slack bot OAuth token (xoxb-...)",
         },
         "auth_provider": "token",
         "scopes_granted": [

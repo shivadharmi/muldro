@@ -168,8 +168,6 @@ _DEFAULT_TOOLS = [
     # Linear (native + MCP — mcp-server-linear tools already prefixed)
     _t("linear_create_issue", "medium", True, "linear"),
     _t("linear_update_issue", "medium", True, "linear"),
-    _t("linear_comment", "medium", True, "linear"),
-    _t("linear_list_issues", "low", False, "linear"),
     _t("linear_get_issue", "low", False, "linear"),
     # Linear MCP-specific tool names
     _t("linear_edit_issue", "medium", True, "linear"),
@@ -182,13 +180,13 @@ _DEFAULT_TOOLS = [
     _t("notion_update_page", "medium", True, "notion"),
     _t("notion_search", "low", False, "notion"),
     _t("notion_get_page", "low", False, "notion"),
-    # Notion MCP raw tool names (@notionhq/notion-mcp-server, kebab-case)
-    _t("create-a-page", "medium", True, "notion"),
-    _t("update-a-page", "medium", True, "notion"),
-    _t("retrieve-a-page", "low", False, "notion"),
-    _t("query-data-source", "low", False, "notion"),
-    _t("create-a-comment", "medium", True, "notion"),
-    _t("append-block-children", "medium", True, "notion"),
+    # Notion MCP raw tool names (@notionhq/notion-mcp-server, API-prefixed)
+    _t("API-post-page", "medium", True, "notion"),
+    _t("API-patch-page", "medium", True, "notion"),
+    _t("API-retrieve-a-page", "low", False, "notion"),
+    _t("API-query-data-source", "low", False, "notion"),
+    _t("API-create-a-comment", "medium", True, "notion"),
+    _t("API-patch-block-children", "medium", True, "notion"),
     # Jira (native connector names)
     _t("jira_create_issue", "medium", True, "jira"),
     _t("jira_update_issue", "medium", True, "jira"),
