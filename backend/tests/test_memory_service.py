@@ -134,3 +134,91 @@ async def test_retrieve_returns_matching(mock_get_client, mock_embed_cls, settin
 
     assert len(results) == 1
     assert results[0]["fact_text"] == "Alice is CFO"
+
+
+@patch("src.services.memory_service.EmbeddingService")
+@patch("src.services.memory_service.get_anthropic_client")
+@pytest.mark.asyncio
+async def test_extract_auto_checks_contradictions(
+    mock_get_client, mock_embed_cls, settings, mock_db
+):
+    """extract_and_store should call check_contradictions for each new memory."""
+    extraction = {
+        "memories": [
+            {
+                "memory_type": "semantic",
+                "scope": "general",
+                "fact_text": "Alice resigned as CFO",
+                "confidence": 0.9,
+                "ttl_days": None,
+            },
+        ]
+    }
+
+    mock_client = MagicMock()
+    response = MagicMock()
+    response.content = [MagicMock(text=json.dumps(extraction))]
+    mock_client.messages.create = AsyncMock(return_value=response)
+    mock_get_client.return_value = mock_client
+
+    mock_embedder = MagicMock()
+    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    mock_embed_cls.return_value = mock_embedder
+
+    service = MemoryService(settings=settings, db=mock_db)
+
+    # Spy on check_contradictions
+    service.check_contradictions = AsyncMock(return_value=[])
+
+    memory_ids = await service.extract_and_store(
+        TEST_USER_ID, "Alice has resigned as CFO.", ["evt_001"]
+    )
+
+    assert len(memory_ids) == 1
+    # check_contradictions must have been called with the new memory
+    service.check_contradictions.assert_called_once()
+    call_args = service.check_contradictions.call_args
+    assert call_args[0][0] == TEST_USER_ID
+    assert "Alice resigned as CFO" in call_args[0][1]
+    assert call_args[0][2] == memory_ids[0]
+
+
+@patch("src.services.memory_service.EmbeddingService")
+@patch("src.services.memory_service.get_anthropic_client")
+@pytest.mark.asyncio
+async def test_contradiction_failure_does_not_block_storage(
+    mock_get_client, mock_embed_cls, settings, mock_db
+):
+    """If check_contradictions fails, memory should still be stored."""
+    extraction = {
+        "memories": [
+            {
+                "memory_type": "semantic",
+                "scope": "general",
+                "fact_text": "Bob is the new CTO",
+                "confidence": 0.85,
+                "ttl_days": None,
+            },
+        ]
+    }
+
+    mock_client = MagicMock()
+    response = MagicMock()
+    response.content = [MagicMock(text=json.dumps(extraction))]
+    mock_client.messages.create = AsyncMock(return_value=response)
+    mock_get_client.return_value = mock_client
+
+    mock_embedder = MagicMock()
+    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    mock_embed_cls.return_value = mock_embedder
+
+    service = MemoryService(settings=settings, db=mock_db)
+
+    # Make check_contradictions blow up
+    service.check_contradictions = AsyncMock(side_effect=RuntimeError("API down"))
+
+    memory_ids = await service.extract_and_store(TEST_USER_ID, "Bob is the new CTO.", ["evt_002"])
+
+    # Memory should still be stored despite contradiction check failure
+    assert len(memory_ids) == 1
+    assert mock_db.add.call_count >= 1

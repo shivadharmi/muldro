@@ -103,6 +103,7 @@ class MemoryService:
         """Extract memories from text and store them. Returns memory_ids."""
         extracted = await self._call_extraction(source_text)
         memory_ids = []
+        new_facts: list[tuple[str, str]] = []  # (memory_id, fact_text)
 
         for mem_data in extracted.get("memories", []):
             fact_text = mem_data.get("fact_text", "")
@@ -133,6 +134,7 @@ class MemoryService:
             )
             self._db.add(memory)
             memory_ids.append(memory_id)
+            new_facts.append((memory_id, fact_text))
 
             if self._vector_store and embedding:
                 await self._vector_store.upsert(
@@ -154,6 +156,14 @@ class MemoryService:
                 len(memory_ids),
                 len(source_event_ids),
             )
+
+            # Auto-check for contradictions with existing memories
+            for mid, fact in new_facts:
+                try:
+                    await self.check_contradictions(user_id, fact, mid, workspace_id=workspace_id)
+                except Exception:
+                    logger.debug("Contradiction check failed for %s", mid, exc_info=True)
+
             for mid in memory_ids:
                 await self._emit_event("memory.created", user_id, {"memory_id": mid})
 
