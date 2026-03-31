@@ -1305,7 +1305,10 @@ class JarvisOrchestrator:
                     async with self._db_factory() as db:
                         correlator = EventCorrelator(db)
                         seen_entities: set[str] = set()
+                        max_entities = 5
                         for raw_evt in raw_events:
+                            if len(seen_entities) >= max_entities:
+                                break
                             eid = getattr(raw_evt, "entity_id", None)
                             if eid and eid not in seen_entities:
                                 seen_entities.add(eid)
@@ -1320,7 +1323,7 @@ class JarvisOrchestrator:
                                         f"last: {thread['last_at']})"
                                     )
                 except Exception:
-                    logger.debug("Correlation enrichment failed", exc_info=True)
+                    logger.warning("Correlation enrichment failed", exc_info=True)
 
             # Step 3: Planner evaluates if any action is needed
             planner_message = (
