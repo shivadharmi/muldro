@@ -657,7 +657,13 @@ class JarvisOrchestrator:
 
             # Persist Plan record so Governor and Operator can reference it
             if decision.tasks and not decision.plan_id:
-                decision = await self._persist_plan_record(decision, user_id, workspace_id)
+                import hashlib
+
+                goal_hash = hashlib.sha256((decision.goal or "").encode()).hexdigest()[:16]
+                user_idem_key = f"user:{decision.decision}:{goal_hash}"
+                decision = await self._persist_plan_record(
+                    decision, user_id, workspace_id, idempotency_key=user_idem_key
+                )
 
             decision_dict = decision.model_dump(mode="json")
             decision_json = json.dumps(decision_dict)
@@ -919,7 +925,13 @@ class JarvisOrchestrator:
 
             # Persist Plan record so Governor and Operator can reference it
             if decision.tasks and not decision.plan_id:
-                decision = await self._persist_plan_record(decision, user_id, workspace_id)
+                import hashlib
+
+                goal_hash = hashlib.sha256((decision.goal or "").encode()).hexdigest()[:16]
+                user_idem_key = f"user:{decision.decision}:{goal_hash}"
+                decision = await self._persist_plan_record(
+                    decision, user_id, workspace_id, idempotency_key=user_idem_key
+                )
 
             decision_dict = decision.model_dump(mode="json")
             decision_json = json.dumps(decision_dict)
