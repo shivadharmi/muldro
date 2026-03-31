@@ -136,3 +136,49 @@ async def test_fetch_message_as_event_missing_optional_headers():
     assert rp["rfc_message_id"] == ""
     assert rp["in_reply_to"] == ""
     assert rp["references"] == ""
+
+
+@pytest.mark.asyncio
+async def test_fetch_message_detail_missing_optional_headers():
+    """_fetch_message_detail should return empty strings for absent optional headers."""
+    connector = GmailConnector(make_mock_settings())
+
+    # Build a message with only the basic required headers (no Cc, Message-ID,
+    # In-Reply-To, or References).
+    msg = {
+        "id": "msg_002",
+        "threadId": "thr_002",
+        "snippet": "Just the basics.",
+        "labelIds": ["INBOX"],
+        "payload": {
+            "headers": [
+                {"name": "From", "value": "alice@example.com"},
+                {"name": "To", "value": "bob@example.com"},
+                {"name": "Subject", "value": "Plain message"},
+                {"name": "Date", "value": "Mon, 30 Mar 2026 12:00:00 -0000"},
+            ],
+        },
+    }
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = msg
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_response)
+
+    detail = await connector._fetch_message_detail(mock_client, "fake-token", "msg_002")
+
+    assert detail is not None
+
+    # Basic headers should be present
+    assert detail["from"] == "alice@example.com"
+    assert detail["to"] == "bob@example.com"
+    assert detail["subject"] == "Plain message"
+    assert detail["date"] == "Mon, 30 Mar 2026 12:00:00 -0000"
+
+    # Optional headers should default to empty strings
+    assert detail["cc"] == ""
+    assert detail["rfc_message_id"] == ""
+    assert detail["in_reply_to"] == ""
+    assert detail["references"] == ""
