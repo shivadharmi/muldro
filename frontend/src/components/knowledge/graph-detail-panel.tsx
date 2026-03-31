@@ -134,11 +134,7 @@ export function GraphDetailPanel() {
   });
 
   if (!selectedEntityId || !selectedNode) {
-    return (
-      <div className="w-80 bg-surface-1 border-l border-b-secondary flex items-center justify-center h-full">
-        <p className="text-sm text-t-tertiary">Select a node to view details</p>
-      </div>
-    );
+    return null;
   }
 
   const connections = findConnections(

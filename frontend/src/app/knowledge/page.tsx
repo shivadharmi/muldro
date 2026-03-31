@@ -113,12 +113,14 @@ function KnowledgeContent() {
       {/* Tab content */}
       <div className="flex-1 overflow-hidden">
         {activeTab === "graph" && (
-          <div className="flex h-full">
+          <div className="flex flex-col h-full">
             <GraphFilters />
-            <div className="flex-1 relative overflow-hidden">
-              <GraphView />
+            <div className="flex flex-1 overflow-hidden">
+              <div className="flex-1 relative overflow-hidden">
+                <GraphView />
+              </div>
+              <GraphDetailPanel />
             </div>
-            <GraphDetailPanel />
           </div>
         )}
         {activeTab === "memories" && <MemoriesView />}

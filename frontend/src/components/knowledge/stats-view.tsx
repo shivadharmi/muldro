@@ -131,7 +131,7 @@ export function StatsView() {
 
   if (isLoading) {
     return (
-      <div className="overflow-y-auto p-4 sm:p-6 space-y-4">
+      <div className="h-full overflow-y-auto p-4 sm:p-6 space-y-4">
         <div className="grid grid-cols-4 gap-3">
           {Array.from({ length: 4 }).map((_, i) => (
             <div
@@ -198,7 +198,7 @@ export function StatsView() {
   // ── Render ─────────────────────────────────────────────────────
 
   return (
-    <div className="overflow-y-auto p-4 sm:p-6 space-y-4">
+    <div className="h-full overflow-y-auto p-4 sm:p-6 space-y-4">
       {/* Row 1: Metric cards */}
       <div className="grid grid-cols-4 gap-3">
         <StatCard
@@ -387,9 +387,9 @@ export function StatsView() {
             </span>
           </div>
           <div className="px-4 py-4 space-y-1.5">
-            {staleRelationships.map((rel) => (
+            {staleRelationships.map((rel, idx) => (
               <div
-                key={rel.relation_id}
+                key={`${rel.relation_id}-${idx}`}
                 className="flex items-center gap-2 text-xs text-t-secondary"
               >
                 <span className="w-1.5 h-1.5 rounded-full bg-j-warning shrink-0" />
