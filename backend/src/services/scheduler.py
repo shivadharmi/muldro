@@ -195,9 +195,10 @@ class SchedulerLoop:
                     state.pending_run = False
                 await db.flush()
 
-                perception_semaphore = asyncio.Semaphore(
-                    getattr(self._settings, "perception_concurrency", 3)
-                )
+                concurrency = getattr(self._settings, "perception_concurrency", None)
+                if not isinstance(concurrency, int) or concurrency < 1:
+                    concurrency = 3
+                perception_semaphore = asyncio.Semaphore(concurrency)
 
                 async def _run_one(state):
                     async with perception_semaphore:
