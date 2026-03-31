@@ -219,10 +219,10 @@ def _normalize_github(payload: dict) -> dict:
 
 def _normalize_gmail(payload: dict) -> dict:
     return {
-        "event_type": "email_received",
-        "entity_id": payload.get("historyId", ""),
+        "event_type": "gmail_webhook_signal",
+        "entity_id": payload.get("emailAddress", "gmail_push"),
         "title": "New Gmail activity",
-        "summary": f"History ID: {payload.get('historyId', '')}",
+        "summary": f"Gmail push notification (historyId: {payload.get('historyId', 'unknown')})",
         "importance_score": 0.6,
     }
 
