@@ -1460,10 +1460,18 @@ class JarvisOrchestrator:
                 cursor = row[0]
 
         try:
-            events, new_cursor = await connector.poll(
-                user_id, cursor, {"access_token": access_token}
+            events, new_cursor = await asyncio.wait_for(
+                connector.poll(user_id, cursor, {"access_token": access_token}),
+                timeout=30,
             )
             return events, new_cursor, None, cursor_type
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Connector %s poll timed out after 30s for user %s",
+                source,
+                user_id,
+            )
+            return [], cursor, "Poll timed out after 30s", cursor_type
         except Exception as e:
             from src.integrations.mcp_errors import classify_error
 

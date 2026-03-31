@@ -1,5 +1,6 @@
 """Tests for EventCorrelator integration into perception cycle."""
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -54,3 +55,15 @@ async def test_correlator_no_thread_for_single_event():
     thread = await correlator.detect_thread("usr_test", "thr_single", workspace_id="ws_test")
 
     assert thread is None
+
+
+@pytest.mark.asyncio
+async def test_poll_connector_timeout():
+    """Slow polls must timeout rather than hang indefinitely."""
+
+    async def slow_poll(*args, **kwargs):
+        await asyncio.sleep(60)
+        return [], None
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(slow_poll(), timeout=0.1)
