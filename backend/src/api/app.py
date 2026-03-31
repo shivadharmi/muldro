@@ -17,6 +17,7 @@ from src.api.routes_feedback import router as feedback_router
 from src.api.routes_graph import router as graph_router
 from src.api.routes_health import router as health_router
 from src.api.routes_integrations import router as integrations_router
+from src.api.routes_knowledge import router as knowledge_router
 from src.api.routes_mcp import router as mcp_router
 from src.api.routes_meetings import router as meetings_router
 from src.api.routes_memories import router as memories_router
@@ -279,6 +280,9 @@ def create_app() -> FastAPI:
 
     # Knowledge graph (Neo4j)
     app.include_router(graph_router, tags=["graph"])
+
+    # Knowledge page (graph + memories + stats)
+    app.include_router(knowledge_router, tags=["knowledge"])
 
     # Integration platform
     app.include_router(integrations_router, tags=["integrations"])

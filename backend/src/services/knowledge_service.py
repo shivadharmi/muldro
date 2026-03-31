@@ -69,7 +69,7 @@ class KnowledgeService:
 
         subgraph = await self._graph.get_subgraph(entity_ids=entity_ids, user_id=user_id)
 
-        enriched_nodes = await self._enrich_nodes(entity_ids, workspace_id)
+        enriched_nodes = await self._enrich_nodes(entity_ids, workspace_id, central)
 
         total_entities = await self._count_entities(user_id, workspace_id)
         total_relationships = await self._count_relationships(user_id, workspace_id)
@@ -196,8 +196,14 @@ class KnowledgeService:
 
         # Resolve provenance events
         provenance_events: list[dict] = []
-        source_event_ids = memory.source_event_ids
-        if source_event_ids and isinstance(source_event_ids, list) and len(source_event_ids) > 0:
+        raw_source = memory.source_event_ids
+        if isinstance(raw_source, dict):
+            source_event_ids = list(raw_source.values())
+        elif isinstance(raw_source, list):
+            source_event_ids = raw_source
+        else:
+            source_event_ids = []
+        if source_event_ids:
             event_stmt = select(NormalizedEvent).where(
                 NormalizedEvent.event_id.in_(source_event_ids),
                 NormalizedEvent.workspace_id == workspace_id,
@@ -279,8 +285,17 @@ class KnowledgeService:
 
     # ── Private helpers ──────────────────────────────────────────────────
 
-    async def _enrich_nodes(self, entity_ids: list[str], workspace_id: str) -> list[dict]:
-        """Fetch full Postgres entity data + aliases for the given IDs."""
+    async def _enrich_nodes(
+        self,
+        entity_ids: list[str],
+        workspace_id: str,
+        neo4j_nodes: list[dict] | None = None,
+    ) -> list[dict]:
+        """Fetch full Postgres entity data + aliases for the given IDs.
+
+        Iterates over the input entity_ids list so that nodes present in Neo4j
+        but missing from Postgres still appear with fallback data (name, type).
+        """
         if not entity_ids:
             return []
 
@@ -290,6 +305,7 @@ class KnowledgeService:
         )
         result = await self._db.execute(entity_stmt)
         entities = result.scalars().all()
+        entity_map = {e.entity_id: e for e in entities}
 
         # Fetch aliases for all entities in one query
         alias_stmt = select(EntityAlias).where(
@@ -305,21 +321,46 @@ class KnowledgeService:
                 {"alias": a.alias, "alias_type": a.alias_type}
             )
 
+        # Build a lookup for Neo4j fallback data
+        neo4j_map: dict[str, dict] = {}
+        for node in neo4j_nodes or []:
+            nid = node.get("entity_id")
+            if nid:
+                neo4j_map[nid] = node
+
         enriched = []
-        for e in entities:
-            enriched.append(
-                {
-                    "entity_id": e.entity_id,
-                    "entity_type": e.entity_type,
-                    "canonical_name": e.canonical_name,
-                    "attributes": e.attributes,
-                    "importance_score": e.importance_score,
-                    "confidence_score": e.confidence_score,
-                    "interaction_count": e.interaction_count,
-                    "last_seen_at": e.last_seen_at.isoformat() if e.last_seen_at else None,
-                    "aliases": alias_map.get(e.entity_id, []),
-                }
-            )
+        for eid in entity_ids:
+            e = entity_map.get(eid)
+            if e:
+                enriched.append(
+                    {
+                        "entity_id": e.entity_id,
+                        "entity_type": e.entity_type,
+                        "canonical_name": e.canonical_name,
+                        "attributes": e.attributes,
+                        "importance_score": e.importance_score,
+                        "confidence_score": e.confidence_score,
+                        "interaction_count": e.interaction_count,
+                        "last_seen_at": e.last_seen_at.isoformat() if e.last_seen_at else None,
+                        "aliases": alias_map.get(e.entity_id, []),
+                    }
+                )
+            else:
+                # Fallback: use Neo4j node data so the node is not silently dropped
+                fallback = neo4j_map.get(eid, {})
+                enriched.append(
+                    {
+                        "entity_id": eid,
+                        "entity_type": fallback.get("entity_type", "unknown"),
+                        "canonical_name": fallback.get("name", eid),
+                        "attributes": {},
+                        "importance_score": None,
+                        "confidence_score": None,
+                        "interaction_count": 0,
+                        "last_seen_at": None,
+                        "aliases": alias_map.get(eid, []),
+                    }
+                )
 
         return enriched
 

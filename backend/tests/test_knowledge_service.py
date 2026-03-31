@@ -425,6 +425,78 @@ async def test_get_memory_detail_no_entities_no_events():
     assert result["source_event_ids"] == []
 
 
+async def test_get_memory_detail_source_event_ids_dict():
+    """Handles source_event_ids stored as a dict (JSONB) by extracting values."""
+    from src.services.knowledge_service import KnowledgeService
+
+    mem = _make_memory(
+        memory_id="mem_dict_events",
+        entity_ids=None,
+        source_event_ids={"gmail": "evt_001", "calendar": "evt_002"},
+    )
+
+    evt1 = _make_event(event_id="evt_001", title="Email from Alice")
+    evt2 = _make_event(event_id="evt_002", title="Calendar invite")
+
+    # DB calls: memory, provenance events (no entity query since entity_ids is None)
+    db = _mock_db_execute([mem, [evt1, evt2]])
+
+    graph_engine = _make_graph_engine()
+    svc = KnowledgeService(make_mock_settings(), db, graph_engine)
+    result = await svc.get_memory_detail("mem_dict_events", TEST_USER_ID, TEST_WORKSPACE_ID)
+
+    assert result is not None
+    assert len(result["provenance_events"]) == 2
+    assert result["provenance_events"][0]["event_id"] == "evt_001"
+    # source_event_ids in the response should be the extracted list of IDs
+    assert sorted(result["source_event_ids"]) == ["evt_001", "evt_002"]
+
+
+async def test_get_initial_graph_neo4j_only_node():
+    """Nodes in Neo4j but not in Postgres appear with fallback data."""
+    from src.services.knowledge_service import KnowledgeService
+
+    central = [
+        {"entity_id": "ent_001", "name": "Alice", "entity_type": "person", "degree": 5},
+        {
+            "entity_id": "ent_ghost",
+            "name": "Ghost Corp",
+            "entity_type": "organization",
+            "degree": 2,
+        },
+    ]
+    subgraph = {"nodes": [], "edges": []}
+    graph_engine = _make_graph_engine(central_entities=central, subgraph=subgraph)
+
+    # Only ent_001 exists in Postgres; ent_ghost does not
+    ent1 = _make_entity(entity_id="ent_001", canonical_name="Alice", entity_type="person")
+
+    # DB calls: entities query (only ent_001), aliases query, count entities, count relationships
+    db = _mock_db_execute(
+        [
+            [ent1],  # entities (ent_ghost missing)
+            [],  # aliases
+            10,  # count entities
+            5,  # count relationships
+        ]
+    )
+
+    svc = KnowledgeService(make_mock_settings(), db, graph_engine)
+    result = await svc.get_initial_graph(TEST_USER_ID, TEST_WORKSPACE_ID)
+
+    assert len(result["nodes"]) == 2
+
+    alice_node = next(n for n in result["nodes"] if n["entity_id"] == "ent_001")
+    assert alice_node["canonical_name"] == "Alice"
+    assert alice_node["entity_type"] == "person"
+
+    ghost_node = next(n for n in result["nodes"] if n["entity_id"] == "ent_ghost")
+    assert ghost_node["canonical_name"] == "Ghost Corp"
+    assert ghost_node["entity_type"] == "organization"
+    assert ghost_node["importance_score"] is None
+    assert ghost_node["interaction_count"] == 0
+
+
 # ── Tests: get_stats ────────────────────────────────────────────────────
 
 
