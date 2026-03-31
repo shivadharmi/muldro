@@ -195,30 +195,50 @@ class SchedulerLoop:
                     state.pending_run = False
                 await db.flush()
 
-                for state in due_states:
-                    try:
-                        workspace_id = await self._resolve_workspace(state.user_id)
-                    except (ValueError, Exception):
-                        workspace_id = state.workspace_id or ""
+                perception_semaphore = asyncio.Semaphore(
+                    getattr(self._settings, "perception_concurrency", 3)
+                )
 
-                    try:
-                        result = await self._orchestrator.run_perception_cycle(
-                            state.source,
-                            user_id=state.user_id,
-                            workspace_id=workspace_id,
-                        )
-                        event_count = result.get("events", 0)
-                        if result.get("status") == "error":
-                            await svc.record_failure(state, result.get("error", "unknown"))
-                        else:
-                            await svc.record_success(state, event_count)
-                    except Exception as e:
-                        await svc.record_failure(state, str(e)[:512])
+                async def _run_one(state):
+                    async with perception_semaphore:
+                        try:
+                            ws_id = await self._resolve_workspace(state.user_id)
+                        except (ValueError, Exception):
+                            ws_id = state.workspace_id or ""
+
+                        try:
+                            result = await self._orchestrator.run_perception_cycle(
+                                state.source,
+                                user_id=state.user_id,
+                                workspace_id=ws_id,
+                            )
+                            event_count = result.get("events", 0)
+                            if result.get("status") == "error":
+                                await svc.record_failure(state, result.get("error", "unknown"))
+                            else:
+                                await svc.record_success(state, event_count)
+                            return state.source, event_count
+                        except Exception as e:
+                            await svc.record_failure(state, str(e)[:512])
+                            logger.warning(
+                                "Perception cycle failed for %s/%s: %s",
+                                state.user_id,
+                                state.source,
+                                e,
+                            )
+                            return state.source, 0
+
+                results = await asyncio.gather(
+                    *(_run_one(s) for s in due_states),
+                    return_exceptions=True,
+                )
+
+                for i, r in enumerate(results):
+                    if isinstance(r, BaseException):
                         logger.warning(
-                            "Perception cycle failed for %s/%s: %s",
-                            state.user_id,
-                            state.source,
-                            e,
+                            "Perception gather exception for %s: %s",
+                            due_states[i].source if i < len(due_states) else "unknown",
+                            r,
                         )
 
                 await db.commit()
