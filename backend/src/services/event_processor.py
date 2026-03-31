@@ -133,7 +133,11 @@ class EventProcessor:
         self, raw: RawEvent, user_id: str, workspace_id: str = ""
     ) -> str | None:
         """Inner event processing — dedup, score, store, trigger downstream."""
-        idempotency_key = f"{raw.source}:{raw.entity_id}:{raw.event_type}"
+        message_id = (raw.raw_payload or {}).get("message_id", "")
+        if message_id:
+            idempotency_key = f"{raw.source}:{raw.entity_id}:{message_id}:{raw.event_type}"
+        else:
+            idempotency_key = f"{raw.source}:{raw.entity_id}:{raw.event_type}"
 
         existing = await self._db.execute(
             select(NormalizedEvent.event_id).where(
@@ -502,8 +506,15 @@ class EventProcessor:
         self, events: list[RawEvent], user_id: str, workspace_id: str
     ) -> list[str | None]:
         """Score and store a chunk of events via a single Claude call."""
+
         # 1. Batch dedup check
-        keys = [f"{r.source}:{r.entity_id}:{r.event_type}" for r in events]
+        def _key(r: RawEvent) -> str:
+            mid = (r.raw_payload or {}).get("message_id", "")
+            if mid:
+                return f"{r.source}:{r.entity_id}:{mid}:{r.event_type}"
+            return f"{r.source}:{r.entity_id}:{r.event_type}"
+
+        keys = [_key(r) for r in events]
         existing = await self._db.execute(
             select(NormalizedEvent.idempotency_key).where(NormalizedEvent.idempotency_key.in_(keys))
         )

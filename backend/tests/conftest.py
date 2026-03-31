@@ -27,7 +27,7 @@ def make_raw_event(**overrides) -> RawEvent:
         title="Investor follow-up on deck",
         summary="Investor requested latest deck and quick call",
         actor={"type": "person", "email": "investor@fund.com", "name": "John Doe"},
-        raw_payload=None,
+        raw_payload={"message_id": "msg_001"},
     )
     defaults.update(overrides)
     return RawEvent(**defaults)
