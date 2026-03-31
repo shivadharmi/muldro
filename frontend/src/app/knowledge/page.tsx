@@ -96,12 +96,13 @@ function KnowledgeContent() {
     <div className="flex flex-col h-full min-h-0">
       {/* Top bar */}
       <div className="shrink-0 p-4 pb-0 border-b border-b-primary bg-surface-1">
-        <div className="flex items-center gap-4 mb-3">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 mb-3">
           <PageHeader title="Knowledge" />
           <KnowledgeSearch />
           {(entityCount > 0 || relationshipCount > 0) && (
-            <span className="text-xs text-t-muted whitespace-nowrap ml-auto">
-              {entityCount} entities &middot; {relationshipCount} relationships
+            <span className="text-xs text-t-muted whitespace-nowrap sm:ml-auto">
+              <span className="hidden sm:inline">{entityCount} entities &middot; {relationshipCount} relationships</span>
+              <span className="sm:hidden">{entityCount} ent &middot; {relationshipCount} rel</span>
             </span>
           )}
         </div>
@@ -113,7 +114,7 @@ function KnowledgeContent() {
         {activeTab === "graph" && (
           <div className="flex flex-col h-full">
             <GraphFilters />
-            <div className="flex flex-1 overflow-hidden">
+            <div className="flex flex-1 overflow-hidden relative">
               <div className="flex-1 relative overflow-hidden">
                 <GraphView />
               </div>

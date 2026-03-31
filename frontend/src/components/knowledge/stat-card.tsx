@@ -17,11 +17,11 @@ export function StatCard({
   color = "text-t-primary",
 }: StatCardProps) {
   return (
-    <div className="bg-surface-1 border border-b-secondary rounded-[var(--radius-md)] px-4 py-3">
-      <p className="text-[11px] text-t-muted uppercase tracking-wider">
+    <div className="bg-surface-1 border border-b-secondary rounded-[var(--radius-md)] px-3 sm:px-4 py-2.5 sm:py-3">
+      <p className="text-[11px] text-t-muted uppercase tracking-wider truncate">
         {label}
       </p>
-      <p className={`text-2xl font-bold mt-1 ${color}`}>{value}</p>
+      <p className={`text-xl sm:text-2xl font-bold mt-1 ${color}`}>{value}</p>
       {delta !== undefined && delta !== 0 && (
         <p
           className={`text-xs mt-1 ${

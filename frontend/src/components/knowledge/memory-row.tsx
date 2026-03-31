@@ -57,7 +57,7 @@ export function MemoryRow({ memory, selected, onSelect, onEntityClick }: MemoryR
           onSelect();
         }
       }}
-      className={`flex items-start gap-3 px-4 py-3 border-b border-b-secondary cursor-pointer transition-colors hover:bg-surface-2 ${
+      className={`flex items-start gap-2 sm:gap-3 px-3 py-2 sm:px-4 sm:py-3 border-b border-b-secondary cursor-pointer transition-colors hover:bg-surface-2 ${
         selected ? "bg-j-primary-soft border-l-2 border-l-j-primary" : ""
       }`}
     >
@@ -121,7 +121,7 @@ export function MemoryRow({ memory, selected, onSelect, onEntityClick }: MemoryR
                     onEntityClick(entityId);
                   }
                 }}
-                className="px-1.5 py-0.5 rounded text-[10px] bg-surface-3 text-t-tertiary cursor-pointer hover:text-t-primary transition-colors"
+                className="px-1.5 py-0.5 rounded text-[10px] bg-surface-3 text-t-tertiary cursor-pointer hover:text-t-primary transition-colors min-h-[28px] inline-flex items-center"
               >
                 {name}
               </button>

@@ -100,11 +100,11 @@ export function MemoriesView() {
   );
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full relative">
       {/* Left side: filters + list */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Filter bar */}
-        <div className="px-4 py-3 border-b border-b-secondary space-y-2">
+        <div className="px-3 sm:px-4 py-2 sm:py-3 border-b border-b-secondary space-y-2">
           {/* Type filters */}
           <div className="flex flex-wrap gap-1.5">
             <FilterChip
@@ -190,7 +190,20 @@ export function MemoriesView() {
       </div>
 
       {/* Right side: detail panel */}
-      {selectedMemoryId && <MemoryDetailPanel />}
+      {selectedMemoryId && (
+        <>
+          {/* Mobile backdrop */}
+          <div
+            className="lg:hidden absolute inset-0 z-10 bg-black/40"
+            onClick={() => selectMemory(null)}
+            onKeyDown={(e) => { if (e.key === "Escape") selectMemory(null); }}
+            role="button"
+            tabIndex={-1}
+            aria-label="Close panel"
+          />
+          <MemoryDetailPanel />
+        </>
+      )}
     </div>
   );
 }

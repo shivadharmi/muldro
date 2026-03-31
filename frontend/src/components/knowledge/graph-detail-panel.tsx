@@ -137,6 +137,8 @@ export function GraphDetailPanel() {
     return null;
   }
 
+  const closePanel = () => selectEntity(null);
+
   const connections = findConnections(
     selectedEntityId,
     graphData.edges,
@@ -149,7 +151,17 @@ export function GraphDetailPanel() {
     : [];
 
   return (
-    <div className="w-80 bg-surface-1 border-l border-b-secondary overflow-y-auto h-full">
+    <>
+      {/* Mobile backdrop */}
+      <div
+        className="lg:hidden absolute inset-0 z-10 bg-black/40"
+        onClick={closePanel}
+        onKeyDown={(e) => { if (e.key === "Escape") closePanel(); }}
+        role="button"
+        tabIndex={-1}
+        aria-label="Close panel"
+      />
+    <div className="absolute inset-0 z-20 lg:relative lg:inset-auto lg:z-auto w-full lg:w-80 bg-surface-1 lg:border-l border-b-secondary overflow-y-auto h-full">
       {/* Header */}
       <div className="p-4 border-b border-b-secondary">
         <div className="flex items-start justify-between">
@@ -183,8 +195,8 @@ export function GraphDetailPanel() {
           {/* Close button */}
           <button
             type="button"
-            onClick={() => selectEntity(null)}
-            className="text-t-muted hover:text-t-primary transition-colors cursor-pointer p-1"
+            onClick={closePanel}
+            className="text-t-muted hover:text-t-primary transition-colors cursor-pointer p-2 -mr-1 min-w-[44px] min-h-[44px] flex items-center justify-center"
             aria-label="Close detail panel"
           >
             <span className="text-lg leading-none">&times;</span>
@@ -263,7 +275,7 @@ export function GraphDetailPanel() {
                 key={conn.entityId}
                 type="button"
                 onClick={() => selectEntity(conn.entityId)}
-                className="w-full text-left px-2 py-1.5 rounded-md hover:bg-surface-2 cursor-pointer transition-colors flex items-center gap-2"
+                className="w-full text-left px-2 py-2 rounded-md hover:bg-surface-2 cursor-pointer transition-colors flex items-center gap-2 min-h-[44px]"
               >
                 <span
                   className="w-2 h-2 rounded-full shrink-0"
@@ -343,5 +355,6 @@ export function GraphDetailPanel() {
         </div>
       )}
     </div>
+    </>
   );
 }

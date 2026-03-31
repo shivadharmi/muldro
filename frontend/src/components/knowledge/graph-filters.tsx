@@ -56,12 +56,12 @@ export function GraphFilters() {
   }
 
   return (
-    <div className="shrink-0 flex items-center gap-2 flex-wrap px-4 py-2.5 bg-surface-1 border-b border-b-secondary">
+    <div className="shrink-0 flex items-center gap-1.5 sm:gap-2 flex-wrap px-3 sm:px-4 py-2 sm:py-2.5 bg-surface-1 border-b border-b-secondary">
       {/* "All" chip */}
       <button
         type="button"
         onClick={handleAllClick}
-        className={`px-3 py-1 rounded-full text-xs font-medium border cursor-pointer transition-colors ${
+        className={`px-2.5 sm:px-3 py-1 rounded-full text-xs font-medium border cursor-pointer transition-colors min-h-[32px] ${
           allActive
             ? "border-j-primary text-j-primary bg-j-primary-soft"
             : "border-b-secondary text-t-tertiary bg-surface-2"
@@ -80,7 +80,7 @@ export function GraphFilters() {
             key={type}
             type="button"
             onClick={() => handleTypeClick(type)}
-            className={`px-3 py-1 rounded-full text-xs font-medium border cursor-pointer transition-colors inline-flex items-center gap-1.5 ${
+            className={`px-2.5 sm:px-3 py-1 rounded-full text-xs font-medium border cursor-pointer transition-colors inline-flex items-center gap-1.5 min-h-[32px] ${
               isHidden
                 ? "border-b-secondary text-t-tertiary bg-surface-2"
                 : colors.active

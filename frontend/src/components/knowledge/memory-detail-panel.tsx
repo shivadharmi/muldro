@@ -95,7 +95,7 @@ export function MemoryDetailPanel() {
 
   if (isLoading) {
     return (
-      <div className="w-80 bg-surface-1 border-l border-b-secondary flex items-center justify-center h-full">
+      <div className="absolute inset-0 z-20 lg:relative lg:inset-auto lg:z-auto w-full lg:w-80 bg-surface-1 lg:border-l border-b-secondary flex items-center justify-center h-full">
         <p className="text-sm text-t-tertiary">Loading...</p>
       </div>
     );
@@ -103,7 +103,7 @@ export function MemoryDetailPanel() {
 
   if (!detail) {
     return (
-      <div className="w-80 bg-surface-1 border-l border-b-secondary flex items-center justify-center h-full">
+      <div className="absolute inset-0 z-20 lg:relative lg:inset-auto lg:z-auto w-full lg:w-80 bg-surface-1 lg:border-l border-b-secondary flex items-center justify-center h-full">
         <p className="text-sm text-t-tertiary">Memory not found</p>
       </div>
     );
@@ -112,7 +112,7 @@ export function MemoryDetailPanel() {
   const style = getTypeStyle(detail.memory_type);
 
   return (
-    <div className="w-80 bg-surface-1 border-l border-b-secondary overflow-y-auto h-full">
+    <div className="absolute inset-0 z-20 lg:relative lg:inset-auto lg:z-auto w-full lg:w-80 bg-surface-1 lg:border-l border-b-secondary overflow-y-auto h-full">
       {/* Header */}
       <div className="px-4 py-3 border-b border-b-secondary">
         <div className="flex items-center justify-between">
@@ -129,7 +129,7 @@ export function MemoryDetailPanel() {
           <button
             type="button"
             onClick={() => selectMemory(null)}
-            className="text-t-muted hover:text-t-primary transition-colors cursor-pointer p-1"
+            className="text-t-muted hover:text-t-primary transition-colors cursor-pointer p-2 -mr-1 min-w-[44px] min-h-[44px] flex items-center justify-center"
             aria-label="Close detail panel"
           >
             <span className="text-lg leading-none">&times;</span>
@@ -162,7 +162,7 @@ export function MemoryDetailPanel() {
                   setActiveTab("graph");
                   selectEntity(entity.entity_id);
                 }}
-                className="w-full text-left px-2 py-1.5 rounded-md hover:bg-surface-2 cursor-pointer transition-colors flex items-center gap-2"
+                className="w-full text-left px-2 py-2 rounded-md hover:bg-surface-2 cursor-pointer transition-colors flex items-center gap-2 min-h-[44px]"
               >
                 <span
                   className="w-2 h-2 rounded-full shrink-0"
@@ -204,7 +204,7 @@ export function MemoryDetailPanel() {
                 setActiveTab("graph");
                 selectEntity(detail.linked_entities[0].entity_id);
               }}
-              className="flex-1 px-3 py-1.5 text-xs font-medium rounded-md bg-surface-2 text-t-secondary hover:bg-surface-3 transition-colors cursor-pointer"
+              className="flex-1 px-3 py-2 text-xs font-medium rounded-md bg-surface-2 text-t-secondary hover:bg-surface-3 transition-colors cursor-pointer min-h-[44px]"
             >
               View in Graph
             </button>
@@ -213,7 +213,7 @@ export function MemoryDetailPanel() {
             type="button"
             onClick={() => archiveMutation.mutate(detail.memory_id)}
             disabled={archiveMutation.isPending}
-            className="flex-1 px-3 py-1.5 text-xs font-medium rounded-md bg-j-error-soft text-j-error hover:opacity-80 transition-opacity cursor-pointer disabled:opacity-50"
+            className="flex-1 px-3 py-2 text-xs font-medium rounded-md bg-j-error-soft text-j-error hover:opacity-80 transition-opacity cursor-pointer disabled:opacity-50 min-h-[44px]"
           >
             {archiveMutation.isPending ? "Archiving..." : "Archive"}
           </button>

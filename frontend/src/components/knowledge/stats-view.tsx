@@ -132,7 +132,7 @@ export function StatsView() {
   if (isLoading) {
     return (
       <div className="h-full overflow-y-auto p-4 sm:p-6 space-y-4">
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {Array.from({ length: 4 }).map((_, i) => (
             <div
               key={i}
@@ -143,7 +143,7 @@ export function StatsView() {
             </div>
           ))}
         </div>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {Array.from({ length: 2 }).map((_, i) => (
             <div
               key={i}
@@ -200,7 +200,7 @@ export function StatsView() {
   return (
     <div className="h-full overflow-y-auto p-4 sm:p-6 space-y-4">
       {/* Row 1: Metric cards */}
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <StatCard
           label="Total Entities"
           value={data.total_entities}
@@ -227,7 +227,7 @@ export function StatsView() {
       </div>
 
       {/* Row 2: Entity types bar chart + Memory types donut */}
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Entity Types */}
         <div className="bg-surface-1 border border-b-secondary rounded-[var(--radius-md)] overflow-hidden">
           <div className="px-4 py-3 border-b border-b-secondary flex items-center justify-between">
@@ -276,7 +276,7 @@ export function StatsView() {
       </div>
 
       {/* Row 3: Most Connected Entities + Communities */}
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Most Connected Entities */}
         <div className="bg-surface-1 border border-b-secondary rounded-[var(--radius-md)] overflow-hidden">
           <div className="px-4 py-3 border-b border-b-secondary flex items-center justify-between">
@@ -329,7 +329,7 @@ export function StatsView() {
           </div>
           <div className="px-4 py-4">
             {topCommunities.length > 0 ? (
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {topCommunities.map((community) => (
                   <CommunityCard
                     key={community.seed_entity_id}

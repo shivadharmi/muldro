@@ -248,7 +248,7 @@ export function KnowledgeSearch() {
   let runningIndex = 0;
 
   return (
-    <div ref={wrapperRef} className="relative min-w-64">
+    <div ref={wrapperRef} className="relative w-full sm:min-w-64 sm:w-auto">
       {/* Input */}
       <div className="relative flex items-center">
         <div className="absolute left-3 pointer-events-none">
@@ -303,7 +303,7 @@ export function KnowledgeSearch() {
           id="knowledge-search-dropdown"
           ref={listRef}
           role="listbox"
-          className="absolute top-full left-0 right-0 mt-1 bg-surface-1 border border-b-secondary rounded-[var(--radius-md)] shadow-lg z-50 overflow-hidden max-h-80 overflow-y-auto"
+          className="absolute top-full left-0 right-0 mt-1 bg-surface-1 border border-b-secondary rounded-[var(--radius-md)] shadow-lg z-50 overflow-hidden max-h-[60vh] sm:max-h-80 overflow-y-auto"
         >
           {groups.map((group) => {
             const groupItems = group.results.map((result, i) => {
