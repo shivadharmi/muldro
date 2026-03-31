@@ -162,6 +162,6 @@ class TestPushNormalization:
     def test_normalize_gmail(self):
         from src.integrations.sync.push_receiver import _normalize_gmail
 
-        result = _normalize_gmail({"historyId": "12345"})
-        assert result["event_type"] == "email_received"
-        assert result["entity_id"] == "12345"
+        result = _normalize_gmail({"historyId": "12345", "emailAddress": "user@gmail.com"})
+        assert result["event_type"] == "gmail_webhook_signal"
+        assert result["entity_id"] == "user@gmail.com"
