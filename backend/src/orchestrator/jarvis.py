@@ -390,6 +390,9 @@ class JarvisOrchestrator:
                     policy_decision={"decision": decision.decision},
                     conversation_id=conversation_id,
                     trace_id=trace_id,
+                    idempotency_key=(
+                        f"{decision.plan_id}:{decision.decision}" if decision.plan_id else None
+                    ),
                 )
                 db.add(run)
 
