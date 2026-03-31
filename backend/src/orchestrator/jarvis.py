@@ -153,6 +153,59 @@ def _build_surface_children(
     return [r.card("sf_card", children)]
 
 
+async def _fetch_thread_contexts(
+    raw_events: list,
+    user_id: str,
+    workspace_id: str,
+    max_threads: int = 3,
+) -> dict[str, dict]:
+    """Fetch full thread context for Gmail reply events via MCP.
+
+    When a reply arrives on a Gmail thread, the Librarian/Planner only see
+    the reply snippet with no context about the prior conversation. This
+    helper fetches the full thread via the ``get_gmail_thread_content`` MCP
+    tool so downstream agents can reason over the complete thread.
+
+    Returns a mapping of ``{thread_id: mcp_result}`` for successfully
+    fetched threads. On any failure the thread is silently skipped so
+    perception is never blocked by MCP availability.
+    """
+    from src.connectors.mcp_bridge import call_mcp_tool, is_mcp_tool
+
+    contexts: dict[str, dict] = {}
+    if not is_mcp_tool("get_gmail_thread_content"):
+        return contexts
+
+    fetched = 0
+    seen: set[str] = set()
+    for raw_evt in raw_events:
+        if fetched >= max_threads:
+            break
+        if raw_evt.source != "gmail":
+            continue
+        payload = raw_evt.raw_payload or {}
+        in_reply_to = payload.get("in_reply_to", "")
+        thread_id = raw_evt.entity_id
+        if not in_reply_to or thread_id in seen:
+            continue
+        seen.add(thread_id)
+
+        try:
+            result = await call_mcp_tool(
+                "get_gmail_thread_content",
+                {"thread_id": thread_id},
+                user_id=user_id,
+                workspace_id=workspace_id,
+            )
+            if isinstance(result, dict) and result.get("status") != "error":
+                contexts[thread_id] = result
+                fetched += 1
+        except Exception:
+            logger.debug("Failed to fetch thread %s context", thread_id, exc_info=True)
+
+    return contexts
+
+
 class JarvisOrchestrator:
     """The Jarvis brain — orchestrates sub-agents via Claude API.
 
@@ -1282,9 +1335,22 @@ class JarvisOrchestrator:
             # Update the observation cursor
             await self._update_cursor(source, user_id, workspace_id, new_cursor, cursor_type)
 
+            # Fetch full thread context for reply emails
+            thread_contexts = await _fetch_thread_contexts(raw_events, user_id, workspace_id)
+
             observer_summary = f"Polled {source}: {len(raw_events)} new event(s).\n" + "\n".join(
                 f"- {s}" for s in event_summaries[:20]
             )
+            if thread_contexts:
+                observer_summary += "\n\n--- Thread Context (full conversation) ---"
+                for tid, ctx in thread_contexts.items():
+                    messages = ctx.get("messages", [])
+                    if messages:
+                        observer_summary += f"\nThread {tid} ({len(messages)} messages):"
+                        for msg in messages[-5:]:
+                            snippet = msg.get("snippet", msg.get("body", ""))[:200]
+                            sender = msg.get("from", "unknown")
+                            observer_summary += f"\n  [{sender}]: {snippet}"
 
             # Step 2: Librarian extracts entities and memories
             librarian_result = await self._call_agent(
