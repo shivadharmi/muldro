@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.services.event_processor import DEFAULT_SCORES, EventProcessor
+from src.services.event_processor import DEFAULT_SCORES, EventProcessor, make_idempotency_key
 from tests.conftest import TEST_USER_ID, make_mock_settings, make_raw_event
 
 
@@ -215,3 +215,36 @@ async def test_idempotency_key_fallback_no_message_id(settings, mock_db):
 
     stored = mock_db.add.call_args[0][0]
     assert stored.idempotency_key == "github:pr_001:pr_opened"
+
+
+def test_make_idempotency_key_with_message_id():
+    """Key includes message_id when present in raw_payload."""
+    raw = make_raw_event(
+        source="gmail",
+        entity_id="thr_abc",
+        event_type="email_received",
+        raw_payload={"message_id": "msg_xyz"},
+    )
+    assert make_idempotency_key(raw) == "gmail:thr_abc:msg_xyz:email_received"
+
+
+def test_make_idempotency_key_without_message_id():
+    """Key falls back to 3-part format when no message_id."""
+    raw = make_raw_event(
+        source="calendar",
+        entity_id="cal_evt_123",
+        event_type="meeting_scheduled",
+        raw_payload=None,
+    )
+    assert make_idempotency_key(raw) == "calendar:cal_evt_123:meeting_scheduled"
+
+
+def test_make_idempotency_key_empty_message_id():
+    """Empty string message_id should use fallback format."""
+    raw = make_raw_event(
+        source="slack",
+        entity_id="ch_001",
+        event_type="message_posted",
+        raw_payload={"message_id": ""},
+    )
+    assert make_idempotency_key(raw) == "slack:ch_001:message_posted"

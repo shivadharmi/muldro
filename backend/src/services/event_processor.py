@@ -50,6 +50,19 @@ class RawEvent:
     causation_id: str | None = None
 
 
+def make_idempotency_key(raw: RawEvent) -> str:
+    """Build a unique idempotency key for an event.
+
+    Includes message_id when available (e.g., Gmail) for per-message
+    granularity within threads. Falls back to source:entity_id:event_type
+    for sources without message-level IDs.
+    """
+    message_id = (raw.raw_payload or {}).get("message_id", "")
+    if message_id:
+        return f"{raw.source}:{raw.entity_id}:{message_id}:{raw.event_type}"
+    return f"{raw.source}:{raw.entity_id}:{raw.event_type}"
+
+
 SCORING_SYSTEM_PROMPT = """\
 You are Jarvis's event scoring engine. Given an event and optional user context, \
 evaluate its importance and urgency for this specific user.
@@ -133,11 +146,7 @@ class EventProcessor:
         self, raw: RawEvent, user_id: str, workspace_id: str = ""
     ) -> str | None:
         """Inner event processing — dedup, score, store, trigger downstream."""
-        message_id = (raw.raw_payload or {}).get("message_id", "")
-        if message_id:
-            idempotency_key = f"{raw.source}:{raw.entity_id}:{message_id}:{raw.event_type}"
-        else:
-            idempotency_key = f"{raw.source}:{raw.entity_id}:{raw.event_type}"
+        idempotency_key = make_idempotency_key(raw)
 
         existing = await self._db.execute(
             select(NormalizedEvent.event_id).where(
@@ -508,13 +517,7 @@ class EventProcessor:
         """Score and store a chunk of events via a single Claude call."""
 
         # 1. Batch dedup check
-        def _key(r: RawEvent) -> str:
-            mid = (r.raw_payload or {}).get("message_id", "")
-            if mid:
-                return f"{r.source}:{r.entity_id}:{mid}:{r.event_type}"
-            return f"{r.source}:{r.entity_id}:{r.event_type}"
-
-        keys = [_key(r) for r in events]
+        keys = [make_idempotency_key(r) for r in events]
         existing = await self._db.execute(
             select(NormalizedEvent.idempotency_key).where(NormalizedEvent.idempotency_key.in_(keys))
         )
