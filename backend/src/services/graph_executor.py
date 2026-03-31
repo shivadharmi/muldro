@@ -857,13 +857,17 @@ class GraphExecutor:
                     creds = await self._connector_credentials_fn("gmail")
                     if creds:
                         connector = connector_cls(self._settings)
+                        draft_params = {
+                            "to": recipient,
+                            "subject": draft.get("subject", ""),
+                            "body": draft.get("body", ""),
+                        }
+                        thread_id = input_data.get("thread_id")
+                        if thread_id:
+                            draft_params["thread_id"] = thread_id
                         create_result = await connector.execute_action(
                             "create_draft",
-                            {
-                                "to": recipient,
-                                "subject": draft.get("subject", ""),
-                                "body": draft.get("body", ""),
-                            },
+                            draft_params,
                             creds,
                         )
                         draft["gmail_draft_id"] = create_result.get("draft_id")
