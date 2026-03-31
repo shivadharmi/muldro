@@ -163,9 +163,17 @@ export function StatsView() {
 
   // ── Data prep ──────────────────────────────────────────────────
 
-  const entityBarData = bucketEntityCounts(data.entity_counts_by_type, 6);
-  const memoryDonutData = mapMemoryCountsToDonut(data.memory_counts_by_type);
-  const memoryDonutTotal = data.memory_counts_by_type.reduce(
+  const entityCounts = data.entity_counts_by_type ?? [];
+  const memoryCounts = data.memory_counts_by_type ?? [];
+  const growthDays = data.growth_by_day ?? [];
+  const centralEntities = data.central_entities ?? [];
+  const communities = data.communities ?? [];
+  const staleRelationships = data.stale_relationships ?? [];
+  const weeklyDelta = data.weekly_delta ?? { entities: 0, relationships: 0, memories: 0 };
+
+  const entityBarData = bucketEntityCounts(entityCounts, 6);
+  const memoryDonutData = mapMemoryCountsToDonut(memoryCounts);
+  const memoryDonutTotal = memoryCounts.reduce(
     (sum, item) => sum + item.count,
     0,
   );
@@ -175,14 +183,14 @@ export function StatsView() {
       ? `${Math.round(data.avg_confidence * 100)}%`
       : "N/A";
 
-  const growthBarData = data.growth_by_day.map((day) => ({
+  const growthBarData = growthDays.map((day) => ({
     label: formatDayLabel(day.date),
     value: day.entities + day.memories,
     color: "hsl(193, 100%, 66%)",
   }));
 
-  const topCentralEntities = data.central_entities.slice(0, 5);
-  const topCommunities = data.communities.slice(0, 4);
+  const topCentralEntities = centralEntities.slice(0, 5);
+  const topCommunities = communities.slice(0, 4);
 
   // ── Render ─────────────────────────────────────────────────────
 
@@ -193,19 +201,19 @@ export function StatsView() {
         <StatCard
           label="Total Entities"
           value={data.total_entities}
-          delta={data.weekly_delta.entities}
+          delta={weeklyDelta.entities}
           color="text-[hsl(193,100%,66%)]"
         />
         <StatCard
           label="Total Relationships"
           value={data.total_relationships}
-          delta={data.weekly_delta.relationships}
+          delta={weeklyDelta.relationships}
           color="text-[hsl(247,92%,74%)]"
         />
         <StatCard
           label="Total Memories"
           value={data.total_memories}
-          delta={data.weekly_delta.memories}
+          delta={weeklyDelta.memories}
           color="text-[hsl(159,78%,54%)]"
         />
         <StatCard
@@ -224,7 +232,7 @@ export function StatsView() {
               Entity Types
             </span>
             <span className="text-xs text-t-muted">
-              {data.entity_counts_by_type.length} types
+              {entityCounts.length} types
             </span>
           </div>
           <div className="px-4 py-4">
@@ -245,7 +253,7 @@ export function StatsView() {
               Memory Types
             </span>
             <span className="text-xs text-t-muted">
-              {data.memory_counts_by_type.length} types
+              {memoryCounts.length} types
             </span>
           </div>
           <div className="px-4 py-4 flex justify-center">
@@ -313,7 +321,7 @@ export function StatsView() {
               Communities Detected
             </span>
             <span className="text-xs text-t-muted">
-              {data.communities.length} found
+              {communities.length} found
             </span>
           </div>
           <div className="px-4 py-4">
@@ -365,18 +373,18 @@ export function StatsView() {
       </div>
 
       {/* Row 5: Stale Relationships (conditional) */}
-      {data.stale_relationships.length > 0 && (
+      {staleRelationships.length > 0 && (
         <div className="bg-surface-1 border border-b-secondary rounded-[var(--radius-md)] overflow-hidden">
           <div className="px-4 py-3 border-b border-b-secondary flex items-center justify-between">
             <span className="text-sm font-semibold text-t-primary">
               Stale Relationships
             </span>
             <span className="text-xs text-j-warning">
-              {data.stale_relationships.length} flagged
+              {staleRelationships.length} flagged
             </span>
           </div>
           <div className="px-4 py-4 space-y-1.5">
-            {data.stale_relationships.map((rel) => (
+            {staleRelationships.map((rel) => (
               <div
                 key={rel.relation_id}
                 className="flex items-center gap-2 text-xs text-t-secondary"
