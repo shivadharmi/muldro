@@ -56,9 +56,10 @@ function EntityTypeBadge({ type }: { type: string }) {
 
 /** Bucket entity counts: keep top N, aggregate the rest as "Other". */
 function bucketEntityCounts(
-  items: { entity_type: string; count: number }[],
+  items: { entity_type: string; count: number }[] | null | undefined,
   topN: number,
 ): { label: string; value: number; color: string }[] {
+  if (!items || !Array.isArray(items)) return [];
   const sorted = [...items].sort((a, b) => b.count - a.count);
   const top = sorted.slice(0, topN);
   const rest = sorted.slice(topN);
@@ -83,8 +84,9 @@ function bucketEntityCounts(
 
 /** Map memory type counts to donut data with cycling palette colors. */
 function mapMemoryCountsToDonut(
-  items: { memory_type: string; count: number }[],
+  items: { memory_type: string; count: number }[] | null | undefined,
 ): { label: string; value: number; color: string }[] {
+  if (!items || !Array.isArray(items)) return [];
   return items.map((item, i) => ({
     label: item.memory_type,
     value: item.count,
