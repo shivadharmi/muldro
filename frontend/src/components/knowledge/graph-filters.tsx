@@ -56,7 +56,7 @@ export function GraphFilters() {
   }
 
   return (
-    <div className="flex items-center gap-2 flex-wrap">
+    <div className="shrink-0 flex items-center gap-2 flex-wrap px-4 py-2.5 bg-surface-1 border-b border-b-secondary">
       {/* "All" chip */}
       <button
         type="button"

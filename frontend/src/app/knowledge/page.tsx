@@ -93,25 +93,23 @@ function KnowledgeContent() {
   const relationshipCount = graphResponse?.stats?.total_relationships ?? 0;
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
+    <div className="flex flex-col h-full min-h-0">
       {/* Top bar */}
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-b-secondary bg-surface-1">
-        <PageHeader title="Knowledge" />
-        <KnowledgeSearch />
-        {(entityCount > 0 || relationshipCount > 0) && (
-          <span className="text-xs text-t-muted whitespace-nowrap ml-auto">
-            {entityCount} entities &middot; {relationshipCount} relationships
-          </span>
-        )}
-      </div>
-
-      {/* Tabs bar */}
-      <div className="px-4 bg-surface-1">
+      <div className="shrink-0 p-4 pb-0 border-b border-b-primary bg-surface-1">
+        <div className="flex items-center gap-4 mb-3">
+          <PageHeader title="Knowledge" />
+          <KnowledgeSearch />
+          {(entityCount > 0 || relationshipCount > 0) && (
+            <span className="text-xs text-t-muted whitespace-nowrap ml-auto">
+              {entityCount} entities &middot; {relationshipCount} relationships
+            </span>
+          )}
+        </div>
         <Tabs tabs={TABS} active={activeTab} onChange={handleTabChange} />
       </div>
 
       {/* Tab content */}
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 min-h-0 overflow-hidden">
         {activeTab === "graph" && (
           <div className="flex flex-col h-full">
             <GraphFilters />
