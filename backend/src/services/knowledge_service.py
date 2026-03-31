@@ -1,0 +1,486 @@
+"""KnowledgeService — orchestrates GraphEngine + Postgres for knowledge page endpoints.
+
+Thin orchestration layer that serves 4 knowledge page endpoints:
+- Initial graph (seed nodes + edges + stats)
+- Paginated memories with filters
+- Memory detail with linked entities and provenance
+- Aggregated stats (counts, deltas, communities, stale relationships)
+"""
+
+import logging
+import math
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.config.settings import Settings
+from src.models.entities import Entity, EntityAlias, EntityRelationship
+from src.models.events import NormalizedEvent
+from src.models.memory import Memory
+from src.services.graph_engine import GraphEngine
+
+logger = logging.getLogger(__name__)
+
+
+class KnowledgeService:
+    """Orchestrates GraphEngine (Neo4j) + Postgres for knowledge page queries."""
+
+    def __init__(self, settings: Settings, db: AsyncSession, graph_engine: GraphEngine):
+        self._settings = settings
+        self._db = db
+        self._graph = graph_engine
+
+    async def close(self) -> None:
+        """Release GraphEngine resources."""
+        await self._graph.close()
+
+    async def __aenter__(self) -> "KnowledgeService":
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        await self.close()
+
+    async def get_initial_graph(
+        self,
+        user_id: str,
+        workspace_id: str,
+    ) -> dict:
+        """Return seed nodes with enriched Postgres data, edges, and stats.
+
+        Calls GraphEngine.find_central_entities for seed nodes, then
+        GraphEngine.get_subgraph for edges. Enriches nodes with full
+        Postgres entity data (attributes, aliases, importance_score, etc.).
+        """
+        central = await self._graph.find_central_entities(user_id=user_id, limit=10)
+        entity_ids = [n["entity_id"] for n in central]
+
+        if not entity_ids:
+            total_entities = await self._count_entities(user_id, workspace_id)
+            total_relationships = await self._count_relationships(user_id, workspace_id)
+            return {
+                "nodes": [],
+                "edges": [],
+                "stats": {
+                    "total_entities": total_entities,
+                    "total_relationships": total_relationships,
+                },
+            }
+
+        subgraph = await self._graph.get_subgraph(entity_ids=entity_ids, user_id=user_id)
+
+        enriched_nodes = await self._enrich_nodes(entity_ids, workspace_id)
+
+        total_entities = await self._count_entities(user_id, workspace_id)
+        total_relationships = await self._count_relationships(user_id, workspace_id)
+
+        return {
+            "nodes": enriched_nodes,
+            "edges": subgraph.get("edges", []),
+            "stats": {
+                "total_entities": total_entities,
+                "total_relationships": total_relationships,
+            },
+        }
+
+    async def get_memories_paginated(
+        self,
+        user_id: str,
+        workspace_id: str,
+        *,
+        memory_type: str | None = None,
+        sort_by: str = "created_at",
+        search: str | None = None,
+        entity_id: str | None = None,
+        page: int = 1,
+        limit: int = 20,
+    ) -> dict:
+        """Query memories with filters, pagination, and sort.
+
+        Returns { items, total, page, pages }.
+        """
+        page = max(1, page)
+        limit = max(1, min(limit, 100))
+
+        base_conditions = [
+            Memory.user_id == user_id,
+            Memory.workspace_id == workspace_id,
+            Memory.status == "active",
+        ]
+
+        if memory_type:
+            base_conditions.append(Memory.memory_type == memory_type)
+
+        if search:
+            base_conditions.append(Memory.fact_text.ilike(f"%{search}%"))
+
+        if entity_id:
+            base_conditions.append(Memory.entity_ids.any(entity_id))
+
+        # Count query
+        count_stmt = select(func.count(Memory.memory_id)).where(*base_conditions)
+        total = (await self._db.execute(count_stmt)).scalar() or 0
+
+        # Sort
+        sort_column = self._resolve_memory_sort(sort_by)
+
+        # Data query
+        offset = (page - 1) * limit
+        data_stmt = (
+            select(Memory)
+            .where(*base_conditions)
+            .order_by(sort_column.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        result = await self._db.execute(data_stmt)
+        memories = result.scalars().all()
+
+        # Collect all entity_ids across memories for name resolution
+        all_entity_ids: set[str] = set()
+        for mem in memories:
+            if mem.entity_ids:
+                all_entity_ids.update(mem.entity_ids)
+
+        entity_name_map = await self._resolve_entity_names(all_entity_ids, workspace_id)
+
+        items = [self._memory_to_dict(mem, entity_name_map) for mem in memories]
+
+        pages = max(1, math.ceil(total / limit))
+
+        return {
+            "items": items,
+            "total": total,
+            "page": page,
+            "pages": pages,
+        }
+
+    async def get_memory_detail(
+        self,
+        memory_id: str,
+        user_id: str,
+        workspace_id: str,
+    ) -> dict | None:
+        """Return full memory with linked entities and provenance events.
+
+        Returns detail dict or None if not found.
+        """
+        stmt = select(Memory).where(
+            Memory.memory_id == memory_id,
+            Memory.user_id == user_id,
+            Memory.workspace_id == workspace_id,
+        )
+        result = await self._db.execute(stmt)
+        memory = result.scalar_one_or_none()
+        if not memory:
+            return None
+
+        # Resolve linked entities
+        linked_entities: list[dict] = []
+        if memory.entity_ids:
+            entity_stmt = select(Entity).where(
+                Entity.entity_id.in_(memory.entity_ids),
+                Entity.workspace_id == workspace_id,
+            )
+            entity_result = await self._db.execute(entity_stmt)
+            entities = entity_result.scalars().all()
+            linked_entities = [
+                {
+                    "entity_id": e.entity_id,
+                    "entity_type": e.entity_type,
+                    "canonical_name": e.canonical_name,
+                    "importance_score": e.importance_score,
+                }
+                for e in entities
+            ]
+
+        # Resolve provenance events
+        provenance_events: list[dict] = []
+        source_event_ids = memory.source_event_ids
+        if source_event_ids and isinstance(source_event_ids, list) and len(source_event_ids) > 0:
+            event_stmt = select(NormalizedEvent).where(
+                NormalizedEvent.event_id.in_(source_event_ids),
+                NormalizedEvent.workspace_id == workspace_id,
+            )
+            event_result = await self._db.execute(event_stmt)
+            events = event_result.scalars().all()
+            provenance_events = [
+                {
+                    "event_id": ev.event_id,
+                    "title": ev.title,
+                    "source": ev.source,
+                    "summary": ev.summary,
+                }
+                for ev in events
+            ]
+
+        return {
+            "memory_id": memory.memory_id,
+            "memory_type": memory.memory_type,
+            "scope": memory.scope,
+            "fact_text": memory.fact_text,
+            "confidence": memory.confidence,
+            "stability_score": memory.stability_score,
+            "status": memory.status,
+            "refresh_count": memory.refresh_count,
+            "last_accessed_at": (
+                memory.last_accessed_at.isoformat() if memory.last_accessed_at else None
+            ),
+            "created_at": memory.created_at.isoformat() if memory.created_at else None,
+            "updated_at": memory.updated_at.isoformat() if memory.updated_at else None,
+            "entity_ids": memory.entity_ids or [],
+            "source_event_ids": source_event_ids or [],
+            "linked_entities": linked_entities,
+            "provenance_events": provenance_events,
+        }
+
+    async def get_stats(
+        self,
+        user_id: str,
+        workspace_id: str,
+    ) -> dict:
+        """Aggregate stats for the knowledge page.
+
+        Returns entity/memory counts by type, weekly deltas, central entities,
+        communities, stale relationships, and growth by day (last 7 days).
+        """
+        entity_counts = await self._entity_counts_by_type(user_id, workspace_id)
+        memory_counts = await self._memory_counts_by_type(user_id, workspace_id)
+
+        now = datetime.now(timezone.utc)
+        week_ago = now - timedelta(days=7)
+
+        entity_weekly_delta = await self._count_entities_since(user_id, workspace_id, week_ago)
+        memory_weekly_delta = await self._count_memories_since(user_id, workspace_id, week_ago)
+        avg_confidence = await self._avg_confidence(user_id, workspace_id)
+        total_entities = await self._count_entities(user_id, workspace_id)
+        total_relationships = await self._count_relationships(user_id, workspace_id)
+
+        central_entities = await self._graph.find_central_entities(user_id=user_id, limit=5)
+        all_communities = await self._graph.detect_communities(user_id=user_id)
+        communities = all_communities[:4]
+        stale_relationships = await self._graph.get_stale_relationships(user_id=user_id, days=14)
+
+        growth_by_day = await self._growth_by_day(user_id, workspace_id, days=7)
+
+        return {
+            "entity_counts_by_type": entity_counts,
+            "memory_counts_by_type": memory_counts,
+            "entity_weekly_delta": entity_weekly_delta,
+            "memory_weekly_delta": memory_weekly_delta,
+            "avg_confidence": avg_confidence,
+            "total_entities": total_entities,
+            "total_relationships": total_relationships,
+            "central_entities": central_entities,
+            "communities": communities,
+            "stale_relationships": stale_relationships,
+            "growth_by_day": growth_by_day,
+        }
+
+    # ── Private helpers ──────────────────────────────────────────────────
+
+    async def _enrich_nodes(self, entity_ids: list[str], workspace_id: str) -> list[dict]:
+        """Fetch full Postgres entity data + aliases for the given IDs."""
+        if not entity_ids:
+            return []
+
+        entity_stmt = select(Entity).where(
+            Entity.entity_id.in_(entity_ids),
+            Entity.workspace_id == workspace_id,
+        )
+        result = await self._db.execute(entity_stmt)
+        entities = result.scalars().all()
+
+        # Fetch aliases for all entities in one query
+        alias_stmt = select(EntityAlias).where(
+            EntityAlias.entity_id.in_(entity_ids),
+            EntityAlias.workspace_id == workspace_id,
+        )
+        alias_result = await self._db.execute(alias_stmt)
+        aliases = alias_result.scalars().all()
+
+        alias_map: dict[str, list[dict]] = {}
+        for a in aliases:
+            alias_map.setdefault(a.entity_id, []).append(
+                {"alias": a.alias, "alias_type": a.alias_type}
+            )
+
+        enriched = []
+        for e in entities:
+            enriched.append(
+                {
+                    "entity_id": e.entity_id,
+                    "entity_type": e.entity_type,
+                    "canonical_name": e.canonical_name,
+                    "attributes": e.attributes,
+                    "importance_score": e.importance_score,
+                    "confidence_score": e.confidence_score,
+                    "interaction_count": e.interaction_count,
+                    "last_seen_at": e.last_seen_at.isoformat() if e.last_seen_at else None,
+                    "aliases": alias_map.get(e.entity_id, []),
+                }
+            )
+
+        return enriched
+
+    async def _count_entities(self, user_id: str, workspace_id: str) -> int:
+        stmt = select(func.count(Entity.entity_id)).where(
+            Entity.user_id == user_id,
+            Entity.workspace_id == workspace_id,
+        )
+        return (await self._db.execute(stmt)).scalar() or 0
+
+    async def _count_relationships(self, user_id: str, workspace_id: str) -> int:
+        stmt = select(func.count(EntityRelationship.relation_id)).where(
+            EntityRelationship.user_id == user_id,
+            EntityRelationship.workspace_id == workspace_id,
+        )
+        return (await self._db.execute(stmt)).scalar() or 0
+
+    async def _avg_confidence(self, user_id: str, workspace_id: str) -> float:
+        """Compute average confidence for active memories, rounded to 2 decimals."""
+        stmt = select(func.avg(Memory.confidence)).where(
+            Memory.user_id == user_id,
+            Memory.workspace_id == workspace_id,
+            Memory.status == "active",
+        )
+        result = (await self._db.execute(stmt)).scalar()
+        if result is None:
+            return 0.0
+        return round(float(result), 2)
+
+    async def _resolve_entity_names(
+        self, entity_ids: set[str], workspace_id: str
+    ) -> dict[str, str]:
+        """Map entity_id -> canonical_name for a set of IDs."""
+        if not entity_ids:
+            return {}
+        stmt = select(Entity.entity_id, Entity.canonical_name).where(
+            Entity.entity_id.in_(list(entity_ids)),
+            Entity.workspace_id == workspace_id,
+        )
+        result = await self._db.execute(stmt)
+        return {row.entity_id: row.canonical_name for row in result.all()}
+
+    def _memory_to_dict(self, mem: Memory, entity_name_map: dict[str, str]) -> dict:
+        """Convert a Memory row to a dict with resolved entity names."""
+        entities = []
+        if mem.entity_ids:
+            entities = [
+                {"entity_id": eid, "name": entity_name_map.get(eid, eid)} for eid in mem.entity_ids
+            ]
+        return {
+            "memory_id": mem.memory_id,
+            "memory_type": mem.memory_type,
+            "scope": mem.scope,
+            "fact_text": mem.fact_text,
+            "confidence": mem.confidence,
+            "stability_score": mem.stability_score,
+            "created_at": mem.created_at.isoformat() if mem.created_at else None,
+            "entities": entities,
+        }
+
+    def _resolve_memory_sort(self, sort_by: str):
+        """Map sort_by string to a SQLAlchemy column."""
+        sort_map = {
+            "created_at": Memory.created_at,
+            "confidence": Memory.confidence,
+            "stability_score": Memory.stability_score,
+            "last_accessed_at": Memory.last_accessed_at,
+        }
+        return sort_map.get(sort_by, Memory.created_at)
+
+    async def _entity_counts_by_type(self, user_id: str, workspace_id: str) -> dict[str, int]:
+        stmt = (
+            select(Entity.entity_type, func.count(Entity.entity_id))
+            .where(
+                Entity.user_id == user_id,
+                Entity.workspace_id == workspace_id,
+            )
+            .group_by(Entity.entity_type)
+        )
+        result = await self._db.execute(stmt)
+        return {row[0]: row[1] for row in result.all()}
+
+    async def _memory_counts_by_type(self, user_id: str, workspace_id: str) -> dict[str, int]:
+        stmt = (
+            select(Memory.memory_type, func.count(Memory.memory_id))
+            .where(
+                Memory.user_id == user_id,
+                Memory.workspace_id == workspace_id,
+                Memory.status == "active",
+            )
+            .group_by(Memory.memory_type)
+        )
+        result = await self._db.execute(stmt)
+        return {row[0]: row[1] for row in result.all()}
+
+    async def _count_entities_since(self, user_id: str, workspace_id: str, since: datetime) -> int:
+        stmt = select(func.count(Entity.entity_id)).where(
+            Entity.user_id == user_id,
+            Entity.workspace_id == workspace_id,
+            Entity.created_at >= since,
+        )
+        return (await self._db.execute(stmt)).scalar() or 0
+
+    async def _count_memories_since(self, user_id: str, workspace_id: str, since: datetime) -> int:
+        stmt = select(func.count(Memory.memory_id)).where(
+            Memory.user_id == user_id,
+            Memory.workspace_id == workspace_id,
+            Memory.status == "active",
+            Memory.created_at >= since,
+        )
+        return (await self._db.execute(stmt)).scalar() or 0
+
+    async def _growth_by_day(self, user_id: str, workspace_id: str, days: int = 7) -> list[dict]:
+        """Return entity + memory creation counts per day for the last N days."""
+        now = datetime.now(timezone.utc)
+        start = now - timedelta(days=days)
+
+        entity_day = func.date(Entity.created_at).label("day")
+        entity_stmt = (
+            select(
+                entity_day,
+                func.count(Entity.entity_id).label("count"),
+            )
+            .where(
+                Entity.user_id == user_id,
+                Entity.workspace_id == workspace_id,
+                Entity.created_at >= start,
+            )
+            .group_by(entity_day)
+            .order_by(entity_day)
+        )
+        entity_result = await self._db.execute(entity_stmt)
+        entity_rows = {str(row[0]): row[1] for row in entity_result.all()}
+
+        memory_day = func.date(Memory.created_at).label("day")
+        memory_stmt = (
+            select(
+                memory_day,
+                func.count(Memory.memory_id).label("count"),
+            )
+            .where(
+                Memory.user_id == user_id,
+                Memory.workspace_id == workspace_id,
+                Memory.status == "active",
+                Memory.created_at >= start,
+            )
+            .group_by(memory_day)
+            .order_by(memory_day)
+        )
+        memory_result = await self._db.execute(memory_stmt)
+        memory_rows = {str(row[0]): row[1] for row in memory_result.all()}
+
+        all_days = set(entity_rows.keys()) | set(memory_rows.keys())
+        growth = []
+        for day in sorted(all_days):
+            growth.append(
+                {
+                    "date": day,
+                    "entities": entity_rows.get(day, 0),
+                    "memories": memory_rows.get(day, 0),
+                }
+            )
+
+        return growth
