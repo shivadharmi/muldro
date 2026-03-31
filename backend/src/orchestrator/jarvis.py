@@ -1296,13 +1296,45 @@ class JarvisOrchestrator:
                 workspace_id=workspace_id,
             )
 
+            # Enrich with correlation context for thread-aware planning
+            correlation_context = ""
+            if event_summaries:
+                try:
+                    from src.services.event_correlator import EventCorrelator
+
+                    async with self._db_factory() as db:
+                        correlator = EventCorrelator(db)
+                        seen_entities: set[str] = set()
+                        for raw_evt in raw_events:
+                            eid = getattr(raw_evt, "entity_id", None)
+                            if eid and eid not in seen_entities:
+                                seen_entities.add(eid)
+                                thread = await correlator.detect_thread(
+                                    user_id, eid, workspace_id=workspace_id
+                                )
+                                if thread and thread["event_count"] > 1:
+                                    correlation_context += (
+                                        f"\n[Thread detected] entity={thread['entity_id']} "
+                                        f"has {thread['event_count']} events "
+                                        f"(first: {thread['first_at']}, "
+                                        f"last: {thread['last_at']})"
+                                    )
+                except Exception:
+                    logger.debug("Correlation enrichment failed", exc_info=True)
+
             # Step 3: Planner evaluates if any action is needed
-            planner_result = await self._call_agent(
-                "planner",
-                message=f"Evaluate these observations from {source}. "
+            planner_message = (
+                f"Evaluate these observations from {source}. "
                 f"Create plans for anything important.\n"
                 f"Optionally include a perception_policy JSON block to control "
-                f"how soon {source} should next be checked:\n{observer_summary}",
+                f"how soon {source} should next be checked:\n{observer_summary}"
+            )
+            if correlation_context:
+                planner_message += f"\n\n--- Correlation Context ---{correlation_context}"
+
+            planner_result = await self._call_agent(
+                "planner",
+                message=planner_message,
                 user_id=user_id,
                 trace=trace,
                 workspace_id=workspace_id,
