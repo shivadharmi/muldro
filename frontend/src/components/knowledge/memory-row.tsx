@@ -108,15 +108,15 @@ export function MemoryRow({ memory, selected, onSelect, onEntityClick }: MemoryR
         </div>
 
         {/* Entity chips */}
-        {memory.entity_names.length > 0 && (
+        {(memory.entity_names ?? []).length > 0 && (
           <div className="flex flex-wrap gap-1 mt-1.5">
-            {memory.entity_names.map((name, idx) => (
+            {(memory.entity_names ?? []).map((name, idx) => (
               <button
-                key={memory.entity_ids[idx] ?? name}
+                key={(memory.entity_ids ?? [])[idx] ?? name}
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  const entityId = memory.entity_ids[idx];
+                  const entityId = (memory.entity_ids ?? [])[idx];
                   if (entityId) {
                     onEntityClick(entityId);
                   }
