@@ -647,3 +647,116 @@ export function checkInstallationHealth(
 ): Promise<{ install_id?: string; server_name?: string; health_status: string }> {
   return api(`/integrations/${installId}/health`);
 }
+
+// ── Knowledge Page ──────────────────────────────────────────────
+
+export interface KnowledgeGraphNode {
+  entity_id: string;
+  canonical_name: string;
+  entity_type: string;
+  importance_score: number;
+  interaction_count: number;
+  last_seen_at: string | null;
+  attributes: Record<string, unknown> | null;
+  aliases: string[];
+}
+
+export interface KnowledgeGraphEdge {
+  from_entity_id?: string;
+  to_entity_id?: string;
+  from?: string;
+  to?: string;
+  relation_type?: string;
+  type?: string;
+  relation_id?: string;
+}
+
+export interface KnowledgeGraphResponse {
+  nodes: KnowledgeGraphNode[];
+  edges: KnowledgeGraphEdge[];
+  stats: { total_entities: number; total_relationships: number };
+}
+
+export interface KnowledgeMemoryItem {
+  memory_id: string;
+  memory_type: string;
+  fact_text: string;
+  confidence: number;
+  stability_score: number;
+  refresh_count: number;
+  scope: string | null;
+  created_at: string | null;
+  last_accessed_at: string | null;
+  expires_at: string | null;
+  entity_ids: string[];
+  entity_names: string[];
+}
+
+export interface KnowledgeMemoryListResponse {
+  items: KnowledgeMemoryItem[];
+  total: number;
+  page: number;
+  pages: number;
+}
+
+export interface KnowledgeMemoryDetail {
+  memory_id: string;
+  memory_type: string;
+  fact_text: string;
+  confidence: number;
+  stability_score: number;
+  refresh_count: number;
+  scope: string | null;
+  created_at: string | null;
+  last_accessed_at: string | null;
+  expires_at: string | null;
+  linked_entities: { entity_id: string; canonical_name: string; entity_type: string }[];
+  provenance: { source_event_ids: string[]; source_description: string | null };
+}
+
+export interface KnowledgeStatsResponse {
+  total_entities: number;
+  total_relationships: number;
+  total_memories: number;
+  avg_confidence: number;
+  weekly_delta: { entities: number; relationships: number; memories: number };
+  entity_counts_by_type: { entity_type: string; count: number }[];
+  memory_counts_by_type: { memory_type: string; count: number }[];
+  central_entities: { entity_id: string; name: string; entity_type: string; degree: number }[];
+  communities: { seed_entity_id: string; seed_name: string; seed_type: string; community_size: number; community_members: string[] }[];
+  stale_relationships: { relation_id: string; from_name: string; to_name: string; relation_type: string }[];
+  growth_by_day: { date: string; entities: number; memories: number }[];
+}
+
+export function fetchKnowledgeGraph(): Promise<KnowledgeGraphResponse> {
+  return api("/knowledge/graph");
+}
+
+export function fetchKnowledgeMemories(params?: {
+  type?: string;
+  sort_by?: string;
+  search?: string;
+  entity_id?: string;
+  page?: number;
+  limit?: number;
+}): Promise<KnowledgeMemoryListResponse> {
+  const qs = new URLSearchParams();
+  if (params?.type) qs.set("type", params.type);
+  if (params?.sort_by) qs.set("sort_by", params.sort_by);
+  if (params?.search) qs.set("search", params.search);
+  if (params?.entity_id) qs.set("entity_id", params.entity_id);
+  if (params?.page) qs.set("page", String(params.page));
+  if (params?.limit) qs.set("limit", String(params.limit));
+  const q = qs.toString();
+  return api(`/knowledge/memories${q ? `?${q}` : ""}`);
+}
+
+export function fetchKnowledgeMemoryDetail(
+  memoryId: string,
+): Promise<KnowledgeMemoryDetail> {
+  return api(`/knowledge/memories/${memoryId}`);
+}
+
+export function fetchKnowledgeStats(): Promise<KnowledgeStatsResponse> {
+  return api("/knowledge/stats");
+}
