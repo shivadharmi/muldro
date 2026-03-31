@@ -194,8 +194,7 @@ class KnowledgeService:
                 for e in entities
             ]
 
-        # Resolve provenance events
-        provenance_events: list[dict] = []
+        # Resolve provenance
         raw_source = memory.source_event_ids
         if isinstance(raw_source, dict):
             source_event_ids = list(raw_source.values())
@@ -203,6 +202,8 @@ class KnowledgeService:
             source_event_ids = raw_source
         else:
             source_event_ids = []
+
+        source_description: str | None = None
         if source_event_ids:
             event_stmt = select(NormalizedEvent).where(
                 NormalizedEvent.event_id.in_(source_event_ids),
@@ -210,15 +211,14 @@ class KnowledgeService:
             )
             event_result = await self._db.execute(event_stmt)
             events = event_result.scalars().all()
-            provenance_events = [
-                {
-                    "event_id": ev.event_id,
-                    "title": ev.title,
-                    "source": ev.source,
-                    "summary": ev.summary,
-                }
-                for ev in events
-            ]
+            if events:
+                parts = [f"{ev.source}: {ev.title}" for ev in events]
+                source_description = "Extracted from " + "; ".join(parts)
+
+        provenance = {
+            "source_event_ids": source_event_ids or [],
+            "source_description": source_description,
+        }
 
         return {
             "memory_id": memory.memory_id,
@@ -235,9 +235,8 @@ class KnowledgeService:
             "created_at": memory.created_at.isoformat() if memory.created_at else None,
             "updated_at": memory.updated_at.isoformat() if memory.updated_at else None,
             "entity_ids": memory.entity_ids or [],
-            "source_event_ids": source_event_ids or [],
             "linked_entities": linked_entities,
-            "provenance_events": provenance_events,
+            "provenance": provenance,
         }
 
     async def get_stats(
@@ -250,17 +249,21 @@ class KnowledgeService:
         Returns entity/memory counts by type, weekly deltas, central entities,
         communities, stale relationships, and growth by day (last 7 days).
         """
-        entity_counts = await self._entity_counts_by_type(user_id, workspace_id)
-        memory_counts = await self._memory_counts_by_type(user_id, workspace_id)
+        entity_counts_raw = await self._entity_counts_by_type(user_id, workspace_id)
+        memory_counts_raw = await self._memory_counts_by_type(user_id, workspace_id)
 
         now = datetime.now(timezone.utc)
         week_ago = now - timedelta(days=7)
 
         entity_weekly_delta = await self._count_entities_since(user_id, workspace_id, week_ago)
         memory_weekly_delta = await self._count_memories_since(user_id, workspace_id, week_ago)
+        relationship_weekly_delta = await self._count_relationships_since(
+            user_id, workspace_id, week_ago
+        )
         avg_confidence = await self._avg_confidence(user_id, workspace_id)
         total_entities = await self._count_entities(user_id, workspace_id)
         total_relationships = await self._count_relationships(user_id, workspace_id)
+        total_memories = await self._count_total_memories(user_id, workspace_id)
 
         central_entities = await self._graph.find_central_entities(user_id=user_id, limit=5)
         all_communities = await self._graph.detect_communities(user_id=user_id)
@@ -269,11 +272,23 @@ class KnowledgeService:
 
         growth_by_day = await self._growth_by_day(user_id, workspace_id, days=7)
 
+        # Convert count dicts to frontend-expected array-of-objects format
+        entity_counts_by_type = [
+            {"entity_type": t, "count": c} for t, c in entity_counts_raw.items()
+        ]
+        memory_counts_by_type = [
+            {"memory_type": t, "count": c} for t, c in memory_counts_raw.items()
+        ]
+
         return {
-            "entity_counts_by_type": entity_counts,
-            "memory_counts_by_type": memory_counts,
-            "entity_weekly_delta": entity_weekly_delta,
-            "memory_weekly_delta": memory_weekly_delta,
+            "entity_counts_by_type": entity_counts_by_type,
+            "memory_counts_by_type": memory_counts_by_type,
+            "weekly_delta": {
+                "entities": entity_weekly_delta,
+                "relationships": relationship_weekly_delta,
+                "memories": memory_weekly_delta,
+            },
+            "total_memories": total_memories,
             "avg_confidence": avg_confidence,
             "total_entities": total_entities,
             "total_relationships": total_relationships,
@@ -315,11 +330,9 @@ class KnowledgeService:
         alias_result = await self._db.execute(alias_stmt)
         aliases = alias_result.scalars().all()
 
-        alias_map: dict[str, list[dict]] = {}
+        alias_map: dict[str, list[str]] = {}
         for a in aliases:
-            alias_map.setdefault(a.entity_id, []).append(
-                {"alias": a.alias, "alias_type": a.alias_type}
-            )
+            alias_map.setdefault(a.entity_id, []).append(a.alias)
 
         # Build a lookup for Neo4j fallback data
         neo4j_map: dict[str, dict] = {}
@@ -405,11 +418,7 @@ class KnowledgeService:
 
     def _memory_to_dict(self, mem: Memory, entity_name_map: dict[str, str]) -> dict:
         """Convert a Memory row to a dict with resolved entity names."""
-        entities = []
-        if mem.entity_ids:
-            entities = [
-                {"entity_id": eid, "name": entity_name_map.get(eid, eid)} for eid in mem.entity_ids
-            ]
+        eids = mem.entity_ids or []
         return {
             "memory_id": mem.memory_id,
             "memory_type": mem.memory_type,
@@ -417,8 +426,13 @@ class KnowledgeService:
             "fact_text": mem.fact_text,
             "confidence": mem.confidence,
             "stability_score": mem.stability_score,
+            "refresh_count": mem.refresh_count,
+            "last_accessed_at": (
+                mem.last_accessed_at.isoformat() if mem.last_accessed_at else None
+            ),
             "created_at": mem.created_at.isoformat() if mem.created_at else None,
-            "entities": entities,
+            "entity_ids": list(eids),
+            "entity_names": [entity_name_map.get(eid, eid) for eid in eids],
         }
 
     def _resolve_memory_sort(self, sort_by: str):
@@ -461,6 +475,24 @@ class KnowledgeService:
             Entity.user_id == user_id,
             Entity.workspace_id == workspace_id,
             Entity.created_at >= since,
+        )
+        return (await self._db.execute(stmt)).scalar() or 0
+
+    async def _count_relationships_since(
+        self, user_id: str, workspace_id: str, since: datetime
+    ) -> int:
+        stmt = select(func.count(EntityRelationship.relation_id)).where(
+            EntityRelationship.user_id == user_id,
+            EntityRelationship.workspace_id == workspace_id,
+            EntityRelationship.created_at >= since,
+        )
+        return (await self._db.execute(stmt)).scalar() or 0
+
+    async def _count_total_memories(self, user_id: str, workspace_id: str) -> int:
+        stmt = select(func.count(Memory.memory_id)).where(
+            Memory.user_id == user_id,
+            Memory.workspace_id == workspace_id,
+            Memory.status == "active",
         )
         return (await self._db.execute(stmt)).scalar() or 0
 

@@ -15,17 +15,60 @@ router = APIRouter()
 # ── Response models ─────────────────────────────────────────────────────
 
 
+class GraphNodeResponse(BaseModel):
+    entity_id: str
+    entity_type: str
+    canonical_name: str
+    attributes: dict = {}
+    importance_score: float | None = None
+    confidence_score: float | None = None
+    interaction_count: int = 0
+    last_seen_at: str | None = None
+    aliases: list[str] = []
+
+
+class GraphStatsResponse(BaseModel):
+    total_entities: int
+    total_relationships: int
+
+
 class GraphResponse(BaseModel):
-    nodes: list[dict]
+    nodes: list[GraphNodeResponse]
     edges: list[dict]
-    stats: dict
+    stats: GraphStatsResponse
+
+
+class MemoryListItem(BaseModel):
+    memory_id: str
+    memory_type: str
+    scope: str | None = None
+    fact_text: str
+    confidence: float
+    stability_score: float | None = None
+    refresh_count: int | None = None
+    last_accessed_at: str | None = None
+    created_at: str | None = None
+    entity_ids: list[str] = []
+    entity_names: list[str] = []
 
 
 class MemoryListResponse(BaseModel):
-    items: list[dict]
+    items: list[MemoryListItem]
     total: int
     page: int
     pages: int
+
+
+class LinkedEntityResponse(BaseModel):
+    entity_id: str
+    entity_type: str
+    canonical_name: str
+    importance_score: float | None = None
+
+
+class ProvenanceResponse(BaseModel):
+    source_event_ids: list[str] = []
+    source_description: str | None = None
 
 
 class MemoryDetailResponse(BaseModel):
@@ -41,16 +84,31 @@ class MemoryDetailResponse(BaseModel):
     created_at: str | None = None
     updated_at: str | None = None
     entity_ids: list[str] = []
-    source_event_ids: list[str] = []
-    linked_entities: list[dict] = []
-    provenance_events: list[dict] = []
+    linked_entities: list[LinkedEntityResponse] = []
+    provenance: ProvenanceResponse = ProvenanceResponse()
+
+
+class WeeklyDeltaResponse(BaseModel):
+    entities: int
+    relationships: int
+    memories: int
+
+
+class EntityCountByType(BaseModel):
+    entity_type: str
+    count: int
+
+
+class MemoryCountByType(BaseModel):
+    memory_type: str
+    count: int
 
 
 class StatsResponse(BaseModel):
-    entity_counts_by_type: dict[str, int]
-    memory_counts_by_type: dict[str, int]
-    entity_weekly_delta: int
-    memory_weekly_delta: int
+    entity_counts_by_type: list[EntityCountByType]
+    memory_counts_by_type: list[MemoryCountByType]
+    weekly_delta: WeeklyDeltaResponse
+    total_memories: int
     avg_confidence: float
     total_entities: int
     total_relationships: int

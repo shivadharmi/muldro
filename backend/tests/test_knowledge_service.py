@@ -196,7 +196,7 @@ async def test_get_initial_graph_with_central_entities():
     assert alice_node["canonical_name"] == "Alice"
     assert alice_node["importance_score"] == 0.8
     assert len(alice_node["aliases"]) == 1
-    assert alice_node["aliases"][0]["alias"] == "alice@acme.com"
+    assert alice_node["aliases"][0] == "alice@acme.com"
 
     graph_engine.find_central_entities.assert_awaited_once_with(user_id=TEST_USER_ID, limit=10)
     graph_engine.get_subgraph.assert_awaited_once_with(
@@ -264,8 +264,10 @@ async def test_get_memories_paginated_basic():
     assert result["pages"] == 1
     assert len(result["items"]) == 2
     assert result["items"][0]["memory_id"] == "mem_001"
-    assert result["items"][0]["entities"][0]["name"] == "Alice"
-    assert result["items"][1]["entities"] == []
+    assert result["items"][0]["entity_ids"] == ["ent_001"]
+    assert result["items"][0]["entity_names"] == ["Alice"]
+    assert result["items"][1]["entity_ids"] == []
+    assert result["items"][1]["entity_names"] == []
 
 
 async def test_get_memories_paginated_with_filters():
@@ -382,10 +384,13 @@ async def test_get_memory_detail_found():
     assert result["fact_text"] == "Alice is CFO at Acme Corp"
     assert len(result["linked_entities"]) == 2
     assert result["linked_entities"][0]["canonical_name"] == "Alice"
-    assert len(result["provenance_events"]) == 2
-    assert result["provenance_events"][0]["title"] == "Email from Alice"
     assert result["entity_ids"] == ["ent_001", "ent_002"]
-    assert result["source_event_ids"] == ["evt_001", "evt_002"]
+
+    # Provenance is now a nested dict
+    provenance = result["provenance"]
+    assert provenance["source_event_ids"] == ["evt_001", "evt_002"]
+    assert provenance["source_description"] is not None
+    assert "Email from Alice" in provenance["source_description"]
 
 
 async def test_get_memory_detail_not_found():
@@ -420,9 +425,9 @@ async def test_get_memory_detail_no_entities_no_events():
 
     assert result is not None
     assert result["linked_entities"] == []
-    assert result["provenance_events"] == []
     assert result["entity_ids"] == []
-    assert result["source_event_ids"] == []
+    assert result["provenance"]["source_event_ids"] == []
+    assert result["provenance"]["source_description"] is None
 
 
 async def test_get_memory_detail_source_event_ids_dict():
@@ -446,10 +451,10 @@ async def test_get_memory_detail_source_event_ids_dict():
     result = await svc.get_memory_detail("mem_dict_events", TEST_USER_ID, TEST_WORKSPACE_ID)
 
     assert result is not None
-    assert len(result["provenance_events"]) == 2
-    assert result["provenance_events"][0]["event_id"] == "evt_001"
-    # source_event_ids in the response should be the extracted list of IDs
-    assert sorted(result["source_event_ids"]) == ["evt_001", "evt_002"]
+    provenance = result["provenance"]
+    assert sorted(provenance["source_event_ids"]) == ["evt_001", "evt_002"]
+    assert provenance["source_description"] is not None
+    assert "Extracted from" in provenance["source_description"]
 
 
 async def test_get_initial_graph_neo4j_only_node():
@@ -543,8 +548,8 @@ async def test_get_stats_returns_all_sections():
     growth_memory_row.__getitem__ = lambda s, i: ("2026-03-28", 7)[i]
 
     # DB calls: entity_counts_by_type, memory_counts_by_type,
-    #           entity_weekly_delta, memory_weekly_delta, avg_confidence,
-    #           total_entities, total_relationships,
+    #           entity_weekly_delta, memory_weekly_delta, relationship_weekly_delta,
+    #           avg_confidence, total_entities, total_relationships, total_memories,
     #           growth_entity, growth_memory
     db = _mock_db_execute(
         [
@@ -552,9 +557,11 @@ async def test_get_stats_returns_all_sections():
             [memory_type_row],  # memory counts by type
             8,  # entity weekly delta
             20,  # memory weekly delta
+            3,  # relationship weekly delta
             0.85,  # avg confidence
             42,  # total entities
             15,  # total relationships
+            32,  # total memories
             [growth_entity_row],  # growth entities
             [growth_memory_row],  # growth memories
         ]
@@ -563,10 +570,10 @@ async def test_get_stats_returns_all_sections():
     svc = KnowledgeService(make_mock_settings(), db, graph_engine)
     result = await svc.get_stats(TEST_USER_ID, TEST_WORKSPACE_ID)
 
-    assert "entity_counts_by_type" in result
-    assert "memory_counts_by_type" in result
-    assert result["entity_weekly_delta"] == 8
-    assert result["memory_weekly_delta"] == 20
+    assert result["entity_counts_by_type"] == [{"entity_type": "person", "count": 5}]
+    assert result["memory_counts_by_type"] == [{"memory_type": "semantic", "count": 12}]
+    assert result["weekly_delta"] == {"entities": 8, "relationships": 3, "memories": 20}
+    assert result["total_memories"] == 32
     assert result["avg_confidence"] == 0.85
     assert result["total_entities"] == 42
     assert result["total_relationships"] == 15
@@ -593,9 +600,11 @@ async def test_get_stats_empty():
             [],  # memory counts by type (empty)
             0,  # entity weekly delta
             0,  # memory weekly delta
+            0,  # relationship weekly delta
             None,  # avg confidence (no active memories)
             0,  # total entities
             0,  # total relationships
+            0,  # total memories
             [],  # growth entities
             [],  # growth memories
         ]
@@ -604,10 +613,10 @@ async def test_get_stats_empty():
     svc = KnowledgeService(make_mock_settings(), db, graph_engine)
     result = await svc.get_stats(TEST_USER_ID, TEST_WORKSPACE_ID)
 
-    assert result["entity_counts_by_type"] == {}
-    assert result["memory_counts_by_type"] == {}
-    assert result["entity_weekly_delta"] == 0
-    assert result["memory_weekly_delta"] == 0
+    assert result["entity_counts_by_type"] == []
+    assert result["memory_counts_by_type"] == []
+    assert result["weekly_delta"] == {"entities": 0, "relationships": 0, "memories": 0}
+    assert result["total_memories"] == 0
     assert result["avg_confidence"] == 0.0
     assert result["total_entities"] == 0
     assert result["total_relationships"] == 0
@@ -647,7 +656,10 @@ async def test_memory_to_dict_structure():
     assert result["fact_text"] == "Meeting at 3pm"
     assert result["confidence"] == 0.95
     assert result["stability_score"] == 0.7
-    assert result["entities"] == [{"entity_id": "ent_001", "name": "Alice"}]
+    assert result["entity_ids"] == ["ent_001"]
+    assert result["entity_names"] == ["Alice"]
+    assert result["refresh_count"] == 0
+    assert result["last_accessed_at"] is None
     assert "created_at" in result
 
 
@@ -684,9 +696,11 @@ async def test_get_stats_communities_limited_to_4():
             [],  # memory counts by type
             0,  # entity weekly delta
             0,  # memory weekly delta
+            0,  # relationship weekly delta
             0.5,  # avg confidence
             10,  # total entities
             5,  # total relationships
+            0,  # total memories
             [],  # growth entities
             [],  # growth memories
         ]

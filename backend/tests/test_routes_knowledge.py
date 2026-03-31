@@ -32,14 +32,22 @@ async def test_knowledge_response_models_defined():
     """Verify Pydantic response models can be imported and instantiated."""
     from src.api.routes_knowledge import (
         GraphResponse,
+        GraphStatsResponse,
         MemoryDetailResponse,
         MemoryListResponse,
+        ProvenanceResponse,
         StatsResponse,
+        WeeklyDeltaResponse,
     )
 
-    graph = GraphResponse(nodes=[], edges=[], stats={})
+    graph = GraphResponse(
+        nodes=[],
+        edges=[],
+        stats=GraphStatsResponse(total_entities=0, total_relationships=0),
+    )
     assert graph.nodes == []
     assert graph.edges == []
+    assert graph.stats.total_entities == 0
 
     mem_list = MemoryListResponse(items=[], total=0, page=1, pages=1)
     assert mem_list.total == 0
@@ -53,13 +61,15 @@ async def test_knowledge_response_models_defined():
     )
     assert detail.memory_id == "mem_test"
     assert detail.linked_entities == []
-    assert detail.provenance_events == []
+    assert detail.provenance == ProvenanceResponse()
+    assert detail.provenance.source_event_ids == []
+    assert detail.provenance.source_description is None
 
     stats = StatsResponse(
-        entity_counts_by_type={},
-        memory_counts_by_type={},
-        entity_weekly_delta=0,
-        memory_weekly_delta=0,
+        entity_counts_by_type=[],
+        memory_counts_by_type=[],
+        weekly_delta=WeeklyDeltaResponse(entities=0, relationships=0, memories=0),
+        total_memories=0,
         avg_confidence=0.0,
         total_entities=0,
         total_relationships=0,
@@ -69,6 +79,8 @@ async def test_knowledge_response_models_defined():
         growth_by_day=[],
     )
     assert stats.total_entities == 0
+    assert stats.total_memories == 0
+    assert stats.weekly_delta.entities == 0
 
 
 @pytest.mark.asyncio
