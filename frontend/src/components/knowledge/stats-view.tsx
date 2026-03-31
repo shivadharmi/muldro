@@ -165,12 +165,13 @@ export function StatsView() {
 
   // ── Data prep ──────────────────────────────────────────────────
 
-  const entityCounts = data.entity_counts_by_type ?? [];
-  const memoryCounts = data.memory_counts_by_type ?? [];
-  const growthDays = data.growth_by_day ?? [];
-  const centralEntities = data.central_entities ?? [];
-  const communities = data.communities ?? [];
-  const staleRelationships = data.stale_relationships ?? [];
+  const toArray = <T,>(v: unknown): T[] => (Array.isArray(v) ? v : []);
+  const entityCounts = toArray<{ entity_type: string; count: number }>(data.entity_counts_by_type);
+  const memoryCounts = toArray<{ memory_type: string; count: number }>(data.memory_counts_by_type);
+  const growthDays = toArray<{ date: string; entities: number; memories: number }>(data.growth_by_day);
+  const centralEntities = toArray<{ entity_id: string; name: string; entity_type: string; degree: number }>(data.central_entities);
+  const communities = toArray<{ seed_entity_id: string; seed_name: string; seed_type: string; community_size: number }>(data.communities);
+  const staleRelationships = toArray<{ relation_id: string; from_name: string; to_name: string; relation_type: string }>(data.stale_relationships);
   const weeklyDelta = data.weekly_delta ?? { entities: 0, relationships: 0, memories: 0 };
 
   const entityBarData = bucketEntityCounts(entityCounts, 6);
