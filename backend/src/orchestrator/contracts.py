@@ -286,15 +286,21 @@ class RealtimeEventPayload(BaseModel):
     created_at: str = ""
 
 
-class WorkspaceSurfaceMetadata(BaseModel):
-    """Typed metadata for a workspace surface pushed via WebSocket.
+class WorkspaceSurfacePush(BaseModel):
+    """Full surface push payload sent via WebSocket / Redis Pub/Sub.
 
-    The frontend WebSocket hook reads ``kind``, ``title``, and the rest
-    of the metadata dict to build a ``GeneratedSurface`` object.
+    Two-layer model: ``preview`` drives the workspace grid card,
+    ``detail_config`` tells the frontend which tabs to show in the
+    detail modal and where to fetch each tab's content.
+
+    The old ``children`` + ``WorkspaceSurfaceMetadata`` shape is removed —
+    grid cards render from SurfacePreview data, not A2UI component trees.
     """
 
     model_config = ConfigDict(extra="ignore")
 
+    type: Literal["surface"] = "surface"
+    id: str
     kind: Literal[
         "summary",
         "briefing",
@@ -308,25 +314,10 @@ class WorkspaceSurfaceMetadata(BaseModel):
         "recommendation",
         "activity",
     ]
-    title: str
-    decision: str = ""
-    reasoning: str = ""
-    priority: Literal["low", "medium", "high", "critical"] = "medium"
+    preview: Any  # SurfacePreview — imported at runtime to avoid circular deps
+    detail_config: Any | None = None  # DetailConfig — same reason
+    decision: str | None = None
     source_run_id: str | None = None
-    source_message_id: str | None = None
-    response_preview: str = ""
-
-
-class WorkspaceSurfacePush(BaseModel):
-    """Full surface push payload sent via WebSocket / Redis Pub/Sub.
-
-    Matches the ``A2UISurface`` shape so the frontend WS hook can
-    convert it to a ``GeneratedSurface`` using metadata fields.
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    type: Literal["surface"] = "surface"
-    id: str
-    children: list[Any] = Field(default_factory=list)
-    metadata: WorkspaceSurfaceMetadata
+    response_preview: str | None = None
+    created_at: str = ""
+    ttl_hours: int = 24

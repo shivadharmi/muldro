@@ -1,37 +1,44 @@
-/** Surface state: active and pinned generated surfaces from A2UI. */
+/** Surface state: workspace surfaces with rich preview + detail modal. */
 
 import { create } from "zustand";
 
-import type { GeneratedSurface, SurfacePosition } from "@/lib/types/surfaces";
+import type { DetailConfig, SurfacePreview } from "@/lib/a2ui-types";
+import type { A2UIComponent } from "@/lib/a2ui-types";
+import type { SurfaceKind } from "@/lib/types/surfaces";
+
+export interface WorkspaceSurface {
+  id: string;
+  kind: SurfaceKind;
+  preview: SurfacePreview;
+  detail_config: DetailConfig | null;
+  decision: string | null;
+  source_run_id: string | null;
+  response_preview: string | null;
+  created_at: string;
+  children?: A2UIComponent[];
+}
 
 interface SurfaceState {
-  surfaces: GeneratedSurface[];
+  surfaces: WorkspaceSurface[];
   activeSurfaceId: string | null;
+  detailModalOpen: boolean;
 
-  addSurface: (surface: GeneratedSurface) => void;
+  addSurface: (surface: WorkspaceSurface) => void;
   removeSurface: (id: string) => void;
-  togglePin: (id: string) => void;
-  setPosition: (id: string, position: SurfacePosition) => void;
   setActiveSurface: (id: string | null) => void;
-  clearUnpinned: () => void;
+  openDetailModal: (id: string) => void;
+  closeDetailModal: () => void;
+  setSurfaces: (surfaces: WorkspaceSurface[]) => void;
 }
 
 export const useSurfaceStore = create<SurfaceState>((set) => ({
   surfaces: [],
   activeSurfaceId: null,
+  detailModalOpen: false,
 
   addSurface: (surface) =>
     set((s) => {
-      // Validate before storing — reject malformed surfaces
-      if (!surface?.id) {
-        console.warn("[surface-store] Rejected surface with missing id");
-        return s;
-      }
-      if (!surface.kind || !surface.data) {
-        console.warn("[surface-store] Rejected surface with missing kind/data:", surface.id);
-        return s;
-      }
-
+      if (!surface?.id || !surface.kind) return s;
       const idx = s.surfaces.findIndex((sf) => sf.id === surface.id);
       if (idx === -1) {
         return { surfaces: [...s.surfaces, surface] };
@@ -45,24 +52,16 @@ export const useSurfaceStore = create<SurfaceState>((set) => ({
     set((s) => ({
       surfaces: s.surfaces.filter((sf) => sf.id !== id),
       activeSurfaceId: s.activeSurfaceId === id ? null : s.activeSurfaceId,
-    })),
-
-  togglePin: (id) =>
-    set((s) => ({
-      surfaces: s.surfaces.map((sf) =>
-        sf.id === id ? { ...sf, pinned: !sf.pinned } : sf
-      ),
-    })),
-
-  setPosition: (id, position) =>
-    set((s) => ({
-      surfaces: s.surfaces.map((sf) =>
-        sf.id === id ? { ...sf, position } : sf
-      ),
+      detailModalOpen: s.activeSurfaceId === id ? false : s.detailModalOpen,
     })),
 
   setActiveSurface: (id) => set({ activeSurfaceId: id }),
 
-  clearUnpinned: () =>
-    set((s) => ({ surfaces: s.surfaces.filter((sf) => sf.pinned) })),
+  openDetailModal: (id) =>
+    set({ activeSurfaceId: id, detailModalOpen: true }),
+
+  closeDetailModal: () =>
+    set({ detailModalOpen: false }),
+
+  setSurfaces: (surfaces) => set({ surfaces }),
 }));

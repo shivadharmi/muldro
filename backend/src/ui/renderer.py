@@ -4,7 +4,13 @@ Provides builder functions for creating A2UI component trees.
 Used by the Presenter agent to generate dynamic UI payloads.
 """
 
-from src.ui.contracts import A2UIAction, A2UIComponent, A2UISurface
+from src.ui.contracts import (
+    A2UIAction,
+    A2UIComponent,
+    A2UISurface,
+    DetailConfig,
+    DetailTab,
+)
 
 # --- Text components ---
 
@@ -380,6 +386,32 @@ def surface(
     metadata: dict | None = None,
 ) -> A2UISurface:
     return A2UISurface(id=id, children=children, metadata=metadata or {})
+
+
+# --- Detail config factory ---
+
+
+_TABS_BY_KIND: dict[str, list[tuple[str, str]]] = {
+    "plan": [("overview", "Overview"), ("context", "Context"), ("execution", "Execution")],
+    "summary": [("overview", "Overview"), ("sources", "Sources"), ("context", "Context")],
+    "briefing": [("priorities", "Priorities"), ("events", "Events"), ("actions", "Actions")],
+    "approval": [("request", "Request"), ("risk", "Risk"), ("history", "History")],
+    "recommendation": [("overview", "Overview"), ("context", "Context")],
+    "alert": [("overview", "Overview")],
+}
+
+
+def build_detail_config(kind: str, surface_id: str) -> DetailConfig | None:
+    """Build detail modal configuration for a surface kind.
+
+    Returns None for kinds with no detail tabs (checklist, timeline, etc.).
+    """
+    tab_defs = _TABS_BY_KIND.get(kind)
+    if not tab_defs:
+        return None
+    base = f"/v1/surfaces/{surface_id}/detail"
+    tabs = [DetailTab(id=tid, label=label, endpoint=f"{base}/{tid}") for tid, label in tab_defs]
+    return DetailConfig(tabs=tabs)
 
 
 # --- Composite surfaces ---

@@ -249,6 +249,11 @@ class UserMCPSessionPool:
 
         # Circuit breaker check
         if not self._circuit_breaker.is_available(server_name):
+            logger.warning(
+                "[mcp:session] circuit OPEN for %s — rejecting %s",
+                server_name,
+                tool_name,
+            )
             return {
                 "status": "error",
                 "error_code": "circuit_open",
@@ -263,17 +268,27 @@ class UserMCPSessionPool:
                 workspace_id,
             )
         except Exception as e:
+            logger.warning(
+                "[mcp:session] session creation failed for %s/%s: %s",
+                server_name,
+                tool_name,
+                e,
+            )
             return make_error_response(e, tool_name=tool_name)
 
         # Resolve canonical → raw MCP tool name
         raw_name = tool_name
 
+        import time as _time
+
+        call_start = _time.monotonic()
         last_error: Exception | None = None
         for attempt in range(max_retries):
             try:
                 result = await session.client.call_tool(raw_name, tool_input)
                 self._circuit_breaker.record_success(server_name)
                 session.last_used = time.monotonic()
+                latency_ms = int((_time.monotonic() - call_start) * 1000)
 
                 # Extract content from CallToolResult
                 if hasattr(result, "content"):
@@ -283,8 +298,22 @@ class UserMCPSessionPool:
                             text_parts.append(block.text)
                         elif hasattr(block, "data"):
                             text_parts.append(str(block.data))
-                    return {"status": "ok", "result": "\n".join(text_parts)}
+                    output = "\n".join(text_parts)
+                    logger.info(
+                        "[mcp:session] %s on %s OK | %dms | %d chars",
+                        tool_name,
+                        server_name,
+                        latency_ms,
+                        len(output),
+                    )
+                    return {"status": "ok", "result": output}
 
+                logger.info(
+                    "[mcp:session] %s on %s OK | %dms",
+                    tool_name,
+                    server_name,
+                    latency_ms,
+                )
                 return {"status": "ok", "result": str(result)}
 
             except Exception as e:

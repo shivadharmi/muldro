@@ -176,8 +176,83 @@ async def jarvis_ws(websocket: WebSocket, user_id: str):
         logger.info("ws_disconnected", extra={"user_id": user_id})
 
 
+async def _handle_approve(user_id: str, payload: dict, app) -> dict:
+    """Handle approval action."""
+    from src.tools.intelligence_server import approve_action
+
+    return await approve_action(
+        user_id=user_id,
+        approval_id=payload["id"],
+        decision="approved",
+        reason="Approved via web dashboard",
+    )
+
+
+async def _handle_reject(user_id: str, payload: dict, app) -> dict:
+    """Handle rejection action."""
+    from src.tools.intelligence_server import approve_action
+
+    return await approve_action(
+        user_id=user_id,
+        approval_id=payload["id"],
+        decision="rejected",
+        reason="Rejected via web dashboard",
+    )
+
+
+async def _handle_orchestrator_action(user_id: str, action: str, payload: dict, app) -> dict:
+    """Generic fallback: route unhandled actions through the orchestrator."""
+    orchestrator = getattr(app.state, "orchestrator", None)
+    if not orchestrator:
+        return {"status": "error", "error": "Orchestrator not available"}
+
+    context = payload.get("context", "")
+    surface_id = payload.get("surface_id", "")
+    message = f"[Action: {action}]"
+    if surface_id:
+        message += f" [Surface: {surface_id}]"
+    if context:
+        message += f" {context}"
+
+    try:
+        from src.models.database import get_session_factory
+        from src.services.workspace_resolver import resolve_workspace_id
+
+        async with get_session_factory()() as db:
+            workspace_id = await resolve_workspace_id(db, user_id)
+
+        result = await orchestrator.process_message(
+            user_id=user_id,
+            workspace_id=workspace_id,
+            message=message,
+        )
+        return {"status": "success", "result": result}
+    except Exception as e:
+        logger.warning("orchestrator_action_failed: %s", e, exc_info=True)
+        return {"status": "error", "error": str(e)}
+
+
+# Registry of named action handlers
+ACTION_HANDLERS: dict[str, object] = {
+    "approve": _handle_approve,
+    "reject": _handle_reject,
+}
+
+
+async def _dispatch_action(user_id: str, action: str, payload: dict, app) -> dict:
+    """Dispatch an action to the appropriate handler, always returning a result."""
+    handler = ACTION_HANDLERS.get(action)
+    if handler:
+        return await handler(user_id, payload, app)
+    return await _handle_orchestrator_action(user_id, action, payload, app)
+
+
 async def _handle_client_message(user_id: str, raw: str, app) -> None:
-    """Handle incoming WebSocket messages (A2UI actions)."""
+    """Handle incoming WebSocket messages (A2UI actions).
+
+    Every action gets an action_result response — the frontend always
+    knows whether the action succeeded or failed.
+    """
     try:
         message = json.loads(raw)
     except json.JSONDecodeError:
@@ -187,55 +262,45 @@ async def _handle_client_message(user_id: str, raw: str, app) -> None:
     msg_type = message.get("type")
 
     if msg_type == "action":
-        # A2UI action from a button click or form submission
         payload = message.get("payload", {})
-        action = payload.get("action")
+        action = payload.get("action", "")
 
-        if action == "approve" and "id" in payload:
-            from src.tools.intelligence_server import approve_action
-
-            result = await approve_action(
-                user_id=user_id,
-                approval_id=payload["id"],
-                decision="approved",
-                reason="Approved via web dashboard",
-            )
+        if not action:
             await _broadcast(
                 user_id,
                 {
                     "type": "action_result",
-                    "action": "approve",
-                    "result": result,
+                    "action": "",
+                    "status": "error",
+                    "error": "No action specified",
                 },
             )
+            return
 
-        elif action == "reject" and "id" in payload:
-            from src.tools.intelligence_server import approve_action
-
-            result = await approve_action(
-                user_id=user_id,
-                approval_id=payload["id"],
-                decision="rejected",
-                reason="Rejected via web dashboard",
-            )
+        try:
+            result = await _dispatch_action(user_id, action, payload, app)
             await _broadcast(
                 user_id,
                 {
                     "type": "action_result",
-                    "action": "reject",
+                    "action": action,
+                    "status": result.get("status", "success"),
                     "result": result,
                 },
             )
-
-        elif action == "meeting_prep" and "event_id" in payload:
-            # Trigger meeting prep generation
-            logger.info(
-                "ws_meeting_prep_requested",
-                extra={"user_id": user_id, "event_id": payload["event_id"]},
+        except Exception as e:
+            logger.warning("action_dispatch_error: %s", e, exc_info=True)
+            await _broadcast(
+                user_id,
+                {
+                    "type": "action_result",
+                    "action": action,
+                    "status": "error",
+                    "error": str(e),
+                },
             )
 
     elif msg_type == "heartbeat":
-        # Client heartbeat — just acknowledge
         pass
 
 

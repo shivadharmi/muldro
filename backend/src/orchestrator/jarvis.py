@@ -81,76 +81,57 @@ CONTEXT_ENRICHED_AGENTS = {"planner", "presenter", "researcher", "librarian"}
 # Intent classification constants imported from intent_classifier module
 
 
-def _build_surface_children(
+def _build_surface_preview(
     decision: PlannerOutput,
     kind: str,
     default_title: str,
     response_text: str,
-) -> list:
-    """Build A2UI component children for a workspace surface push.
+):
+    """Build a SurfacePreview from a planner decision for workspace grid cards.
 
-    Uses renderer.py builders so the frontend A2UIRenderer has
-    actual component trees to render instead of empty children[].
-
-    The surface shows decision context (reasoning, priority, kind) — NOT the
-    full response text, which is already visible in the chat bubble.
+    Extracts rich preview data per decision type: title, metrics, entities,
+    progress, tags. The frontend renders this via SurfaceCard (not A2UI trees).
     """
-    from src.ui import renderer as r
+    from src.ui.contracts import SurfaceMetric, SurfacePreview
 
     title = decision.goal[:80] if decision.goal else default_title
-    reasoning = decision.reasoning[:200] if decision.reasoning else ""
+    subtitle = decision.reasoning[:120] if decision.reasoning else None
+    metrics: list[SurfaceMetric] = []
+    entities: list[str] = []
+    tags: list[str] = []
+    progress_val: float | None = None
 
     if kind == "plan":
-        children = [r.heading("sf_title", title)]
-        if reasoning:
-            children.append(r.caption("sf_reasoning", reasoning))
-        children.append(r.badge("sf_priority", decision.priority, variant="default"))
-        if decision.tasks:
-            task_items = [
-                r.text(
-                    f"sf_task_{i}",
-                    f"• {t.task_type}: {(t.input_data or {}).get('description', '')[:60]}",
-                )
-                for i, t in enumerate(decision.tasks[:5])
-            ]
-            children.extend(task_items)
-        return [r.card("sf_card", children)]
+        task_count = len(decision.tasks)
+        if task_count:
+            metrics.append(SurfaceMetric(label="Tasks", value=str(task_count)))
+        metrics.append(SurfaceMetric(label="Priority", value=decision.priority))
 
-    if kind == "recommendation":
-        children = [
-            r.heading("sf_title", title),
-            r.badge("sf_kind", "Recommendation", variant="default"),
-        ]
-        if reasoning:
-            children.append(r.text("sf_reasoning", reasoning))
-        return [r.card("sf_card", children)]
+    elif kind == "recommendation":
+        tags.append("recommendation")
+        if decision.risk_level != "none":
+            variant = "warning" if decision.risk_level in ("high", "medium") else "default"
+            metrics.append(SurfaceMetric(label="Risk", value=decision.risk_level, variant=variant))
 
-    if kind == "summary":
-        children = [
-            r.heading("sf_title", title),
-            r.badge("sf_kind", default_title, variant="default"),
-        ]
-        if reasoning:
-            children.append(r.text("sf_reasoning", reasoning))
-        return [r.card("sf_card", children)]
+    elif kind == "summary":
+        tags.append(default_title.lower())
 
-    if kind == "briefing":
-        children = [
-            r.heading("sf_title", title),
-            r.badge("sf_kind", "Briefing", variant="default"),
-        ]
-        if reasoning:
-            children.append(r.text("sf_reasoning", reasoning))
-        return [r.card("sf_card", children)]
+    elif kind == "briefing":
+        tags.append("briefing")
 
-    if kind == "alert":
-        return [r.alert("sf_alert", reasoning or title, severity="info", title=title)]
+    elif kind == "alert":
+        tags.append("reminder")
 
-    # Fallback: generic card with reasoning
-    children = [r.heading("sf_title", title)]
-    if reasoning:
-        children.append(r.text("sf_reasoning", reasoning))
-    return [r.card("sf_card", children)]
+    return SurfacePreview(
+        title=title,
+        subtitle=subtitle,
+        status=None,
+        priority=decision.priority if decision.priority != "medium" else None,
+        metrics=metrics,
+        entities=entities,
+        progress=progress_val,
+        tags=tags,
+    )
 
 
 async def _fetch_thread_contexts(
@@ -730,7 +711,7 @@ class JarvisOrchestrator:
                 if action == "execute_plan":
                     if decision.plan_id:
                         exec_result = await self._execute_plan_via_graph(
-                            decision.plan_id, user_id, trace
+                            decision.plan_id, user_id, workspace_id, trace
                         )
                         result["execution"] = exec_result
                     continue
@@ -1003,7 +984,7 @@ class JarvisOrchestrator:
                                 "plan_id": decision.plan_id,
                             }
                             exec_result = await self._execute_plan_via_graph(
-                                decision.plan_id, user_id, trace
+                                decision.plan_id, user_id, workspace_id, trace
                             )
                             yield {
                                 "event": "execution_result",
@@ -1813,12 +1794,16 @@ class JarvisOrchestrator:
     ) -> None:
         """Push a typed surface to the workspace via Redis Pub/Sub.
 
-        Uses ``WorkspaceSurfacePush`` to ensure the payload matches the
-        A2UISurface shape expected by the frontend WebSocket hook.
-        Only pushes for decision types that have visual representation.
+        Uses the two-layer model: SurfacePreview (grid card) + DetailConfig
+        (modal tabs). Only pushes for decision types that have visual value
+        beyond the chat response — 5 chat-only decisions are filtered out.
         """
-        from src.orchestrator.contracts import WorkspaceSurfaceMetadata, WorkspaceSurfacePush
+        from datetime import datetime, timedelta, timezone
 
+        from src.orchestrator.contracts import WorkspaceSurfacePush
+        from src.ui.renderer import build_detail_config
+
+        # 9 decisions that produce workspace surfaces; 5 chat-only excluded
         surface_kind_map: dict[str, tuple[str, str]] = {
             "create_task": ("plan", "New Plan"),
             "draft_reply": ("recommendation", "Draft Reply"),
@@ -1828,12 +1813,7 @@ class JarvisOrchestrator:
             "read_source": ("summary", "Source Summary"),
             "observe": ("summary", "Observation"),
             "add_to_brief": ("briefing", "Briefing Update"),
-            "set_goal": ("summary", "Goal Set"),
-            "set_instruction": ("summary", "Instruction Set"),
             "schedule_reminder": ("alert", "Reminder Scheduled"),
-            "answer_directly": ("summary", "Answer"),
-            "search_memory": ("summary", "Knowledge Search"),
-            "remember": ("summary", "Memory Updated"),
         }
         mapping = surface_kind_map.get(decision.decision)
         if not mapping:
@@ -1848,20 +1828,19 @@ class JarvisOrchestrator:
 
             from ulid import ULID
 
-            children = _build_surface_children(decision, kind, default_title, response_text)
+            surface_id = f"surf_{ULID()}"
+            preview = _build_surface_preview(decision, kind, default_title, response_text)
+            detail_config = build_detail_config(kind, surface_id)
 
             surface = WorkspaceSurfacePush(
-                id=f"surf_{ULID()}",
-                children=[c.model_dump(mode="json") for c in children],
-                metadata=WorkspaceSurfaceMetadata(
-                    kind=kind,
-                    title=(decision.goal[:80] if decision.goal else default_title),
-                    decision=decision.decision,
-                    reasoning=(decision.reasoning[:200] if decision.reasoning else ""),
-                    priority=decision.priority,
-                    source_run_id=run_id,
-                    response_preview=(response_text[:300] if response_text else ""),
-                ),
+                id=surface_id,
+                kind=kind,
+                preview=preview.model_dump(mode="json"),
+                detail_config=detail_config.model_dump(mode="json") if detail_config else None,
+                decision=decision.decision,
+                source_run_id=run_id,
+                response_preview=(response_text[:300] if response_text else None),
+                created_at=datetime.now(timezone.utc).isoformat(),
             )
 
             channel = f"jarvis:a2ui:{user_id}"
@@ -1870,8 +1849,6 @@ class JarvisOrchestrator:
 
             # Persist to ui_surfaces table so the workspace survives page refresh
             try:
-                from datetime import datetime, timedelta, timezone
-
                 from src.models.ui_state import UISurface
 
                 async with self._db_factory() as db:
@@ -1882,6 +1859,10 @@ class JarvisOrchestrator:
                             workspace_id=workspace_id,
                             surface_type=kind,
                             payload=surface.model_dump(mode="json"),
+                            preview=preview.model_dump(mode="json"),
+                            detail_config=(
+                                detail_config.model_dump(mode="json") if detail_config else None
+                            ),
                             expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
                         )
                     )
@@ -2544,12 +2525,15 @@ class JarvisOrchestrator:
 
         # Map flat name to namespaced name (server-specific prefix)
         namespaced = f"{server_prefix}_{tool_name}"
+        logger.info("[mcp:internal] calling %s (ns: %s)", tool_name, namespaced)
         result = await self._internal_client.call_tool(namespaced, tool_input)
 
         # Extract result from CallToolResult
         if result.is_error:
             error_text = result.data if hasattr(result, "data") else str(result)
+            logger.warning("[mcp:internal] %s ERROR: %s", tool_name, str(error_text)[:200])
             return {"status": "error", "error": error_text}
+        logger.info("[mcp:internal] %s OK", tool_name)
 
         # Parse structured content if available
         if hasattr(result, "structured_content") and result.structured_content:
@@ -2575,8 +2559,10 @@ class JarvisOrchestrator:
             tool = await registry.get_tool(tool_name)
 
         if not tool:
+            logger.warning("[mcp] tool not found in registry: %s", tool_name)
             return {"error": f"Unknown tool: {tool_name}"}
         if not tool.enabled:
+            logger.warning("[mcp] tool disabled: %s", tool_name)
             return {"error": f"Tool '{tool_name}' is disabled", "blocked": True}
 
         # _special server returns input as-is (report_governor_verdict)
@@ -2587,6 +2573,12 @@ class JarvisOrchestrator:
         if workspace_id and "workspace_id" not in tool_input:
             tool_input = {**tool_input, "workspace_id": workspace_id}
 
+        logger.info(
+            "[mcp] dispatch %s via %s/%s",
+            tool_name,
+            tool.backend,
+            tool.server or "default",
+        )
         await self._publish_event("tool.started", user_id, {"tool": tool_name})
 
         try:
@@ -2619,7 +2611,7 @@ class JarvisOrchestrator:
             await self._publish_event("tool.completed", user_id, {"tool": tool_name})
             return result
         except Exception as e:
-            logger.warning("Tool %s failed: %s", tool_name, e)
+            logger.warning("[mcp] %s FAILED: %s", tool_name, e)
             await self._publish_event(
                 "tool.failed",
                 user_id,
@@ -2627,7 +2619,9 @@ class JarvisOrchestrator:
             )
             return {"error": f"Tool execution failed for {tool_name}: {e}"}
 
-    async def _execute_plan_via_graph(self, plan_id: str, user_id: str, trace=None) -> dict:
+    async def _execute_plan_via_graph(
+        self, plan_id: str, user_id: str, workspace_id: str, trace=None
+    ) -> dict:
         """Bridge: create a run from a plan and execute it via GraphExecutor.
 
         This is the critical connection between the orchestrator (agent routing)
@@ -2678,7 +2672,7 @@ class JarvisOrchestrator:
                     memory_service=svc.memory_service,
                 )
 
-                run = await executor.create_run(plan_id, user_id)
+                run = await executor.create_run(plan_id, user_id, workspace_id)
 
                 await self._publish_event(
                     "execution_started",

@@ -115,11 +115,12 @@ async def get_workspace_surfaces(
     workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
-    """Unified workspace surfaces — pre-built A2UI component trees.
+    """Unified workspace surfaces — preview + detail_config per surface.
 
     Returns all surfaces needed by the workspace page in a single call:
     approvals, briefing, priority alerts, recommendations, and persisted
-    WS surfaces. Each surface has populated children[] ready for rendering.
+    WS surfaces. Each surface has preview data for grid cards and
+    detail_config for modal drill-down tabs.
     """
     from src.services.surface_builder import SurfaceService
 
@@ -127,6 +128,6 @@ async def get_workspace_surfaces(
     surfaces = await svc.build_workspace_surfaces(user_id)
 
     return WorkspaceSurfacesResponse(
-        surfaces=[s.model_dump(mode="json") for s in surfaces],
+        surfaces=surfaces,
         count=len(surfaces),
     )

@@ -226,7 +226,8 @@ class GraphEngine:
             result = await session.run(
                 f"""
                 MATCH (e:Entity {{user_id: $user_id}})
-                WHERE toLower(e.name) CONTAINS toLower($search_query)
+                WHERE e.name IS NOT NULL
+                  AND toLower(e.name) CONTAINS toLower($search_query)
                 {type_filter}
                 RETURN e.entity_id AS entity_id,
                        e.name AS name,

@@ -1,19 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { A2UIRenderer } from "@/components/a2ui/renderer";
 import { ErrorBoundary } from "@/components/error-boundary";
-import { handleA2UIAction } from "@/components/a2ui/action-handler";
-import { useWsActionStore } from "@/stores/ws-action-store";
-import type { A2UISurface } from "@/lib/a2ui-types";
+import { SurfaceCard } from "@/components/workspace/surface-card";
+import type { WorkspaceSurface } from "@/stores/surface-store";
 
 interface Props {
-  surfaces: A2UISurface[];
+  surfaces: WorkspaceSurface[];
+  onSurfaceClick?: (id: string) => void;
 }
 
-export function WorkspaceCanvas({ surfaces }: Props) {
-  const sendAction = useWsActionStore((s) => s.sendAction);
-
+export function WorkspaceCanvas({ surfaces, onSurfaceClick }: Props) {
   if (surfaces.length === 0) {
     return (
       <div className="rounded-xl border border-b-primary bg-surface-0 p-6">
@@ -62,25 +59,26 @@ export function WorkspaceCanvas({ surfaces }: Props) {
   }
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-      {surfaces.map((surface) => (
+    <div
+      className="grid gap-4"
+      style={{
+        gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))",
+        gridAutoFlow: "dense",
+      }}
+    >
+      {surfaces.map((ws) => (
         <ErrorBoundary
-          key={`seb-${surface.id}`}
+          key={ws.id}
           fallback={
             <div className="rounded-lg border border-red-500/30 bg-surface-1 p-4">
               <p className="text-sm text-t-secondary">Surface failed to load</p>
-              <p className="text-xs text-t-tertiary mt-1">ID: {surface.id}</p>
             </div>
           }
         >
-          <div className="flex flex-col">
-            <A2UIRenderer
-              surface={surface}
-              onAction={(action, payload) =>
-                handleA2UIAction(sendAction, action, payload)
-              }
-            />
-          </div>
+          <SurfaceCard
+            surface={ws}
+            onClick={() => onSurfaceClick?.(ws.id)}
+          />
         </ErrorBoundary>
       ))}
     </div>

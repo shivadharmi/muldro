@@ -17,7 +17,7 @@ import type {
   SystemDashboard,
 } from "./types";
 
-import type { A2UISurface } from "./a2ui-types";
+
 import { getStoredToken } from "./auth";
 
 // ── Typed API Error ─────────────────────────────────────────────
@@ -390,8 +390,26 @@ export function fetchSurface(surfaceId: string) {
   return api(`/ui/surfaces/${surfaceId}`);
 }
 
-export function fetchWorkspaceSurfaces(): Promise<{ surfaces: A2UISurface[]; count: number }> {
+interface WorkspaceSurfaceResponse {
+  id: string;
+  kind: string;
+  preview: import("@/lib/a2ui-types").SurfacePreview;
+  detail_config: import("@/lib/a2ui-types").DetailConfig | null;
+  decision?: string | null;
+  source_run_id?: string | null;
+  response_preview?: string | null;
+  created_at?: string | null;
+}
+
+export function fetchWorkspaceSurfaces(): Promise<{ surfaces: WorkspaceSurfaceResponse[]; count: number }> {
   return api("/workspace/surfaces");
+}
+
+export function fetchSurfaceDetail(
+  surfaceId: string,
+  tabId: string
+): Promise<import("@/lib/a2ui-types").DetailTabResponse> {
+  return api(`/surfaces/${surfaceId}/detail/${tabId}`);
 }
 
 // ── Message Context / Evidence ──────────────────────────────────

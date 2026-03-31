@@ -207,7 +207,8 @@ async def agent_loop(
             if tools:
                 api_kwargs["tools"] = tools
 
-            # Governor structured output: force tool_choice for governor
+            # Governor structured output: force tool_choice for governor.
+            # Forced tool_choice is incompatible with thinking — disable it.
             if agent_name == "governor" and tools:
                 governor_tool = next(
                     (t for t in tools if t["name"] == "report_governor_verdict"), None
@@ -217,6 +218,9 @@ async def agent_loop(
                         "type": "tool",
                         "name": "report_governor_verdict",
                     }
+                    api_kwargs.pop("thinking", None)
+                    if "temperature" not in api_kwargs:
+                        api_kwargs["temperature"] = agent.temperature
 
             response = None
 
@@ -304,6 +308,15 @@ async def agent_loop(
 
                 yield LoopToolCall(agent=agent_name, tool_name=tool_name, tool_input=tool_input)
 
+                # Log tool dispatch
+                input_summary = str(tool_input)[:200] if tool_input else "{}"
+                logger.info(
+                    "[tool] %s → %s | input: %s",
+                    agent_name,
+                    tool_name,
+                    input_summary,
+                )
+
                 # Governor pre-hook
                 pre_result = await governor_pre_tool_hook(
                     tool_name,
@@ -359,7 +372,18 @@ async def agent_loop(
                     )
                 except asyncio.TimeoutError:
                     result = {"error": f"Tool '{tool_name}' timed out after 60s", "timed_out": True}
+                    logger.warning("[tool] %s TIMEOUT after 60s", tool_name)
                 tool_latency = int((time.time() - tool_start) * 1000)
+
+                # Log tool result
+                result_summary = str(result)[:200] if result else "null"
+                logger.info(
+                    "[tool] %s ← %s | %dms | result: %s",
+                    agent_name,
+                    tool_name,
+                    tool_latency,
+                    result_summary,
+                )
 
                 # Detect tool errors and signal them to Claude via is_error
                 is_error = (

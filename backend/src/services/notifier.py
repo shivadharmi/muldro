@@ -374,61 +374,38 @@ class Notifier:
                 # they appear on the workspace dashboard in real time.
                 if notification.type == "approval_request":
                     try:
-                        from src.orchestrator.contracts import (
-                            WorkspaceSurfaceMetadata,
-                            WorkspaceSurfacePush,
-                        )
-                        from src.ui import renderer as r
+                        from datetime import datetime, timezone
 
-                        approval_id = (notification.data or {}).get("approval_id", "")
+                        from src.orchestrator.contracts import WorkspaceSurfacePush
+                        from src.ui.contracts import SurfaceMetric, SurfacePreview
+                        from src.ui.renderer import build_detail_config
+
                         risk_level = (notification.data or {}).get("risk_level", "medium")
                         risk_variant = (
                             "warning" if risk_level in ("high", "critical") else "default"
                         )
 
-                        children = [
-                            r.card(
-                                "apr_card",
-                                [
-                                    r.heading("apr_title", notification.title),
-                                    r.badge("apr_risk", risk_level, variant=risk_variant),
-                                    r.text("apr_body", notification.body or ""),
-                                    r.row(
-                                        "apr_actions",
-                                        [
-                                            r.button(
-                                                f"approve_{approval_id}",
-                                                "Approve",
-                                                variant="primary",
-                                                action_payload={
-                                                    "action": "approve",
-                                                    "id": approval_id,
-                                                },
-                                            ),
-                                            r.button(
-                                                f"reject_{approval_id}",
-                                                "Reject",
-                                                variant="danger",
-                                                action_payload={
-                                                    "action": "reject",
-                                                    "id": approval_id,
-                                                },
-                                            ),
-                                        ],
-                                    ),
-                                ],
-                            ),
-                        ]
+                        surface_id = f"notif_surf_{ULID()}"
+                        preview = SurfacePreview(
+                            title=notification.title,
+                            subtitle=(notification.body or "")[:120] or None,
+                            status="awaiting_approval",
+                            priority="high" if risk_level in ("high", "critical") else "medium",
+                            metrics=[
+                                SurfaceMetric(label="Risk", value=risk_level, variant=risk_variant),
+                            ],
+                        )
+                        detail_config = build_detail_config("approval", surface_id)
 
                         surface = WorkspaceSurfacePush(
-                            id=f"notif_surf_{ULID()}",
-                            children=[c.model_dump(mode="json") for c in children],
-                            metadata=WorkspaceSurfaceMetadata(
-                                kind="approval",
-                                title=notification.title,
-                                decision="approval_requested",
-                                reasoning=notification.body or "",
+                            id=surface_id,
+                            kind="approval",
+                            preview=preview.model_dump(mode="json"),
+                            detail_config=(
+                                detail_config.model_dump(mode="json") if detail_config else None
                             ),
+                            decision="approval_requested",
+                            created_at=datetime.now(timezone.utc).isoformat(),
                         )
                         ws_msg = json.dumps(
                             {"type": "surface", "surface": surface.model_dump(mode="json")}

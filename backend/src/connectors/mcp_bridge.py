@@ -174,20 +174,31 @@ async def call_mcp_tool(
         Dict with either the result or an error.
     """
     if not _session_pool:
+        logger.warning("[mcp:bridge] bridge not initialized for tool %s", tool_name)
         return {"status": "error", "error": "MCP bridge not initialized"}
 
     # Find which server provides this tool
     server_name = _session_pool.get_server_for_tool(tool_name, workspace_id=workspace_id)
     if not server_name:
+        logger.warning("[mcp:bridge] no server found for tool %s", tool_name)
         return {"status": "error", "error": f"Unknown MCP tool: {tool_name}"}
 
-    return await _session_pool.call_tool(
+    logger.info(
+        "[mcp:bridge] %s → server=%s user=%s",
+        tool_name,
+        server_name,
+        user_id[:16] if user_id else "none",
+    )
+    result = await _session_pool.call_tool(
         tool_name,
         arguments or {},
         user_id=user_id,
         server_name=server_name,
         workspace_id=workspace_id,
     )
+    status = result.get("status", "unknown")
+    logger.info("[mcp:bridge] %s ← status=%s", tool_name, status)
+    return result
 
 
 async def refresh_server_auth(

@@ -14,10 +14,27 @@ Component Types (25+):
 
 import logging
 from enum import Enum
+from typing import Literal
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 
 logger = logging.getLogger(__name__)
+
+# ── Surface kind taxonomy ───────────────────────────────────────
+
+SurfaceKind = Literal[
+    "summary",
+    "briefing",
+    "plan",
+    "checklist",
+    "approval",
+    "comparison",
+    "alert",
+    "timeline",
+    "table",
+    "recommendation",
+    "activity",
+]
 
 
 class ComponentType(str, Enum):
@@ -93,6 +110,90 @@ class A2UISurface(BaseModel):
     id: str
     children: list[A2UIComponent] = []
     metadata: dict = {}
+
+
+# ── Rich preview + detail modal contracts ───────────────────────
+
+
+class SurfaceMetric(BaseModel):
+    """Single metric displayed on a preview card (e.g. '3 tasks', 'high risk')."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    label: str
+    value: str
+    variant: Literal["default", "success", "warning", "danger"] = "default"
+
+
+class SurfacePreview(BaseModel):
+    """Rich preview data for workspace grid cards.
+
+    Contains everything the frontend needs to render a visually
+    differentiated card — no A2UI component tree needed.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    title: str
+    subtitle: str | None = None
+    status: (
+        Literal[
+            "pending",
+            "running",
+            "completed",
+            "failed",
+            "awaiting_approval",
+            "cancelled",
+        ]
+        | None
+    ) = None
+    priority: Literal["low", "medium", "high", "critical"] | None = None
+    metrics: list[SurfaceMetric] = []
+    entities: list[str] = []
+    progress: float | None = None
+    timestamp: str | None = None
+    tags: list[str] = []
+
+
+class DetailTab(BaseModel):
+    """Single tab in the detail modal — points to a server endpoint."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    label: str
+    endpoint: str
+    icon: str | None = None
+    badge_count: int | None = None
+
+
+class DetailConfig(BaseModel):
+    """Configuration for the detail modal — which tabs to show."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    tabs: list[DetailTab]
+    default_tab: str | None = None
+
+
+class DetailSection(BaseModel):
+    """Collapsible section within a detail tab response."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    title: str
+    collapsed: bool = True
+    children: list[A2UIComponent]
+
+
+class DetailTabResponse(BaseModel):
+    """Response from a detail tab endpoint — sections of A2UI content."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    tab_id: str
+    sections: list[DetailSection]
 
 
 # Rebuild for recursive model

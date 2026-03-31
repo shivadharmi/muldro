@@ -29,6 +29,7 @@ from src.api.routes_runs import router as runs_router
 from src.api.routes_runtime import router as runtime_router
 from src.api.routes_search import router as search_router
 from src.api.routes_settings import router as settings_router
+from src.api.routes_surface_detail import router as surface_detail_router
 from src.api.routes_system import router as system_router
 from src.api.routes_traces import router as traces_router
 from src.api.routes_ui import router as ui_router
@@ -244,6 +245,9 @@ def create_app() -> FastAPI:
 
     # A2UI surface state REST endpoints
     app.include_router(ui_router, tags=["ui"])
+
+    # Surface detail modal tabs
+    app.include_router(surface_detail_router, tags=["surface-detail"])
 
     # WebSocket for real-time A2UI surface streaming
     app.include_router(ws_router, tags=["websocket"])
