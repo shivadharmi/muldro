@@ -326,20 +326,23 @@ export function GraphDetailPanel() {
       )}
 
       {/* Aliases */}
-      {selectedNode.aliases.length > 0 && (
+      {(selectedNode.aliases ?? []).length > 0 && (
         <div className="p-4">
           <h4 className="text-xs font-medium text-t-muted uppercase tracking-wider mb-2">
             Aliases
           </h4>
           <div className="flex flex-wrap gap-1">
-            {selectedNode.aliases.map((alias) => (
-              <span
-                key={alias}
-                className="px-2 py-0.5 rounded-full bg-surface-2 text-xs text-t-secondary"
-              >
-                {alias}
-              </span>
-            ))}
+            {(selectedNode.aliases ?? []).map((alias, idx) => {
+              const text = typeof alias === "string" ? alias : (alias as { alias?: string }).alias ?? String(alias);
+              return (
+                <span
+                  key={`${text}-${idx}`}
+                  className="px-2 py-0.5 rounded-full bg-surface-2 text-xs text-t-secondary"
+                >
+                  {text}
+                </span>
+              );
+            })}
           </div>
         </div>
       )}
