@@ -71,12 +71,23 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "internal.approve_action",
     },
     "operator": {
+        # Email
+        "email.list",
+        "email.read",
+        "email.search",
         "email.send",
         "email.draft",
         "email.reply",
+        # Calendar
+        "calendar.list",
+        "calendar.get",
         "calendar.create",
         "calendar.update",
         "calendar.delete",
+        # Messaging
+        "messaging.list_channels",
+        "messaging.get_history",
+        "messaging.get_thread",
         "messaging.send",
         "messaging.reply",
         "messaging.react",
@@ -84,14 +95,26 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "messaging.send_template",
         "messaging.post",
         "messaging.share",
+        # Issues
+        "issue.list",
+        "issue.get",
+        "issue.search",
         "issue.create",
         "issue.update",
         "issue.comment",
         "issue.transition",
         "issue.sub_issue",
+        # Repos
+        "repo.list_prs",
+        "repo.get_diff",
+        "repo.get_reviews",
         "repo.create_pr",
         "repo.merge_pr",
         "repo.update_pr",
+        # Workflow
+        "workflow.list",
+        "workflow.get",
+        "workflow.search",
         "workflow.create_issue",
         "workflow.update_issue",
         "workflow.transition",
@@ -99,10 +122,12 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "workflow.delete",
         "workflow.delete_comment",
         "workflow.delete_milestone",
+        # Docs
         "doc.create",
         "doc.update",
         "doc.comment",
         "doc.append",
+        # Internal
         "internal.update_execution",
     },
     "presenter": {
