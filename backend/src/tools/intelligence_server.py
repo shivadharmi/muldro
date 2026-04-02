@@ -832,6 +832,103 @@ async def verify_run(
             return {"verdict": "skipped", "error": str(e)}
 
 
+# ── Memory Storage ──────────────────────────────────────────────────────
+
+
+@intelligence.tool(
+    tags={"librarian", "write"},
+    annotations=ToolAnnotations(readOnlyHint=False, idempotentHint=False),
+)
+async def store_memory(
+    user_id: str,
+    text: str,
+    ctx: Context,
+    memory_type: str = "fact",
+    scope: str = "general",
+    ttl_days: int = 0,
+    entity_ids: str = "",
+    source: str = "agent",
+    workspace_id: str = "",
+) -> dict:
+    """Store a memory in the knowledge base."""
+    async with _get_db() as db:
+        try:
+            memory_svc = _services.memory_service
+            if not memory_svc:
+                return make_error_response(RuntimeError("Memory service not available"))
+
+            linked_ids = (
+                [e.strip() for e in entity_ids.split(",") if e.strip()] if entity_ids else None
+            )
+
+            if memory_type == "goal":
+                mid = await memory_svc.store_goal_memory(
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    title=text,
+                    entity_ids=linked_ids,
+                )
+            elif memory_type == "briefing_item":
+                mid = await memory_svc.store_briefing_memory(
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    text=text,
+                    source=source,
+                )
+            else:
+                mid = await memory_svc.store_memory(
+                    user_id=user_id,
+                    fact_text=text,
+                    memory_type=memory_type,
+                    scope=scope,
+                    entity_ids=linked_ids or [],
+                    workspace_id=workspace_id,
+                    ttl_days=ttl_days if ttl_days > 0 else None,
+                    source=source,
+                )
+            await db.commit()
+            await ctx.info(f"Stored {memory_type} memory: {text[:80]}")
+            return {"status": "stored", "memory_id": mid}
+        except Exception as e:
+            logger.error("store_memory failed: %s", e, exc_info=True)
+            await db.rollback()
+            return make_error_response(e)
+
+
+@intelligence.tool(
+    tags={"persona", "write"},
+    annotations=ToolAnnotations(readOnlyHint=False, idempotentHint=False),
+)
+async def store_preference(
+    user_id: str,
+    text: str,
+    ctx: Context,
+    confidence: float = 0.5,
+    source_text: str = "",
+    workspace_id: str = "",
+) -> dict:
+    """Store a user preference extracted from interactions."""
+    async with _get_db() as db:
+        try:
+            memory_svc = _services.memory_service
+            if not memory_svc:
+                return make_error_response(RuntimeError("Memory service not available"))
+
+            mid = await memory_svc.store_instruction_memory(
+                user_id=user_id,
+                workspace_id=workspace_id,
+                instruction_text=text,
+                instruction_type="preference",
+            )
+            await db.commit()
+            await ctx.info(f"Stored preference: {text[:80]} (confidence={confidence})")
+            return {"status": "stored", "memory_id": mid, "confidence": confidence}
+        except Exception as e:
+            logger.error("store_preference failed: %s", e, exc_info=True)
+            await db.rollback()
+            return make_error_response(e)
+
+
 # ── MCP Resources — Live Data ───────────────────────────────────────────
 
 

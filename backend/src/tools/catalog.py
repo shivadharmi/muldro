@@ -5,7 +5,7 @@ capabilities, risk levels, and metadata. Serves as a parallel registry during
 the Unified Tool Registry migration (Phase 6).
 
 Tools are organized by server:
-- intelligence: 15 tools (search, ingest, policies, context, briefing, etc.)
+- intelligence: 17 tools (search, ingest, policies, context, briefing, store_memory, etc.)
 - communication: 3 tools (telegram, approval prompts, UI updates)
 - _special: 1 tool (report_governor_verdict — inline-dispatched, not MCP)
 """
@@ -32,6 +32,8 @@ from src.tools.schemas import (
     SearchInput,
     SendApprovalPromptInput,
     SendTelegramInput,
+    StoreMemoryInput,
+    StorePreferenceInput,
     UpdateEntityInput,
     UpdateExecutionInput,
     UpdateObservationCursorInput,
@@ -62,7 +64,7 @@ def _desc(model_cls: type[BaseModel]) -> str:
 
 
 INTERNAL_TOOLS: list[InternalToolDef] = [
-    # Intelligence server tools (15 tools)
+    # Intelligence server tools (17 tools)
     InternalToolDef(
         name="ingest_event",
         input_model=IngestEventInput,
@@ -212,6 +214,26 @@ INTERNAL_TOOLS: list[InternalToolDef] = [
         server="intelligence",
         description=_desc(VerifyRunInput),
         read_only=True,
+    ),
+    InternalToolDef(
+        name="store_memory",
+        input_model=StoreMemoryInput,
+        capability="internal.store_memory",
+        risk_level="low",
+        requires_approval=False,
+        server="intelligence",
+        description=_desc(StoreMemoryInput),
+        read_only=False,
+    ),
+    InternalToolDef(
+        name="store_preference",
+        input_model=StorePreferenceInput,
+        capability="internal.store_preference",
+        risk_level="low",
+        requires_approval=False,
+        server="intelligence",
+        description=_desc(StorePreferenceInput),
+        read_only=False,
     ),
     # Special: inline-dispatched (not a real MCP tool).
     # Shares capability with evaluate_policy — both are governor-domain tools.

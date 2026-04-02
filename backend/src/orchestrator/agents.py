@@ -60,6 +60,7 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
     "librarian": {
         "internal.update_entity",
         "internal.search",
+        "internal.store_memory",
     },
     "planner": {
         "internal.get_plans",
@@ -178,6 +179,7 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
     "persona": {
         "internal.search",
         "internal.extract_preferences",
+        "internal.store_preference",
     },
 }
 

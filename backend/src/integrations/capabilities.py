@@ -153,6 +153,8 @@ CAPABILITY_CATALOG: dict[str, CapabilityMeta] = {
     "internal.verify_run": _cap(CapabilityFamily.INTERNAL, False),
     "internal.update_execution": _cap(CapabilityFamily.INTERNAL, False),
     "internal.push_ui": _cap(CapabilityFamily.INTERNAL, False),
+    "internal.store_memory": _cap(CapabilityFamily.INTERNAL, False),
+    "internal.store_preference": _cap(CapabilityFamily.INTERNAL, False),
     "internal.send_telegram": _cap(CapabilityFamily.MESSAGING, False, "medium"),
     "internal.send_approval": _cap(CapabilityFamily.MESSAGING, False, "medium"),
     # Drive

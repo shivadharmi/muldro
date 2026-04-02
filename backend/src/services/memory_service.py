@@ -390,6 +390,58 @@ class MemoryService:
         logger.info("Briefing memory stored: %s '%s'", memory_id, text[:80])
         return memory_id
 
+    async def store_memory(
+        self,
+        user_id: str,
+        fact_text: str,
+        memory_type: str = "fact",
+        scope: str = "general",
+        entity_ids: list[str] | None = None,
+        workspace_id: str = "",
+        ttl_days: int | None = None,
+        source: str = "agent",
+    ) -> str:
+        """Store a single memory directly (no Claude extraction).
+
+        Returns the memory_id.
+        """
+        embedding = await self._embedder.embed_text(fact_text)
+        memory_id = f"mem_{ULID()}"
+        memory = Memory(
+            memory_id=memory_id,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            memory_type=memory_type,
+            scope=scope,
+            fact_text=fact_text,
+            confidence=0.8,
+            stability_score=0.0,
+            source_event_ids=[],
+            provenance={"source": source, "extraction_method": "direct"},
+            ttl_days=ttl_days,
+            status="active",
+            entity_ids=entity_ids,
+        )
+        self._db.add(memory)
+        await self._db.flush()
+
+        if self._vector_store and embedding:
+            await self._vector_store.upsert(
+                "memories",
+                memory_id,
+                embedding,
+                {
+                    "memory_type": memory_type,
+                    "fact_text": fact_text,
+                    "user_id": user_id,
+                },
+                user_id,
+            )
+
+        logger.info("Memory stored: %s type=%s '%s'", memory_id, memory_type, fact_text[:80])
+        await self._emit_event("memory.created", user_id, {"memory_id": memory_id})
+        return memory_id
+
     async def retrieve(
         self,
         user_id: str,
