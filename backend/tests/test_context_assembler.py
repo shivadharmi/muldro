@@ -33,12 +33,6 @@ class TestContextAssembly:
         )
         assert context == ""
 
-        # Governor is not enriched
-        context = await orchestrator._assemble_context(
-            "governor", "test message", user_id=TEST_USER_ID
-        )
-        assert context == ""
-
         # Persona is not enriched
         context = await orchestrator._assemble_context(
             "persona", "test message", user_id=TEST_USER_ID

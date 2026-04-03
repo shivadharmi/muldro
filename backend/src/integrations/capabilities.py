@@ -139,6 +139,7 @@ CAPABILITY_CATALOG: dict[str, CapabilityMeta] = {
     # Internal intelligence
     "internal.search": _cap(CapabilityFamily.INTERNAL, True),
     "internal.get_plans": _cap(CapabilityFamily.INTERNAL, True),
+    "internal.get_plan_details": _cap(CapabilityFamily.INTERNAL, True),
     "internal.get_goals": _cap(CapabilityFamily.INTERNAL, True),
     "internal.get_briefing": _cap(CapabilityFamily.INTERNAL, True),
     "internal.get_cursor": _cap(CapabilityFamily.INTERNAL, True),
