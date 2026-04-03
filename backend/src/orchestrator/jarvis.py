@@ -549,26 +549,72 @@ class JarvisOrchestrator:
         return set(TOOL_INPUT_MODELS.keys())
 
     async def _get_tools_for_agent(self, agent: SubAgent, workspace_id: str = "") -> list[dict]:
-        """Filter tool definitions using registry-driven capability check."""
-        from src.connectors.mcp_bridge import list_mcp_tools
+        """Build tool list from DB registry, filtered by agent capability scope.
 
-        tools = list(self._tools)
-        for mcp_tool in list_mcp_tools(workspace_id=workspace_id):
-            schema = mcp_tool.get("input_schema", {})
-            tools.append(
-                {
-                    "name": mcp_tool["name"],
-                    "description": mcp_tool.get("description", "External MCP tool"),
-                    "input_schema": schema if schema else {"type": "object", "properties": {}},
-                }
-            )
+        Internal tools come from build_tool_definitions() (Pydantic schemas).
+        External tools come from ToolDefinition DB records (seeded + discovered).
+        Session pool metadata enriches schema/description when DB records lack them.
+        """
+        from src.connectors.mcp_bridge import list_mcp_tools
+        from src.services.tool_registry import ToolRegistry
+
+        scope = agent.capability_scope
+        if not scope:
+            return []
+
+        # Start with internal tools, filtered by capability
+        tools: list[dict] = []
+        internal_names: set[str] = set()
 
         async with self._db_factory() as db:
-            return [
-                t
-                for t in tools
-                if await agent.can_use_tool(t["name"], db, workspace_id=workspace_id or None)
-            ]
+            registry = ToolRegistry(db, workspace_id=workspace_id or None)
+
+            for t in self._tools:
+                tool_def = await registry.get_tool(t["name"])
+                if tool_def and tool_def.capability and tool_def.capability in scope:
+                    tools.append(t)
+                    internal_names.add(t["name"])
+
+            # Build schema lookup from session pool (enriches DB records
+            # that lack input_schema — e.g., external seeds before discovery)
+            mcp_schemas: dict[str, dict] = {}
+            for mcp_tool in list_mcp_tools(workspace_id=workspace_id):
+                mcp_schemas[mcp_tool["name"]] = {
+                    "description": mcp_tool.get("description", ""),
+                    "input_schema": mcp_tool.get("input_schema", {}),
+                }
+
+            # Add external tools from DB registry, filtered by capability
+            all_db_tools = await registry.list_tools(enabled_only=True)
+
+            for tool_def in all_db_tools:
+                if tool_def.name in internal_names:
+                    continue
+                if not tool_def.capability or tool_def.capability not in scope:
+                    continue
+
+                # Prefer DB schema, fallback to session pool, then minimal
+                schema = tool_def.input_schema
+                description = tool_def.description or tool_def.name
+
+                if tool_def.name in mcp_schemas:
+                    if not schema:
+                        schema = mcp_schemas[tool_def.name].get("input_schema")
+                    if description == tool_def.name:
+                        description = mcp_schemas[tool_def.name].get("description") or description
+
+                if not schema:
+                    schema = {"type": "object", "properties": {}}
+
+                tools.append(
+                    {
+                        "name": tool_def.name,
+                        "description": description,
+                        "input_schema": schema,
+                    }
+                )
+
+        return tools
 
     def _get_model_for_agent(self, agent: SubAgent) -> str:
         """Get the Claude model ID for an agent's tier."""

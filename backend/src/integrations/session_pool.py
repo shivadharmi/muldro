@@ -177,10 +177,12 @@ class UserMCPSessionPool:
     async def _register_discovered_tools(
         self, raw_tools: list, server_name: str, workspace_id: str
     ) -> None:
-        """Register unknown discovered tools in DB with safe defaults.
+        """Register or enrich discovered tools in DB.
 
-        Unknown tools get capability=None, making them invisible to agents
-        until an admin maps their capability. Safe by design.
+        New tools get capability=None (invisible to agents until admin maps
+        capability). Existing tools (e.g., from seeds) get enriched with
+        input_schema and description from MCP discovery — seeds have
+        capability but lack schema; discovery provides schema.
         """
         try:
             from ulid import ULID
@@ -192,6 +194,13 @@ class UserMCPSessionPool:
             async with get_session_factory()() as db:
                 registry = ToolRegistry(db, workspace_id=workspace_id or None)
                 for t in raw_tools:
+                    discovered_schema = (
+                        getattr(t, "inputSchema", None)
+                        or getattr(t, "input_schema", None)
+                        or {"type": "object", "properties": {}}
+                    )
+                    discovered_desc = t.description or ""
+
                     existing = await registry.get_tool(t.name)
                     if not existing:
                         new_tool = ToolDefinition(
@@ -204,12 +213,8 @@ class UserMCPSessionPool:
                             capability=None,
                             risk_level="medium",
                             requires_approval=True,
-                            description=t.description or "",
-                            input_schema=(
-                                getattr(t, "inputSchema", None)
-                                or getattr(t, "input_schema", None)
-                                or {"type": "object", "properties": {}}
-                            ),
+                            description=discovered_desc,
+                            input_schema=discovered_schema,
                             enabled=True,
                             verified=True,
                         )
@@ -219,6 +224,21 @@ class UserMCPSessionPool:
                             t.name,
                             server_name,
                         )
+                    else:
+                        # Enrich existing seed record with discovered
+                        # schema/description (seeds lack these fields)
+                        enriched = False
+                        if not existing.input_schema and discovered_schema:
+                            existing.input_schema = discovered_schema
+                            enriched = True
+                        if not existing.description and discovered_desc:
+                            existing.description = discovered_desc
+                            enriched = True
+                        if enriched:
+                            logger.info(
+                                "Enriched tool %s with discovered metadata",
+                                t.name,
+                            )
                 await db.commit()
         except Exception:
             logger.debug("Failed to register discovered tools", exc_info=True)
