@@ -160,14 +160,16 @@ DEFAULT_ROUTES: list[dict[str, Any]] = [
     },
     {
         "name": "draft_reply",
-        "description": "Route for drafting replies — governance check, then execution.",
+        "description": "Route for drafting replies — Operator reads thread + drafts via tools.",
         "decision_type": "draft_reply",
         "agent_pipeline": [
             {"agent": "governor", "message_template": "Evaluate this plan: {decision_json}"},
             {
                 "agent": "operator",
-                "condition": {"has_truthy_key": "plan_id"},
-                "action": "execute_plan",
+                "message_template": (
+                    "Draft an email reply. Read the original thread first, "
+                    "then create a draft. Decision: {decision_json}"
+                ),
             },
         ],
         "priority": 95,
@@ -214,6 +216,14 @@ DEFAULT_ROUTES: list[dict[str, Any]] = [
         ],
         "priority": 80,
         "keywords": ["recall", "what do you know", "search memory"],
+    },
+    {
+        "name": "ignore",
+        "description": "Silently ignore — no response, no action.",
+        "decision_type": "ignore",
+        "agent_pipeline": [],
+        "priority": 5,
+        "keywords": [],
     },
     {
         "name": "acknowledge",

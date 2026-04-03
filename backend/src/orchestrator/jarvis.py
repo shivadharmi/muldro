@@ -76,7 +76,7 @@ BEDROCK_MODEL_TIERS = {
 }
 
 # Agents that benefit from context enrichment (read-heavy agents)
-CONTEXT_ENRICHED_AGENTS = {"planner", "presenter", "researcher", "librarian"}
+CONTEXT_ENRICHED_AGENTS = {"planner", "presenter", "researcher", "librarian", "operator"}
 
 # Intent classification constants imported from intent_classifier module
 
@@ -693,6 +693,12 @@ class JarvisOrchestrator:
                 brief_result = await self._handle_add_to_brief(decision, user_id, workspace_id)
                 result["briefing_item"] = brief_result
 
+            # Handle ignore decision — no response, no action
+            if decision.decision == "ignore":
+                result["status"] = "ignored"
+                result["decision"] = "ignore"
+                return result
+
             # Resolve agent pipeline from routes
             pipeline = await self._resolve_pipeline(decision_dict)
 
@@ -953,6 +959,11 @@ class JarvisOrchestrator:
                 await self._handle_schedule_reminder(decision, user_id, workspace_id)
             elif decision.decision == "add_to_brief":
                 await self._handle_add_to_brief(decision, user_id, workspace_id)
+
+            # Handle ignore decision — no response, no action
+            if decision.decision == "ignore":
+                yield {"event": "ignored", "decision": "ignore"}
+                return
 
             # Step 2: Route based on intent
             if use_planner:

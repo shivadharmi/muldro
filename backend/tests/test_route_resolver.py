@@ -50,9 +50,9 @@ class TestDefaultRoutes:
         assert "answer_directly" in decision_types
         assert "search_memory" in decision_types
 
-    def test_default_routes_have_16_entries(self):
-        """Should have 16 default routes."""
-        assert len(DEFAULT_ROUTES) == 16
+    def test_default_routes_have_17_entries(self):
+        """Should have 17 default routes."""
+        assert len(DEFAULT_ROUTES) == 17
 
     def test_create_task_route_has_governor_and_operator(self):
         """create_task route should pipeline through governor then operator."""
@@ -77,6 +77,15 @@ class TestDefaultRoutes:
         route = next(r for r in DEFAULT_ROUTES if r["decision_type"] == "draft_reply")
         agents = [step["agent"] for step in route["agent_pipeline"]]
         assert agents == ["governor", "operator"]
+
+    def test_draft_reply_route_uses_agent_loop_not_graph_executor(self):
+        """draft_reply Operator step must use agent loop (message_template), not execute_plan."""
+        route = next(r for r in DEFAULT_ROUTES if r["decision_type"] == "draft_reply")
+        operator_step = route["agent_pipeline"][1]
+        assert operator_step["agent"] == "operator"
+        assert "action" not in operator_step, "Operator should NOT have action: execute_plan"
+        assert "message_template" in operator_step, "Operator should have a message_template"
+        assert "condition" not in operator_step, "Operator should not be conditional"
 
     def test_schedule_reminder_route_exists(self):
         """schedule_reminder should have an explicit route."""
@@ -113,7 +122,7 @@ class TestDefaultRoutes:
 class TestRouteSeeding:
     @pytest.mark.asyncio
     async def test_seed_defaults_creates_routes(self, mock_db):
-        """Should seed all 16 default routes when none exist."""
+        """Should seed all 17 default routes when none exist."""
         # No existing routes
         result_mock = MagicMock()
         result_mock.scalars.return_value = result_mock
@@ -123,8 +132,8 @@ class TestRouteSeeding:
         resolver = RouteResolver(mock_db)
         count = await resolver.seed_defaults()
 
-        assert count == 16
-        assert mock_db.add.call_count == 16
+        assert count == 17
+        assert mock_db.add.call_count == 17
 
     @pytest.mark.asyncio
     async def test_seed_defaults_skips_existing(self, mock_db):
@@ -152,7 +161,7 @@ class TestRouteSeeding:
         resolver = RouteResolver(mock_db)
         count = await resolver.seed_defaults()
 
-        assert count == 13  # 16 - 3 existing
+        assert count == 14  # 17 - 3 existing
 
 
 # ── Resolution ─────────────────────────────────────────────────
