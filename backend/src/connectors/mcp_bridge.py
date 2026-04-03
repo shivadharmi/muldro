@@ -155,6 +155,27 @@ def get_mcp_tool_names() -> list[str]:
     return list(_session_pool.get_all_tools().keys())
 
 
+async def _resolve_server_from_registry(tool_name: str, workspace_id: str) -> str | None:
+    """Look up the MCP server name for a tool from the DB registry.
+
+    Used as fallback when no active session exists for the tool yet.
+    Seed records carry the server name (e.g., "google-workspace") from
+    EXTERNAL_TOOL_SEEDS, allowing session creation before first use.
+    """
+    try:
+        from src.models.database import get_session_factory
+        from src.services.tool_registry import ToolRegistry
+
+        async with get_session_factory()() as db:
+            registry = ToolRegistry(db, workspace_id=workspace_id or None)
+            tool = await registry.get_tool(tool_name)
+            if tool and tool.server:
+                return tool.server
+    except Exception:
+        logger.debug("Registry lookup failed for %s", tool_name, exc_info=True)
+    return None
+
+
 async def call_mcp_tool(
     tool_name: str,
     arguments: dict[str, Any] | None = None,
@@ -177,8 +198,12 @@ async def call_mcp_tool(
         logger.warning("[mcp:bridge] bridge not initialized for tool %s", tool_name)
         return {"status": "error", "error": "MCP bridge not initialized"}
 
-    # Find which server provides this tool
+    # Find which server provides this tool.
+    # First check active sessions, then fall back to DB registry
+    # (seeds know server names before any session is created).
     server_name = _session_pool.get_server_for_tool(tool_name, workspace_id=workspace_id)
+    if not server_name:
+        server_name = await _resolve_server_from_registry(tool_name, workspace_id)
     if not server_name:
         logger.warning("[mcp:bridge] no server found for tool %s", tool_name)
         return {"status": "error", "error": f"Unknown MCP tool: {tool_name}"}
