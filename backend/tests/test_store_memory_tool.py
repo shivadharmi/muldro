@@ -128,6 +128,24 @@ class TestPersonaHasStorePreference:
         assert "internal.extract_preferences" in scope
 
 
+class TestPlannerHasGoalWrite:
+    """Planner agent must have store_memory capability for goal_update route."""
+
+    def test_planner_has_store_memory(self):
+        from src.orchestrator.agents import AGENT_CAPABILITY_SCOPES
+
+        scope = AGENT_CAPABILITY_SCOPES["planner"]
+        assert "internal.store_memory" in scope
+
+    def test_planner_retains_existing(self):
+        from src.orchestrator.agents import AGENT_CAPABILITY_SCOPES
+
+        scope = AGENT_CAPABILITY_SCOPES["planner"]
+        assert "internal.get_plans" in scope
+        assert "internal.get_goals" in scope
+        assert "internal.search" in scope
+
+
 class TestCapabilityCatalog:
     def test_store_memory_capability_exists(self):
         from src.integrations.capabilities import CAPABILITY_CATALOG

@@ -66,6 +66,7 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "internal.get_plans",
         "internal.get_goals",
         "internal.search",
+        "internal.store_memory",
     },
     "governor": {
         "internal.evaluate_policy",
