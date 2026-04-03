@@ -39,9 +39,9 @@ class TestContextAssembly:
         )
         assert context == ""
 
-        # Operator is not enriched
+        # Persona is not enriched
         context = await orchestrator._assemble_context(
-            "operator", "test message", user_id=TEST_USER_ID
+            "persona", "test message", user_id=TEST_USER_ID
         )
         assert context == ""
 

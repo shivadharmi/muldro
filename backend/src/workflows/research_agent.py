@@ -106,12 +106,9 @@ async def cross_reference(ctx: WorkflowContext) -> dict:
             messages=[{"role": "user", "content": "\n\n".join(prompt_parts)}],
         )
 
-        import json
+        from src.llm_utils import parse_llm_json
 
-        text = response.content[0].text
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1].rsplit("```", 1)[0]
-        return json.loads(text)
+        return parse_llm_json(response.content[0].text)
     except Exception:
         logger.debug("Cross-reference via Claude failed", exc_info=True)
         all_findings = [

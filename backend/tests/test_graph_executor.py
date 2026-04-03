@@ -168,3 +168,169 @@ class TestResumeRun:
         executor = GraphExecutor(settings, mock_db)
         with pytest.raises(ValueError, match="not resumable"):
             await executor.resume_run("run_001")
+
+
+@pytest.fixture
+def executor_with_agent_deps(settings, mock_db):
+    """GraphExecutor with agent loop dependencies for agentic execution tests."""
+
+    async def mock_db_factory():
+        """Mock async context manager for db_factory."""
+
+        class MockDbContext:
+            async def __aenter__(self):
+                return mock_db
+
+            async def __aexit__(self, *args):
+                pass
+
+        return MockDbContext()
+
+    execute_tool_fn = AsyncMock()
+
+    # Mock BudgetTracker with record_usage
+    budget = MagicMock()
+    budget.record_usage = AsyncMock(return_value=MagicMock(cost_usd=0.01))
+
+    with patch("src.services.graph_executor.get_anthropic_client") as mock_client:
+        mock_client.return_value = MagicMock()
+        from src.services.graph_executor import GraphExecutor
+
+        return GraphExecutor(
+            settings,
+            mock_db,
+            db_factory=mock_db_factory,
+            execute_tool_fn=execute_tool_fn,
+            budget=budget,
+            circuit_breaker=None,
+        )
+
+
+class TestAgenticStepExecution:
+    """Tests for agent loop integration in GraphExecutor."""
+
+    @patch("src.orchestrator.agent_loop.agent_loop")
+    async def test_step_via_agent_loop_calls_loop(self, mock_agent_loop, executor_with_agent_deps):
+        """Test that _run_step_via_agent_loop calls agent_loop and returns result."""
+        from src.orchestrator.agent_loop import LoopDone
+
+        # Mock agent_loop to yield LoopDone
+        async def fake_agent_loop(**kwargs):
+            yield LoopDone(agent="operator", text="Task completed successfully")
+
+        mock_agent_loop.side_effect = fake_agent_loop
+
+        # Create mock step and run
+        step = MagicMock()
+        step.input_data = {"task_type": "summarize", "goal": "Test goal"}
+        run = MagicMock()
+        run.user_id = TEST_USER_ID
+        run.workspace_id = "ws_test"
+        run.run_id = "run_test"
+
+        result = await executor_with_agent_deps._run_step_via_agent_loop(step, run)
+
+        assert result["status"] == "completed"
+        assert "Task completed successfully" in result["result"]
+
+    @patch("src.orchestrator.agent_loop.agent_loop")
+    async def test_step_via_agent_loop_passes_operator(
+        self, mock_agent_loop, executor_with_agent_deps
+    ):
+        """Test that agent_loop is called with operator agent and max_tool_rounds=10."""
+        from src.orchestrator.agent_loop import LoopDone
+
+        captured_kwargs = {}
+
+        async def fake_agent_loop(**kwargs):
+            captured_kwargs.update(kwargs)
+            yield LoopDone(agent="operator", text="Done")
+
+        mock_agent_loop.side_effect = fake_agent_loop
+
+        step = MagicMock()
+        step.input_data = {"task_type": "test_task"}
+        run = MagicMock()
+        run.user_id = TEST_USER_ID
+        run.workspace_id = "ws_test"
+        run.run_id = "run_test"
+
+        await executor_with_agent_deps._run_step_via_agent_loop(step, run)
+
+        assert captured_kwargs["agent"].name == "operator"
+        assert captured_kwargs["max_tool_rounds"] == 10
+
+    @patch("src.orchestrator.agent_loop.agent_loop")
+    async def test_agent_loop_error_still_returns(self, mock_agent_loop, executor_with_agent_deps):
+        """Test that LoopError is collected but result is still returned."""
+        from src.orchestrator.agent_loop import LoopDone, LoopError
+
+        async def fake_agent_loop(**kwargs):
+            yield LoopError(agent="operator", message="Something went wrong")
+            yield LoopDone(agent="operator", text="Recovered and completed")
+
+        mock_agent_loop.side_effect = fake_agent_loop
+
+        step = MagicMock()
+        step.input_data = {"task_type": "test_task"}
+        run = MagicMock()
+        run.user_id = TEST_USER_ID
+        run.workspace_id = "ws_test"
+        run.run_id = "run_test"
+
+        result = await executor_with_agent_deps._run_step_via_agent_loop(step, run)
+
+        assert result["status"] == "completed"
+        assert "errors" in result
+        assert len(result["errors"]) == 1
+        assert "Something went wrong" in result["errors"][0]
+
+    @patch("src.orchestrator.agent_loop.agent_loop")
+    async def test_run_step_action_delegates_to_agent_loop(
+        self, mock_agent_loop, executor_with_agent_deps
+    ):
+        """_run_step_action should delegate to _run_step_via_agent_loop when deps available."""
+        from src.orchestrator.agent_loop import LoopDone
+
+        async def fake_loop(**kwargs):
+            yield LoopDone(agent="operator", text="Done via agent loop")
+
+        mock_agent_loop.side_effect = fake_loop
+
+        step = MagicMock()
+        step.step_id = "step_dispatch"
+        step.input_data = {"task_type": "any_task", "goal": "Do something"}
+
+        run = MagicMock()
+        run.run_id = "run_dispatch"
+        run.user_id = "usr_test"
+        run.workspace_id = "ws_test"
+
+        result = await executor_with_agent_deps._run_step_action(step, run)
+
+        assert result["result"] == "Done via agent loop"
+
+    async def test_run_step_action_falls_back_without_deps(self, settings, mock_db):
+        """_run_step_action uses minimal fallback when agent loop deps are missing."""
+        with patch("src.services.graph_executor.get_anthropic_client") as mock_client_fn:
+            mock_client = MagicMock()
+            response = MagicMock()
+            response.content = [MagicMock(text='{"status": "completed", "result": "fallback"}')]
+            mock_client.messages.create = AsyncMock(return_value=response)
+            mock_client_fn.return_value = mock_client
+
+            from src.services.graph_executor import GraphExecutor
+
+            executor = GraphExecutor(settings, mock_db)  # No agent loop deps
+
+        step = MagicMock()
+        step.step_id = "step_fallback"
+        step.input_data = {"task_type": "test_task"}
+
+        run = MagicMock()
+        run.run_id = "run_fallback"
+        run.user_id = "usr_test"
+        run.workspace_id = "ws_test"
+
+        result = await executor._run_step_action(step, run)
+        assert result["status"] == "completed"

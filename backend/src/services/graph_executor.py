@@ -19,9 +19,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
 from src.config.settings import Settings, get_anthropic_client
+from src.llm_utils import parse_llm_json
 from src.models.plans import Plan, PlanTask
 from src.models.task_graph import TaskCheckpoint, TaskRun, TaskStep
-from src.orchestrator.contracts import StepResult, ToolCallRequest
+from src.orchestrator.contracts import StepResult
 from src.services.audit import AuditService
 from src.services.execution_state import transition_run, transition_step
 
@@ -38,6 +39,10 @@ async def create_graph_executor(
     settings: Settings,
     db: AsyncSession,
     workspace_id: str = "",
+    db_factory=None,
+    execute_tool_fn=None,
+    budget=None,
+    circuit_breaker=None,
 ) -> GraphExecutor:
     """Factory that creates a GraphExecutor with all deps consistently resolved.
 
@@ -112,6 +117,10 @@ async def create_graph_executor(
         verifier=verifier,
         context_builder=context_builder,
         memory_service=memory_service,
+        db_factory=db_factory,
+        execute_tool_fn=execute_tool_fn,
+        budget=budget,
+        circuit_breaker=circuit_breaker,
     )
 
 
@@ -129,6 +138,11 @@ class GraphExecutor:
         context_builder: ContextBuilder | None = None,
         connector_credentials_fn=None,
         memory_service: MemoryService | None = None,
+        # Agent loop dependencies (for agentic step execution)
+        db_factory=None,
+        execute_tool_fn=None,
+        budget=None,
+        circuit_breaker=None,
     ):
         self._settings = settings
         self._db = db
@@ -141,6 +155,10 @@ class GraphExecutor:
         self._context_builder = context_builder
         self._connector_credentials_fn = connector_credentials_fn
         self._memory_service = memory_service
+        self._db_factory = db_factory
+        self._execute_tool_fn = execute_tool_fn
+        self._budget = budget
+        self._circuit_breaker = circuit_breaker
 
     async def create_run(
         self,
@@ -703,23 +721,11 @@ class GraphExecutor:
     async def _run_step_action(self, step: TaskStep, run: TaskRun) -> dict:
         """Execute the actual action for a step.
 
-        Resolution order:
-        1. MCP bridge (external MCP servers)
-        2. ToolRegistry → connector dispatch
-        3. Built-in Claude handlers (draft_email, summarize)
-        4. Generic Claude handler (any task_type with goal/context)
-        5. Stub completion for truly unknown types
+        Routes to agent loop if dependencies are available, otherwise uses
+        a minimal single-turn Claude fallback.
         """
         input_data = step.input_data or {}
         task_type = input_data.get("task_type", "unknown")
-
-        request = ToolCallRequest(
-            tool_name=task_type,
-            parameters=input_data,
-        )
-
-        # Enrich input with context if ContextBuilder is available
-        context_prompt = await self._build_step_context(run, step)
 
         await self._emit_event(
             "tool_call_started",
@@ -728,39 +734,186 @@ class GraphExecutor:
             workspace_id=run.workspace_id,
         )
 
-        # 1. Try MCP bridge (external MCP servers)
-        from src.connectors.mcp_bridge import call_mcp_tool, is_mcp_tool
+        # Check if agent loop dependencies are available
+        if self._db_factory and self._execute_tool_fn and self._budget:
+            return await self._run_step_via_agent_loop(step, run)
 
-        if is_mcp_tool(task_type, workspace_id=run.workspace_id):
-            raw = await call_mcp_tool(
-                task_type,
-                input_data,
-                user_id=run.user_id,
-                workspace_id=run.workspace_id,
-            )
-            return raw
+        # Fallback: minimal single-turn Claude call
+        return await self._minimal_claude_action(step, run)
 
-        # 2. Try connector dispatch via ToolRegistry
-        if self._tool_registry:
-            tool_def = await self._tool_registry.get_tool(task_type)
-            if tool_def:
-                request.requires_approval = tool_def.requires_approval
-                if tool_def.connector_type and tool_def.connector_type != "internal":
-                    raw = await self._execute_via_connector(
-                        tool_def, task_type, input_data, context_prompt
+    async def _minimal_claude_action(self, step: TaskStep, run: TaskRun) -> dict:
+        """Minimal single-turn Claude action without tool discovery.
+
+        Used as fallback when agent loop dependencies are not available.
+        """
+        input_data = step.input_data or {}
+        task_type = input_data.get("task_type", "unknown")
+        context_prompt = await self._build_step_context(run, step)
+
+        goal = input_data.get("goal", input_data.get("context", ""))
+        parts = [f"Task type: {task_type}"]
+        if goal:
+            parts.append(f"Goal: {goal}")
+        for key, value in input_data.items():
+            if key not in ("task_type", "goal", "context"):
+                parts.append(f"{key}: {value}")
+        if context_prompt:
+            parts.append(f"\n--- Background ---\n{context_prompt}")
+
+        system = (
+            f"You are Jarvis's task execution engine handling a '{task_type}' step. "
+            "Complete the task described below. "
+            'Respond with JSON: {"status": "completed", "result": "...", "details": {...}}'
+        )
+
+        response = await self._client.messages.create(
+            model=self._settings.resolved_model,
+            max_tokens=1024,
+            system=system,
+            messages=[{"role": "user", "content": "\n".join(parts)}],
+        )
+
+        try:
+            return parse_llm_json(response.content[0].text)
+        except json.JSONDecodeError:
+            return {"status": "completed", "result": response.content[0].text}
+
+    async def _build_operator_tools(self) -> list[dict]:
+        """Build Claude API tool definitions filtered by Operator's capability scope."""
+        if not self._tool_registry:
+            return []
+
+        from src.orchestrator.agents import AGENTS
+        from src.tools.schemas import TOOL_INPUT_MODELS
+
+        operator = AGENTS.get("operator")
+        if not operator:
+            return []
+
+        scope = operator.capability_scope
+        tools = []
+        seen = set()
+
+        # Internal tools from TOOL_INPUT_MODELS
+        for tool_name, model_cls in TOOL_INPUT_MODELS.items():
+            tool_def = await self._tool_registry.get_tool(tool_name)
+            if tool_def and tool_def.capability and tool_def.capability in scope:
+                schema = model_cls.model_json_schema()
+                tools.append(
+                    {
+                        "name": tool_name,
+                        "description": (
+                            model_cls.__doc__.strip() if model_cls.__doc__ else tool_name
+                        ),
+                        "input_schema": schema,
+                    }
+                )
+                seen.add(tool_name)
+
+        # External tools from registry
+        try:
+            all_tools = await self._tool_registry.list_tools(enabled_only=True)
+            for tool_def in all_tools:
+                if (
+                    tool_def.name not in seen
+                    and tool_def.capability
+                    and tool_def.capability in scope
+                ):
+                    tools.append(
+                        {
+                            "name": tool_def.name,
+                            "description": tool_def.description or tool_def.name,
+                            "input_schema": tool_def.input_schema or {"type": "object"},
+                        }
                     )
-                    return raw
+                    seen.add(tool_def.name)
+        except Exception:
+            logger.debug("Failed to list external tools", exc_info=True)
 
-        # 3. Built-in Claude handlers for specific types
-        if task_type in ("draft_email", "draft_reply"):
-            return await self._draft_action(input_data, run, context_prompt)
-        if task_type == "summarize":
-            return await self._summarize_action(input_data, context_prompt)
+        return tools
 
-        # 4. Generic Claude handler — catch-all for any unrecognized
-        #    task_type. Claude interprets the task semantically using the
-        #    enriched context prompt from ContextBuilder.
-        return await self._generic_claude_action(task_type, input_data, context_prompt)
+    async def _run_step_via_agent_loop(self, step: TaskStep, run: TaskRun) -> dict:
+        """Execute a step via the Operator agent loop with full tool discovery."""
+        from src.orchestrator.agent_loop import (
+            LoopDone,
+            LoopError,
+            LoopToolCall,
+            agent_loop,
+        )
+        from src.orchestrator.agents import AGENTS
+
+        input_data = step.input_data or {}
+        task_type = input_data.get("task_type", "unknown")
+        goal = input_data.get("goal", input_data.get("context", ""))
+
+        # Build message from step input
+        message_parts = [f"Task type: {task_type}"]
+        if goal:
+            message_parts.append(f"Goal: {goal}")
+        for key, value in input_data.items():
+            if key not in ("task_type", "goal", "context"):
+                message_parts.append(f"{key}: {value}")
+
+        message = "\n".join(message_parts)
+
+        # Get context
+        context_prompt = await self._build_step_context(run, step)
+
+        # Resolve operator agent
+        operator = AGENTS.get("operator")
+        if not operator:
+            return {
+                "status": "completed",
+                "result": "Operator agent not found",
+                "errors": ["Operator agent not configured"],
+            }
+
+        # Build system blocks
+        system_blocks = [{"type": "text", "text": operator.prompt}]
+        if context_prompt:
+            system_blocks.append({"type": "text", "text": f"\n--- Context ---\n{context_prompt}"})
+
+        # Build tools list
+        tools = await self._build_operator_tools()
+
+        # Collect events from agent loop
+        text = ""
+        tools_called = []
+        errors = []
+
+        async for event in agent_loop(
+            client=self._client,
+            agent=operator,
+            model=self._settings.resolved_model,
+            system_blocks=system_blocks,
+            tools=tools,
+            message=message,
+            user_id=run.user_id,
+            workspace_id=run.workspace_id or "",
+            db_factory=self._db_factory,
+            services=None,
+            budget=self._budget,
+            trace=None,
+            execute_tool_fn=self._execute_tool_fn,
+            max_tool_rounds=10,
+            stream=False,
+            circuit_breaker=self._circuit_breaker,
+            run_id=run.run_id,
+        ):
+            if isinstance(event, LoopDone):
+                text = event.text
+                tools_called = event.tools_called
+            elif isinstance(event, LoopError):
+                errors.append(event.message)
+            elif isinstance(event, LoopToolCall):
+                pass  # Already tracked in LoopDone.tools_called
+
+        return {
+            "status": "completed",
+            "result": text,
+            "tools_called": tools_called,
+            "errors": errors,
+        }
 
     async def _build_step_context(self, run: TaskRun, step: TaskStep) -> str:
         """Build context prompt for a step using ContextBuilder."""
@@ -838,13 +991,14 @@ class GraphExecutor:
             messages=[{"role": "user", "content": "\n".join(context_parts) or "Draft an email"}],
         )
 
-        text = response.content[0].text
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1].rsplit("```", 1)[0]
         try:
-            draft = json.loads(text)
+            draft = parse_llm_json(response.content[0].text)
         except json.JSONDecodeError:
-            draft = {"subject": "Draft", "body": text, "tone": "professional"}
+            draft = {
+                "subject": "Draft",
+                "body": response.content[0].text,
+                "tone": "professional",
+            }
 
         # Actually create the draft in Gmail if recipient is available
         recipient = input_data.get("to") or input_data.get("recipient", "")
@@ -901,13 +1055,10 @@ class GraphExecutor:
             messages=[{"role": "user", "content": content}],
         )
 
-        text = response.content[0].text
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1].rsplit("```", 1)[0]
         try:
-            return json.loads(text)
+            return parse_llm_json(response.content[0].text)
         except json.JSONDecodeError:
-            return {"status": "completed", "summary": text}
+            return {"status": "completed", "summary": response.content[0].text}
 
     async def _generic_claude_action(
         self, task_type: str, input_data: dict, context_prompt: str = ""
@@ -936,13 +1087,10 @@ class GraphExecutor:
             messages=[{"role": "user", "content": "\n".join(parts)}],
         )
 
-        text = response.content[0].text
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1].rsplit("```", 1)[0]
         try:
-            return json.loads(text)
+            return parse_llm_json(response.content[0].text)
         except json.JSONDecodeError:
-            return {"status": "completed", "result": text}
+            return {"status": "completed", "result": response.content[0].text}
 
     async def _get_ready_steps(self, run_id: str) -> list[TaskStep]:
         """Get steps whose dependencies are all completed.

@@ -344,6 +344,10 @@ class SchedulerLoop:
                             settings=self._settings,
                             db=db,
                             workspace_id=ws_id,
+                            db_factory=factory,
+                            execute_tool_fn=self._orchestrator._execute_tool,
+                            budget=self._orchestrator._budget,
+                            circuit_breaker=getattr(self._orchestrator, "_circuit_breaker", None),
                         )
 
                         # Ensure steps exist before execution (defensive)

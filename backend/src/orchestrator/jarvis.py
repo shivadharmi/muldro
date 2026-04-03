@@ -2688,6 +2688,11 @@ class JarvisOrchestrator:
                     context_builder=context_builder,
                     connector_credentials_fn=get_credentials,
                     memory_service=svc.memory_service,
+                    # Agent loop dependencies
+                    db_factory=self._db_factory,
+                    execute_tool_fn=self._execute_tool,
+                    budget=self._budget,
+                    circuit_breaker=getattr(self, "_circuit_breaker", None),
                 )
 
                 run = await executor.create_run(plan_id, user_id, workspace_id)

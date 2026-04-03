@@ -12,7 +12,6 @@ Responsibilities:
 - Adapt output format (chat text vs Canvas JSON)
 """
 
-import json
 import logging
 from datetime import date, datetime, timedelta, timezone
 
@@ -597,10 +596,9 @@ class Presenter:
                 system=MEETING_PREP_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": context}],
             )
-            text = response.content[0].text
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1].rsplit("```", 1)[0]
-            return json.loads(text)
+            from src.llm_utils import parse_llm_json
+
+            return parse_llm_json(response.content[0].text)
         except Exception:
             logger.warning("Meeting prep generation failed", exc_info=True)
             return {
@@ -622,10 +620,9 @@ class Presenter:
                 system=system_prompt,
                 messages=[{"role": "user", "content": context}],
             )
-            text = response.content[0].text
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1].rsplit("```", 1)[0]
-            return json.loads(text)
+            from src.llm_utils import parse_llm_json
+
+            return parse_llm_json(response.content[0].text)
         except Exception:
             logger.warning("Briefing generation failed", exc_info=True)
             return {

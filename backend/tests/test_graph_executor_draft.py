@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from tests.conftest import make_mock_settings
+from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID, make_mock_settings
 
 
 @pytest.fixture
@@ -48,6 +48,8 @@ def mock_connector():
 def mock_run():
     run = MagicMock()
     run.run_id = "run_01JTESTDRAFT000000000000000"
+    run.user_id = TEST_USER_ID
+    run.workspace_id = TEST_WORKSPACE_ID
     return run
 
 
@@ -76,10 +78,7 @@ async def test_draft_passes_thread_id(
     executor = _make_executor(mock_settings, mock_anthropic_client)
     connector_cls = MagicMock(return_value=mock_connector)
 
-    with patch(
-        "src.connectors.base.CONNECTOR_REGISTRY",
-        {"gmail": connector_cls},
-    ):
+    with patch("src.connectors.base.CONNECTOR_REGISTRY", {"gmail": connector_cls}):
         result = await executor._draft_action(
             input_data={
                 "recipient": "alice@example.com",
@@ -109,10 +108,7 @@ async def test_draft_works_without_thread_id(
     executor = _make_executor(mock_settings, mock_anthropic_client)
     connector_cls = MagicMock(return_value=mock_connector)
 
-    with patch(
-        "src.connectors.base.CONNECTOR_REGISTRY",
-        {"gmail": connector_cls},
-    ):
+    with patch("src.connectors.base.CONNECTOR_REGISTRY", {"gmail": connector_cls}):
         result = await executor._draft_action(
             input_data={
                 "recipient": "bob@example.com",

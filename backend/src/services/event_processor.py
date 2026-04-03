@@ -11,7 +11,6 @@ Responsibilities:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -432,10 +431,9 @@ class EventProcessor:
                 system=SCORING_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_message}],
             )
-            text = response.content[0].text
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1].rsplit("```", 1)[0]
-            return json.loads(text)
+            from src.llm_utils import parse_llm_json
+
+            return parse_llm_json(response.content[0].text)
         except Exception:
             logger.warning("Event scoring failed, using defaults", exc_info=True)
             return {**DEFAULT_SCORES, "summary": raw.summary}
@@ -615,10 +613,9 @@ class EventProcessor:
                 system=SCORING_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": batch_prompt}],
             )
-            text = response.content[0].text
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1].rsplit("```", 1)[0]
-            parsed = json.loads(text)
+            from src.llm_utils import parse_llm_json
+
+            parsed = parse_llm_json(response.content[0].text)
             if isinstance(parsed, list) and len(parsed) == len(events):
                 return parsed
             logger.warning(

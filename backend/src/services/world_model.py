@@ -484,10 +484,9 @@ class WorldModel:
                 system=ENTITY_EXTRACTION_PROMPT,
                 messages=[{"role": "user", "content": user_message}],
             )
-            text = response.content[0].text
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1].rsplit("```", 1)[0]
-            return json.loads(text)
+            from src.llm_utils import parse_llm_json
+
+            return parse_llm_json(response.content[0].text)
         except Exception:
             logger.warning("Entity extraction failed", exc_info=True)
             return {"entities": [], "relationships": []}

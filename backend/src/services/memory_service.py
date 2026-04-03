@@ -10,7 +10,6 @@ Responsibilities:
 - Expire or demote low-value memories
 """
 
-import json
 import logging
 from datetime import datetime, timezone
 
@@ -608,10 +607,9 @@ class MemoryService:
                     }
                 ],
             )
-            result_text = response.content[0].text
-            if result_text.startswith("```"):
-                result_text = result_text.split("\n", 1)[1].rsplit("```", 1)[0]
-            return json.loads(result_text).get("contradicts", False)
+            from src.llm_utils import parse_llm_json
+
+            return parse_llm_json(response.content[0].text).get("contradicts", False)
         except Exception:
             logger.debug("Contradiction check failed", exc_info=True)
             return False
@@ -875,12 +873,9 @@ class MemoryService:
                 system=MEMORY_EXTRACTION_PROMPT,
                 messages=[{"role": "user", "content": source_text}],
             )
-            text = response.content[0].text.strip()
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-            if not text or text[0] not in "{[":
-                return {"memories": []}
-            return json.loads(text)
+            from src.llm_utils import parse_llm_json
+
+            return parse_llm_json(response.content[0].text)
         except Exception:
             logger.debug("Memory extraction returned non-JSON", exc_info=True)
             return {"memories": []}
@@ -894,12 +889,9 @@ class MemoryService:
                 system=PREFERENCE_EXTRACTION_PROMPT,
                 messages=[{"role": "user", "content": source_text}],
             )
-            text = response.content[0].text.strip()
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-            if not text or text[0] not in "{[":
-                return {"preferences": []}
-            return json.loads(text)
+            from src.llm_utils import parse_llm_json
+
+            return parse_llm_json(response.content[0].text)
         except Exception:
             logger.debug("Preference extraction returned non-JSON", exc_info=True)
             return {"preferences": []}
