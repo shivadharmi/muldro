@@ -76,7 +76,14 @@ BEDROCK_MODEL_TIERS = {
 }
 
 # Agents that benefit from context enrichment (read-heavy agents)
-CONTEXT_ENRICHED_AGENTS = {"planner", "presenter", "researcher", "librarian", "operator"}
+CONTEXT_ENRICHED_AGENTS = {
+    "planner",
+    "presenter",
+    "researcher",
+    "librarian",
+    "operator",
+    "governor",
+}
 
 # Intent classification constants imported from intent_classifier module
 

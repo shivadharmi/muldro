@@ -25,6 +25,7 @@ from src.tools.schemas import (
     GetBriefingInput,
     GetGoalMemoriesInput,
     GetObservationCursorInput,
+    GetPlanDetailsInput,
     IngestEventInput,
     PushUiUpdateInput,
     ReportGovernorVerdictInput,
@@ -234,6 +235,16 @@ INTERNAL_TOOLS: list[InternalToolDef] = [
         server="intelligence",
         description=_desc(StorePreferenceInput),
         read_only=False,
+    ),
+    InternalToolDef(
+        name="get_plan_details",
+        input_model=GetPlanDetailsInput,
+        capability="internal.get_plan_details",
+        risk_level="low",
+        requires_approval=False,
+        server="intelligence",
+        description=_desc(GetPlanDetailsInput),
+        read_only=True,
     ),
     # Special: inline-dispatched (not a real MCP tool).
     # Shares capability with evaluate_policy — both are governor-domain tools.

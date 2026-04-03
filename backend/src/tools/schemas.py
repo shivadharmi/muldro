@@ -237,6 +237,17 @@ class StorePreferenceInput(BaseModel):
     )
 
 
+class GetPlanDetailsInput(BaseModel):
+    """Fetch plan metadata to verify existence and inspect tasks.
+
+    Returns plan goal, priority, risk level, decision type, status,
+    creation time, and task list. Used by Governor to independently
+    verify that a plan_id corresponds to a legitimate plan.
+    """
+
+    plan_id: str = Field(description="ID of the plan to look up")
+
+
 # ── Registry ───────────────────────────────────────────────────────
 
 TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
@@ -261,6 +272,7 @@ TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
     "push_ui_update": PushUiUpdateInput,
     "store_memory": StoreMemoryInput,
     "store_preference": StorePreferenceInput,
+    "get_plan_details": GetPlanDetailsInput,
 }
 
 

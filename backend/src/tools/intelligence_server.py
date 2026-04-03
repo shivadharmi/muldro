@@ -239,6 +239,79 @@ async def update_entity(
 # ── Planning ─────────────────────────────────────────────────────────────
 
 
+async def _get_plan_details_impl(
+    plan_id: str,
+    user_id: str,
+    workspace_id: str,
+    db,
+) -> dict:
+    """Core implementation for get_plan_details tool.
+
+    Returns plan metadata or {"status": "not_found"} if plan doesn't exist
+    or workspace doesn't match.
+    """
+    from src.models.plans import Plan
+
+    result = await db.execute(
+        select(Plan).where(
+            Plan.plan_id == plan_id,
+        )
+    )
+    plan = result.scalar_one_or_none()
+
+    if not plan:
+        return {"status": "not_found"}
+
+    # Workspace isolation check (skip if workspace_id not provided)
+    if workspace_id and plan.workspace_id != workspace_id:
+        return {"status": "not_found"}
+
+    # Build tasks list
+    tasks = [
+        {
+            "task_id": task.task_id,
+            "task_type": task.task_type,
+            "description": getattr(task, "description", ""),
+            "depends_on": task.depends_on or [],
+        }
+        for task in (plan.tasks or [])
+    ]
+
+    return {
+        "plan_id": plan.plan_id,
+        "goal": plan.goal,
+        "priority": plan.priority,
+        "risk_level": plan.risk_level,
+        "decision": plan.decision,
+        "status": plan.status,
+        "created_at": plan.created_at.isoformat() if plan.created_at else None,
+        "tasks": tasks,
+    }
+
+
+@intelligence.tool(
+    tags={"governor", "read"},
+    annotations=ToolAnnotations(readOnlyHint=True),
+)
+async def get_plan_details(
+    user_id: str,
+    plan_id: str,
+    ctx: Context,
+    workspace_id: str = "",
+) -> dict:
+    """Fetch plan metadata to verify existence and inspect tasks.
+
+    Returns plan metadata including tasks list, or not_found status.
+    Used by Governor to verify plan existence before policy evaluation.
+    """
+    async with _get_db() as db:
+        try:
+            return await _get_plan_details_impl(plan_id, user_id, workspace_id, db)
+        except Exception as e:
+            logger.error("get_plan_details failed: %s", e, exc_info=True)
+            return {"status": "not_found", "error": str(e)}
+
+
 @intelligence.tool(
     tags={"planner", "read"},
     annotations=ToolAnnotations(readOnlyHint=True),
