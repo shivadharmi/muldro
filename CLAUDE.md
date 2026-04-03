@@ -118,7 +118,7 @@ All backend settings via env vars with `JARVIS_` prefix (pydantic-settings in `s
 | Observer | Read sources, detect changes, ingest events | normalized_events |
 | Librarian | Extract entities, update world model, store memories | entities, relationships, memories |
 | Planner | Produce task graphs, manage goals (structured JSON) | plans, plan_tasks, goal memories |
-| Governor | Evaluate policies, gate approvals | policy decisions, approvals |
+| Governor | Evaluate policies, gate approvals, verify plans | policy decisions, approvals |
 | Operator | Execute approved plans via tools (reads context first) | task_runs, task_steps |
 | Presenter | Generate user-facing output | briefings, A2UI surfaces (via SurfaceService + renderer.py) |
 | Researcher | Deep context gathering | None (read-only) |
@@ -156,11 +156,9 @@ The `RouteResolver` (`src/services/route_resolver.py`) maps Planner decisions to
 
 ## Agentic vs Scripted Execution
 
-Routes use TWO execution modes:
-- **Agentic** (`message_template`): Agent goes through the agent loop, discovers available tools, and autonomously decides which to call. Used by most routes.
-- **Scripted** (`action: "execute_plan"`): GraphExecutor walks a predefined task DAG with hardcoded handlers. Used only by `create_task` for complex multi-step plans.
+All routes use **agentic execution** (`message_template`): the agent goes through the agent loop, discovers available tools, and autonomously decides which to call.
 
-**Do not** add `action: "execute_plan"` to new routes unless the workflow genuinely needs DAG execution with checkpointing. Default to `message_template` so the agent can discover tools and act autonomously.
+The `create_task` route triggers GraphExecutor for DAG management (dependencies, checkpointing, resume), but each step within the DAG is executed via the agent loop — the Operator agent discovers tools autonomously per step. GraphExecutor is a **durable DAG wrapper around agent_loop**, not a separate execution mode.
 
 **Do not** hardcode tool-calling sequences in Python handlers. Let agents discover tools via the agent loop. The agent loop handles tool discovery, multi-turn reasoning, error recovery, and governor hooks automatically.
 
@@ -343,7 +341,8 @@ All 51 data tables are scoped by `workspace_id` (NOT NULL FK to `workspaces`). O
 - Do not use `TOOL_TO_CAPABILITY` dict or `get_capability_for_tool()` — they were deleted. Use registry `capability` column via `ToolRegistry.get_tool()`
 - Do not use `_DEFAULT_TOOLS` or `CANONICAL_ALIASES` — they were deleted. Use `catalog.py` seeds
 - Do not use native connector dispatch (`_NATIVE_TOOL_MAP`, `_try_native_connector`) — deleted. All tools go through MCP
-- Do not add `action: "execute_plan"` to routes for simple 1-2 tool workflows — use `message_template` so the agent goes through the agent loop
 - Do not hardcode tool-calling sequences in `_xxx_action` handlers — let agents discover tools autonomously
+- Do not bypass agent loop for step execution — GraphExecutor delegates to agent_loop per step
+- Do not import from `src/ui/views.py` — deleted. Use `renderer.py` builders + `SurfaceService` for surfaces
 - Do not give agents write capabilities without corresponding read capabilities — agents need to read context before writing (read-before-write principle)
 - Do not add internal MCP tools without adding them to ALL three places: `schemas.py` (input model), `catalog.py` (tool def), `intelligence_server.py` (implementation)

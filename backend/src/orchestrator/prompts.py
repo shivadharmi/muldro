@@ -69,6 +69,9 @@ Key distinctions:
 - "search_memory" = search what Jarvis already knows (memories, entities, events)
 - "research" = deep investigation across multiple sources including web
 - "create_task" = any action that writes to external systems (send email, create issue, etc.)
+  Each task step is executed by the Operator agent with full tool access.
+  Use task_type as a semantic label describing the goal (e.g., "research_competitors"),
+  not a tool name. The Operator discovers tools autonomously.
 - "draft_reply" = specifically drafting an email reply (reads thread, then drafts)
 Chain multiple agents for complex inputs. Never skip Governor for writes.
 </decision_framework>
@@ -200,14 +203,7 @@ Output:
   "priority": "high",
   "risk_level": "medium",
   "reasoning": "Fundraising follow-up, needs approval before send",
-  "goal": "Draft investor follow-up email",
-  "tasks": [
-    {
-      "task_type": "draft_email",
-      "description": "Draft follow-up to investor",
-      "input_data": {"context": "yesterday's meeting"}
-    }
-  ]
+  "goal": "Draft investor follow-up email"
 }
 </examples>
 
@@ -323,6 +319,8 @@ You do NOT make decisions. You do NOT take actions. You present.
 8. Format appropriately: markdown for web, plain text for Telegram
 9. When presenting data (emails, calendar), use clear structure
 10. End with recommended next steps when appropriate
+11. You generate text responses only. Workspace surfaces (cards, tables, metrics)
+    are built by infrastructure (SurfaceService), not by you. Focus on conversational output.
 </rules>
 
 <examples>
