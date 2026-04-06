@@ -2633,10 +2633,6 @@ class JarvisOrchestrator:
         if tool.backend == "internal_mcp" and tool.server == "_special":
             return tool_input
 
-        # Inject workspace_id so tools always have it
-        if workspace_id and "workspace_id" not in tool_input:
-            tool_input = {**tool_input, "workspace_id": workspace_id}
-
         logger.info(
             "[mcp] dispatch %s via %s/%s",
             tool_name,
@@ -2648,12 +2644,17 @@ class JarvisOrchestrator:
         try:
             match tool.backend:
                 case "internal_mcp":
+                    # Internal tools receive workspace_id in input
+                    if workspace_id and "workspace_id" not in tool_input:
+                        tool_input = {**tool_input, "workspace_id": workspace_id}
                     result = await self._call_internal_tool(
                         tool_name,
                         {**tool_input, "user_id": user_id},
                         server_prefix=tool.server,
                     )
                 case "external_mcp":
+                    # External MCP servers do not accept workspace_id in tool input —
+                    # it is passed as a keyword arg for session routing only.
                     from src.connectors.mcp_bridge import call_mcp_tool
 
                     result = await call_mcp_tool(
@@ -2663,6 +2664,9 @@ class JarvisOrchestrator:
                         workspace_id=workspace_id,
                     )
                 case "composite":
+                    # Composite tools are Jarvis-internal, receive workspace_id
+                    if workspace_id and "workspace_id" not in tool_input:
+                        tool_input = {**tool_input, "workspace_id": workspace_id}
                     result = await self._call_composite_tool(
                         tool_name,
                         tool_input,
