@@ -32,7 +32,7 @@ SESSION_TTL_SECONDS = 1800
 # The sessions are short-lived (30-min TTL) and per-user.
 _STDIO_TOKEN_ENV_VARS: dict[str, str] = {
     "github": "GITHUB_PERSONAL_ACCESS_TOKEN",
-    "slack": "SLACK_BOT_TOKEN",
+    "slack": "SLACK_MCP_XOXB_TOKEN",
     "linear": "LINEAR_ACCESS_TOKEN",
     "notion": "NOTION_TOKEN",
 }
