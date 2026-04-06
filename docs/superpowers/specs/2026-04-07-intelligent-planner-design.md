@@ -451,3 +451,84 @@ Each phase is independently deployable and testable. Rollback = revert to previo
 4. The Operator receives only step-relevant tools, not the full catalog
 5. Novel requests that combine existing capabilities produce reasonable plans
 6. Requests that exceed capabilities produce honest `partial`/`not_achievable` assessments
+
+## Blast Radius
+
+This spec has the largest blast radius of the four specs because `PlannerOutput` and the 19 decision types are referenced across the entire codebase — both as imports and as string literals.
+
+### Tier 1: CRITICAL — Must change first (foundational contracts)
+
+| File | What changes | Why |
+|------|-------------|-----|
+| `src/orchestrator/contracts.py` | Replace `PlannerOutput`, `PlannerTask`, `InstructionSpec` with `PlanOutput`, `PlanStep`, `CapabilityGap` | Core contract — everything imports from here |
+| `src/orchestrator/jarvis.py` | Replace routing logic in `process_message()` and `process_message_stream()`, replace `_resolve_pipeline()`, remove decision-type conditionals (~20 locations using `decision.decision == "..."`) | Hub of the system — routes all messages |
+| `src/services/route_resolver.py` | Delete entirely (Phase 6) or deprecate alongside new capability routing | Primary routing mechanism being replaced |
+| `src/orchestrator/prompts.py` | Delete `JARVIS_DECISION_FRAMEWORK`, `OBSERVER_PROMPT`, `RESEARCHER_PROMPT`. Add `PERCEIVER_PROMPT`, rewrite `PLANNER_PROMPT` | Agent prompt definitions |
+| `src/orchestrator/agents.py` | Merge observer+researcher → perceiver in `AGENTS` dict, `AGENT_MODEL_TIERS`, `AGENT_CAPABILITY_SCOPES` | Agent definitions |
+
+### Tier 2: HIGH — Must change immediately after Tier 1
+
+| File | What changes | Why |
+|------|-------------|-----|
+| `src/orchestrator/intent_classifier.py` | Update `extract_decision()` return type, update `intent_to_decision()` → `intent_to_plan()`, add expanded fast intents | Fast path produces new `PlanOutput` |
+| `src/services/graph_executor.py` | Accept `PlanOutput` steps, resolve capabilities to tools per step via `CapabilityResolver` | Execution engine must understand new plan model |
+| `src/api/routes_chat.py` | Update `MessageMetadata` to use `PlanOutput` instead of `PlannerOutput` | Chat API returns decision metadata |
+| `src/services/governor.py` | Update `evaluate_plan()` to work with `PlanOutput` (no `decision` field) | Governor reads plan structure |
+| `src/orchestrator/tracing.py` | Update `SpanRecord.decision` field handling — no longer a decision type string | Trace recording |
+| `src/services/metrics_service.py` | Update `PLANS_CREATED` counter label from `["decision"]` to capability-based label | Prometheus metrics |
+| `src/tools/intelligence_server.py` | Update `get_plan_details` to return `PlanOutput` structure | MCP tool for plan inspection |
+| `src/models/agent_routes.py` | Deprecate or delete `AgentRoute` model | DB model for deleted routing |
+| `src/api/app.py` | Remove `RouteResolver.seed_defaults()` from startup | Startup initialization |
+
+### Tier 3: MEDIUM — Dependent updates
+
+| File | What changes | Why |
+|------|-------------|-----|
+| `src/services/surface_builder.py` | Update surface building from decision-type mapping to capability-based | Surface generation |
+| `src/services/surface_detail_builders.py` | Update detail builders for new plan structure | Surface detail tabs |
+| `src/ui/renderer.py` | Update `build_detail_config()` for new plan structure | A2UI rendering |
+| `src/services/event_bus.py` | Update domain event payloads (no `decision` field) | Event publishing |
+| `src/services/scheduler.py` | Update `_tick_background_tasks()` for new plan format, update "observer" references | Background execution |
+| `src/interface/telegram.py` | Update `process_message()` response handling | Telegram interface |
+| `src/api/routes_traces.py` | Update trace display for new plan structure | Trace API |
+| `src/services/route_analytics.py` | Delete or update for capability-based analytics | Analytics |
+| `frontend/src/lib/agent-config.ts` | Merge observer+researcher → perceiver in `AGENT_CONFIGS` | Frontend agent display |
+| `frontend/src/lib/types.ts` | Update TypeScript interfaces for `PlanOutput` | Frontend types |
+| `frontend/src/components/jarvis/chat-panel.tsx` | Update decision display in chat | Chat UI |
+
+### Tier 4: Tests (MUST rewrite — will fail immediately)
+
+| File | What changes | Why |
+|------|-------------|-----|
+| `tests/test_contracts.py` | Complete rewrite — 50+ tests reference `PlannerOutput` and 19 decision types | Contract validation tests |
+| `tests/test_contracts_v2.py` | Update for new contract models | Extended contract tests |
+| `tests/test_route_resolver.py` | Delete (60+ tests) or rewrite for capability routing | Route resolver tests |
+| `tests/test_orchestrator.py` | Update for new routing and plan model | End-to-end orchestrator tests |
+| `tests/test_planner_structured.py` | Rewrite for `PlanOutput` parsing | Planner output tests |
+| `tests/test_perception_execution.py` | Update `PlannerOutput` fixtures | Perception pipeline tests |
+| `tests/test_ignore_decision.py` | Update for new handling of ignored messages | Decision handling test |
+| `tests/test_agent_registry.py` | Update for perceiver agent | Agent loading tests |
+| `tests/golden/test_planner_decisions.py` | Complete rewrite — hardcoded decision type assertions | Golden tests |
+
+### Tier 5: Documentation
+
+| File | What changes |
+|------|-------------|
+| `CLAUDE.md` | Update Agent Routing & Execution section, PlannerOutput references, DEFAULT_ROUTES table, decision→pipeline mapping |
+| `docs/architecture/message-flow.md` | Update flow diagrams |
+| `docs/architecture/decisions.md` | Replace 19 decision types documentation |
+| `docs/architecture/services.md` | Remove RouteResolver documentation |
+| `docs/architecture/overview.md` | Update agent_routes references |
+
+### Key Risk: String-Based Decision Type References
+
+The 19 decision types appear as **string literals** across 30+ files — these won't be caught by Python import analysis. A search for each string is required:
+
+- `"create_task"` — ~30 files
+- `"acknowledge"` — ~35 files (default fallback)
+- `"ignore"` — ~25 files (special early return)
+- `"set_goal"`, `"set_instruction"`, `"schedule_reminder"`, `"add_to_brief"` — ~5 files each (direct handlers in jarvis.py, wired into BOTH streaming and non-streaming)
+
+**Migration safety net:** Keep `PlannerOutput` as a deprecated alias during transition. Run `ruff` + `grep` for all 19 decision strings before deleting.
+
+### Total: ~48 files affected (22 source, 10 tests, 3 frontend, 5 migrations/models, 8 docs)

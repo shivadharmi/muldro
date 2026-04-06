@@ -345,3 +345,91 @@ Execution surfaces are persisted to the `ui_surfaces` table (already exists) wit
 4. Simple interactions don't create TaskRun records (only InteractionLog)
 5. Active executions are visually prominent in the workspace
 6. Surface updates are smooth (no flickering, no duplicate surfaces)
+
+## Blast Radius
+
+This spec touches both backend execution infrastructure and the full frontend surface rendering pipeline. The key risk is the chain from GraphExecutor → Redis → WebSocket → Surface Store → React rendering — if any link breaks, surface updates silently fail.
+
+### Tier 1: CRITICAL — Execution tracking & surface lifecycle
+
+| File | What changes | Why |
+|------|-------------|-----|
+| `src/orchestrator/jarvis.py` | Delete `_create_lightweight_run()` (4-5 call sites in `process_message` + `process_message_stream`), delete `_complete_lightweight_run()` (3 call sites). Replace with `_log_interaction()`. Refactor `_push_workspace_surface()` into `_create_initial_surface()` + surface_id passed to GraphExecutor | Core orchestrator — most call sites |
+| `src/services/graph_executor.py` | Add `_emit_surface_update()` calls after each step transition (start, complete, approval, done). Accept `surface_id` parameter in `execute_run()` | Execution engine — where progress events originate |
+| `src/models/task_graph.py` | `TaskRun` with `source='user_message'` is deprecated. Queries filtering by this source must be updated or removed | Data model for execution tracking |
+| `frontend/src/hooks/use-jarvis-ws.ts` | Add `surface_update` message type handler alongside existing `surface` handler. Add `onSurfaceUpdate` callback parameter | **CRITICAL** — without this, surface_update events are silently dropped |
+
+### Tier 2: HIGH — Transport & storage
+
+| File | What changes | Why |
+|------|-------------|-----|
+| `src/orchestrator/contracts.py` | Add `SurfaceUpdateMessage` model alongside existing `WorkspaceSurfacePush` | New contract for incremental surface updates |
+| `src/ui/contracts.py` | Add `SurfaceUpdate` type with phase, steps, progress fields | A2UI contract extension |
+| `src/api/routes_ws.py` | Handle `surface_update` message type in WebSocket connection handler | WebSocket delivery |
+| `src/services/surface_builder.py` | Include active execution surfaces (phase != completed) in `build_workspace_surfaces()`, sort above static surfaces | Workspace reconnection |
+| `src/services/event_bus.py` | Add `surface_update` event type handler | Event publishing |
+| `frontend/src/stores/surface-store.ts` | Verify `addSurface()` merge works for partial updates (already does `...spread`). May need explicit `updateSurfacePartial()` method | Surface state management |
+| `frontend/src/app/page.tsx` | Add `onSurfaceUpdate` callback to `useJarvisWs()` hook call | Workspace page |
+| `frontend/src/app/chat/page.tsx` | Add `onSurfaceUpdate` callback to `useJarvisWs()` hook call | Chat page |
+
+### Tier 3: MEDIUM — Frontend components
+
+| File | What changes | Why |
+|------|-------------|-----|
+| `frontend/src/components/workspace/surface-card.tsx` | Handle live updates — re-render when surface phase/steps change | Surface card rendering |
+| `frontend/src/components/workspace/surface-detail-modal.tsx` | Handle detail_config updates during execution | Detail modal |
+| `frontend/src/components/a2ui/renderer.tsx` | Add ExecutionSurface case to renderer switch | Component dispatch |
+| `frontend/src/lib/a2ui-types.ts` | Add `SurfaceUpdate` TypeScript type, execution surface data types | Frontend types |
+| `src/services/execution_state.py` | Verify `InteractionLog` doesn't need state machine (it shouldn't) | State management |
+| `src/services/eviction_service.py` | Update cleanup queries — may query `source='user_message'` TaskRuns | Data cleanup |
+| `src/api/routes_runs.py` | Update run listing to distinguish real runs from InteractionLog | Run API |
+
+### Tier 4: Tests
+
+| File | What changes | Why |
+|------|-------------|-----|
+| `tests/test_orchestrator.py` | Rewrite — currently tests `_create_lightweight_run` in `process_message` flow | Core orchestrator tests |
+| `tests/test_acceptance.py` | Update lightweight run expectations → InteractionLog | Acceptance pipeline |
+| `tests/test_execution_state.py` | Verify no InteractionLog state transitions expected | State machine tests |
+| `tests/test_graph_executor.py` | Add surface_update emission assertions | Executor tests |
+| E2E tests | Verify surface updates reach frontend | Frontend integration |
+
+### Critical Interdependency Chains
+
+**Chain 1: Lightweight run deletion (must do in order)**
+```
+Create InteractionLog model + migration
+    ↓
+Implement _log_interaction() in jarvis.py
+    ↓
+Replace ALL _create_lightweight_run call sites (4-5 locations)
+    ↓
+Replace ALL _complete_lightweight_run call sites (3 locations)
+    ↓
+Delete old methods
+    ↓
+Update routes_runs.py queries
+    ↓
+Update tests
+```
+**Risk:** Missing any call site → runtime AttributeError.
+
+**Chain 2: Surface update pipeline (must complete entire chain)**
+```
+Add SurfaceUpdateMessage contract (backend)
+    ↓
+GraphExecutor emits surface_update events to Redis
+    ↓
+routes_ws.py relays surface_update messages to WebSocket
+    ↓
+use-jarvis-ws.ts receives surface_update and calls onSurfaceUpdate
+    ↓
+page.tsx/chat/page.tsx wires onSurfaceUpdate to surface store
+    ↓
+surface-store.ts merges update into existing surface
+    ↓
+surface-card.tsx re-renders with new state
+```
+**Risk:** Any missing link → surface_update events silently dropped with no error.
+
+### Total: ~30 files affected (10 backend source, 5 tests, 10 frontend, 3 models/contracts, 2 new components)

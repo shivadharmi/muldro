@@ -557,3 +557,84 @@ This should be rare (<5% of evaluations). The Governor LLM prompt is simplified 
 4. Approval UX shows WHY and shows graduation progress
 5. User can control trust ceilings per capability
 6. System is faster — deterministic engine replaces Governor LLM call for 95%+ of evaluations
+
+## Blast Radius
+
+This spec modifies the approval pipeline which is woven through hooks, the agent loop, the graph executor, approval routes, and multiple services.
+
+### Tier 1: CRITICAL — Core approval logic
+
+| File | What changes | Why |
+|------|-------------|-----|
+| `src/orchestrator/hooks.py` | Convert `governor_pre_tool_hook` from approval gate to audit-only — remove approval creation logic (lines 99-163), keep audit logging | Currently creates approvals on every write tool call |
+| `src/services/graph_executor.py` | Replace dual approval check in `_execute_step()` (lines 531-621) with single TrustEngine call. Remove `ApprovalPolicyEngine` import and call (lines 539-568) | Central execution flow — where the single approval gate lives |
+| `src/orchestrator/contracts.py` | Add `auto_execute_notify` and `auto_execute_silent` to `PolicyDecision.decision` Literal | Contract change affects all PolicyDecision consumers |
+| `src/services/governor.py` | Replace LLM-based `evaluate_plan()` with deterministic TrustEngine delegation. Keep for edge cases only | Core approval decision logic |
+
+### Tier 2: HIGH — Approval flow participants
+
+| File | What changes | Why |
+|------|-------------|-----|
+| `src/orchestrator/agent_loop.py` | Update `governor_pre_tool_hook` call handling (line 362) — hook now returns audit info, not approval gates | Agent loop calls hook on every tool use |
+| `src/api/routes_approvals.py` | Add `record_approval_decision()` call to both `approve_action()` and `reject_action()` endpoints | Trust feedback loop — where trust accumulates |
+| `src/services/approval_policy_engine.py` | Delete entirely — replaced by `TrustEngine` | Old policy engine |
+| `src/models/trust_score.py` | Delete — replaced by `TrustState` model | Old trust model |
+| `src/runtime.py` | Update Tier 2 service initialization — add TrustEngine, update Governor setup (line 70) | Service container setup |
+| `src/orchestrator/prompts.py` | Simplify `GOVERNOR_PROMPT` for edge-case-only usage | Governor prompt |
+
+### Tier 3: MEDIUM — Services that read approval data (safe but verify)
+
+| File | What changes | Why |
+|------|-------------|-----|
+| `src/services/surface_builder.py` | Update approval surface building for new trust context (show graduation progress) | Builds approval cards |
+| `src/services/surface_detail_builders.py` | Update approval detail views (3 imports of Approval model) | Approval detail rendering |
+| `src/orchestrator/recovery.py` | Verify compatibility with new TrustState model for approval state recovery | Crash recovery |
+| `src/services/notifier.py` | Add handling for `auto_execute_notify` — new notification type for auto-executed actions | Notification delivery |
+| `src/services/approval_impact.py` | Safe — analysis-only service, queries Approval records | Impact analysis |
+| `src/services/eviction_service.py` | Safe — cleanup queries unchanged | Cleanup |
+| `src/services/heartbeat.py` | Safe — observability metrics | Health checks |
+| `src/api/routes_settings.py` | Add trust transparency endpoints (trust state listing, ceiling management) | New Settings → Trust UI |
+
+### Tier 4: Tests
+
+| File | What changes | Why |
+|------|-------------|-----|
+| `tests/test_governor.py` | Rewrite for deterministic logic instead of LLM evaluation | Core governor tests |
+| `tests/test_governor_v2.py` | Update for new policy evaluation | Extended governor tests |
+| `tests/test_governor_time_policies.py` | Update time-based policy tests | Time policy tests |
+| `tests/golden/test_governor_policies.py` | Rewrite golden expectations | Golden tests |
+| `tests/test_approval_service.py` | Add trust feedback loop assertions | Approval service tests |
+| `tests/test_approvals.py` | Update approve/reject endpoint tests for trust feedback | Approval route tests |
+| `tests/test_trust_engine.py` | Rewrite for TrustState model (currently uses TrustScore) | Trust engine tests |
+| `tests/test_orchestrator.py` | Update hook expectations to audit-only behavior | Orchestrator integration tests |
+| `tests/test_agent_loop.py` | Update governor hook behavior in agent loop tests | Agent loop tests |
+| `tests/test_graph_executor.py` | Update `_execute_step` approval logic tests | Graph executor tests |
+| `tests/test_unified_dispatch.py` | Update Governor mocking | Dispatch integration tests |
+| `tests/test_contracts_v2.py` | Add `auto_execute_notify`/`auto_execute_silent` assertions | Contract tests |
+
+### Tier 5: Frontend
+
+| File | What changes | Why |
+|------|-------------|-----|
+| Frontend Settings page | New Trust tab with per-capability trust display and ceiling controls | Trust transparency UI |
+| Approval surface components | Show trust context ("first time" / "similar to 4 approvals" / graduation hint) | Approval UX improvement |
+
+### Interdependency Chain
+
+```
+Create TrustState + TrustCeiling models + migration
+    ↓
+Implement TrustEngine with graduation rules
+    ↓
+Update GraphExecutor._execute_step() to use TrustEngine (single gate)
+    ↓
+Convert governor_pre_tool_hook to audit-only
+    ↓
+Wire trust feedback into routes_approvals approve/reject
+    ↓
+Delete ApprovalPolicyEngine + TrustScore
+    ↓
+Update all tests
+```
+
+### Total: ~40 files affected (18 source, 12 tests, 2 models to delete, 2 new models, 6 frontend)

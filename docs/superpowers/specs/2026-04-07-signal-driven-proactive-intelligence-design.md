@@ -475,3 +475,74 @@ This is enforced by the trust engine (Spec 2): external writes always go through
 5. Dismissals teach the system what the user doesn't care about
 6. Persona costs reduced ~5x via batching with better signal quality
 7. Cross-source synthesis identifies related signals across services
+
+## Blast Radius
+
+This spec primarily modifies the perception pipeline and notification system. It has the smallest blast radius of the four specs because most changes are additive (new assessor, new surface type, new model) rather than replacing existing contracts.
+
+### Tier 1: CRITICAL — Core perception pipeline
+
+| File | What changes | Why |
+|------|-------------|-----|
+| `src/orchestrator/jarvis.py` | Remove 2 fire-and-forget Persona calls (lines ~813-826 in `process_message`, lines ~1160-1173 in `process_message_stream`). Add relevance assessment step in `run_perception_cycle()` between Librarian extraction and Planner evaluation. Update perception decision routing to push/briefing/silent tiers | Central orchestrator |
+| `src/services/scheduler.py` | Remove `synthesis_cooldown = 1800` (line ~258). Replace fixed 30-min cooldown with signal-volume-based triggering in `_tick_perception()`. Add Persona batch trigger logic (every 10 interactions or daily) | Scheduler drives perception |
+
+### Tier 2: HIGH — Signal routing & notification
+
+| File | What changes | Why |
+|------|-------------|-----|
+| `src/orchestrator/contracts.py` | Add `notification_tier` field to `PerceptionDecision` model. Add "proactive_insight" to `WorkspaceSurfacePush.kind` Literal | Contracts for tier routing and new surface type |
+| `src/services/notifier.py` | Add handling for push-tier perception signals (new notification type distinct from `approval_request` and `info_update`) | Notification delivery |
+| `src/services/memory_service.py` | Update `store_briefing_memory()` to accept `relevance_score` and `relevance_metadata` parameters | Briefing item storage with context |
+| `src/services/surface_builder.py` | Add `_build_proactive_insight_surfaces()` method. Include insight surfaces in `build_workspace_surfaces()` | New surface type in workspace |
+| `src/services/perception_policy.py` | May need adjustment for relevance-aware urgency calculations | Perception guardrails |
+
+### Tier 3: MEDIUM — Models & rendering
+
+| File | What changes | Why |
+|------|-------------|-----|
+| `src/models/briefings.py` | Add `relevance_score` (Float), `relevance_metadata` (JSONB) columns | Briefing item relevance context |
+| `src/ui/renderer.py` | Add rendering rules for `proactive_insight` surface kind | Surface detail config |
+| `src/orchestrator/prompts.py` | Update Planner prompt to receive relevance context from perception. Keep `PERSONA_PROMPT` (used by batch service now) | Prompt updates |
+| `src/orchestrator/agents.py` | Persona agent definition unchanged — model tier and prompt stay the same. But calling pattern changes from per-message to batched | Agent config |
+| `src/tools/intelligence_server.py` | Briefing generation may consider relevance metadata when building briefings | MCP tool |
+
+### Tier 4: Frontend
+
+| File | What changes | Why |
+|------|-------------|-----|
+| `frontend/src/lib/types/surfaces.ts` | Add `proactive_insight` to SurfaceKind type | TypeScript types |
+| `frontend/src/components/workspace/surface-card.tsx` | Add rendering for proactive_insight kind (suggested actions + dismiss button) | Surface card |
+| `frontend/src/app/page.tsx` | May need to surface proactive insights prominently (above other surfaces) | Workspace layout |
+
+### Tier 5: Tests
+
+| File | What changes | Why |
+|------|-------------|-----|
+| `tests/test_perception.py` | Add relevance assessor stage tests, tier routing tests | Perception pipeline |
+| `tests/test_perception_execution.py` | Update perception pipeline verification | Pipeline flow |
+| `tests/test_scheduler.py` | Remove 30-min cooldown tests, add signal-volume trigger tests, add Persona batch tests | Scheduler timing |
+| `tests/test_orchestrator.py` | Remove per-message Persona call assertions | Persona removal |
+| `tests/test_persona_golden.py` | May need refactoring for batch-mode testing | Persona behavior |
+| `tests/test_briefing.py` | Add relevance metadata storage tests | Briefing items |
+| `tests/test_briefing_read_model.py` | Add relevance metadata display tests | Briefing read |
+| `tests/test_notifier.py` | Add push-tier signal routing tests | Notification |
+| `tests/test_surface_registry.py` | Add proactive_insight surface kind tests | Surface registry |
+
+### Tier 6: New files & migrations
+
+| File | Type | Why |
+|------|------|-----|
+| `src/services/relevance_assessor.py` | NEW | LLM relevance assessment service |
+| `src/models/engagement_history.py` | NEW | Engagement tracking model |
+| `frontend/src/components/a2ui/components/insight-surface.tsx` | NEW | Proactive insight surface component |
+| Alembic migration for `engagement_history` table | NEW | New table |
+| Alembic migration for briefing relevance columns | NEW | Schema update |
+
+### Key Risk: Persona Removal Timing
+
+The Persona agent is called in **both** `process_message()` and `process_message_stream()`. Both calls must be removed simultaneously. If one path still calls Persona per-message while the other uses batching, the behavior diverges between API and streaming paths.
+
+**Safety net:** Search for `"persona"` as agent name string in jarvis.py to find all call sites.
+
+### Total: ~30 files affected (12 source, 9 tests, 3 frontend, 2 new models, 2 new migrations, 2 new services)
