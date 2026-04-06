@@ -139,12 +139,26 @@ def create_app() -> FastAPI:
         except Exception:
             logger.debug("Qdrant collection init skipped", exc_info=True)
 
-        # Initialize MCP bridge with session pool (replaces old gateway layer).
+        # Create OAuthManager for MCP bridge token resolution.
+        # Lightweight instance (db_factory + encryption key, no state).
+        oauth_manager = None
+        try:
+            from src.models.database import get_session_factory as _get_sf
+            from src.services.oauth_manager import OAuthManager
+
+            oauth_manager = OAuthManager(
+                db_factory=_get_sf(),
+                settings=settings,
+                encryption_key=settings.oauth_encryption_key,
+            )
+        except Exception:
+            logger.debug("OAuthManager unavailable for MCP bridge", exc_info=True)
+
+        # Initialize MCP bridge with session pool.
         # Auth is resolved per-user from OAuthManager at call time.
         try:
             from src.connectors.mcp_bridge import initialize_mcp_bridge
 
-            oauth_manager = getattr(app.state, "oauth_manager", None)
             await initialize_mcp_bridge(oauth_manager=oauth_manager)
         except Exception:
             logger.debug("MCP bridge init skipped", exc_info=True)
