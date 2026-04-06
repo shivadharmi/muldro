@@ -16,6 +16,28 @@ from src.models.server_trust import ServerTrustRecord
 
 logger = logging.getLogger(__name__)
 
+
+async def _clear_stale_tool_schemas(db: AsyncSession, server_name: str, workspace_id: str) -> None:
+    """Clear cached input_schema for tools belonging to a server.
+
+    Called when the server's transport changes (e.g., stdio → HTTP), because
+    tool schemas may differ between transport modes (OAuth 2.0 vs 2.1).
+    """
+    from sqlalchemy import update
+
+    from src.models.tool_definitions import ToolDefinition
+
+    await db.execute(
+        update(ToolDefinition)
+        .where(
+            ToolDefinition.server == server_name,
+            ToolDefinition.input_schema.isnot(None),
+        )
+        .values(input_schema=None)
+    )
+    logger.info("Cleared stale tool schemas for server %s", server_name)
+
+
 # Default installations — each maps to a former get_*_config() function
 _DEFAULT_INSTALLATIONS: list[dict] = [
     {
@@ -243,9 +265,13 @@ async def seed_installations(db: AsyncSession, workspace_id: str, user_id: str) 
         inst = existing[server_name]
         needs_update = False
 
-        if inst.transport != inst_data.get("transport", "stdio"):
+        old_transport = inst.transport
+        if old_transport != inst_data.get("transport", "stdio"):
             inst.transport = inst_data.get("transport", "stdio")
             needs_update = True
+            # Transport changed — clear stale tool schemas from DB so live
+            # MCP discovery takes priority (e.g., OAuth 2.1 strips params).
+            await _clear_stale_tool_schemas(db, server_name, workspace_id)
         if inst.remote_url != inst_data.get("remote_url"):
             inst.remote_url = inst_data.get("remote_url")
             needs_update = True

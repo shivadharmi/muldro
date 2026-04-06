@@ -465,11 +465,12 @@ class UserMCPSessionPool:
         workspace_id: str = "",
         config: dict | None = None,
     ) -> list[str]:
-        """Eagerly discover tools from an HTTP MCP server (no auth required).
+        """Eagerly discover tools from an HTTP MCP server.
 
-        Connects briefly to list tools and populate _tool_metadata so schemas
-        are available before the first authenticated tool call.  Only useful
-        for HTTP servers (SSE / streamable-http) which are always-on services.
+        Tries unauthenticated first, falls back to using the first available
+        OAuth token from OAuthManager (some servers require auth for list_tools).
+        Populates _tool_metadata so schemas are available before the first
+        authenticated tool call.
         """
         cfg = config or self._server_configs.get((workspace_id, server_name))
         if not cfg:
@@ -483,40 +484,105 @@ class UserMCPSessionPool:
         if not url:
             return []
 
+        # Try unauthenticated, then with token if 401
+        raw_tools = None
         try:
             async with Client(url) as client:
                 raw_tools = await client.list_tools()
-
-            discovered: list[str] = []
-            for t in raw_tools:
-                input_schema = (
-                    getattr(t, "inputSchema", None)
-                    or getattr(t, "input_schema", None)
-                    or {"type": "object", "properties": {}}
+        except Exception as unauth_err:
+            if "401" not in str(unauth_err):
+                logger.warning(
+                    "[mcp:pool] Tool discovery failed for %s: %s",
+                    server_name,
+                    unauth_err,
                 )
-                self._tool_metadata[t.name] = {
-                    "name": t.name,
-                    "server": server_name,
-                    "description": t.description or "",
-                    "input_schema": input_schema,
-                    "_workspace_id": workspace_id,
-                }
-                discovered.append(t.name)
+                return []
 
-            logger.info(
-                "[mcp:pool] Discovered %d tools from HTTP server %s",
-                len(discovered),
-                server_name,
+            # 401 — try with a user token from OAuthManager
+            if not self._oauth_manager:
+                logger.warning(
+                    "[mcp:pool] %s requires auth for tool discovery but no OAuthManager",
+                    server_name,
+                )
+                return []
+
+            auth_provider = cfg.get("auth_provider", "none")
+            provider_name = (
+                auth_provider
+                if auth_provider not in ("oauth", "none", "token")
+                else _infer_provider(server_name)
             )
-            return discovered
-        except Exception as e:
-            logger.warning(
-                "[mcp:pool] Tool discovery failed for %s at %s: %s",
-                server_name,
-                url,
-                e,
-            )
+
+            # Find any user with a valid token for this provider
+            token = await self._resolve_any_token(provider_name)
+            if not token:
+                logger.info(
+                    "[mcp:pool] No OAuth tokens available for %s discovery — "
+                    "schemas will be discovered on first authenticated call",
+                    server_name,
+                )
+                return []
+
+            try:
+                async with Client(url, auth=BearerAuth(token=token)) as client:
+                    raw_tools = await client.list_tools()
+            except Exception as auth_err:
+                logger.warning(
+                    "[mcp:pool] Authenticated discovery also failed for %s: %s",
+                    server_name,
+                    auth_err,
+                )
+                return []
+
+        if not raw_tools:
             return []
+
+        discovered: list[str] = []
+        for t in raw_tools:
+            input_schema = (
+                getattr(t, "inputSchema", None)
+                or getattr(t, "input_schema", None)
+                or {"type": "object", "properties": {}}
+            )
+            self._tool_metadata[t.name] = {
+                "name": t.name,
+                "server": server_name,
+                "description": t.description or "",
+                "input_schema": input_schema,
+                "_workspace_id": workspace_id,
+            }
+            discovered.append(t.name)
+
+        logger.info(
+            "[mcp:pool] Discovered %d tools from HTTP server %s",
+            len(discovered),
+            server_name,
+        )
+        return discovered
+
+    async def _resolve_any_token(self, provider: str) -> str | None:
+        """Get any valid token for a provider — used for tool discovery only."""
+        if not self._oauth_manager:
+            return None
+        try:
+            from sqlalchemy import select
+
+            from src.models.oauth_token import OAuthToken
+
+            async with self._oauth_manager._db_factory() as db:
+                result = await db.execute(
+                    select(OAuthToken.user_id)
+                    .where(
+                        OAuthToken.provider == provider,
+                    )
+                    .limit(1)
+                )
+                row = result.first()
+                if row:
+                    return await self._oauth_manager.get_valid_token(row[0], provider)
+        except Exception as e:
+            logger.debug("[mcp:pool] Could not resolve token for discovery: %s", e)
+        return None
 
     def get_all_tool_metadata(self, workspace_id: str = "") -> list[dict[str, Any]]:
         """Return all tool metadata across servers."""
