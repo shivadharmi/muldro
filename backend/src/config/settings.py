@@ -99,6 +99,7 @@ class Settings(BaseSettings):
     google_oauth_client_id: str = ""
     google_oauth_client_secret: str = ""
     google_oauth_redirect_uri: str = "http://localhost:8000/v1/auth/google/callback"
+    google_workspace_mcp_url: str = "http://localhost:8001/mcp"
     github_oauth_client_id: str = ""
     github_oauth_client_secret: str = ""
     github_oauth_redirect_uri: str = "http://localhost:8000/v1/auth/github/callback"
