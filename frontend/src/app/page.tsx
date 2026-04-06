@@ -95,7 +95,7 @@ export default function WorkspacePage() {
   });
 
   useEffect(() => {
-    setGlobalSendAction(() => sendAction);
+    setGlobalSendAction(sendAction);
   }, [sendAction, setGlobalSendAction]);
 
   const activeSurface = activeSurfaceId

@@ -161,9 +161,18 @@ def build(settings: Settings, db: AsyncSession) -> ServiceContainer:
 
         notifier = None
         try:
-            from src.services.notifier import Notifier
+            import redis.asyncio as aioredis
 
-            notifier = Notifier(db, settings)
+            from src.services.notifier import Notifier
+            from src.services.surface_registry import SurfaceRegistry
+
+            notifier_redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+            surface_registry = SurfaceRegistry(redis=notifier_redis)
+            notifier = Notifier(
+                surface_registry=surface_registry,
+                redis=notifier_redis,
+                db=db,
+            )
             svc.notifier = notifier
         except Exception:
             logger.debug("Notifier unavailable for GraphExecutor", exc_info=True)

@@ -61,7 +61,7 @@ export default function ChatPage() {
   });
 
   useEffect(() => {
-    setGlobalSendAction(() => sendAction);
+    setGlobalSendAction(sendAction);
   }, [sendAction, setGlobalSendAction]);
 
   const handleSelectConversation = useCallback(

@@ -177,27 +177,71 @@ async def jarvis_ws(websocket: WebSocket, user_id: str):
 
 
 async def _handle_approve(user_id: str, payload: dict, app) -> dict:
-    """Handle approval action."""
-    from src.tools.intelligence_server import approve_action
-
-    return await approve_action(
-        user_id=user_id,
-        approval_id=payload["id"],
-        decision="approved",
-        reason="Approved via web dashboard",
-    )
+    """Handle approval action via the REST handler (full execution resume)."""
+    return await _process_approval_ws(user_id, payload.get("id", ""), "approve", app)
 
 
 async def _handle_reject(user_id: str, payload: dict, app) -> dict:
-    """Handle rejection action."""
-    from src.tools.intelligence_server import approve_action
+    """Handle rejection action via the REST handler (full execution resume)."""
+    return await _process_approval_ws(user_id, payload.get("id", ""), "reject", app)
 
-    return await approve_action(
-        user_id=user_id,
-        approval_id=payload["id"],
-        decision="rejected",
-        reason="Rejected via web dashboard",
-    )
+
+async def _process_approval_ws(user_id: str, approval_id: str, action: str, app) -> dict:
+    """Bridge WS approval actions to the REST endpoint handlers.
+
+    Resolves workspace_id and DB session manually (no FastAPI DI available
+    in the WebSocket action path), then delegates to the same approve_action /
+    reject_action functions that power the REST API.
+    """
+    from fastapi import HTTPException
+
+    from src.api.deps import resolve_workspace_id
+    from src.config.settings import get_settings
+    from src.models.database import get_session_factory
+
+    settings = get_settings()
+
+    async with get_session_factory()() as db:
+        try:
+            workspace_id = await resolve_workspace_id(db, user_id)
+        except Exception as e:
+            logger.warning("ws_approval_workspace_resolve_failed: %s", e)
+            return {"status": "error", "error": "Could not resolve workspace"}
+
+        try:
+            if action == "approve":
+                from src.api.routes_approvals import approve_action
+
+                result = await approve_action(
+                    approval_id=approval_id,
+                    req=None,
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    db=db,
+                    settings=settings,
+                )
+            else:
+                from src.api.routes_approvals import reject_action
+
+                result = await reject_action(
+                    approval_id=approval_id,
+                    req=None,
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    db=db,
+                    settings=settings,
+                )
+
+            return {
+                "status": "success",
+                "approval_id": result.approval_id,
+                "decision": result.status,
+            }
+        except HTTPException as e:
+            return {"status": "error", "error": e.detail}
+        except Exception as e:
+            logger.error("ws_approval_failed: %s", e, exc_info=True)
+            return {"status": "error", "error": str(e)}
 
 
 async def _handle_orchestrator_action(user_id: str, action: str, payload: dict, app) -> dict:
@@ -215,8 +259,8 @@ async def _handle_orchestrator_action(user_id: str, action: str, payload: dict, 
         message += f" {context}"
 
     try:
+        from src.api.deps import resolve_workspace_id
         from src.models.database import get_session_factory
-        from src.services.workspace_resolver import resolve_workspace_id
 
         async with get_session_factory()() as db:
             workspace_id = await resolve_workspace_id(db, user_id)

@@ -385,7 +385,15 @@ class Notifier:
                             "warning" if risk_level in ("high", "critical") else "default"
                         )
 
-                        surface_id = f"notif_surf_{ULID()}"
+                        # Use approval_{approval_id} format so the surface
+                        # detail endpoint can resolve the tab builders via
+                        # the "approval_" prefix in _PREFIX_MAP.  This also
+                        # deduplicates with the REST-polled surfaces built by
+                        # SurfaceService._build_approval_surfaces().
+                        approval_id = (notification.data or {}).get("approval_id", "")
+                        surface_id = (
+                            f"approval_{approval_id}" if approval_id else f"notif_surf_{ULID()}"
+                        )
                         preview = SurfacePreview(
                             title=notification.title,
                             subtitle=(notification.body or "")[:120] or None,

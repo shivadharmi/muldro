@@ -119,19 +119,17 @@ async def approve_action(
     """Approve a pending action and trigger execution."""
     approval = await _get_approval(db, approval_id, user_id, workspace_id)
 
-    from src.services.execution_state import transition_run
-
     approval.status = "approved"
     approval.decided_at = datetime.now(timezone.utc)
     approval.decision_reason = req.reason if req else None
     approval.approved_by = user_id
 
-    # Update run status via state machine (awaiting_approval -> running)
+    # Resolve the linked run for event emission and downstream resume.
+    # Do NOT transition the run here — resume_run() and execute_run()
+    # handle their own state transitions after re-reading the row.
     effective_run_id = approval.run_id or approval.execution_id
     run_result = await db.execute(select(TaskRun).where(TaskRun.run_id == effective_run_id))
     run = run_result.scalar_one_or_none()
-    if run and run.status == "awaiting_approval":
-        transition_run(run, "running")
 
     # Emit approval_resolved runtime event
     try:
@@ -157,6 +155,7 @@ async def approve_action(
     await audit.log(
         user_id=user_id,
         action_type="approval_approved",
+        workspace_id=workspace_id,
         approval_id=approval_id,
         execution_id=approval.execution_id,
         summary=f"Approved: {approval.title}",
@@ -355,6 +354,7 @@ async def reject_action(
     await audit.log(
         user_id=user_id,
         action_type="approval_rejected",
+        workspace_id=workspace_id,
         approval_id=approval_id,
         execution_id=approval.execution_id,
         summary=f"Rejected: {approval.title}",

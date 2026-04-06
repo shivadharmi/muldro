@@ -524,13 +524,12 @@ async def build_approval_risk(db: AsyncSession, surface: Any, **kwargs: Any) -> 
     risk_variant = "danger" if apr.risk_level in ("high", "critical") else "warning"
     children.append(r.badge("risk_level", apr.risk_level or "medium", variant=risk_variant))
 
-    if apr.policy_snapshot and isinstance(apr.policy_snapshot, dict):
-        justification = apr.policy_snapshot.get("justification", "")
-        if justification:
-            children.append(r.text("risk_just", justification))
-        decision = apr.policy_snapshot.get("decision", "")
-        if decision:
-            children.append(r.badge("risk_decision", decision))
+    if apr.summary:
+        children.append(r.text("risk_just", apr.summary))
+    if apr.decision_reason:
+        children.append(r.text("risk_reason", apr.decision_reason))
+    if apr.status and apr.status != "pending":
+        children.append(r.badge("risk_decision", apr.status))
 
     return DetailTabResponse(
         tab_id="risk",

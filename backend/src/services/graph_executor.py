@@ -61,7 +61,17 @@ async def create_graph_executor(
 
     notifier: Notifier | None = None
     try:
-        notifier = Notifier(db, settings)
+        import redis.asyncio as aioredis
+
+        from src.services.surface_registry import SurfaceRegistry
+
+        notifier_redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+        surface_registry = SurfaceRegistry(redis=notifier_redis)
+        notifier = Notifier(
+            surface_registry=surface_registry,
+            redis=notifier_redis,
+            db=db,
+        )
     except Exception:
         logger.debug("Notifier unavailable for GraphExecutor", exc_info=True)
 
@@ -506,104 +516,113 @@ class GraphExecutor:
         Approval is required if EITHER:
         1. The tool's requires_approval flag is True (per-tool setting)
         2. An ApprovalPolicy for the workspace matches the capability/tool
+
+        If the step is already in ``running`` state (resumed after approval),
+        the approval gate is skipped and execution proceeds directly.
         """
-        needs_approval = False
-        risk_level = "low"
-        task_type = (step.input_data or {}).get("task_type", "")
+        # Step already running → resumed after approval, skip to execution
+        already_approved = step.status == "running"
 
-        # Check 1: per-tool requires_approval flag
-        if self._tool_registry and task_type:
-            tool = await self._tool_registry.get_tool(task_type)
-            if tool and tool.requires_approval:
-                needs_approval = True
-                risk_level = tool.risk_level or "low"
+        if not already_approved:
+            needs_approval = False
+            risk_level = "low"
+            task_type = (step.input_data or {}).get("task_type", "")
 
-        # Check 2: workspace approval policies (capability-pattern based)
-        if not needs_approval and task_type and run.workspace_id:
-            try:
-                from src.services.approval_policy_engine import ApprovalPolicyEngine
-                from src.tools.catalog import EXTERNAL_TOOL_SEEDS, INTERNAL_TOOLS
-
-                capability = None
-                for _t in INTERNAL_TOOLS:
-                    if _t.name == task_type:
-                        capability = _t.capability
-                        break
-                if capability is None:
-                    for _s in EXTERNAL_TOOL_SEEDS:
-                        if _s.name == task_type:
-                            capability = _s.capability
-                            break
-                engine = ApprovalPolicyEngine(self._db, run.workspace_id)
-                decision = await engine.check(
-                    capability=capability,
-                    tool_name=task_type,
-                    risk_level=risk_level,
-                )
-                if decision.requires_approval:
+            # Check 1: per-tool requires_approval flag
+            if self._tool_registry and task_type:
+                tool = await self._tool_registry.get_tool(task_type)
+                if tool and tool.requires_approval:
                     needs_approval = True
-                    logger.info(
-                        "Approval required by policy: %s (reason: %s)",
-                        decision.policy_id,
-                        decision.reason,
-                    )
-            except Exception:
-                logger.debug("Approval policy check failed", exc_info=True)
+                    risk_level = tool.risk_level or "low"
 
-        if needs_approval:
-            from src.services.approval_service import create_approval
-
-            approval = await create_approval(
-                self._db,
-                user_id=run.user_id,
-                workspace_id=run.workspace_id,
-                approval_type=f"step:{task_type}",
-                title=f"Approve step: {step.name or task_type}",
-                summary=f"Step in run {run.run_id} requires approval",
-                risk_level=risk_level,
-                execution_id=run.run_id,
-                run_id=run.run_id,
-                step_id=step.step_id,
-                requested_by=run.user_id,
-            )
-            transition_step(step, "waiting_approval")
-            transition_run(run, "awaiting_approval")
-            await self._checkpoint(run, step.step_id, "approval_gate")
-            await self._db.flush()
-
-            await self._emit_event(
-                "approval_requested",
-                run.user_id,
-                {
-                    "run_id": run.run_id,
-                    "step_id": step.step_id,
-                    "approval_id": approval.approval_id,
-                    "task_type": task_type,
-                    "risk_level": risk_level,
-                },
-                workspace_id=run.workspace_id,
-            )
-
-            if self._notifier:
+            # Check 2: workspace approval policies (capability-pattern based)
+            if not needs_approval and task_type and run.workspace_id:
                 try:
-                    await self._notifier.notify(
-                        user_id=run.user_id,
-                        notification_type="approval_request",
-                        title=f"Approve: {step.name or task_type}",
-                        body=f"Step requires approval in run {run.run_id}",
-                        data={
-                            "approval_id": approval.approval_id,
-                            "run_id": run.run_id,
-                            "step_id": step.step_id,
-                        },
-                        workspace_id=run.workspace_id,
-                    )
-                except Exception:
-                    logger.warning("Failed to notify for step approval", exc_info=True)
-            return
+                    from src.services.approval_policy_engine import ApprovalPolicyEngine
+                    from src.tools.catalog import EXTERNAL_TOOL_SEEDS, INTERNAL_TOOLS
 
-        transition_step(step, "running")
-        step.started_at = datetime.now(timezone.utc)
+                    capability = None
+                    for _t in INTERNAL_TOOLS:
+                        if _t.name == task_type:
+                            capability = _t.capability
+                            break
+                    if capability is None:
+                        for _s in EXTERNAL_TOOL_SEEDS:
+                            if _s.name == task_type:
+                                capability = _s.capability
+                                break
+                    engine = ApprovalPolicyEngine(self._db, run.workspace_id)
+                    decision = await engine.check(
+                        capability=capability,
+                        tool_name=task_type,
+                        risk_level=risk_level,
+                    )
+                    if decision.requires_approval:
+                        needs_approval = True
+                        logger.info(
+                            "Approval required by policy: %s (reason: %s)",
+                            decision.policy_id,
+                            decision.reason,
+                        )
+                except Exception:
+                    logger.debug("Approval policy check failed", exc_info=True)
+
+            if needs_approval:
+                from src.services.approval_service import create_approval
+
+                approval = await create_approval(
+                    self._db,
+                    user_id=run.user_id,
+                    workspace_id=run.workspace_id,
+                    approval_type=f"step:{task_type}",
+                    title=f"Approve step: {step.name or task_type}",
+                    summary=f"Step in run {run.run_id} requires approval",
+                    risk_level=risk_level,
+                    execution_id=run.run_id,
+                    run_id=run.run_id,
+                    step_id=step.step_id,
+                    requested_by=run.user_id,
+                )
+                transition_step(step, "running")
+                transition_step(step, "waiting_approval")
+                transition_run(run, "awaiting_approval")
+                await self._checkpoint(run, step.step_id, "approval_gate")
+                await self._db.flush()
+
+                await self._emit_event(
+                    "approval_requested",
+                    run.user_id,
+                    {
+                        "run_id": run.run_id,
+                        "step_id": step.step_id,
+                        "approval_id": approval.approval_id,
+                        "task_type": task_type,
+                        "risk_level": risk_level,
+                    },
+                    workspace_id=run.workspace_id,
+                )
+
+                if self._notifier:
+                    try:
+                        await self._notifier.notify(
+                            user_id=run.user_id,
+                            notification_type="approval_request",
+                            title=f"Approve: {step.name or task_type}",
+                            body=f"Step requires approval in run {run.run_id}",
+                            data={
+                                "approval_id": approval.approval_id,
+                                "run_id": run.run_id,
+                                "step_id": step.step_id,
+                            },
+                            workspace_id=run.workspace_id,
+                        )
+                    except Exception:
+                        logger.warning("Failed to notify for step approval", exc_info=True)
+                return
+
+            transition_step(step, "running")
+
+        step.started_at = step.started_at or datetime.now(timezone.utc)
         await self._db.flush()
         await self._emit_event(
             "step.started",
