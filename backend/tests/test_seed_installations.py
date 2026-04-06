@@ -98,3 +98,28 @@ class TestLinearToolNames:
         names = {s.name for s in EXTERNAL_TOOL_SEEDS}
         assert "linear_comment" not in names
         assert "linear_list_issues" not in names
+
+
+class TestAuthProviderLabels:
+    """Servers with OAuth callback routes must have OAuth-aware auth_provider."""
+
+    def _get_seed(self, server_name: str) -> dict:
+        return next(s for s in _DEFAULT_INSTALLATIONS if s["server_name"] == server_name)
+
+    def test_github_auth_provider_is_oauth(self):
+        seed = self._get_seed("github")
+        assert seed["auth_provider"] == "github", (
+            f"GitHub uses OAuth flow — auth_provider must be 'github', got '{seed['auth_provider']}'"
+        )
+
+    def test_linear_auth_provider_is_oauth(self):
+        seed = self._get_seed("linear")
+        assert seed["auth_provider"] == "linear", (
+            f"Linear uses OAuth flow — auth_provider must be 'linear', got '{seed['auth_provider']}'"
+        )
+
+    def test_notion_auth_provider_is_oauth(self):
+        seed = self._get_seed("notion")
+        assert seed["auth_provider"] == "notion", (
+            f"Notion uses OAuth flow — auth_provider must be 'notion', got '{seed['auth_provider']}'"
+        )

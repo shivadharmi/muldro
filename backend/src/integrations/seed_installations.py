@@ -59,7 +59,7 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
         "env_template": {
             "GITHUB_PERSONAL_ACCESS_TOKEN": "GitHub personal access token",
         },
-        "auth_provider": "token",
+        "auth_provider": "github",
         "scopes_granted": [
             "issue.create",
             "issue.list",
@@ -129,7 +129,7 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
         "env_template": {
             "LINEAR_ACCESS_TOKEN": "Linear API access token",
         },
-        "auth_provider": "token",
+        "auth_provider": "linear",
         "scopes_granted": [
             "workflow.create_issue",
             "workflow.update_issue",
@@ -147,7 +147,7 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
         "env_template": {
             "NOTION_TOKEN": "Notion integration token",
         },
-        "auth_provider": "token",
+        "auth_provider": "notion",
         "scopes_granted": [
             "doc.create",
             "doc.update",
