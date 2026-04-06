@@ -458,6 +458,66 @@ class UserMCPSessionPool:
                 result[canonical] = key[1]  # server_name
         return result
 
+    async def discover_tools(
+        self,
+        server_name: str,
+        *,
+        workspace_id: str = "",
+        config: dict | None = None,
+    ) -> list[str]:
+        """Eagerly discover tools from an HTTP MCP server (no auth required).
+
+        Connects briefly to list tools and populate _tool_metadata so schemas
+        are available before the first authenticated tool call.  Only useful
+        for HTTP servers (SSE / streamable-http) which are always-on services.
+        """
+        cfg = config or self._server_configs.get((workspace_id, server_name))
+        if not cfg:
+            return []
+
+        transport = cfg.get("transport", "stdio")
+        if transport not in ("sse", "streamable-http"):
+            return []
+
+        url = cfg.get("url")
+        if not url:
+            return []
+
+        try:
+            async with Client(url) as client:
+                raw_tools = await client.list_tools()
+
+            discovered: list[str] = []
+            for t in raw_tools:
+                input_schema = (
+                    getattr(t, "inputSchema", None)
+                    or getattr(t, "input_schema", None)
+                    or {"type": "object", "properties": {}}
+                )
+                self._tool_metadata[t.name] = {
+                    "name": t.name,
+                    "server": server_name,
+                    "description": t.description or "",
+                    "input_schema": input_schema,
+                    "_workspace_id": workspace_id,
+                }
+                discovered.append(t.name)
+
+            logger.info(
+                "[mcp:pool] Discovered %d tools from HTTP server %s",
+                len(discovered),
+                server_name,
+            )
+            return discovered
+        except Exception as e:
+            logger.warning(
+                "[mcp:pool] Tool discovery failed for %s at %s: %s",
+                server_name,
+                url,
+                e,
+            )
+            return []
+
     def get_all_tool_metadata(self, workspace_id: str = "") -> list[dict[str, Any]]:
         """Return all tool metadata across servers."""
         result: list[dict[str, Any]] = []

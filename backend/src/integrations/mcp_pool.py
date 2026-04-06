@@ -231,6 +231,7 @@ class WorkspaceMCPPool:
                 installations = result.scalars().all()
 
                 count = 0
+                http_servers: list[tuple[str, str, dict]] = []
                 for inst in installations:
                     config = _installation_to_config(inst)
                     await self.add_server(
@@ -239,6 +240,23 @@ class WorkspaceMCPPool:
                         config,
                     )
                     count += 1
+                    if config.get("transport") in ("sse", "streamable-http"):
+                        http_servers.append((inst.workspace_id, inst.server_name, config))
+
+                # Eagerly discover tools from HTTP MCP servers so schemas are
+                # available before the first tool call. Stdio servers are lazy
+                # (spawned per-user), but HTTP servers are shared services.
+                for ws_id, srv_name, cfg in http_servers:
+                    try:
+                        await self._session_pool.discover_tools(
+                            srv_name, workspace_id=ws_id, config=cfg
+                        )
+                    except Exception as disc_err:
+                        logger.warning(
+                            "Tool discovery failed for HTTP server %s: %s",
+                            srv_name,
+                            disc_err,
+                        )
 
                 logger.info("Loaded %d MCP servers from DB", count)
                 return count

@@ -129,13 +129,24 @@ def create_app() -> FastAPI:
                     total_updated += count
                 if total_updated:
                     await db.commit()
-                logger.info(
-                    "Installation re-seed: %d updated across %d workspaces",
-                    total_updated,
-                    len(workspaces),
+                import sys
+
+                print(
+                    f"[STARTUP] Installation re-seed: {total_updated} updated"
+                    f" across {len(workspaces)} workspaces",
+                    file=sys.stderr,
+                    flush=True,
                 )
-        except Exception:
-            logger.warning("Installation re-seed failed", exc_info=True)
+        except Exception as _reseed_err:
+            import sys
+            import traceback
+
+            print(
+                f"[STARTUP] Installation re-seed FAILED: {_reseed_err}",
+                file=sys.stderr,
+                flush=True,
+            )
+            traceback.print_exc(file=sys.stderr)
 
         # Validate tool registry consistency
         try:

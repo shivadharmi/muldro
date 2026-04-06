@@ -593,15 +593,21 @@ class JarvisOrchestrator:
                 if not tool_def.capability or tool_def.capability not in scope:
                     continue
 
-                # Prefer DB schema, fallback to session pool, then minimal
-                schema = tool_def.input_schema
+                # Live MCP schemas take priority for external tools — the
+                # MCP server is the source of truth (e.g., OAuth 2.1 mode
+                # strips user_google_email from schemas at runtime).
+                # Fallback to DB schema, then minimal.
+                schema = None
                 description = tool_def.description or tool_def.name
 
                 if tool_def.name in mcp_schemas:
-                    if not schema:
-                        schema = mcp_schemas[tool_def.name].get("input_schema")
-                    if description == tool_def.name:
-                        description = mcp_schemas[tool_def.name].get("description") or description
+                    schema = mcp_schemas[tool_def.name].get("input_schema")
+                    live_desc = mcp_schemas[tool_def.name].get("description")
+                    if live_desc:
+                        description = live_desc
+
+                if not schema:
+                    schema = tool_def.input_schema
 
                 if not schema:
                     schema = {"type": "object", "properties": {}}
