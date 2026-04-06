@@ -210,7 +210,7 @@ class TestExecuteTool:
 
         mock_mcp.assert_called_once_with(
             "API-post-page",
-            {"title": "Test", "workspace_id": "ws_1"},
+            {"title": "Test"},
             user_id="usr_1",
             workspace_id="ws_1",
         )
