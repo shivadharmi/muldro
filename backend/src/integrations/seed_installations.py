@@ -265,12 +265,14 @@ async def seed_installations(db: AsyncSession, workspace_id: str, user_id: str) 
         inst = existing[server_name]
         needs_update = False
 
-        old_transport = inst.transport
-        if old_transport != inst_data.get("transport", "stdio"):
+        if inst.transport != inst_data.get("transport", "stdio"):
             inst.transport = inst_data.get("transport", "stdio")
             needs_update = True
-            # Transport changed — clear stale tool schemas from DB so live
-            # MCP discovery takes priority (e.g., OAuth 2.1 strips params).
+
+        # HTTP servers get schemas from live discovery — always clear stale
+        # DB schemas so they don't override live ones.  This handles both
+        # transport changes and schema drift (e.g., OAuth 2.1 mode changes).
+        if inst_data.get("transport", "stdio") in ("sse", "streamable-http"):
             await _clear_stale_tool_schemas(db, server_name, workspace_id)
         if inst.remote_url != inst_data.get("remote_url"):
             inst.remote_url = inst_data.get("remote_url")
