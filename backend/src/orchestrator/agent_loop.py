@@ -127,6 +127,25 @@ def _sanitize_content_blocks(content) -> list[dict]:
     ]
 
 
+def _is_thinking_error(err: Exception) -> bool:
+    """Check if an API error is specifically about thinking block incompatibility."""
+    msg = str(err).lower()
+    return "thinking" in msg and (
+        "disabled" in msg or "not supported" in msg or "cannot contain" in msg
+    )
+
+
+def _strip_thinking_from_messages(messages: list[dict]) -> None:
+    """Remove thinking blocks from assistant messages in-place.
+
+    Required when disabling thinking mid-loop: the API rejects messages
+    containing thinking blocks when thinking is disabled.
+    """
+    for msg in messages:
+        if msg.get("role") == "assistant" and isinstance(msg.get("content"), list):
+            msg["content"] = [b for b in msg["content"] if b.get("type") != "thinking"]
+
+
 async def agent_loop(
     *,
     client,
@@ -245,23 +264,46 @@ async def agent_loop(
                             agent_name,
                             stream_err,
                         )
-                        if thinking_enabled:
+                        # Only disable thinking if the error is specifically about
+                        # thinking blocks — not for transient network/Bedrock errors.
+                        if thinking_enabled and _is_thinking_error(stream_err):
                             api_kwargs["temperature"] = agent.temperature
                             api_kwargs.pop("thinking", None)
+                            _strip_thinking_from_messages(api_kwargs.get("messages", []))
                             thinking_enabled = False
-                        response = await _api_call_with_retry(client, api_kwargs, agent_name)
+                        try:
+                            response = await _api_call_with_retry(client, api_kwargs, agent_name)
+                        except Exception as fallback_err:
+                            # If fallback also fails due to thinking contamination,
+                            # strip thinking and retry once more.
+                            if thinking_enabled and _is_thinking_error(fallback_err):
+                                logger.warning(
+                                    "Fallback failed for %s due to thinking, retrying: %s",
+                                    agent_name,
+                                    fallback_err,
+                                )
+                                api_kwargs["temperature"] = agent.temperature
+                                api_kwargs.pop("thinking", None)
+                                _strip_thinking_from_messages(api_kwargs.get("messages", []))
+                                thinking_enabled = False
+                                response = await _api_call_with_retry(
+                                    client, api_kwargs, agent_name
+                                )
+                            else:
+                                raise
             else:
                 try:
                     response = await _api_call_with_retry(client, api_kwargs, agent_name)
                 except Exception as think_err:
-                    if thinking_enabled:
+                    if thinking_enabled and _is_thinking_error(think_err):
                         logger.warning(
-                            "Thinking failed for %s, falling back: %s",
+                            "Thinking error for %s, disabling and retrying: %s",
                             agent_name,
                             think_err,
                         )
                         api_kwargs["temperature"] = agent.temperature
                         api_kwargs.pop("thinking", None)
+                        _strip_thinking_from_messages(api_kwargs.get("messages", []))
                         thinking_enabled = False
                         response = await _api_call_with_retry(client, api_kwargs, agent_name)
                     else:
