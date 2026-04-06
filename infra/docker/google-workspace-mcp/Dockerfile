@@ -2,6 +2,10 @@ FROM python:3.13-slim
 
 RUN pip install --no-cache-dir workspace-mcp
 
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 EXPOSE 8000
 
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["workspace-mcp", "--transport", "streamable-http", "--tool-tier", "complete", "--tools", "gmail", "calendar"]

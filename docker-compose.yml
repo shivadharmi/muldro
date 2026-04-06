@@ -50,9 +50,9 @@ services:
       context: ./infra/docker/google-workspace-mcp
     ports:
       - "8001:8000"
+    env_file:
+      - ./backend/.env
     environment:
-      GOOGLE_OAUTH_CLIENT_ID: ${JARVIS_GOOGLE_OAUTH_CLIENT_ID}
-      GOOGLE_OAUTH_CLIENT_SECRET: ${JARVIS_GOOGLE_OAUTH_CLIENT_SECRET}
       MCP_ENABLE_OAUTH21: "true"
       EXTERNAL_OAUTH21_PROVIDER: "true"
       WORKSPACE_MCP_STATELESS_MODE: "true"
