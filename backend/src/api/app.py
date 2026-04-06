@@ -109,6 +109,34 @@ def create_app() -> FastAPI:
                 exc_info=True,
             )
 
+        # Re-seed integration installations for all workspaces.
+        # Installation configs (transport, auth_provider, remote_url) change with
+        # code updates but the DB records persist from initial provisioning.
+        # This ensures existing workspaces pick up config changes on restart.
+        try:
+            from sqlalchemy import select as sa_select
+
+            from src.integrations.seed_installations import seed_installations
+            from src.models.database import get_session_factory as _get_isf
+            from src.models.users import Workspace
+
+            async with _get_isf()() as db:
+                result = await db.execute(sa_select(Workspace))
+                workspaces = result.scalars().all()
+                total_updated = 0
+                for ws in workspaces:
+                    count = await seed_installations(db, ws.workspace_id, ws.owner_user_id)
+                    total_updated += count
+                if total_updated:
+                    await db.commit()
+                    logger.info(
+                        "Re-seeded %d installation records across %d workspaces",
+                        total_updated,
+                        len(workspaces),
+                    )
+        except Exception:
+            logger.debug("Installation re-seed skipped", exc_info=True)
+
         # Validate tool registry consistency
         try:
             from src.tools.validation import validate_registry
