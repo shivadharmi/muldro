@@ -5,6 +5,7 @@ workspace-scoped DB rows managed by the IntegrationControlPlane.
 """
 
 import logging
+import os
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,14 +21,14 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
     {
         "server_name": "google-workspace",
         "display_name": "Google Workspace",
-        "transport": "stdio",
-        "command": "uvx",
-        "args": ["workspace-mcp", "--tool-tier", "complete", "--tools", "gmail", "calendar"],
-        "env_template": {
-            "GOOGLE_OAUTH_CLIENT_ID": "Google OAuth client ID",
-            "GOOGLE_OAUTH_CLIENT_SECRET": "Google OAuth client secret",
-        },
-        "auth_provider": "oauth",
+        "transport": "streamable-http",
+        "remote_url": os.environ.get(
+            "JARVIS_GOOGLE_WORKSPACE_MCP_URL", "http://localhost:8001/mcp"
+        ),
+        "command": None,
+        "args": None,
+        "env_template": {},
+        "auth_provider": "google",
         "scopes_granted": [
             "email.send",
             "email.list",
@@ -229,6 +230,7 @@ async def seed_installations(db: AsyncSession, workspace_id: str, user_id: str) 
                 command=inst_data.get("command"),
                 args=inst_data.get("args"),
                 env_template=inst_data.get("env_template"),
+                remote_url=inst_data.get("remote_url"),
                 trust_id=trust_by_name.get(server_name),
                 auth_provider=inst_data.get("auth_provider"),
                 scopes_granted=inst_data.get("scopes_granted"),
@@ -241,11 +243,20 @@ async def seed_installations(db: AsyncSession, workspace_id: str, user_id: str) 
         inst = existing[server_name]
         needs_update = False
 
+        if inst.transport != inst_data.get("transport", "stdio"):
+            inst.transport = inst_data.get("transport", "stdio")
+            needs_update = True
+        if inst.remote_url != inst_data.get("remote_url"):
+            inst.remote_url = inst_data.get("remote_url")
+            needs_update = True
         if inst.command != inst_data.get("command"):
             inst.command = inst_data.get("command")
             needs_update = True
         if inst.args != inst_data.get("args"):
             inst.args = inst_data.get("args")
+            needs_update = True
+        if inst.auth_provider != inst_data.get("auth_provider"):
+            inst.auth_provider = inst_data.get("auth_provider")
             needs_update = True
         if inst.scopes_granted != inst_data.get("scopes_granted"):
             inst.scopes_granted = inst_data.get("scopes_granted")
