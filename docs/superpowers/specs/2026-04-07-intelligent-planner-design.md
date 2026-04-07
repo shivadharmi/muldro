@@ -443,6 +443,14 @@ Each phase is independently deployable and testable. Rollback = revert to previo
 - Regression tests: all current fast-intent cases still work
 - Planner quality tests: sample prompts → verify plan decomposition quality
 
+## Absorbed Issues from Audit
+
+These issues were found in the subsystem audit and are best fixed as part of this spec:
+
+**Issue #22 — MCP tool name normalization is identity mapping:** The current `tool_mapping[t.name] = t.name` does nothing. With capability-based routing, tool names are resolved dynamically by `CapabilityResolver` — the normalization problem becomes moot. Delete the identity mapping code during migration Phase 3.
+
+**Issue #10 — Telegram accesses orchestrator private attributes:** `telegram.py` directly accesses `self._orchestrator._db_factory()` and `self._orchestrator._budget`. During the orchestrator refactor in this spec, add public methods: `orchestrator.get_budget_status()` and `orchestrator.get_db_session()`. Update Telegram to use these.
+
 ## Success Criteria
 
 1. The Planner produces multi-step plans with capability-level steps for complex requests
@@ -451,6 +459,8 @@ Each phase is independently deployable and testable. Rollback = revert to previo
 4. The Operator receives only step-relevant tools, not the full catalog
 5. Novel requests that combine existing capabilities produce reasonable plans
 6. Requests that exceed capabilities produce honest `partial`/`not_achievable` assessments
+7. Telegram uses public orchestrator methods (no private attribute access)
+8. MCP tool name identity mapping deleted
 
 ## Blast Radius
 

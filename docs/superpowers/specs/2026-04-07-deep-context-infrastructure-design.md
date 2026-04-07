@@ -486,15 +486,71 @@ async def search_with_graph_boost(
 - Integration test: sync relationship with strength → traverse_weighted → sorted by strength
 - Integration test: ContextBuilder produces enriched graph context with strength and types
 
+## Absorbed Issues from Audit
+
+**Issue #3 — Expired memories still returned in search:** Memory TTL is stored in the `ttl_days` field but no scheduled job enforces expiration. Expired memories are returned by Qdrant vector search and Postgres FTS. Fix: Add `_tick_memory_expiration()` to the scheduler that:
+
+1. Queries memories where `created_at + ttl_days < now` and `status = 'active'`
+2. Marks them as `status = 'expired'` in Postgres
+3. Deletes their vectors from Qdrant via `vector_store.delete(collection="memories", id=memory_id)`
+4. Runs every scheduler tick (30s), processes up to 100 expired memories per tick
+
+This must be in place BEFORE enriching Qdrant payloads — otherwise expired memories with rich payloads pollute search results.
+
+**Issue #24 — Stability score has no decay:** `refresh_stability()` increments by 0.1 on every access with no decay. Old memories accumulate stability without bound. Fix: Implement exponential decay:
+
+```python
+def refresh_stability(memory: Memory) -> None:
+    """Update stability with time-based decay."""
+    days_since_access = (now - (memory.last_accessed_at or memory.created_at)).days
+    decay = max(0.0, memory.stability_score - (0.02 * days_since_access))
+    memory.stability_score = min(1.0, decay + 0.1)  # Decay then increment
+    memory.last_accessed_at = now
+    memory.access_count += 1
+```
+
+Store `stability_score` in Qdrant payload (Component 6) so decayed scores are reflected in vector search scoring without Postgres round-trip.
+
+**Issue #25 — Preference strength extracted but never used in ranking:** Memory extraction prompts ask Claude to classify preferences as "strong"/"moderate"/"weak" and store this in provenance. But `retrieve()` and TriSearch scoring ignore it. Fix: Map preference strength to a retrieval boost:
+
+```python
+# In tri_search.py composite scoring
+PREFERENCE_STRENGTH_BOOST = {"strong": 0.15, "moderate": 0.05, "weak": 0.0}
+
+if result.get("memory_type") == "preference":
+    strength = result.get("preference_strength", "moderate")
+    score += PREFERENCE_STRENGTH_BOOST.get(strength, 0.0)
+```
+
+Also store `preference_strength` in the enriched Qdrant payload (Component 6).
+
+**Issue #26 — Briefing related items found by timestamp, not semantic linking:** Briefing evidence bundles use timestamp proximity to find related items. With events now embedded in Qdrant (Component 1), briefing generation can use vector similarity to find semantically related events, memories, and conversations:
+
+```python
+# In briefing generation
+related = await tri_search.search(
+    query=briefing.headline,
+    user_id=user_id,
+    types=["event", "memory", "conversation"],
+    limit=10,
+)
+```
+
+This replaces the timestamp-proximity approach with actual semantic relevance.
+
 ## Success Criteria
 
-1. All 4 Qdrant collections actively populated (events, artifacts, conversations, approvals)
+1. All 4+ Qdrant collections actively populated (events, artifacts, conversations, approvals)
 2. TriSearch uses richer payloads to skip Postgres round-trip for scoring
 3. Payload indexing enables filtered search by memory_type, entity_type, source
 4. Neo4j relationships have typed labels, strength, and temporal data
 5. Agent prompts show relationship strength, type, and recency — not just flat names
 6. `traverse_weighted()` ranks entities by relationship strength
 7. Planner and Perceiver agents receive genuinely useful graph context that improves plan quality
+8. Expired memories cleaned from both Postgres and Qdrant on schedule
+9. Memory stability decays over time (not monotonically increasing)
+10. Preference strength influences retrieval ranking
+11. Briefing evidence uses semantic similarity, not timestamp proximity
 
 ## Blast Radius
 

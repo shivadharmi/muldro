@@ -466,6 +466,46 @@ This is enforced by the trust engine (Spec 2): external writes always go through
 - Integration test: 5 dismissals → auto-suppression → signals route to silent tier
 - E2E test: email arrives → insight surface appears → user clicks "Draft reply" → execution surface shows progress → approval → email drafted
 
+## Absorbed Issues from Audit
+
+**Issue #18 — Notifier priority score computed but never used:** The Notifier already computes `priority_score = 0.30*urgency + 0.25*goal_relevance + 0.20*novelty + 0.15*confidence + 0.10*interruptibility` but discards it. This spec introduces relevance scoring for perception signals. Wire relevance assessment output into the existing priority score computation, then use the score to control delivery:
+
+```python
+# In notifier.py — use priority_score for delivery decisions
+if priority_score < 0.3:
+    # Silent — log only, don't deliver
+    return
+elif priority_score < 0.6:
+    # Batch — add to briefing, don't push immediately
+    await self._add_to_briefing(...)
+    return
+else:
+    # Push — deliver to active surfaces immediately
+    await self._deliver(...)
+```
+
+**Issue #5 — Notifier: No rate limiting per surface:** Proactive insight surfaces will push notifications. Without rate limiting, Spec 4 will spam users. Add per-surface rate caps:
+
+```python
+# In notifier.py
+SURFACE_RATE_LIMITS = {
+    "telegram": 5,   # max per hour
+    "web": 15,       # max per hour (less intrusive)
+    "slack": 8,      # max per hour
+    "email": 3,      # max per hour (most intrusive)
+}
+
+async def _check_rate_limit(self, user_id: str, surface: str) -> bool:
+    key = f"notifier:rate:{user_id}:{surface}"
+    count = await self._redis.incr(key)
+    if count == 1:
+        await self._redis.expire(key, 3600)  # 1 hour window
+    limit = SURFACE_RATE_LIMITS.get(surface, 10)
+    return count <= limit
+```
+
+When rate limit exceeded, notification is held for next briefing instead of dropped.
+
 ## Success Criteria
 
 1. Detected signals are interpreted against user goals before any action
@@ -475,6 +515,8 @@ This is enforced by the trust engine (Spec 2): external writes always go through
 5. Dismissals teach the system what the user doesn't care about
 6. Persona costs reduced ~5x via batching with better signal quality
 7. Cross-source synthesis identifies related signals across services
+8. Notifier priority score drives delivery decisions (not ignored)
+9. Per-surface rate limiting prevents notification spam
 
 ## Blast Radius
 

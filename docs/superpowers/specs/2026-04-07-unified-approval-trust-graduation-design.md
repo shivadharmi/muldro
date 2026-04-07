@@ -549,6 +549,22 @@ This should be rare (<5% of evaluations). The Governor LLM prompt is simplified 
 - E2E test: approve 3 low-risk emails → verify trust graduates to learning
 - E2E test: approve 10 low-risk emails → verify auto-execute with notification
 
+## Absorbed Issues from Audit
+
+**Issue #13 — MCP Bridge: No cost/rate tracking per tool call:** External MCP tool calls have no cost attribution. When the TrustEngine auto-executes actions at `trusted`/`autonomous` levels, there's no visibility into what they cost. Fix: Tag every `_execute_tool()` call with cost attribution back to the budget tracker. Add per-capability cost tracking to the TrustEngine so the trust dashboard shows "email.send: 15 auto-executions, $0.03 total cost this week."
+
+**Implementation:** In `agent_loop.py`, after each tool call completes, call:
+```python
+await budget.record_tool_cost(
+    workspace_id=workspace_id,
+    tool_name=tool_name,
+    capability=capability,
+    cost_usd=estimated_cost,  # From tool registry or fixed estimate
+)
+```
+
+Expose per-capability cost in the new `GET /v1/trust/dashboard` endpoint alongside trust state.
+
 ## Success Criteria
 
 1. Single approval gate — no triple prompting
@@ -557,6 +573,7 @@ This should be rare (<5% of evaluations). The Governor LLM prompt is simplified 
 4. Approval UX shows WHY and shows graduation progress
 5. User can control trust ceilings per capability
 6. System is faster — deterministic engine replaces Governor LLM call for 95%+ of evaluations
+7. Per-capability cost tracking visible in trust dashboard
 
 ## Blast Radius
 
