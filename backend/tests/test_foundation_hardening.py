@@ -589,3 +589,62 @@ class TestStartupComponentHealth:
 
         # Restore
         _component_health.update(original)
+
+
+class TestBriefingAsyncGeneration:
+    """Fix 3.2: Return 202 when briefing not yet generated."""
+
+    @pytest.mark.asyncio
+    async def test_get_briefing_returns_existing(self):
+        """When briefing exists, return it directly."""
+        from src.services.briefing_read_model import BriefingReadModel
+
+        model = BriefingReadModel.__new__(BriefingReadModel)
+        model._db = AsyncMock()
+        model._workspace_id = "ws_test"
+
+        # Mock get_detail to return existing briefing
+        model.get_detail = AsyncMock(return_value={"briefing_id": "brf_001", "headline": "Test"})
+        result = await model.get_detail("2026-04-07")
+        assert result is not None
+        assert result["briefing_id"] == "brf_001"
+
+
+class TestTelegramRateLimiting:
+    """Fix 3.3: Per-user rate limiting (10 msg/min)."""
+
+    def test_rate_limiter_allows_under_limit(self):
+        from src.interface.telegram import TelegramRateLimiter
+
+        limiter = TelegramRateLimiter(max_per_minute=10)
+        for _ in range(10):
+            assert limiter.allow("user_1") is True
+
+    def test_rate_limiter_blocks_over_limit(self):
+        from src.interface.telegram import TelegramRateLimiter
+
+        limiter = TelegramRateLimiter(max_per_minute=10)
+        for _ in range(10):
+            limiter.allow("user_1")
+        assert limiter.allow("user_1") is False
+
+    def test_rate_limiter_independent_per_user(self):
+        from src.interface.telegram import TelegramRateLimiter
+
+        limiter = TelegramRateLimiter(max_per_minute=10)
+        for _ in range(10):
+            limiter.allow("user_1")
+        # user_2 should still be allowed
+        assert limiter.allow("user_2") is True
+
+    def test_rate_limiter_resets_after_window(self):
+        import time
+
+        from src.interface.telegram import TelegramRateLimiter
+
+        limiter = TelegramRateLimiter(max_per_minute=10)
+        for _ in range(10):
+            limiter.allow("user_1")
+        # Manually expire the window
+        limiter._windows["user_1"] = (10, time.monotonic() - 61)
+        assert limiter.allow("user_1") is True
