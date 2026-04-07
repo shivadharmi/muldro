@@ -432,4 +432,28 @@ surface-card.tsx re-renders with new state
 ```
 **Risk:** Any missing link → surface_update events silently dropped with no error.
 
-### Total: ~30 files affected (10 backend source, 5 tests, 10 frontend, 3 models/contracts, 2 new components)
+### Frontend Changes (Hard Replacement)
+
+| File | What changes | Why |
+|------|-------------|-----|
+| `frontend/src/hooks/use-jarvis-ws.ts` | Add `surface_update` message type handler. Add `onSurfaceUpdate` callback parameter alongside existing `onSurfacePush`. Parse `{type: "surface_update", surface_id, phase, data}` messages. | WebSocket receives live surface updates |
+| `frontend/src/stores/surface-store.ts` | Add `updateSurface(surfaceId, partialData)` method that merges update into existing surface without replacing it. Existing `addSurface()` already does spread merge but needs explicit partial update support for phase/steps/progress fields. | Surface state merge |
+| `frontend/src/app/page.tsx` | Wire `onSurfaceUpdate` callback to surface store's `updateSurface()`. Sort surfaces: active executions (phase = executing/approval_needed) above completed surfaces. | Workspace homepage |
+| `frontend/src/app/chat/page.tsx` | Same `onSurfaceUpdate` wiring. Surface rail shows execution progress inline. | Chat split-pane |
+| `frontend/src/lib/a2ui-types.ts` | Add `SurfaceUpdateMessage` type: `{type: "surface_update", surface_id, phase, steps: StepState[], current_step, progress, approval: ApprovalContext \| null, results: ResultSummary \| null}`. Add `StepState`, `ApprovalContext`, `ResultSummary` types. | A2UI protocol extension |
+| `frontend/src/lib/types/surfaces.ts` | Add `ExecutionPhase` type: `"planning" \| "plan_ready" \| "executing" \| "approval_needed" \| "completed" \| "failed" \| "partial"`. | Phase enum |
+| `frontend/src/components/workspace/surface-card.tsx` | Render execution phase — show step list with status icons (○ pending, ◉ executing with pulse animation, ✓ completed, ✗ failed, ⚠ approval). Show progress bar. | Live execution rendering |
+| `frontend/src/components/a2ui/components/execution-surface.tsx` | **NEW** — Full execution surface component with step list, inline approval, results summary. | Execution progress |
+| `frontend/src/components/a2ui/components/inline-approval.tsx` | **NEW** — Approval card rendered inside execution surface. Shows risk reasoning, trust context, graduation hint, approve/edit/reject buttons. | Inline approval UX |
+| `frontend/src/components/a2ui/components/step-list.tsx` | **NEW** — Renders list of plan steps with status indicators, output summaries, and user-action badges. | Step-by-step display |
+| `frontend/src/components/a2ui/renderer.tsx` | Add `execution_surface` case to the component type switch dispatcher. | Component registry |
+
+### API Contract Changes (Hard Replacement)
+
+| Endpoint | What changes | Why |
+|----------|-------------|-----|
+| `WS /ws/{user_id}` | New message type: `{type: "surface_update", ...}` alongside existing `{type: "surface", ...}`. Backend publishes surface_update events from GraphExecutor through Redis to WS. | Live execution progress |
+| `GET /v1/workspace/surfaces` | Response surfaces include `phase` field for active executions. Active surfaces sorted first. | Workspace reconnection |
+| `GET /v1/runs/{id}` | Still returns `TaskRun` — but lightweight runs (source=user_message) no longer exist. Only real plan executions. | Cleaner run listing |
+
+### Total: ~38 files affected (10 backend source, 5 tests, 14 frontend, 3 models/contracts, 3 new components, 3 API changes)

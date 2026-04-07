@@ -612,17 +612,55 @@ This spec modifies the approval pipeline which is woven through hooks, the agent
 | `tests/test_unified_dispatch.py` | Update Governor mocking | Dispatch integration tests |
 | `tests/test_contracts_v2.py` | Add `auto_execute_notify`/`auto_execute_silent` assertions | Contract tests |
 
-### Tier 5: Frontend
+### Tier 5: Frontend (Hard Replacement)
 
 | File | What changes | Why |
 |------|-------------|-----|
-| Frontend Settings page | New Trust tab with per-capability trust display and ceiling controls | Trust transparency UI |
-| Approval surface components | Show trust context ("first time" / "similar to 4 approvals" / graduation hint) | Approval UX improvement |
+| `frontend/src/app/settings/page.tsx` | Add Trust tab alongside existing Account, Policy, Budget tabs. Trust tab shows per-capability trust levels with graduation progress bars, ceiling controls per capability. | Trust transparency UI |
+| `frontend/src/lib/types.ts` | Delete old `Approval` type fields that referenced `execution_id`. Add `TrustState` and `TrustCeiling` types. Update `ApprovalDetail` to include `trust_context` (first_time, similar_count, graduation_hint). | Domain types |
+| `frontend/src/lib/api.ts` | Add: `fetchTrustDashboard()`, `setTrustCeiling(capability, maxLevel)`, `resetTrust(capability)`. Update `approveAction()` / `rejectAction()` response to include updated trust state. | API client |
+| `frontend/src/components/workspace/surface-card.tsx` | Update approval surface rendering — show trust context, graduation hint, undo button for auto-executed actions. | Approval UX |
+| `frontend/src/stores/activity-store.ts` | Handle new `auto_execute_notify` events — show notification-style entries for auto-executed actions. | Activity feed |
+
+### Policy Mode Absorption
+
+The current 4 policy modes (lockdown, approval_required, suggest_only, full_auto) in Settings → Policy become **workspace-level trust ceilings** in the new system:
+
+| Old Policy Mode | New Trust Ceiling | Effect |
+|---|---|---|
+| `lockdown` | All capabilities → `blocked` | Nothing executes |
+| `approval_required` | All capabilities → `learning` | Everything needs approval (current default) |
+| `suggest_only` | All capabilities → `first_use` | Jarvis proposes but never executes |
+| `full_auto` | No ceiling restriction | Trust graduates naturally |
+
+**Implementation:** The `PUT /v1/settings/policy/mode` endpoint maps the mode to a batch `TrustCeiling` update. The Settings → Policy UI continues to show the 4 modes as a simple selector, but underneath it sets trust ceilings.
+
+### Dead Code Absorption
+
+| Dead System | Replacement | Migration |
+|---|---|---|
+| `ApprovalPolicy` model + table | `TrustCeiling` model | Drop `approval_policies` table. Capability pattern matching absorbed into TrustCeiling. |
+| `ApprovalPolicyEngine` service | `TrustEngine` | Delete `approval_policy_engine.py`. All checks go through TrustEngine. |
+| `TrustScore` model + table | `TrustState` model | Drop `trust_scores` table. New `trust_states` table with per-risk-level tracking. |
+| Time-based policies (Governor) | `TrustEngine` with time-aware ceilings | Time policies become time-scoped trust ceilings (e.g., "full_auto during business hours, approval_required at night"). |
+
+### New API Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET /v1/trust/dashboard` | Trust state overview — all capabilities with levels, progress, ceilings |
+| `GET /v1/trust/{capability}` | Detailed trust state for one capability across all risk levels |
+| `PUT /v1/trust/{capability}/ceiling` | Set maximum trust level for a capability |
+| `POST /v1/trust/{capability}/reset` | Reset trust scores for a capability |
+| `GET /v1/trust/time-policies` | List time-based trust overrides |
+| `PUT /v1/trust/time-policies` | Set time-based trust overrides |
 
 ### Interdependency Chain
 
 ```
 Create TrustState + TrustCeiling models + migration
+    ↓
+Drop ApprovalPolicy + TrustScore tables
     ↓
 Implement TrustEngine with graduation rules
     ↓
@@ -637,4 +675,4 @@ Delete ApprovalPolicyEngine + TrustScore
 Update all tests
 ```
 
-### Total: ~40 files affected (18 source, 12 tests, 2 models to delete, 2 new models, 6 frontend)
+### Total: ~50 files affected (18 source, 12 tests, 4 models to delete, 2 new models, 8 frontend, 6 new API endpoints)

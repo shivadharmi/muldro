@@ -507,13 +507,26 @@ This spec primarily modifies the perception pipeline and notification system. It
 | `src/orchestrator/agents.py` | Persona agent definition unchanged — model tier and prompt stay the same. But calling pattern changes from per-message to batched | Agent config |
 | `src/tools/intelligence_server.py` | Briefing generation may consider relevance metadata when building briefings | MCP tool |
 
-### Tier 4: Frontend
+### Tier 4: Frontend (Hard Replacement)
 
 | File | What changes | Why |
 |------|-------------|-----|
-| `frontend/src/lib/types/surfaces.ts` | Add `proactive_insight` to SurfaceKind type | TypeScript types |
-| `frontend/src/components/workspace/surface-card.tsx` | Add rendering for proactive_insight kind (suggested actions + dismiss button) | Surface card |
-| `frontend/src/app/page.tsx` | May need to surface proactive insights prominently (above other surfaces) | Workspace layout |
+| `frontend/src/lib/types/surfaces.ts` | Add `"proactive_insight"` to SurfaceKind union type. | New surface kind |
+| `frontend/src/lib/a2ui-types.ts` | Add `InsightSurfaceData` type: `{signal_source, signal_summary, relevance_reasoning, related_goals, suggested_actions: {description, capability}[], dismiss_available}`. Add `"insight"` to `JarvisMessage` type union. | Insight surface protocol |
+| `frontend/src/components/workspace/surface-card.tsx` | Add rendering for `proactive_insight` kind — insight icon (💡), signal summary, related goal badges, suggested action buttons, dismiss button. Color: blue-violet (distinct from approval amber). | Surface card |
+| `frontend/src/components/a2ui/components/insight-surface.tsx` | **NEW** — Full insight surface component. Shows signal context, relevance reasoning, suggested actions as clickable buttons, dismiss with optional feedback. On action click → transitions to execution surface (Spec 3). | Proactive insight display |
+| `frontend/src/components/a2ui/renderer.tsx` | Add `insight_surface` case to component type switch. | Component registry |
+| `frontend/src/app/page.tsx` | Sort proactive insights above static surfaces (same priority tier as active executions). Handle insight→execution surface transition when user clicks a suggested action. | Workspace layout |
+| `frontend/src/stores/surface-store.ts` | Handle insight surface lifecycle: `proposal → accepted → executing → completed`. When user clicks action, update surface phase from proposal to executing (same surface ID becomes an execution surface from Spec 3). | Surface lifecycle |
+| `frontend/src/lib/api.ts` | Add: `dismissInsight(surfaceId, reason?)` — records dismissal for engagement learning. No new fetch endpoints needed — insights arrive via WebSocket push. | API client |
+
+### API Contract Changes
+
+| Endpoint | What changes | Why |
+|----------|-------------|-----|
+| `WS /ws/{user_id}` | New message subtype: `{type: "surface", surface: {kind: "proactive_insight", ...}}` — uses existing surface push mechanism. | Insight delivery |
+| `POST /v1/insights/{id}/dismiss` | **NEW** — Record dismissal for engagement learning. Body: `{reason?: string}`. | Dismissal feedback |
+| `GET /v1/workspace/surfaces` | Includes proactive insight surfaces in workspace build. Insights sorted by relevance_score. | Workspace reconnection |
 
 ### Tier 5: Tests
 
@@ -545,4 +558,4 @@ The Persona agent is called in **both** `process_message()` and `process_message
 
 **Safety net:** Search for `"persona"` as agent name string in jarvis.py to find all call sites.
 
-### Total: ~30 files affected (12 source, 9 tests, 3 frontend, 2 new models, 2 new migrations, 2 new services)
+### Total: ~38 files affected (12 source, 9 tests, 8 frontend, 2 new models, 2 new migrations, 2 new services, 1 new API endpoint, 2 new components)

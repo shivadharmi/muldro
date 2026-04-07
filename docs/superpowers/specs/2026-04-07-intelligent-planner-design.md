@@ -529,6 +529,28 @@ The 19 decision types appear as **string literals** across 30+ files — these w
 - `"ignore"` — ~25 files (special early return)
 - `"set_goal"`, `"set_instruction"`, `"schedule_reminder"`, `"add_to_brief"` — ~5 files each (direct handlers in jarvis.py, wired into BOTH streaming and non-streaming)
 
-**Migration safety net:** Keep `PlannerOutput` as a deprecated alias during transition. Run `ruff` + `grep` for all 19 decision strings before deleting.
+**Safety net:** Run `ruff` + `grep` for all 19 decision strings before deleting. Hard replacement — no backward compat aliases.
 
-### Total: ~48 files affected (22 source, 10 tests, 3 frontend, 5 migrations/models, 8 docs)
+### Frontend Changes (Hard Replacement)
+
+| File | What changes | Why |
+|------|-------------|-----|
+| `frontend/src/lib/api.ts` | Replace `PlannerOutput` type with `PlanOutput`. Update `ChatSSEEvent` — `decision` event becomes `plan` event with new shape. Update `streamChat()` SSE parser. | API client mirrors backend contracts |
+| `frontend/src/lib/types.ts` | Delete `Task`/`TaskDetail` types that reference `decision` field. Update `ConversationMessage.metadata_` — `decision` field changes from `PlannerOutput` to `PlanOutput`. | Domain model types |
+| `frontend/src/lib/a2ui-types.ts` | Update `WorkspaceSurfacePush` — `decision` field removed (surfaces keyed by capability, not decision type). | A2UI protocol |
+| `frontend/src/lib/types/runtime.ts` | Update `RuntimeEventType` — remove decision-type-specific events (e.g., `route_selected`), add capability-based events. | Activity feed events |
+| `frontend/src/lib/agent-config.ts` | Delete `observer` and `researcher` entries. Add `perceiver` entry (merge their tools + config). Update `governor` — demoted from agent to edge-case. | Agent configuration |
+| `frontend/src/components/jarvis/chat-panel.tsx` | Update SSE event handling — parse `plan` event instead of `decision` event. Update agent step rendering for `perceiver` agent name. | Chat UI |
+| `frontend/src/stores/activity-store.ts` | Update event type parsing for new `RuntimeEventType` values. | Live event feed |
+| `frontend/src/components/shell/activity-strip.tsx` | Update event rendering for new event types. | Activity strip |
+
+### API Contract Changes (Hard Replacement)
+
+| Endpoint | What changes | Why |
+|----------|-------------|-----|
+| `POST /v1/jarvis/chat` (SSE) | Emit `plan` event with `PlanOutput` shape instead of `decision` event with `PlannerOutput`. Agent step events use `perceiver` instead of `observer`/`researcher`. | Primary chat interface |
+| `GET /v1/conversations/{id}/messages` | `MessageMetadata.decision` field contains `PlanOutput` (not `PlannerOutput`). Agent steps reference new agent names. | Message history — old messages with old format will fail to render; truncate or ignore. |
+| `GET /v1/realtime/runtime` | Emit capability-based events instead of decision-type events. | Runtime event stream |
+| `GET /v1/traces/{id}` | `SpanRecord.decision` field changes. `agents_invoked` list uses new agent names. | Trace inspection |
+
+### Total: ~55 files affected (22 backend source, 10 tests, 8 frontend, 5 migrations/models, 10 docs)
