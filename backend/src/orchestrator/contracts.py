@@ -321,3 +321,47 @@ class WorkspaceSurfacePush(BaseModel):
     response_preview: str | None = None
     created_at: str = ""
     ttl_hours: int = 24
+
+
+# ── Capability-based planning contracts ─────────────────────────────
+
+
+class CapabilityGap(BaseModel):
+    """A capability the plan needs but doesn't have."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    description: str
+    resolution: str  # e.g. "connect Notion" or "not currently possible"
+    workaround: str | None = None
+
+
+class PlanStep(BaseModel):
+    """A single step in a capability-based plan."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    step_id: str = ""
+    description: str
+    actor: Literal["jarvis", "user"] = "jarvis"
+    capability: str  # e.g. "email.search", "reason", "respond"
+    input: dict[str, Any] = Field(default_factory=dict)
+    depends_on: list[str] = Field(default_factory=list)
+    risk: Literal["none", "low", "medium", "high"] = "none"
+    user_context: str | None = None
+
+
+class PlanOutput(BaseModel):
+    """Validated planner output — a goal-decomposed plan."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    goal: str
+    reasoning: str = ""
+    achievable: Literal["full", "partial", "not_achievable"] = "full"
+    priority: Literal["low", "medium", "high", "critical"] = "medium"
+    steps: list[PlanStep] = Field(default_factory=list)
+    success_criteria: str = ""
+    capability_gaps: list[CapabilityGap] = Field(default_factory=list)
+    plan_id: str | None = None
+    requires_user_input: bool = False
