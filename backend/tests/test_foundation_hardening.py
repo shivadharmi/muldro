@@ -286,3 +286,52 @@ class TestEventProcessorDLQ:
         # Find "except Exception:\n            pass" or "except:\n            pass"
         bare_passes = re.findall(r"except\s*(?:Exception)?\s*:\s*\n\s*pass", source)
         assert len(bare_passes) == 0, f"Found bare except:pass blocks: {bare_passes}"
+
+
+class TestMCPDiscoveryTracking:
+    """Fix 2.5: Track and surface MCP discovery failures."""
+
+    def test_bridge_health_includes_discovery_failures_key(self):
+        from src.connectors.mcp_bridge import get_bridge_health
+
+        health = get_bridge_health()
+        assert "discovery_failures" in health
+
+    def test_record_and_clear_discovery_failure(self):
+        from src.connectors import mcp_bridge
+
+        mcp_bridge.record_discovery_failure("test-server", "Connection refused")
+        health = mcp_bridge.get_bridge_health()
+        assert "test-server" in health["discovery_failures"]
+        assert health["discovery_failures"]["test-server"]["count"] == 1
+
+        # Clean up
+        mcp_bridge.clear_discovery_failure("test-server")
+        health = mcp_bridge.get_bridge_health()
+        assert "test-server" not in health["discovery_failures"]
+
+    def test_discovery_failure_count_increments(self):
+        from src.connectors import mcp_bridge
+
+        mcp_bridge.record_discovery_failure("test-srv", "err1")
+        mcp_bridge.record_discovery_failure("test-srv", "err2")
+        health = mcp_bridge.get_bridge_health()
+        assert health["discovery_failures"]["test-srv"]["count"] == 2
+        assert health["discovery_failures"]["test-srv"]["error"] == "err2"
+        mcp_bridge.clear_discovery_failure("test-srv")
+
+
+class TestCircuitBreakerReset:
+    """Fix 4.3: MCP circuit breaker manual reset."""
+
+    def test_circuit_breaker_reset_restores_closed_state(self):
+        from src.services.mcp_resilience import CircuitState, MCPCircuitBreaker
+
+        cb = MCPCircuitBreaker()
+        # Record enough failures to open circuit
+        for _ in range(6):
+            cb.record_failure("test-server")
+        assert cb.get_state("test-server") == CircuitState.OPEN
+
+        cb.reset("test-server")
+        assert cb.get_state("test-server") == CircuitState.CLOSED

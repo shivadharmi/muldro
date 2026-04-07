@@ -11,6 +11,7 @@ But all *write actions* (send_email, create_draft, create_issue, etc.) go throug
 
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Any
 
 from src.integrations.session_pool import UserMCPSessionPool
@@ -21,6 +22,22 @@ logger = logging.getLogger(__name__)
 # Module-level session pool — initialized once at startup
 _session_pool: UserMCPSessionPool | None = None
 _circuit_breaker = MCPCircuitBreaker()
+_discovery_failures: dict[str, dict] = {}
+
+
+def record_discovery_failure(server_name: str, error: str) -> None:
+    """Record a tool discovery failure for a server."""
+    existing = _discovery_failures.get(server_name, {"count": 0})
+    _discovery_failures[server_name] = {
+        "error": error[:200],
+        "count": existing["count"] + 1,
+        "last_failure": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def clear_discovery_failure(server_name: str) -> None:
+    """Clear discovery failure record after successful discovery."""
+    _discovery_failures.pop(server_name, None)
 
 
 async def get_mcp_config() -> dict:
@@ -243,8 +260,13 @@ async def refresh_server_auth(
 def get_bridge_health() -> dict:
     """Get health status for the MCP bridge."""
     if not _session_pool:
-        return {"status": "inactive", "servers": {}}
+        return {
+            "status": "inactive",
+            "servers": {},
+            "discovery_failures": dict(_discovery_failures),
+        }
     return {
         "status": "active",
         "servers": _session_pool.get_health(),
+        "discovery_failures": dict(_discovery_failures),
     }
