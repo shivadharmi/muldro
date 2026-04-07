@@ -517,6 +517,11 @@ async def agent_loop(
     thinking_summary = thinking_summary or None
 
     # Record token usage
+    # NOTE: record_from_span() exists on BudgetTracker but cannot be used here
+    # because the span hasn't been populated with token counts yet — those are
+    # set by trace.end_span() below. The local variables are the source of truth
+    # at this point. When span lifecycle is refactored to populate tokens before
+    # budget recording, switch to budget.record_from_span(db, span=span, ...).
     cost_usd = 0.0
     try:
         async with db_factory() as db:

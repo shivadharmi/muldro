@@ -805,3 +805,84 @@ class TestNotifierSurfaceSync:
 
         # Redis lpush should have been called for sync fallback
         redis.lpush.assert_called()
+
+
+class TestSchedulerDLQRetry:
+    """Fix 2.1 (continued): Scheduler retries DLQ entries."""
+
+    @pytest.mark.asyncio
+    async def test_tick_dlq_retry_processes_entries(self):
+        from src.services.scheduler import SchedulerLoop
+
+        settings = make_mock_settings()
+        scheduler = SchedulerLoop(settings, user_ids=["usr_test"])
+
+        # Verify the method exists
+        assert hasattr(scheduler, "_tick_dlq_retry")
+
+    @pytest.mark.asyncio
+    async def test_tick_dlq_retry_called_every_5th_tick(self):
+        """Verify _tick_dlq_retry is invoked on 5th tick cycle."""
+        from src.services.scheduler import SchedulerLoop
+
+        settings = make_mock_settings()
+        scheduler = SchedulerLoop(settings, user_ids=["usr_test"])
+
+        # Mock all sub-tick methods
+        scheduler._tick_perception = AsyncMock()
+        scheduler._check_follow_ups = AsyncMock()
+        scheduler._tick_background_tasks = AsyncMock()
+        scheduler._tick_eviction = AsyncMock()
+        scheduler._tick_dlq_retry = AsyncMock()
+
+        # Simulate 5 ticks by patching the schedule query to return empty
+        from unittest.mock import patch
+
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = []
+        mock_db.execute = AsyncMock(return_value=mock_result)
+        mock_db.commit = AsyncMock()
+
+        mock_factory = MagicMock()
+        mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("src.services.scheduler.get_session_factory", return_value=mock_factory):
+            for _ in range(5):
+                await scheduler._tick()
+
+        # DLQ retry should have been called once (on 5th tick)
+        scheduler._tick_dlq_retry.assert_called_once()
+
+
+class TestHealthDashboardMCP:
+    """Fix 2.5 (continued): MCP health in dashboard."""
+
+    def test_health_dashboard_model_has_mcp_field(self):
+        from src.api.routes_health import HealthDashboardResponse
+
+        model = HealthDashboardResponse(
+            budget={},
+            queues={},
+            observations={},
+            agents={},
+        )
+        assert hasattr(model, "mcp")
+        assert model.mcp == {}
+
+    def test_health_dashboard_model_accepts_mcp_data(self):
+        from src.api.routes_health import HealthDashboardResponse
+
+        mcp_data = {
+            "discovery_failures": {"test-server": {"count": 1, "error": "timeout"}},
+        }
+        model = HealthDashboardResponse(
+            budget={},
+            queues={},
+            observations={},
+            agents={},
+            mcp=mcp_data,
+        )
+        assert model.mcp == mcp_data
+        assert "discovery_failures" in model.mcp

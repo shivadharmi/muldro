@@ -26,6 +26,10 @@ class HealthDashboardResponse(BaseModel):
     traces: dict = {}
     runs: dict = {}
     components: dict = {}
+    mcp: dict = {}
+    # NOTE: graph_sync health (GraphSyncService.get_sync_stats()) is available
+    # per-request via the service but not yet wired here — requires a module-level
+    # stats accumulator or ServiceContainer singleton to expose without a DB session.
 
 
 @router.get("/v1/system/dashboard", response_model=HealthDashboardResponse)
@@ -50,6 +54,14 @@ async def system_dashboard(
     except ImportError:
         pass
 
+    mcp_health: dict = {}
+    try:
+        from src.connectors.mcp_bridge import get_bridge_health
+
+        mcp_health = get_bridge_health()
+    except Exception:
+        pass
+
     return HealthDashboardResponse(
         budget=budget_info,
         queues=queue_info,
@@ -58,6 +70,7 @@ async def system_dashboard(
         traces=trace_info,
         runs=run_info,
         components=components,
+        mcp=mcp_health,
     )
 
 

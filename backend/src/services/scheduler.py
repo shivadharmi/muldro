@@ -70,10 +70,11 @@ class SchedulerLoop:
         # 3. Execute pending background tasks
         await self._tick_background_tasks(factory)
 
-        # 4. Eviction — clean up expired data every 5th tick (~150s)
+        # 4. Eviction + DLQ retry — every 5th tick (~150s)
         self._tick_count = getattr(self, "_tick_count", 0) + 1
         if self._tick_count % 5 == 0:
             await self._tick_eviction(factory)
+            await self._tick_dlq_retry(factory)
 
         # 5. Process due schedules
         async with factory() as db:
@@ -474,6 +475,35 @@ class SchedulerLoop:
                     await graph_engine.close()
         except Exception:
             logger.warning("Eviction tick error", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # DLQ retry — process dead-letter entries that can be retried
+    # ------------------------------------------------------------------
+
+    async def _tick_dlq_retry(self, factory) -> None:
+        """Retry DLQ entries that haven't exceeded max attempts."""
+        try:
+            async with factory() as db:
+                from src.services.dead_letter import DeadLetterService
+
+                dlq = DeadLetterService(db)
+                for uid in self._user_ids:
+                    pending = await dlq.list_pending(uid, limit=10)
+                    for entry in pending:
+                        if not await dlq.mark_retrying(entry.entry_id):
+                            logger.info(
+                                "DLQ entry %s exhausted, marked as exhausted",
+                                entry.entry_id,
+                            )
+                        else:
+                            logger.debug(
+                                "DLQ entry %s marked for retry (attempt %d)",
+                                entry.entry_id,
+                                entry.attempt_count,
+                            )
+                    await db.commit()
+        except Exception:
+            logger.debug("DLQ retry tick failed", exc_info=True)
 
     # ------------------------------------------------------------------
     # Follow-up notifications
