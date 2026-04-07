@@ -8,6 +8,16 @@ import uvicorn
 from src.config.logging import configure_logging
 from src.config.settings import get_settings
 
+_component_health: dict[str, dict] = {
+    "worker": {"status": "not_started"},
+    "bot": {"status": "not_started"},
+}
+
+
+def get_component_health() -> dict:
+    """Get health status of worker and bot components."""
+    return dict(_component_health)
+
 
 def main():
     parser = argparse.ArgumentParser(description="Jarvis Backend")
@@ -31,6 +41,7 @@ def main():
         logger = logging.getLogger("jarvis.worker_thread")
 
         def run_worker():
+            _component_health["worker"] = {"status": "starting"}
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
@@ -82,6 +93,7 @@ def main():
             stream_consumer = StreamConsumerManager(settings)
             scheduler = SchedulerLoop(settings, orchestrator=orchestrator, user_ids=user_ids)
             logger.info("Worker thread starting (StreamConsumerManager + SchedulerLoop)")
+            _component_health["worker"] = {"status": "running"}
             try:
                 loop.run_until_complete(
                     asyncio.gather(
@@ -91,6 +103,7 @@ def main():
                     )
                 )
             except Exception:
+                _component_health["worker"] = {"status": "crashed"}
                 logger.exception("Worker thread crashed")
 
         worker_thread = threading.Thread(target=run_worker, daemon=True)
@@ -104,6 +117,7 @@ def main():
         bot_logger = logging.getLogger("jarvis.bot_thread")
 
         def run_bot():
+            _component_health["bot"] = {"status": "starting"}
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             bot_logger.info("Telegram bot thread starting")
@@ -142,8 +156,10 @@ def main():
                 bot._notifier = notifier
 
                 loop.run_until_complete(bot.start())
+                _component_health["bot"] = {"status": "running"}
                 loop.run_forever()
             except Exception:
+                _component_health["bot"] = {"status": "crashed"}
                 bot_logger.exception("Bot thread crashed")
 
         bot_thread = threading.Thread(target=run_bot, daemon=True)

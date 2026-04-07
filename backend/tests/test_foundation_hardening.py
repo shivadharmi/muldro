@@ -504,3 +504,88 @@ class TestBriefingLifecycle:
 
         item = model._to_list_item(briefing)
         assert item["status"] == "pinned"
+
+
+class TestTraceCostReconciliation:
+    """Fix 5.1: Budget records from trace spans."""
+
+    @pytest.mark.asyncio
+    async def test_record_from_span_delegates_to_record_usage(self):
+        from src.orchestrator.budget import BudgetTracker
+
+        tracker = BudgetTracker(daily_limit_usd=10.0)
+        db = AsyncMock()
+        db.add = MagicMock()
+        db.flush = AsyncMock()
+
+        span = MagicMock()
+        span.input_tokens = 1000
+        span.output_tokens = 500
+        span.cache_creation_input_tokens = 100
+        span.cache_read_input_tokens = 200
+        span.thinking_tokens = 50
+
+        usage = await tracker.record_from_span(
+            db,
+            span=span,
+            agent_name="observer",
+            model="claude-sonnet-4-20250514",
+            trigger="perception",
+            workspace_id="ws_test",
+        )
+        assert usage.input_tokens == 1000
+        assert usage.output_tokens == 500
+        assert usage.cache_creation_input_tokens == 100
+
+    @pytest.mark.asyncio
+    async def test_record_from_span_handles_missing_attrs(self):
+        from src.orchestrator.budget import BudgetTracker
+
+        tracker = BudgetTracker(daily_limit_usd=10.0)
+        db = AsyncMock()
+        db.add = MagicMock()
+        db.flush = AsyncMock()
+
+        # Span without optional token attrs
+        span = MagicMock(spec=[])  # empty spec = no attributes
+        span.input_tokens = 500
+        span.output_tokens = 200
+
+        usage = await tracker.record_from_span(
+            db,
+            span=span,
+            agent_name="test",
+            model="claude-sonnet-4-20250514",
+            trigger="test",
+            workspace_id="ws_test",
+        )
+        assert usage.input_tokens == 500
+
+
+class TestStartupComponentHealth:
+    """Fix 2.6: Worker/bot thread health tracking."""
+
+    def test_component_health_dict_exists(self):
+        from run import get_component_health
+
+        health = get_component_health()
+        assert isinstance(health, dict)
+        assert "worker" in health
+        assert "bot" in health
+
+    def test_initial_health_is_not_started(self):
+        from run import _component_health
+
+        # Reset to initial state for test
+        original = dict(_component_health)
+        _component_health["worker"] = {"status": "not_started"}
+        _component_health["bot"] = {"status": "not_started"}
+
+        from run import get_component_health
+
+        health = get_component_health()
+        assert health["worker"]["status"] == "not_started"
+        assert health["bot"]["status"] == "not_started"
+
+        # Restore
+        _component_health.update(original)

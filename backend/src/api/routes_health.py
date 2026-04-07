@@ -25,6 +25,7 @@ class HealthDashboardResponse(BaseModel):
     agents: dict
     traces: dict = {}
     runs: dict = {}
+    components: dict = {}
 
 
 @router.get("/v1/system/dashboard", response_model=HealthDashboardResponse)
@@ -41,6 +42,14 @@ async def system_dashboard(
     trace_info = await _get_trace_metrics(workspace_id)
     run_info = await _get_run_metrics(workspace_id)
 
+    components = {}
+    try:
+        from run import get_component_health
+
+        components = get_component_health()
+    except ImportError:
+        pass
+
     return HealthDashboardResponse(
         budget=budget_info,
         queues=queue_info,
@@ -48,6 +57,7 @@ async def system_dashboard(
         agents=agent_info,
         traces=trace_info,
         runs=run_info,
+        components=components,
     )
 
 

@@ -175,6 +175,34 @@ class BudgetTracker:
         )
         return usage
 
+    async def record_from_span(
+        self,
+        db: AsyncSession,
+        *,
+        span,
+        agent_name: str,
+        model: str,
+        trigger: str,
+        trace_id: str | None = None,
+        conversation_id: str | None = None,
+        workspace_id: str,
+    ) -> TokenUsage:
+        """Record budget usage from a completed trace span (single source of truth)."""
+        return await self.record_usage(
+            db,
+            agent_name=agent_name,
+            model=model,
+            input_tokens=getattr(span, "input_tokens", 0) or 0,
+            output_tokens=getattr(span, "output_tokens", 0) or 0,
+            cache_creation_input_tokens=getattr(span, "cache_creation_input_tokens", 0) or 0,
+            cache_read_input_tokens=getattr(span, "cache_read_input_tokens", 0) or 0,
+            thinking_tokens=getattr(span, "thinking_tokens", 0) or 0,
+            trigger=trigger,
+            trace_id=trace_id,
+            conversation_id=conversation_id,
+            workspace_id=workspace_id,
+        )
+
     async def get_daily_spend(self, db: AsyncSession, *, workspace_id: str = "") -> float:
         # Fast path: read from Redis if available
         if self._redis and workspace_id:
