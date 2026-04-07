@@ -1,5 +1,11 @@
 """Tests for Spec 0: Foundation Hardening."""
 
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from tests.conftest import make_mock_settings
+
 
 class TestSettingsCleanup:
     """Fix 6.1: Remove unused settings + add environment field."""
@@ -51,3 +57,86 @@ class TestSettingsCleanup:
         assert not hasattr(Settings, "observation_stale_jira_minutes")
         assert not hasattr(Settings, "observation_stale_linkedin_minutes")
         assert not hasattr(Settings, "observation_stale_twitter_minutes")
+
+
+class TestOAuthStartupValidation:
+    """Fix 1.1: Enforce OAuth encryption key at startup."""
+
+    def test_production_without_oauth_key_raises(self):
+        from src.runtime import RuntimeBuildError, build
+
+        settings = make_mock_settings(
+            oauth_encryption_key="",
+            environment="production",
+        )
+        db = MagicMock()
+        with pytest.raises(RuntimeBuildError, match="OAUTH_ENCRYPTION_KEY"):
+            build(settings, db)
+
+    def test_development_without_oauth_key_does_not_raise_oauth_error(self):
+        from src.runtime import build
+
+        settings = make_mock_settings(
+            oauth_encryption_key="",
+            environment="development",
+        )
+        db = MagicMock()
+        try:
+            build(settings, db)
+        except Exception as exc:
+            # May fail on Tier 1 service init (WorldModel etc) — that's fine
+            # The key assertion is that it doesn't fail on OAuth check
+            assert "OAUTH_ENCRYPTION_KEY" not in str(exc)
+
+    def test_production_with_oauth_key_passes_check(self):
+        from src.runtime import build
+
+        settings = make_mock_settings(
+            oauth_encryption_key="dGVzdC1rZXktMzItYnl0ZXM=",
+            environment="production",
+        )
+        db = MagicMock()
+        try:
+            build(settings, db)
+        except Exception as exc:
+            assert "OAUTH_ENCRYPTION_KEY" not in str(exc)
+
+
+class TestBudgetWorkspaceRequired:
+    """Fix 2.4: Budget rejects empty workspace_id."""
+
+    @pytest.mark.asyncio
+    async def test_record_usage_rejects_empty_workspace_id(self):
+        from src.orchestrator.budget import BudgetTracker
+
+        tracker = BudgetTracker(daily_limit_usd=10.0)
+        db = AsyncMock()
+        with pytest.raises(ValueError, match="workspace_id"):
+            await tracker.record_usage(
+                db,
+                agent_name="test",
+                model="claude-sonnet-4-20250514",
+                input_tokens=100,
+                output_tokens=50,
+                trigger="test",
+                workspace_id="",
+            )
+
+    @pytest.mark.asyncio
+    async def test_record_usage_accepts_valid_workspace_id(self):
+        from src.orchestrator.budget import BudgetTracker
+
+        tracker = BudgetTracker(daily_limit_usd=10.0)
+        db = AsyncMock()
+        db.add = MagicMock()
+        db.flush = AsyncMock()
+        usage = await tracker.record_usage(
+            db,
+            agent_name="test",
+            model="claude-sonnet-4-20250514",
+            input_tokens=100,
+            output_tokens=50,
+            trigger="test",
+            workspace_id="ws_test",
+        )
+        assert usage.workspace_id == "ws_test"

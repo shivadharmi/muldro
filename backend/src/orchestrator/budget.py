@@ -110,6 +110,8 @@ class BudgetTracker:
         trace_id: str | None = None,
         workspace_id: str = "",
     ) -> TokenUsage:
+        if not workspace_id:
+            raise ValueError("workspace_id is required for record_usage")
         cost = self.calculate_cost(
             model,
             input_tokens,

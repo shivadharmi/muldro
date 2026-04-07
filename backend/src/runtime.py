@@ -31,6 +31,19 @@ def build(settings: Settings, db: AsyncSession) -> ServiceContainer:
     """
     svc = ServiceContainer()
 
+    # ── Pre-flight: OAuth encryption key ──────────────────────────────
+    if not settings.oauth_encryption_key:
+        if getattr(settings, "environment", "development") == "production":
+            raise RuntimeBuildError(
+                "JARVIS_OAUTH_ENCRYPTION_KEY is required in production. "
+                "OAuth tokens will be stored in PLAINTEXT without it."
+            )
+        logger.error(
+            "JARVIS_OAUTH_ENCRYPTION_KEY is not set — "
+            "OAuth tokens will be stored in PLAINTEXT. "
+            "Set this variable to a Fernet-compatible key."
+        )
+
     # ── Tier 1: fail fast ──────────────────────────────────────────
     try:
         from src.services.world_model import WorldModel
