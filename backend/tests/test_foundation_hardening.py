@@ -255,3 +255,34 @@ class TestWorkerDeadLetter:
             group="test_group",
         )
         mock_dlq.enqueue.assert_not_called()
+
+
+class TestEventProcessorDLQ:
+    """Fix 2.1: Wire DLQ into event processor for failed post-processing."""
+
+    def test_event_processor_accepts_dead_letter(self):
+        from src.services.event_processor import EventProcessor
+
+        dlq = MagicMock()
+        settings = make_mock_settings()
+        db = MagicMock()
+        processor = EventProcessor(settings=settings, db=db, dead_letter=dlq)
+        assert processor._dead_letter is dlq
+
+    def test_event_processor_works_without_dead_letter(self):
+        from src.services.event_processor import EventProcessor
+
+        settings = make_mock_settings()
+        db = MagicMock()
+        processor = EventProcessor(settings=settings, db=db, dead_letter=None)
+        assert processor._dead_letter is None
+
+    def test_no_bare_except_pass_in_event_processor(self):
+        """Verify no bare except:pass blocks remain."""
+        import re
+        from pathlib import Path
+
+        source = Path("src/services/event_processor.py").read_text()
+        # Find "except Exception:\n            pass" or "except:\n            pass"
+        bare_passes = re.findall(r"except\s*(?:Exception)?\s*:\s*\n\s*pass", source)
+        assert len(bare_passes) == 0, f"Found bare except:pass blocks: {bare_passes}"

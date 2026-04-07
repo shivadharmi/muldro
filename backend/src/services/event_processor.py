@@ -197,8 +197,20 @@ class EventProcessor:
             from src.services.metrics_service import MetricsService
 
             MetricsService.record_event_ingested(raw.source, raw.event_type)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Metrics recording failed: %s", exc)
+            if self._dead_letter:
+                try:
+                    await self._dead_letter.enqueue(
+                        user_id=user_id,
+                        operation_type="metrics_recording",
+                        error_type=type(exc).__name__,
+                        error_message=str(exc)[:500],
+                        payload={"event_id": event_id, "source": raw.source},
+                        workspace_id=workspace_id,
+                    )
+                except Exception:
+                    logger.debug("DLQ enqueue failed for metrics", exc_info=True)
 
         # Publish to event bus for decoupled downstream processing
         if self._event_bus:
