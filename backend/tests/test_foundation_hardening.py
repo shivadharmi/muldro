@@ -1,5 +1,7 @@
 """Tests for Spec 0: Foundation Hardening."""
 
+import os
+import socket
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -140,3 +142,116 @@ class TestBudgetWorkspaceRequired:
             workspace_id="ws_test",
         )
         assert usage.workspace_id == "ws_test"
+
+
+class TestWorkerConsumerName:
+    """Fix 2.2: Unique consumer name per worker instance."""
+
+    def test_consumer_name_includes_hostname(self):
+        from src.services.worker import _get_consumer_name
+
+        name = _get_consumer_name()
+        assert socket.gethostname() in name
+
+    def test_consumer_name_includes_pid(self):
+        from src.services.worker import _get_consumer_name
+
+        name = _get_consumer_name()
+        assert str(os.getpid()) in name
+
+    def test_consumer_name_not_hardcoded(self):
+        from src.services.worker import _get_consumer_name
+
+        name = _get_consumer_name()
+        assert name != "worker-1"
+
+
+class TestWorkerDeadLetter:
+    """Fix 2.3: Worker DLQ after 3 failed retries."""
+
+    @pytest.mark.asyncio
+    async def test_handler_success_clears_retry_counter(self):
+        from src.services.worker import StreamConsumerManager
+
+        settings = make_mock_settings(neo4j_url="")
+        manager = StreamConsumerManager(settings)
+
+        mock_redis = AsyncMock()
+        mock_redis.delete = AsyncMock()
+
+        event = MagicMock()
+        event.payload = {"event_id": "evt_test"}
+        event.user_id = "usr_01JTEST00000000000000000000"
+
+        await manager._handle_with_retry(
+            handler=AsyncMock(),  # succeeds
+            event=event,
+            redis=mock_redis,
+            dlq=AsyncMock(),
+            bus=AsyncMock(),
+            stream="test_stream",
+            group="test_group",
+        )
+        mock_redis.delete.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_handler_failure_after_3_retries_goes_to_dlq(self):
+        from src.services.worker import StreamConsumerManager
+
+        settings = make_mock_settings(neo4j_url="")
+        manager = StreamConsumerManager(settings)
+
+        mock_redis = AsyncMock()
+        mock_redis.incr = AsyncMock(return_value=4)  # 4th attempt
+        mock_redis.expire = AsyncMock()
+
+        mock_dlq = AsyncMock()
+        mock_dlq.enqueue = AsyncMock(return_value="dlq_001")
+
+        mock_bus = AsyncMock()
+        mock_bus.ack = AsyncMock()
+
+        event = MagicMock()
+        event.payload = {"event_id": "evt_test"}
+        event.user_id = "usr_01JTEST00000000000000000000"
+        event.message_id = "msg_test"
+
+        await manager._handle_with_retry(
+            handler=AsyncMock(side_effect=Exception("boom")),
+            event=event,
+            redis=mock_redis,
+            dlq=mock_dlq,
+            bus=mock_bus,
+            stream="test_stream",
+            group="test_group",
+        )
+        mock_dlq.enqueue.assert_called_once()
+        mock_bus.ack.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_handler_failure_under_limit_does_not_dlq(self):
+        from src.services.worker import StreamConsumerManager
+
+        settings = make_mock_settings(neo4j_url="")
+        manager = StreamConsumerManager(settings)
+
+        mock_redis = AsyncMock()
+        mock_redis.incr = AsyncMock(return_value=2)  # 2nd attempt
+        mock_redis.expire = AsyncMock()
+
+        mock_dlq = AsyncMock()
+
+        event = MagicMock()
+        event.payload = {"event_id": "evt_test"}
+        event.user_id = "usr_01JTEST00000000000000000000"
+
+        await manager._handle_with_retry(
+            handler=AsyncMock(side_effect=Exception("boom")),
+            event=event,
+            redis=mock_redis,
+            dlq=mock_dlq,
+            bus=AsyncMock(),
+            stream="test_stream",
+            group="test_group",
+        )
+        mock_dlq.enqueue.assert_not_called()

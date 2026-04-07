@@ -5,11 +5,19 @@ StreamConsumerManager: Processes event bus streams via consumer groups.
 
 import asyncio
 import logging
+import os
+import socket
 
 from src.api.deps import resolve_workspace_id
 from src.config.settings import Settings
 
 logger = logging.getLogger(__name__)
+
+
+def _get_consumer_name() -> str:
+    """Generate unique consumer name from hostname + PID."""
+    return f"worker-{socket.gethostname()}-{os.getpid()}"
+
 
 NOTIFICATIONS_STREAM = "jarvis:notifications"
 
@@ -110,7 +118,7 @@ class StreamConsumerManager:
                     await bus.subscribe(
                         stream,
                         group,
-                        "worker-1",
+                        _get_consumer_name(),
                         handler,
                         count=10,
                         block_ms=2000,
@@ -118,6 +126,56 @@ class StreamConsumerManager:
             except Exception:
                 logger.warning("Consumer %s error on %s", group, stream, exc_info=True)
                 await asyncio.sleep(1)
+
+    async def _handle_with_retry(
+        self,
+        handler,
+        event,
+        redis,
+        dlq,
+        bus,
+        stream: str,
+        group: str,
+    ) -> None:
+        """Wrap handler with retry tracking. After 3 failures -> DLQ."""
+        event_id = event.payload.get("event_id", "unknown")
+        retry_key = f"jarvis:worker:retry:{event_id}"
+
+        try:
+            await handler(event)
+            # Success — clear retry counter
+            if redis:
+                await redis.delete(retry_key)
+        except Exception as exc:
+            attempts = 0
+            if redis:
+                attempts = await redis.incr(retry_key)
+                await redis.expire(retry_key, 3600)
+            else:
+                attempts = 1
+
+            if attempts > 3 and dlq:
+                logger.error(
+                    "Event %s exhausted %d retries, moving to DLQ",
+                    event_id,
+                    attempts,
+                )
+                await dlq.enqueue(
+                    user_id=event.user_id,
+                    operation_type=f"worker_{group}",
+                    error_type=type(exc).__name__,
+                    error_message=str(exc)[:500],
+                    payload={"event_id": event_id, "group": group},
+                )
+                if bus:
+                    await bus.ack(stream, group, event.message_id)
+            else:
+                logger.warning(
+                    "Handler failed for %s (attempt %d): %s",
+                    event_id,
+                    attempts,
+                    exc,
+                )
 
     async def stop(self) -> None:
         self._running = False
