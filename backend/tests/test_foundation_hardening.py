@@ -416,3 +416,91 @@ class TestNeo4jBatchSync:
         stats = sync.get_sync_stats()
         assert stats["failures"] == 1
         assert "Neo4j down" in stats["last_error"]
+
+
+class TestBriefingLifecycle:
+    """Fix 3.1: Implement briefing pin/snooze/archive state transitions."""
+
+    @pytest.mark.asyncio
+    async def test_pin_briefing_sets_pinned_and_status(self):
+        from src.services.briefing_read_model import BriefingReadModel
+
+        db = AsyncMock()
+        briefing = MagicMock()
+        briefing.pinned = False
+        briefing.status = "active"
+
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none.return_value = briefing
+        db.execute = AsyncMock(return_value=result_mock)
+        db.flush = AsyncMock()
+
+        model = BriefingReadModel(db, "ws_test")
+        result = await model.pin_briefing("brf_001")
+        assert result is True
+        assert briefing.pinned is True
+        assert briefing.status == "pinned"
+
+    @pytest.mark.asyncio
+    async def test_snooze_briefing_sets_snoozed_until(self):
+        from src.services.briefing_read_model import BriefingReadModel
+
+        db = AsyncMock()
+        briefing = MagicMock()
+        briefing.snoozed_until = None
+        briefing.status = "active"
+
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none.return_value = briefing
+        db.execute = AsyncMock(return_value=result_mock)
+        db.flush = AsyncMock()
+
+        model = BriefingReadModel(db, "ws_test")
+        result = await model.snooze_briefing("brf_001")
+        assert result is True
+        assert briefing.snoozed_until is not None
+        assert briefing.status == "snoozed"
+
+    @pytest.mark.asyncio
+    async def test_archive_briefing_sets_archived(self):
+        from src.services.briefing_read_model import BriefingReadModel
+
+        db = AsyncMock()
+        briefing = MagicMock()
+        briefing.status = "active"
+
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none.return_value = briefing
+        db.execute = AsyncMock(return_value=result_mock)
+        db.flush = AsyncMock()
+
+        model = BriefingReadModel(db, "ws_test")
+        result = await model.archive_briefing("brf_001")
+        assert result is True
+        assert briefing.status == "archived"
+
+    @pytest.mark.asyncio
+    async def test_pin_nonexistent_briefing_returns_false(self):
+        from src.services.briefing_read_model import BriefingReadModel
+
+        db = AsyncMock()
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none.return_value = None
+        db.execute = AsyncMock(return_value=result_mock)
+
+        model = BriefingReadModel(db, "ws_test")
+        assert await model.pin_briefing("brf_nonexistent") is False
+
+    def test_to_list_item_uses_model_status(self):
+        from src.services.briefing_read_model import BriefingReadModel
+
+        model = BriefingReadModel.__new__(BriefingReadModel)
+        briefing = MagicMock()
+        briefing.briefing_id = "brf_001"
+        briefing.headline = "Test"
+        briefing.briefing_date = None
+        briefing.status = "pinned"
+        briefing.created_at = None
+
+        item = model._to_list_item(briefing)
+        assert item["status"] == "pinned"

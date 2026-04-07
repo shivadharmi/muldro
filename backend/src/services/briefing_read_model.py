@@ -7,6 +7,7 @@ related items, and lifecycle actions (pin, snooze, archive).
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -76,15 +77,42 @@ class BriefingReadModel:
 
     async def pin_briefing(self, briefing_id: str) -> bool:
         """Pin a briefing for easy access."""
-        return await self._exists(briefing_id)
+        briefing = await self._get_briefing(briefing_id)
+        if not briefing:
+            return False
+        briefing.pinned = True
+        briefing.status = "pinned"
+        await self._db.flush()
+        return True
 
-    async def snooze_briefing(self, briefing_id: str) -> bool:
+    async def snooze_briefing(self, briefing_id: str, hours: int = 4) -> bool:
         """Snooze a briefing (hide temporarily)."""
-        return await self._exists(briefing_id)
+        briefing = await self._get_briefing(briefing_id)
+        if not briefing:
+            return False
+        briefing.snoozed_until = datetime.now(timezone.utc) + timedelta(hours=hours)
+        briefing.status = "snoozed"
+        await self._db.flush()
+        return True
 
     async def archive_briefing(self, briefing_id: str) -> bool:
         """Archive a briefing."""
-        return await self._exists(briefing_id)
+        briefing = await self._get_briefing(briefing_id)
+        if not briefing:
+            return False
+        briefing.status = "archived"
+        await self._db.flush()
+        return True
+
+    async def _get_briefing(self, briefing_id: str) -> Briefing | None:
+        """Load a single briefing by ID within workspace scope."""
+        result = await self._db.execute(
+            select(Briefing).where(
+                Briefing.briefing_id == briefing_id,
+                Briefing.workspace_id == self._workspace_id,
+            )
+        )
+        return result.scalar_one_or_none()
 
     async def _exists(self, briefing_id: str) -> bool:
         result = await self._db.execute(
@@ -129,7 +157,7 @@ class BriefingReadModel:
             "briefing_id": briefing.briefing_id,
             "headline": briefing.headline,
             "date": str(briefing.briefing_date) if briefing.briefing_date else None,
-            "status": "active",
+            "status": getattr(briefing, "status", "active"),
             "domain": None,
             "confidence": None,
             "created_at": briefing.created_at.isoformat() if briefing.created_at else None,
