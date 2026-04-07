@@ -6,7 +6,7 @@ to Neo4j. Also runs periodic full reconciliation.
 
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config.settings import Settings
@@ -24,6 +24,8 @@ class GraphSyncService:
         self._settings = settings
         self._db = db
         self._graph = GraphEngine(settings)
+        self._sync_failures: int = 0
+        self._last_sync_error: str | None = None
 
     async def on_entity_change(self, event: BusEvent) -> None:
         """Handle entity created/updated events."""
@@ -86,8 +88,6 @@ class GraphSyncService:
 
     async def sync_relationships_for_entity(self, entity_id: str) -> None:
         """Sync all relationships involving an entity to Neo4j."""
-        from sqlalchemy import or_
-
         result = await self._db.execute(
             select(EntityRelationship).where(
                 or_(
@@ -105,6 +105,63 @@ class GraphSyncService:
                 relation_type=rel.relation_type,
                 user_id=rel.user_id,
             )
+
+    async def batch_sync_entities(self, entity_ids: list[str]) -> dict:
+        """Sync multiple entities and their relationships in bulk queries."""
+        # Batch-load all entities in one query
+        result = await self._db.execute(select(Entity).where(Entity.entity_id.in_(entity_ids)))
+        entities = result.scalars().all()
+
+        synced = 0
+        for entity in entities:
+            try:
+                await self._graph.sync_entity(
+                    entity_id=entity.entity_id,
+                    entity_type=entity.entity_type,
+                    name=entity.canonical_name,
+                    user_id=entity.user_id,
+                    attributes=entity.attributes,
+                )
+                synced += 1
+                self._sync_failures = max(0, self._sync_failures - 1)
+            except Exception as exc:
+                self._sync_failures += 1
+                self._last_sync_error = str(exc)[:200]
+                logger.warning("Batch entity sync failed for %s: %s", entity.entity_id, exc)
+
+        # Batch-load relationships for all entities
+        result = await self._db.execute(
+            select(EntityRelationship).where(
+                or_(
+                    EntityRelationship.from_entity_id.in_(entity_ids),
+                    EntityRelationship.to_entity_id.in_(entity_ids),
+                )
+            )
+        )
+        rels = result.scalars().all()
+        rels_synced = 0
+        for rel in rels:
+            try:
+                await self._graph.sync_relationship(
+                    relation_id=rel.relation_id,
+                    from_entity_id=rel.from_entity_id,
+                    to_entity_id=rel.to_entity_id,
+                    relation_type=rel.relation_type,
+                    user_id=rel.user_id,
+                )
+                rels_synced += 1
+            except Exception as exc:
+                self._sync_failures += 1
+                self._last_sync_error = str(exc)[:200]
+
+        return {"entities_synced": synced, "relationships_synced": rels_synced}
+
+    def get_sync_stats(self) -> dict:
+        """Return sync health metrics."""
+        return {
+            "failures": self._sync_failures,
+            "last_error": self._last_sync_error,
+        }
 
     async def full_reconciliation(self, user_id: str) -> dict:
         """Full sync of all entities and relationships for a user."""

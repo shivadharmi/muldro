@@ -211,20 +211,18 @@ class StreamConsumerManager:
                 len(entity_ids),
             )
 
-            # Sync extracted entities to Neo4j
+            # Sync extracted entities to Neo4j (batch)
             if entity_ids and self._settings.neo4j_url:
                 try:
                     from src.services.graph_sync import GraphSyncService
 
                     graph_sync = GraphSyncService(self._settings, db)
-                    for eid in entity_ids:
-                        await graph_sync.sync_entity_by_id(eid)
-                        await graph_sync.sync_relationships_for_entity(eid)
+                    result = await graph_sync.batch_sync_entities(entity_ids)
                     await graph_sync.close()
                     logger.info(
-                        "Neo4j sync for %d entities from event %s",
-                        len(entity_ids),
+                        "Neo4j batch sync for event %s: %s",
                         event_id,
+                        result,
                     )
                 except Exception:
                     logger.warning(

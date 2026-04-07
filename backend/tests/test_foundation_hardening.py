@@ -335,3 +335,84 @@ class TestCircuitBreakerReset:
 
         cb.reset("test-server")
         assert cb.get_state("test-server") == CircuitState.CLOSED
+
+
+class TestNeo4jBatchSync:
+    """Fix 4.1 + 5.2: Batch Neo4j sync and failure tracking."""
+
+    @pytest.mark.asyncio
+    async def test_batch_sync_entities_loads_in_bulk(self):
+        from src.services.graph_sync import GraphSyncService
+
+        settings = make_mock_settings(neo4j_url="bolt://localhost:7687")
+        db = AsyncMock()
+
+        entity1 = MagicMock(
+            entity_id="ent_001",
+            entity_type="person",
+            canonical_name="Alice",
+            user_id="usr_test",
+            attributes={},
+        )
+        entity2 = MagicMock(
+            entity_id="ent_002",
+            entity_type="company",
+            canonical_name="Acme",
+            user_id="usr_test",
+            attributes={},
+        )
+
+        # First call returns entities, second returns relationships
+        entity_result = MagicMock()
+        entity_result.scalars.return_value.all.return_value = [entity1, entity2]
+        rel_result = MagicMock()
+        rel_result.scalars.return_value.all.return_value = []
+        db.execute = AsyncMock(side_effect=[entity_result, rel_result])
+
+        sync = GraphSyncService(settings, db)
+        sync._graph = AsyncMock()
+        sync._graph.sync_entity = AsyncMock()
+        sync._graph.sync_relationship = AsyncMock()
+
+        result = await sync.batch_sync_entities(["ent_001", "ent_002"])
+        assert result["entities_synced"] == 2
+        assert sync._graph.sync_entity.call_count == 2
+
+    def test_sync_stats_initial_state(self):
+        from src.services.graph_sync import GraphSyncService
+
+        settings = make_mock_settings(neo4j_url="bolt://localhost:7687")
+        db = MagicMock()
+        sync = GraphSyncService(settings, db)
+        stats = sync.get_sync_stats()
+        assert stats["failures"] == 0
+        assert stats["last_error"] is None
+
+    @pytest.mark.asyncio
+    async def test_sync_failure_increments_counter(self):
+        from src.services.graph_sync import GraphSyncService
+
+        settings = make_mock_settings(neo4j_url="bolt://localhost:7687")
+        db = AsyncMock()
+
+        entity = MagicMock(
+            entity_id="ent_001",
+            entity_type="person",
+            canonical_name="Alice",
+            user_id="usr_test",
+            attributes={},
+        )
+        entity_result = MagicMock()
+        entity_result.scalars.return_value.all.return_value = [entity]
+        rel_result = MagicMock()
+        rel_result.scalars.return_value.all.return_value = []
+        db.execute = AsyncMock(side_effect=[entity_result, rel_result])
+
+        sync = GraphSyncService(settings, db)
+        sync._graph = AsyncMock()
+        sync._graph.sync_entity = AsyncMock(side_effect=Exception("Neo4j down"))
+
+        await sync.batch_sync_entities(["ent_001"])
+        stats = sync.get_sync_stats()
+        assert stats["failures"] == 1
+        assert "Neo4j down" in stats["last_error"]
