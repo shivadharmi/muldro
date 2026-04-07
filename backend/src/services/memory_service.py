@@ -156,12 +156,27 @@ class MemoryService:
                 len(source_event_ids),
             )
 
-            # Auto-check for contradictions with existing memories
+            # Defer contradiction checks to background (avoids N Claude calls per store)
             for mid, fact in new_facts:
-                try:
-                    await self.check_contradictions(user_id, fact, mid, workspace_id=workspace_id)
-                except Exception:
-                    logger.debug("Contradiction check failed for %s", mid, exc_info=True)
+                if self._event_bus:
+                    try:
+                        await self._event_bus.publish(
+                            self._event_bus.event_stream(user_id),
+                            "contradiction_check_requested",
+                            {
+                                "memory_id": mid,
+                                "fact_text": fact,
+                                "user_id": user_id,
+                                "workspace_id": workspace_id,
+                            },
+                            user_id=user_id,
+                        )
+                    except Exception:
+                        logger.debug(
+                            "Deferred contradiction check publish failed for %s",
+                            mid,
+                            exc_info=True,
+                        )
 
             for mid in memory_ids:
                 await self._emit_event("memory.created", user_id, {"memory_id": mid})

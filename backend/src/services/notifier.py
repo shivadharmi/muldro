@@ -102,6 +102,29 @@ class Notifier:
             created_at=datetime.now(timezone.utc).isoformat(),
         )
 
+        # Validate workspace membership
+        if workspace_id and self._db:
+            try:
+                from sqlalchemy import select
+
+                from src.models.users import WorkspaceMember
+
+                result = await self._db.execute(
+                    select(WorkspaceMember).where(
+                        WorkspaceMember.user_id == user_id,
+                        WorkspaceMember.workspace_id == workspace_id,
+                    )
+                )
+                if not result.scalar_one_or_none():
+                    logger.warning(
+                        "Notification blocked: user %s not in workspace %s",
+                        user_id,
+                        workspace_id,
+                    )
+                    return {"status": "blocked", "reason": "workspace_membership"}
+            except Exception:
+                logger.debug("Workspace validation skipped", exc_info=True)
+
         # Persist to DB if available
         if self._db:
             try:
@@ -175,6 +198,25 @@ class Notifier:
                 )
             except Exception:
                 logger.debug("Failed to emit notification.sent event", exc_info=True)
+
+        # Store sync event for polling fallback (reconnection safety)
+        if self._redis and workspace_id:
+            try:
+                import json as _json
+
+                sync_key = f"jarvis:pending_sync:{user_id}"
+                await self._redis.lpush(
+                    sync_key,
+                    _json.dumps(
+                        {
+                            "action": notification_type,
+                            "notification_id": notification.notification_id,
+                        }
+                    ),
+                )
+                await self._redis.expire(sync_key, 300)
+            except Exception:
+                logger.debug("Surface sync fallback failed", exc_info=True)
 
         return {"status": "sent", "surfaces": results}
 

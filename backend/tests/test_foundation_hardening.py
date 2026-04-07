@@ -648,3 +648,160 @@ class TestTelegramRateLimiting:
         # Manually expire the window
         limiter._windows["user_1"] = (10, time.monotonic() - 61)
         assert limiter.allow("user_1") is True
+
+
+class TestNotifierWorkspaceValidation:
+    """Fix 1.2: Notifier rejects cross-workspace notifications."""
+
+    @pytest.mark.asyncio
+    async def test_notify_blocks_invalid_workspace(self):
+        from src.services.notifier import Notifier
+        from src.services.surface_registry import SurfaceRegistry
+
+        db = AsyncMock()
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none.return_value = None
+        db.execute = AsyncMock(return_value=result_mock)
+
+        notifier = Notifier(surface_registry=SurfaceRegistry(), db=db)
+        result = await notifier.notify(
+            user_id="usr_test",
+            notification_type="info_update",
+            title="Test",
+            body="Test body",
+            workspace_id="ws_wrong",
+        )
+        assert result.get("status") == "blocked"
+
+    @pytest.mark.asyncio
+    async def test_notify_allows_valid_workspace(self):
+        from src.services.notifier import Notifier
+        from src.services.surface_registry import SurfaceRegistry
+
+        db = AsyncMock()
+        member = MagicMock()
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none.return_value = member
+        db.execute = AsyncMock(return_value=result_mock)
+
+        notifier = Notifier(surface_registry=SurfaceRegistry(), db=db)
+        result = await notifier.notify(
+            user_id="usr_test",
+            notification_type="info_update",
+            title="Test",
+            body="Test body",
+            workspace_id="ws_valid",
+        )
+        assert result.get("status") != "blocked"
+
+    @pytest.mark.asyncio
+    async def test_notify_skips_validation_without_db(self):
+        from src.services.notifier import Notifier
+        from src.services.surface_registry import SurfaceRegistry
+
+        notifier = Notifier(surface_registry=SurfaceRegistry())
+        result = await notifier.notify(
+            user_id="usr_test",
+            notification_type="info_update",
+            title="Test",
+            body="Test body",
+            workspace_id="ws_any",
+        )
+        assert result.get("status") != "blocked"
+
+
+class TestMemoryContradictionDeferral:
+    """Fix 4.2: Defer contradiction checks to async background job."""
+
+    @pytest.mark.asyncio
+    async def test_extract_and_store_does_not_call_contradictions_sync(self):
+        from src.services.memory_service import MemoryService
+
+        settings = make_mock_settings(use_bedrock=False)
+        db = AsyncMock()
+        db.add = MagicMock()
+        db.flush = AsyncMock()
+        db.execute = AsyncMock(
+            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))
+        )
+
+        event_bus = AsyncMock()
+        event_bus.event_stream = MagicMock(return_value="jarvis:events:usr_test")
+        event_bus.publish = AsyncMock()
+
+        svc = MemoryService(settings=settings, db=db, event_bus=event_bus)
+        svc._client = MagicMock()
+        svc._embedder = AsyncMock()
+        svc._embedder.embed_text = AsyncMock(return_value=[0.1] * 1024)
+
+        # Mock _call_extraction to return a candidate memory
+        svc._call_extraction = AsyncMock(
+            return_value={
+                "memories": [
+                    {
+                        "memory_type": "fact",
+                        "fact_text": "Test fact",
+                        "confidence": 0.9,
+                        "scope": "general",
+                        "ttl_days": None,
+                    }
+                ]
+            }
+        )
+        svc._is_duplicate = AsyncMock(return_value=False)
+        svc._vector_store = AsyncMock()
+        svc._vector_store.upsert = AsyncMock()
+
+        # Key: check_contradictions should NOT be called synchronously
+        svc.check_contradictions = AsyncMock()
+
+        await svc.extract_and_store(
+            user_id="usr_test",
+            source_text="Test text",
+            source_event_ids=["evt_001"],
+            workspace_id="ws_test",
+        )
+
+        svc.check_contradictions.assert_not_called()
+        # Instead, event bus should have been used for deferred check
+        event_bus.publish.assert_called()
+
+
+class TestNotifierSurfaceSync:
+    """Fix 6.2: Surface sync with delivery confirmation."""
+
+    @pytest.mark.asyncio
+    async def test_sync_event_stored_in_redis(self):
+        from src.services.notifier import Notifier
+
+        redis = AsyncMock()
+        redis.publish = AsyncMock()
+        redis.lpush = AsyncMock()
+        redis.expire = AsyncMock()
+
+        db = AsyncMock()
+        member = MagicMock()
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none.return_value = member
+        db.execute = AsyncMock(return_value=result_mock)
+
+        registry = AsyncMock()
+        registry.get_active_surfaces = AsyncMock(return_value=["web"])
+        registry.get_preferred_surface = AsyncMock(return_value="web")
+
+        notifier = Notifier(
+            surface_registry=registry,
+            redis=redis,
+            db=db,
+        )
+
+        await notifier.notify(
+            user_id="usr_test",
+            notification_type="info_update",
+            title="Test",
+            body="Body",
+            workspace_id="ws_test",
+        )
+
+        # Redis lpush should have been called for sync fallback
+        redis.lpush.assert_called()

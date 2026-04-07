@@ -142,7 +142,7 @@ async def test_retrieve_returns_matching(mock_get_client, mock_embed_cls, settin
 async def test_extract_auto_checks_contradictions(
     mock_get_client, mock_embed_cls, settings, mock_db
 ):
-    """extract_and_store should call check_contradictions for each new memory."""
+    """extract_and_store should defer contradiction checks via event bus."""
     extraction = {
         "memories": [
             {
@@ -165,9 +165,13 @@ async def test_extract_auto_checks_contradictions(
     mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 1024)
     mock_embed_cls.return_value = mock_embedder
 
-    service = MemoryService(settings=settings, db=mock_db)
+    event_bus = AsyncMock()
+    event_bus.event_stream = MagicMock(return_value=f"jarvis:events:{TEST_USER_ID}")
+    event_bus.publish = AsyncMock()
 
-    # Spy on check_contradictions
+    service = MemoryService(settings=settings, db=mock_db, event_bus=event_bus)
+
+    # check_contradictions should NOT be called synchronously
     service.check_contradictions = AsyncMock(return_value=[])
 
     memory_ids = await service.extract_and_store(
@@ -175,12 +179,17 @@ async def test_extract_auto_checks_contradictions(
     )
 
     assert len(memory_ids) == 1
-    # check_contradictions must have been called with the new memory
-    service.check_contradictions.assert_called_once()
-    call_args = service.check_contradictions.call_args
-    assert call_args[0][0] == TEST_USER_ID
-    assert "Alice resigned as CFO" in call_args[0][1]
-    assert call_args[0][2] == memory_ids[0]
+    # Contradiction check is deferred: synchronous call must NOT happen
+    service.check_contradictions.assert_not_called()
+    # Instead, event bus should receive a contradiction_check_requested event
+    event_bus.publish.assert_called()
+    # Find the contradiction_check_requested call among all publish calls
+    contradiction_calls = [
+        c for c in event_bus.publish.call_args_list if c[0][1] == "contradiction_check_requested"
+    ]
+    assert len(contradiction_calls) == 1
+    assert contradiction_calls[0][0][2]["fact_text"] == "Alice resigned as CFO"
+    assert contradiction_calls[0][0][2]["memory_id"] == memory_ids[0]
 
 
 @patch("src.services.memory_service.EmbeddingService")
