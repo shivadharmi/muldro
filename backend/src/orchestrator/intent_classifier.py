@@ -8,7 +8,8 @@ import json
 import logging
 from typing import Any
 
-from src.orchestrator.contracts import PlannerOutput
+from src.llm_utils import parse_llm_json
+from src.orchestrator.contracts import PlannerOutput, PlanOutput, PlanStep
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +132,54 @@ def _match_read_capability(message: str, capabilities: list[str]) -> str:
             return default_cap
 
     return "knowledge.search"
+
+
+def extract_plan(response_text: str) -> PlanOutput:
+    """Parse Planner agent response into validated PlanOutput.
+
+    Uses ``parse_llm_json`` to handle code fences and whitespace,
+    then falls back to brace-matching for JSON embedded in prose.
+    Validates against the ``PlanOutput`` Pydantic model.
+    Falls back to a minimal single-step respond plan on parse failure.
+    """
+    # First try: code fences + raw JSON via parse_llm_json
+    try:
+        raw = parse_llm_json(response_text)
+        if isinstance(raw, dict):
+            return PlanOutput.model_validate(raw)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Second try: brace-matching for JSON embedded in prose — scan all top-level blocks
+    start = 0
+    while start < len(response_text):
+        idx = response_text.find("{", start)
+        if idx == -1:
+            break
+        depth = 0
+        end = -1
+        for i, ch in enumerate(response_text[idx:], idx):
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
+        if end == -1:
+            break  # unclosed brace — stop scanning
+        try:
+            raw = json.loads(response_text[idx : end + 1])
+            if isinstance(raw, dict):
+                return PlanOutput.model_validate(raw)
+        except (json.JSONDecodeError, ValueError):
+            pass
+        start = end + 1
+
+    return PlanOutput(
+        goal=response_text[:200],
+        steps=[PlanStep(description="Respond to user", capability="respond")],
+    )
 
 
 async def classify_intent(
