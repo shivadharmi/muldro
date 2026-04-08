@@ -28,6 +28,7 @@ _FAMILY_DISPLAY: dict[str, str] = {
     "search": "Search",
     "filesystem": "Files",
     "internal": "Internal",
+    "system": "System",
 }
 
 

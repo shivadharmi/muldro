@@ -62,7 +62,7 @@ class CapabilityResolver:
                 result.append(
                     {
                         "name": t.name,
-                        "description": t.description or "",
+                        "description": t.description or t.name,
                         "input_schema": t.input_schema or {"type": "object"},
                     }
                 )

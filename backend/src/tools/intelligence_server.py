@@ -1080,39 +1080,42 @@ async def discover_capabilities(
     Returns matching capabilities with descriptions, tools,
     risk levels, and connection status.
     """
-    async with _get_db() as db:
-        stmt = select(ToolDefinition).where(ToolDefinition.enabled.is_(True))
-        result = await db.execute(stmt)
-        all_tools = list(result.scalars().all())
+    try:
+        async with _get_db() as db:
+            stmt = select(ToolDefinition).where(ToolDefinition.enabled.is_(True))
+            result = await db.execute(stmt)
+            all_tools = list(result.scalars().all())
 
-    matches: list[dict] = []
-    query_lower = query.lower()
-    seen_capabilities: set[str] = set()
+        matches: list[dict] = []
+        query_lower = query.lower()
+        seen_capabilities: set[str] = set()
 
-    for tool in all_tools:
-        if not tool.capability:
-            continue
-        cap = tool.capability
-        desc = tool.description or ""
-        if query_lower not in cap.lower() and query_lower not in desc.lower():
-            continue
-        if cap in seen_capabilities:
-            # Add this tool to existing capability entry
-            for m in matches:
-                if m["capability"] == cap:
-                    m["tools"].append(tool.name)
-                    break
-            continue
+        for tool in all_tools:
+            if not tool.capability:
+                continue
+            cap = tool.capability
+            desc = tool.description or ""
+            if query_lower not in cap.lower() and query_lower not in desc.lower():
+                continue
+            if cap in seen_capabilities:
+                for m in matches:
+                    if m["capability"] == cap:
+                        m["tools"].append(tool.name)
+                        break
+                continue
 
-        seen_capabilities.add(cap)
-        matches.append(
-            {
-                "capability": cap,
-                "tools": [tool.name],
-                "risk": tool.risk_level or "none",
-                "status": "connected",
-                "description": desc,
-            }
-        )
+            seen_capabilities.add(cap)
+            matches.append(
+                {
+                    "capability": cap,
+                    "tools": [tool.name],
+                    "risk": tool.risk_level or "none",
+                    "status": "connected",
+                    "description": desc,
+                }
+            )
 
-    return {"capabilities": matches}
+        return {"capabilities": matches}
+    except Exception as e:
+        logger.error("discover_capabilities failed: %s", e, exc_info=True)
+        return make_error_response(e)

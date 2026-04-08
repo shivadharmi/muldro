@@ -98,6 +98,9 @@ class TestFamilyDisplayName:
     def test_internal(self):
         assert _family_display_name("internal") == "Internal"
 
+    def test_system(self):
+        assert _family_display_name("system") == "System"
+
     def test_unknown_passes_through(self):
         assert _family_display_name("custom_thing") == "custom_thing"
 
