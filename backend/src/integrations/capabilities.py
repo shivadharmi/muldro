@@ -34,6 +34,7 @@ class CapabilityFamily(StrEnum):
     SEARCH = "search"
     INTERNAL = "internal"
     FILESYSTEM = "filesystem"
+    SYSTEM = "system"
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,6 +210,8 @@ CAPABILITY_CATALOG: dict[str, CapabilityMeta] = {
     "doc.get_self": _cap(CapabilityFamily.DOC, True),
     "doc.get_user": _cap(CapabilityFamily.DOC, True),
     "doc.get_users": _cap(CapabilityFamily.DOC, True),
+    # System meta-tools (Spec 1A)
+    "system.discovery": _cap(CapabilityFamily.SYSTEM, True, "none"),
 }
 
 
