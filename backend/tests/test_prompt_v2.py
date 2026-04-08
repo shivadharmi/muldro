@@ -79,3 +79,84 @@ class TestPlannerPromptV2:
 
         assert "decision" in PLANNER_PROMPT
         assert "create_task" in PLANNER_PROMPT
+
+
+class TestPerceiverPrompt:
+    """Structural validation of the new Perceiver prompt."""
+
+    def test_prompt_exists_and_nonempty(self):
+        from src.orchestrator.prompts import PERCEIVER_PROMPT
+
+        assert isinstance(PERCEIVER_PROMPT, str)
+        assert len(PERCEIVER_PROMPT) > 100
+
+    def test_has_role_section(self):
+        from src.orchestrator.prompts import PERCEIVER_PROMPT
+
+        assert "<role>" in PERCEIVER_PROMPT
+        assert "</role>" in PERCEIVER_PROMPT
+
+    def test_role_mentions_read_only(self):
+        from src.orchestrator.prompts import PERCEIVER_PROMPT
+
+        role_start = PERCEIVER_PROMPT.index("<role>")
+        role_end = PERCEIVER_PROMPT.index("</role>")
+        role_text = PERCEIVER_PROMPT[role_start:role_end].lower()
+        assert "read" in role_text
+
+    def test_has_rules_section(self):
+        from src.orchestrator.prompts import PERCEIVER_PROMPT
+
+        assert "<rules>" in PERCEIVER_PROMPT
+        assert "</rules>" in PERCEIVER_PROMPT
+
+    def test_mentions_never_write(self):
+        """Perceiver must be strictly read-only."""
+        from src.orchestrator.prompts import PERCEIVER_PROMPT
+
+        prompt_lower = PERCEIVER_PROMPT.lower()
+        assert "never" in prompt_lower and "write" in prompt_lower
+
+    def test_has_methodology_or_workflow(self):
+        """Should include a methodology/workflow section."""
+        from src.orchestrator.prompts import PERCEIVER_PROMPT
+
+        assert "<methodology>" in PERCEIVER_PROMPT or "<workflow>" in PERCEIVER_PROMPT
+
+    def test_has_examples(self):
+        from src.orchestrator.prompts import PERCEIVER_PROMPT
+
+        assert "<examples>" in PERCEIVER_PROMPT
+        assert "</examples>" in PERCEIVER_PROMPT
+
+    def test_covers_external_sources(self):
+        """Should mention external data sources."""
+        from src.orchestrator.prompts import PERCEIVER_PROMPT
+
+        prompt_lower = PERCEIVER_PROMPT.lower()
+        assert "email" in prompt_lower or "calendar" in prompt_lower
+
+    def test_covers_internal_knowledge(self):
+        """Should mention internal knowledge search."""
+        from src.orchestrator.prompts import PERCEIVER_PROMPT
+
+        prompt_lower = PERCEIVER_PROMPT.lower()
+        assert "knowledge" in prompt_lower or "memor" in prompt_lower
+
+    def test_old_observer_prompt_still_exists(self):
+        """The existing OBSERVER_PROMPT must be untouched."""
+        from src.orchestrator.prompts import OBSERVER_PROMPT
+
+        assert "Observer" in OBSERVER_PROMPT
+
+    def test_old_researcher_prompt_still_exists(self):
+        """The existing RESEARCHER_PROMPT must be untouched."""
+        from src.orchestrator.prompts import RESEARCHER_PROMPT
+
+        assert "Researcher" in RESEARCHER_PROMPT
+
+    def test_not_in_agent_prompts(self):
+        """PERCEIVER_PROMPT should NOT be in AGENT_PROMPTS yet (that's 1B-ii)."""
+        from src.orchestrator.prompts import AGENT_PROMPTS
+
+        assert "perceiver" not in AGENT_PROMPTS
