@@ -83,6 +83,38 @@ _VALID_INTENTS = {
     "complex",
 }
 
+# Keyword-to-capability mapping for fast-path single-read intents
+_READ_CAPABILITY_KEYWORDS: list[tuple[list[str], str]] = [
+    (["email", "mail", "inbox", "gmail"], "email.search"),
+    (["calendar", "schedule", "meeting", "event"], "calendar.read"),
+    (["slack", "message", "channel", "dm"], "messaging.read"),
+    (["github", "pr", "pull request", "issue", "repo", "commit"], "repo.read"),
+]
+
+
+def _match_read_capability(message: str, capabilities: list[str]) -> str:
+    """Match user message keywords to the best read capability for fast path.
+
+    Checks keyword matches against the message, validates the matched
+    capability exists in the available list (with family-prefix fallback),
+    and returns ``"knowledge.search"`` if no keyword matches.
+    """
+    msg_lower = message.lower()
+    cap_set = set(capabilities)
+
+    for keywords, default_cap in _READ_CAPABILITY_KEYWORDS:
+        if any(kw in msg_lower for kw in keywords):
+            if default_cap in cap_set:
+                return default_cap
+            # Fallback: any capability in the same family
+            family = default_cap.split(".")[0]
+            for cap in capabilities:
+                if cap.startswith(f"{family}."):
+                    return cap
+            return default_cap
+
+    return "knowledge.search"
+
 
 async def classify_intent(
     client,
