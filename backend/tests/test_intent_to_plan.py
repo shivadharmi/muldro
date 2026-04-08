@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from src.orchestrator.contracts import PlanOutput
 from src.orchestrator.intent_classifier import (
     _VALID_INTENTS,
     FAST_INTENTS,
     INTENT_CLASSIFIER_PROMPT,
     _match_read_capability,
+    intent_to_plan,
 )
 
 # ── Test _match_read_capability ──────────────────────────────────────
@@ -125,3 +127,99 @@ class TestExpandedFastIntents:
             assert intent in INTENT_CLASSIFIER_PROMPT, (
                 f"INTENT_CLASSIFIER_PROMPT missing '{intent}'"
             )
+
+
+# ── Test intent_to_plan ──────────────────────────────────────────────
+
+
+class TestIntentToPlan:
+    """Map fast intents to lightweight PlanOutput."""
+
+    CAPS = [
+        "email.search",
+        "calendar.list",
+        "messaging.get_history",
+        "repo.list_prs",
+        "knowledge.search",
+    ]
+
+    def test_greeting_returns_respond(self):
+        result = intent_to_plan("greeting", "Hey Jarvis!", self.CAPS)
+        assert isinstance(result, PlanOutput)
+        assert result.priority == "low"
+        assert len(result.steps) == 1
+        assert result.steps[0].capability == "respond"
+
+    def test_chitchat_returns_respond(self):
+        result = intent_to_plan("chitchat", "How are you?", self.CAPS)
+        assert result.priority == "low"
+        assert result.steps[0].capability == "respond"
+
+    def test_acknowledgment_returns_respond(self):
+        result = intent_to_plan("acknowledgment", "Ok got it, thanks", self.CAPS)
+        assert result.priority == "low"
+        assert result.steps[0].capability == "respond"
+
+    def test_direct_answer_returns_reason(self):
+        result = intent_to_plan("direct_answer", "What's 2+2?", self.CAPS)
+        assert result.steps[0].capability == "reason"
+        assert result.priority == "medium"
+
+    def test_simple_question_returns_reason(self):
+        result = intent_to_plan("simple_question", "What's John's email?", self.CAPS)
+        assert result.steps[0].capability == "reason"
+
+    def test_single_read_uses_keyword_match(self):
+        result = intent_to_plan("single_read", "Check my email", self.CAPS)
+        assert result.steps[0].capability == "email.search"
+
+    def test_single_read_calendar(self):
+        result = intent_to_plan("single_read", "Show my schedule", self.CAPS)
+        assert result.steps[0].capability.startswith("calendar.")
+
+    def test_data_fetch_uses_keyword_match(self):
+        result = intent_to_plan("data_fetch", "Check Slack messages", self.CAPS)
+        assert result.steps[0].capability.startswith("messaging.")
+
+    def test_data_fetch_email(self):
+        result = intent_to_plan("data_fetch", "Any new emails?", self.CAPS)
+        assert result.steps[0].capability == "email.search"
+
+    def test_status_query_returns_knowledge_search(self):
+        result = intent_to_plan("status_query", "What are my goals?", self.CAPS)
+        assert result.steps[0].capability == "knowledge.search"
+
+    def test_memory_operation_returns_knowledge_search(self):
+        result = intent_to_plan(
+            "memory_operation", "Remember John prefers morning calls", self.CAPS
+        )
+        assert result.steps[0].capability == "knowledge.search"
+
+    def test_approval_response_returns_respond(self):
+        result = intent_to_plan("approval_response", "Yes, approve that", self.CAPS)
+        assert result.steps[0].capability == "respond"
+
+    def test_unknown_intent_returns_respond_fallback(self):
+        result = intent_to_plan("unknown_intent", "???", self.CAPS)
+        assert result.steps[0].capability == "respond"
+        assert result.priority == "low"
+
+    def test_goal_truncated_to_200_chars(self):
+        long_msg = "x" * 500
+        result = intent_to_plan("greeting", long_msg, self.CAPS)
+        assert len(result.goal) <= 200
+
+    def test_all_fast_intents_handled(self):
+        """Every intent in FAST_INTENTS produces a valid PlanOutput."""
+        for intent in FAST_INTENTS:
+            result = intent_to_plan(intent, "test message", self.CAPS)
+            assert isinstance(result, PlanOutput), f"Failed for intent: {intent}"
+            assert len(result.steps) >= 1, f"No steps for intent: {intent}"
+
+    def test_single_read_risk_is_none(self):
+        result = intent_to_plan("single_read", "Check email", self.CAPS)
+        assert result.steps[0].risk == "none"
+
+    def test_data_fetch_risk_is_none(self):
+        result = intent_to_plan("data_fetch", "Show calendar", self.CAPS)
+        assert result.steps[0].risk == "none"

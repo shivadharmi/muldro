@@ -182,6 +182,81 @@ def extract_plan(response_text: str) -> PlanOutput:
     )
 
 
+def intent_to_plan(intent: str, message: str, capabilities: list[str]) -> PlanOutput:
+    """Generate a lightweight PlanOutput from fast intent classification.
+
+    Maps each fast intent to a minimal plan with the appropriate
+    capability step. Coexists with ``intent_to_decision()`` until
+    Spec 1B-ii switches the routing.
+    """
+    goal = message[:200]
+
+    if intent in ("greeting", "chitchat", "acknowledgment"):
+        return PlanOutput(
+            goal=goal,
+            steps=[PlanStep(description="Respond to user", capability="respond")],
+            priority="low",
+        )
+
+    if intent == "direct_answer":
+        return PlanOutput(
+            goal=goal,
+            steps=[PlanStep(description="Answer from context", capability="reason")],
+        )
+
+    if intent == "simple_question":
+        return PlanOutput(
+            goal=goal,
+            steps=[PlanStep(description="Answer question", capability="reason")],
+        )
+
+    if intent == "single_read":
+        cap = _match_read_capability(message, capabilities)
+        return PlanOutput(
+            goal=goal,
+            steps=[PlanStep(description=goal, capability=cap, risk="none")],
+        )
+
+    if intent == "data_fetch":
+        cap = _match_read_capability(message, capabilities)
+        return PlanOutput(
+            goal=goal,
+            steps=[PlanStep(description=goal, capability=cap, risk="none")],
+        )
+
+    if intent == "status_query":
+        return PlanOutput(
+            goal=goal,
+            steps=[
+                PlanStep(description="Retrieve status", capability="knowledge.search"),
+            ],
+        )
+
+    if intent == "memory_operation":
+        return PlanOutput(
+            goal=goal,
+            steps=[
+                PlanStep(
+                    description="Store or recall knowledge",
+                    capability="knowledge.search",
+                ),
+            ],
+        )
+
+    if intent == "approval_response":
+        return PlanOutput(
+            goal=goal,
+            steps=[PlanStep(description="Process approval", capability="respond")],
+        )
+
+    # Fallback for unknown intents
+    return PlanOutput(
+        goal=goal,
+        steps=[PlanStep(description="Respond to user", capability="respond")],
+        priority="low",
+    )
+
+
 async def classify_intent(
     client,
     model: str,
