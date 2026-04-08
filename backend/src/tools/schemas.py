@@ -248,6 +248,16 @@ class GetPlanDetailsInput(BaseModel):
     plan_id: str = Field(description="ID of the plan to look up")
 
 
+class DiscoverCapabilitiesInput(BaseModel):
+    """Search available capabilities by query.
+
+    Returns matching capabilities with descriptions, tools, risk levels,
+    and connection status.
+    """
+
+    query: str = Field(description="Search query, e.g. 'email', 'calendar management'")
+
+
 # ── Registry ───────────────────────────────────────────────────────
 
 TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
@@ -273,6 +283,7 @@ TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
     "store_memory": StoreMemoryInput,
     "store_preference": StorePreferenceInput,
     "get_plan_details": GetPlanDetailsInput,
+    "discover_capabilities": DiscoverCapabilitiesInput,
 }
 
 

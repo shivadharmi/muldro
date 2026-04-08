@@ -5,7 +5,7 @@ capabilities, risk levels, and metadata. Serves as a parallel registry during
 the Unified Tool Registry migration (Phase 6).
 
 Tools are organized by server:
-- intelligence: 17 tools (search, ingest, policies, context, briefing, store_memory, etc.)
+- intelligence: 19 tools (search, ingest, policies, context, briefing, etc.)
 - communication: 3 tools (telegram, approval prompts, UI updates)
 - _special: 1 tool (report_governor_verdict — inline-dispatched, not MCP)
 """
@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from src.tools.schemas import (
     ApproveActionInput,
     BuildContextInput,
+    DiscoverCapabilitiesInput,
     EvaluatePolicyInput,
     ExtractPreferencesInput,
     GetActivePlansInput,
@@ -65,7 +66,7 @@ def _desc(model_cls: type[BaseModel]) -> str:
 
 
 INTERNAL_TOOLS: list[InternalToolDef] = [
-    # Intelligence server tools (17 tools)
+    # Intelligence server tools (19 tools)
     InternalToolDef(
         name="ingest_event",
         input_model=IngestEventInput,
@@ -244,6 +245,16 @@ INTERNAL_TOOLS: list[InternalToolDef] = [
         requires_approval=False,
         server="intelligence",
         description=_desc(GetPlanDetailsInput),
+        read_only=True,
+    ),
+    InternalToolDef(
+        name="discover_capabilities",
+        input_model=DiscoverCapabilitiesInput,
+        capability="system.discovery",
+        risk_level="none",
+        requires_approval=False,
+        server="intelligence",
+        description=_desc(DiscoverCapabilitiesInput),
         read_only=True,
     ),
     # Special: inline-dispatched (not a real MCP tool).

@@ -11,12 +11,12 @@ class TestToolInputModels:
         assert present == set(), f"Orphan tools still in TOOL_INPUT_MODELS: {present}"
 
     def test_tool_count_is_21(self):
-        """After adding store_memory and store_preference.
+        """After adding store_memory, store_preference, and discover_capabilities.
 
-        Exactly 21 tools should remain.
+        Exactly 23 tools should remain.
         """
-        assert len(TOOL_INPUT_MODELS) == 22, (
-            f"Expected 22 tools, got {len(TOOL_INPUT_MODELS)}: {sorted(TOOL_INPUT_MODELS.keys())}"
+        assert len(TOOL_INPUT_MODELS) == 23, (
+            f"Expected 23 tools, got {len(TOOL_INPUT_MODELS)}: {sorted(TOOL_INPUT_MODELS.keys())}"
         )
 
     def test_all_models_have_docstrings(self):
@@ -41,7 +41,7 @@ class TestToolInputModels:
             )
 
     def test_expected_tools_present(self):
-        """Verify the 22 expected internal tools are all present."""
+        """Verify the 23 expected internal tools are all present."""
         expected = {
             "ingest_event",
             "search",
@@ -60,6 +60,7 @@ class TestToolInputModels:
             "verify_run",
             "store_memory",
             "store_preference",
+            "discover_capabilities",
             "report_governor_verdict",
             "get_goal_memories",
             "send_telegram",

@@ -20,6 +20,7 @@ from ulid import ULID
 from src.integrations.mcp_errors import make_error_response
 from src.models.approvals import Approval
 from src.models.observation_cursor import ObservationCursor
+from src.models.tool_definitions import ToolDefinition
 
 logger = logging.getLogger(__name__)
 
@@ -1061,3 +1062,57 @@ async def active_plans_resource(workspace_id: str) -> str:
                 for p in plans
             ]
         )
+
+
+# ── Capability Discovery ────────────────────────────────────────────────
+
+
+@intelligence.tool(
+    tags={"planner", "read"},
+    annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True),
+)
+async def discover_capabilities(
+    query: str,
+    ctx: Context,
+) -> dict:
+    """Search available capabilities by query.
+
+    Returns matching capabilities with descriptions, tools,
+    risk levels, and connection status.
+    """
+    async with _get_db() as db:
+        stmt = select(ToolDefinition).where(ToolDefinition.enabled.is_(True))
+        result = await db.execute(stmt)
+        all_tools = list(result.scalars().all())
+
+    matches: list[dict] = []
+    query_lower = query.lower()
+    seen_capabilities: set[str] = set()
+
+    for tool in all_tools:
+        if not tool.capability:
+            continue
+        cap = tool.capability
+        desc = tool.description or ""
+        if query_lower not in cap.lower() and query_lower not in desc.lower():
+            continue
+        if cap in seen_capabilities:
+            # Add this tool to existing capability entry
+            for m in matches:
+                if m["capability"] == cap:
+                    m["tools"].append(tool.name)
+                    break
+            continue
+
+        seen_capabilities.add(cap)
+        matches.append(
+            {
+                "capability": cap,
+                "tools": [tool.name],
+                "risk": tool.risk_level or "none",
+                "status": "connected",
+                "description": desc,
+            }
+        )
+
+    return {"capabilities": matches}
