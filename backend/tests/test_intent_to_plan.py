@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from src.orchestrator.intent_classifier import _match_read_capability
+from src.orchestrator.intent_classifier import (
+    _VALID_INTENTS,
+    FAST_INTENTS,
+    INTENT_CLASSIFIER_PROMPT,
+    _match_read_capability,
+)
 
 # ── Test _match_read_capability ──────────────────────────────────────
 
@@ -79,3 +84,44 @@ class TestMatchReadCapability:
 
     def test_case_insensitive(self):
         assert _match_read_capability("CHECK MY EMAIL", self.CAPS) == "email.search"
+
+
+# ── Test expanded FAST_INTENTS ───────────────────────────────────────
+
+
+class TestExpandedFastIntents:
+    """Verify the 4 new fast intents are present in all relevant constants."""
+
+    NEW_INTENTS = {"direct_answer", "single_read", "memory_operation", "acknowledgment"}
+    ORIGINAL_INTENTS = {
+        "greeting",
+        "chitchat",
+        "simple_question",
+        "data_fetch",
+        "status_query",
+        "approval_response",
+    }
+
+    def test_fast_intents_contains_originals(self):
+        for intent in self.ORIGINAL_INTENTS:
+            assert intent in FAST_INTENTS, f"Missing original: {intent}"
+
+    def test_fast_intents_contains_new(self):
+        for intent in self.NEW_INTENTS:
+            assert intent in FAST_INTENTS, f"Missing new intent: {intent}"
+
+    def test_fast_intents_total_count(self):
+        assert len(FAST_INTENTS) == 10
+
+    def test_valid_intents_contains_new(self):
+        for intent in self.NEW_INTENTS:
+            assert intent in _VALID_INTENTS, f"Missing from _VALID_INTENTS: {intent}"
+
+    def test_valid_intents_superset_of_fast(self):
+        assert FAST_INTENTS.issubset(_VALID_INTENTS)
+
+    def test_classifier_prompt_mentions_new_intents(self):
+        for intent in self.NEW_INTENTS:
+            assert intent in INTENT_CLASSIFIER_PROMPT, (
+                f"INTENT_CLASSIFIER_PROMPT missing '{intent}'"
+            )

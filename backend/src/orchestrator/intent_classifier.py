@@ -20,14 +20,20 @@ Output ONLY a JSON object, nothing else.
 </role>
 
 <intents>
-- greeting: Greetings, pleasantries, "hey", "hi", "good morning", "thanks"
+- greeting: Greetings, pleasantries, "hey", "hi", "good morning"
 - chitchat: Casual conversation, "how are you", jokes, small talk
-- simple_question: Direct factual question answerable from context/memory
+- simple_question: Factual question answerable from Jarvis's stored memory or context
+  (contacts, prior conversations, stored facts)
 - data_fetch: Read from external source (check email, show calendar, read slack)
 - status_query: Asking about goals, plans, briefing, pending items, tasks
 - approval_response: Approving/rejecting a pending action
 - command: Actionable WRITE request needing planning (send email, schedule, create)
 - complex: Multi-step, ambiguous, or high-stakes requests needing deep planning
+- direct_answer: Question answerable from general world knowledge, no Jarvis memory or
+  external service needed ("what's the capital of France", "explain async/await")
+- single_read: One read from a specific external service (latest email, today's calendar)
+- memory_operation: Store, recall, or update knowledge ("remember this", "what do you know about X")
+- acknowledgment: Confirming, thanking, or acknowledging ("ok", "got it", "thanks", "sounds good")
 </intents>
 
 <sources>
@@ -44,7 +50,10 @@ Only include sources the user's intent clearly relates to. Omit if none apply.
 "Hey Jarvis" -> {"intent": "greeting", "confidence": 0.99}
 "What's John's email?" -> {"intent": "simple_question", "confidence": 0.9}
 "Check my gmail" -> {"intent":"data_fetch","confidence":0.95,"sources":["gmail"]}
-"Show my latest emails" -> {"intent":"data_fetch","confidence":0.95,"sources":["gmail"]}
+"What's the capital of France?" -> {"intent": "direct_answer", "confidence": 0.95}
+"Show my latest emails" -> {"intent": "single_read", "confidence": 0.95, "sources": ["gmail"]}
+"Remember that John prefers morning meetings" -> {"intent": "memory_operation", "confidence": 0.9}
+"Ok got it, thanks" -> {"intent": "acknowledgment", "confidence": 0.95}
 "What's on my calendar today" -> {"intent":"data_fetch","confidence":0.95,"sources":["calendar"]}
 "Any new Slack messages?" -> {"intent":"data_fetch","confidence":0.9,"sources":["slack"]}
 "Did Sarah reply?" -> {"intent":"data_fetch","confidence":0.85,"sources":["gmail","slack"]}
@@ -67,6 +76,10 @@ FAST_INTENTS = {
     "data_fetch",
     "status_query",
     "approval_response",
+    "direct_answer",
+    "single_read",
+    "memory_operation",
+    "acknowledgment",
 }
 
 # Confidence threshold — below this, fall back to Planner
@@ -81,6 +94,10 @@ _VALID_INTENTS = {
     "approval_response",
     "command",
     "complex",
+    "direct_answer",
+    "single_read",
+    "memory_operation",
+    "acknowledgment",
 }
 
 # Keyword-to-capability mapping for fast-path single-read intents
