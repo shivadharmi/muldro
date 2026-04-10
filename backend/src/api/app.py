@@ -71,7 +71,6 @@ def create_app() -> FastAPI:
         try:
             from src.models.database import get_session_factory
             from src.services.agent_registry import AgentRegistry
-            from src.services.route_resolver import RouteResolver
             from src.services.tool_registry import ToolRegistry
 
             async with get_session_factory()() as db:
@@ -92,14 +91,6 @@ def create_app() -> FastAPI:
                         logger.info("Seeded %d agent definitions", agent_count)
                 except Exception:
                     logger.warning("Agent seed failed", exc_info=True)
-
-                try:
-                    route_count = await RouteResolver(db).seed_defaults()
-                    if route_count:
-                        needs_commit = True
-                        logger.info("Seeded %d agent routes", route_count)
-                except Exception:
-                    logger.warning("Route seed failed", exc_info=True)
 
                 if needs_commit:
                     await db.commit()

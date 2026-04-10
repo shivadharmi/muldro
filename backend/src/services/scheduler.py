@@ -732,9 +732,9 @@ class SchedulerLoop:
                 raise RuntimeError("Orchestrator required for custom_agent_task")
         elif action == "wake_agent":
             # Agent-requested wakeup — bridge between agent decisions and perception
-            agent = config.get("agent", "observer")
+            agent = config.get("agent", "perceiver")
             source = config.get("source")
-            if agent == "observer" and source:
+            if agent == "perceiver" and source:
                 from src.services.perception_policy import PerceptionPolicyService
 
                 factory = get_session_factory()

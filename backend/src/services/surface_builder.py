@@ -273,7 +273,7 @@ class SurfaceService:
                         "kind": payload.get("kind", db_row.surface_type),
                         "preview": preview_data,
                         "detail_config": db_row.detail_config or payload.get("detail_config"),
-                        "decision": payload.get("decision"),
+                        "capability": payload.get("capability"),
                         "source_run_id": payload.get("source_run_id"),
                         "response_preview": payload.get("response_preview"),
                         "created_at": (

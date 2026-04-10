@@ -70,13 +70,6 @@ class TestPlannerPromptV2:
 
         assert AGENT_PROMPTS["planner"] == PLANNER_PROMPT_V2
 
-    def test_old_planner_prompt_still_exists(self):
-        """The existing PLANNER_PROMPT is kept for reference."""
-        from src.orchestrator.prompts import PLANNER_PROMPT
-
-        assert "decision" in PLANNER_PROMPT
-        assert "create_task" in PLANNER_PROMPT
-
 
 class TestPerceiverPrompt:
     """Structural validation of the new Perceiver prompt."""
@@ -139,18 +132,6 @@ class TestPerceiverPrompt:
 
         prompt_lower = PERCEIVER_PROMPT.lower()
         assert "knowledge" in prompt_lower or "memor" in prompt_lower
-
-    def test_old_observer_prompt_still_exists(self):
-        """The existing OBSERVER_PROMPT is kept for reference."""
-        from src.orchestrator.prompts import OBSERVER_PROMPT
-
-        assert "Observer" in OBSERVER_PROMPT
-
-    def test_old_researcher_prompt_still_exists(self):
-        """The existing RESEARCHER_PROMPT is kept for reference."""
-        from src.orchestrator.prompts import RESEARCHER_PROMPT
-
-        assert "Researcher" in RESEARCHER_PROMPT
 
     def test_is_active_in_agent_prompts(self):
         """PERCEIVER_PROMPT is now wired into AGENT_PROMPTS (1B-ii switchover complete)."""

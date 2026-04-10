@@ -1,5 +1,4 @@
 from src.models.agent_decision_log import AgentDecisionLog
-from src.models.agent_routes import AgentRoute
 from src.models.agents import Agent
 from src.models.approval_policy import ApprovalPolicy
 from src.models.approvals import Approval
@@ -46,7 +45,6 @@ from src.models.webhook_subscription import WebhookSubscription
 
 __all__ = [
     "Agent",
-    "AgentRoute",
     "Base",
     "NormalizedEvent",
     "Entity",

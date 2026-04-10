@@ -40,38 +40,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Default action classification (used when no per-user settings override)
-APPROVAL_REQUIRED_ACTIONS = {
-    "draft_reply",
-    "draft_email",
-    "send_email",
-    "create_event",
-    "update_task",
-    "post_message",
-}
-
-AUTO_EXECUTE_DECISIONS = {
-    "fetch_info",
-    "summarize",
-    "search",
-    "add_to_brief",
-    "acknowledge",
-    "answer_directly",
-}
-
-CRITICAL_ACTIONS = {
-    "payment",
-    "deploy",
-    "delete_data",
-    "modify_permissions",
-    "security_change",
-}
-
-BLOCKED_ACTIONS = {
-    "delete_data",
-    "modify_permissions",
-}
-
 VALID_POLICY_MODES = {"lockdown", "approval_required", "suggest_only", "full_auto"}
 
 
@@ -215,21 +183,17 @@ class Governor:
         """Create an approval record for a plan requiring user consent."""
         from src.services.approval_service import create_approval
 
-        task_types = []
-        if plan.tasks:
-            task_types = [t.task_type for t in plan.tasks]
-
         approval = await create_approval(
             self._db,
             user_id=user_id,
             workspace_id=workspace_id,
-            approval_type=task_types[0] if task_types else plan.decision,
+            approval_type=plan.risk_level or "medium",
             title=f"Approve: {plan.goal}",
             summary=plan.reasoning_summary,
             risk_level=plan.risk_level or "medium",
             execution_id=execution_id,
             requested_by=user_id,
-            artifact_refs={"plan_id": plan.plan_id, "task_types": task_types},
+            artifact_refs={"plan_id": plan.plan_id},
         )
 
         await self._audit.log(
@@ -335,8 +299,7 @@ class Governor:
             return False
 
     async def _apply_policy(self, plan: Plan, user_id: str) -> str:
-        """Apply policy rules considering user settings and trust scores."""
-        decision = plan.decision or ""
+        """Apply policy rules based on plan risk level and user settings."""
         risk = plan.risk_level or "low"
         policy_mode = await self._get_policy_mode(user_id)
 
@@ -344,45 +307,33 @@ class Governor:
         if policy_mode == "lockdown":
             return "blocked"
 
-        # Suggest-only: never execute, always just suggest
+        # Suggest-only: never execute
         if policy_mode == "suggest_only":
             return "blocked"
 
-        # Always block dangerous actions regardless of mode
-        if decision in BLOCKED_ACTIONS:
-            return "blocked"
-
-        # Critical actions always require approval, even in full_auto
-        if decision in CRITICAL_ACTIONS or risk == "critical":
+        # Critical risk always requires approval, even in full_auto
+        if risk == "critical":
             return "approval_required"
 
-        # Full auto mode: auto-execute unless high-risk or blocked
+        # Full auto mode: auto-execute unless high-risk
         if policy_mode == "full_auto":
             if risk == "high":
                 return "approval_required"
             return "auto_execute"
 
-        # Default: approval_required mode with trust-based graduation
+        # Default: approval_required mode
         if risk == "high":
             return "approval_required"
 
-        if decision in APPROVAL_REQUIRED_ACTIONS:
-            # Check trust engine for graduated autonomy
-            if await self._check_trust(user_id, decision, risk):
-                logger.info("Trust-based auto-approve: user=%s action=%s", user_id, decision)
+        # Trust-based graduation for medium-risk
+        if risk == "medium":
+            if await self._check_trust(user_id, "write", risk):
                 return "auto_execute"
             return "approval_required"
 
-        if decision in AUTO_EXECUTE_DECISIONS:
+        # Low/none risk in approval_required mode — check trust
+        if await self._check_trust(user_id, "read", risk):
             return "auto_execute"
-
-        # Check task types for external actions
-        if plan.tasks:
-            for task in plan.tasks:
-                if task.task_type in APPROVAL_REQUIRED_ACTIONS:
-                    if await self._check_trust(user_id, task.task_type, risk):
-                        continue
-                    return "approval_required"
 
         # Default: require approval for safety
         return "approval_required"

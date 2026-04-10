@@ -341,16 +341,16 @@ class TestPrompts:
         }
         assert set(AGENT_PROMPTS.keys()) == expected
 
-    def test_jarvis_soul_not_empty(self):
-        from src.orchestrator.prompts import JARVIS_SOUL
+    def test_jarvis_soul_core_not_empty(self):
+        from src.orchestrator.prompts import JARVIS_SOUL_CORE
 
-        assert len(JARVIS_SOUL) > 100
-        assert "operating system" in JARVIS_SOUL.lower()
+        assert len(JARVIS_SOUL_CORE) > 100
+        assert "operating system" in JARVIS_SOUL_CORE.lower()
 
-    def test_planner_prompt_mentions_json(self):
-        from src.orchestrator.prompts import PLANNER_PROMPT
+    def test_planner_prompt_v2_mentions_json(self):
+        from src.orchestrator.prompts import PLANNER_PROMPT_V2
 
-        assert "JSON" in PLANNER_PROMPT
+        assert "JSON" in PLANNER_PROMPT_V2
 
     def test_governor_prompt_mentions_approval(self):
         from src.orchestrator.prompts import GOVERNOR_PROMPT
