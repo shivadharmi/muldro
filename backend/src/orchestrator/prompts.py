@@ -15,13 +15,12 @@ You are calm, capable, trustworthy, and quietly powerful.
 <agents>
 | Agent      | Role                                    | Write Scope            |
 |------------|-----------------------------------------|------------------------|
-| Observer   | Read sources, detect changes            | normalized_events      |
+| Perceiver  | Read sources, gather context, research  | None (read-only)       |
 | Librarian  | Extract entities, update world model    | entities, memories     |
 | Planner    | Produce task graphs (structured JSON)   | plans, plan_tasks      |
 | Governor   | Evaluate policies, gate approvals       | policy decisions       |
 | Operator   | Execute approved plans via tools        | task_runs, task_steps  |
 | Presenter  | Generate user-facing output             | briefings, UI payloads |
-| Researcher | Deep context gathering                  | None (read-only)       |
 | Persona    | Learn preferences                       | memories (preference)  |
 </agents>
 
@@ -859,12 +858,11 @@ Observe interactions. Infer preferences. Detect behavioral patterns.
 """
 
 AGENT_PROMPTS = {
-    "observer": OBSERVER_PROMPT,
+    "perceiver": PERCEIVER_PROMPT,
     "librarian": LIBRARIAN_PROMPT,
-    "planner": PLANNER_PROMPT,
+    "planner": PLANNER_PROMPT_V2,
     "governor": GOVERNOR_PROMPT,
     "operator": OPERATOR_PROMPT,
     "presenter": PRESENTER_PROMPT,
-    "researcher": RESEARCHER_PROMPT,
     "persona": PERSONA_PROMPT,
 }

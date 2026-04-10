@@ -79,7 +79,7 @@ BEDROCK_MODEL_TIERS = {
 CONTEXT_ENRICHED_AGENTS = {
     "planner",
     "presenter",
-    "researcher",
+    "perceiver",
     "librarian",
     "operator",
     "governor",

@@ -1,6 +1,6 @@
 """Sub-agent definitions for the Jarvis orchestrator.
 
-Defines 8 specialized agents with their prompts, model assignments,
+Defines 7 specialized agents with their prompts, model assignments,
 capability-based access scopes, and per-agent thinking configuration.
 """
 
@@ -10,13 +10,12 @@ from src.orchestrator.prompts import AGENT_PROMPTS
 
 # Model tier assignments per agent
 AGENT_MODEL_TIERS = {
-    "observer": "sonnet",
+    "perceiver": "sonnet",
     "librarian": "sonnet",
     "planner": "opus",
     "governor": "sonnet",
     "operator": "sonnet",
     "presenter": "sonnet",
-    "researcher": "sonnet",
     "persona": "haiku",
 }
 
@@ -24,12 +23,14 @@ AGENT_MODEL_TIERS = {
 # If a tool's canonical capability is in an agent's capability scope,
 # the agent is allowed to use that tool regardless of its raw name.
 AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
-    "observer": {
+    "perceiver": {
+        # From observer — external data source reads
         "email.list",
         "email.read",
         "email.search",
         "calendar.list",
         "calendar.get",
+        "calendar.read",
         "doc.drive_list",
         "doc.drive_search",
         "doc.get",
@@ -45,6 +46,10 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "issue.get",
         "issue.search",
         "repo.search_code",
+        "repo.search_repos",
+        "repo.list_prs",
+        "repo.get_diff",
+        "repo.get_reviews",
         "workflow.list",
         "workflow.get",
         "workflow.search",
@@ -52,10 +57,18 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "filesystem.read",
         "filesystem.list",
         "filesystem.search",
+        # From observer — internal observation tools
         "internal.ingest_event",
         "internal.report_observation",
         "internal.get_cursor",
         "internal.update_cursor",
+        # From researcher — knowledge + web
+        "internal.search",
+        "search.web",
+        "browser.open",
+        "browser.snapshot",
+        "browser.extract",
+        "browser.screenshot",
     },
     "librarian": {
         "internal.update_entity",
@@ -67,6 +80,7 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "internal.get_goals",
         "internal.search",
         "internal.store_memory",
+        "internal.discover_capabilities",
     },
     "governor": {
         "internal.evaluate_policy",
@@ -141,43 +155,6 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "internal.push_ui",
         "messaging.send",
     },
-    "researcher": {
-        "internal.search",
-        "email.list",
-        "email.read",
-        "email.search",
-        "calendar.list",
-        "calendar.get",
-        "doc.drive_list",
-        "doc.drive_search",
-        "doc.get",
-        "doc.search",
-        "doc.query",
-        "messaging.list_channels",
-        "messaging.get_history",
-        "messaging.get_thread",
-        "messaging.get_users",
-        "messaging.search",
-        "issue.list",
-        "issue.get",
-        "issue.search",
-        "repo.search_code",
-        "repo.search_repos",
-        "repo.list_prs",
-        "repo.get_diff",
-        "repo.get_reviews",
-        "workflow.list",
-        "workflow.get",
-        "workflow.search",
-        "filesystem.read",
-        "filesystem.list",
-        "filesystem.search",
-        "search.web",
-        "browser.open",
-        "browser.snapshot",
-        "browser.extract",
-        "browser.screenshot",
-    },
     "persona": {
         "internal.search",
         "internal.extract_preferences",
@@ -197,12 +174,11 @@ class ThinkingConfig:
 # Per-agent thinking assignments
 AGENT_THINKING: dict[str, ThinkingConfig] = {
     "planner": ThinkingConfig(enabled=True, budget_tokens=8192),
-    "researcher": ThinkingConfig(enabled=True, budget_tokens=6144),
+    "perceiver": ThinkingConfig(enabled=True, budget_tokens=6144),
     "librarian": ThinkingConfig(enabled=True, budget_tokens=4096),
     "presenter": ThinkingConfig(enabled=True, budget_tokens=4096),
     "governor": ThinkingConfig(enabled=True, budget_tokens=2048),
     "operator": ThinkingConfig(enabled=True, budget_tokens=2048),
-    "observer": ThinkingConfig(enabled=True, budget_tokens=2048),
     "persona": ThinkingConfig(enabled=True, budget_tokens=2048),
 }
 
@@ -233,7 +209,7 @@ class SubAgent:
 
 
 def create_sub_agents() -> dict[str, SubAgent]:
-    """Create all 8 sub-agent definitions."""
+    """Create all 7 sub-agent definitions."""
     agents = {}
     for name, prompt in AGENT_PROMPTS.items():
         agents[name] = SubAgent(
