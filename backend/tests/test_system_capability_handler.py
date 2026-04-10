@@ -1,4 +1,4 @@
-"""Tests for _handle_system_capability and public orchestrator methods."""
+"""Tests for _handle_system_capability, plan persistence, and public orchestrator methods."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -203,3 +203,311 @@ class TestPlannerSystemPrompt:
         prompt_text = blocks[0]["text"]
         # Raw placeholder should remain when no summary provided
         assert "{capability_summary}" in prompt_text
+
+
+class TestPlanPersistence:
+    """_persist_plan_record accepts PlanOutput and creates Plan + PlanTasks."""
+
+    @pytest.mark.asyncio
+    async def test_persist_plan_record_with_plan_output(self):
+        orch = _make_orchestrator()
+
+        mock_db = AsyncMock()
+        mock_db.commit = AsyncMock()
+        mock_db.add = MagicMock()
+        mock_db.execute = AsyncMock(
+            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))
+        )
+        ctx = AsyncMock()
+        ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        orch._db_factory = MagicMock(return_value=ctx)
+
+        plan = PlanOutput(
+            goal="Send follow-up email",
+            reasoning="User wants to follow up with investor",
+            priority="high",
+            steps=[
+                PlanStep(
+                    step_id="s1",
+                    description="Read email",
+                    capability="email.read",
+                    risk="none",
+                ),
+                PlanStep(
+                    step_id="s2",
+                    description="Draft reply",
+                    capability="email.draft",
+                    depends_on=["s1"],
+                    risk="medium",
+                ),
+            ],
+        )
+
+        result = await orch._persist_plan_record(plan, "usr_1", "ws_1")
+        assert isinstance(result, PlanOutput)
+        assert result.plan_id is not None
+        assert result.plan_id.startswith("plan_")
+        assert mock_db.add.called
+        assert mock_db.commit.called
+
+    @pytest.mark.asyncio
+    async def test_persist_plan_record_skips_user_steps(self):
+        orch = _make_orchestrator()
+
+        added_objects = []
+        mock_db = AsyncMock()
+        mock_db.commit = AsyncMock()
+        mock_db.add = MagicMock(side_effect=lambda obj: added_objects.append(obj))
+        mock_db.execute = AsyncMock(
+            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))
+        )
+        ctx = AsyncMock()
+        ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        orch._db_factory = MagicMock(return_value=ctx)
+
+        plan = PlanOutput(
+            goal="Send email",
+            steps=[
+                PlanStep(
+                    step_id="s1",
+                    description="Draft",
+                    capability="email.draft",
+                    risk="medium",
+                ),
+                PlanStep(
+                    step_id="s2",
+                    description="User reviews",
+                    capability="email.send",
+                    actor="user",
+                ),
+            ],
+        )
+
+        await orch._persist_plan_record(plan, "usr_1", "ws_1")
+        from src.models.plans import Plan
+
+        plans = [o for o in added_objects if isinstance(o, Plan)]
+        assert len(plans) == 1
+        assert len(plans[0].tasks) == 1  # Only jarvis step becomes a task
+
+    @pytest.mark.asyncio
+    async def test_persist_plan_record_maps_depends_on(self):
+        """Step depends_on step_ids are mapped to task_ids."""
+        orch = _make_orchestrator()
+
+        added_objects = []
+        mock_db = AsyncMock()
+        mock_db.commit = AsyncMock()
+        mock_db.add = MagicMock(side_effect=lambda obj: added_objects.append(obj))
+        mock_db.execute = AsyncMock(
+            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))
+        )
+        ctx = AsyncMock()
+        ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        orch._db_factory = MagicMock(return_value=ctx)
+
+        plan = PlanOutput(
+            goal="Multi-step email workflow",
+            steps=[
+                PlanStep(step_id="s1", description="Search", capability="email.search"),
+                PlanStep(
+                    step_id="s2",
+                    description="Draft",
+                    capability="email.draft",
+                    depends_on=["s1"],
+                    risk="medium",
+                ),
+                PlanStep(
+                    step_id="s3",
+                    description="Send",
+                    capability="email.send",
+                    depends_on=["s2"],
+                    risk="high",
+                ),
+            ],
+        )
+
+        await orch._persist_plan_record(plan, "usr_1", "ws_1")
+        from src.models.plans import Plan
+
+        plans = [o for o in added_objects if isinstance(o, Plan)]
+        assert len(plans) == 1
+        tasks = plans[0].tasks
+        assert len(tasks) == 3
+
+        # First task has no depends_on
+        assert tasks[0].depends_on is None or tasks[0].depends_on == []
+        # Second task depends on first task's task_id
+        assert tasks[1].depends_on == [tasks[0].task_id]
+        # Third task depends on second task's task_id
+        assert tasks[2].depends_on == [tasks[1].task_id]
+
+    @pytest.mark.asyncio
+    async def test_persist_plan_record_derives_risk_and_execution_mode(self):
+        """Max step risk determines Plan risk_level and execution_mode."""
+        orch = _make_orchestrator()
+
+        added_objects = []
+        mock_db = AsyncMock()
+        mock_db.commit = AsyncMock()
+        mock_db.add = MagicMock(side_effect=lambda obj: added_objects.append(obj))
+        mock_db.execute = AsyncMock(
+            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))
+        )
+        ctx = AsyncMock()
+        ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        orch._db_factory = MagicMock(return_value=ctx)
+
+        # Plan with high risk step
+        plan = PlanOutput(
+            goal="Delete everything",
+            steps=[
+                PlanStep(
+                    step_id="s1",
+                    description="Delete files",
+                    capability="fs.delete",
+                    risk="high",
+                ),
+            ],
+        )
+
+        await orch._persist_plan_record(plan, "usr_1", "ws_1")
+        from src.models.plans import Plan
+
+        plans = [o for o in added_objects if isinstance(o, Plan)]
+        assert plans[0].risk_level == "high"
+        assert plans[0].execution_mode == "approval_required"
+
+    @pytest.mark.asyncio
+    async def test_persist_plan_record_low_risk_auto_execute(self):
+        """Low risk plans get auto_execute execution_mode."""
+        orch = _make_orchestrator()
+
+        added_objects = []
+        mock_db = AsyncMock()
+        mock_db.commit = AsyncMock()
+        mock_db.add = MagicMock(side_effect=lambda obj: added_objects.append(obj))
+        mock_db.execute = AsyncMock(
+            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))
+        )
+        ctx = AsyncMock()
+        ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        orch._db_factory = MagicMock(return_value=ctx)
+
+        plan = PlanOutput(
+            goal="Read emails",
+            steps=[
+                PlanStep(
+                    step_id="s1",
+                    description="Search inbox",
+                    capability="email.search",
+                    risk="low",
+                ),
+            ],
+        )
+
+        await orch._persist_plan_record(plan, "usr_1", "ws_1")
+        from src.models.plans import Plan
+
+        plans = [o for o in added_objects if isinstance(o, Plan)]
+        assert plans[0].risk_level == "low"
+        assert plans[0].execution_mode == "auto_execute"
+
+    @pytest.mark.asyncio
+    async def test_persist_plan_record_idempotency_skip(self):
+        """Duplicate idempotency key returns plan without persisting."""
+        orch = _make_orchestrator()
+
+        mock_db = AsyncMock()
+        mock_db.commit = AsyncMock()
+        mock_db.add = MagicMock()
+        # Simulate existing plan found
+        mock_db.execute = AsyncMock(
+            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value="plan_existing123"))
+        )
+        ctx = AsyncMock()
+        ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        orch._db_factory = MagicMock(return_value=ctx)
+
+        plan = PlanOutput(
+            goal="Something",
+            steps=[
+                PlanStep(step_id="s1", description="Do it", capability="do.it"),
+            ],
+        )
+
+        result = await orch._persist_plan_record(plan, "usr_1", "ws_1", idempotency_key="test_key")
+        # Should return original plan without plan_id (not persisted)
+        assert result.plan_id is None
+        mock_db.add.assert_not_called()
+
+
+class TestLightweightRun:
+    """_create_lightweight_run accepts PlanOutput."""
+
+    @pytest.mark.asyncio
+    async def test_create_lightweight_run_with_plan_output(self):
+        orch = _make_orchestrator()
+
+        added_objects = []
+        mock_db = AsyncMock()
+        mock_db.commit = AsyncMock()
+        mock_db.add = MagicMock(side_effect=lambda obj: added_objects.append(obj))
+        ctx = AsyncMock()
+        ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        orch._db_factory = MagicMock(return_value=ctx)
+
+        plan = PlanOutput(
+            goal="Answer a question",
+            reasoning="Simple factual query",
+            plan_id="plan_abc123",
+        )
+
+        run_id = await orch._create_lightweight_run(
+            user_id="usr_1",
+            workspace_id="ws_1",
+            plan=plan,
+            trace_id="trace_xyz",
+            conversation_id="conv_1",
+        )
+
+        assert run_id is not None
+        assert run_id.startswith("run_")
+        assert len(added_objects) == 2  # TaskRun + TaskStep
+
+        from src.models.task_graph import TaskRun, TaskStep
+
+        runs = [o for o in added_objects if isinstance(o, TaskRun)]
+        steps = [o for o in added_objects if isinstance(o, TaskStep)]
+        assert len(runs) == 1
+        assert len(steps) == 1
+
+        assert runs[0].plan_id == "plan_abc123"
+        assert runs[0].status == "running"
+        assert steps[0].step_type == "plan"
+        assert steps[0].input_data["goal"] == "Answer a question"
+
+    @pytest.mark.asyncio
+    async def test_create_lightweight_run_db_failure_returns_none(self):
+        orch = _make_orchestrator()
+
+        ctx = AsyncMock()
+        ctx.__aenter__ = AsyncMock(side_effect=Exception("DB down"))
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        orch._db_factory = MagicMock(return_value=ctx)
+
+        plan = PlanOutput(goal="test")
+        result = await orch._create_lightweight_run(
+            user_id="usr_1",
+            workspace_id="ws_1",
+            plan=plan,
+            trace_id="trace_1",
+        )
+        assert result is None

@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.orchestrator.contracts import PlannerOutput, PlannerTask
+from src.orchestrator.contracts import PlannerOutput, PlannerTask, PlanOutput, PlanStep
 
 # ---------------------------------------------------------------------------
 # _check_step_condition — Phase 1
@@ -257,11 +257,10 @@ class TestPersistPlanIdempotency:
         orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
         orch._settings = MagicMock()
 
-        decision = PlannerOutput(
-            decision="create_task",
+        plan = PlanOutput(
             goal="Follow up with investor",
             reasoning="Important",
-            tasks=[PlannerTask(task_type="send_email", input_data={})],
+            steps=[PlanStep(step_id="s1", description="Send email", capability="email.send")],
         )
 
         # Mock DB that returns an existing plan for the idempotency key
@@ -280,14 +279,14 @@ class TestPersistPlanIdempotency:
         orch._db_factory = MagicMock(return_value=mock_cm)
 
         result = await orch._persist_plan_record(
-            decision,
+            plan,
             "usr_test",
             "ws_test",
             trigger_type="perception",
             idempotency_key="perception:gmail:create_task:abc123",
         )
 
-        # Should return original decision WITHOUT plan_id (skipped)
+        # Should return original plan WITHOUT plan_id (skipped)
         assert result.plan_id is None
 
     @pytest.mark.asyncio
@@ -299,11 +298,16 @@ class TestPersistPlanIdempotency:
         orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
         orch._settings = MagicMock()
 
-        decision = PlannerOutput(
-            decision="create_task",
+        plan = PlanOutput(
             goal="Send report",
             reasoning="Scheduled",
-            tasks=[PlannerTask(task_type="generate_report", input_data={})],
+            steps=[
+                PlanStep(
+                    step_id="s1",
+                    description="Generate report",
+                    capability="report.generate",
+                ),
+            ],
         )
 
         # Mock DB that returns no existing plan (idempotency check passes)
@@ -323,7 +327,7 @@ class TestPersistPlanIdempotency:
         orch._db_factory = MagicMock(return_value=mock_cm)
 
         result = await orch._persist_plan_record(
-            decision,
+            plan,
             "usr_test",
             "ws_test",
             trigger_type="perception",
