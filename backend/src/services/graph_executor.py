@@ -526,7 +526,9 @@ class GraphExecutor:
         if not already_approved:
             needs_approval = False
             risk_level = "low"
-            task_type = (step.input_data or {}).get("task_type", "")
+            task_type = (step.input_data or {}).get(
+                "capability", (step.input_data or {}).get("task_type", "")
+            )
 
             # Check 1: per-tool requires_approval flag
             if self._tool_registry and task_type:
@@ -651,7 +653,10 @@ class GraphExecutor:
                 {
                     "run_id": run.run_id,
                     "step_id": step.step_id,
-                    "tool_name": (step.input_data or {}).get("task_type", "unknown"),
+                    "tool_name": (step.input_data or {}).get(
+                        "capability",
+                        (step.input_data or {}).get("task_type", "unknown"),
+                    ),
                     "duration_ms": elapsed_ms,
                 },
                 workspace_id=run.workspace_id,
@@ -744,7 +749,7 @@ class GraphExecutor:
         a minimal single-turn Claude fallback.
         """
         input_data = step.input_data or {}
-        task_type = input_data.get("task_type", "unknown")
+        task_type = input_data.get("capability", input_data.get("task_type", "unknown"))
 
         await self._emit_event(
             "tool_call_started",
@@ -766,7 +771,7 @@ class GraphExecutor:
         Used as fallback when agent loop dependencies are not available.
         """
         input_data = step.input_data or {}
-        task_type = input_data.get("task_type", "unknown")
+        task_type = input_data.get("capability", input_data.get("task_type", "unknown"))
         context_prompt = await self._build_step_context(run, step)
 
         goal = input_data.get("goal", input_data.get("context", ""))
@@ -862,7 +867,7 @@ class GraphExecutor:
         from src.orchestrator.agents import AGENTS
 
         input_data = step.input_data or {}
-        task_type = input_data.get("task_type", "unknown")
+        task_type = input_data.get("capability", input_data.get("task_type", "unknown"))
         goal = input_data.get("goal", input_data.get("context", ""))
 
         # Build message from step input

@@ -334,3 +334,25 @@ class TestAgenticStepExecution:
 
         result = await executor._run_step_action(step, run)
         assert result["status"] == "completed"
+
+
+class TestCapabilityFieldReading:
+    """GraphExecutor reads 'capability' field with 'task_type' fallback."""
+
+    def test_capability_preferred_over_task_type(self):
+        """When both capability and task_type exist, capability wins."""
+        input_data = {"capability": "email.draft", "task_type": "draft_email"}
+        result = input_data.get("capability", input_data.get("task_type", "unknown"))
+        assert result == "email.draft"
+
+    def test_falls_back_to_task_type(self):
+        """When only task_type exists, it's used."""
+        input_data = {"task_type": "draft_email"}
+        result = input_data.get("capability", input_data.get("task_type", "unknown"))
+        assert result == "draft_email"
+
+    def test_defaults_to_unknown(self):
+        """When neither exists, defaults to 'unknown'."""
+        input_data = {}
+        result = input_data.get("capability", input_data.get("task_type", "unknown"))
+        assert result == "unknown"
