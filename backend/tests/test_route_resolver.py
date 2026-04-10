@@ -387,37 +387,6 @@ class TestRouteCache:
         assert mock_db.execute.call_count == 2
 
 
-# ── Orchestrator Step Condition ────────────────────────────────
-
-
-class TestOrchestratorStepCondition:
-    def test_check_step_condition_has_key(self):
-        from src.orchestrator.jarvis import JarvisOrchestrator
-
-        assert JarvisOrchestrator._check_step_condition({"has_key": "plan_id"}, {"plan_id": "p1"})
-        assert not JarvisOrchestrator._check_step_condition(
-            {"has_key": "plan_id"}, {"other": "val"}
-        )
-
-    def test_check_step_condition_not_has_key(self):
-        from src.orchestrator.jarvis import JarvisOrchestrator
-
-        assert JarvisOrchestrator._check_step_condition({"not_has_key": "error"}, {"plan_id": "p1"})
-        assert not JarvisOrchestrator._check_step_condition(
-            {"not_has_key": "error"}, {"error": "oops"}
-        )
-
-    def test_check_step_condition_value_match(self):
-        from src.orchestrator.jarvis import JarvisOrchestrator
-
-        assert JarvisOrchestrator._check_step_condition(
-            {"decision": "create_task"}, {"decision": "create_task"}
-        )
-        assert not JarvisOrchestrator._check_step_condition(
-            {"decision": "create_task"}, {"decision": "research"}
-        )
-
-
 # ── CRUD Operations ────────────────────────────────────────────
 
 

@@ -1,7 +1,6 @@
 """Tests for perception plan extraction, execution queuing, and idempotency.
 
-Covers Phase 1 (_check_step_condition has_truthy_key),
-Phase 3 (_queue_perception_plan), and Phase 7 (idempotency).
+Covers _queue_perception_plan (Phase 3) and plan idempotency (Phase 7).
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -9,113 +8,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.orchestrator.contracts import PlanOutput, PlanStep
-
-# ---------------------------------------------------------------------------
-# _check_step_condition — Phase 1
-# ---------------------------------------------------------------------------
-
-
-class TestCheckStepCondition:
-    """Verify _check_step_condition handles all condition types."""
-
-    @staticmethod
-    def _check(condition: dict, decision: dict) -> bool:
-        from src.orchestrator.jarvis import JarvisOrchestrator
-
-        return JarvisOrchestrator._check_step_condition(condition, decision)
-
-    def test_has_truthy_key_with_value(self):
-        """has_truthy_key returns True when key has a truthy value."""
-        assert self._check(
-            {"has_truthy_key": "plan_id"},
-            {"plan_id": "plan_abc123"},
-        )
-
-    def test_has_truthy_key_with_none(self):
-        """has_truthy_key returns False when key is None."""
-        assert not self._check(
-            {"has_truthy_key": "plan_id"},
-            {"plan_id": None},
-        )
-
-    def test_has_truthy_key_with_empty_string(self):
-        """has_truthy_key returns False when key is empty string."""
-        assert not self._check(
-            {"has_truthy_key": "plan_id"},
-            {"plan_id": ""},
-        )
-
-    def test_has_truthy_key_missing_key(self):
-        """has_truthy_key returns False when key is missing entirely."""
-        assert not self._check(
-            {"has_truthy_key": "plan_id"},
-            {"decision": "create_task"},
-        )
-
-    def test_has_key(self):
-        """has_key returns True when key exists (even if None)."""
-        assert self._check(
-            {"has_key": "plan_id"},
-            {"plan_id": None},
-        )
-
-    def test_has_key_missing(self):
-        assert not self._check(
-            {"has_key": "plan_id"},
-            {"decision": "create_task"},
-        )
-
-    def test_not_has_key(self):
-        assert self._check(
-            {"not_has_key": "plan_id"},
-            {"decision": "create_task"},
-        )
-
-    def test_not_has_key_present(self):
-        assert not self._check(
-            {"not_has_key": "plan_id"},
-            {"plan_id": "plan_123"},
-        )
-
-    def test_field_prefix(self):
-        """field:<name> checks decision[name] == value."""
-        assert self._check(
-            {"field:decision": "create_task"},
-            {"decision": "create_task"},
-        )
-
-    def test_field_prefix_mismatch(self):
-        assert not self._check(
-            {"field:decision": "create_task"},
-            {"decision": "draft_reply"},
-        )
-
-    def test_direct_equality(self):
-        """Fallback: key=value direct equality check."""
-        assert self._check(
-            {"decision": "create_task"},
-            {"decision": "create_task"},
-        )
-
-    def test_direct_equality_mismatch(self):
-        assert not self._check(
-            {"decision": "create_task"},
-            {"decision": "draft_reply"},
-        )
-
-    def test_multiple_conditions_all_pass(self):
-        """All conditions must be satisfied (AND logic)."""
-        assert self._check(
-            {"has_truthy_key": "plan_id", "field:decision": "create_task"},
-            {"plan_id": "plan_abc", "decision": "create_task"},
-        )
-
-    def test_multiple_conditions_one_fails(self):
-        assert not self._check(
-            {"has_truthy_key": "plan_id", "field:decision": "create_task"},
-            {"plan_id": None, "decision": "create_task"},
-        )
-
 
 # ---------------------------------------------------------------------------
 # _queue_perception_plan — Phase 3

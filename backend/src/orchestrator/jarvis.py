@@ -42,7 +42,6 @@ from src.services.agent_registry import AgentRegistry
 from src.services.capability_resolver import CapabilityResolver, route_step
 from src.services.context_builder import ContextBuilder, ContextPack
 from src.services.execution_state import transition_run, transition_step
-from src.services.route_resolver import RouteResolver
 from src.services.trace_store import TraceStore
 from src.tools.schemas import build_tool_definitions
 
@@ -156,59 +155,6 @@ def _build_surface_preview_from_plan(
         metrics=metrics,
         entities=[],
         progress=None,
-        tags=tags,
-    )
-
-
-def _build_surface_preview(
-    decision: PlannerOutput,
-    kind: str,
-    default_title: str,
-    response_text: str,
-):
-    """Build a SurfacePreview from a planner decision for workspace grid cards.
-
-    Extracts rich preview data per decision type: title, metrics, entities,
-    progress, tags. The frontend renders this via SurfaceCard (not A2UI trees).
-    """
-    from src.ui.contracts import SurfaceMetric, SurfacePreview
-
-    title = decision.goal[:80] if decision.goal else default_title
-    subtitle = decision.reasoning[:120] if decision.reasoning else None
-    metrics: list[SurfaceMetric] = []
-    entities: list[str] = []
-    tags: list[str] = []
-    progress_val: float | None = None
-
-    if kind == "plan":
-        task_count = len(decision.tasks)
-        if task_count:
-            metrics.append(SurfaceMetric(label="Tasks", value=str(task_count)))
-        metrics.append(SurfaceMetric(label="Priority", value=decision.priority))
-
-    elif kind == "recommendation":
-        tags.append("recommendation")
-        if decision.risk_level != "none":
-            variant = "warning" if decision.risk_level in ("high", "medium") else "default"
-            metrics.append(SurfaceMetric(label="Risk", value=decision.risk_level, variant=variant))
-
-    elif kind == "summary":
-        tags.append(default_title.lower())
-
-    elif kind == "briefing":
-        tags.append("briefing")
-
-    elif kind == "alert":
-        tags.append("reminder")
-
-    return SurfacePreview(
-        title=title,
-        subtitle=subtitle,
-        status=None,
-        priority=decision.priority if decision.priority != "medium" else None,
-        metrics=metrics,
-        entities=entities,
-        progress=progress_val,
         tags=tags,
     )
 
@@ -2975,43 +2921,3 @@ class JarvisOrchestrator:
         except Exception as e:
             logger.error("Plan execution via graph failed: %s", e, exc_info=True)
             return {"status": "error", "error": str(e)}
-
-    async def _resolve_pipeline(self, decision: dict) -> list[dict]:
-        """Resolve a planner decision to an agent pipeline via RouteResolver."""
-        try:
-            async with self._db_factory() as db:
-                resolver = RouteResolver(db)
-                return await resolver.resolve(decision)
-        except Exception:
-            logger.warning("Route resolution failed, using empty pipeline", exc_info=True)
-            return []
-
-    @staticmethod
-    def _check_step_condition(condition: dict, decision: dict) -> bool:
-        """Check if a pipeline step's condition is satisfied.
-
-        Supported condition types (mirrors RouteResolver._matches_conditions):
-          has_key:        value exists in decision dict
-          not_has_key:    value does NOT exist in decision dict
-          has_truthy_key: value exists AND is truthy (not None/empty/False)
-          field:<name>:   decision[name] == value
-          <key>: <value>: decision[key] == value (direct equality)
-        """
-        for key, value in condition.items():
-            if key == "has_key":
-                if value not in decision:
-                    return False
-            elif key == "not_has_key":
-                if value in decision:
-                    return False
-            elif key == "has_truthy_key":
-                if not decision.get(value):
-                    return False
-            elif key.startswith("field:"):
-                field_name = key[len("field:") :]
-                if decision.get(field_name) != value:
-                    return False
-            else:
-                if decision.get(key) != value:
-                    return False
-        return True
