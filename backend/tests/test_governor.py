@@ -52,9 +52,9 @@ async def test_governor_requires_approval_for_draft(mock_db):
 
 
 @pytest.mark.asyncio
-async def test_governor_auto_executes_acknowledge(mock_db):
-    """Plans with acknowledge decision should auto-execute."""
-    plan = _make_mock_plan(decision="acknowledge")
+async def test_governor_low_risk_requires_approval_by_default(mock_db):
+    """Low-risk plans require approval by default (no trust engine)."""
+    plan = _make_mock_plan(risk_level="low")
 
     result_mock = MagicMock()
     result_mock.scalar_one_or_none.return_value = plan
@@ -64,15 +64,14 @@ async def test_governor_auto_executes_acknowledge(mock_db):
     result = await governor.evaluate_plan("plan_001", TEST_USER_ID)
 
     assert isinstance(result, PolicyDecision)
-    assert result.decision == "auto_execute"
+    assert result.decision == "approval_required"
     assert result.execution_id is not None
-    assert result.approval_id is None
 
 
 @pytest.mark.asyncio
-async def test_governor_blocks_dangerous_actions(mock_db):
-    """Plans with blocked decision types should be blocked."""
-    plan = _make_mock_plan(decision="delete_data")
+async def test_governor_critical_risk_requires_approval(mock_db):
+    """Plans with critical risk always require approval."""
+    plan = _make_mock_plan(risk_level="critical")
 
     result_mock = MagicMock()
     result_mock.scalar_one_or_none.return_value = plan
@@ -82,15 +81,13 @@ async def test_governor_blocks_dangerous_actions(mock_db):
     result = await governor.evaluate_plan("plan_001", TEST_USER_ID)
 
     assert isinstance(result, PolicyDecision)
-    assert result.decision == "blocked"
+    assert result.decision == "approval_required"
 
 
 @pytest.mark.asyncio
-async def test_governor_checks_task_types(mock_db):
-    """Governor should check task types even if plan decision is neutral."""
-    mock_task = MagicMock()
-    mock_task.task_type = "send_email"
-    plan = _make_mock_plan(decision="create_task", tasks=[mock_task])
+async def test_governor_medium_risk_requires_approval(mock_db):
+    """Medium-risk plans require approval without trust engine."""
+    plan = _make_mock_plan(risk_level="medium")
 
     result_mock = MagicMock()
     result_mock.scalar_one_or_none.return_value = plan

@@ -1,83 +1,12 @@
-"""Tests for Gap Closure v2 contracts: ExecutionPlan, PolicyDecision."""
+"""Tests for Gap Closure v2 contracts: PolicyDecision, DomainEvent."""
 
 import pytest
 from pydantic import ValidationError
 
 from src.orchestrator.contracts import (
     DomainEvent,
-    ExecutionPlan,
-    PlannerTask,
     PolicyDecision,
 )
-
-# ── ExecutionPlan ─────────────────────────────────────────────────────────
-
-
-class TestExecutionPlan:
-    def test_minimal_valid(self):
-        ep = ExecutionPlan(plan_id="plan_001", goal="Send email")
-        assert ep.plan_id == "plan_001"
-        assert ep.goal == "Send email"
-        assert ep.tasks == []
-        assert ep.risk_level == "low"
-        assert ep.execution_mode == "approval_required"
-        assert ep.priority == "medium"
-
-    def test_full_valid(self):
-        ep = ExecutionPlan(
-            plan_id="plan_002",
-            goal="Draft investor update",
-            tasks=[
-                PlannerTask(task_type="draft_email", input_data={"to": "investor@co.com"}),
-                PlannerTask(task_type="summarize", input_data={"text": "Q4 results"}),
-            ],
-            risk_level="high",
-            execution_mode="approval_required",
-            priority="critical",
-            reasoning_summary="Investor needs update before board meeting",
-        )
-        assert len(ep.tasks) == 2
-        assert ep.risk_level == "high"
-        assert ep.priority == "critical"
-
-    def test_invalid_risk_level(self):
-        with pytest.raises(ValidationError):
-            ExecutionPlan(plan_id="p", goal="g", risk_level="extreme")
-
-    def test_invalid_execution_mode(self):
-        with pytest.raises(ValidationError):
-            ExecutionPlan(plan_id="p", goal="g", execution_mode="yolo")
-
-    def test_invalid_priority(self):
-        with pytest.raises(ValidationError):
-            ExecutionPlan(plan_id="p", goal="g", priority="urgent")
-
-    def test_extra_fields_ignored(self):
-        ep = ExecutionPlan(plan_id="p", goal="g", unknown_field="should_be_ignored")
-        assert not hasattr(ep, "unknown_field")
-
-    def test_model_dump(self):
-        ep = ExecutionPlan(plan_id="plan_003", goal="Test")
-        d = ep.model_dump()
-        assert d["plan_id"] == "plan_003"
-        assert "tasks" in d
-        assert isinstance(d["tasks"], list)
-
-    def test_model_validate_from_dict(self):
-        data = {
-            "plan_id": "plan_004",
-            "goal": "Research competitors",
-            "tasks": [{"task_type": "fetch_info", "input_data": {"query": "competitors"}}],
-            "risk_level": "none",
-            "execution_mode": "auto_execute",
-            "priority": "low",
-            "reasoning_summary": "Low risk read-only operation",
-        }
-        ep = ExecutionPlan.model_validate(data)
-        assert ep.plan_id == "plan_004"
-        assert len(ep.tasks) == 1
-        assert ep.tasks[0].task_type == "fetch_info"
-
 
 # ── PolicyDecision ────────────────────────────────────────────────────────
 
