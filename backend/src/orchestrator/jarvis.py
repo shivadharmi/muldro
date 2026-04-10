@@ -27,7 +27,7 @@ from src.orchestrator.agent_loop import (
 )
 from src.orchestrator.agents import AGENTS, SubAgent
 from src.orchestrator.budget import BudgetTracker
-from src.orchestrator.contracts import PlannerOutput, PlanOutput, PlanStep
+from src.orchestrator.contracts import PlanOutput, PlanStep
 from src.orchestrator.intent_classifier import (
     FAST_INTENTS,
     INTENT_CONFIDENCE_THRESHOLD,
@@ -727,11 +727,11 @@ class JarvisOrchestrator:
         5. Presenter formats the final response
         """
         if not user_id:
-            return {"error": "user_id is required", "decision": "error"}
+            return {"error": "user_id is required"}
         if not workspace_id:
-            return {"error": "workspace_id is required", "decision": "error"}
+            return {"error": "workspace_id is required"}
         if not message or not message.strip():
-            return {"error": "Empty message", "decision": "ignore"}
+            return {"error": "Empty message"}
 
         trace = self._trace_manager.start_trace("user_message")
         run_id: str | None = None
@@ -2388,52 +2388,69 @@ class JarvisOrchestrator:
         tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral"}}
         return tools
 
-    async def _handle_set_goal(self, decision, user_id: str, workspace_id: str) -> dict:
+    async def _handle_set_goal(
+        self,
+        goal_text: str,
+        reasoning: str,
+        priority: str,
+        user_id: str,
+        workspace_id: str,
+    ) -> dict:
         """Store a goal as a memory via MemoryService."""
         memory_svc = self._services.memory_service
         if not memory_svc:
             return {"status": "error", "error": "Memory service unavailable"}
 
-        title = decision.goal or decision.reasoning or "Untitled goal"
+        title = goal_text or reasoning or "Untitled goal"
         memory_id = await memory_svc.store_goal_memory(
             user_id=user_id,
             workspace_id=workspace_id,
             title=title,
-            priority=decision.priority,
+            priority=priority,
         )
         logger.info("Goal stored as memory %s: %s", memory_id, title)
         return {"status": "created", "memory_id": memory_id, "title": title}
 
-    async def _handle_set_instruction(self, decision, user_id: str, workspace_id: str) -> dict:
+    async def _handle_set_instruction(
+        self,
+        instruction_text: str,
+        reasoning: str,
+        instruction: dict,
+        user_id: str,
+        workspace_id: str,
+    ) -> dict:
         """Handle set_instruction: create trigger/schedule/preference memory."""
-        spec = decision.instruction
-        if not spec:
+        if not instruction:
             return {"status": "error", "error": "No instruction spec provided"}
 
         memory_svc = self._services.memory_service
         if not memory_svc:
             return {"status": "error", "error": "Memory service unavailable"}
 
+        inst_text = instruction.get("instruction_text", instruction_text)
+        inst_type = instruction.get("instruction_type", "preference")
+
         # Store as a preference memory via public API
         memory_id = await memory_svc.store_instruction_memory(
             user_id=user_id,
             workspace_id=workspace_id,
-            instruction_text=spec.instruction_text,
-            instruction_type=spec.instruction_type,
+            instruction_text=inst_text,
+            instruction_type=inst_type,
         )
 
         result: dict = {
             "status": "created",
             "memory_id": memory_id,
-            "instruction_type": spec.instruction_type,
-            "text": spec.instruction_text,
+            "instruction_type": inst_type,
+            "text": inst_text,
         }
 
-        # Create trigger if applicable
-        if spec.instruction_type == "trigger" and spec.trigger_conditions:
-            try:
-                from ulid import ULID
+        trigger_conditions = instruction.get("trigger_conditions")
+        schedule_config = instruction.get("schedule_config")
 
+        # Create trigger if applicable
+        if inst_type == "trigger" and trigger_conditions:
+            try:
                 from src.models.triggers import Trigger
 
                 async with self._db_factory() as db:
@@ -2442,8 +2459,8 @@ class JarvisOrchestrator:
                         trigger_id=trigger_id,
                         user_id=user_id,
                         workspace_id=workspace_id,
-                        name=spec.instruction_text[:100],
-                        conditions=spec.trigger_conditions,
+                        name=inst_text[:100],
+                        conditions=trigger_conditions,
                         action_type="notify",
                         action_config={},
                         enabled=True,
@@ -2456,10 +2473,8 @@ class JarvisOrchestrator:
                 logger.warning("Failed to create trigger: %s", e)
 
         # Create schedule if applicable
-        if spec.instruction_type == "schedule" and spec.schedule_config:
+        if inst_type == "schedule" and schedule_config:
             try:
-                from ulid import ULID
-
                 from src.models.schedules import Schedule
 
                 async with self._db_factory() as db:
@@ -2468,11 +2483,11 @@ class JarvisOrchestrator:
                         schedule_id=schedule_id,
                         user_id=user_id,
                         workspace_id=workspace_id,
-                        name=spec.instruction_text[:100],
-                        schedule_type=spec.schedule_config.get("type", "recurring"),
-                        cron_expr=spec.schedule_config.get("cron_expr"),
-                        action_type=spec.schedule_config.get("action_type", "custom_agent_task"),
-                        action_config=spec.schedule_config.get("action_config", {}),
+                        name=inst_text[:100],
+                        schedule_type=schedule_config.get("type", "recurring"),
+                        cron_expr=schedule_config.get("cron_expr"),
+                        action_type=schedule_config.get("action_type", "custom_agent_task"),
+                        action_config=schedule_config.get("action_config", {}),
                         enabled=True,
                         source="user",
                         priority="medium",
@@ -2483,18 +2498,25 @@ class JarvisOrchestrator:
             except Exception as e:
                 logger.warning("Failed to create schedule: %s", e)
 
-        logger.info("Instruction stored: %s (%s)", spec.instruction_text, spec.instruction_type)
+        logger.info("Instruction stored: %s (%s)", inst_text, inst_type)
         return result
 
-    async def _handle_schedule_reminder(self, decision, user_id: str, workspace_id: str) -> dict:
+    async def _handle_schedule_reminder(
+        self,
+        reminder_text: str,
+        reasoning: str,
+        tasks: list[dict],
+        user_id: str,
+        workspace_id: str,
+    ) -> dict:
         """Create a one-shot schedule for a reminder."""
         from src.models.schedules import Schedule
 
-        title = decision.goal or decision.reasoning or "Reminder"
+        title = reminder_text or reasoning or "Reminder"
         # Extract timing from tasks if available
-        schedule_config = {}
-        if decision.tasks:
-            schedule_config = decision.tasks[0].input_data or {}
+        schedule_config: dict = {}
+        if tasks:
+            schedule_config = tasks[0].get("input_data") or {}
 
         try:
             async with self._db_factory() as db:
@@ -2513,7 +2535,7 @@ class JarvisOrchestrator:
                     },
                     enabled=True,
                     source="user",
-                    priority=decision.priority,
+                    priority="medium",
                 )
                 db.add(schedule)
                 await db.commit()
@@ -2524,13 +2546,13 @@ class JarvisOrchestrator:
             logger.warning("Failed to create reminder schedule: %s", e)
             return {"status": "error", "error": str(e)}
 
-    async def _handle_add_to_brief(self, decision, user_id: str, workspace_id: str) -> dict:
+    async def _handle_add_to_brief(self, text: str, user_id: str, workspace_id: str) -> dict:
         """Store a briefing item as a memory so the next briefing includes it."""
         memory_svc = self._services.memory_service
         if not memory_svc:
             return {"status": "error", "error": "Memory service unavailable"}
 
-        text = decision.goal or decision.reasoning or "Briefing item"
+        text = text or "Briefing item"
         try:
             memory_id = await memory_svc.store_briefing_memory(
                 user_id=user_id,
@@ -2550,13 +2572,7 @@ class JarvisOrchestrator:
         user_id: str,
         workspace_id: str,
     ) -> dict:
-        """Route system.* capability steps to direct handlers.
-
-        Bridges PlanStep data to the existing handlers which accept
-        PlannerOutput. Full handler rewrite is deferred to Spec 1B-iii.
-        """
-        from src.orchestrator.contracts import InstructionSpec, PlannerTask
-
+        """Route system.* capability steps to direct handlers."""
         cap = step.capability
 
         if cap in ("system.respond", "system.acknowledge"):
@@ -2572,40 +2588,25 @@ class JarvisOrchestrator:
             logger.warning("Unknown system capability: %s", cap)
             return {}
 
-        # Build a bridge PlannerOutput for legacy handlers
-        bridge = PlannerOutput(
-            decision=cap.removeprefix("system."),
-            goal=step.description or plan.goal,
-            reasoning=plan.reasoning,
-            priority=plan.priority,
-        )
-
-        # Transfer instruction spec from step input if present
-        if step.input.get("instruction"):
-            try:
-                bridge = bridge.model_copy(
-                    update={"instruction": InstructionSpec(**step.input["instruction"])}
-                )
-            except Exception:
-                logger.debug("Failed to parse instruction from step input", exc_info=True)
-
-        # Transfer tasks from step input if present (for schedule_reminder)
-        if step.input.get("tasks"):
-            try:
-                bridge = bridge.model_copy(
-                    update={"tasks": [PlannerTask(**t) for t in step.input["tasks"]]}
-                )
-            except Exception:
-                logger.debug("Failed to parse tasks from step input", exc_info=True)
+        goal_text = step.description or plan.goal
+        reasoning = plan.reasoning
 
         if cap == "system.set_goal":
-            return await self._handle_set_goal(bridge, user_id, workspace_id)
+            return await self._handle_set_goal(
+                goal_text, reasoning, plan.priority, user_id, workspace_id
+            )
         elif cap == "system.set_instruction":
-            return await self._handle_set_instruction(bridge, user_id, workspace_id)
+            instruction = step.input.get("instruction", {})
+            return await self._handle_set_instruction(
+                goal_text, reasoning, instruction, user_id, workspace_id
+            )
         elif cap == "system.schedule_reminder":
-            return await self._handle_schedule_reminder(bridge, user_id, workspace_id)
+            tasks = step.input.get("tasks", [])
+            return await self._handle_schedule_reminder(
+                goal_text, reasoning, tasks, user_id, workspace_id
+            )
         elif cap == "system.add_to_brief":
-            return await self._handle_add_to_brief(bridge, user_id, workspace_id)
+            return await self._handle_add_to_brief(goal_text, user_id, workspace_id)
 
         return {}  # unreachable due to early guard, but satisfies type checker
 
