@@ -35,7 +35,7 @@ from src.orchestrator.intent_classifier import (
     extract_decision,
     intent_to_decision,
 )
-from src.orchestrator.prompts import JARVIS_DECISION_FRAMEWORK, JARVIS_SOUL_CORE
+from src.orchestrator.prompts import JARVIS_SOUL_CORE
 from src.orchestrator.services import ServiceContainer
 from src.orchestrator.tracing import TraceManager
 from src.services.agent_registry import AgentRegistry
@@ -1245,6 +1245,8 @@ class JarvisOrchestrator:
         trace=None,
         max_tool_rounds: int = 10,
         workspace_id: str = "",
+        capability_summary: str = "",
+        tools_override: list[dict] | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Call a sub-agent with streaming, yielding SSE-compatible dicts."""
         agent = self._agents.get(agent_name)
@@ -1253,13 +1255,32 @@ class JarvisOrchestrator:
             return
 
         model = self._get_model_for_agent(agent)
-        tools = self._apply_cache_control_to_tools(
-            await self._get_tools_for_agent(agent, workspace_id=workspace_id)
-        )
+
+        if tools_override is not None:
+            tools = self._apply_cache_control_to_tools(tools_override)
+        else:
+            tools = self._apply_cache_control_to_tools(
+                await self._get_tools_for_agent(agent, workspace_id=workspace_id)
+            )
+
+        # Auto-generate capability summary for planner if not provided
+        if agent_name == "planner" and not capability_summary:
+            try:
+                from src.orchestrator.capability_summary import (
+                    generate_capability_summary,
+                )
+
+                async with self._db_factory() as db:
+                    capability_summary = await generate_capability_summary(db, workspace_id)
+            except Exception:
+                logger.debug("Failed to generate capability summary", exc_info=True)
+
         context_block = await self._assemble_context(
             agent_name, message, user_id=user_id, workspace_id=workspace_id
         )
-        system_blocks = self._build_system_prompt(agent, context_block)
+        system_blocks = self._build_system_prompt(
+            agent, context_block, capability_summary=capability_summary
+        )
 
         async for evt in agent_loop(
             client=self._client,
@@ -2325,21 +2346,25 @@ class JarvisOrchestrator:
             logger.debug("Failed to parse perception_policy from planner", exc_info=True)
             return None
 
-    def _build_system_prompt(self, agent: SubAgent, context: str = "") -> list[dict]:
+    def _build_system_prompt(
+        self, agent: SubAgent, context: str = "", capability_summary: str = ""
+    ) -> list[dict]:
         """Build system prompt with cache_control for prompt caching.
 
-        Uses structured system blocks so the static soul + role prompt is cached
-        across calls (5-min TTL), saving ~90% on re-reads of the system prompt.
+        For the Planner, injects the runtime capability summary into
+        PLANNER_PROMPT_V2 (replacing the {capability_summary} placeholder).
+        Other agents get JARVIS_SOUL_CORE + their role prompt unchanged.
         """
-        # Only the Planner sees the decision framework; other agents just get the core soul
         soul = JARVIS_SOUL_CORE
-        if agent.name == "planner":
-            soul += "\n" + JARVIS_DECISION_FRAMEWORK
+
+        prompt = agent.prompt
+        if agent.name == "planner" and capability_summary:
+            prompt = prompt.format(capability_summary=capability_summary)
 
         blocks = [
             {
                 "type": "text",
-                "text": f"{soul}\n\n--- YOUR ROLE ---\n{agent.prompt}",
+                "text": f"{soul}\n\n--- YOUR ROLE ---\n{prompt}",
                 "cache_control": {"type": "ephemeral"},
             },
         ]
@@ -2584,6 +2609,8 @@ class JarvisOrchestrator:
         trace=None,
         max_tool_rounds: int = 10,
         workspace_id: str = "",
+        capability_summary: str = "",
+        tools_override: list[dict] | None = None,
     ) -> str:
         """Call a sub-agent (non-streaming). Returns final text response."""
         agent = self._agents.get(agent_name)
@@ -2591,13 +2618,32 @@ class JarvisOrchestrator:
             raise ValueError(f"Unknown agent: {agent_name}")
 
         model = self._get_model_for_agent(agent)
-        tools = self._apply_cache_control_to_tools(
-            await self._get_tools_for_agent(agent, workspace_id=workspace_id)
-        )
+
+        if tools_override is not None:
+            tools = self._apply_cache_control_to_tools(tools_override)
+        else:
+            tools = self._apply_cache_control_to_tools(
+                await self._get_tools_for_agent(agent, workspace_id=workspace_id)
+            )
+
+        # Auto-generate capability summary for planner if not provided
+        if agent_name == "planner" and not capability_summary:
+            try:
+                from src.orchestrator.capability_summary import (
+                    generate_capability_summary,
+                )
+
+                async with self._db_factory() as db:
+                    capability_summary = await generate_capability_summary(db, workspace_id)
+            except Exception:
+                logger.debug("Failed to generate capability summary", exc_info=True)
+
         context_block = await self._assemble_context(
             agent_name, message, user_id=user_id, workspace_id=workspace_id
         )
-        system_blocks = self._build_system_prompt(agent, context_block)
+        system_blocks = self._build_system_prompt(
+            agent, context_block, capability_summary=capability_summary
+        )
 
         text = ""
         async for evt in agent_loop(

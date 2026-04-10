@@ -162,3 +162,44 @@ class TestPublicOrchestratorMethods:
         assert health["circuit_breaker_open"] is False
         assert health["background_tasks"] == 0
         assert "agents" in health
+
+
+class TestPlannerSystemPrompt:
+    """Planner gets capability summary, not JARVIS_DECISION_FRAMEWORK."""
+
+    def test_build_system_prompt_planner_with_cap_summary(self):
+        orch = _make_orchestrator()
+        from src.orchestrator.agents import AGENTS
+
+        planner = AGENTS["planner"]
+        blocks = orch._build_system_prompt(
+            planner,
+            context="",
+            capability_summary=(
+                "<connected_services>\n  Email: search, read\n</connected_services>"
+            ),
+        )
+        prompt_text = blocks[0]["text"]
+        assert "Email: search, read" in prompt_text
+        assert "decision_framework" not in prompt_text.lower()
+
+    def test_build_system_prompt_non_planner_ignores_cap_summary(self):
+        orch = _make_orchestrator()
+        from src.orchestrator.agents import AGENTS
+
+        presenter = AGENTS["presenter"]
+        blocks = orch._build_system_prompt(
+            presenter, context="", capability_summary="should not appear"
+        )
+        prompt_text = blocks[0]["text"]
+        assert "should not appear" not in prompt_text
+
+    def test_build_system_prompt_planner_without_cap_summary(self):
+        orch = _make_orchestrator()
+        from src.orchestrator.agents import AGENTS
+
+        planner = AGENTS["planner"]
+        blocks = orch._build_system_prompt(planner, context="")
+        prompt_text = blocks[0]["text"]
+        # Raw placeholder should remain when no summary provided
+        assert "{capability_summary}" in prompt_text
