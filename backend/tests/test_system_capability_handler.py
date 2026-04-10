@@ -1,0 +1,164 @@
+"""Tests for _handle_system_capability and public orchestrator methods."""
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from src.orchestrator.contracts import PlanOutput, PlanStep
+
+
+def _make_orchestrator():
+    """Create a minimal JarvisOrchestrator with mocked deps."""
+    from src.orchestrator.jarvis import JarvisOrchestrator
+
+    settings = MagicMock()
+    settings.use_bedrock = False
+    settings.daily_token_budget_usd = 10.0
+    settings.redis_url = "redis://localhost:6379"
+    db_factory = MagicMock()
+    services = MagicMock()
+    services.memory_service = AsyncMock()
+    services.memory_service.store_goal_memory = AsyncMock(return_value="mem_test123")
+    services.memory_service.store_instruction_memory = AsyncMock(return_value="mem_instr456")
+    services.memory_service.store_briefing_memory = AsyncMock(return_value="mem_brief789")
+    services.redis = None
+
+    with patch("src.orchestrator.jarvis.get_anthropic_client"):
+        orch = JarvisOrchestrator(settings=settings, db_factory=db_factory, services=services)
+    return orch
+
+
+class TestHandleSystemCapability:
+    """system.* capability steps route to the correct direct handler."""
+
+    @pytest.mark.asyncio
+    async def test_system_set_goal(self):
+        orch = _make_orchestrator()
+        step = PlanStep(
+            step_id="s1",
+            description="Set goal: launch by April",
+            capability="system.set_goal",
+            input={},
+        )
+        plan = PlanOutput(
+            goal="Launch product by April",
+            reasoning="User wants to set a goal",
+            priority="high",
+            steps=[step],
+        )
+        result = await orch._handle_system_capability(step, plan, "usr_1", "ws_1")
+        assert result["status"] == "created"
+        assert result["memory_id"] == "mem_test123"
+        orch._services.memory_service.store_goal_memory.assert_called_once_with(
+            user_id="usr_1",
+            workspace_id="ws_1",
+            title="Set goal: launch by April",
+            priority="high",
+        )
+
+    @pytest.mark.asyncio
+    async def test_system_set_instruction(self):
+        orch = _make_orchestrator()
+        step = PlanStep(
+            step_id="s1",
+            description="Summarize email every morning",
+            capability="system.set_instruction",
+            input={
+                "instruction": {
+                    "instruction_text": "Summarize email every morning",
+                    "instruction_type": "schedule",
+                }
+            },
+        )
+        plan = PlanOutput(goal="Set recurring instruction", steps=[step])
+        result = await orch._handle_system_capability(step, plan, "usr_1", "ws_1")
+        assert result["status"] == "created"
+        assert result["memory_id"] == "mem_instr456"
+
+    @pytest.mark.asyncio
+    async def test_system_add_to_brief(self):
+        orch = _make_orchestrator()
+        step = PlanStep(
+            step_id="s1",
+            description="Add investor update to briefing",
+            capability="system.add_to_brief",
+            input={},
+        )
+        plan = PlanOutput(goal="Add to briefing", steps=[step])
+        result = await orch._handle_system_capability(step, plan, "usr_1", "ws_1")
+        assert result["status"] == "stored"
+        assert result["memory_id"] == "mem_brief789"
+
+    @pytest.mark.asyncio
+    async def test_system_schedule_reminder(self):
+        orch = _make_orchestrator()
+        # Mock DB for schedule creation
+        mock_db = AsyncMock()
+        mock_db.commit = AsyncMock()
+        mock_db.add = MagicMock()
+        ctx = AsyncMock()
+        ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        orch._db_factory = MagicMock(return_value=ctx)
+
+        step = PlanStep(
+            step_id="s1",
+            description="Remind me to call John at 3pm",
+            capability="system.schedule_reminder",
+            input={"cron_expr": "0 15 * * *"},
+        )
+        plan = PlanOutput(goal="Schedule reminder", priority="medium", steps=[step])
+        result = await orch._handle_system_capability(step, plan, "usr_1", "ws_1")
+        assert result["status"] == "created"
+        assert "schedule_id" in result
+
+    @pytest.mark.asyncio
+    async def test_system_respond_returns_empty(self):
+        orch = _make_orchestrator()
+        step = PlanStep(step_id="s1", description="Respond", capability="system.respond")
+        plan = PlanOutput(goal="Respond", steps=[step])
+        result = await orch._handle_system_capability(step, plan, "usr_1", "ws_1")
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_unknown_system_capability_returns_empty(self):
+        orch = _make_orchestrator()
+        step = PlanStep(step_id="s1", description="?", capability="system.unknown_thing")
+        plan = PlanOutput(goal="?", steps=[step])
+        result = await orch._handle_system_capability(step, plan, "usr_1", "ws_1")
+        assert result == {}
+
+
+class TestPublicOrchestratorMethods:
+    """get_budget_status() and get_system_health() — public API for Telegram."""
+
+    @pytest.mark.asyncio
+    async def test_get_budget_status(self):
+        orch = _make_orchestrator()
+        mock_status = MagicMock()
+        mock_status.daily_spend_usd = 1.5
+        mock_status.daily_limit_usd = 10.0
+        orch._budget = MagicMock()
+        orch._budget.get_budget_status = AsyncMock(return_value=mock_status)
+
+        mock_db = AsyncMock()
+        ctx = AsyncMock()
+        ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        orch._db_factory = MagicMock(return_value=ctx)
+
+        status = await orch.get_budget_status()
+        assert status.daily_spend_usd == 1.5
+        assert status.daily_limit_usd == 10.0
+
+    @pytest.mark.asyncio
+    async def test_get_system_health(self):
+        orch = _make_orchestrator()
+        orch._circuit_breaker = MagicMock()
+        orch._circuit_breaker.is_open = MagicMock(return_value=False)
+        orch._background_tasks = set()
+
+        health = await orch.get_system_health()
+        assert health["circuit_breaker_open"] is False
+        assert health["background_tasks"] == 0
+        assert "agents" in health

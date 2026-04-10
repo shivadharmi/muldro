@@ -27,7 +27,7 @@ from src.orchestrator.agent_loop import (
 )
 from src.orchestrator.agents import AGENTS, SubAgent
 from src.orchestrator.budget import BudgetTracker
-from src.orchestrator.contracts import PlannerOutput
+from src.orchestrator.contracts import PlannerOutput, PlanOutput, PlanStep
 from src.orchestrator.intent_classifier import (
     FAST_INTENTS,
     INTENT_CONFIDENCE_THRESHOLD,
@@ -245,6 +245,23 @@ class JarvisOrchestrator:
         if self._background_tasks:
             logger.info("Awaiting %d background tasks", len(self._background_tasks))
             await asyncio.wait(self._background_tasks, timeout=5.0)
+
+    async def get_budget_status(self):
+        """Public accessor for budget status — replaces private _budget access."""
+        async with self._db_factory() as db:
+            return await self._budget.get_budget_status(db)
+
+    async def get_system_health(self) -> dict:
+        """Public accessor for system health — replaces private attribute access."""
+        return {
+            "circuit_breaker_open": (
+                self._circuit_breaker.is_open()
+                if hasattr(self._circuit_breaker, "is_open")
+                else False
+            ),
+            "background_tasks": len(self._background_tasks),
+            "agents": sorted(self._agents.keys()),
+        }
 
     async def load_agents_from_db(self) -> None:
         """Load agent definitions from the database, replacing hardcoded defaults."""
@@ -2492,6 +2509,72 @@ class JarvisOrchestrator:
         except Exception as e:
             logger.warning("Failed to store briefing item: %s", e)
             return {"status": "error", "error": str(e)}
+
+    async def _handle_system_capability(
+        self,
+        step: PlanStep,
+        plan: PlanOutput,
+        user_id: str,
+        workspace_id: str,
+    ) -> dict:
+        """Route system.* capability steps to direct handlers.
+
+        Bridges PlanStep data to the existing handlers which accept
+        PlannerOutput. Full handler rewrite is deferred to Spec 1B-iii.
+        """
+        from src.orchestrator.contracts import InstructionSpec, PlannerTask
+
+        cap = step.capability
+
+        if cap in ("system.respond", "system.acknowledge"):
+            return {}
+
+        known_system_caps = {
+            "system.set_goal",
+            "system.set_instruction",
+            "system.schedule_reminder",
+            "system.add_to_brief",
+        }
+        if cap not in known_system_caps:
+            logger.warning("Unknown system capability: %s", cap)
+            return {}
+
+        # Build a bridge PlannerOutput for legacy handlers
+        bridge = PlannerOutput(
+            decision=cap.removeprefix("system."),
+            goal=step.description or plan.goal,
+            reasoning=plan.reasoning,
+            priority=plan.priority,
+        )
+
+        # Transfer instruction spec from step input if present
+        if step.input.get("instruction"):
+            try:
+                bridge = bridge.model_copy(
+                    update={"instruction": InstructionSpec(**step.input["instruction"])}
+                )
+            except Exception:
+                logger.debug("Failed to parse instruction from step input", exc_info=True)
+
+        # Transfer tasks from step input if present (for schedule_reminder)
+        if step.input.get("tasks"):
+            try:
+                bridge = bridge.model_copy(
+                    update={"tasks": [PlannerTask(**t) for t in step.input["tasks"]]}
+                )
+            except Exception:
+                logger.debug("Failed to parse tasks from step input", exc_info=True)
+
+        if cap == "system.set_goal":
+            return await self._handle_set_goal(bridge, user_id, workspace_id)
+        elif cap == "system.set_instruction":
+            return await self._handle_set_instruction(bridge, user_id, workspace_id)
+        elif cap == "system.schedule_reminder":
+            return await self._handle_schedule_reminder(bridge, user_id, workspace_id)
+        elif cap == "system.add_to_brief":
+            return await self._handle_add_to_brief(bridge, user_id, workspace_id)
+
+        return {}  # unreachable due to early guard, but satisfies type checker
 
     async def _call_agent(
         self,
