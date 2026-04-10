@@ -34,7 +34,6 @@ from src.orchestrator.intent_classifier import (
     classify_intent,
     extract_decision,
     extract_plan,
-    intent_to_decision,
     intent_to_plan,
 )
 from src.orchestrator.prompts import JARVIS_SOUL_CORE
@@ -958,14 +957,15 @@ class JarvisOrchestrator:
         context: dict | None = None,
         conversation_id: str | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
-        """Stream events while processing a user message through the orchestrator.
+        """Stream events while processing a user message.
 
-        Yields SSE-compatible dicts with event types:
-          agent_start, thinking, tool_call, tool_result, agent_done,
-          response, error, done
+        Yields SSE-compatible dicts. Uses capability-based plan step routing.
         """
         if not user_id or not workspace_id:
-            yield {"event": "error", "message": "user_id and workspace_id are required"}
+            yield {
+                "event": "error",
+                "message": "user_id and workspace_id are required",
+            }
             return
         if not message or not message.strip():
             yield {"event": "error", "message": "Empty message"}
@@ -975,57 +975,58 @@ class JarvisOrchestrator:
         run_id: str | None = None
 
         def _fire_event(event_type: str, **kwargs: Any) -> None:
-            """Schedule a runtime event emission without blocking the SSE generator."""
             self._spawn_background(self._emit_runtime_event(event_type, **kwargs))
 
         try:
             yield {"event": "trace", "trace_id": trace.trace_id}
 
-            # Emit command_received runtime event (fire-and-forget)
             _fire_event(
                 "command_received",
                 workspace_id=workspace_id,
                 user_id=user_id,
-                payload={"surface": surface, "message_preview": message[:100]},
+                payload={
+                    "surface": surface,
+                    "message_preview": message[:100],
+                },
             )
 
-            # Load conversation history for multi-turn context
             history_block = await self._load_conversation_history(conversation_id)
 
-            # Step 0: Fast intent classification (Haiku — <200ms)
+            # Step 0: Fast intent classification
             intent, confidence, sources = await classify_intent(
                 self._client, self._haiku_model, message, history_block
             )
-            yield {"event": "intent", "intent": intent, "confidence": confidence}
+            yield {
+                "event": "intent",
+                "intent": intent,
+                "confidence": confidence,
+            }
 
-            # Bump perception for relevant sources (fire-and-forget)
             if sources:
                 await self._bump_perception_for_sources(sources, user_id, workspace_id)
 
             # Decide routing based on intent AND mode
-            # execute mode: always plan, then auto-execute
-            # plan mode: always plan, but stop before execution
-            # ask mode: use intent classification (current default)
-            if mode == "execute":
-                use_planner = True
-            elif mode == "plan":
+            if mode in ("execute", "plan"):
                 use_planner = True
             else:
                 use_planner = intent not in FAST_INTENTS or confidence < INTENT_CONFIDENCE_THRESHOLD
 
-            # Emit route_selected runtime event (fire-and-forget)
             _fire_event(
                 "route_selected",
                 workspace_id=workspace_id,
                 user_id=user_id,
-                payload={"intent": intent, "confidence": confidence, "use_planner": use_planner},
+                payload={
+                    "intent": intent,
+                    "confidence": confidence,
+                    "use_planner": use_planner,
+                },
             )
 
-            decision: PlannerOutput
+            # Step 1: Generate PlanOutput
+            plan: PlanOutput
             plan_text = ""
 
             if use_planner:
-                # Full Planner path for commands/complex intents
                 planner_message = f"User message: {message}\n\nContext: {json.dumps(context or {})}"
                 if history_block:
                     planner_message = f"{history_block}\n\n{planner_message}"
@@ -1041,211 +1042,152 @@ class JarvisOrchestrator:
                     if evt.get("event") == "agent_done":
                         plan_text = evt.get("text", "")
 
-                decision = extract_decision(plan_text)
+                plan = extract_plan(plan_text)
             else:
-                # Fast path — synthesize a lightweight decision from intent
-                decision = intent_to_decision(intent, message)
+                capabilities = await self._get_available_capabilities(workspace_id)
+                plan = intent_to_plan(intent, message, capabilities)
 
             # Apply mode overrides
-            if mode == "execute" and decision.execution_mode != "auto_execute":
-                decision = decision.model_copy(update={"execution_mode": "auto_execute"})
-            elif mode == "plan" and decision.execution_mode != "draft_only":
-                decision = decision.model_copy(update={"execution_mode": "draft_only"})
+            if mode == "plan":
+                plan = plan.model_copy(update={"requires_user_input": True})
 
-            # Persist Plan record so Governor and Operator can reference it
-            if decision.tasks and not decision.plan_id:
+            # Persist Plan record if needed
+            if len(plan.steps) > 1 or any(s.risk not in ("none",) for s in plan.steps):
                 import hashlib
 
-                goal_hash = hashlib.sha256((decision.goal or "").encode()).hexdigest()[:16]
-                user_idem_key = f"user:{decision.decision}:{goal_hash}"
-                decision = await self._persist_plan_record(
-                    decision, user_id, workspace_id, idempotency_key=user_idem_key
+                goal_hash = hashlib.sha256((plan.goal or "").encode()).hexdigest()[:16]
+                plan = await self._persist_plan_record(
+                    plan,
+                    user_id,
+                    workspace_id,
+                    idempotency_key=f"user:{goal_hash}",
                 )
 
-            decision_dict = decision.model_dump(mode="json")
-            decision_json = json.dumps(decision_dict)
+            plan_dict = plan.model_dump(mode="json")
 
-            # Create a lightweight TaskRun for tracking
             run_id = await self._create_lightweight_run(
                 user_id=user_id,
                 workspace_id=workspace_id,
-                decision=decision,
+                plan=plan,
                 trace_id=trace.trace_id,
                 conversation_id=conversation_id,
             )
 
+            # Emit plan event (replaces old "decision" event)
             yield {
-                "event": "decision",
-                "decision": decision_dict,
+                "event": "plan",
+                "plan": plan_dict,
                 "run_id": run_id,
             }
 
-            # Emit plan_created runtime event (fire-and-forget)
             _fire_event(
                 "plan_created",
                 workspace_id=workspace_id,
                 user_id=user_id,
                 run_id=run_id,
-                payload={"decision": decision.decision, "trace_id": trace.trace_id},
+                payload={
+                    "goal": plan.goal,
+                    "trace_id": trace.trace_id,
+                },
             )
 
-            # Handle direct decisions (no agent pipeline needed)
-            if decision.decision == "set_goal":
-                await self._handle_set_goal(decision, user_id, workspace_id)
-            elif decision.decision == "set_instruction":
-                await self._handle_set_instruction(decision, user_id, workspace_id)
-            elif decision.decision == "schedule_reminder":
-                await self._handle_schedule_reminder(decision, user_id, workspace_id)
-            elif decision.decision == "add_to_brief":
-                await self._handle_add_to_brief(decision, user_id, workspace_id)
+            # Step 2: Pre-resolve routing and tools
+            step_routing: list[tuple[PlanStep, str, list[dict]]] = []
+            user_steps: list[PlanStep] = []
 
-            # Handle ignore decision — no response, no action
-            if decision.decision == "ignore":
-                yield {"event": "ignored", "decision": "ignore"}
-                return
-
-            # Step 2: Route based on intent
-            if use_planner:
-                # Planner path: resolve pipeline from DB routes
-                pipeline = await self._resolve_pipeline(decision_dict)
-
-                for step in pipeline:
-                    agent_name = step.get("agent", "")
-                    if not agent_name or agent_name not in self._agents:
+            async with self._db_factory() as db:
+                resolver = CapabilityResolver(db, workspace_id)
+                for step in plan.steps:
+                    if step.actor == "user":
+                        user_steps.append(step)
                         continue
+                    if step.capability.startswith("system."):
+                        step_routing.append((step, "", []))
+                    elif step.capability in ("reason", "respond"):
+                        step_routing.append((step, "presenter", []))
+                    else:
+                        agent_name = await route_step(step.capability, resolver)
+                        tools = await resolver.resolve_for_step(step.capability)
+                        step_routing.append((step, agent_name, tools))
 
-                    step_cond = step.get("condition")
-                    if step_cond and not self._check_step_condition(step_cond, decision_dict):
-                        continue
+            # Step 3: Execute steps with streaming
+            for step, agent_name, tools in step_routing:
+                if step.capability.startswith("system."):
+                    await self._handle_system_capability(step, plan, user_id, workspace_id)
+                    continue
 
-                    action = step.get("action")
-                    if action == "execute_plan":
-                        # Plan mode (draft_only): skip execution, just present the plan
-                        if decision.execution_mode == "draft_only":
-                            yield {
-                                "event": "plan_ready",
-                                "plan_id": decision.plan_id,
-                                "message": "Plan created. Review and approve to execute.",
-                            }
-                            continue
-                        if decision.plan_id:
-                            yield {
-                                "event": "execution_start",
-                                "plan_id": decision.plan_id,
-                            }
-                            exec_result = await self._execute_plan_via_graph(
-                                decision.plan_id, user_id, workspace_id, trace
-                            )
-                            yield {
-                                "event": "execution_result",
-                                "run_id": exec_result.get("run_id"),
-                                "status": exec_result.get("status"),
-                            }
-                        continue
+                # Plan mode: skip risky execution, present the plan
+                if mode == "plan" and step.risk in ("medium", "high"):
+                    yield {
+                        "event": "plan_ready",
+                        "plan_id": plan.plan_id,
+                        "message": ("Plan created. Review and approve to execute."),
+                    }
+                    continue
 
-                    template = step.get("message_template", "Process this: {decision_json}")
-                    agent_message = template.format(
-                        decision_json=decision_json,
-                        surface=surface,
-                        message=message,
-                    )
-
-                    async for evt in self._call_agent_stream(
-                        agent_name,
-                        message=agent_message,
-                        user_id=user_id,
-                        trace=trace,
-                        workspace_id=workspace_id,
-                    ):
-                        yield evt
-
-            elif intent == "simple_question":
-                # Researcher gathers context, then Presenter responds
-                async for evt in self._call_agent_stream(
-                    "researcher",
-                    message=f"Research this question for the user: {message}",
-                    user_id=user_id,
-                    trace=trace,
-                    workspace_id=workspace_id,
-                ):
-                    yield evt
-                    if evt.get("event") == "agent_done":
-                        plan_text = f"Researcher findings:\n{evt.get('text', '')}"
-
-            elif intent == "data_fetch":
-                # Observer reads from external sources (Gmail, Calendar, Slack)
-                observer_text = ""
-                async for evt in self._call_agent_stream(
-                    "observer",
-                    message=(
-                        f"The user wants to check an external source. "
-                        f"Read the relevant data and report what you find.\n\n"
-                        f"User request: {message}"
-                    ),
-                    user_id=user_id,
-                    trace=trace,
-                    workspace_id=workspace_id,
-                ):
-                    yield evt
-                    if evt.get("event") == "agent_done":
-                        observer_text = evt.get("text", "")
-
-                # Feed observer results to presenter context
-                if observer_text:
-                    plan_text = f"Observer findings:\n{observer_text}"
-
-            elif intent == "status_query":
-                # Fetch status data via tools, then let Presenter format
-                pass  # Presenter will handle with context enrichment below
-
-            elif intent == "approval_response":
-                # Governor handles approval directly
-                async for evt in self._call_agent_stream(
-                    "governor",
-                    message=f"The user wants to approve/reject an action: {message}",
-                    user_id=user_id,
-                    trace=trace,
-                    workspace_id=workspace_id,
-                ):
-                    yield evt
-                    if evt.get("event") == "agent_done":
-                        plan_text = f"Governor response:\n{evt.get('text', '')}"
-
-            # Step 3: Presenter formats the response (always)
-            presenter_msg = (
-                f"Respond to the user ({surface}). Be conversational and helpful.\n\n"
-                f"User message: {message}\n"
-                f"Intent: {intent}\n"
-            )
-            if plan_text:
-                presenter_msg += (
-                    f"Planner decision: {decision_json}\nPlanner analysis: {plan_text[:2000]}\n"
+                agent_message = (
+                    f"Execute this step: {step.description}\n"
+                    f"Goal: {plan.goal}\n"
+                    f"User message: {message}"
                 )
-            if history_block:
-                presenter_msg = f"{history_block}\n\n{presenter_msg}"
+                if history_block:
+                    agent_message = f"{history_block}\n\n{agent_message}"
 
+                async for evt in self._call_agent_stream(
+                    agent_name,
+                    message=agent_message,
+                    user_id=user_id,
+                    trace=trace,
+                    workspace_id=workspace_id,
+                    tools_override=tools if tools else None,
+                ):
+                    yield evt
+
+            # Step 4: Presenter formatting (if no respond step)
+            has_presenter_step = any(
+                s.capability in ("reason", "respond") for s in plan.steps if s.actor == "jarvis"
+            )
             presenter_text = ""
-            async for evt in self._call_agent_stream(
-                "presenter",
-                message=presenter_msg,
-                user_id=user_id,
-                trace=trace,
-                workspace_id=workspace_id,
-            ):
-                yield evt
-                if evt.get("event") == "agent_done":
-                    presenter_text = evt.get("text", "")
-                    yield {"event": "response", "text": presenter_text}
+            if not has_presenter_step:
+                presenter_msg = (
+                    f"Respond to the user ({surface}). "
+                    f"Be conversational and helpful.\n\n"
+                    f"User message: {message}\n"
+                    f"Intent: {intent}\n"
+                )
+                if plan_text:
+                    presenter_msg += (
+                        f"Plan: {json.dumps(plan_dict)}\nAnalysis: {plan_text[:2000]}\n"
+                    )
+                if history_block:
+                    presenter_msg = f"{history_block}\n\n{presenter_msg}"
 
-            # Persona learning — only for meaningful interactions
+                async for evt in self._call_agent_stream(
+                    "presenter",
+                    message=presenter_msg,
+                    user_id=user_id,
+                    trace=trace,
+                    workspace_id=workspace_id,
+                ):
+                    yield evt
+                    if evt.get("event") == "agent_done":
+                        presenter_text = evt.get("text", "")
+                        yield {
+                            "event": "response",
+                            "text": presenter_text,
+                        }
+
+            # Persona learning (meaningful intents only)
             if intent in ("command", "complex"):
                 try:
                     await self._call_agent(
                         "persona",
-                        message=f"Observe this user interaction on {surface}:\n"
-                        f"User said: {message}\n"
-                        f"Decision: {decision.decision}\n"
-                        f"Extract any preference signals.",
+                        message=(
+                            f"Observe this user interaction on {surface}:\n"
+                            f"User said: {message}\n"
+                            f"Plan goal: {plan.goal}\n"
+                            f"Extract any preference signals."
+                        ),
                         user_id=user_id,
                         trace=trace,
                         workspace_id=workspace_id,
@@ -1253,11 +1195,14 @@ class JarvisOrchestrator:
                 except Exception:
                     pass
 
-            # Complete the lightweight run
+            # Complete lightweight run
             if run_id:
                 await self._complete_lightweight_run(
                     run_id,
-                    {"decision": decision.decision, "summary": presenter_text},
+                    {
+                        "plan": plan.goal,
+                        "summary": presenter_text,
+                    },
                     success=True,
                 )
                 _fire_event(
@@ -1268,20 +1213,29 @@ class JarvisOrchestrator:
                     payload={"trace_id": trace.trace_id},
                 )
 
-            # Push surface to workspace via Redis + persist to DB.
-            # The chat page receives it via WebSocket; workspace page via REST polling.
-            # SSE delivery removed to avoid duplicates (WS is the canonical path).
-            self._spawn_background(
-                self._push_workspace_surface(
-                    decision,
-                    user_id,
-                    workspace_id,
-                    run_id,
-                    response_text=presenter_text,
+            # Push workspace surface (fire-and-forget, wrapped — still
+            # expects PlannerOutput; Task 7 fixes this properly)
+            try:
+                self._spawn_background(
+                    self._push_workspace_surface(
+                        plan,
+                        user_id,
+                        workspace_id,
+                        run_id,
+                        response_text=presenter_text,
+                    )
                 )
-            )
+            except Exception:
+                logger.debug(
+                    "Surface push skipped (PlanOutput not yet supported)",
+                    exc_info=True,
+                )
 
-            yield {"event": "done", "trace_id": trace.trace_id, "run_id": run_id}
+            yield {
+                "event": "done",
+                "trace_id": trace.trace_id,
+                "run_id": run_id,
+            }
 
         except Exception as e:
             logger.error("process_message_stream failed: %s", e, exc_info=True)
@@ -1297,7 +1251,9 @@ class JarvisOrchestrator:
             yield {"event": "error", "message": str(e)}
         finally:
             await self._trace_manager.finish_trace(
-                trace.trace_id, user_id=user_id, workspace_id=workspace_id
+                trace.trace_id,
+                user_id=user_id,
+                workspace_id=workspace_id,
             )
 
     async def _call_agent_stream(

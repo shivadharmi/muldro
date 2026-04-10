@@ -162,3 +162,67 @@ class TestProcessMessageRouting:
         # Result should contain "plan" key (not "decision" key from old routing)
         assert "plan" in result
         assert "error" not in result
+
+
+class TestProcessMessageStreamRouting:
+    """process_message_stream() uses PlanOutput capability-based routing."""
+
+    @pytest.mark.asyncio
+    @patch("src.orchestrator.jarvis.classify_intent")
+    async def test_stream_fast_path_emits_plan_event(self, mock_classify):
+        mock_classify.return_value = ("greeting", 0.99, [])
+        orch = _make_orchestrator()
+
+        async def mock_call_agent_stream(agent_name, **kwargs):
+            yield {"event": "agent_start", "agent": agent_name, "model": "sonnet"}
+            yield {"event": "agent_done", "agent": agent_name, "text": "Hi!"}
+
+        orch._call_agent_stream = mock_call_agent_stream
+        orch._call_agent = AsyncMock(return_value="")
+        orch._create_lightweight_run = AsyncMock(return_value="run_1")
+        orch._complete_lightweight_run = AsyncMock()
+        orch._push_workspace_surface = AsyncMock()
+        orch._spawn_background = MagicMock()
+        orch._emit_runtime_event = AsyncMock()
+        orch._load_conversation_history = AsyncMock(return_value="")
+        orch._get_available_capabilities = AsyncMock(return_value=[])
+
+        events = []
+        async for evt in orch.process_message_stream(
+            message="Hi", user_id="usr_1", workspace_id="ws_1"
+        ):
+            events.append(evt)
+
+        event_types = [e.get("event") for e in events]
+        assert "plan" in event_types
+        assert "done" in event_types
+        # Should NOT have old "decision" event
+        assert "decision" not in event_types
+
+    @pytest.mark.asyncio
+    @patch("src.orchestrator.jarvis.classify_intent")
+    async def test_stream_does_not_call_resolve_pipeline(self, mock_classify):
+        mock_classify.return_value = ("greeting", 0.99, [])
+        orch = _make_orchestrator()
+        orch._resolve_pipeline = AsyncMock(side_effect=AssertionError("Should not be called"))
+
+        async def mock_call_agent_stream(agent_name, **kwargs):
+            yield {"event": "agent_done", "agent": agent_name, "text": "Hi!"}
+
+        orch._call_agent_stream = mock_call_agent_stream
+        orch._call_agent = AsyncMock(return_value="")
+        orch._create_lightweight_run = AsyncMock(return_value="run_1")
+        orch._complete_lightweight_run = AsyncMock()
+        orch._push_workspace_surface = AsyncMock()
+        orch._spawn_background = MagicMock()
+        orch._emit_runtime_event = AsyncMock()
+        orch._load_conversation_history = AsyncMock(return_value="")
+        orch._get_available_capabilities = AsyncMock(return_value=[])
+
+        events = []
+        async for evt in orch.process_message_stream(
+            message="Hi", user_id="usr_1", workspace_id="ws_1"
+        ):
+            events.append(evt)
+        error_events = [e for e in events if e.get("event") == "error"]
+        assert len(error_events) == 0
