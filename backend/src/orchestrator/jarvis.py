@@ -90,6 +90,77 @@ CONTEXT_ENRICHED_AGENTS = {
 # Intent classification constants imported from intent_classifier module
 
 
+def _derive_surface_kind(plan: "PlanOutput") -> tuple[str, str] | None:
+    """Derive workspace surface kind from PlanOutput step capabilities.
+
+    Returns (kind, default_title) or None if the plan is chat-only.
+    """
+    if not plan.steps:
+        return None
+
+    caps = {s.capability for s in plan.steps if s.actor == "jarvis"}
+
+    # Respond/reason only -> no surface (chat-only)
+    if caps <= {"reason", "respond", "none"}:
+        return None
+
+    # System capabilities with visual value
+    if "system.add_to_brief" in caps:
+        return ("briefing", "Briefing Update")
+    if "system.schedule_reminder" in caps:
+        return ("alert", "Reminder Scheduled")
+
+    # Write actions -> plan surface
+    if any(s.risk in ("medium", "high") for s in plan.steps):
+        return ("plan", "New Plan")
+
+    # Multi-step -> plan surface
+    jarvis_steps = [s for s in plan.steps if s.actor == "jarvis"]
+    if len(jarvis_steps) > 2:
+        return ("plan", plan.goal[:80] or "Plan")
+
+    # Single/dual read -> summary
+    return ("summary", "Summary")
+
+
+def _build_surface_preview_from_plan(
+    plan: "PlanOutput",
+    kind: str,
+    default_title: str,
+    response_text: str,
+):
+    """Build a SurfacePreview from a PlanOutput for workspace grid cards."""
+    from src.ui.contracts import SurfaceMetric, SurfacePreview
+
+    title = plan.goal[:80] if plan.goal else default_title
+    subtitle = plan.reasoning[:120] if plan.reasoning else None
+    metrics: list[SurfaceMetric] = []
+    tags: list[str] = []
+
+    if kind == "plan":
+        step_count = len([s for s in plan.steps if s.actor == "jarvis"])
+        if step_count:
+            metrics.append(SurfaceMetric(label="Steps", value=str(step_count)))
+        metrics.append(SurfaceMetric(label="Priority", value=plan.priority))
+    elif kind == "summary":
+        tags.append("read")
+    elif kind == "briefing":
+        tags.append("briefing")
+    elif kind == "alert":
+        tags.append("reminder")
+
+    return SurfacePreview(
+        title=title,
+        subtitle=subtitle,
+        status=None,
+        priority=plan.priority if plan.priority != "medium" else None,
+        metrics=metrics,
+        entities=[],
+        progress=None,
+        tags=tags,
+    )
+
+
 def _build_surface_preview(
     decision: PlannerOutput,
     kind: str,
@@ -907,21 +978,14 @@ class JarvisOrchestrator:
                     payload={"trace_id": trace.trace_id},
                 )
 
-            # Push surface to workspace (wrapped — _push_workspace_surface
-            # still expects PlannerOutput; Task 7 fixes this properly)
-            try:
-                await self._push_workspace_surface(
-                    plan,
-                    user_id,
-                    workspace_id,
-                    run_id,
-                    response_text=result.get("presentation", result.get("presenter", "")),
-                )
-            except Exception:
-                logger.debug(
-                    "Surface push skipped (PlanOutput not yet supported)",
-                    exc_info=True,
-                )
+            # Push surface to workspace
+            await self._push_workspace_surface(
+                plan,
+                user_id,
+                workspace_id,
+                run_id,
+                response_text=result.get("presentation", result.get("presenter", "")),
+            )
 
             return result
 
@@ -1213,23 +1277,16 @@ class JarvisOrchestrator:
                     payload={"trace_id": trace.trace_id},
                 )
 
-            # Push workspace surface (fire-and-forget, wrapped — still
-            # expects PlannerOutput; Task 7 fixes this properly)
-            try:
-                self._spawn_background(
-                    self._push_workspace_surface(
-                        plan,
-                        user_id,
-                        workspace_id,
-                        run_id,
-                        response_text=presenter_text,
-                    )
+            # Push workspace surface (fire-and-forget)
+            self._spawn_background(
+                self._push_workspace_surface(
+                    plan,
+                    user_id,
+                    workspace_id,
+                    run_id,
+                    response_text=presenter_text,
                 )
-            except Exception:
-                logger.debug(
-                    "Surface push skipped (PlanOutput not yet supported)",
-                    exc_info=True,
-                )
+            )
 
             yield {
                 "event": "done",
@@ -1823,10 +1880,15 @@ class JarvisOrchestrator:
                         workspace_id=workspace_id,
                     )
                 await self._push_workspace_surface(
-                    PlannerOutput(
-                        decision="add_to_brief",
+                    PlanOutput(
                         goal="Daily Briefing",
                         reasoning=str(result)[:200],
+                        steps=[
+                            PlanStep(
+                                description="Briefing update",
+                                capability="system.add_to_brief",
+                            )
+                        ],
                     ),
                     user_id=user_id,
                     workspace_id=workspace_id,
@@ -1913,7 +1975,7 @@ class JarvisOrchestrator:
 
     async def _push_workspace_surface(
         self,
-        decision: PlannerOutput,
+        plan: "PlanOutput",
         user_id: str,
         workspace_id: str,
         run_id: str | None = None,
@@ -1921,28 +1983,15 @@ class JarvisOrchestrator:
     ) -> None:
         """Push a typed surface to the workspace via Redis Pub/Sub.
 
-        Uses the two-layer model: SurfacePreview (grid card) + DetailConfig
-        (modal tabs). Only pushes for decision types that have visual value
-        beyond the chat response — 5 chat-only decisions are filtered out.
+        Derives surface kind from plan step capabilities.
+        Only pushes for plans with visual value beyond the chat response.
         """
         from datetime import datetime, timedelta, timezone
 
         from src.orchestrator.contracts import WorkspaceSurfacePush
         from src.ui.renderer import build_detail_config
 
-        # 9 decisions that produce workspace surfaces; 5 chat-only excluded
-        surface_kind_map: dict[str, tuple[str, str]] = {
-            "create_task": ("plan", "New Plan"),
-            "draft_reply": ("recommendation", "Draft Reply"),
-            "recommend": ("recommendation", "Recommendation"),
-            "summarize": ("summary", "Summary"),
-            "research": ("summary", "Research Results"),
-            "read_source": ("summary", "Source Summary"),
-            "observe": ("summary", "Observation"),
-            "add_to_brief": ("briefing", "Briefing Update"),
-            "schedule_reminder": ("alert", "Reminder Scheduled"),
-        }
-        mapping = surface_kind_map.get(decision.decision)
+        mapping = _derive_surface_kind(plan)
         if not mapping:
             return
 
@@ -1956,22 +2005,27 @@ class JarvisOrchestrator:
             from ulid import ULID
 
             surface_id = f"surf_{ULID()}"
-            preview = _build_surface_preview(decision, kind, default_title, response_text)
+            preview = _build_surface_preview_from_plan(plan, kind, default_title, response_text)
             detail_config = build_detail_config(kind, surface_id)
 
             surface = WorkspaceSurfacePush(
                 id=surface_id,
                 kind=kind,
                 preview=preview.model_dump(mode="json"),
-                detail_config=detail_config.model_dump(mode="json") if detail_config else None,
-                decision=decision.decision,
+                detail_config=(detail_config.model_dump(mode="json") if detail_config else None),
+                decision=None,
                 source_run_id=run_id,
                 response_preview=(response_text[:300] if response_text else None),
                 created_at=datetime.now(timezone.utc).isoformat(),
             )
 
             channel = f"jarvis:a2ui:{user_id}"
-            ws_msg = json.dumps({"type": "surface", "surface": surface.model_dump(mode="json")})
+            ws_msg = json.dumps(
+                {
+                    "type": "surface",
+                    "surface": surface.model_dump(mode="json"),
+                }
+            )
             await event_bus.publish_to_channel(channel, ws_msg)
 
             # Persist to ui_surfaces table so the workspace survives page refresh
@@ -1995,7 +2049,10 @@ class JarvisOrchestrator:
                     )
                     await db.commit()
             except Exception:
-                logger.debug("Failed to persist workspace surface to DB", exc_info=True)
+                logger.debug(
+                    "Failed to persist workspace surface to DB",
+                    exc_info=True,
+                )
         except Exception:
             logger.warning("Failed to push workspace surface", exc_info=True)
 
