@@ -165,11 +165,7 @@ class TelegramInterface:
     async def _handle_status(self, update, context) -> None:
         """Handle /status command — show system status."""
         try:
-            db = self._orchestrator._db_factory()
-            try:
-                budget = await self._orchestrator._budget.get_budget_status(db)
-            finally:
-                await db.close()
+            budget = await self._orchestrator.get_budget_status()
 
             surfaces = []
             if self._surface_registry:
