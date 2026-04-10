@@ -12,72 +12,6 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class PlannerTask(BaseModel):
-    """A single task within a planner output."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    task_type: str
-    input_data: dict[str, Any] = Field(default_factory=dict)
-
-
-class PlannerOutput(BaseModel):
-    """Validated planner decision — replaces raw JSON dict from Claude.
-
-    Sources of truth for decision types:
-    - Planner prompt (prompts.py): ignore, acknowledge, summarize, ask_user,
-      recommend, create_task, draft_reply, schedule_reminder
-    - Route resolver (route_resolver.py): research, observe, remember,
-      watcher_create, goal_update
-    - Orchestrator direct handling: answer_directly, search_memory, add_to_brief
-
-    Add new decision types here FIRST, then to the planner prompt and routes.
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    decision: Literal[
-        "acknowledge",
-        "answer_directly",
-        "create_task",
-        "draft_reply",
-        "search_memory",
-        "add_to_brief",
-        "ignore",
-        "watcher_create",
-        "goal_update",
-        "research",
-        "observe",
-        "read_source",
-        "remember",
-        "ask_user",
-        "recommend",
-        "summarize",
-        "schedule_reminder",
-        "set_goal",
-        "set_instruction",
-    ] = "acknowledge"
-    goal: str = ""
-    reasoning: str = ""
-    priority: Literal["low", "medium", "high", "critical"] = "medium"
-    risk_level: Literal["none", "low", "medium", "high"] = "low"
-    execution_mode: Literal["auto_execute", "approval_required", "draft_only"] = "approval_required"
-    plan_id: str | None = None
-    tasks: list[PlannerTask] = Field(default_factory=list)
-    instruction: InstructionSpec | None = None
-
-
-class InstructionSpec(BaseModel):
-    """Specification for a user instruction (trigger, schedule, or preference)."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    instruction_text: str
-    instruction_type: Literal["trigger", "schedule", "preference"] = "preference"
-    trigger_conditions: dict[str, Any] | None = None
-    schedule_config: dict[str, Any] | None = None
-
-
 class AgentEnvelope(BaseModel):
     """Input envelope for a sub-agent call."""
 
@@ -225,20 +159,6 @@ class DomainEvent(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
     trace_id: str | None = None
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-
-class ExecutionPlan(BaseModel):
-    """Structured plan DTO bridging Planner -> Governor."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    plan_id: str
-    goal: str
-    tasks: list[PlannerTask] = Field(default_factory=list)
-    risk_level: Literal["none", "low", "medium", "high"] = "low"
-    execution_mode: Literal["auto_execute", "approval_required", "draft_only"] = "approval_required"
-    priority: Literal["low", "medium", "high", "critical"] = "medium"
-    reasoning_summary: str = ""
 
 
 class PerceptionDecision(BaseModel):
