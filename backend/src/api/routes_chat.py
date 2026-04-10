@@ -19,7 +19,7 @@ from src.orchestrator.contracts import (
     MessageAgentStep,
     MessageMetadata,
     MessageToolCall,
-    PlannerOutput,
+    PlanOutput,
 )
 
 logger = logging.getLogger(__name__)
@@ -153,7 +153,7 @@ async def chat_stream(
 
     final_response_text = ""
     final_trace_id = None
-    final_decision: PlannerOutput | None = None
+    final_decision: PlanOutput | None = None
     agent_steps: list[MessageAgentStep] = []
 
     async def event_generator():
@@ -187,10 +187,10 @@ async def chat_stream(
                     final_response_text = event.get("text", "")
                 if event_type == "trace":
                     final_trace_id = event.get("trace_id")
-                if event_type == "decision":
-                    raw = event.get("decision")
+                if event_type == "plan":
+                    raw = event.get("plan")
                     if isinstance(raw, dict):
-                        final_decision = PlannerOutput.model_validate(raw)
+                        final_decision = PlanOutput.model_validate(raw)
 
                 # Collect agent step data using Pydantic models
                 if event_type == "agent_start":

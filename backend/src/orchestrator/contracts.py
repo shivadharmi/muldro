@@ -211,7 +211,7 @@ class MessageMetadata(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     trace_id: str | None = None
-    decision: PlannerOutput | None = None
+    decision: PlanOutput | None = None
     agent_steps: list[MessageAgentStep] = Field(default_factory=list)
 
 
