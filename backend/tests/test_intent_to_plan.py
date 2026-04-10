@@ -223,3 +223,20 @@ class TestIntentToPlan:
     def test_data_fetch_risk_is_none(self):
         result = intent_to_plan("data_fetch", "Show calendar", self.CAPS)
         assert result.steps[0].risk == "none"
+
+
+# ── Test old functions removed ─────────────────────────────────────
+
+
+class TestOldFunctionsRemoved:
+    """intent_to_decision and extract_decision are deleted."""
+
+    def test_intent_to_decision_not_available(self):
+        from src.orchestrator import intent_classifier
+
+        assert not hasattr(intent_classifier, "intent_to_decision")
+
+    def test_extract_decision_not_available(self):
+        from src.orchestrator import intent_classifier
+
+        assert not hasattr(intent_classifier, "extract_decision")

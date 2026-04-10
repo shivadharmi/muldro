@@ -32,7 +32,6 @@ from src.orchestrator.intent_classifier import (
     FAST_INTENTS,
     INTENT_CONFIDENCE_THRESHOLD,
     classify_intent,
-    extract_decision,
     extract_plan,
     intent_to_plan,
 )
@@ -1449,7 +1448,7 @@ class JarvisOrchestrator:
                 workspace_id=workspace_id,
             )
             # Queue any actionable plans from the synthesis
-            decision = await self._queue_perception_plan(
+            plan = await self._queue_perception_plan(
                 planner_result,
                 "synthesis",
                 user_id,
@@ -1458,7 +1457,7 @@ class JarvisOrchestrator:
             )
             return {
                 "status": "completed",
-                "decision": decision.decision if decision else "none",
+                "plan_goal": plan.goal if plan else None,
             }
         except Exception as e:
             logger.warning("Cross-source synthesis failed: %s", e, exc_info=True)
@@ -1594,8 +1593,8 @@ class JarvisOrchestrator:
                 planner_result, source, user_id, workspace_id, len(raw_events)
             )
 
-            # Step 5: Extract decision and queue execution if actionable
-            perception_decision = await self._queue_perception_plan(
+            # Step 5: Extract plan and queue execution if actionable
+            perception_plan = await self._queue_perception_plan(
                 planner_result,
                 source,
                 user_id,
@@ -1611,7 +1610,7 @@ class JarvisOrchestrator:
                     "source": source,
                     "trace_id": trace.trace_id,
                     "event_count": len(raw_events),
-                    "decision": perception_decision.decision if perception_decision else None,
+                    "plan_goal": perception_plan.goal if perception_plan else None,
                 },
                 trace_id=trace.trace_id,
             )
@@ -1623,8 +1622,8 @@ class JarvisOrchestrator:
                 "events": len(raw_events),
                 "librarian": librarian_result,
                 "planner": planner_result,
-                "decision": perception_decision.decision if perception_decision else None,
-                "plan_id": perception_decision.plan_id if perception_decision else None,
+                "plan_goal": perception_plan.goal if perception_plan else None,
+                "plan_id": perception_plan.plan_id if perception_plan else None,
             }
 
         except Exception as e:
@@ -2243,26 +2242,6 @@ class JarvisOrchestrator:
         except Exception:
             logger.debug("Failed to apply perception policy", exc_info=True)
 
-    # Decisions from perception that should trigger execution or inline handling
-    PERCEPTION_ACTIONABLE_DECISIONS = {
-        "create_task",
-        "draft_reply",
-        "research",
-        "watcher_create",
-        "schedule_reminder",
-        "set_goal",
-        "set_instruction",
-        "add_to_brief",
-    }
-
-    # Subset handled inline (fast, no pipeline needed)
-    _PERCEPTION_INLINE_DECISIONS = {
-        "schedule_reminder",
-        "set_goal",
-        "set_instruction",
-        "add_to_brief",
-    }
-
     async def _queue_perception_plan(
         self,
         planner_result: str,
@@ -2270,83 +2249,91 @@ class JarvisOrchestrator:
         user_id: str,
         workspace_id: str,
         trace_id: str,
-    ) -> PlannerOutput | None:
-        """Extract a structured decision from the Planner's perception response
+    ) -> PlanOutput | None:
+        """Extract a structured plan from the Planner's perception response
         and queue actionable plans for background execution.
 
-        Lightweight decisions (set_goal, schedule_reminder, etc.) are handled
-        inline.  Heavier decisions with tasks (create_task, draft_reply) are
-        persisted as Plan + background TaskRun so the scheduler's
-        _tick_background_tasks() picks them up on the next 30s tick.
-
-        Returns the extracted PlannerOutput, or None if no action was needed.
+        System capability steps are handled inline. Steps with write
+        capabilities are persisted as Plan + background TaskRun.
         """
         import hashlib
 
-        decision = extract_decision(planner_result)
+        plan = extract_plan(planner_result)
 
-        if decision.decision not in self.PERCEPTION_ACTIONABLE_DECISIONS:
+        # Check if any steps are actionable
+        has_system_caps = any(
+            s.capability.startswith("system.") for s in plan.steps if s.actor == "jarvis"
+        )
+        has_write_steps = any(s.risk not in ("none",) for s in plan.steps if s.actor == "jarvis")
+        has_tool_steps = any(
+            not s.capability.startswith("system.")
+            and s.capability not in ("reason", "respond", "none")
+            for s in plan.steps
+            if s.actor == "jarvis"
+        )
+
+        if not has_system_caps and not has_write_steps and not has_tool_steps:
             logger.debug(
-                "Perception decision '%s' from %s — no action needed",
-                decision.decision,
+                "Perception plan from %s — no actionable steps",
                 source,
             )
-            return decision
+            return plan
 
-        # Handle lightweight decisions inline (fast, no pipeline)
-        if decision.decision in self._PERCEPTION_INLINE_DECISIONS:
-            try:
-                if decision.decision == "set_goal":
-                    await self._handle_set_goal(decision, user_id, workspace_id)
-                elif decision.decision == "set_instruction":
-                    await self._handle_set_instruction(decision, user_id, workspace_id)
-                elif decision.decision == "schedule_reminder":
-                    await self._handle_schedule_reminder(decision, user_id, workspace_id)
-                elif decision.decision == "add_to_brief":
-                    await self._handle_add_to_brief(decision, user_id, workspace_id)
-                logger.info(
-                    "Perception inline handler: %s from %s",
-                    decision.decision,
-                    source,
-                )
-            except Exception:
-                logger.warning(
-                    "Perception inline handler failed: %s",
-                    decision.decision,
-                    exc_info=True,
-                )
-            return decision
+        # Handle system capability steps inline
+        inline_caps = {
+            "system.set_goal",
+            "system.set_instruction",
+            "system.schedule_reminder",
+            "system.add_to_brief",
+        }
+        for step in plan.steps:
+            if step.capability in inline_caps:
+                try:
+                    await self._handle_system_capability(step, plan, user_id, workspace_id)
+                    logger.info(
+                        "Perception inline handler: %s from %s",
+                        step.capability,
+                        source,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Perception inline handler failed: %s",
+                        step.capability,
+                        exc_info=True,
+                    )
 
-        # For decisions with tasks, persist plan and queue for background execution
-        if not decision.tasks:
-            logger.debug(
-                "Perception decision '%s' from %s has no tasks — skipping",
-                decision.decision,
-                source,
-            )
-            return decision
+        # For steps requiring tool execution, persist and queue
+        tool_steps = [
+            s
+            for s in plan.steps
+            if s.actor == "jarvis"
+            and not s.capability.startswith("system.")
+            and s.capability not in ("reason", "respond", "none")
+        ]
+        if not tool_steps:
+            return plan
 
-        # Compute idempotency key to prevent duplicate plans from re-observed events
-        goal_hash = hashlib.sha256((decision.goal or "").encode()).hexdigest()[:16]
-        idempotency_key = f"perception:{source}:{decision.decision}:{goal_hash}"
+        # Compute idempotency key
+        goal_hash = hashlib.sha256((plan.goal or "").encode()).hexdigest()[:16]
+        idempotency_key = f"perception:{source}:{goal_hash}"
 
         # Persist Plan + PlanTasks
-        decision = await self._persist_plan_record(
-            decision,
+        plan = await self._persist_plan_record(
+            plan,
             user_id,
             workspace_id,
             trigger_type="perception",
             idempotency_key=idempotency_key,
         )
 
-        if not decision.plan_id:
+        if not plan.plan_id:
             logger.debug(
                 "Plan not persisted (idempotent skip or error) for %s",
                 source,
             )
-            return decision
+            return plan
 
-        # Create a background TaskRun with steps for the scheduler to execute
+        # Create a background TaskRun for the scheduler
         try:
             async with self._db_factory() as db:
                 from src.services.graph_executor import create_graph_executor
@@ -2357,7 +2344,7 @@ class JarvisOrchestrator:
                     workspace_id=workspace_id,
                 )
                 run = await executor.create_run(
-                    plan_id=decision.plan_id,
+                    plan_id=plan.plan_id,
                     user_id=user_id,
                     workspace_id=workspace_id,
                     source="background",
@@ -2365,20 +2352,19 @@ class JarvisOrchestrator:
                 await db.commit()
 
                 logger.info(
-                    "Perception queued plan %s → run %s (%d tasks) from %s",
-                    decision.plan_id,
+                    "Perception queued plan %s → run %s from %s",
+                    plan.plan_id,
                     run.run_id,
-                    len(decision.tasks),
                     source,
                 )
         except Exception:
             logger.warning(
                 "Failed to create background run for perception plan %s",
-                decision.plan_id,
+                plan.plan_id,
                 exc_info=True,
             )
 
-        return decision
+        return plan
 
     async def _bump_perception_for_sources(
         self, sources: list[str], user_id: str, workspace_id: str

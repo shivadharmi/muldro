@@ -6,10 +6,9 @@ Extracted from jarvis.py to reduce orchestrator size.
 
 import json
 import logging
-from typing import Any
 
 from src.llm_utils import parse_llm_json
-from src.orchestrator.contracts import PlannerOutput, PlanOutput, PlanStep
+from src.orchestrator.contracts import PlanOutput, PlanStep
 
 logger = logging.getLogger(__name__)
 
@@ -186,8 +185,7 @@ def intent_to_plan(intent: str, message: str, capabilities: list[str]) -> PlanOu
     """Generate a lightweight PlanOutput from fast intent classification.
 
     Maps each fast intent to a minimal plan with the appropriate
-    capability step. Coexists with ``intent_to_decision()`` until
-    Spec 1B-ii switches the routing.
+    capability step.
     """
     goal = message[:200]
 
@@ -314,48 +312,3 @@ async def classify_intent(
         logger.warning("Intent classification failed, defaulting to command: %s", e)
 
     return "command", 0.5, []
-
-
-def intent_to_decision(intent: str, message: str) -> PlannerOutput:
-    """Synthesize a lightweight PlannerOutput from a fast intent classification."""
-    intent_map = {
-        "greeting": "acknowledge",
-        "chitchat": "acknowledge",
-        "simple_question": "answer_directly",
-        "data_fetch": "read_source",
-        "status_query": "answer_directly",
-        "approval_response": "acknowledge",
-    }
-    return PlannerOutput(
-        decision=intent_map.get(intent, "acknowledge"),
-        reasoning=f"Fast-classified as {intent}",
-        priority="low" if intent in ("greeting", "chitchat") else "medium",
-        risk_level="none" if intent in ("greeting", "chitchat") else "low",
-        execution_mode="auto_execute",
-        goal=message[:200],
-    )
-
-
-def extract_decision(response_text: str) -> PlannerOutput:
-    """Extract and validate structured decision from planner response."""
-    raw: dict[str, Any] = {}
-    try:
-        if "{" in response_text:
-            start = response_text.index("{")
-            depth = 0
-            for i, ch in enumerate(response_text[start:], start):
-                if ch == "{":
-                    depth += 1
-                elif ch == "}":
-                    depth -= 1
-                    if depth == 0:
-                        json_str = response_text[start : i + 1]
-                        raw = json.loads(json_str)
-                        break
-    except (json.JSONDecodeError, ValueError):
-        pass
-
-    if not raw:
-        raw = {"decision": "acknowledge", "reasoning": response_text[:500]}
-
-    return PlannerOutput.model_validate(raw)

@@ -424,23 +424,26 @@ class TestOrchestrator:
         assert result["trace_id"].startswith("trace_")
 
     @patch("src.orchestrator.jarvis.get_anthropic_client")
-    async def test_extract_decision_from_json(self, mock_get_client):
-        from src.orchestrator.intent_classifier import extract_decision
+    async def test_extract_plan_from_json(self, mock_get_client):
+        from src.orchestrator.intent_classifier import extract_plan
 
-        # Test JSON extraction — returns PlannerOutput
-        text = 'Here is my analysis:\n{"decision": "create_task", "priority": "high"}\nDone.'
-        result = extract_decision(text)
-        assert result.decision == "create_task"
+        # Test JSON extraction — returns PlanOutput
+        text = (
+            "Here is my analysis:\n"
+            '{"goal": "Create task", "steps": [{"description": "Do it", '
+            '"capability": "respond"}], "priority": "high"}\nDone.'
+        )
+        result = extract_plan(text)
+        assert result.goal == "Create task"
         assert result.priority == "high"
 
     @patch("src.orchestrator.jarvis.get_anthropic_client")
-    async def test_extract_decision_fallback(self, mock_get_client):
-        from src.orchestrator.intent_classifier import extract_decision
+    async def test_extract_plan_fallback(self, mock_get_client):
+        from src.orchestrator.intent_classifier import extract_plan
 
-        # No JSON in response — fallback to PlannerOutput defaults
-        result = extract_decision("Just some plain text response")
-        assert result.decision == "acknowledge"
-        assert result.reasoning == "Just some plain text response"[:500]
+        # No JSON in response — fallback to PlanOutput defaults
+        result = extract_plan("Just some plain text response")
+        assert result.steps[0].capability == "respond"
 
 
 # ── Recovery Tests ───────────────────────────────────────────────────────
