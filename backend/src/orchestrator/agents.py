@@ -30,7 +30,6 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "email.search",
         "calendar.list",
         "calendar.get",
-        "calendar.read",
         "doc.drive_list",
         "doc.drive_search",
         "doc.get",
@@ -80,7 +79,7 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "internal.get_goals",
         "internal.search",
         "internal.store_memory",
-        "internal.discover_capabilities",
+        "system.discovery",
     },
     "governor": {
         "internal.evaluate_policy",

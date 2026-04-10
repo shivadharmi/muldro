@@ -64,17 +64,14 @@ class TestPlannerPromptV2:
         formatted = PLANNER_PROMPT_V2.format(capability_summary="<test>email: search, read</test>")
         assert "<test>email: search, read</test>" in formatted
 
-    def test_not_in_agent_prompts(self):
-        """V2 prompt should NOT be wired into AGENT_PROMPTS yet (that's 1B-ii)."""
+    def test_is_active_in_agent_prompts(self):
+        """V2 prompt is now wired into AGENT_PROMPTS (1B-ii switchover complete)."""
         from src.orchestrator.prompts import AGENT_PROMPTS
 
-        for name, prompt in AGENT_PROMPTS.items():
-            assert prompt != PLANNER_PROMPT_V2, (
-                f"PLANNER_PROMPT_V2 should not be in AGENT_PROMPTS['{name}'] yet"
-            )
+        assert AGENT_PROMPTS["planner"] == PLANNER_PROMPT_V2
 
     def test_old_planner_prompt_still_exists(self):
-        """The existing PLANNER_PROMPT must be untouched."""
+        """The existing PLANNER_PROMPT is kept for reference."""
         from src.orchestrator.prompts import PLANNER_PROMPT
 
         assert "decision" in PLANNER_PROMPT
@@ -144,19 +141,20 @@ class TestPerceiverPrompt:
         assert "knowledge" in prompt_lower or "memor" in prompt_lower
 
     def test_old_observer_prompt_still_exists(self):
-        """The existing OBSERVER_PROMPT must be untouched."""
+        """The existing OBSERVER_PROMPT is kept for reference."""
         from src.orchestrator.prompts import OBSERVER_PROMPT
 
         assert "Observer" in OBSERVER_PROMPT
 
     def test_old_researcher_prompt_still_exists(self):
-        """The existing RESEARCHER_PROMPT must be untouched."""
+        """The existing RESEARCHER_PROMPT is kept for reference."""
         from src.orchestrator.prompts import RESEARCHER_PROMPT
 
         assert "Researcher" in RESEARCHER_PROMPT
 
-    def test_not_in_agent_prompts(self):
-        """PERCEIVER_PROMPT should NOT be in AGENT_PROMPTS yet (that's 1B-ii)."""
-        from src.orchestrator.prompts import AGENT_PROMPTS
+    def test_is_active_in_agent_prompts(self):
+        """PERCEIVER_PROMPT is now wired into AGENT_PROMPTS (1B-ii switchover complete)."""
+        from src.orchestrator.prompts import AGENT_PROMPTS, PERCEIVER_PROMPT
 
-        assert "perceiver" not in AGENT_PROMPTS
+        assert "perceiver" in AGENT_PROMPTS
+        assert AGENT_PROMPTS["perceiver"] == PERCEIVER_PROMPT

@@ -75,16 +75,16 @@ class TestCapabilityMappings:
 # ── Agent capability scope tests ───────────────────────────────────────────
 
 
-class TestResearcherAgentScope:
-    """Verify the Researcher agent can use web search and browser tools."""
+class TestPerceiverAgentScope:
+    """Verify the Perceiver agent can use web search and browser tools."""
 
     @pytest.mark.asyncio
-    async def test_researcher_can_use_web_search(self):
+    async def test_perceiver_can_use_web_search(self):
         from unittest.mock import AsyncMock, MagicMock, patch
 
         from src.orchestrator.agents import AGENTS
 
-        researcher = AGENTS["researcher"]
+        perceiver = AGENTS["perceiver"]
         mock_db = AsyncMock()
 
         with patch("src.services.tool_registry.ToolRegistry") as mock_reg_cls:
@@ -95,15 +95,15 @@ class TestResearcherAgentScope:
             mock_reg.get_tool = AsyncMock(return_value=tool)
             mock_reg_cls.return_value = mock_reg
 
-            assert await researcher.can_use_tool("web_search", mock_db)
+            assert await perceiver.can_use_tool("web_search", mock_db)
 
     @pytest.mark.asyncio
-    async def test_researcher_can_use_browser_navigate(self):
+    async def test_perceiver_can_use_browser_navigate(self):
         from unittest.mock import AsyncMock, MagicMock, patch
 
         from src.orchestrator.agents import AGENTS
 
-        researcher = AGENTS["researcher"]
+        perceiver = AGENTS["perceiver"]
         mock_db = AsyncMock()
 
         with patch("src.services.tool_registry.ToolRegistry") as mock_reg_cls:
@@ -114,15 +114,15 @@ class TestResearcherAgentScope:
             mock_reg.get_tool = AsyncMock(return_value=tool)
             mock_reg_cls.return_value = mock_reg
 
-            assert await researcher.can_use_tool("browser_navigate", mock_db)
+            assert await perceiver.can_use_tool("browser_navigate", mock_db)
 
     @pytest.mark.asyncio
-    async def test_researcher_can_use_browser_snapshot(self):
+    async def test_perceiver_can_use_browser_snapshot(self):
         from unittest.mock import AsyncMock, MagicMock, patch
 
         from src.orchestrator.agents import AGENTS
 
-        researcher = AGENTS["researcher"]
+        perceiver = AGENTS["perceiver"]
         mock_db = AsyncMock()
 
         with patch("src.services.tool_registry.ToolRegistry") as mock_reg_cls:
@@ -133,15 +133,15 @@ class TestResearcherAgentScope:
             mock_reg.get_tool = AsyncMock(return_value=tool)
             mock_reg_cls.return_value = mock_reg
 
-            assert await researcher.can_use_tool("browser_snapshot", mock_db)
+            assert await perceiver.can_use_tool("browser_snapshot", mock_db)
 
     @pytest.mark.asyncio
-    async def test_researcher_can_use_browser_screenshot(self):
+    async def test_perceiver_can_use_browser_screenshot(self):
         from unittest.mock import AsyncMock, MagicMock, patch
 
         from src.orchestrator.agents import AGENTS
 
-        researcher = AGENTS["researcher"]
+        perceiver = AGENTS["perceiver"]
         mock_db = AsyncMock()
 
         with patch("src.services.tool_registry.ToolRegistry") as mock_reg_cls:
@@ -152,16 +152,16 @@ class TestResearcherAgentScope:
             mock_reg.get_tool = AsyncMock(return_value=tool)
             mock_reg_cls.return_value = mock_reg
 
-            assert await researcher.can_use_tool("browser_screenshot", mock_db)
+            assert await perceiver.can_use_tool("browser_screenshot", mock_db)
 
     @pytest.mark.asyncio
-    async def test_researcher_cannot_use_browser_submit(self):
-        """Researcher is read-only — no write-capable browser tools."""
+    async def test_perceiver_cannot_use_browser_submit(self):
+        """Perceiver is read-only — no write-capable browser tools."""
         from unittest.mock import AsyncMock, MagicMock, patch
 
         from src.orchestrator.agents import AGENTS
 
-        researcher = AGENTS["researcher"]
+        perceiver = AGENTS["perceiver"]
         mock_db = AsyncMock()
 
         with patch("src.services.tool_registry.ToolRegistry") as mock_reg_cls:
@@ -172,7 +172,7 @@ class TestResearcherAgentScope:
             mock_reg.get_tool = AsyncMock(return_value=tool)
             mock_reg_cls.return_value = mock_reg
 
-            assert not await researcher.can_use_tool("browser_file_upload", mock_db)
+            assert not await perceiver.can_use_tool("browser_file_upload", mock_db)
 
 
 # ── web_search function tests ─────────────────────────────────────────────

@@ -196,13 +196,12 @@ class TestAgents:
         from src.orchestrator.agents import AGENTS
 
         expected = {
-            "observer",
+            "perceiver",
             "librarian",
             "planner",
             "governor",
             "operator",
             "presenter",
-            "researcher",
             "persona",
         }
         assert set(AGENTS.keys()) == expected
@@ -252,24 +251,24 @@ class TestAgents:
             )
             mock_reg_cls.return_value = mock_reg
 
-            # Observer can ingest events but not send email
-            assert await AGENTS["observer"].can_use_tool("ingest_event", mock_db) is True
-            assert await AGENTS["observer"].can_use_tool("gmail_send", mock_db) is False
+            # Perceiver can ingest events but not send email
+            assert await AGENTS["perceiver"].can_use_tool("ingest_event", mock_db) is True
+            assert await AGENTS["perceiver"].can_use_tool("gmail_send", mock_db) is False
 
             # Operator can send email but not plan
             assert await AGENTS["operator"].can_use_tool("gmail_send", mock_db) is True
             assert await AGENTS["operator"].can_use_tool("get_active_plans", mock_db) is False
 
-            # Researcher is read-only (no write tools)
-            assert await AGENTS["researcher"].can_use_tool("search", mock_db) is True
-            assert await AGENTS["researcher"].can_use_tool("gmail_send", mock_db) is False
-            assert await AGENTS["researcher"].can_use_tool("slack_post_message", mock_db) is False
+            # Perceiver can search but not write (read-only)
+            assert await AGENTS["perceiver"].can_use_tool("search", mock_db) is True
+            assert await AGENTS["perceiver"].can_use_tool("gmail_send", mock_db) is False
+            assert await AGENTS["perceiver"].can_use_tool("slack_post_message", mock_db) is False
 
     def test_planner_has_higher_max_tokens(self):
         from src.orchestrator.agents import AGENTS
 
         assert AGENTS["planner"].max_tokens == 8192
-        assert AGENTS["observer"].max_tokens == 4096
+        assert AGENTS["perceiver"].max_tokens == 4096
 
     def test_governor_has_low_temperature(self):
         from src.orchestrator.agents import AGENTS
@@ -332,13 +331,12 @@ class TestPrompts:
         from src.orchestrator.prompts import AGENT_PROMPTS
 
         expected = {
-            "observer",
+            "perceiver",
             "librarian",
             "planner",
             "governor",
             "operator",
             "presenter",
-            "researcher",
             "persona",
         }
         assert set(AGENT_PROMPTS.keys()) == expected

@@ -37,16 +37,16 @@ def mock_db():
 
 
 @pytest.mark.asyncio
-async def test_seed_defaults_creates_eight_agents(mock_db):
-    """seed_defaults should create 8 agents when table is empty."""
+async def test_seed_defaults_creates_seven_agents(mock_db):
+    """seed_defaults should create 7 agents when table is empty."""
     # No existing agents
     mock_db.execute = AsyncMock(return_value=FakeResult(rows=[]))
 
     registry = AgentRegistry(mock_db)
     count = await registry.seed_defaults()
 
-    assert count == 8
-    assert mock_db.add.call_count == 8
+    assert count == 7
+    assert mock_db.add.call_count == 7
 
     # Verify agent names match AGENT_PROMPTS
     added_names = set()
@@ -65,7 +65,7 @@ async def test_seed_defaults_skips_existing(mock_db):
     """seed_defaults should skip agents that already exist (with matching scope/prompt)."""
     # Simulate 5 existing agents with correct scope/prompt — no updates needed
     existing_agents = []
-    for name in ["observer", "librarian", "planner", "governor", "operator"]:
+    for name in ["perceiver", "librarian", "planner", "governor", "operator"]:
         agent = MagicMock(spec=Agent)
         agent.name = name
         agent.capability_scope = sorted(AGENT_CAPABILITY_SCOPES.get(name, set()))
@@ -77,8 +77,8 @@ async def test_seed_defaults_skips_existing(mock_db):
     registry = AgentRegistry(mock_db)
     count = await registry.seed_defaults()
 
-    # Should only create the 3 missing: presenter, researcher, persona
-    assert count == 3
+    # Should only create the 2 missing: presenter, persona
+    assert count == 2
 
 
 @pytest.mark.asyncio
