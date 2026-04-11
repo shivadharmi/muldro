@@ -240,6 +240,7 @@ class WorkspaceSurfacePush(BaseModel):
         "table",
         "recommendation",
         "activity",
+        "proactive_insight",
     ]
     preview: Any  # SurfacePreview — imported at runtime to avoid circular deps
     detail_config: Any | None = None  # DetailConfig — same reason
@@ -248,6 +249,31 @@ class WorkspaceSurfacePush(BaseModel):
     response_preview: str | None = None
     created_at: str = ""
     ttl_hours: int = 24
+
+
+class SuggestedActionRef(BaseModel):
+    """Reference to a suggested action stored in the surface payload."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    description: str
+    capability: str
+    action_input: dict[str, Any] = Field(default_factory=dict)
+
+
+class InsightSurfaceData(BaseModel):
+    """Data payload for proactive_insight surfaces, stored in UISurface.payload."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    signal_source: str
+    signal_category: str = ""
+    signal_summary: str
+    relevance_score: float = 0.0
+    relevance_reasoning: str = ""
+    related_goals: list[str] = Field(default_factory=list)
+    suggested_actions: list[SuggestedActionRef] = Field(default_factory=list)
+    dismiss_available: bool = True
 
 
 # ── Execution surface update contracts ────────────────────────────

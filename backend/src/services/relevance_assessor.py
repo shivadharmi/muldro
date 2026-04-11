@@ -102,6 +102,7 @@ async def assess_relevance(
     user_context: UserContext,
     client: Any,
     model: str = "claude-haiku-4-5-20251001",
+    engagement_context: str = "",
 ) -> RelevanceAssessment:
     """Call Haiku to assess signal relevance. Returns silent assessment on failure."""
     try:
@@ -113,6 +114,8 @@ async def assess_relevance(
             event_type=signal.event_type,
             summary=signal.summary,
         )
+        if engagement_context:
+            prompt += f"\n\nEngagement history:\n{engagement_context}"
         response = await client.messages.create(
             model=model,
             max_tokens=512,
