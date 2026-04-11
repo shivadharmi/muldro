@@ -98,6 +98,7 @@ export const useActivityStore = create<ActivityState>((set, get) => ({
       "artifact_created", "surface_created",
       "agent_started", "agent_completed",
       "run_completed", "run_failed", "run_cancelled",
+      "auto_execute_notify",
     ];
 
     for (const type of runtimeTypes) {
