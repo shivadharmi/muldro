@@ -276,6 +276,60 @@ async def _handle_orchestrator_action(user_id: str, action: str, payload: dict, 
         return {"status": "error", "error": str(e)}
 
 
+async def _handle_edit_before_approve(user_id: str, payload: dict, app) -> dict:
+    """Handle edit-before-approve action via the REST edit endpoint."""
+    return await _process_edit_approval_ws(user_id, payload, app)
+
+
+async def _process_edit_approval_ws(user_id: str, payload: dict, app) -> dict:
+    """Bridge WS edit action to the REST edit_approval endpoint.
+
+    Resolves workspace_id and DB session manually (no FastAPI DI available
+    in the WebSocket action path), then delegates to the same edit_approval
+    function that powers the REST API.
+    """
+    from fastapi import HTTPException
+
+    from src.api.deps import resolve_workspace_id
+    from src.models.database import get_session_factory
+
+    approval_id = payload.get("approval_id", "")
+
+    async with get_session_factory()() as db:
+        try:
+            workspace_id = await resolve_workspace_id(db, user_id)
+        except Exception as e:
+            logger.warning("ws_edit_approval_workspace_resolve_failed: %s", e)
+            return {"status": "error", "error": "Could not resolve workspace"}
+
+        try:
+            from src.api.routes_approvals import ApprovalEditRequest, edit_approval
+
+            req = ApprovalEditRequest(
+                title=payload.get("title"),
+                summary=payload.get("summary"),
+                risk_level=payload.get("risk_level"),
+            )
+            result = await edit_approval(
+                approval_id=approval_id,
+                req=req,
+                user_id=user_id,
+                workspace_id=workspace_id,
+                db=db,
+            )
+            return {
+                "status": "success",
+                "approval_id": result.approval_id,
+                "title": result.title,
+                "summary": result.summary,
+            }
+        except HTTPException as e:
+            return {"status": "error", "error": e.detail}
+        except Exception as e:
+            logger.error("ws_edit_approval_failed: %s", e, exc_info=True)
+            return {"status": "error", "error": str(e)}
+
+
 async def _handle_execute_insight(user_id: str, payload: dict, app) -> dict:
     """Handle insight action execution — transitions insight to execution surface.
 
@@ -361,6 +415,7 @@ async def _handle_execute_insight(user_id: str, payload: dict, app) -> dict:
 ACTION_HANDLERS: dict[str, object] = {
     "approve": _handle_approve,
     "reject": _handle_reject,
+    "edit_before_approve": _handle_edit_before_approve,
     "execute_insight": _handle_execute_insight,
 }
 
