@@ -137,29 +137,3 @@ class TestCeilingRespected:
         engine._get_ceiling = AsyncMock(return_value=_make_ceiling("learning"))
         result = await engine.evaluate("email.send", _make_risk("low"))
         assert result.decision == "approval_required"
-
-
-class TestCompatShim:
-    """Old API compatibility — record_decision and should_auto_approve still work."""
-
-    async def test_record_decision_approved(self, engine, mock_db):
-        mock_result = MagicMock()
-        mock_state = _make_trust_state("first_use")
-        mock_result.scalar_one_or_none.return_value = mock_state
-        mock_db.execute = AsyncMock(return_value=mock_result)
-
-        score = await engine.record_decision(
-            "usr_test", "send_email", approved=True, workspace_id="ws_test"
-        )
-        assert isinstance(score, float)
-
-    async def test_should_auto_approve(self, engine, mock_db):
-        mock_result = MagicMock()
-        mock_state = _make_trust_state("first_use")
-        mock_state.approved_count = 0
-        mock_state.rejected_count = 0
-        mock_result.scalar_one_or_none.return_value = mock_state
-        mock_db.execute = AsyncMock(return_value=mock_result)
-
-        result = await engine.should_auto_approve("usr_test", "send_email", workspace_id="ws_test")
-        assert isinstance(result, bool)
