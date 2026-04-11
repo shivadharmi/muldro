@@ -8,11 +8,15 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.briefings import Briefing
+
+if TYPE_CHECKING:
+    from src.services.tri_search import TriSearchService
 
 logger = logging.getLogger(__name__)
 
@@ -20,9 +24,17 @@ logger = logging.getLogger(__name__)
 class BriefingReadModel:
     """Read model for briefing list/detail with evidence and actions."""
 
-    def __init__(self, db: AsyncSession, workspace_id: str):
+    def __init__(
+        self,
+        db: AsyncSession,
+        workspace_id: str,
+        tri_search: TriSearchService | None = None,
+        user_id: str = "",
+    ):
         self._db = db
         self._workspace_id = workspace_id
+        self._tri_search = tri_search
+        self._user_id = user_id
 
     async def list_briefings(
         self,
@@ -124,12 +136,42 @@ class BriefingReadModel:
         return result.scalar_one_or_none() is not None
 
     async def _get_related_items(self, briefing: Briefing) -> list[dict]:
-        """Find items related to this briefing (runs, approvals, goals)."""
+        """Find items related to this briefing via vector similarity.
+
+        Falls back to timestamp proximity if TriSearch is unavailable.
+        """
         items: list[dict] = []
 
+        # Prefer semantic search for evidence linking (Issue #26)
+        if self._tri_search and briefing.headline:
+            try:
+                results = await self._tri_search.search(
+                    query=briefing.headline,
+                    user_id=self._user_id,
+                    workspace_id=self._workspace_id,
+                    db=self._db,
+                    types=["event", "memory", "conversation"],
+                    limit=10,
+                )
+                for r in results:
+                    items.append(
+                        {
+                            "item_type": r.get("result_type", "unknown"),
+                            "item_id": r.get("id", ""),
+                            "title": r.get("title", ""),
+                            "score": r.get("final_score", 0.0),
+                        }
+                    )
+                return items
+            except Exception:
+                logger.debug(
+                    "TriSearch evidence linking failed, falling back",
+                    exc_info=True,
+                )
+
+        # Fallback: timestamp proximity
         from src.models.task_graph import TaskRun
 
-        # Find runs created around the same time as the briefing
         if briefing.created_at:
             result = await self._db.execute(
                 select(TaskRun)

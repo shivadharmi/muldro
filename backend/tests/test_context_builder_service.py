@@ -247,3 +247,66 @@ class TestBuildHandlesServiceFailures:
         assert pack.goals == []
         assert pack.recent_events == []
         assert pack.artifacts == []
+
+
+class TestBriefingEvidenceSemantic:
+    @pytest.mark.asyncio
+    async def test_related_items_uses_tri_search(self):
+        """_get_related_items should use TriSearch vector similarity."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from src.services.briefing_read_model import BriefingReadModel
+
+        mock_db = AsyncMock()
+        mock_tri_search = AsyncMock()
+        mock_tri_search.search = AsyncMock(
+            return_value=[
+                {
+                    "id": "mem_1",
+                    "title": "Related memory",
+                    "result_type": "memory",
+                    "final_score": 0.85,
+                    "text": "Some evidence",
+                },
+                {
+                    "id": "evt_2",
+                    "title": "Related event",
+                    "result_type": "event",
+                    "final_score": 0.72,
+                    "text": "An event",
+                },
+            ]
+        )
+
+        brm = BriefingReadModel(mock_db, "ws_1", tri_search=mock_tri_search, user_id="usr_1")
+
+        mock_briefing = MagicMock()
+        mock_briefing.headline = "Q1 Revenue Update"
+        mock_briefing.briefing_id = "brn_001"
+        mock_briefing.created_at = None
+
+        items = await brm._get_related_items(mock_briefing)
+
+        mock_tri_search.search.assert_called_once()
+        assert len(items) >= 2
+        assert any(i["item_id"] == "mem_1" for i in items)
+        assert any(i["item_id"] == "evt_2" for i in items)
+
+    @pytest.mark.asyncio
+    async def test_related_items_falls_back_without_tri_search(self):
+        """Without TriSearch, falls back to timestamp proximity."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from src.services.briefing_read_model import BriefingReadModel
+
+        mock_db = AsyncMock()
+        # No TriSearch provided
+        brm = BriefingReadModel(mock_db, "ws_1")
+
+        mock_briefing = MagicMock()
+        mock_briefing.headline = "Q1 Revenue Update"
+        mock_briefing.created_at = None
+
+        # Should not raise even without TriSearch
+        items = await brm._get_related_items(mock_briefing)
+        assert isinstance(items, list)
