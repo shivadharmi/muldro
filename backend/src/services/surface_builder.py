@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.approvals import Approval
 from src.models.briefings import Briefing
-from src.models.task_graph import TaskRun
+from src.models.task_graph import TaskRun, TaskStep
 from src.models.trust_state import TrustState
 from src.models.ui_state import UISurface
 from src.ui.contracts import SurfaceMetric, SurfacePreview
@@ -38,6 +38,7 @@ class SurfaceService:
         surfaces: list[dict[str, Any]] = []
 
         surfaces.extend(await self._build_approval_surfaces(user_id))
+        surfaces.extend(await self._build_active_execution_surfaces())
         surfaces.extend(await self._build_priority_surfaces())
 
         briefing = await self._build_briefing_surface(user_id)
@@ -233,6 +234,75 @@ class SurfaceService:
                         detail_config.model_dump(mode="json") if detail_config else None
                     ),
                     "created_at": run.created_at.isoformat() if run.created_at else None,
+                }
+            )
+
+        return surfaces
+
+    async def _build_active_execution_surfaces(self) -> list[dict[str, Any]]:
+        """Build surfaces for actively executing TaskRuns.
+
+        Includes runs with status in (running, paused). These appear
+        above completed surfaces in the workspace.
+        """
+        result = await self._db.execute(
+            select(TaskRun)
+            .where(
+                TaskRun.workspace_id == self._workspace_id,
+                TaskRun.status.in_(["running", "paused"]),
+                TaskRun.source != "user_message",
+            )
+            .order_by(TaskRun.started_at.desc())
+            .limit(5)
+        )
+        runs = result.scalars().all()
+        surfaces: list[dict[str, Any]] = []
+
+        for run in runs:
+            step_result = await self._db.execute(
+                select(TaskStep).where(TaskStep.run_id == run.run_id).order_by(TaskStep.created_at)
+            )
+            steps = list(step_result.scalars().all())
+            completed = sum(1 for s in steps if s.status == "completed")
+            total = len(steps)
+
+            current_step_name = None
+            for s in steps:
+                if s.status in ("running", "ready"):
+                    current_step_name = s.name or (s.input_data or {}).get("capability", "")
+                    break
+
+            surface_id = f"exec_{run.run_id}"
+            subtitle = f"Step {completed + 1}/{total}"
+            if current_step_name:
+                subtitle += f": {current_step_name}"
+
+            preview = SurfacePreview(
+                title="Executing plan",
+                subtitle=subtitle,
+                status="running",
+                progress=completed / total if total > 0 else 0.0,
+                metrics=[
+                    SurfaceMetric(
+                        label="Progress",
+                        value=f"{completed}/{total} steps",
+                    ),
+                ],
+            )
+            detail_config = build_detail_config("plan", surface_id)
+
+            surfaces.append(
+                {
+                    "id": surface_id,
+                    "kind": "plan",
+                    "preview": preview.model_dump(mode="json"),
+                    "detail_config": (
+                        detail_config.model_dump(mode="json") if detail_config else None
+                    ),
+                    "source_run_id": run.run_id,
+                    "created_at": (
+                        run.started_at.isoformat() if run.started_at else run.created_at.isoformat()
+                    ),
                 }
             )
 

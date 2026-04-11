@@ -14,7 +14,6 @@ from typing import Any
 from ulid import ULID
 
 from src.config.settings import Settings, get_anthropic_client
-from src.models.task_graph import TaskRun, TaskStep
 from src.orchestrator.agent_loop import (
     LoopAgentStart,
     LoopDone,
@@ -41,7 +40,6 @@ from src.orchestrator.tracing import TraceManager
 from src.services.agent_registry import AgentRegistry
 from src.services.capability_resolver import CapabilityResolver, route_step
 from src.services.context_builder import ContextBuilder, ContextPack
-from src.services.execution_state import transition_run, transition_step
 from src.services.trace_store import TraceStore
 from src.tools.schemas import build_tool_definitions
 
@@ -431,100 +429,56 @@ class JarvisOrchestrator:
             logger.warning("Failed to persist plan record", exc_info=True)
             return plan_output
 
-    async def _create_lightweight_run(
+    async def _log_interaction(
         self,
         user_id: str,
         workspace_id: str,
-        plan: PlanOutput,
         trace_id: str,
+        message_preview: str | None = None,
+        intent: str | None = None,
+        plan: "PlanOutput | None" = None,
         conversation_id: str | None = None,
+        response_preview: str | None = None,
+        run_id: str | None = None,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cost_usd: float = 0.0,
+        latency_ms: int = 0,
     ) -> str | None:
-        """Create a lightweight TaskRun for every user interaction.
+        """Create a lightweight InteractionLog record for auditing.
 
-        Even simple plans get a single-step run so ALL interactions are tracked
-        in the runs table.  This is for tracking, not execution.
-        Returns the run_id on success, None if DB unavailable.
+        Replaces _create_lightweight_run + _complete_lightweight_run.
+        Returns the interaction_id on success, None on failure.
         """
-        run_id = f"run_{ULID()}"
+        from src.models.interaction_log import InteractionLog
 
+        interaction_id = f"ilog_{ULID()}"
         try:
             async with self._db_factory() as db:
-                run = TaskRun(
-                    run_id=run_id,
-                    user_id=user_id,
-                    workspace_id=workspace_id,
-                    plan_id=plan.plan_id,
-                    status="running",
-                    source="user_message",
-                    execution_mode="auto_execute",
-                    policy_decision={"decision": "plan"},
-                    conversation_id=conversation_id,
-                    trace_id=trace_id,
-                    idempotency_key=(f"{plan.plan_id}:plan" if plan.plan_id else None),
+                db.add(
+                    InteractionLog(
+                        interaction_id=interaction_id,
+                        workspace_id=workspace_id,
+                        user_id=user_id,
+                        trace_id=trace_id,
+                        conversation_id=conversation_id,
+                        message_preview=(message_preview[:500] if message_preview else None),
+                        plan_summary=(plan.reasoning[:500] if plan and plan.reasoning else None),
+                        plan_id=plan.plan_id if plan else None,
+                        run_id=run_id,
+                        intent=intent,
+                        response_preview=(response_preview[:500] if response_preview else None),
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        cost_usd=cost_usd,
+                        latency_ms=latency_ms,
+                    )
                 )
-                db.add(run)
-
-                step = TaskStep(
-                    step_id=f"step_{ULID()}",
-                    run_id=run_id,
-                    workspace_id=workspace_id,
-                    task_id=f"task_{ULID()}",
-                    plan_task_id=None,
-                    step_type="plan",
-                    status="running",
-                    input_data=plan.model_dump(mode="json"),
-                )
-                db.add(step)
                 await db.commit()
         except Exception:
-            logger.warning("Failed to create lightweight run", exc_info=True)
+            logger.warning("Failed to log interaction", exc_info=True)
             return None
-
-        return run_id
-
-    async def _complete_lightweight_run(
-        self,
-        run_id: str,
-        result: dict,
-        success: bool = True,
-    ) -> None:
-        """Mark a lightweight run and its step as completed or failed."""
-        try:
-            async with self._db_factory() as db:
-                from sqlalchemy import select
-
-                res = await db.execute(select(TaskRun).where(TaskRun.run_id == run_id))
-                run = res.scalar_one_or_none()
-                if not run:
-                    return
-
-                target_status = "completed" if success else "failed"
-                try:
-                    transition_run(run, target_status)
-                except Exception:
-                    run.status = target_status  # fallback for edge-case states
-                if not success:
-                    run.error = {"message": result.get("summary", "unknown error")[:500]}
-
-                step_res = await db.execute(select(TaskStep).where(TaskStep.run_id == run_id))
-                for step in step_res.scalars().all():
-                    try:
-                        transition_step(step, target_status)
-                    except Exception:
-                        step.status = target_status  # fallback for edge-case states
-                    if success:
-                        step.output_data = {
-                            "decision": result.get("decision"),
-                            "summary": str(result.get("summary", ""))[:1000],
-                        }
-
-                await db.commit()
-
-                # D1: Learn from execution outcomes — store preference memories
-                # based on approval decisions and failures for future context
-                await self._learn_from_outcome(run_id, run, result, success)
-        except Exception:
-            logger.debug("Failed to complete lightweight run %s", run_id, exc_info=True)
+        return interaction_id
 
     async def _learn_from_outcome(
         self,
@@ -734,7 +688,6 @@ class JarvisOrchestrator:
             return {"error": "Empty message"}
 
         trace = self._trace_manager.start_trace("user_message")
-        run_id: str | None = None
 
         try:
             await self._emit_runtime_event(
@@ -801,18 +754,21 @@ class JarvisOrchestrator:
 
             plan_dict = plan.model_dump(mode="json")
 
-            # Create lightweight TaskRun for tracking
-            run_id = await self._create_lightweight_run(
+            # Log this interaction for auditing
+            ilog_id = await self._log_interaction(
                 user_id=user_id,
                 workspace_id=workspace_id,
-                plan=plan,
                 trace_id=trace.trace_id,
+                message_preview=message[:500],
+                intent=intent,
+                plan=plan,
                 conversation_id=conversation_id,
             )
 
             result: dict[str, Any] = {
                 "trace_id": trace.trace_id,
-                "run_id": run_id,
+                "run_id": None,
+                "interaction_id": ilog_id,
                 "plan": plan_dict,
                 "summary": plan.reasoning or plan_text,
             }
@@ -912,23 +868,20 @@ class JarvisOrchestrator:
                 except Exception:
                     logger.debug("Persona reflection skipped", exc_info=True)
 
-            # Complete the lightweight run
-            if run_id:
-                await self._complete_lightweight_run(run_id, result, success=True)
-                await self._emit_runtime_event(
-                    "run_completed",
-                    workspace_id=workspace_id,
-                    user_id=user_id,
-                    run_id=run_id,
-                    payload={"trace_id": trace.trace_id},
-                )
+            await self._emit_runtime_event(
+                "run_completed",
+                workspace_id=workspace_id,
+                user_id=user_id,
+                run_id=None,
+                payload={"trace_id": trace.trace_id},
+            )
 
             # Push surface to workspace
             await self._push_workspace_surface(
                 plan,
                 user_id,
                 workspace_id,
-                run_id,
+                None,
                 response_text=result.get("presentation", result.get("presenter", "")),
             )
 
@@ -941,15 +894,13 @@ class JarvisOrchestrator:
                 "decision": "error",
                 "summary": f"Error processing message: {e}",
             }
-            if run_id:
-                await self._complete_lightweight_run(run_id, error_result, success=False)
-                await self._emit_runtime_event(
-                    "run_failed",
-                    workspace_id=workspace_id,
-                    user_id=user_id,
-                    run_id=run_id,
-                    payload={"error": str(e)[:200]},
-                )
+            await self._emit_runtime_event(
+                "run_failed",
+                workspace_id=workspace_id,
+                user_id=user_id,
+                run_id=None,
+                payload={"error": str(e)[:200]},
+            )
             return error_result
         finally:
             await self._trace_manager.finish_trace(
@@ -981,7 +932,6 @@ class JarvisOrchestrator:
             return
 
         trace = self._trace_manager.start_trace("user_message")
-        run_id: str | None = None
 
         def _fire_event(event_type: str, **kwargs: Any) -> None:
             self._spawn_background(self._emit_runtime_event(event_type, **kwargs))
@@ -1074,11 +1024,13 @@ class JarvisOrchestrator:
 
             plan_dict = plan.model_dump(mode="json")
 
-            run_id = await self._create_lightweight_run(
+            await self._log_interaction(
                 user_id=user_id,
                 workspace_id=workspace_id,
-                plan=plan,
                 trace_id=trace.trace_id,
+                message_preview=message[:500],
+                intent=intent,
+                plan=plan,
                 conversation_id=conversation_id,
             )
 
@@ -1086,14 +1038,14 @@ class JarvisOrchestrator:
             yield {
                 "event": "plan",
                 "plan": plan_dict,
-                "run_id": run_id,
+                "run_id": None,
             }
 
             _fire_event(
                 "plan_created",
                 workspace_id=workspace_id,
                 user_id=user_id,
-                run_id=run_id,
+                run_id=None,
                 payload={
                     "goal": plan.goal,
                     "trace_id": trace.trace_id,
@@ -1204,23 +1156,13 @@ class JarvisOrchestrator:
                 except Exception:
                     pass
 
-            # Complete lightweight run
-            if run_id:
-                await self._complete_lightweight_run(
-                    run_id,
-                    {
-                        "plan": plan.goal,
-                        "summary": presenter_text,
-                    },
-                    success=True,
-                )
-                _fire_event(
-                    "run_completed",
-                    workspace_id=workspace_id,
-                    user_id=user_id,
-                    run_id=run_id,
-                    payload={"trace_id": trace.trace_id},
-                )
+            _fire_event(
+                "run_completed",
+                workspace_id=workspace_id,
+                user_id=user_id,
+                run_id=None,
+                payload={"trace_id": trace.trace_id},
+            )
 
             # Push workspace surface (fire-and-forget)
             self._spawn_background(
@@ -1228,7 +1170,7 @@ class JarvisOrchestrator:
                     plan,
                     user_id,
                     workspace_id,
-                    run_id,
+                    None,
                     response_text=presenter_text,
                 )
             )
@@ -1236,20 +1178,18 @@ class JarvisOrchestrator:
             yield {
                 "event": "done",
                 "trace_id": trace.trace_id,
-                "run_id": run_id,
+                "run_id": None,
             }
 
         except Exception as e:
             logger.error("process_message_stream failed: %s", e, exc_info=True)
-            if run_id:
-                await self._complete_lightweight_run(run_id, {"summary": str(e)}, success=False)
-                _fire_event(
-                    "run_failed",
-                    workspace_id=workspace_id,
-                    user_id=user_id,
-                    run_id=run_id,
-                    payload={"error": str(e)[:200]},
-                )
+            _fire_event(
+                "run_failed",
+                workspace_id=workspace_id,
+                user_id=user_id,
+                run_id=None,
+                payload={"error": str(e)[:200]},
+            )
             yield {"event": "error", "message": str(e)}
         finally:
             await self._trace_manager.finish_trace(

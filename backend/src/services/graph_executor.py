@@ -22,7 +22,7 @@ from src.config.settings import Settings, get_anthropic_client
 from src.llm_utils import parse_llm_json
 from src.models.plans import Plan, PlanTask
 from src.models.task_graph import TaskCheckpoint, TaskRun, TaskStep
-from src.orchestrator.contracts import PolicyDecision, StepResult
+from src.orchestrator.contracts import PolicyDecision, ResultSummary, StepResult, StepState
 from src.services.audit import AuditService
 from src.services.execution_state import transition_run, transition_step
 from src.services.risk_assessor import RiskAssessment, get_or_assess_risk
@@ -288,7 +288,9 @@ class GraphExecutor:
             plan.plan_id,
         )
 
-    async def execute_run(self, run_id: str, trace_id: str | None = None) -> TaskRun:
+    async def execute_run(
+        self, run_id: str, trace_id: str | None = None, surface_id: str | None = None
+    ) -> TaskRun:
         """Execute a run's DAG to completion (or pause at approval gate)."""
         result = await self._db.execute(select(TaskRun).where(TaskRun.run_id == run_id))
         run = result.scalar_one_or_none()
@@ -324,9 +326,11 @@ class GraphExecutor:
             # Enforce timeout for background runs to prevent indefinite hangs
             timeout = run.timeout_seconds or (600 if run.source == "background" else None)
             if timeout:
-                await asyncio.wait_for(self._execute_dag(run), timeout=timeout)
+                await asyncio.wait_for(
+                    self._execute_dag(run, surface_id=surface_id), timeout=timeout
+                )
             else:
-                await self._execute_dag(run)
+                await self._execute_dag(run, surface_id=surface_id)
         except asyncio.TimeoutError:
             transition_run(run, "timed_out")
             run.completed_at = datetime.now(timezone.utc)
@@ -407,7 +411,7 @@ class GraphExecutor:
         await self._db.flush()
 
         try:
-            await self._execute_dag(run)
+            await self._execute_dag(run, surface_id=None)
         except Exception as exc:
             transition_run(run, "failed")
             run.completed_at = datetime.now(timezone.utc)
@@ -463,8 +467,9 @@ class GraphExecutor:
         )
         return run
 
-    async def _execute_dag(self, run: TaskRun) -> None:
+    async def _execute_dag(self, run: TaskRun, surface_id: str | None = None) -> None:
         """Main DAG execution loop."""
+        self._current_surface_id = surface_id
         while True:
             ready_steps = await self._get_ready_steps(run.run_id)
             if not ready_steps:
@@ -485,6 +490,41 @@ class GraphExecutor:
                         await self._run_verification(run)
                     # Writeback memories from execution results
                     await self._writeback_memories(run)
+                    if surface_id:
+                        _comp_steps = await self._get_all_steps(run.run_id)
+                        _final_states = [
+                            StepState(
+                                step_id=s.step_id,
+                                description=(
+                                    s.name or (s.input_data or {}).get("capability", s.task_id)
+                                ),
+                                status=s.status,
+                                output_summary=(
+                                    str(s.output_data.get("result", ""))[:200]
+                                    if s.output_data
+                                    else None
+                                ),
+                                duration_ms=(
+                                    int((s.completed_at - s.started_at).total_seconds() * 1000)
+                                    if s.completed_at and s.started_at
+                                    else None
+                                ),
+                            )
+                            for s in _comp_steps
+                        ]
+                        _findings = [
+                            str(s.output_data.get("result", ""))[:100]
+                            for s in _comp_steps
+                            if s.output_data and s.output_data.get("result")
+                        ]
+                        await self._emit_surface_update(
+                            surface_id=surface_id,
+                            user_id=run.user_id,
+                            phase="completed",
+                            steps=_final_states,
+                            progress=f"{len(_comp_steps)}/{len(_comp_steps)} steps",
+                            results=ResultSummary(key_findings=_findings[:5]),
+                        )
                     break
                 # If there are pending steps but none ready, we're blocked
                 failed = [s for s in all_steps if s.status == "failed"]
@@ -495,6 +535,13 @@ class GraphExecutor:
                         "message": f"{len(failed)} step(s) failed",
                         "failed_steps": [s.step_id for s in failed],
                     }
+                    if surface_id:
+                        await self._emit_surface_update(
+                            surface_id=surface_id,
+                            user_id=run.user_id,
+                            phase="failed",
+                            progress=f"{len(failed)} step(s) failed",
+                        )
                     break
                 # Must be waiting for approval or external event
                 break
@@ -504,6 +551,29 @@ class GraphExecutor:
             # step failures and permanently stuck runs).
             run.current_step_ids = [s.step_id for s in ready_steps]
             await self._db.flush()
+
+            # Surface update: executing phase
+            if surface_id:
+                _all_for_surface = await self._get_all_steps(run.run_id)
+                _step_states = [
+                    StepState(
+                        step_id=s.step_id,
+                        description=(s.name or (s.input_data or {}).get("capability", s.task_id)),
+                        status=(
+                            "executing" if s.step_id in (run.current_step_ids or []) else s.status
+                        ),
+                    )
+                    for s in _all_for_surface
+                ]
+                _done_count = sum(1 for s in _all_for_surface if s.status == "completed")
+                await self._emit_surface_update(
+                    surface_id=surface_id,
+                    user_id=run.user_id,
+                    phase="executing",
+                    steps=_step_states,
+                    current_step=ready_steps[0].step_id if ready_steps else None,
+                    progress=f"{_done_count}/{len(_all_for_surface)} steps",
+                )
 
             for step in ready_steps:
                 try:
@@ -1293,6 +1363,52 @@ class GraphExecutor:
                 await redis.aclose()
         except Exception:
             logger.debug("Failed to publish run progress", exc_info=True)
+
+    async def _emit_surface_update(
+        self,
+        surface_id: str | None,
+        user_id: str,
+        phase: str,
+        steps: list | None = None,
+        current_step: str | None = None,
+        progress: str = "",
+        approval: object | None = None,
+        results: object | None = None,
+    ) -> None:
+        """Publish a SurfaceUpdate to Redis for live workspace streaming.
+
+        Best-effort — failures are logged but never raised.
+        """
+        if not surface_id:
+            return
+
+        try:
+            from src.orchestrator.contracts import SurfaceUpdate
+
+            update = SurfaceUpdate(
+                surface_id=surface_id,
+                phase=phase,
+                steps=steps or [],
+                current_step=current_step,
+                progress=progress,
+                approval=approval,
+                results=results,
+            )
+
+            channel = f"jarvis:a2ui:{user_id}"
+            payload = json.dumps(
+                {
+                    "type": "surface_update",
+                    **update.model_dump(mode="json"),
+                }
+            )
+
+            if self._redis:
+                await self._redis.publish(channel, payload)
+            elif self._event_bus:
+                await self._event_bus.publish_to_channel(channel, payload)
+        except Exception:
+            logger.debug("Failed to emit surface update", exc_info=True)
 
     @staticmethod
     def _build_graph_definition(tasks: list[PlanTask]) -> dict:
