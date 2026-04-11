@@ -518,19 +518,22 @@ class SchedulerLoop:
     async def _tick_memory_expiration(self, factory, vector_store=None) -> None:
         """Mark expired memories and cascade delete from Qdrant."""
         try:
-            from sqlalchemy import func, select, text
+            from sqlalchemy import func, select
+            from sqlalchemy.dialects.postgresql import INTERVAL
+            from sqlalchemy.sql.expression import cast as sa_cast
+            from sqlalchemy.sql.expression import literal
 
             from src.models.memory import Memory
 
             async with factory() as db:
+                # Postgres: created_at + (ttl_days || ' days')::interval < now()
+                interval_expr = sa_cast(func.concat(Memory.ttl_days, literal(" days")), INTERVAL)
                 result = await db.execute(
                     select(Memory)
                     .where(
                         Memory.status == "active",
                         Memory.ttl_days.isnot(None),
-                        Memory.created_at
-                        + func.cast(func.concat(Memory.ttl_days, " days"), type_=text("interval"))
-                        < func.now(),
+                        Memory.created_at + interval_expr < func.now(),
                     )
                     .limit(100)
                 )
