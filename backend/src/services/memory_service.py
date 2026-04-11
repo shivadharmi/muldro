@@ -13,7 +13,7 @@ Responsibilities:
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import case, select, update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
@@ -78,6 +78,18 @@ Rules:
 - Each preference must be a standalone, actionable statement
 - Set confidence high (>0.8) for explicit statements, lower for inferences
 """
+
+
+def _compute_decayed_stability(current_stability: float, days_since_access: int) -> float:
+    """Compute new stability score with time-based decay and access boost.
+
+    Formula: min(1.0, max(0.0, current - 0.02 * days) + 0.1)
+    - Decays by 0.02 per day since last access
+    - Adds 0.1 boost for the current access
+    - Clamped to [0.0, 1.0]
+    """
+    decayed = max(0.0, current_stability - 0.02 * days_since_access)
+    return min(1.0, decayed + 0.1)
 
 
 class MemoryService:
@@ -770,22 +782,31 @@ class MemoryService:
         return merged_count
 
     async def refresh_stability(self, memory_id: str, user_id: str) -> None:
-        """Refresh memory stability when accessed.
+        """Refresh memory stability with time-based decay + access boost.
 
-        Increments refresh_count, updates last_accessed_at, and increases
-        stability_score by 0.1 (capped at 1.0).
+        Decays stability by 0.02 per day since last access, then adds 0.1.
+        This ensures unused memories gradually decay while accessed ones stay stable.
         """
         try:
+            now = datetime.now(timezone.utc)
+
+            # Fetch current memory to compute decay
+            result = await self._db.execute(select(Memory).where(Memory.memory_id == memory_id))
+            memory = result.scalar_one_or_none()
+            if not memory:
+                return
+
+            last_access = memory.last_accessed_at or memory.created_at
+            days_since = (now - last_access).days if last_access else 0
+            new_stability = _compute_decayed_stability(memory.stability_score or 0.0, days_since)
+
             stmt = (
                 update(Memory)
                 .where(Memory.memory_id == memory_id)
                 .values(
                     refresh_count=Memory.refresh_count + 1,
-                    last_accessed_at=datetime.now(timezone.utc),
-                    stability_score=case(
-                        (Memory.stability_score + 0.1 < 1.0, Memory.stability_score + 0.1),
-                        else_=1.0,
-                    ),
+                    last_accessed_at=now,
+                    stability_score=new_stability,
                 )
             )
             await self._db.execute(stmt)
@@ -796,7 +817,6 @@ class MemoryService:
                 {"action": "stability_refresh", "memory_id": memory_id},
             )
         except Exception:
-            # Rollback so the session isn't left in a failed transaction state
             try:
                 await self._db.rollback()
             except Exception:

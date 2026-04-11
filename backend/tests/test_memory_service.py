@@ -279,3 +279,35 @@ async def test_contradiction_failure_does_not_block_storage(
     # Memory should still be stored despite contradiction check failure
     assert len(memory_ids) == 1
     assert mock_db.add.call_count >= 1
+
+
+class TestStabilityDecay:
+    def test_stability_decay_math_no_days(self):
+        """0 days since access: no decay, +0.1 boost."""
+        from src.services.memory_service import _compute_decayed_stability
+
+        assert _compute_decayed_stability(0.5, 0) == 0.6
+
+    def test_stability_decay_math_10_days(self):
+        """10 days: 0.5 - 0.2 = 0.3, +0.1 = 0.4."""
+        from src.services.memory_service import _compute_decayed_stability
+
+        assert _compute_decayed_stability(0.5, 10) == 0.4
+
+    def test_stability_decay_math_30_days(self):
+        """30 days: 0.5 - 0.6 = 0.0 (clamped), +0.1 = 0.1."""
+        from src.services.memory_service import _compute_decayed_stability
+
+        assert _compute_decayed_stability(0.5, 30) == 0.1
+
+    def test_stability_decay_caps_at_1(self):
+        """Cap at 1.0."""
+        from src.services.memory_service import _compute_decayed_stability
+
+        assert _compute_decayed_stability(1.0, 0) == 1.0
+
+    def test_stability_decay_very_old(self):
+        """Very old: floor at 0.1 (the access boost)."""
+        from src.services.memory_service import _compute_decayed_stability
+
+        assert _compute_decayed_stability(0.2, 100) == 0.1
