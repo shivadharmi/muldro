@@ -3,7 +3,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import get_current_user, get_current_workspace_id, get_session
@@ -81,8 +81,8 @@ class ResetResponse(BaseModel):
 
 class TimePolicyRule(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    start_hour: int
-    end_hour: int
+    start_hour: int = Field(ge=0, le=23)
+    end_hour: int = Field(ge=0, le=23)
     max_level: str
     days: list[int] | None = None
 

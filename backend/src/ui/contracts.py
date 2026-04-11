@@ -16,7 +16,7 @@ import logging
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +179,15 @@ class DetailConfig(BaseModel):
 
     tabs: list[DetailTab]
     default_tab: str | None = None
+
+    @model_validator(mode="after")
+    def _check_default_tab(self) -> "DetailConfig":
+        if self.default_tab is not None and self.tabs:
+            tab_ids = [t.id for t in self.tabs]
+            if self.default_tab not in tab_ids:
+                msg = f"default_tab '{self.default_tab}' not in tabs: {tab_ids}"
+                raise ValueError(msg)
+        return self
 
 
 class DetailSection(BaseModel):

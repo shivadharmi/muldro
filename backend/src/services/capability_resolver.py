@@ -96,7 +96,7 @@ async def route_step(step_capability: str, resolver: CapabilityResolver) -> str:
     4. Known write capability (any tool needs approval) -> ``"operator"``
     5. Unknown capability (no tools found) -> ``"operator"`` (fallback)
 
-    ``"perceiver"`` is a future agent name (Observer + Researcher merge in Spec 1B-i).
+    ``"perceiver"`` handles information gathering (merged from Observer + Researcher).
     """
     if step_capability in ("reason", "respond", "none"):
         return "presenter"

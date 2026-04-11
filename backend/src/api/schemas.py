@@ -3,7 +3,7 @@
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 # ── Shared Type Literals ─────────────────────────────────────────
 
@@ -50,8 +50,8 @@ class BriefingResponse(BaseModel):
 
 class BriefingFeedbackRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    feedback_type: str  # "rating" | "item_acted_on" | "item_dismissed" | "follow_up_asked"
-    rating: int | None = None  # 1-5 when feedback_type="rating"
+    feedback_type: Literal["rating", "item_acted_on", "item_dismissed", "follow_up_asked"]
+    rating: int | None = Field(None, ge=1, le=5)
     item_section: str | None = None  # e.g. "top_priorities", "recommended_actions"
     item_index: int | None = None
     item_title: str | None = None
@@ -325,14 +325,14 @@ class ScheduleCreateRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
     name: str
     description: str | None = None
-    schedule_type: str = "recurring"  # recurring | one_shot
+    schedule_type: Literal["recurring", "one_shot"] = "recurring"
     cron_expr: str | None = None
     run_at: datetime | None = None
     action_type: str
     action_config: dict | None = None
     enabled: bool = True
-    source: str = "user"  # system | user | reflection
-    priority: str = "medium"  # low | medium | high
+    source: Literal["system", "user", "reflection"] = "user"
+    priority: Literal["low", "medium", "high"] = "medium"
 
 
 class ScheduleUpdateRequest(BaseModel):
@@ -344,7 +344,7 @@ class ScheduleUpdateRequest(BaseModel):
     action_type: str | None = None
     action_config: dict | None = None
     enabled: bool | None = None
-    priority: str | None = None
+    priority: Literal["low", "medium", "high"] | None = None
 
 
 class ScheduleResponse(BaseModel):

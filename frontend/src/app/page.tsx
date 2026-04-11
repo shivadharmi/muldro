@@ -72,7 +72,8 @@ export default function WorkspacePage() {
       const aActive = isActive(a) ? 0 : 1;
       const bActive = isActive(b) ? 0 : 1;
       if (aActive !== bActive) return aActive - bActive;
-      return b.created_at.localeCompare(a.created_at);
+      const dateCompare = b.created_at.localeCompare(a.created_at);
+      return dateCompare !== 0 ? dateCompare : a.id.localeCompare(b.id);
     });
   }, [restSurfaces, wsSurfaces]);
 

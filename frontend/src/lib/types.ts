@@ -463,3 +463,34 @@ export interface TimePolicyRule {
   max_level: string;
   days?: number[] | null;
 }
+
+// ── Plan Output ──────────────────────────────────────────────────
+
+export interface PlanStep {
+  step_id: string;
+  description: string;
+  actor: "jarvis" | "user";
+  capability: string;
+  input: Record<string, unknown>;
+  depends_on: string[];
+  risk: "none" | "low" | "medium" | "high";
+  user_context: string | null;
+}
+
+export interface CapabilityGap {
+  description: string;
+  resolution: string;
+  workaround: string | null;
+}
+
+export interface PlanOutput {
+  goal: string;
+  reasoning: string;
+  achievable: "full" | "partial" | "not_achievable";
+  priority: "low" | "medium" | "high" | "critical";
+  steps: PlanStep[];
+  success_criteria: string;
+  capability_gaps: CapabilityGap[];
+  plan_id: string | null;
+  requires_user_input: boolean;
+}

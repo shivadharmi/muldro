@@ -170,7 +170,7 @@ class PerceptionDecision(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    next_check_seconds: int | None = None
+    next_check_seconds: int | None = Field(None, ge=30)
     mode: Literal["poll", "push", "hybrid", "paused"] | None = None
     watch_entities: list[str] = Field(default_factory=list)
     urgency: Literal["low", "normal", "high"] = "normal"

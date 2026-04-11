@@ -77,6 +77,10 @@ export default function SettingsPage() {
   const [budgetInput, setBudgetInput] = useState("");
   const [trustEntries, setTrustEntries] = useState<TrustDashboardEntry[]>([]);
   const [trustLoading, setTrustLoading] = useState(false);
+  const [policyLoading, setPolicyLoading] = useState(false);
+  const [budgetSaving, setBudgetSaving] = useState(false);
+  const [ceilingLoading, setCeilingLoading] = useState<string | null>(null);
+  const [resetLoading, setResetLoading] = useState<string | null>(null);
   const { user, logout } = useAuth();
   const { addToast } = useToast();
 
@@ -108,6 +112,7 @@ export default function SettingsPage() {
   }, [activeTab, loadTrust]);
 
   async function handlePolicyChange(mode: string) {
+    setPolicyLoading(true);
     try {
       await setPolicyMode(mode);
       setPolicyModeState(mode);
@@ -117,12 +122,15 @@ export default function SettingsPage() {
         `Failed: ${err instanceof Error ? err.message : "Unknown"}`,
         "error"
       );
+    } finally {
+      setPolicyLoading(false);
     }
   }
 
   async function handleBudgetSave() {
     const value = parseFloat(budgetInput);
     if (isNaN(value) || value <= 0) return;
+    setBudgetSaving(true);
     try {
       const res = await updateBudgetLimit(value);
       setBudgetLimit(res.daily_limit_usd);
@@ -133,10 +141,13 @@ export default function SettingsPage() {
         `Failed: ${err instanceof Error ? err.message : "Unknown"}`,
         "error"
       );
+    } finally {
+      setBudgetSaving(false);
     }
   }
 
   async function handleCeilingChange(capability: string, maxLevel: string) {
+    setCeilingLoading(capability);
     try {
       await setTrustCeiling(capability, maxLevel);
       setTrustEntries((prev) =>
@@ -153,10 +164,13 @@ export default function SettingsPage() {
         `Failed: ${err instanceof Error ? err.message : "Unknown"}`,
         "error"
       );
+    } finally {
+      setCeilingLoading(null);
     }
   }
 
   async function handleResetTrust(capability: string) {
+    setResetLoading(capability);
     try {
       await resetTrust(capability);
       await loadTrust();
@@ -166,6 +180,8 @@ export default function SettingsPage() {
         `Failed: ${err instanceof Error ? err.message : "Unknown"}`,
         "error"
       );
+    } finally {
+      setResetLoading(null);
     }
   }
 
@@ -234,6 +250,7 @@ export default function SettingsPage() {
                     name="policy"
                     checked={policyMode === pm.value}
                     onChange={() => handlePolicyChange(pm.value)}
+                    disabled={policyLoading}
                     className="mt-0.5"
                   />
                   <div>
@@ -280,6 +297,8 @@ export default function SettingsPage() {
                     entry={entry}
                     onCeilingChange={handleCeilingChange}
                     onReset={handleResetTrust}
+                    ceilingDisabled={ceilingLoading === entry.capability}
+                    resetDisabled={resetLoading === entry.capability}
                   />
                 ))}
               </div>
@@ -310,9 +329,10 @@ export default function SettingsPage() {
                     />
                     <button
                       onClick={handleBudgetSave}
-                      className="px-3 py-2 rounded-lg bg-j-primary text-j-primary-fg text-sm hover:bg-j-primary-hover"
+                      disabled={budgetSaving}
+                      className="px-3 py-2 rounded-lg bg-j-primary text-j-primary-fg text-sm hover:bg-j-primary-hover disabled:opacity-50"
                     >
-                      Save
+                      {budgetSaving ? "Saving..." : "Save"}
                     </button>
                     <button
                       onClick={() => setEditingBudget(false)}
@@ -355,12 +375,16 @@ interface TrustCapabilityCardProps {
   entry: TrustDashboardEntry;
   onCeilingChange: (capability: string, maxLevel: string) => void;
   onReset: (capability: string) => void;
+  ceilingDisabled?: boolean;
+  resetDisabled?: boolean;
 }
 
 function TrustCapabilityCard({
   entry,
   onCeilingChange,
   onReset,
+  ceilingDisabled,
+  resetDisabled,
 }: TrustCapabilityCardProps) {
   const [expanded, setExpanded] = useState(false);
 
@@ -464,7 +488,8 @@ function TrustCapabilityCard({
                   onChange={(e) =>
                     onCeilingChange(entry.capability, e.target.value)
                   }
-                  className="text-xs rounded bg-surface-2 border border-b-primary px-2 py-1 text-t-primary focus:outline-none focus:ring-1 focus:ring-j-ring"
+                  disabled={ceilingDisabled}
+                  className="text-xs rounded bg-surface-2 border border-b-primary px-2 py-1 text-t-primary focus:outline-none focus:ring-1 focus:ring-j-ring disabled:opacity-50"
                 >
                   {CEILING_OPTIONS.map((opt) => (
                     <option key={opt.value} value={opt.value}>
@@ -475,9 +500,10 @@ function TrustCapabilityCard({
 
                 <button
                   onClick={() => onReset(entry.capability)}
-                  className="ml-auto text-xs text-j-error hover:underline"
+                  disabled={resetDisabled}
+                  className="ml-auto text-xs text-j-error hover:underline disabled:opacity-50"
                 >
-                  Reset Trust
+                  {resetDisabled ? "Resetting..." : "Reset Trust"}
                 </button>
               </div>
             </div>

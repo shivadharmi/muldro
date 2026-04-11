@@ -1,6 +1,7 @@
 """Insight surface endpoints — dismiss and execute suggested actions."""
 
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
@@ -22,7 +23,7 @@ class DismissRequest(BaseModel):
 
 class DismissResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    status: str = "dismissed"
+    status: Literal["dismissed"] = "dismissed"
     surface_id: str
 
 

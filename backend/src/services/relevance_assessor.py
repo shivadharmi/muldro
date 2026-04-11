@@ -146,7 +146,7 @@ async def assess_relevance(
         text = response.content[0].text
         text = re.sub(r"^```\w*\n?", "", text.strip()).rstrip("`").strip()
         data = json.loads(text)
-        assessment = RelevanceAssessment(**data)
+        assessment = RelevanceAssessment.model_validate(data)
         return assessment.model_copy(
             update={
                 "notification_tier": _determine_tier(assessment.relevance_score, assessment.urgency)
