@@ -204,16 +204,22 @@ class EvictionService:
         from src.models.approvals import Approval
 
         cutoff = datetime.now(timezone.utc) - timedelta(days=APPROVAL_RETENTION_DAYS)
-        result = await self._db.execute(
-            delete(Approval).where(
-                Approval.status.in_(["expired", "approved", "rejected"]),
-                Approval.created_at < cutoff,
-            )
+        stmt = select(Approval.approval_id).where(
+            Approval.status.in_(["expired", "approved", "rejected"]),
+            Approval.created_at < cutoff,
         )
-        count = result.rowcount or 0
-        if count:
-            await self._db.flush()
-        return count
+        result = await self._db.execute(stmt)
+        approval_ids = [row[0] for row in result.all()]
+
+        if not approval_ids:
+            return 0
+
+        await self._cascade_qdrant_delete("approvals", approval_ids)
+
+        await self._db.execute(delete(Approval).where(Approval.approval_id.in_(approval_ids)))
+        await self._db.flush()
+        logger.info("Evicted %d approvals", len(approval_ids))
+        return len(approval_ids)
 
     # ------------------------------------------------------------------
     # Event eviction (old events past retention)

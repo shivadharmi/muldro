@@ -281,7 +281,7 @@ class TriSearchService:
         raw = await self._vector_store.hybrid_search(
             user_id=user_id,
             query_vector=embedding,
-            collections=["memories", "events", "artifacts"],
+            collections=["memories", "events", "artifacts", "conversations", "approvals"],
             limit=limit,
         )
 
@@ -394,5 +394,7 @@ def _collection_to_type(collection: str) -> str:
         "entities": "entity",
         "events": "event",
         "artifacts": "artifact",
+        "conversations": "conversation",
+        "approvals": "approval",
     }
     return mapping.get(collection, collection)

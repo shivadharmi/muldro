@@ -127,6 +127,48 @@ class TestAssessRelevance:
         assert result.notification_tier == "silent"
 
     @pytest.mark.asyncio
+    async def test_strips_code_fences_from_json_response(self):
+        from src.services.relevance_assessor import (
+            PerceptionSignal,
+            UserContext,
+            assess_relevance,
+        )
+
+        mock_client = AsyncMock()
+        fenced_json = (
+            '```json\n{"relevance_score": 0.9, "reasoning": "Important PR",'
+            ' "relates_to_goals": [], "urgency": "immediate",'
+            ' "suggested_actions": []}\n```'
+        )
+        mock_client.messages.create.return_value = MagicMock(content=[MagicMock(text=fenced_json)])
+        signal = PerceptionSignal(source="github", event_type="pr_merged", summary="PR merged")
+        context = UserContext(goals=["ship v2"])
+        result = await assess_relevance(signal, context, mock_client)
+        assert result.relevance_score == 0.9
+        assert result.notification_tier == "push"
+
+    @pytest.mark.asyncio
+    async def test_strips_bare_code_fences(self):
+        from src.services.relevance_assessor import (
+            PerceptionSignal,
+            UserContext,
+            assess_relevance,
+        )
+
+        mock_client = AsyncMock()
+        fenced_json = (
+            '```\n{"relevance_score": 0.5, "reasoning": "Meh",'
+            ' "relates_to_goals": [], "urgency": "whenever",'
+            ' "suggested_actions": []}\n```'
+        )
+        mock_client.messages.create.return_value = MagicMock(content=[MagicMock(text=fenced_json)])
+        signal = PerceptionSignal(source="slack", event_type="msg", summary="Hey")
+        context = UserContext()
+        result = await assess_relevance(signal, context, mock_client)
+        assert result.relevance_score == 0.5
+        assert result.notification_tier == "briefing"
+
+    @pytest.mark.asyncio
     async def test_returns_silent_on_malformed_json(self):
         from src.services.relevance_assessor import (
             PerceptionSignal,

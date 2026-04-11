@@ -6,6 +6,7 @@ scoring relevance against their goals and routing to push/briefing/silent tiers.
 
 import json
 import logging
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -122,6 +123,7 @@ async def assess_relevance(
             messages=[{"role": "user", "content": prompt}],
         )
         text = response.content[0].text
+        text = re.sub(r"^```\w*\n?", "", text.strip()).rstrip("`").strip()
         data = json.loads(text)
         assessment = RelevanceAssessment(**data)
         return assessment.model_copy(

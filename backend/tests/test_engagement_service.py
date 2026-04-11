@@ -1,5 +1,6 @@
 """Tests for EngagementService — suppression rules, rate calculation."""
 
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -22,6 +23,7 @@ def _make_history_row(
     ignored=0,
     consecutive_dismissals=0,
     suppressed=False,
+    updated_at=None,
 ):
     """Create a mock EngagementHistory row."""
     row = MagicMock()
@@ -33,6 +35,7 @@ def _make_history_row(
     row.suppressed = suppressed
     row.last_engaged_at = None
     row.last_dismissed_at = None
+    row.updated_at = updated_at or datetime.now(timezone.utc)
     return row
 
 
@@ -167,3 +170,65 @@ async def test_get_engagement_context_returns_formatted_context():
     context = await svc.get_engagement_context()
     assert "gmail" in context
     assert "reply" in context
+
+
+@pytest.mark.asyncio
+async def test_suppression_ttl_clears_after_7_days():
+    """Suppression should auto-clear if updated_at is older than 7 days."""
+    db = _make_mock_db()
+    row = _make_history_row(dismissed=5, consecutive_dismissals=5, suppressed=True)
+    row.updated_at = datetime.now(timezone.utc) - timedelta(days=8)
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = row
+    db.execute.return_value = result_mock
+
+    svc = EngagementService(db, "ws_test")
+    penalty = await svc.get_relevance_penalty("gmail", "reply")
+    assert penalty == 0.0
+    assert row.suppressed is False
+    assert row.consecutive_dismissals == 0
+
+
+@pytest.mark.asyncio
+async def test_suppression_ttl_persists_within_7_days():
+    """Suppression should persist if updated_at is within 7 days."""
+    db = _make_mock_db()
+    row = _make_history_row(dismissed=5, consecutive_dismissals=5, suppressed=True)
+    row.updated_at = datetime.now(timezone.utc) - timedelta(days=3)
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = row
+    db.execute.return_value = result_mock
+
+    svc = EngagementService(db, "ws_test")
+    penalty = await svc.get_relevance_penalty("gmail", "reply")
+    assert penalty == 1.0
+    assert row.suppressed is True
+
+
+@pytest.mark.asyncio
+async def test_is_suppressed_clears_after_ttl():
+    """is_suppressed should return False and clear suppression after 7 days."""
+    db = _make_mock_db()
+    row = _make_history_row(dismissed=5, consecutive_dismissals=5, suppressed=True)
+    row.updated_at = datetime.now(timezone.utc) - timedelta(days=8)
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = row
+    db.execute.return_value = result_mock
+
+    svc = EngagementService(db, "ws_test")
+    assert await svc.is_suppressed("gmail", "reply") is False
+    assert row.suppressed is False
+
+
+@pytest.mark.asyncio
+async def test_is_suppressed_persists_within_ttl():
+    """is_suppressed should return True within 7 days."""
+    db = _make_mock_db()
+    row = _make_history_row(dismissed=5, consecutive_dismissals=5, suppressed=True)
+    row.updated_at = datetime.now(timezone.utc) - timedelta(days=3)
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = row
+    db.execute.return_value = result_mock
+
+    svc = EngagementService(db, "ws_test")
+    assert await svc.is_suppressed("gmail", "reply") is True

@@ -8,7 +8,7 @@ Drives suppression rules:
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 _PENALTY_THRESHOLD = 3
 _SUPPRESS_THRESHOLD = 5
 _RELEVANCE_PENALTY = 0.2
+_SUPPRESSION_TTL_DAYS = 7
 
 
 class EngagementService:
@@ -95,6 +96,11 @@ class EngagementService:
         if not row:
             return 0.0
         if row.suppressed:
+            ttl_cutoff = datetime.now(timezone.utc) - timedelta(days=_SUPPRESSION_TTL_DAYS)
+            if row.updated_at and row.updated_at < ttl_cutoff:
+                row.suppressed = False
+                row.consecutive_dismissals = 0
+                return 0.0
             return 1.0
         if row.consecutive_dismissals >= _PENALTY_THRESHOLD:
             return _RELEVANCE_PENALTY
@@ -103,14 +109,21 @@ class EngagementService:
     async def is_suppressed(self, signal_source: str, signal_category: str) -> bool:
         """Check if a signal source × category is suppressed."""
         result = await self._db.execute(
-            select(EngagementHistory.suppressed).where(
+            select(EngagementHistory).where(
                 EngagementHistory.workspace_id == self._workspace_id,
                 EngagementHistory.signal_source == signal_source,
                 EngagementHistory.signal_category == signal_category,
             )
         )
-        val = result.scalar_one_or_none()
-        return bool(val)
+        row = result.scalar_one_or_none()
+        if not row or not row.suppressed:
+            return False
+        ttl_cutoff = datetime.now(timezone.utc) - timedelta(days=_SUPPRESSION_TTL_DAYS)
+        if row.updated_at and row.updated_at < ttl_cutoff:
+            row.suppressed = False
+            row.consecutive_dismissals = 0
+            return False
+        return True
 
     async def get_engagement_context(self) -> str:
         """Build text summary of engagement patterns for relevance assessor."""

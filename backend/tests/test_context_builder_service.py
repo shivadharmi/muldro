@@ -249,6 +249,76 @@ class TestBuildHandlesServiceFailures:
         assert pack.artifacts == []
 
 
+class TestEntityDoubleWrite:
+    """Test that world-model fallback only runs when TriSearch returns no entities."""
+
+    @pytest.mark.asyncio
+    async def test_world_model_skipped_when_trisearch_returns_entities(self):
+        """When TriSearch populates entities, world-model fallback should be skipped."""
+        mock_world = AsyncMock()
+        mock_world.find_entity = AsyncMock(
+            return_value=[
+                {"entity_id": "ent_wm", "entity_type": "org", "canonical_name": "WorldModel Co"},
+            ]
+        )
+
+        mock_tri = AsyncMock()
+        mock_tri.search_for_context = AsyncMock(
+            return_value={
+                "entity": [
+                    {"id": "ent_ts", "result_type": "entity", "title": "TriSearch Co"},
+                ],
+                "memory": [],
+            }
+        )
+
+        mock_db = AsyncMock()
+        builder = ContextBuilder(
+            world_model=mock_world,
+            tri_search=mock_tri,
+            db=mock_db,
+        )
+
+        pack = await builder.build("usr_1", "test", workspace_id="ws_1")
+
+        # TriSearch entities should be used
+        assert len(pack.entities) == 1
+        assert pack.entities[0]["canonical_name"] == "TriSearch Co"
+        # World model should NOT have been called
+        mock_world.find_entity.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_world_model_runs_when_trisearch_returns_no_entities(self):
+        """When TriSearch returns no entities, world-model fallback should run."""
+        mock_world = AsyncMock()
+        mock_world.find_entity = AsyncMock(
+            return_value=[
+                {"entity_id": "ent_wm", "entity_type": "org", "canonical_name": "WorldModel Co"},
+            ]
+        )
+
+        mock_tri = AsyncMock()
+        mock_tri.search_for_context = AsyncMock(
+            return_value={
+                "entity": [],
+                "memory": [],
+            }
+        )
+
+        mock_db = AsyncMock()
+        builder = ContextBuilder(
+            world_model=mock_world,
+            tri_search=mock_tri,
+            db=mock_db,
+        )
+
+        pack = await builder.build("usr_1", "test", workspace_id="ws_1")
+
+        mock_world.find_entity.assert_called_once()
+        assert len(pack.entities) == 1
+        assert pack.entities[0]["canonical_name"] == "WorldModel Co"
+
+
 class TestBriefingEvidenceSemantic:
     @pytest.mark.asyncio
     async def test_related_items_uses_tri_search(self):

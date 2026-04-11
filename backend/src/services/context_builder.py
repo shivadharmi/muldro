@@ -145,7 +145,7 @@ class ContextBuilder:
 
         # Entities
         entity_ids: list[str] = []
-        if self._world_model and query:
+        if not pack.entities and self._world_model and query:
             try:
                 entities = await self._world_model.find_entity(
                     user_id,

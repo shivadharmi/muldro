@@ -97,6 +97,39 @@ async def test_heartbeat_no_action_needed(settings, mock_db):
 
 
 @pytest.mark.asyncio
+async def test_expire_stale_memories_cascades_to_qdrant(settings, mock_db):
+    """Expired memories should be deleted from Qdrant."""
+    vector_store = AsyncMock()
+
+    old_memory = MagicMock()
+    old_memory.created_at = datetime.now(timezone.utc) - timedelta(days=100)
+    old_memory.ttl_days = 30
+    old_memory.status = "active"
+    old_memory.memory_id = "mem_expired_1"
+
+    fresh_memory = MagicMock()
+    fresh_memory.created_at = datetime.now(timezone.utc) - timedelta(days=5)
+    fresh_memory.ttl_days = 30
+    fresh_memory.status = "active"
+    fresh_memory.memory_id = "mem_fresh_1"
+
+    mem_result = MagicMock()
+    mem_result.scalars.return_value.all.return_value = [old_memory, fresh_memory]
+
+    empty = MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[]))))
+
+    mock_db.execute = AsyncMock(
+        side_effect=[mem_result, empty, empty, empty, empty, empty, empty, empty]
+    )
+
+    service = HeartbeatService(settings=settings, db=mock_db, vector_store=vector_store)
+    result = await service.run(TEST_USER_ID)
+
+    assert result["expired_memories"] == 1
+    vector_store.delete.assert_awaited_once_with("memories", "mem_expired_1")
+
+
+@pytest.mark.asyncio
 async def test_critical_plans_not_escalated(settings, mock_db):
     """Should not escalate plans already at critical priority."""
     critical_plan = MagicMock()
