@@ -16,6 +16,7 @@ from src.api.routes_events import router as events_router
 from src.api.routes_feedback import router as feedback_router
 from src.api.routes_graph import router as graph_router
 from src.api.routes_health import router as health_router
+from src.api.routes_insights import router as insights_router
 from src.api.routes_integrations import router as integrations_router
 from src.api.routes_knowledge import router as knowledge_router
 from src.api.routes_mcp import router as mcp_router
@@ -342,6 +343,9 @@ def create_app() -> FastAPI:
 
     # Runtime projections
     app.include_router(runtime_router, tags=["runtime"])
+
+    # Insight surfaces (dismiss + execute)
+    app.include_router(insights_router, tags=["insights"])
 
     return app
 

@@ -413,9 +413,7 @@ class SurfaceService:
                         "detail_config": None,
                         "insight_data": payload.get("insight_data"),
                         "created_at": (
-                            db_row.created_at.isoformat()
-                            if db_row.created_at
-                            else None
+                            db_row.created_at.isoformat() if db_row.created_at else None
                         ),
                     }
                 )
