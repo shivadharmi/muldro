@@ -547,3 +547,54 @@ export interface MeetingPrep {
   action_items: Record<string, unknown>[];
   risks: string[];
 }
+
+// ── Trust ─────────────────────────────────────────────────────
+
+export interface GraduationProgress {
+  next_level: string | null;
+  current: number;
+  target: number;
+  percentage: number;
+  blocked_by_rejections: boolean;
+}
+
+export interface TrustRiskLevel {
+  risk_level: string;
+  trust_level: string;
+  approved_count: number;
+  rejected_count: number;
+  graduation_progress: GraduationProgress;
+}
+
+export interface TrustDashboardEntry {
+  capability: string;
+  family: string;
+  trust_level: string;
+  ceiling: string;
+  risk_levels: TrustRiskLevel[];
+}
+
+export interface TrustCapabilityDetailRisk {
+  risk_level: string;
+  trust_level: string;
+  approved_count: number;
+  rejected_count: number;
+  modified_count: number;
+  last_decision_at: string | null;
+  cooldown_until: string | null;
+  graduation_progress: GraduationProgress;
+}
+
+export interface TrustCapabilityDetail {
+  capability: string;
+  family: string;
+  ceiling: string;
+  risk_levels: TrustCapabilityDetailRisk[];
+}
+
+export interface TimePolicyRule {
+  start_hour: number;
+  end_hour: number;
+  max_level: string;
+  days?: number[] | null;
+}

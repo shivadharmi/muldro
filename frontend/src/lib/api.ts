@@ -15,6 +15,9 @@ import type {
   Notification,
   SearchResponse,
   SystemDashboard,
+  TrustDashboardEntry,
+  TrustCapabilityDetail,
+  TimePolicyRule,
 } from "./types";
 
 
@@ -794,4 +797,51 @@ export function fetchKnowledgeMemoryDetail(
 
 export function fetchKnowledgeStats(): Promise<KnowledgeStatsResponse> {
   return api("/knowledge/stats");
+}
+
+// ── Trust ──────────────────────────────────────────────────────
+
+export async function fetchTrustDashboard(): Promise<{
+  capabilities: TrustDashboardEntry[];
+}> {
+  return api("/trust/dashboard");
+}
+
+export async function fetchTrustCapability(
+  capability: string
+): Promise<TrustCapabilityDetail> {
+  return api(`/trust/${capability}`);
+}
+
+export async function setTrustCeiling(
+  capability: string,
+  maxLevel: string
+): Promise<{ capability: string; max_level: string }> {
+  return api(`/trust/${capability}/ceiling`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ max_level: maxLevel }),
+  });
+}
+
+export async function resetTrust(
+  capability: string
+): Promise<{ capability: string; status: string }> {
+  return api(`/trust/${capability}/reset`, { method: "POST" });
+}
+
+export async function fetchTimePolicies(): Promise<{
+  policies: TimePolicyRule[];
+}> {
+  return api("/trust-time-policies");
+}
+
+export async function setTimePolicies(
+  policies: TimePolicyRule[]
+): Promise<{ policies: TimePolicyRule[] }> {
+  return api("/trust-time-policies", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ policies }),
+  });
 }
