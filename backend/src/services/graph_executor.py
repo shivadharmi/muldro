@@ -700,6 +700,21 @@ class GraphExecutor:
                                 "Failed to notify for step approval",
                                 exc_info=True,
                             )
+                    _surf_id = getattr(self, "_current_surface_id", None)
+                    if _surf_id:
+                        from src.orchestrator.contracts import ApprovalContext
+
+                        await self._emit_surface_update(
+                            surface_id=_surf_id,
+                            user_id=run.user_id,
+                            phase="approval_needed",
+                            approval=ApprovalContext(
+                                approval_id=approval.approval_id,
+                                step_description=step.name or capability,
+                                risk_reasoning=f"Risk: {risk_level}",
+                                trust_context="Legacy approval gate",
+                            ),
+                        )
                     return
 
             transition_step(step, "running")
@@ -817,6 +832,23 @@ class GraphExecutor:
                 )
             except Exception:
                 logger.warning("Failed to notify for step approval", exc_info=True)
+
+        # Surface update: approval needed
+        _surf_id = getattr(self, "_current_surface_id", None)
+        if _surf_id:
+            from src.orchestrator.contracts import ApprovalContext
+
+            await self._emit_surface_update(
+                surface_id=_surf_id,
+                user_id=run.user_id,
+                phase="approval_needed",
+                approval=ApprovalContext(
+                    approval_id=approval.approval_id,
+                    step_description=step.name or capability,
+                    risk_reasoning=risk.reasoning,
+                    trust_context=decision.justification or "",
+                ),
+            )
 
     async def _notify_auto_executed(
         self,
