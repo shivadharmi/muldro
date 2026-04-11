@@ -437,6 +437,11 @@ class TestPerceptionRelevanceAssessment:
 
             mock_db = AsyncMock()
             mock_db.commit = AsyncMock()
+            # EngagementService queries return None (not suppressed, no history)
+            mock_exec_result = MagicMock()
+            mock_exec_result.scalar_one_or_none.return_value = None
+            mock_exec_result.scalars.return_value.all.return_value = []
+            mock_db.execute.return_value = mock_exec_result
             db_ctx = AsyncMock()
             db_ctx.__aenter__ = AsyncMock(return_value=mock_db)
             db_ctx.__aexit__ = AsyncMock(return_value=False)
