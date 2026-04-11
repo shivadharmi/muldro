@@ -25,13 +25,13 @@ POLICY_CASES = [
     {"tool": "create_pull_request", "agent": "operator", **_A},
     # Read-only tools -> allowed
     {"tool": "search", "agent": "planner", **_A},
-    {"tool": "search_gmail_messages", "agent": "observer", **_A},
-    {"tool": "get_events", "agent": "observer", **_A},
-    {"tool": "get_observation_cursor", "agent": "observer", **_A},
-    {"tool": "report_observation", "agent": "observer", **_A},
-    {"tool": "slack_get_channel_history", "agent": "researcher", **_A},
+    {"tool": "search_gmail_messages", "agent": "perceiver", **_A},
+    {"tool": "get_events", "agent": "perceiver", **_A},
+    {"tool": "get_observation_cursor", "agent": "perceiver", **_A},
+    {"tool": "report_observation", "agent": "perceiver", **_A},
+    {"tool": "slack_get_channel_history", "agent": "perceiver", **_A},
     # Internal tools -> allowed
-    {"tool": "ingest_event", "agent": "observer", **_A},
+    {"tool": "ingest_event", "agent": "perceiver", **_A},
     {"tool": "update_execution", "agent": "operator", **_A},
     {"tool": "build_context", "agent": "planner", **_A},
     # Unknown tools -> allowed (not blocked)

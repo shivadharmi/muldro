@@ -118,7 +118,7 @@ class TestSurfaceUpdate:
         su = SurfaceUpdate(
             surface_id="surf_abc",
             phase="executing",
-            steps=[StepState(step_id="s1", description="x", status="running")],
+            steps=[StepState(step_id="s1", description="x", status="executing")],
             current_step="s1",
             progress="1/3",
         )

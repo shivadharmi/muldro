@@ -72,7 +72,7 @@ class TestSurfaceUpdateFlow:
         su = SurfaceUpdate(
             surface_id="surf_01",
             phase="executing",
-            steps=[StepState(step_id="s1", description="x", status="running")],
+            steps=[StepState(step_id="s1", description="x", status="executing")],
         )
         msg = json.dumps({"type": "surface_update", **su.model_dump(mode="json")})
         parsed = json.loads(msg)

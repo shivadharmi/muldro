@@ -35,7 +35,7 @@ async def test_event_latency_ok(trace_store):
             "started_at": datetime.now(timezone.utc).isoformat(),
             "spans": [
                 {
-                    "agent_name": "observer",
+                    "agent_name": "perceiver",
                     "duration_ms": 500,
                     "input_tokens": 0,
                     "output_tokens": 0,
@@ -59,7 +59,7 @@ async def test_event_latency_critical(trace_store):
             "started_at": datetime.now(timezone.utc).isoformat(),
             "spans": [
                 {
-                    "agent_name": "observer",
+                    "agent_name": "perceiver",
                     "duration_ms": 3000,
                     "input_tokens": 0,
                     "output_tokens": 0,
@@ -121,7 +121,7 @@ async def test_error_rate_critical(trace_store):
                     "error": "failed",
                 },
                 {
-                    "agent_name": "observer",
+                    "agent_name": "perceiver",
                     "duration_ms": 200,
                     "input_tokens": 0,
                     "output_tokens": 0,
@@ -173,7 +173,7 @@ async def test_alert_cooldown(trace_store):
             "started_at": datetime.now(timezone.utc).isoformat(),
             "spans": [
                 {
-                    "agent_name": "observer",
+                    "agent_name": "perceiver",
                     "duration_ms": 3000,
                     "input_tokens": 0,
                     "output_tokens": 0,

@@ -24,7 +24,7 @@ AGENT_MODEL_TIERS = {
 # the agent is allowed to use that tool regardless of its raw name.
 AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
     "perceiver": {
-        # From observer — external data source reads
+        # External data source reads (perception)
         "email.list",
         "email.read",
         "email.search",
@@ -56,12 +56,12 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "filesystem.read",
         "filesystem.list",
         "filesystem.search",
-        # From observer — internal observation tools
+        # Internal observation tools
         "internal.ingest_event",
         "internal.report_observation",
         "internal.get_cursor",
         "internal.update_cursor",
-        # From researcher — knowledge + web
+        # Knowledge + web search
         "internal.search",
         "search.web",
         "browser.open",

@@ -53,7 +53,7 @@ class TestTracing:
         manager = TraceManager()
         trace = manager.start_trace("test")
 
-        s1 = trace.start_span("observer")
+        s1 = trace.start_span("perceiver")
         trace.end_span(s1.span_id, input_tokens=500, output_tokens=100)
 
         s2 = trace.start_span("planner")
@@ -68,7 +68,7 @@ class TestTracing:
 
         manager = TraceManager()
         trace = manager.start_trace("test")
-        span = trace.start_span("observer")
+        span = trace.start_span("perceiver")
 
         trace.finish()
         assert trace.ended_at is not None
@@ -80,7 +80,7 @@ class TestTracing:
 
         manager = TraceManager()
         trace = manager.start_trace("test")
-        span = trace.start_span("observer")
+        span = trace.start_span("perceiver")
         trace.end_span(span.span_id, input_tokens=100, output_tokens=50)
         trace.finish()
 
@@ -88,7 +88,7 @@ class TestTracing:
         assert d["trace_id"] == trace.trace_id
         assert d["trigger"] == "test"
         assert len(d["spans"]) == 1
-        assert d["spans"][0]["agent_name"] == "observer"
+        assert d["spans"][0]["agent_name"] == "perceiver"
         assert d["total_input_tokens"] == 100
 
     @pytest.mark.asyncio
@@ -308,7 +308,7 @@ class TestHooks:
     async def test_internal_tools_allowed(self):
         from src.orchestrator.hooks import governor_pre_tool_hook
 
-        result = await governor_pre_tool_hook("ingest_event", {}, "observer", user_id=TEST_USER_ID)
+        result = await governor_pre_tool_hook("ingest_event", {}, "perceiver", user_id=TEST_USER_ID)
         assert result["allowed"] is True
 
     async def test_audit_hook_logs(self):

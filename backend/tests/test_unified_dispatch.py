@@ -285,7 +285,7 @@ class TestCanUseTool:
         from src.orchestrator.agents import SubAgent
 
         agent = SubAgent(
-            name="researcher",
+            name="perceiver",
             prompt="test",
             model_tier="sonnet",
             capability_scope={"internal.search", "search.web"},
@@ -329,7 +329,7 @@ class TestCanUseTool:
         from src.orchestrator.agents import SubAgent
 
         agent = SubAgent(
-            name="researcher",
+            name="perceiver",
             prompt="test",
             model_tier="sonnet",
             capability_scope={"internal.search"},

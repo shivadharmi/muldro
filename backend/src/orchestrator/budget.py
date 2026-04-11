@@ -29,18 +29,6 @@ MODEL_PRICING = {
 CACHE_WRITE_MULTIPLIER = 1.25
 CACHE_READ_MULTIPLIER = 0.10
 
-# Default agent model assignments
-AGENT_MODELS = {
-    "observer": "sonnet",
-    "librarian": "sonnet",
-    "planner": "opus",
-    "governor": "sonnet",
-    "operator": "sonnet",
-    "presenter": "sonnet",
-    "researcher": "sonnet",
-    "persona": "haiku",
-}
-
 # Per-perception-cycle token budget (input tokens)
 PERCEPTION_CYCLE_BUDGET = 50_000
 

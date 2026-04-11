@@ -51,8 +51,6 @@ logger = logging.getLogger(__name__)
 # Event types published to the agent events stream
 AGENT_EVENT_TYPES = {
     "plan_generated",
-    "research_started",
-    "research_completed",
     "approval_requested",
     "execution_started",
     "execution_completed",

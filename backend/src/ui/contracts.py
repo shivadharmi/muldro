@@ -16,7 +16,7 @@ import logging
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -79,16 +79,18 @@ class ComponentType(str, Enum):
 
 
 class A2UIAction(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     type: str = "click"  # click, submit, change
-    payload: dict = {}
+    payload: dict = Field(default_factory=dict)
 
 
 class A2UIComponent(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     type: str
     id: str
-    properties: dict = {}
-    children: list["A2UIComponent"] = []
-    actions: list[A2UIAction] = []
+    properties: dict = Field(default_factory=dict)
+    children: list["A2UIComponent"] = Field(default_factory=list)
+    actions: list[A2UIAction] = Field(default_factory=list)
 
     @field_validator("type")
     @classmethod
@@ -107,10 +109,11 @@ class A2UIComponent(BaseModel):
 
 
 class A2UISurface(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     type: str = "surface"
     id: str
-    children: list[A2UIComponent] = []
-    metadata: dict = {}
+    children: list[A2UIComponent] = Field(default_factory=list)
+    metadata: dict = Field(default_factory=dict)
 
 
 # ── Rich preview + detail modal contracts ───────────────────────

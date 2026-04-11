@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class RuntimeStepResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     step_id: str
     status: str
     action: str | None = None
@@ -18,6 +19,7 @@ class RuntimeStepResponse(BaseModel):
 
 
 class RuntimeRunResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     run_id: str
     plan_id: str | None = None
     status: str
@@ -30,21 +32,24 @@ class RuntimeRunResponse(BaseModel):
 
 
 class RuntimeEventResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     event_id: str
     run_id: str | None = None
     step_id: str | None = None
     event_type: str
     occurred_at: datetime
-    payload: dict = {}
+    payload: dict = Field(default_factory=dict)
 
 
 class AgentWorkloadResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     agent_name: str
     call_count_24h: int
     avg_duration_ms: float
 
 
 class RuntimeSummaryResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     active_runs: int = 0
     blocked_runs: int = 0
     completed_24h: int = 0

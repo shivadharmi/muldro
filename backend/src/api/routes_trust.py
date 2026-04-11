@@ -3,7 +3,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import get_current_user, get_current_workspace_id, get_session
@@ -17,6 +17,7 @@ VALID_TRUST_LEVELS = {"first_use", "learning", "trusted", "autonomous", "blocked
 
 
 class TrustRiskLevel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     risk_level: str
     trust_level: str
     approved_count: int
@@ -25,6 +26,7 @@ class TrustRiskLevel(BaseModel):
 
 
 class TrustCapabilityEntry(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     capability: str
     family: str
     trust_level: str
@@ -33,10 +35,12 @@ class TrustCapabilityEntry(BaseModel):
 
 
 class TrustDashboardResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     capabilities: list[TrustCapabilityEntry]
 
 
 class TrustCapabilityDetailRisk(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     risk_level: str
     trust_level: str
     approved_count: int
@@ -48,6 +52,7 @@ class TrustCapabilityDetailRisk(BaseModel):
 
 
 class TrustCapabilityDetailResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     capability: str
     family: str
     ceiling: str
@@ -55,20 +60,24 @@ class TrustCapabilityDetailResponse(BaseModel):
 
 
 class CeilingRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     max_level: str
 
 
 class CeilingResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     capability: str
     max_level: str
 
 
 class ResetResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     capability: str
     status: str
 
 
 class TimePolicyRule(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     start_hour: int
     end_hour: int
     max_level: str
@@ -76,10 +85,12 @@ class TimePolicyRule(BaseModel):
 
 
 class TimePoliciesResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     policies: list[TimePolicyRule]
 
 
 class TimePoliciesRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     policies: list[TimePolicyRule]
 
 

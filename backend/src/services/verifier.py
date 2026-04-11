@@ -4,7 +4,7 @@ import json
 import logging
 from enum import Enum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +22,7 @@ class Verdict(str, Enum):
 
 
 class VerificationResult(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     verdict: Verdict
     score: float = 0.0
     details: str = ""

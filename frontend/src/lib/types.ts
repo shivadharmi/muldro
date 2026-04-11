@@ -132,82 +132,6 @@ export interface ApprovalDetail {
   trace_id: string | null;
 }
 
-// ── Tasks ───────────────────────────────────────────────────────
-
-export interface Task {
-  task_id: string;
-  goal: string;
-  priority: string;
-  status: string;
-  created_at: string | null;
-}
-
-export interface TaskStep {
-  task_id: string;
-  task_type: string;
-  status: string;
-  result_summary: string | null;
-}
-
-export interface TaskDetail {
-  task_id: string;
-  goal: string;
-  priority: string;
-  status: string;
-  risk_level: string;
-  reasoning_summary: string | null;
-  steps: TaskStep[];
-  execution_status: string | null;
-  created_at: string | null;
-}
-
-// ── Schedules ───────────────────────────────────────────────────
-
-export interface Schedule {
-  schedule_id: string;
-  user_id: string;
-  name: string;
-  description: string | null;
-  schedule_type: string;
-  cron_expr: string | null;
-  run_at: string | null;
-  action_type: string;
-  action_config: Record<string, unknown> | null;
-  enabled: boolean;
-  last_run_at: string | null;
-  next_run_at: string | null;
-  run_count: number;
-  consecutive_failures: number;
-  last_error: string | null;
-  source: string;
-  priority: string;
-  created_at: string | null;
-  updated_at: string | null;
-}
-
-export interface ScheduleCreateInput {
-  name: string;
-  description?: string;
-  schedule_type: string;
-  cron_expr?: string;
-  run_at?: string;
-  action_type: string;
-  action_config?: Record<string, unknown>;
-  enabled?: boolean;
-  priority?: string;
-}
-
-export interface ScheduleUpdateInput {
-  name?: string;
-  description?: string;
-  cron_expr?: string;
-  run_at?: string;
-  action_type?: string;
-  action_config?: Record<string, unknown>;
-  enabled?: boolean;
-  priority?: string;
-}
-
 // ── Briefings ───────────────────────────────────────────────────
 
 export interface Briefing {
@@ -287,56 +211,6 @@ export interface HeartbeatResult {
   timestamp: string;
 }
 
-// ── Standalone Tasks ────────────────────────────────────────────
-
-export interface StandaloneTask {
-  task_id: string;
-  title: string;
-  description: string | null;
-  task_type: string;
-  source: string;
-  priority: string;
-  status: string;
-  goal_id: string | null;
-  parent_task_id: string | null;
-  due_at: string | null;
-  assigned_agent: string | null;
-  created_at: string | null;
-}
-
-export interface StandaloneTaskCreateInput {
-  title: string;
-  description?: string;
-  task_type?: string;
-  priority?: string;
-  goal_id?: string;
-  parent_task_id?: string;
-  due_at?: string;
-}
-
-// ── Goals ───────────────────────────────────────────────────────
-
-export interface Goal {
-  goal_id: string;
-  title: string;
-  description: string | null;
-  status: string;
-  progress: number;
-  priority: string;
-  target_date: string | null;
-  success_criteria_json: Record<string, unknown> | null;
-  task_count: number;
-  completed_task_count: number;
-  created_at: string | null;
-}
-
-export interface GoalCreateInput {
-  title: string;
-  description?: string;
-  priority?: string;
-  target_date?: string;
-}
-
 // ── Notifications ───────────────────────────────────────────────
 
 export interface Notification {
@@ -349,15 +223,6 @@ export interface Notification {
   sent_at: string | null;
   read_at: string | null;
   created_at: string | null;
-}
-
-// ── Workflows ───────────────────────────────────────────────────
-
-export interface Workflow {
-  name: string;
-  description: string;
-  step_count: number;
-  tags: string[];
 }
 
 // ── Runs ────────────────────────────────────────────────────────

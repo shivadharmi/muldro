@@ -528,7 +528,7 @@ class TestTraceCostReconciliation:
         usage = await tracker.record_from_span(
             db,
             span=span,
-            agent_name="observer",
+            agent_name="perceiver",
             model="claude-sonnet-4-20250514",
             trigger="perception",
             workspace_id="ws_test",

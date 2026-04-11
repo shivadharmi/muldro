@@ -157,7 +157,7 @@ function renderComponentInner(
 export function A2UIRenderer({ surface, onAction }: RendererProps) {
   return (
     <div className="space-y-4">
-      {surface.children.map((child) => renderComponent(child, onAction))}
+      {(surface.children ?? []).map((child) => renderComponent(child, onAction))}
     </div>
   );
 }

@@ -80,15 +80,16 @@ export const useSurfaceStore = create<SurfaceState>((set) => ({
     set((s) => {
       const idx = s.surfaces.findIndex((sf) => sf.id === surfaceId);
       if (idx === -1) return s;
+      const prev = s.surfaces[idx];
       const next = [...s.surfaces];
       next[idx] = {
-        ...next[idx],
-        phase: update.phase,
-        steps: update.steps,
-        current_step: update.current_step,
-        progress: update.progress,
-        approval: update.approval,
-        results: update.results,
+        ...prev,
+        ...(update.phase !== undefined && { phase: update.phase }),
+        ...(update.steps && update.steps.length > 0 && { steps: update.steps }),
+        ...(update.current_step !== undefined && { current_step: update.current_step }),
+        ...(update.progress !== undefined && { progress: update.progress }),
+        ...(update.approval !== undefined && { approval: update.approval }),
+        ...(update.results !== undefined && { results: update.results }),
       };
       return { surfaces: next };
     }),

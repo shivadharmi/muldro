@@ -20,24 +20,22 @@ logger = logging.getLogger(__name__)
 
 # Display names for the 8 default agents
 _DEFAULT_DISPLAY_NAMES = {
-    "observer": "Observer",
+    "perceiver": "Perceiver",
     "librarian": "Librarian",
     "planner": "Planner",
     "governor": "Governor",
     "operator": "Operator",
     "presenter": "Presenter",
-    "researcher": "Researcher",
     "persona": "Persona",
 }
 
 _DEFAULT_DESCRIPTIONS = {
-    "observer": "Perceives the world — reads data sources, detects changes, ingests events.",
+    "perceiver": "Perceives the world — reads data sources, detects changes, gathers context.",
     "librarian": "Understands events — extracts entities, updates world model, curates memories.",
     "planner": "Decides what to do — produces structured task graphs, never prose.",
     "governor": "Enforces safety — evaluates policies, gates approvals, audits actions.",
     "operator": "Executes approved plans — calls external tools, tracks execution state.",
     "presenter": "Communicates with the user — briefings, notifications, dynamic UI.",
-    "researcher": "Gathers deep context — cross-source synthesis, fact validation.",
     "persona": "Learns preferences — adapts communication style, detects patterns.",
 }
 

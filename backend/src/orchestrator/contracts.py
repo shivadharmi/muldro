@@ -192,7 +192,7 @@ class PolicyDecision(BaseModel):
         "blocked",
     ]
     justification: str = ""
-    risk_level: str = "low"
+    risk_level: Literal["none", "low", "medium", "high", "critical"] = "low"
     approval_id: str | None = None
     execution_id: str | None = None
 
@@ -286,7 +286,7 @@ class StepState(BaseModel):
 
     step_id: str
     description: str
-    status: str  # pending, executing, completed, failed, approval_needed, user_action
+    status: Literal["pending", "executing", "completed", "failed", "approval_needed", "user_action"]
     output_summary: str | None = None
     duration_ms: int | None = None
 
@@ -324,7 +324,9 @@ class SurfaceUpdate(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     surface_id: str
-    phase: str  # planning, plan_ready, executing, approval_needed, completed, failed, partial
+    phase: Literal[
+        "planning", "plan_ready", "executing", "approval_needed", "completed", "failed", "partial"
+    ]
     steps: list[StepState] = Field(default_factory=list)
     current_step: str | None = None
     progress: str = ""

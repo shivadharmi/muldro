@@ -26,7 +26,7 @@ class TestAgentEnvelope:
         assert len(e.tools_available) == 1
 
     def test_defaults(self):
-        e = AgentEnvelope(agent_name="observer", message="hi")
+        e = AgentEnvelope(agent_name="perceiver", message="hi")
         assert e.context == ""
         assert e.tools_available == []
 
@@ -37,12 +37,12 @@ class TestAgentEnvelope:
 class TestAgentResult:
     def test_valid(self):
         r = AgentResult(
-            agent_name="researcher",
+            agent_name="perceiver",
             response_text="Found 3 results",
             tools_called=["search_memory"],
             tokens_used=150,
         )
-        assert r.agent_name == "researcher"
+        assert r.agent_name == "perceiver"
         assert r.tokens_used == 150
 
     def test_defaults(self):

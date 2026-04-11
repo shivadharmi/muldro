@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -60,6 +60,8 @@ def _rank_memories(memories: list[dict]) -> list[dict]:
 
 class ContextPack(BaseModel):
     """Structured context assembled for an agent prompt."""
+
+    model_config = ConfigDict(extra="ignore")
 
     task_summary: str | None = None
     goals: list[dict] = []

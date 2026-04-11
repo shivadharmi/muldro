@@ -332,6 +332,44 @@ export function ChatPanel({
               }
               break;
 
+            case "tool_call":
+              updateAssistant((m) => ({
+                ...m,
+                agents: m.agents.map((a) =>
+                  a.agent === event.agent && a.status === "running"
+                    ? {
+                        ...a,
+                        toolCalls: [
+                          ...a.toolCalls,
+                          {
+                            tool: event.tool || "unknown",
+                            input: (event.input ?? {}) as Record<string, unknown>,
+                          },
+                        ],
+                      }
+                    : a
+                ),
+              }));
+              break;
+
+            case "tool_result":
+              updateAssistant((m) => ({
+                ...m,
+                agents: m.agents.map((a) =>
+                  a.agent === event.agent && a.status === "running"
+                    ? {
+                        ...a,
+                        toolCalls: a.toolCalls.map((tc, i) =>
+                          i === a.toolCalls.length - 1
+                            ? { ...tc, result: event.result }
+                            : tc
+                        ),
+                      }
+                    : a
+                ),
+              }));
+              break;
+
             case "done":
               updateAssistant((m) => ({
                 ...m,
