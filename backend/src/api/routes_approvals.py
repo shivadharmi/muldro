@@ -240,19 +240,49 @@ async def approve_action(
                 transition_step(step, "running")
                 await db.flush()
             await executor.resume_run(approval.run_id)
-        except Exception:
+        except Exception as exc:
             logger.exception("Resume failed after approval: %s", approval.run_id)
+            try:
+                await db.rollback()
+                from src.services.execution_state import transition_run as _tr
+
+                run_for_fail = await db.execute(
+                    select(TaskRun).where(TaskRun.run_id == approval.run_id)
+                )
+                r = run_for_fail.scalar_one_or_none()
+                if r and r.status not in ("completed", "failed", "cancelled"):
+                    _tr(r, "failed")
+                    r.error = {"resume_failed": str(exc)[:500]}
+                    r.completed_at = datetime.now(timezone.utc)
+                    await db.commit()
+            except Exception:
+                logger.warning("Failed to mark run as failed after resume error", exc_info=True)
     elif run and run.plan_id:
         # Plan-level approval: trigger execution via GraphExecutor directly
         try:
+            from src.services.graph_executor import create_graph_executor
+
             executor = await create_graph_executor(
                 settings=settings, db=db, workspace_id=workspace_id
             )
             # Pass surface_id from checkpoint if available
             _surface_id = (run.checkpoint or {}).get("surface_id")
             await executor.execute_run(run.run_id, surface_id=_surface_id)
-        except Exception:
+        except Exception as exc:
             logger.exception("Execution failed after approval: %s", run.run_id)
+            try:
+                await db.rollback()
+                from src.services.execution_state import transition_run as _tr
+
+                run_for_fail = await db.execute(select(TaskRun).where(TaskRun.run_id == run.run_id))
+                r = run_for_fail.scalar_one_or_none()
+                if r and r.status not in ("completed", "failed", "cancelled"):
+                    _tr(r, "failed")
+                    r.error = {"resume_failed": str(exc)[:500]}
+                    r.completed_at = datetime.now(timezone.utc)
+                    await db.commit()
+            except Exception:
+                logger.warning("Failed to mark run as failed after resume error", exc_info=True)
     elif approval.artifact_refs and approval.artifact_refs.get("tool_name"):
         # B1: Tool-level approval resume — create a background TaskRun to
         # re-execute the approved tool with the original parameters.
@@ -307,19 +337,51 @@ async def approve_action(
 
             try:
                 await executor.execute_run(bg_run.run_id)
-            except Exception:
+            except Exception as exc:
                 logger.exception("Execution failed for tool-level resume run: %s", bg_run.run_id)
+                try:
+                    await db.rollback()
+                    from src.services.execution_state import transition_run as _tr
+
+                    run_for_fail = await db.execute(
+                        select(TaskRun).where(TaskRun.run_id == bg_run.run_id)
+                    )
+                    r = run_for_fail.scalar_one_or_none()
+                    if r and r.status not in ("completed", "failed", "cancelled"):
+                        _tr(r, "failed")
+                        r.error = {"resume_failed": str(exc)[:500]}
+                        r.completed_at = datetime.now(timezone.utc)
+                        await db.commit()
+                except Exception:
+                    logger.warning("Failed to mark run as failed after resume error", exc_info=True)
 
             logger.info(
                 "Tool-level approval resumed: %s → run %s",
                 approval.approval_id,
                 bg_run.run_id,
             )
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "Failed to create resume run for tool approval: %s",
                 approval.approval_id,
             )
+            try:
+                await db.rollback()
+                from src.services.execution_state import transition_run as _tr
+
+                # bg_run may not have been created/flushed yet — NameError
+                # or missing DB row is caught by the outer handler.
+                run_for_fail = await db.execute(
+                    select(TaskRun).where(TaskRun.run_id == bg_run.run_id)  # type: ignore[possibly-undefined]
+                )
+                r = run_for_fail.scalar_one_or_none()
+                if r and r.status not in ("completed", "failed", "cancelled"):
+                    _tr(r, "failed")
+                    r.error = {"resume_failed": str(exc)[:500]}
+                    r.completed_at = datetime.now(timezone.utc)
+                    await db.commit()
+            except Exception:
+                logger.warning("Failed to mark run as failed after resume error", exc_info=True)
 
     return ApprovalResponse(
         approval_id=approval.approval_id,
