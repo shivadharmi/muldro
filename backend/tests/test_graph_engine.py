@@ -45,7 +45,7 @@ class TestTypedEdgeSync:
             relation_id="rel_001",
             from_entity_id="ent_001",
             to_entity_id="ent_002",
-            relation_type="works_at",
+            relation_type="works_on",
             user_id="usr_001",
             strength=0.8,
             start_date="2025-06-01",
@@ -57,8 +57,8 @@ class TestTypedEdgeSync:
         cypher = call_args[0][0]
         kwargs = call_args[1]
 
-        assert ":WORKS_AT" in cypher, f"Expected :WORKS_AT in cypher, got: {cypher}"
-        assert ":RELATES_TO" not in cypher, "Should not use :RELATES_TO"
+        assert ":WORKS_ON" in cypher, f"Expected :WORKS_AT in cypher, got: {cypher}"
+        assert ":RELATED_TO" not in cypher, "Should not use :RELATES_TO"
         assert kwargs.get("strength") == 0.8
         assert kwargs.get("start_date") == "2025-06-01"
         assert kwargs.get("end_date") is None
@@ -76,7 +76,7 @@ class TestTypedEdgeSync:
             relation_id="rel_002",
             from_entity_id="ent_001",
             to_entity_id="ent_002",
-            relation_type="works_at",
+            relation_type="works_on",
             user_id="usr_001",
         )
 
@@ -85,10 +85,10 @@ class TestTypedEdgeSync:
         kwargs = call_args[1]
 
         assert "r.relation_type" in cypher or "relation_type" in cypher.lower()
-        assert kwargs.get("rel_type") == "works_at"
+        assert kwargs.get("rel_type") == "works_on"
 
     async def test_sync_relationship_sanitizes_label(self, settings, mock_driver, mock_session):
-        """'member of' → :MEMBER_OF"""
+        """'member_of' → :MEMBER_OF"""
         from src.services.graph_engine import GraphEngine
 
         engine = GraphEngine(settings)
@@ -98,7 +98,7 @@ class TestTypedEdgeSync:
             relation_id="rel_003",
             from_entity_id="ent_001",
             to_entity_id="ent_002",
-            relation_type="member of",
+            relation_type="member_of",
             user_id="usr_001",
         )
 
@@ -120,7 +120,7 @@ class TestTypedEdgeSync:
             relation_id="rel_004",
             from_entity_id="ent_001",
             to_entity_id="ent_002",
-            relation_type="knows",
+            relation_type="related_to",
             user_id="usr_001",
         )
 
@@ -141,7 +141,7 @@ class TestTypedEdgeSync:
             relation_id="rel_005",
             from_entity_id="ent_001",
             to_entity_id="ent_002",
-            relation_type="knows",
+            relation_type="related_to",
             user_id="usr_001",
         )
         assert engine._driver is None
@@ -411,3 +411,73 @@ class TestTraverseTemporal:
             entity_id="ent_a", user_id="usr_1", after="2025-01-01"
         )
         assert results == []
+
+
+class TestCypherInjectionPrevention:
+    """Tests for Cypher injection prevention via allow-list validation."""
+
+    async def test_sync_relationship_rejects_invalid_type(self, settings, mock_driver):
+        from src.services.graph_engine import GraphEngine
+
+        engine = GraphEngine(settings)
+        engine._driver = mock_driver
+
+        with pytest.raises(ValueError, match="Invalid relation_type"):
+            await engine.sync_relationship(
+                relation_id="rel_bad",
+                from_entity_id="ent_001",
+                to_entity_id="ent_002",
+                relation_type="DETACH DELETE n //",
+                user_id="usr_001",
+            )
+
+    async def test_sync_relationship_accepts_valid_type(self, settings, mock_driver, mock_session):
+        from src.services.graph_engine import GraphEngine
+
+        engine = GraphEngine(settings)
+        engine._driver = mock_driver
+
+        await engine.sync_relationship(
+            relation_id="rel_ok",
+            from_entity_id="ent_001",
+            to_entity_id="ent_002",
+            relation_type="works_on",
+            user_id="usr_001",
+        )
+        mock_session.run.assert_called_once()
+
+    async def test_traverse_rejects_invalid_relation_types(self, settings, mock_driver):
+        from src.services.graph_engine import GraphEngine
+
+        engine = GraphEngine(settings)
+        engine._driver = mock_driver
+
+        with pytest.raises(ValueError, match="Invalid relation_types"):
+            await engine.traverse(
+                entity_id="ent_001",
+                user_id="usr_001",
+                relation_types=["works_on", "DROP DATABASE"],
+            )
+
+    async def test_traverse_parameterizes_types(self, settings, mock_driver, mock_session):
+        from src.services.graph_engine import GraphEngine
+
+        mock_result = AsyncMock()
+        mock_result.single = AsyncMock(return_value=None)
+        mock_session.run = AsyncMock(return_value=mock_result)
+
+        engine = GraphEngine(settings)
+        engine._driver = mock_driver
+
+        await engine.traverse(
+            entity_id="ent_001",
+            user_id="usr_001",
+            relation_types=["works_on", "owns"],
+        )
+
+        call_args = mock_session.run.call_args
+        cypher = call_args[0][0]
+        params = call_args[1]
+
+        assert "$types" in cypher
+        assert params["types"] == ["works_on", "owns"]

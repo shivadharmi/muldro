@@ -225,9 +225,10 @@ class VectorStore:
         user_id: str,
         threshold: float = 0.9,
         limit: int = 5,
+        filters: dict | None = None,
     ) -> list[dict]:
         """Find items above a similarity threshold. For dedup/contradiction checks."""
-        results = await self.search(collection, query_vector, user_id, limit=limit)
+        results = await self.search(collection, query_vector, user_id, filters=filters, limit=limit)
         return [r for r in results if r.get("score", 0) >= threshold]
 
     async def delete(self, collection: str, id: str) -> None:

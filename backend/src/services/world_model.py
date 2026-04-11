@@ -414,11 +414,15 @@ class WorldModel:
                         user_id,
                         threshold=0.92,
                         limit=1,
+                        filters={"workspace_id": workspace_id} if workspace_id else None,
                     )
                     if similar:
                         eid = similar[0].get("payload", {}).get("_original_id") or similar[0]["id"]
                         result = await self._db.execute(
-                            select(Entity).where(Entity.entity_id == eid)
+                            select(Entity).where(
+                                Entity.entity_id == eid,
+                                Entity.workspace_id == workspace_id,
+                            )
                         )
                         return result.scalar_one_or_none()
             except Exception:

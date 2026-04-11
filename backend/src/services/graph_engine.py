@@ -9,6 +9,7 @@ import json
 import logging
 
 from src.config.settings import Settings
+from src.services.world_model import RELATION_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,11 @@ class GraphEngine:
         if not driver:
             return
 
+        if relation_type not in RELATION_TYPES:
+            raise ValueError(
+                f"Invalid relation_type {relation_type!r}; must be one of {sorted(RELATION_TYPES)}"
+            )
+
         label = relation_type.upper().replace(" ", "_")
 
         try:
@@ -142,8 +148,13 @@ class GraphEngine:
             return {"nodes": [], "edges": []}
 
         rel_filter = ""
+        params: dict = {"entity_id": entity_id, "user_id": user_id}
         if relation_types:
-            rel_filter = f"AND ALL(r IN rels WHERE r.relation_type IN {relation_types})"
+            invalid = set(relation_types) - RELATION_TYPES
+            if invalid:
+                raise ValueError(f"Invalid relation_types: {invalid}")
+            rel_filter = "AND ALL(r IN rels WHERE r.relation_type IN $types)"
+            params["types"] = relation_types
 
         async with driver.session() as session:
             result = await session.run(
@@ -164,8 +175,7 @@ class GraphEngine:
                         type: r.relation_type
                     }}) AS edges
                 """,
-                entity_id=entity_id,
-                user_id=user_id,
+                **params,
             )
             record = await result.single()
             if not record:

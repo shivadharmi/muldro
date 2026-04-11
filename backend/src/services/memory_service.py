@@ -847,10 +847,14 @@ class MemoryService:
             )
 
         # Step 1: Qdrant semantic search
+        qdrant_filters = {}
+        if workspace_id:
+            qdrant_filters["workspace_id"] = workspace_id
         qdrant_results = await self._vector_store.search(
             "memories",
             query_embedding,
             user_id,
+            filters=qdrant_filters if qdrant_filters else None,
             limit=max_results * 2,
         )
         if not qdrant_results:
@@ -861,6 +865,7 @@ class MemoryService:
         stmt = select(Memory).where(
             Memory.memory_id.in_(memory_ids),
             Memory.status == "active",
+            Memory.workspace_id == workspace_id,
         )
         if memory_types:
             stmt = stmt.where(Memory.memory_type.in_(memory_types))

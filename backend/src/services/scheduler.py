@@ -591,22 +591,29 @@ class SchedulerLoop:
                 if len(interactions) < 5:
                     return
 
-                summary = "\n".join(
-                    f"- {i.message_preview or '(no preview)'} → {i.intent or 'unknown'}"
-                    for i in interactions
-                )
-                user_id = interactions[0].user_id
-                workspace_id = getattr(interactions[0], "workspace_id", "") or ""
+                # Group by (workspace_id, user_id) to avoid cross-workspace mixing
+                grouped: dict[tuple[str, str], list] = {}
+                for i in interactions:
+                    key = (getattr(i, "workspace_id", "") or "", i.user_id)
+                    grouped.setdefault(key, []).append(i)
 
-                await self._orchestrator._call_agent(
-                    "persona",
-                    message=(
-                        "Analyze these recent user interactions and extract"
-                        f" preference patterns:\n{summary}"
-                    ),
-                    user_id=user_id,
-                    workspace_id=workspace_id,
-                )
+                for (ws_id, uid), group in grouped.items():
+                    if len(group) < 5:
+                        continue
+                    summary = "\n".join(
+                        f"- {i.message_preview or '(no preview)'} → {i.intent or 'unknown'}"
+                        for i in group
+                    )
+                    await self._orchestrator._call_agent(
+                        "persona",
+                        message=(
+                            "Analyze these recent user interactions and extract"
+                            f" preference patterns:\n{summary}"
+                        ),
+                        user_id=uid,
+                        workspace_id=ws_id,
+                    )
+
                 self._last_persona_batch_at = datetime.now(timezone.utc)
                 logger.info("Persona batch completed: %d interactions analyzed", len(interactions))
 
