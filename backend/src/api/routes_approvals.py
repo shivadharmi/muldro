@@ -162,6 +162,20 @@ async def approve_action(
         details={"reason": req.reason if req else None},
     )
 
+    # Trust feedback loop — record approval for graduated autonomy
+    try:
+        from src.services.risk_assessor import record_approval_decision
+
+        capability = approval.approval_type
+        if ":" in capability:
+            capability = capability.split(":", 1)[1]
+        decision_type = "modified" if req and req.reason else "approved"
+        await record_approval_decision(
+            db, workspace_id, capability, approval.risk_level or "low", decision_type
+        )
+    except Exception:
+        logger.warning("Trust feedback failed for approval %s", approval_id, exc_info=True)
+
     await db.commit()
 
     # Publish approval.approved domain event via SSE
@@ -360,6 +374,19 @@ async def reject_action(
         summary=f"Rejected: {approval.title}",
         details={"reason": req.reason if req else None},
     )
+
+    # Trust feedback loop — record rejection for graduated autonomy
+    try:
+        from src.services.risk_assessor import record_approval_decision
+
+        capability = approval.approval_type
+        if ":" in capability:
+            capability = capability.split(":", 1)[1]
+        await record_approval_decision(
+            db, workspace_id, capability, approval.risk_level or "low", "rejected"
+        )
+    except Exception:
+        logger.warning("Trust feedback failed for rejection %s", approval_id, exc_info=True)
 
     await db.commit()
 

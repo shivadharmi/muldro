@@ -1,163 +1,177 @@
-"""Trust engine — builds and tracks trust scores per action type.
+"""Trust engine — deterministic policy decisions from trust state + risk level.
 
-Implements graduated autonomy: as the user consistently approves certain
-action types, the trust score rises, eventually enabling auto-approval.
+Implements a 4×4 matrix of (trust_level × risk_level) → PolicyDecision:
+
+                 | none          | low           | medium           | high
+    first_use    | approval_req  | approval_req  | approval_req     | approval_req
+    learning     | approval_req  | approval_req  | approval_req     | approval_req
+    trusted      | auto_notify   | auto_notify   | approval_req     | approval_req
+    autonomous   | auto_silent   | auto_silent   | auto_notify      | approval_req
+
+Ceiling: user-set max autonomy per capability caps the effective trust level.
 """
 
 import logging
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models.trust_score import TrustScore
+from src.orchestrator.contracts import PolicyDecision
+from src.services.risk_assessor import (
+    RiskAssessment,
+    apply_rejection,
+    get_or_create_trust_state,
+    graduate_trust,
+    min_trust_level,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class TrustEngine:
-    """Builds and tracks per-action-type trust scores."""
+    """Deterministic trust evaluation from TrustState + RiskAssessment."""
 
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, workspace_id: str = ""):
         self._db = db
+        self._workspace_id = workspace_id
+
+    async def evaluate(self, capability: str, risk_assessment: RiskAssessment) -> PolicyDecision:
+        """Evaluate trust for a capability + risk assessment → PolicyDecision."""
+        risk = risk_assessment.risk_level
+        state = await self._get_trust_state(capability, risk)
+        ceiling = await self._get_ceiling(capability)
+        effective_level = min_trust_level(state.trust_level, ceiling.max_level)
+
+        decision = self._matrix_lookup(effective_level, risk)
+
+        return PolicyDecision(
+            decision=decision,
+            justification=risk_assessment.reasoning,
+            risk_level=risk,
+        )
+
+    def _matrix_lookup(self, trust_level: str, risk_level: str) -> str:
+        """4×4 matrix: trust_level × risk_level → decision string."""
+        if trust_level in ("first_use", "learning"):
+            return "approval_required"
+
+        if trust_level == "trusted":
+            if risk_level in ("none", "low"):
+                return "auto_execute_notify"
+            return "approval_required"
+
+        if trust_level == "autonomous":
+            if risk_level == "high":
+                return "approval_required"
+            if risk_level == "medium":
+                return "auto_execute_notify"
+            return "auto_execute_silent"
+
+        return "approval_required"
+
+    async def _get_trust_state(self, capability: str, risk_level: str):
+        """Fetch or create TrustState for this workspace + capability + risk."""
+        return await get_or_create_trust_state(self._db, self._workspace_id, capability, risk_level)
+
+    async def _get_ceiling(self, capability: str):
+        """Fetch TrustCeiling or return default (autonomous)."""
+        from src.models.trust_state import TrustCeiling
+
+        result = await self._db.execute(
+            select(TrustCeiling).where(
+                TrustCeiling.workspace_id == self._workspace_id,
+                TrustCeiling.capability == capability,
+            )
+        )
+        ceiling = result.scalar_one_or_none()
+        if ceiling:
+            return ceiling
+
+        return SimpleNamespace(max_level="autonomous")
+
+    # ── Compatibility shim for Governor (removed in Spec 2B) ─────
 
     async def record_decision(
         self, user_id: str, action_type: str, approved: bool, workspace_id: str = ""
     ) -> float:
-        """Record an approval/rejection decision and update trust score."""
-        score = await self._get_or_create(user_id, action_type, workspace_id=workspace_id)
-
+        """Compatibility shim — Governor still calls this."""
+        ws = workspace_id or self._workspace_id
+        state = await get_or_create_trust_state(self._db, ws, action_type, "low")
         if approved:
-            score.approved_count += 1
+            state.approved_count += 1
         else:
-            score.rejected_count += 1
+            apply_rejection(state)
 
-        score.last_decision_at = datetime.now(timezone.utc)
-        total = score.approved_count + score.rejected_count
-        score.trust_score = score.approved_count / total if total > 0 else 0.0
-
+        state.last_decision_at = datetime.now(timezone.utc)
+        state.trust_level = graduate_trust(state)
         await self._db.flush()
-        logger.info(
-            "Trust updated: user=%s action=%s score=%.2f (%d/%d)",
-            user_id,
-            action_type,
-            score.trust_score,
-            score.approved_count,
-            total,
-        )
-        return score.trust_score
 
-    async def get_trust_score(
-        self, user_id: str, action_type: str, workspace_id: str = ""
-    ) -> float:
-        """Get the current trust score for an action type."""
-        conditions = [
-            TrustScore.user_id == user_id,
-            TrustScore.action_type == action_type,
-        ]
-        if workspace_id:
-            conditions.append(TrustScore.workspace_id == workspace_id)
-        result = await self._db.execute(select(TrustScore).where(*conditions))
-        score = result.scalar_one_or_none()
-        return score.trust_score if score else 0.0
+        total = state.approved_count + state.rejected_count
+        return state.approved_count / total if total > 0 else 0.0
 
     async def should_auto_approve(
         self, user_id: str, action_type: str, risk_level: str = "low", workspace_id: str = ""
     ) -> bool:
-        """Determine if an action should be auto-approved based on trust."""
-        conditions = [
-            TrustScore.user_id == user_id,
-            TrustScore.action_type == action_type,
-        ]
-        if workspace_id:
-            conditions.append(TrustScore.workspace_id == workspace_id)
-        result = await self._db.execute(select(TrustScore).where(*conditions))
-        score = result.scalar_one_or_none()
-        if not score:
-            return False
+        """Compatibility shim."""
+        ws = workspace_id or self._workspace_id
+        state = await get_or_create_trust_state(self._db, ws, action_type, risk_level)
 
-        # Never auto-approve high-risk actions
         if risk_level == "high":
             return False
 
-        # Need sufficient history
-        total = score.approved_count + score.rejected_count
+        total = state.approved_count + state.rejected_count
         if total < 5:
             return False
 
-        return score.trust_score >= score.auto_approve_threshold
+        return state.trust_level in ("trusted", "autonomous")
+
+    async def get_trust_score(
+        self, user_id: str, action_type: str, workspace_id: str = ""
+    ) -> float:
+        """Compatibility shim."""
+        ws = workspace_id or self._workspace_id
+        state = await get_or_create_trust_state(self._db, ws, action_type, "low")
+        total = state.approved_count + state.rejected_count
+        return state.approved_count / total if total > 0 else 0.0
 
     async def get_trust_dashboard(self, user_id: str, workspace_id: str = "") -> list[dict]:
-        """Get all trust scores for a user."""
-        query = select(TrustScore).where(TrustScore.user_id == user_id)
-        if workspace_id:
-            query = query.where(TrustScore.workspace_id == workspace_id)
-        query = query.order_by(TrustScore.trust_score.desc())
-        result = await self._db.execute(query)
-        scores = result.scalars().all()
+        """Compatibility shim."""
+        from src.models.trust_state import TrustState
+
+        ws = workspace_id or self._workspace_id
+        result = await self._db.execute(select(TrustState).where(TrustState.workspace_id == ws))
+        states = result.scalars().all()
         return [
             {
-                "action_type": s.action_type,
-                "trust_score": s.trust_score,
+                "action_type": s.capability,
+                "trust_level": s.trust_level,
                 "approved_count": s.approved_count,
                 "rejected_count": s.rejected_count,
-                "auto_approve_threshold": s.auto_approve_threshold,
-                "last_decision_at": s.last_decision_at.isoformat() if s.last_decision_at else None,
+                "risk_level": s.risk_level,
+                "last_decision_at": (
+                    s.last_decision_at.isoformat() if s.last_decision_at else None
+                ),
             }
-            for s in scores
+            for s in states
         ]
 
     async def reset_trust(
         self, user_id: str, action_type: str | None = None, workspace_id: str = ""
     ) -> None:
-        """Reset trust scores."""
+        """Compatibility shim."""
+        from src.models.trust_state import TrustState
+
+        ws = workspace_id or self._workspace_id
+        conditions = [TrustState.workspace_id == ws]
         if action_type:
-            conditions = [
-                TrustScore.user_id == user_id,
-                TrustScore.action_type == action_type,
-            ]
-            if workspace_id:
-                conditions.append(TrustScore.workspace_id == workspace_id)
-            result = await self._db.execute(select(TrustScore).where(*conditions))
-            score = result.scalar_one_or_none()
-            if score:
-                score.approved_count = 0
-                score.rejected_count = 0
-                score.trust_score = 0.0
-        else:
-            conditions = [TrustScore.user_id == user_id]
-            if workspace_id:
-                conditions.append(TrustScore.workspace_id == workspace_id)
-            result = await self._db.execute(select(TrustScore).where(*conditions))
-            for score in result.scalars().all():
-                score.approved_count = 0
-                score.rejected_count = 0
-                score.trust_score = 0.0
-
+            conditions.append(TrustState.capability == action_type)
+        result = await self._db.execute(select(TrustState).where(*conditions))
+        for state in result.scalars().all():
+            state.approved_count = 0
+            state.rejected_count = 0
+            state.modified_count = 0
+            state.trust_level = "first_use"
+            state.cooldown_until = None
         await self._db.flush()
-
-    async def _get_or_create(
-        self, user_id: str, action_type: str, workspace_id: str = ""
-    ) -> TrustScore:
-        conditions = [
-            TrustScore.user_id == user_id,
-            TrustScore.action_type == action_type,
-        ]
-        if workspace_id:
-            conditions.append(TrustScore.workspace_id == workspace_id)
-        result = await self._db.execute(select(TrustScore).where(*conditions))
-        score = result.scalar_one_or_none()
-        if score:
-            return score
-
-        score = TrustScore(
-            user_id=user_id,
-            workspace_id=workspace_id,
-            action_type=action_type,
-            approved_count=0,
-            rejected_count=0,
-            trust_score=0.0,
-        )
-        self._db.add(score)
-        await self._db.flush()
-        return score
