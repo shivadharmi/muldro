@@ -209,6 +209,50 @@ class TriSearchService:
             grouped[r.get("result_type", "unknown")].append(r)
         return dict(grouped)
 
+    async def search_with_graph_boost(
+        self,
+        query: str,
+        user_id: str,
+        workspace_id: str,
+        db: AsyncSession,
+        context_entity_ids: list[str] | None = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Search with graph-based boosting for results connected to context entities.
+
+        Fetches 2x results, then boosts scores by 10% per entity overlap
+        with the graph neighborhood of context entities.
+        """
+        base_results = await self.search(
+            query=query,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            db=db,
+            limit=limit * 2,
+        )
+
+        if not context_entity_ids or not self._graph_engine:
+            return base_results[:limit]
+
+        # Build neighborhood set from context entities
+        neighborhood: set[str] = set()
+        for eid in context_entity_ids[:3]:
+            try:
+                related = await self._graph_engine.traverse_weighted(eid, user_id, depth=2)
+                neighborhood.update(r["entity_id"] for r in related)
+            except Exception:
+                logger.debug("Graph boost traversal failed for %s", eid, exc_info=True)
+
+        # Apply boost: 10% per overlapping entity
+        for result in base_results:
+            result_entities = set(result.get("entity_ids") or [])
+            overlap = result_entities & neighborhood
+            if overlap:
+                result["final_score"] = result.get("final_score", 0.0) * (1.0 + 0.1 * len(overlap))
+
+        base_results.sort(key=lambda r: r.get("final_score", 0.0), reverse=True)
+        return base_results[:limit]
+
     # ── Backend helpers ──────────────────────────────────────────
 
     async def _embed_query(self, query: str) -> list[float] | None:

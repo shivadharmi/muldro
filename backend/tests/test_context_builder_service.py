@@ -310,3 +310,79 @@ class TestBriefingEvidenceSemantic:
         # Should not raise even without TriSearch
         items = await brm._get_related_items(mock_briefing)
         assert isinstance(items, list)
+
+
+class TestEnrichedGraphContext:
+    @pytest.mark.asyncio
+    async def test_build_uses_traverse_weighted(self):
+        """ContextBuilder.build() should call traverse_weighted, not get_related_people."""
+        from src.services.context_builder import ContextBuilder
+
+        mock_graph = AsyncMock()
+        mock_graph.traverse_weighted = AsyncMock(return_value=[
+            {
+                "entity_id": "ent_b",
+                "name": "Alice Chen",
+                "entity_type": "person",
+                "avg_strength": 0.85,
+                "distance": 1,
+                "attributes": "{}",
+            },
+            {
+                "entity_id": "ent_c",
+                "name": "Acme Corp",
+                "entity_type": "organization",
+                "avg_strength": 0.6,
+                "distance": 2,
+                "attributes": "{}",
+            },
+        ])
+
+        mock_world = AsyncMock()
+        mock_world.find_entity = AsyncMock(return_value=[
+            {"entity_id": "ent_a", "entity_type": "person", "canonical_name": "Bob"},
+        ])
+
+        builder = ContextBuilder(
+            world_model=mock_world,
+            graph_engine=mock_graph,
+        )
+
+        pack = await builder.build(user_id="usr_1", query="test query")
+
+        mock_graph.traverse_weighted.assert_called()
+        mock_graph.get_related_people.assert_not_called()
+        assert len(pack.graph_relationships) == 2
+        assert pack.graph_relationships[0]["name"] == "Alice Chen"
+        assert pack.graph_relationships[0]["entity_type"] == "person"
+        assert pack.graph_relationships[0]["strength"] == 0.85
+        assert pack.graph_relationships[0]["distance"] == 1
+
+    def test_to_prompt_renders_enriched_graph(self):
+        """to_prompt() should render enriched graph relationships."""
+        from src.services.context_builder import ContextBuilder, ContextPack
+
+        pack = ContextPack(
+            task_summary="test",
+            graph_relationships=[
+                {
+                    "name": "Sarah Chen",
+                    "entity_type": "person",
+                    "relation_type": "invested_in",
+                    "strength": 0.8,
+                    "distance": 1,
+                },
+                {
+                    "name": "Acme Corp",
+                    "entity_type": "organization",
+                    "strength": 0.6,
+                    "distance": 2,
+                },
+            ],
+        )
+
+        prompt = ContextBuilder.to_prompt(pack)
+        assert "Sarah Chen" in prompt
+        assert "person" in prompt
+        assert "strength=0.8" in prompt
+        assert "distance=1" in prompt
