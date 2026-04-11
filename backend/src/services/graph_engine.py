@@ -97,26 +97,38 @@ class GraphEngine:
         to_entity_id: str,
         relation_type: str,
         user_id: str,
+        strength: float = 1.0,
+        start_date: str | None = None,
+        end_date: str | None = None,
     ) -> None:
-        """Upsert a relationship edge to Neo4j."""
+        """Upsert a relationship edge to Neo4j with typed label and strength/temporal data."""
         driver = await self._get_driver()
         if not driver:
             return
 
+        label = relation_type.upper().replace(" ", "_")
+
         try:
             async with driver.session() as session:
                 await session.run(
-                    """
-                    MATCH (a:Entity {entity_id: $from_id})
-                    MATCH (b:Entity {entity_id: $to_id})
-                    MERGE (a)-[r:RELATES_TO {relation_id: $rel_id}]->(b)
-                    SET r.relation_type = $rel_type, r.user_id = $user_id
+                    f"""
+                    MATCH (a:Entity {{entity_id: $from_id}})
+                    MATCH (b:Entity {{entity_id: $to_id}})
+                    MERGE (a)-[r:{label} {{relation_id: $rel_id}}]->(b)
+                    SET r.relation_type = $rel_type,
+                        r.user_id = $user_id,
+                        r.strength = $strength,
+                        r.start_date = $start_date,
+                        r.end_date = $end_date
                     """,
                     from_id=from_entity_id,
                     to_id=to_entity_id,
                     rel_id=relation_id,
                     rel_type=relation_type,
                     user_id=user_id,
+                    strength=strength,
+                    start_date=start_date,
+                    end_date=end_date,
                 )
         except Exception:
             logger.warning("Neo4j sync_relationship failed for %s", relation_id, exc_info=True)
@@ -258,12 +270,17 @@ class GraphEngine:
             count += 1
 
         for rel in relationships:
+            start_date = rel.get("start_date")
+            end_date = rel.get("end_date")
             await self.sync_relationship(
                 relation_id=rel["relation_id"],
                 from_entity_id=rel["from_entity_id"],
                 to_entity_id=rel["to_entity_id"],
                 relation_type=rel["relation_type"],
                 user_id=user_id,
+                strength=rel.get("strength", 1.0),
+                start_date=start_date.isoformat() if start_date else None,
+                end_date=end_date.isoformat() if end_date else None,
             )
             count += 1
 
@@ -281,7 +298,7 @@ class GraphEngine:
                 """
                 MATCH (n:Entity)
                 WHERE n.entity_id IN $entity_ids AND n.user_id = $user_id
-                MATCH (n)-[r:RELATES_TO]-(m:Entity)
+                MATCH (n)-[r]-(m:Entity)
                 WHERE m.entity_id IN $entity_ids AND m.user_id = $user_id
                 RETURN
                     collect(DISTINCT {
@@ -362,7 +379,7 @@ class GraphEngine:
                 f"""
                 MATCH (e:Entity {{user_id: $user_id}})
                 WHERE true {type_filter}
-                OPTIONAL MATCH (e)-[r:RELATES_TO]-()
+                OPTIONAL MATCH (e)-[r]-()
                 WITH e, count(r) AS degree
                 WHERE degree > 0
                 RETURN e.entity_id AS entity_id,
@@ -392,7 +409,7 @@ class GraphEngine:
         async with driver.session() as session:
             result = await session.run(
                 """
-                MATCH (a:Entity {user_id: $user_id})-[r:RELATES_TO]-(b:Entity)
+                MATCH (a:Entity {user_id: $user_id})-[r]-(b:Entity)
                 WHERE b.user_id = $user_id
                 RETURN DISTINCT
                     r.relation_id AS relation_id,
@@ -418,7 +435,7 @@ class GraphEngine:
             result = await session.run(
                 """
                 MATCH (e:Entity {user_id: $user_id})
-                OPTIONAL MATCH path = (e)-[:RELATES_TO*]-(connected:Entity)
+                OPTIONAL MATCH path = (e)-[*]-(connected:Entity)
                 WHERE connected.user_id = $user_id
                 WITH e, collect(DISTINCT connected.entity_id) AS community_members
                 WHERE size(community_members) > 0
