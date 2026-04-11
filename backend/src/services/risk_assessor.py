@@ -9,13 +9,136 @@ Components:
 - RiskAssessment, assess_risk(), get_or_assess_risk(): Added in Task 5
 """
 
+import hashlib
+import json
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import Any, Literal
 
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
+
+# ── Risk Assessment ──────────────────────────────────────────────
+
+_RISK_SYSTEM_PROMPT = """You assess the contextual risk of actions Jarvis is about to perform
+on behalf of the user.
+
+Consider:
+- What could go wrong if this action is incorrect or premature?
+- Is this reversible? Can it be undone?
+- What's the blast radius? Who and how many are affected?
+- How sensitive is the content being acted on?
+- What's the relationship context? (casual, professional, critical)
+
+You receive:
+- The capability being used and its parameters
+- The user's goals, relationships, and recent context (from memory)
+
+Output JSON only:
+{
+  "risk_level": "none | low | medium | high",
+  "reasoning": "1-2 sentence human-readable explanation",
+  "reversible": true | false,
+  "blast_radius": "self | internal | external_single | external_multiple | public"
+}"""
+
+
+class RiskAssessment(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    risk_level: Literal["none", "low", "medium", "high"]
+    reasoning: str
+    reversible: bool = True
+    blast_radius: Literal["self", "internal", "external_single", "external_multiple", "public"] = (
+        "self"
+    )
+
+
+def build_risk_cache_key(capability: str, step_input: dict) -> str:
+    """Build a deterministic cache key from capability + step input."""
+    raw = json.dumps({"capability": capability, "input": step_input}, sort_keys=True)
+    return hashlib.sha256(raw.encode()).hexdigest()[:24]
+
+
+async def assess_risk(
+    capability: str,
+    step_input: dict,
+    user_context: dict,
+    client: Any,
+    model: str = "claude-haiku-4-5-20251001",
+) -> RiskAssessment:
+    """Call Haiku to assess contextual risk for an action.
+
+    Falls back to medium risk on any failure (API error, invalid JSON, etc.).
+    """
+    user_message = json.dumps(
+        {
+            "capability": capability,
+            "parameters": step_input,
+            "user_context": user_context,
+        },
+        default=str,
+    )
+
+    try:
+        response = await client.messages.create(
+            model=model,
+            max_tokens=256,
+            system=_RISK_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_message}],
+        )
+        text = response.content[0].text
+        data = json.loads(text)
+        return RiskAssessment.model_validate(data)
+    except Exception:
+        logger.warning(
+            "Risk assessment failed for %s, falling back to medium",
+            capability,
+            exc_info=True,
+        )
+        return RiskAssessment(
+            risk_level="medium",
+            reasoning="Fallback — risk assessment failed, defaulting to medium",
+            reversible=True,
+            blast_radius="self",
+        )
+
+
+async def get_or_assess_risk(
+    capability: str,
+    step_input: dict,
+    user_context: dict,
+    workspace_id: str,
+    client: Any,
+    redis: Any,
+    model: str = "claude-haiku-4-5-20251001",
+) -> RiskAssessment:
+    """Redis-cached risk assessment. 24h TTL."""
+    cache_key = build_risk_cache_key(capability, step_input)
+    full_key = f"risk:{workspace_id}:{cache_key}"
+
+    # Try cache
+    try:
+        cached = await redis.get(full_key)
+        if cached:
+            return RiskAssessment.model_validate_json(cached)
+    except Exception:
+        logger.debug("Redis cache read failed for %s", full_key, exc_info=True)
+
+    # Cache miss — call LLM
+    assessment = await assess_risk(capability, step_input, user_context, client, model)
+
+    # Store in cache
+    try:
+        await redis.setex(full_key, 86400, assessment.model_dump_json())
+    except Exception:
+        logger.debug("Redis cache write failed for %s", full_key, exc_info=True)
+
+    return assessment
+
 
 # ── Trust Level Ordering ─────────────────────────────────────────
 TRUST_LEVELS = ("first_use", "learning", "trusted", "autonomous")
