@@ -45,6 +45,7 @@ class SurfaceService:
         if briefing:
             surfaces.append(briefing)
 
+        surfaces.extend(await self._build_insight_surfaces(user_id))
         surfaces.extend(await self._build_recommendation_surfaces())
         surfaces.extend(await self._load_persisted_surfaces(user_id))
 
@@ -380,6 +381,53 @@ class SurfaceService:
 
         return surfaces
 
+    async def _build_insight_surfaces(self, user_id: str) -> list[dict[str, Any]]:
+        """Load persisted proactive insight surfaces that haven't expired."""
+        now = datetime.now(timezone.utc)
+        result = await self._db.execute(
+            select(UISurface)
+            .where(
+                UISurface.user_id == user_id,
+                UISurface.workspace_id == self._workspace_id,
+                UISurface.surface_type == "proactive_insight",
+                UISurface.expires_at > now,
+            )
+            .order_by(UISurface.updated_at.desc())
+            .limit(10)
+        )
+        rows = result.scalars().all()
+        surfaces: list[dict[str, Any]] = []
+
+        for db_row in rows:
+            try:
+                payload = db_row.payload or {}
+                preview_data = db_row.preview or payload.get("preview")
+                if not preview_data:
+                    continue
+
+                surfaces.append(
+                    {
+                        "id": payload.get("id", db_row.surface_id),
+                        "kind": "proactive_insight",
+                        "preview": preview_data,
+                        "detail_config": None,
+                        "insight_data": payload.get("insight_data"),
+                        "created_at": (
+                            db_row.created_at.isoformat()
+                            if db_row.created_at
+                            else None
+                        ),
+                    }
+                )
+            except Exception:
+                logger.debug(
+                    "Failed to parse insight surface %s",
+                    db_row.surface_id,
+                    exc_info=True,
+                )
+
+        return surfaces
+
     async def _load_persisted_surfaces(self, user_id: str) -> list[dict[str, Any]]:
         """Load non-expired persisted surfaces from ui_surfaces table."""
         now = datetime.now(timezone.utc)
@@ -389,6 +437,7 @@ class SurfaceService:
                 UISurface.user_id == user_id,
                 UISurface.workspace_id == self._workspace_id,
                 UISurface.expires_at > now,
+                UISurface.surface_type != "proactive_insight",
             )
             .order_by(UISurface.updated_at.desc())
             .limit(20)

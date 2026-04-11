@@ -38,6 +38,7 @@ export interface SurfacePreview {
     | "failed"
     | "awaiting_approval"
     | "cancelled"
+    | "proposal"
     | null;
   priority: "low" | "medium" | "high" | "critical" | null;
   metrics: SurfaceMetric[];
@@ -83,6 +84,25 @@ export interface WorkspaceSurfacePush {
   response_preview: string | null;
   created_at: string;
   ttl_hours: number;
+}
+
+// ── Insight surface types ────────────────────────────────────
+
+export interface SuggestedActionRef {
+  description: string;
+  capability: string;
+  action_input: Record<string, unknown>;
+}
+
+export interface InsightData {
+  signal_source: string;
+  signal_category: string;
+  signal_summary: string;
+  relevance_score: number;
+  relevance_reasoning: string;
+  related_goals: string[];
+  suggested_actions: SuggestedActionRef[];
+  dismiss_available: boolean;
 }
 
 // ── Action result ──────────────────────────────────────────────

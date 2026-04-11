@@ -12,4 +12,5 @@ export type SurfaceKind =
   | "table"
   | "recommendation"
   | "activity"
-  | "execution";
+  | "execution"
+  | "proactive_insight";
