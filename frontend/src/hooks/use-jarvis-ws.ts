@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ActionResult, JarvisMessage, WorkspaceSurfacePush } from "@/lib/a2ui-types";
+import type { ActionResult, JarvisMessage, SurfaceUpdate, WorkspaceSurfacePush } from "@/lib/a2ui-types";
 import { getStoredToken } from "@/lib/auth";
 
 function getWsUrl(userId: string): string {
@@ -18,6 +18,7 @@ function getWsUrl(userId: string): string {
 interface UseJarvisWsOptions {
   userId: string;
   onSurfacePush?: (surface: WorkspaceSurfacePush) => void;
+  onSurfaceUpdate?: (update: SurfaceUpdate) => void;
   onActionResult?: (result: ActionResult) => void;
   onNotification?: (msg: JarvisMessage) => void;
   enabled?: boolean;
@@ -26,6 +27,7 @@ interface UseJarvisWsOptions {
 export function useJarvisWs({
   userId,
   onSurfacePush,
+  onSurfaceUpdate,
   onActionResult,
   onNotification,
   enabled = true,
@@ -36,10 +38,14 @@ export function useJarvisWs({
 
   const onSurfacePushRef = useRef(onSurfacePush);
   const onActionResultRef = useRef(onActionResult);
+  const onSurfaceUpdateRef = useRef(onSurfaceUpdate);
   const onNotificationRef = useRef(onNotification);
   useEffect(() => {
     onSurfacePushRef.current = onSurfacePush;
   }, [onSurfacePush]);
+  useEffect(() => {
+    onSurfaceUpdateRef.current = onSurfaceUpdate;
+  }, [onSurfaceUpdate]);
   useEffect(() => {
     onActionResultRef.current = onActionResult;
   }, [onActionResult]);
@@ -99,6 +105,8 @@ export function useJarvisWs({
             result: msg.result,
             error: msg.error,
           });
+        } else if (msg.type === "surface_update" && onSurfaceUpdateRef.current) {
+          onSurfaceUpdateRef.current(msg as unknown as SurfaceUpdate);
         } else if (msg.type === "heartbeat") {
           // no-op
         } else if (onNotificationRef.current) {
