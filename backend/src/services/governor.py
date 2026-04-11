@@ -21,7 +21,6 @@ Policy Modes:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from sqlalchemy import select
@@ -208,77 +207,8 @@ class Governor:
 
         return approval.approval_id
 
-    async def _get_time_based_policy_override(self, user_id: str) -> str | None:
-        """Check if a time-based policy override applies for the current time.
-
-        Time policies are stored in user settings as:
-        {
-            "time_policies": [
-                {"start_hour": 9, "end_hour": 17, "mode": "full_auto", "days": [0,1,2,3,4]},
-                {"start_hour": 22, "end_hour": 6, "mode": "lockdown"}
-            ]
-        }
-        Returns the policy mode if a time-based rule matches, or None.
-        """
-        if not self._settings_service:
-            return None
-
-        try:
-            time_policies = await self._settings_service.get(user_id, "policy", "time_policies")
-            if not time_policies or not isinstance(time_policies, list):
-                return None
-
-            now = datetime.now(timezone.utc)
-            current_hour = now.hour
-            current_day = now.weekday()  # 0=Monday, 6=Sunday
-
-            for policy in time_policies:
-                if not isinstance(policy, dict):
-                    continue
-
-                start_hour = policy.get("start_hour")
-                end_hour = policy.get("end_hour")
-                mode = policy.get("mode")
-                days = policy.get("days")  # Optional day-of-week filter
-
-                if start_hour is None or end_hour is None or not mode:
-                    continue
-
-                # Check day-of-week filter if present
-                if days is not None:
-                    if not isinstance(days, list) or current_day not in days:
-                        continue
-
-                # Check if current hour falls within the time range
-                if start_hour <= end_hour:
-                    # Normal range (e.g., 9:00 to 17:00)
-                    in_range = start_hour <= current_hour < end_hour
-                else:
-                    # Overnight range (e.g., 22:00 to 06:00)
-                    in_range = current_hour >= start_hour or current_hour < end_hour
-
-                if in_range and mode in VALID_POLICY_MODES:
-                    logger.info(
-                        "Time-based policy override: user=%s mode=%s (hour=%d)",
-                        user_id,
-                        mode,
-                        current_hour,
-                    )
-                    return mode
-
-        except Exception:
-            logger.warning("Failed to read time-based policies for %s", user_id, exc_info=True)
-
-        return None
-
     async def _get_policy_mode(self, user_id: str) -> str:
         """Get policy mode from user settings, with fallback."""
-        # First check time-based override
-        time_override = await self._get_time_based_policy_override(user_id)
-        if time_override:
-            return time_override
-
-        # Then fall back to user's default policy mode
         if self._settings_service:
             try:
                 mode = await self._settings_service.get_policy_mode(user_id)

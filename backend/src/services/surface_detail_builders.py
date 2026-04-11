@@ -481,6 +481,45 @@ async def build_approval_request(
     risk_variant = "warning" if apr.risk_level in ("high", "critical") else "default"
     children.append(r.badge("apr_risk", apr.risk_level or "medium", variant=risk_variant))
 
+    # Trust context
+    if apr.artifact_refs and isinstance(apr.artifact_refs, dict):
+        cap = apr.artifact_refs.get("tool_name")
+        if cap:
+            from src.models.trust_state import TrustState
+
+            trust_result = await db.execute(
+                select(TrustState).where(
+                    TrustState.workspace_id == apr.workspace_id,
+                    TrustState.capability == cap,
+                    TrustState.risk_level == (apr.risk_level or "low"),
+                )
+            )
+            trust_state = trust_result.scalar_one_or_none()
+            if trust_state:
+                level = trust_state.trust_level
+                count = trust_state.approved_count
+                if level == "first_use":
+                    children.append(r.badge("apr_trust", "First time", variant="default"))
+                elif level == "learning":
+                    remaining = max(0, 10 - count)
+                    children.append(
+                        r.text(
+                            "apr_trust_hint",
+                            f"Similar to {count} prior approvals — "
+                            f"{remaining} more to auto-approve",
+                        )
+                    )
+                else:
+                    children.append(
+                        r.badge(
+                            "apr_trust",
+                            level.title(),
+                            variant="success",
+                        )
+                    )
+            else:
+                children.append(r.badge("apr_trust", "First time", variant="default"))
+
     if apr.status == "pending":
         children.append(
             r.row(

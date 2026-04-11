@@ -165,3 +165,13 @@ async def test_reset_trust_for_capability():
     assert state1.approved_count == 0
     assert state2.trust_level == "first_use"
     assert state2.approved_count == 0
+
+
+def test_policy_mode_to_ceiling_mapping():
+    """Verify the 4 mode → ceiling mappings are correct."""
+    from src.api.routes_settings import POLICY_MODE_TO_CEILING
+
+    assert POLICY_MODE_TO_CEILING["lockdown"] == "blocked"
+    assert POLICY_MODE_TO_CEILING["approval_required"] == "learning"
+    assert POLICY_MODE_TO_CEILING["suggest_only"] == "first_use"
+    assert POLICY_MODE_TO_CEILING["full_auto"] is None
