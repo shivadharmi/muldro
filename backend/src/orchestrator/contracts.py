@@ -249,6 +249,62 @@ class WorkspaceSurfacePush(BaseModel):
     ttl_hours: int = 24
 
 
+# ── Execution surface update contracts ────────────────────────────
+
+
+class StepState(BaseModel):
+    """Live status of a single execution step."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    step_id: str
+    description: str
+    status: str  # pending, executing, completed, failed, approval_needed, user_action
+    output_summary: str | None = None
+    duration_ms: int | None = None
+
+
+class ApprovalContext(BaseModel):
+    """Context for an approval gate within a surface update."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    approval_id: str
+    step_description: str
+    risk_reasoning: str
+    trust_context: str
+    graduation_hint: str = ""
+
+
+class ResultSummary(BaseModel):
+    """Summary of completed execution results."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    key_findings: list[str] = Field(default_factory=list)
+    artifacts_created: list[str] = Field(default_factory=list)
+    suggested_next: list[str] = Field(default_factory=list)
+
+
+class SurfaceUpdate(BaseModel):
+    """Live execution progress pushed to workspace surfaces.
+
+    Published to Redis channel jarvis:a2ui:{user_id} with
+    type='surface_update'. The frontend applies incremental
+    updates to the matching surface_id.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    surface_id: str
+    phase: str  # planning, plan_ready, executing, approval_needed, completed, failed, partial
+    steps: list[StepState] = Field(default_factory=list)
+    current_step: str | None = None
+    progress: str = ""
+    approval: ApprovalContext | None = None
+    results: ResultSummary | None = None
+
+
 # ── Capability-based planning contracts ─────────────────────────────
 
 
