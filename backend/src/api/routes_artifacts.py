@@ -55,11 +55,13 @@ async def _embed_artifact(
     user_id: str,
     embedding_service,
     vector_store,
+    workspace_id: str = "",
 ) -> None:
     """Embed artifact metadata into Qdrant (best-effort)."""
     try:
-        text = f"{title or ''}: {description or ''}"
-        if not text.strip().strip(":").strip():
+        parts = [artifact_type, title or "", description or ""]
+        text = " ".join(p for p in parts if p)
+        if not text.strip():
             return
         embedding = await embedding_service.embed_text(text)
         if embedding:
@@ -70,7 +72,10 @@ async def _embed_artifact(
                 id=artifact_id,
                 vector=embedding,
                 payload={
+                    "artifact_id": artifact_id,
+                    "workspace_id": workspace_id,
                     "artifact_type": artifact_type,
+                    "filename": title or "",
                     "mime_type": mime_type or "",
                     "created_at": datetime.now(timezone.utc).isoformat(),
                 },
@@ -235,6 +240,7 @@ async def create_artifact(
                 user_id=user_id,
                 embedding_service=es,
                 vector_store=vs,
+                workspace_id=workspace_id,
             )
     except Exception:
         pass

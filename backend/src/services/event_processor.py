@@ -221,7 +221,8 @@ class EventProcessor:
         # Embed into Qdrant for vector search (importance >= 0.3 only)
         if (event.importance_score or 0) >= 0.3 and self._embedding_service and self._vector_store:
             try:
-                text = f"{event.title or ''}: {event.summary or ''}"
+                parts = [event.event_type, event.source, event.title or "", event.summary or ""]
+                text = " ".join(p for p in parts if p)
                 embedding = await self._embedding_service.embed_text(text)
                 if embedding:
                     await self._vector_store.upsert(
@@ -229,10 +230,12 @@ class EventProcessor:
                         id=event.event_id,
                         vector=embedding,
                         payload={
+                            "event_id": event.event_id,
                             "event_type": event.event_type,
                             "source": event.source,
                             "importance_score": event.importance_score,
-                            "occurred_at": event.occurred_at.isoformat()
+                            "workspace_id": workspace_id,
+                            "created_at": event.occurred_at.isoformat()
                             if event.occurred_at
                             else None,
                             "actor": (event.actor_entities[0] or {}).get("name")
