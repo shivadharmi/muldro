@@ -28,9 +28,7 @@ class TestRecordApprovalDecision:
         result_mock.scalar_one_or_none.return_value = state
         mock_db.execute = AsyncMock(return_value=result_mock)
 
-        await record_approval_decision(
-            mock_db, "ws_test", "email.send", "low", "approved"
-        )
+        await record_approval_decision(mock_db, "ws_test", "email.send", "low", "approved")
         assert state.approved_count == 1
         assert state.last_decision_at is not None
 
@@ -46,9 +44,7 @@ class TestRecordApprovalDecision:
         result_mock.scalar_one_or_none.return_value = state
         mock_db.execute = AsyncMock(return_value=result_mock)
 
-        await record_approval_decision(
-            mock_db, "ws_test", "email.send", "low", "rejected"
-        )
+        await record_approval_decision(mock_db, "ws_test", "email.send", "low", "rejected")
         assert state.rejected_count == 1
         assert state.trust_level == "learning"
         assert state.cooldown_until is not None
@@ -65,9 +61,7 @@ class TestRecordApprovalDecision:
         result_mock.scalar_one_or_none.return_value = state
         mock_db.execute = AsyncMock(return_value=result_mock)
 
-        await record_approval_decision(
-            mock_db, "ws_test", "email.send", "low", "modified"
-        )
+        await record_approval_decision(mock_db, "ws_test", "email.send", "low", "modified")
         assert state.modified_count == 1
         assert state.approved_count == 6
 
@@ -83,7 +77,5 @@ class TestRecordApprovalDecision:
         result_mock.scalar_one_or_none.return_value = state
         mock_db.execute = AsyncMock(return_value=result_mock)
 
-        await record_approval_decision(
-            mock_db, "ws_test", "email.send", "low", "approved"
-        )
+        await record_approval_decision(mock_db, "ws_test", "email.send", "low", "approved")
         assert state.trust_level == "learning"
