@@ -125,12 +125,12 @@ async def test_step_level_resume_failure_marks_run_failed():
         ),
         patch("src.api.routes_approvals.AuditService") as mock_audit_cls,
         patch(
-            "src.services.graph_executor.create_graph_executor",
+            "src.api.routes_approvals.create_graph_executor",
             new_callable=AsyncMock,
             return_value=mock_executor,
         ),
-        patch("src.services.execution_state.transition_run") as mock_transition_run,
-        patch("src.services.execution_state.transition_step"),
+        patch("src.api.routes_approvals.transition_run") as mock_transition_run,
+        patch("src.api.routes_approvals.transition_step"),
         patch(
             "src.services.risk_assessor.record_approval_decision",
             new_callable=AsyncMock,
@@ -155,6 +155,80 @@ async def test_step_level_resume_failure_marks_run_failed():
     assert run_after_fail.completed_at is not None
     mock_transition_run.assert_called_once_with(run_after_fail, "failed")
     # DB should have been committed after marking failure
+    assert db.rollback.called
+    assert db.commit.called
+
+
+@pytest.mark.asyncio
+async def test_step_level_resume_failure_from_awaiting_approval():
+    """After rollback, run is back in awaiting_approval — must still transition to failed."""
+    from src.api.routes_approvals import approve_action
+
+    approval = _make_approval(run_id="run_001a", step_id="step_001a")
+    step = _make_step(step_id="step_001a", run_id="run_001a")
+    # Post-rollback the run reverts to awaiting_approval (the realistic state)
+    run_after_fail = _make_run(run_id="run_001a", status="awaiting_approval")
+
+    call_count = 0
+    run_obj = _make_run(run_id="run_001a", status="awaiting_approval")
+
+    async def fake_execute(stmt):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _FakeResult(run_obj)
+        elif call_count == 2:
+            return _FakeResult(step)
+        elif call_count == 3:
+            return _FakeResult(run_after_fail)
+        return _FakeResult(None)
+
+    db = MagicMock()
+    db.execute = AsyncMock(side_effect=fake_execute)
+    db.commit = AsyncMock()
+    db.flush = AsyncMock()
+    db.rollback = AsyncMock()
+    db.add = MagicMock()
+
+    settings = make_mock_settings(qdrant_url="", redis_url="redis://localhost:6379/0")
+
+    mock_executor = MagicMock()
+    mock_executor.resume_run = AsyncMock(side_effect=RuntimeError("connection reset"))
+
+    with (
+        patch(
+            "src.api.routes_approvals._get_approval",
+            new_callable=AsyncMock,
+            return_value=approval,
+        ),
+        patch("src.api.routes_approvals.AuditService") as mock_audit_cls,
+        patch(
+            "src.api.routes_approvals.create_graph_executor",
+            new_callable=AsyncMock,
+            return_value=mock_executor,
+        ),
+        patch("src.api.routes_approvals.transition_run") as mock_transition_run,
+        patch("src.api.routes_approvals.transition_step"),
+        patch(
+            "src.services.risk_assessor.record_approval_decision",
+            new_callable=AsyncMock,
+        ),
+    ):
+        mock_audit_cls.return_value.log = AsyncMock()
+
+        result = await approve_action(
+            approval_id="apr_001a",
+            req=None,
+            user_id=TEST_USER_ID,
+            workspace_id=TEST_WORKSPACE_ID,
+            db=db,
+            settings=settings,
+        )
+
+    assert result.status == "approved"
+    assert run_after_fail.error == {"resume_failed": "connection reset"}
+    assert run_after_fail.completed_at is not None
+    mock_transition_run.assert_called_once_with(run_after_fail, "failed")
     assert db.rollback.called
     assert db.commit.called
 
@@ -207,11 +281,11 @@ async def test_plan_level_resume_failure_marks_run_failed():
         ),
         patch("src.api.routes_approvals.AuditService") as mock_audit_cls,
         patch(
-            "src.services.graph_executor.create_graph_executor",
+            "src.api.routes_approvals.create_graph_executor",
             new_callable=AsyncMock,
             return_value=mock_executor,
         ),
-        patch("src.services.execution_state.transition_run") as mock_transition_run,
+        patch("src.api.routes_approvals.transition_run") as mock_transition_run,
         patch(
             "src.services.risk_assessor.record_approval_decision",
             new_callable=AsyncMock,
@@ -236,6 +310,7 @@ async def test_plan_level_resume_failure_marks_run_failed():
     assert run_after_fail.completed_at is not None
     mock_transition_run.assert_called_once_with(run_after_fail, "failed")
     assert db.rollback.called
+    assert db.commit.called
 
 
 @pytest.mark.asyncio
@@ -286,11 +361,11 @@ async def test_tool_level_execute_failure_marks_run_failed():
         ),
         patch("src.api.routes_approvals.AuditService") as mock_audit_cls,
         patch(
-            "src.services.graph_executor.create_graph_executor",
+            "src.api.routes_approvals.create_graph_executor",
             new_callable=AsyncMock,
             return_value=mock_executor,
         ),
-        patch("src.services.execution_state.transition_run") as mock_transition_run,
+        patch("src.api.routes_approvals.transition_run") as mock_transition_run,
         patch(
             "src.services.risk_assessor.record_approval_decision",
             new_callable=AsyncMock,
@@ -315,6 +390,7 @@ async def test_tool_level_execute_failure_marks_run_failed():
     assert run_after_fail.completed_at is not None
     mock_transition_run.assert_called_once_with(run_after_fail, "failed")
     assert db.rollback.called
+    assert db.commit.called
 
 
 @pytest.mark.asyncio
@@ -363,12 +439,12 @@ async def test_resume_failure_does_not_crash_when_run_already_terminal():
         ),
         patch("src.api.routes_approvals.AuditService") as mock_audit_cls,
         patch(
-            "src.services.graph_executor.create_graph_executor",
+            "src.api.routes_approvals.create_graph_executor",
             new_callable=AsyncMock,
             return_value=mock_executor,
         ),
-        patch("src.services.execution_state.transition_run") as mock_transition_run,
-        patch("src.services.execution_state.transition_step"),
+        patch("src.api.routes_approvals.transition_run") as mock_transition_run,
+        patch("src.api.routes_approvals.transition_step"),
         patch(
             "src.services.risk_assessor.record_approval_decision",
             new_callable=AsyncMock,
@@ -438,11 +514,11 @@ async def test_resume_failure_recovery_itself_fails_gracefully():
         ),
         patch("src.api.routes_approvals.AuditService") as mock_audit_cls,
         patch(
-            "src.services.graph_executor.create_graph_executor",
+            "src.api.routes_approvals.create_graph_executor",
             new_callable=AsyncMock,
             return_value=mock_executor,
         ),
-        patch("src.services.execution_state.transition_step"),
+        patch("src.api.routes_approvals.transition_step"),
         patch(
             "src.services.risk_assessor.record_approval_decision",
             new_callable=AsyncMock,

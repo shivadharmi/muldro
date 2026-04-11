@@ -16,6 +16,8 @@ from src.models.approvals import Approval
 from src.models.plans import Plan
 from src.models.task_graph import TaskRun, TaskStep
 from src.services.audit import AuditService
+from src.services.execution_state import transition_run, transition_step
+from src.services.graph_executor import create_graph_executor
 
 logger = logging.getLogger(__name__)
 
@@ -221,20 +223,14 @@ async def approve_action(
 
     # Resume the run (either step-level approval gate or plan-level)
     if approval.run_id:
-        from src.services.graph_executor import create_graph_executor
-
         executor = await create_graph_executor(settings=settings, db=db, workspace_id=workspace_id)
         try:
-            from src.models.task_graph import TaskStep
-
             step_result = await db.execute(
                 select(TaskStep).where(
                     TaskStep.step_id == approval.step_id,
                     TaskStep.run_id == approval.run_id,
                 )
             )
-            from src.services.execution_state import transition_step
-
             step = step_result.scalar_one_or_none()
             if step and step.status == "waiting_approval":
                 transition_step(step, "running")
@@ -242,26 +238,10 @@ async def approve_action(
             await executor.resume_run(approval.run_id)
         except Exception as exc:
             logger.exception("Resume failed after approval: %s", approval.run_id)
-            try:
-                await db.rollback()
-                from src.services.execution_state import transition_run as _tr
-
-                run_for_fail = await db.execute(
-                    select(TaskRun).where(TaskRun.run_id == approval.run_id)
-                )
-                r = run_for_fail.scalar_one_or_none()
-                if r and r.status not in ("completed", "failed", "cancelled"):
-                    _tr(r, "failed")
-                    r.error = {"resume_failed": str(exc)[:500]}
-                    r.completed_at = datetime.now(timezone.utc)
-                    await db.commit()
-            except Exception:
-                logger.warning("Failed to mark run as failed after resume error", exc_info=True)
+            await _mark_run_failed_after_resume(db, approval.run_id, exc)
     elif run and run.plan_id:
         # Plan-level approval: trigger execution via GraphExecutor directly
         try:
-            from src.services.graph_executor import create_graph_executor
-
             executor = await create_graph_executor(
                 settings=settings, db=db, workspace_id=workspace_id
             )
@@ -270,24 +250,12 @@ async def approve_action(
             await executor.execute_run(run.run_id, surface_id=_surface_id)
         except Exception as exc:
             logger.exception("Execution failed after approval: %s", run.run_id)
-            try:
-                await db.rollback()
-                from src.services.execution_state import transition_run as _tr
-
-                run_for_fail = await db.execute(select(TaskRun).where(TaskRun.run_id == run.run_id))
-                r = run_for_fail.scalar_one_or_none()
-                if r and r.status not in ("completed", "failed", "cancelled"):
-                    _tr(r, "failed")
-                    r.error = {"resume_failed": str(exc)[:500]}
-                    r.completed_at = datetime.now(timezone.utc)
-                    await db.commit()
-            except Exception:
-                logger.warning("Failed to mark run as failed after resume error", exc_info=True)
+            await _mark_run_failed_after_resume(db, run.run_id, exc)
     elif approval.artifact_refs and approval.artifact_refs.get("tool_name"):
         # B1: Tool-level approval resume — create a background TaskRun to
         # re-execute the approved tool with the original parameters.
         try:
-            from src.models.plans import Plan, PlanTask
+            from src.models.plans import PlanTask
 
             tool_name = approval.artifact_refs["tool_name"]
             tool_params = approval.artifact_refs.get("tool_params", {})
@@ -327,8 +295,6 @@ async def approve_action(
             await db.flush()
 
             # Populate steps and execute immediately (user just approved)
-            from src.services.graph_executor import create_graph_executor
-
             executor = await create_graph_executor(
                 settings=settings, db=db, workspace_id=workspace_id
             )
@@ -339,21 +305,7 @@ async def approve_action(
                 await executor.execute_run(bg_run.run_id)
             except Exception as exc:
                 logger.exception("Execution failed for tool-level resume run: %s", bg_run.run_id)
-                try:
-                    await db.rollback()
-                    from src.services.execution_state import transition_run as _tr
-
-                    run_for_fail = await db.execute(
-                        select(TaskRun).where(TaskRun.run_id == bg_run.run_id)
-                    )
-                    r = run_for_fail.scalar_one_or_none()
-                    if r and r.status not in ("completed", "failed", "cancelled"):
-                        _tr(r, "failed")
-                        r.error = {"resume_failed": str(exc)[:500]}
-                        r.completed_at = datetime.now(timezone.utc)
-                        await db.commit()
-                except Exception:
-                    logger.warning("Failed to mark run as failed after resume error", exc_info=True)
+                await _mark_run_failed_after_resume(db, bg_run.run_id, exc)
 
             logger.info(
                 "Tool-level approval resumed: %s → run %s",
@@ -365,23 +317,14 @@ async def approve_action(
                 "Failed to create resume run for tool approval: %s",
                 approval.approval_id,
             )
+            # bg_run may not have been created/flushed yet — NameError
+            # or missing DB row is caught by _mark_run_failed_after_resume.
             try:
-                await db.rollback()
-                from src.services.execution_state import transition_run as _tr
-
-                # bg_run may not have been created/flushed yet — NameError
-                # or missing DB row is caught by the outer handler.
-                run_for_fail = await db.execute(
-                    select(TaskRun).where(TaskRun.run_id == bg_run.run_id)  # type: ignore[possibly-undefined]
-                )
-                r = run_for_fail.scalar_one_or_none()
-                if r and r.status not in ("completed", "failed", "cancelled"):
-                    _tr(r, "failed")
-                    r.error = {"resume_failed": str(exc)[:500]}
-                    r.completed_at = datetime.now(timezone.utc)
-                    await db.commit()
-            except Exception:
-                logger.warning("Failed to mark run as failed after resume error", exc_info=True)
+                _bg_run_id = bg_run.run_id  # type: ignore[possibly-undefined]
+            except NameError:
+                _bg_run_id = None
+            if _bg_run_id:
+                await _mark_run_failed_after_resume(db, _bg_run_id, exc)
 
     return ApprovalResponse(
         approval_id=approval.approval_id,
@@ -407,8 +350,6 @@ async def reject_action(
 ):
     """Reject a pending action."""
     approval = await _get_approval(db, approval_id, user_id, workspace_id)
-
-    from src.services.execution_state import transition_run
 
     approval.status = "rejected"
     approval.decided_at = datetime.now(timezone.utc)
@@ -442,8 +383,6 @@ async def reject_action(
     if run and run.status in ("awaiting_approval", "running", "paused"):
         # Transition the waiting step to cancelled
         if approval.step_id:
-            from src.services.execution_state import transition_step
-
             step_result = await db.execute(
                 select(TaskStep).where(
                     TaskStep.step_id == approval.step_id,
@@ -455,8 +394,6 @@ async def reject_action(
                 transition_step(step, "cancelled")
 
         # Cancel the full run via graph executor (handles all remaining steps)
-        from src.services.graph_executor import create_graph_executor
-
         executor = await create_graph_executor(settings=settings, db=db, workspace_id=workspace_id)
         try:
             await executor.cancel_run(effective_run_id)
@@ -626,6 +563,21 @@ async def get_approval_impact(
             for e in affected
         ],
     }
+
+
+async def _mark_run_failed_after_resume(db: AsyncSession, run_id: str, exc: Exception) -> None:
+    """Best-effort: rollback, re-fetch run, transition to failed."""
+    try:
+        await db.rollback()
+        result = await db.execute(select(TaskRun).where(TaskRun.run_id == run_id))
+        r = result.scalar_one_or_none()
+        if r and r.status not in ("completed", "failed", "cancelled"):
+            transition_run(r, "failed")
+            r.error = {"resume_failed": str(exc)[:500]}
+            r.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+    except Exception:
+        logger.warning("Failed to mark run as failed after resume error", exc_info=True)
 
 
 async def _embed_approval_decision(
