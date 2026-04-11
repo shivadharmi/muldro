@@ -8,7 +8,7 @@
 - **Isolation** - Each agent has a defined scope; bugs in one agent don't cascade to others
 - **Debuggability** - Every interaction flows through one point with full tracing
 - **Independent model selection** - Planner uses Opus for deep reasoning, Persona uses Haiku for cost efficiency
-- **Easy to add/remove agents** - New agents plug in without modifying existing ones
+- **Easy to add/remove/merge agents** - Observer and Researcher were merged into Perceiver without modifying other agents
 - **Budget control** - Central point for token tracking and degradation
 
 **Trade-off:** Slightly higher latency from routing through the orchestrator. Acceptable because agent calls dominate latency (Claude API), not routing logic.
@@ -34,20 +34,22 @@
 - `TriSearchService` coordinates Qdrant + Postgres FTS + Neo4j, `GraphSyncService` handles Neo4j sync
 - Single configuration point via pydantic-settings
 
-## 3. Approval Gates on All External Writes
+## 3. TrustEngine as Single Approval Gate
 
-**Decision:** Every external write (sending emails, posting messages, creating PRs) requires explicit user approval in v1.
+**Decision:** The `TrustEngine` in GraphExecutor is the single approval gate for all external writes, using a 4x4 matrix of trust_level (new, familiar, trusted, autonomous) x risk_level (none, low, medium, high). Governor is now audit-only (`edge_case_only=True`).
 
 **Rationale:**
 - **Safety-first** for a system that acts on behalf of a founder
-- **Trust building** - Users see every action before it happens, building confidence
-- **Reversibility** - Prevents sending wrong emails, posting to wrong channels
-- **Graduated autonomy** via trust scores that can relax the requirement over time
+- **Graduated autonomy** - Trust levels evolve based on interaction history, not static config
+- **Fine-grained decisions** - 4 outcomes: `auto_execute_silent`, `auto_execute_notify`, `approval_required`, `blocked`
+- **Reversibility** - High-risk actions always require approval regardless of trust level
 
-**Trade-off:** Slower execution for routine tasks. Mitigated by:
-- `full_auto` policy mode for trusted action types
-- Trust score tracking (approved_count, rejected_count)
+**Trade-off:** Slower execution for new users. Mitigated by:
+- Trust levels increase automatically as actions are approved
+- `auto_execute_notify` allows execution while keeping users informed
 - Plan-level approvals (approve once, execute all steps)
+
+**Models:** `TrustState`, `TrustCeiling`, `InteractionLog`, `EngagementHistory` track trust evolution. `ApprovalPolicyEngine`, `TrustScore`, and `ApprovalPolicy` models were deleted.
 
 ## 4. ULID with Type Prefixes
 
@@ -83,7 +85,8 @@
 - **No name normalization** - Real MCP names flow end-to-end (eliminates collision bugs like `search` vs Notion's `search`)
 - **Auto-discovery** - Unknown MCP tools registered on connect with safe defaults (`capability=None` → invisible)
 - **Startup validation** - 6 cross-checks catch inconsistencies before runtime
-- **Capability-based auth** - Agents have capability scopes, not tool lists. Adding a tool with `email.send` capability automatically grants it to all agents with `email.send` in scope.
+- **Capability-based auth** - Agents have capability scopes, not tool lists. Adding a tool with `email.send` capability automatically grants it to all agents with `email.send` in scope
+- **Discoverability** - Planner can call `discover_capabilities` tool; `capability_summary` service provides a structured view of available capabilities
 
 **Trade-off:** DB lookup per dispatch (mitigated by ToolRegistry cache). No offline fallback if DB is down (acceptable — Postgres is a hard dependency anyway).
 
@@ -101,7 +104,7 @@
 
 ## 8. Contracts at Boundaries
 
-**Decision:** Use Pydantic models (`PlannerOutput`, `AgentEnvelope`, `PolicyDecision`, `DomainEvent`) at all inter-service boundaries.
+**Decision:** Use Pydantic models (`PlanOutput`, `PlanStep`, `AgentEnvelope`, `PolicyDecision`, `DomainEvent`, `SurfaceUpdate`) at all inter-service boundaries.
 
 **Rationale:**
 - **Schema drift detection** - Catch breaking changes at dev time, not production
@@ -136,13 +139,14 @@
 
 ## 11. Claude Structured Output with Text Fallback
 
-**Decision:** The Planner uses Claude's `tool_use` for structured output (PlannerOutput schema) with a text-based JSON parser as fallback.
+**Decision:** The Planner uses Claude's `tool_use` for structured output (PlanOutput schema) with a text-based JSON parser (`extract_plan`) as fallback.
 
 **Rationale:**
-- **Deterministic schema** - tool_use enforces the exact PlannerOutput structure
-- **Resilience** - If tool_use fails, text parsing recovers the decision
+- **Deterministic schema** - tool_use enforces the exact PlanOutput structure with capability-based steps
+- **Resilience** - If tool_use fails, text parsing via `extract_plan` recovers the plan
 - **Debugging** - Text fallback is human-readable in traces
 - **Cost savings** - tool_use has ~0% schema violation rate, reducing retry costs
+- **Validation** - Circular dependency validator ensures step DAGs are acyclic
 
 **Trade-off:** Dual parsing logic. Worth it for the reliability improvement.
 
@@ -184,13 +188,13 @@
 
 ## 15. Runtime Contracts at Boundaries
 
-**Decision:** Pydantic models (`PlannerOutput`, `PolicyDecision`, `StepResult`, `ToolCallRequest`) validate data at all agent and execution boundaries. Graceful fallback on validation failure.
+**Decision:** Pydantic models (`PlanOutput`, `PlanStep`, `PolicyDecision`, `StepResult`, `ToolCallRequest`, `SurfaceUpdate`) validate data at all agent and execution boundaries. Graceful fallback on validation failure.
 
 **Rationale:**
 - **Catch errors early** - Malformed agent output is caught before it propagates
 - **Self-documenting** - Contract models define the exact interface between components
 - **Resilient** - `extra="ignore"` allows forward compatibility; text fallback parsing if structured output fails
-- **Type safety** - Literal types on decision/status fields prevent invalid states
+- **Type safety** - Literal types on status fields prevent invalid states; circular dependency validation on PlanStep DAGs
 
 **Trade-off:** Dual parsing logic (structured output + text fallback) for the Planner. Worth it because the fallback catches edge cases where Claude's tool_use doesn't fire.
 
@@ -217,3 +221,48 @@
 - **Per-agent attribution** - Know which agents consume the most budget (Planner/Opus vs Persona/Haiku)
 
 **Trade-off:** Slightly more complex cost calculation. Mitigated by centralizing all cost logic in `BudgetTracker.calculate_cost()` with comprehensive tests (13 budget tests).
+
+## 18. Capability-Based Routing
+
+**Decision:** Replace decision-type routing (`RouteResolver` with 19 decision types mapped to agent pipelines) with capability-based routing (`CapabilityResolver` mapping step capabilities to agents).
+
+**Rationale:**
+- **Composable** - Plans are sequences of capability-tagged steps, not monolithic decision types
+- **Extensible** - Adding a new capability does not require a new decision type or route definition
+- **Agent-agnostic** - Steps declare what capability they need, not which agent runs them
+- **DAG-native** - Steps have `depends_on` fields forming a directed acyclic graph validated at plan creation
+- **Discoverable** - Planner calls `discover_capabilities` to learn what the system can do
+
+**Deleted:** `RouteResolver`, `route_analytics`, `agent_routes` table, `DEFAULT_ROUTES`, all 19 decision type constants. The `CapabilityResolver` (`src/services/capability_resolver.py`) and `capability_summary` service (`src/services/capability_summary.py`) replace them.
+
+**Trade-off:** Plans are slightly more complex (steps with capabilities vs a single decision string). Worth it because multi-step plans with mixed capabilities are now first-class.
+
+## 19. Single TrustEngine Gate
+
+**Decision:** Replace the triple approval gate (Governor pre-hook + ApprovalPolicyEngine + Governor service) with a single `TrustEngine` in GraphExecutor using a 4x4 trust_level x risk_level matrix.
+
+**Rationale:**
+- **Single gate** - One evaluation point instead of three, eliminating conflicting decisions
+- **Graduated autonomy** - Four trust levels (new, familiar, trusted, autonomous) evolve based on real interaction history
+- **Four outcomes** - `auto_execute_silent`, `auto_execute_notify`, `approval_required`, `blocked` (not just approve/reject)
+- **Risk assessment** - `RiskAssessor` (`src/services/risk_assessor.py`) evaluates step risk independently from trust
+
+**Deleted:** `ApprovalPolicyEngine`, `TrustScore` model, `ApprovalPolicy` model. Governor is now `edge_case_only=True` (audit-only).
+
+**New models:** `TrustState`, `TrustCeiling`, `InteractionLog`, `EngagementHistory`.
+
+**Trade-off:** Trust must be earned over time (new users face more approval prompts). Acceptable because safety is the priority, and trust levels increase automatically as actions are approved.
+
+## 20. Signal-Driven Perception
+
+**Decision:** Replace fixed-interval perception polling with signal-driven perception using a relevance assessor and tiered notification system.
+
+**Rationale:**
+- **Efficient** - Only process events that pass relevance scoring, reducing unnecessary API calls
+- **Context-aware** - `RelevanceAssessor` (`src/services/relevance_assessor.py`) scores events against user context and active plans
+- **Tiered delivery** - `EngagementService` (`src/services/engagement_service.py`) routes notifications based on urgency and user preferences
+- **Memory-efficient** - `EvictionService` (`src/services/eviction_service.py`) manages perception state lifecycle
+
+**New services:** `relevance_assessor.py`, `engagement_service.py`, `eviction_service.py`, `briefing_read_model.py`, `surface_detail_builders.py`.
+
+**Trade-off:** More complex perception pipeline. Mitigated by clear service boundaries and the Perceiver agent (merged from Observer + Researcher) having a single `PERCEIVER_PROMPT` with 7-step read-only processing.

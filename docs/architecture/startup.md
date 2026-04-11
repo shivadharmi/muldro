@@ -39,8 +39,7 @@ sequenceDiagram
 
     Note over APP,DB: Seed Configuration
     APP->>DB: ToolRegistry.seed_defaults() (163 tools from catalog.py)
-    APP->>DB: AgentRegistry.seed_defaults() (8 agents)
-    APP->>DB: RouteResolver.seed_defaults() (16 routes)
+    APP->>DB: AgentRegistry.seed_defaults() (7 agents)
 
     Note over APP,DB: Validate Registry
     APP->>APP: validate_registry() (6 cross-checks)
@@ -115,7 +114,17 @@ graph TD
 
 ### Background Task Execution
 
-The scheduler also runs `_tick_background_tasks()` every 30 seconds, picking up `TaskRun` records with `status="pending"` and `source="background"`. These are executed via `GraphExecutor.execute_run()` and the user is notified on completion.
+The scheduler also runs additional ticks every 30 seconds:
+
+| Tick | Purpose |
+|------|---------|
+| `_tick_background_tasks()` | Execute pending background TaskRuns via GraphExecutor |
+| `_tick_dlq_retry()` | Retry dead-letter queue entries |
+| `_tick_memory_expiration()` | Expire memories past their TTL |
+| `_tick_eviction()` | Evict data older than 90-day retention window |
+| `_tick_persona_batch()` | Batch persona preference extraction (every 10th tick, ~5 min) |
+
+Cross-source synthesis triggers when 2+ perception sources have new events in the same tick (30-minute cooldown).
 
 ### Budget Hydration
 
@@ -200,7 +209,9 @@ First POST /v1/jarvis/chat
     → Create long-lived DB session
     → Build: EventProcessor, WorldModel, MemoryService, Planner,
              Governor, Presenter, Audit, VectorStore, GraphEngine,
-             RerankerService, TriSearchService
+             RerankerService, TriSearchService, TrustEngine,
+             RiskAssessor, RelevanceAssessor, EngagementService,
+             EvictionService
     → Configure intelligence server with services
     → load_agents_from_db()
     → Cache orchestrator for subsequent requests
@@ -226,7 +237,7 @@ This avoids startup overhead when only serving health checks or API endpoints th
 
 ```yaml
 # docker-compose.yml provides all 5 infrastructure services:
-postgres:      pgvector/pgvector:pg17  (port 5432)
+postgres:      pgvector/pgvector:pg17  (port 5432)  # pgvector image but vector search uses Qdrant
 redis:         redis:7-alpine          (port 6379)
 qdrant:        qdrant/qdrant:v1.12.0   (ports 6333, 6334)
 neo4j:         neo4j:5-community       (ports 7474, 7687)

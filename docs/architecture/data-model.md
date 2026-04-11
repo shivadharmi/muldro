@@ -34,12 +34,11 @@ erDiagram
 
     Trace ||--o{ ModelCall : records
 
-    Agent ||--o{ AgentRoute : routes_to
 ```
 
 ## Workspace Isolation
 
-All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces` with CASCADE delete) for multi-tenant isolation. The only exceptions are user-level tables (`users`, `workspaces`, `workspace_members`, `sessions`, `magic_links`) and system-global tables (`agents`, `agent_routes`).
+All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces` with CASCADE delete) for multi-tenant isolation. The only exceptions are user-level tables (`users`, `workspaces`, `workspace_members`, `sessions`, `magic_links`) and the system-global table (`agents`).
 
 ## Tables by Category
 
@@ -82,12 +81,11 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 | `task_steps` | `step_` | run_id (FK), task_id, step_type, depends_on (ARRAY), status (9 states: pending, running, completed, failed, skipped, cancelled, awaiting_approval, blocked, timed_out), input_data (JSONB), output_data (JSONB) | Cascade on run |
 | `task_checkpoints` | - | run_id (FK), step_id, state_snapshot (JSONB), reason | |
 
-### Governance (2 tables)
+### Governance (1 table)
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
 | `approvals` | `apr_` | execution_id, approval_type, title, risk_level, status (4 states), decided_at, expires_at, step_id, run_id | |
-| `trust_scores` | - | user_id, action_type, approved_count, rejected_count, trust_score, auto_approve_threshold | Unique on user+action_type |
 
 ### Observability (3 tables)
 
@@ -97,12 +95,11 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 | `model_calls` | - | trace_id (FK), agent_name, model, input_tokens, output_tokens, cost_usd, duration_ms, tools_called (ARRAY), decision | Cascade on trace |
 | `token_usage` | - | agent_name, model, input_tokens, output_tokens, cost_usd, trigger, trace_id, conversation_id | |
 
-### Agent Configuration (2 tables)
+### Agent Configuration (1 table)
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
 | `agents` | `agt_` | name (unique), display_name, system_prompt, model_tier, tool_scope (JSONB), max_tokens, temperature, enabled | |
-| `agent_routes` | `rt_` | name (unique), decision_type, agent_pipeline (JSONB), conditions (JSONB), priority, keywords (ARRAY), weight, enabled | |
 
 ### Notifications & Triggers (2 tables)
 
@@ -188,13 +185,21 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 | `integration_audit_events` | - | integration_id (FK), action, details (JSONB) | Integration activity audit |
 | `webhook_subscriptions` | - | url, event_types (ARRAY), secret_hash, enabled | Inbound webhook registrations |
 
-### Perception & Runtime (3 tables)
+### Trust & Engagement (4 tables)
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
-| `perception_state` | - | source, user_id, last_run_at, next_run_at, status | Per-source perception scheduling |
+| `trust_states` | - | workspace_id, capability, risk_level, trust_level, approved_count, rejected_count, modified_count, last_decision_at, cooldown_until | Unique on workspace+capability+risk_level |
+| `trust_ceilings` | - | workspace_id, capability, max_level | User-set maximum autonomy level per capability |
+| `interaction_logs` | `int_` | workspace_id, user_id, trace_id, conversation_id, message_preview, plan_summary, plan_id, run_id, intent, response_preview, input_tokens, output_tokens, cost_usd, latency_ms | Lightweight audit for simple interactions (no TaskRun overhead) |
+| `engagement_history` | `eng_` | workspace_id, signal_source, signal_category, engaged_count, dismissed_count, ignored_count, consecutive_dismissals, engagement_rate, suppressed | Tracks insight surface engagement for suppression rules |
+
+### Perception & Runtime (2 tables)
+
+| Table | PK Prefix | Key Columns | Notes |
+|-------|-----------|-------------|-------|
+| `perception_state` | - | source, user_id, mode, last_run_at, next_run_at, status | Per-source perception scheduling with mode field |
 | `runtime_events` | - | event_type, agent_name, payload (JSONB), created_at | Internal runtime event log |
-| `approval_policies` | - | action_type, risk_level, auto_approve, conditions (JSONB) | Configurable approval rules |
 
 > **Note:** All data tables listed above include `workspace_id` for multi-tenant isolation unless noted as user-level or system-global.
 
@@ -219,8 +224,8 @@ All IDs use ULID (Universally Unique Lexicographically Sortable Identifier) with
 | `sched_` | schedules | `sched_01HWQX4C...` |
 | `art_` | artifacts | `art_01HWQX4D...` |
 | `agt_` | agents | `agt_01HWQX4E...` |
-| `rt_` | agent_routes | `rt_01HWQX4F...` |
 | `tool_` | tool_definitions | `tool_01HWQX4G...` |
+| `eng_` | engagement_history | `eng_01HWQX4F...` |
 | `conv_` | conversations | `conv_01HWQX4H...` |
 | `msg_` | messages | `msg_01HWQX4I...` |
 
@@ -236,7 +241,7 @@ All IDs use ULID (Universally Unique Lexicographically Sortable Identifier) with
 |--------------|-------|
 | Provider | AWS Bedrock Titan V2 |
 | Dimensions | 1024 |
-| Storage | Qdrant (4 collections) |
+| Storage | Qdrant (6 collections) |
 | Full-text | Postgres tsvector + GIN indexes (7 tables) |
 | Reranking | Bedrock amazon.rerank-v1:0 |
 
@@ -263,8 +268,6 @@ Key JSONB columns used for flexible structured data:
 | task_runs | context_pack_json | Pre-built context |
 | task_steps | input_data / output_data | Step I/O |
 | triggers | conditions | Match criteria |
-| agent_routes | agent_pipeline | Ordered pipeline steps |
-| agent_routes | conditions | Route match conditions |
 | agents | tool_scope | Allowed tool names |
 | tool_definitions | input_schema / output_schema | Tool API schemas |
 
@@ -275,7 +278,7 @@ Data is distributed across 5 infrastructure services. Postgres is always the sou
 ```mermaid
 graph LR
     subgraph "Source of Truth"
-        PG[(Postgres 17<br/>51 tables, tsvector FTS)]
+        PG[(Postgres 17<br/>51 tables + tsvector FTS)]
     end
 
     subgraph "Vector Search"
@@ -314,14 +317,18 @@ graph LR
 | Agent config | rows | - | - | - | - |
 | Sessions | rows | - | - | - | surface tracking |
 
-### Qdrant Collections (4)
+### Qdrant Collections (6)
 
-| Collection | Dimensions | Payload Fields | Purpose |
-|-----------|------------|---------------|---------|
-| `memories` | 1024 | user_id, memory_type, fact_text, confidence | Semantic memory retrieval |
-| `entities` | 1024 | user_id, entity_type, canonical_name, attributes | Entity search |
-| `events` | 1024 | user_id, source, event_type, title, summary | Event discovery |
-| `artifacts` | 1024 | user_id, artifact_type, title, mime_type | Artifact search |
+| Collection | Dimensions | Payload Fields | Payload Indexes | Purpose |
+|-----------|------------|---------------|-----------------|---------|
+| `memories` | 1024 | user_id, memory_type, fact_text, confidence, scope, preference_strength | memory_type (keyword), confidence (float) | Semantic memory retrieval |
+| `entities` | 1024 | user_id, entity_type, canonical_name, attributes | entity_type (keyword) | Entity search |
+| `events` | 1024 | user_id, source, event_type, title, summary, importance_score | source (keyword), event_type (keyword), importance_score (float) | Event discovery |
+| `artifacts` | 1024 | user_id, artifact_type, title, mime_type | - | Artifact search |
+| `conversations` | 1024 | user_id, title, surface | - | Conversation semantic search |
+| `approvals` | 1024 | user_id, approval_type, title, risk_level | - | Approval semantic search |
+
+`ensure_indexes()` creates Qdrant payload indexes at startup for filtered search on the fields listed above.
 
 ### Postgres FTS Indexes (tsvector + GIN)
 
@@ -341,7 +348,7 @@ graph LR
 
 **Nodes:** Entity label with properties (entity_id, entity_type, name, user_id, attributes)
 
-**Edges:** RELATES_TO type with properties (relation_id, relation_type, user_id, strength)
+**Edges:** Typed relationship labels derived from `relation_type` (e.g., `works_at` → `:WORKS_AT`, `invested_in` → `:INVESTED_IN`). Each edge carries properties: relation_id, relation_type, user_id, strength (float), start_date (ISO string, nullable), end_date (ISO string, nullable).
 
 **Graph queries enabled:**
 - Multi-hop traversal (up to N depth)
@@ -366,7 +373,7 @@ graph LR
 
 ## Migrations
 
-The project uses Alembic for database migrations. As of the current state, there are 51 migrations covering all schema changes from initial setup through the unified tool registry (050-051).
+The project uses Alembic for database migrations. As of the current state, there are 62 migrations covering all schema changes from initial setup through the 15-spec system redesign.
 
 ```bash
 # From backend/
