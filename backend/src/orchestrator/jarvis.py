@@ -9,7 +9,10 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncGenerator
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from src.services.relevance_assessor import PerceptionSignal, RelevanceAssessment
 
 from ulid import ULID
 
@@ -1458,7 +1461,30 @@ class JarvisOrchestrator:
                     preferences=user_prefs,
                 )
 
-                assessment = await assess_relevance(signal, user_context, self._client)
+                # Fetch engagement context for the assessor
+                engagement_context = ""
+                try:
+                    from src.services.engagement_service import EngagementService
+
+                    async with self._db_factory() as db:
+                        eng_svc = EngagementService(db, workspace_id)
+                        if await eng_svc.is_suppressed(signal.source, signal.event_type):
+                            logger.debug(
+                                "Signal suppressed: %s/%s",
+                                signal.source,
+                                signal.event_type,
+                            )
+                            return {"status": "suppressed", "source": source}
+                        engagement_context = await eng_svc.get_engagement_context()
+                except Exception:
+                    logger.debug("Failed to load engagement context", exc_info=True)
+
+                assessment = await assess_relevance(
+                    signal,
+                    user_context,
+                    self._client,
+                    engagement_context=engagement_context,
+                )
 
                 # Route by notification tier
                 if assessment.notification_tier == "briefing":
@@ -1478,25 +1504,13 @@ class JarvisOrchestrator:
                         logger.warning("Failed to store briefing memory", exc_info=True)
 
                 elif assessment.notification_tier == "push":
-                    # Notify via existing notifier (interim until Spec 4B surfaces)
                     try:
-                        notifier = self._services.notifier if self._services else None
-                        if notifier:
-                            await notifier.notify(
-                                user_id=user_id,
-                                notification_type="insight",
-                                title=f"Signal from {source}",
-                                body=assessment.reasoning[:200],
-                                data={
-                                    "urgency": 0.8 if assessment.urgency == "immediate" else 0.6,
-                                    "goal_relevance": assessment.relevance_score,
-                                    "novelty": 0.7,
-                                    "signal_source": source,
-                                },
-                                workspace_id=workspace_id,
-                            )
+                        await self._push_insight_surface(signal, assessment, user_id, workspace_id)
                     except Exception:
-                        logger.warning("Failed to push notification for signal", exc_info=True)
+                        logger.warning(
+                            "Failed to push insight surface for signal",
+                            exc_info=True,
+                        )
 
                 # silent tier: already in world model from Librarian, no action needed
 
@@ -1987,6 +2001,104 @@ class JarvisOrchestrator:
                 )
         except Exception:
             logger.warning("Failed to push workspace surface", exc_info=True)
+
+    async def _push_insight_surface(
+        self,
+        signal: "PerceptionSignal",
+        assessment: "RelevanceAssessment",
+        user_id: str,
+        workspace_id: str,
+    ) -> None:
+        """Push a proactive insight surface to the workspace.
+
+        Called when the relevance assessor routes a signal to the push tier.
+        Creates a WorkspaceSurfacePush with kind='proactive_insight' and
+        persists to ui_surfaces for workspace reconnection.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        from ulid import ULID
+
+        from src.orchestrator.contracts import (
+            InsightSurfaceData,
+            SuggestedActionRef,
+            WorkspaceSurfacePush,
+        )
+        from src.ui.contracts import SurfacePreview
+
+        try:
+            event_bus = await self._ensure_event_bus()
+            if not event_bus:
+                return
+
+            surface_id = f"surf_{ULID()}"
+
+            suggested_actions = [
+                SuggestedActionRef(
+                    description=a.description,
+                    capability=a.capability,
+                    action_input=a.action_input,
+                )
+                for a in assessment.suggested_actions
+            ]
+
+            insight_data = InsightSurfaceData(
+                signal_source=signal.source,
+                signal_category=signal.event_type,
+                signal_summary=signal.summary,
+                relevance_score=assessment.relevance_score,
+                relevance_reasoning=assessment.reasoning,
+                related_goals=assessment.relates_to_goals,
+                suggested_actions=suggested_actions,
+            )
+
+            preview = SurfacePreview(
+                title=signal.summary[:120],
+                subtitle=assessment.reasoning[:200] if assessment.reasoning else None,
+                status="proposal",
+                priority="high" if assessment.urgency == "immediate" else "medium",
+                tags=[signal.source],
+            )
+
+            surface = WorkspaceSurfacePush(
+                id=surface_id,
+                kind="proactive_insight",
+                preview=preview.model_dump(mode="json"),
+                detail_config=None,
+                created_at=datetime.now(timezone.utc).isoformat(),
+            )
+
+            # Include insight data in the payload for the frontend
+            surface_payload = surface.model_dump(mode="json")
+            surface_payload["insight_data"] = insight_data.model_dump(mode="json")
+
+            channel = f"jarvis:a2ui:{user_id}"
+            ws_msg = json.dumps({"type": "surface", "surface": surface_payload})
+            await event_bus.publish_to_channel(channel, ws_msg)
+
+            # Persist to ui_surfaces
+            try:
+                from src.models.ui_state import UISurface
+
+                async with self._db_factory() as db:
+                    db.add(
+                        UISurface(
+                            surface_id=surface_id,
+                            user_id=user_id,
+                            workspace_id=workspace_id,
+                            surface_type="proactive_insight",
+                            payload=surface_payload,
+                            preview=preview.model_dump(mode="json"),
+                            detail_config=None,
+                            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+                        )
+                    )
+                    await db.commit()
+            except Exception:
+                logger.debug("Failed to persist insight surface to DB", exc_info=True)
+
+        except Exception:
+            logger.warning("Failed to push insight surface", exc_info=True)
 
     async def _load_conversation_history(
         self, conversation_id: str | None, max_messages: int = 20, max_chars: int = 8000
