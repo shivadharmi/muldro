@@ -1,6 +1,7 @@
 "use client";
 
 import type { WorkspaceSurface } from "@/stores/surface-store";
+import { StepListCompact } from "@/components/a2ui/components/step-list";
 
 interface Props {
   surface: WorkspaceSurface;
@@ -23,6 +24,16 @@ const statusDotColor: Record<string, string> = {
   failed: "bg-red-400",
   awaiting_approval: "bg-amber-400",
   cancelled: "bg-gray-500",
+};
+
+const phaseDotColor: Record<string, string> = {
+  planning: "bg-blue-400 animate-pulse",
+  plan_ready: "bg-blue-400",
+  executing: "bg-blue-400 animate-pulse",
+  approval_needed: "bg-amber-400 animate-pulse",
+  completed: "bg-green-400",
+  failed: "bg-red-400",
+  partial: "bg-amber-400",
 };
 
 const priorityBadge: Record<string, string> = {
@@ -51,9 +62,13 @@ export function SurfaceCard({ surface, onClick }: Props) {
     >
       {/* Header: status dot + title + priority */}
       <div className="flex items-start gap-2 mb-1">
-        {preview.status && (
+        {(surface.phase || preview.status) && (
           <span
-            className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${statusDotColor[preview.status] ?? "bg-gray-400"}`}
+            className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${
+              surface.phase
+                ? phaseDotColor[surface.phase] ?? "bg-gray-400"
+                : statusDotColor[preview.status!] ?? "bg-gray-400"
+            }`}
           />
         )}
         <h3 className="text-sm font-medium text-t-primary flex-1 line-clamp-2">
@@ -73,6 +88,13 @@ export function SurfaceCard({ surface, onClick }: Props) {
         <p className="text-xs text-t-tertiary line-clamp-2 mb-2">
           {preview.subtitle}
         </p>
+      )}
+
+      {/* Execution step count */}
+      {surface.steps && surface.steps.length > 0 && (
+        <div className="mb-2">
+          <StepListCompact steps={surface.steps} />
+        </div>
       )}
 
       {/* Progress bar */}
