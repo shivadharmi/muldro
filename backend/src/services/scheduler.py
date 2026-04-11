@@ -75,6 +75,14 @@ class SchedulerLoop:
             await self._tick_eviction(factory)
             await self._tick_dlq_retry(factory)
 
+            # Memory expiration — cascade to Qdrant
+            vector_store = None
+            if self._settings.qdrant_url:
+                from src.services.vector_store import VectorStore
+
+                vector_store = VectorStore(self._settings)
+            await self._tick_memory_expiration(factory, vector_store)
+
         # 4b. Persona batch — every 10th tick (~5 min)
         await self._tick_persona_batch()
 

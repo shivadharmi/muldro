@@ -25,9 +25,11 @@ from src.models.events import NormalizedEvent
 
 if TYPE_CHECKING:
     from src.services.dead_letter import DeadLetterService
+    from src.services.embedding_service import EmbeddingService
     from src.services.event_bus import EventBus
     from src.services.memory_service import MemoryService
     from src.services.notifier import Notifier
+    from src.services.vector_store import VectorStore
     from src.services.world_model import WorldModel
 
 logger = logging.getLogger(__name__)
@@ -121,6 +123,8 @@ class EventProcessor:
         dead_letter: DeadLetterService | None = None,
         event_bus: EventBus | None = None,
         notifier: Notifier | None = None,
+        embedding_service: EmbeddingService | None = None,
+        vector_store: VectorStore | None = None,
     ):
         self._settings = settings
         self._db = db
@@ -131,6 +135,8 @@ class EventProcessor:
         self._dead_letter = dead_letter
         self._event_bus = event_bus
         self._notifier = notifier
+        self._embedding_service = embedding_service
+        self._vector_store = vector_store
         self._semaphore = asyncio.Semaphore(settings.event_processor_concurrency)
 
     async def process(self, raw: RawEvent, user_id: str, workspace_id: str = "") -> str | None:
@@ -211,6 +217,32 @@ class EventProcessor:
                     )
                 except Exception:
                     logger.debug("DLQ enqueue failed for metrics", exc_info=True)
+
+        # Embed into Qdrant for vector search (importance >= 0.3 only)
+        if (event.importance_score or 0) >= 0.3 and self._embedding_service and self._vector_store:
+            try:
+                text = f"{event.title or ''}: {event.summary or ''}"
+                embedding = await self._embedding_service.embed_text(text)
+                if embedding:
+                    await self._vector_store.upsert(
+                        collection="events",
+                        id=event.event_id,
+                        vector=embedding,
+                        payload={
+                            "event_type": event.event_type,
+                            "source": event.source,
+                            "importance_score": event.importance_score,
+                            "occurred_at": event.occurred_at.isoformat()
+                            if event.occurred_at
+                            else None,
+                            "actor": (event.actor_entities[0] or {}).get("name")
+                            if event.actor_entities
+                            else None,
+                        },
+                        user_id=event.user_id,
+                    )
+            except Exception:
+                logger.debug("Event embedding failed for %s", event_id, exc_info=True)
 
         # Publish to event bus for decoupled downstream processing
         if self._event_bus:

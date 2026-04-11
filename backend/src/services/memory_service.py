@@ -91,6 +91,30 @@ class MemoryService:
         self._event_bus = event_bus
         self._vector_store = vector_store
 
+    @staticmethod
+    def _build_memory_payload(
+        memory_type: str,
+        fact_text: str,
+        user_id: str,
+        confidence: float = 0.5,
+        stability_score: float = 0.0,
+        entity_ids: list[str] | None = None,
+        scope: str | None = None,
+        preference_strength: str | None = None,
+    ) -> dict:
+        """Build enriched Qdrant payload for a memory."""
+        return {
+            "memory_type": memory_type,
+            "fact_text": fact_text,
+            "user_id": user_id,
+            "confidence": confidence,
+            "stability_score": stability_score,
+            "entity_ids": entity_ids or [],
+            "scope": scope or "general",
+            "preference_strength": preference_strength,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+
     async def extract_and_store(
         self,
         user_id: str,
@@ -140,11 +164,14 @@ class MemoryService:
                     "memories",
                     memory_id,
                     embedding,
-                    {
-                        "memory_type": mem_data.get("memory_type"),
-                        "fact_text": fact_text,
-                        "user_id": user_id,
-                    },
+                    self._build_memory_payload(
+                        memory_type=mem_data.get("memory_type", "semantic"),
+                        fact_text=fact_text,
+                        user_id=user_id,
+                        confidence=mem_data.get("confidence", 0.5),
+                        entity_ids=entity_ids,
+                        scope=mem_data.get("scope"),
+                    ),
                     user_id,
                 )
 
@@ -231,11 +258,14 @@ class MemoryService:
                     "memories",
                     memory_id,
                     embedding,
-                    {
-                        "memory_type": "preference",
-                        "fact_text": fact_text,
-                        "user_id": user_id,
-                    },
+                    self._build_memory_payload(
+                        memory_type="preference",
+                        fact_text=fact_text,
+                        user_id=user_id,
+                        confidence=pref_data.get("confidence", 0.5),
+                        scope=pref_data.get("category"),
+                        preference_strength=pref_data.get("strength"),
+                    ),
                     user_id,
                 )
 
@@ -292,11 +322,15 @@ class MemoryService:
                 "memories",
                 memory_id,
                 embedding,
-                {
-                    "memory_type": "goal",
-                    "fact_text": fact_text,
-                    "user_id": user_id,
-                },
+                self._build_memory_payload(
+                    memory_type="goal",
+                    fact_text=fact_text,
+                    user_id=user_id,
+                    confidence=0.9,
+                    stability_score=0.5,
+                    entity_ids=entity_ids,
+                    scope="planning",
+                ),
                 user_id,
             )
 
@@ -342,11 +376,14 @@ class MemoryService:
                 "memories",
                 memory_id,
                 embedding,
-                {
-                    "memory_type": "preference",
-                    "fact_text": fact_text,
-                    "user_id": user_id,
-                },
+                self._build_memory_payload(
+                    memory_type="preference",
+                    fact_text=fact_text,
+                    user_id=user_id,
+                    confidence=0.95,
+                    stability_score=0.8,
+                    scope="general",
+                ),
                 user_id,
             )
 

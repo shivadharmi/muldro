@@ -25,6 +25,8 @@ COLLECTION_MEMORIES = "memories"
 COLLECTION_ENTITIES = "entities"
 COLLECTION_EVENTS = "events"
 COLLECTION_ARTIFACTS = "artifacts"
+COLLECTION_CONVERSATIONS = "conversations"
+COLLECTION_APPROVALS = "approvals"
 
 # Vector dimensions (Bedrock Titan V2)
 VECTOR_SIZE = 1024
@@ -77,6 +79,8 @@ class VectorStore:
             COLLECTION_ENTITIES,
             COLLECTION_EVENTS,
             COLLECTION_ARTIFACTS,
+            COLLECTION_CONVERSATIONS,
+            COLLECTION_APPROVALS,
         )
         for name in collections:
             try:
@@ -87,6 +91,38 @@ class VectorStore:
                     vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
                 )
                 logger.info("Created Qdrant collection: %s", name)
+
+    async def ensure_indexes(self) -> None:
+        """Create Qdrant payload indexes for filtered search."""
+        client = await self._get_client()
+        if not client:
+            return
+        from qdrant_client.models import PayloadSchemaType
+
+        indexes = {
+            COLLECTION_MEMORIES: [
+                ("memory_type", PayloadSchemaType.KEYWORD),
+                ("confidence", PayloadSchemaType.FLOAT),
+            ],
+            COLLECTION_ENTITIES: [
+                ("entity_type", PayloadSchemaType.KEYWORD),
+            ],
+            COLLECTION_EVENTS: [
+                ("source", PayloadSchemaType.KEYWORD),
+                ("event_type", PayloadSchemaType.KEYWORD),
+                ("importance_score", PayloadSchemaType.FLOAT),
+            ],
+        }
+        for collection, fields in indexes.items():
+            for field_name, schema_type in fields:
+                try:
+                    await client.create_payload_index(
+                        collection_name=collection,
+                        field_name=field_name,
+                        field_schema=schema_type,
+                    )
+                except Exception:
+                    pass  # index may already exist
 
     async def upsert(
         self,
@@ -215,7 +251,13 @@ class VectorStore:
     ) -> list[dict]:
         """Search across multiple collections and merge results."""
         if not collections:
-            collections = [COLLECTION_MEMORIES, COLLECTION_ENTITIES, COLLECTION_EVENTS]
+            collections = [
+                COLLECTION_MEMORIES,
+                COLLECTION_ENTITIES,
+                COLLECTION_EVENTS,
+                COLLECTION_CONVERSATIONS,
+                COLLECTION_APPROVALS,
+            ]
 
         all_results = []
         for collection in collections:

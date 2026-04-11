@@ -192,6 +192,54 @@ async def test_extract_auto_checks_contradictions(
     assert contradiction_calls[0][0][2]["memory_id"] == memory_ids[0]
 
 
+@patch("src.services.memory_service.get_anthropic_client")
+@pytest.mark.asyncio
+async def test_memory_upsert_includes_enriched_payload(mock_get_client):
+    """Memory Qdrant payloads should include confidence, stability, entity_ids, scope."""
+    settings = make_mock_settings()
+    mock_client = MagicMock()
+    mock_get_client.return_value = mock_client
+
+    mock_db = MagicMock()
+    mock_db.add = MagicMock()
+    mock_db.flush = AsyncMock()
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = None
+    mock_db.execute = AsyncMock(return_value=result_mock)
+
+    mock_vector_store = AsyncMock()
+
+    svc = MemoryService(
+        settings=settings,
+        db=mock_db,
+        vector_store=mock_vector_store,
+    )
+    svc._embedder = AsyncMock()
+    svc._embedder.embed_text = AsyncMock(return_value=[0.1] * 1024)
+
+    await svc.store_memory(
+        user_id="usr_test",
+        fact_text="Test fact",
+        memory_type="semantic",
+        scope="general",
+        entity_ids=["ent_abc"],
+        workspace_id="ws_test",
+    )
+
+    mock_vector_store.upsert.assert_called_once()
+    # Get the payload from the call - it's the 4th positional arg
+    call_args = mock_vector_store.upsert.call_args
+    payload = call_args[0][3] if len(call_args[0]) > 3 else call_args.kwargs.get("payload")
+
+    assert payload["memory_type"] == "semantic"
+    assert payload["fact_text"] == "Test fact"
+    assert payload["confidence"] == 0.8
+    assert payload["stability_score"] == 0.0
+    assert payload["entity_ids"] == ["ent_abc"]
+    assert payload["scope"] == "general"
+    assert "created_at" in payload
+
+
 @patch("src.services.memory_service.EmbeddingService")
 @patch("src.services.memory_service.get_anthropic_client")
 @pytest.mark.asyncio
