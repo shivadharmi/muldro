@@ -1422,6 +1422,7 @@ class JarvisOrchestrator:
 
             # Step 2b: Assess relevance of signals against user context
             try:
+                from src.services.memory_service import MemoryService
                 from src.services.relevance_assessor import (
                     PerceptionSignal,
                     UserContext,
@@ -1438,8 +1439,6 @@ class JarvisOrchestrator:
                 user_goals = []
                 user_prefs = []
                 try:
-                    from src.services.memory_service import MemoryService
-
                     async with self._db_factory() as db:
                         mem_svc = MemoryService(db, self._settings)
                         # get_user_preferences(user_id, category, max_results, workspace_id)

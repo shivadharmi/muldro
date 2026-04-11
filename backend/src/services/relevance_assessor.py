@@ -121,10 +121,11 @@ async def assess_relevance(
         text = response.content[0].text
         data = json.loads(text)
         assessment = RelevanceAssessment(**data)
-        assessment.notification_tier = _determine_tier(
-            assessment.relevance_score, assessment.urgency
+        return assessment.model_copy(
+            update={
+                "notification_tier": _determine_tier(assessment.relevance_score, assessment.urgency)
+            }
         )
-        return assessment
     except Exception:
         logger.warning("Relevance assessment failed, defaulting to silent", exc_info=True)
         return RelevanceAssessment(

@@ -39,7 +39,6 @@ class SchedulerLoop:
         self._orchestrator = orchestrator
         self._user_ids = user_ids or []
         self._running = False
-        self._last_synthesis_at: float = 0.0  # D2: throttle cross-source synthesis
 
     async def run(self) -> None:
         """Main loop: every 30s, check for due schedules and fire them."""

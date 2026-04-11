@@ -99,6 +99,7 @@ class Notifier:
         """Check if a notification can be sent to this surface within rate limits.
 
         Uses Redis INCR with 1-hour TTL. Returns True if under limit.
+        Counts attempts (not deliveries) — denied notifications still increment.
         """
         if not self._redis:
             return True
