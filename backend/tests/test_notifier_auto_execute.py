@@ -117,7 +117,13 @@ class TestAutoExecuteNotify:
                 notification_type="info_update",
                 title="FYI",
                 body="Some info",
-                data={},
+                data={
+                    "urgency": 0.9,
+                    "goal_relevance": 0.9,
+                    "novelty": 0.9,
+                    "confidence": 0.9,
+                    "interruptibility": 0.9,
+                },
             )
 
         assert deliver_mock.call_count == 1

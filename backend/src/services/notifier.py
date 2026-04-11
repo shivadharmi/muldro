@@ -187,8 +187,11 @@ class Notifier:
             except Exception:
                 logger.warning("Failed to persist notification", exc_info=True)
 
-        # Priority-based delivery filter (approval_request + critical_alert bypass)
-        if notification_type not in ("approval_request", "critical_alert"):
+        # Types that bypass priority/rate-limit filters
+        _bypass_filter = ("approval_request", "critical_alert", "auto_execute_notify")
+        # Types that deliver to ALL surfaces (not just preferred)
+        _broadcast_types = ("approval_request", "critical_alert")
+        if notification_type not in _bypass_filter:
             if priority < 0.3:
                 logger.info(
                     "notification_silent",
@@ -212,7 +215,7 @@ class Notifier:
             return {"status": "queued", "surfaces": []}
 
         # Rate-limit filtering: remove surfaces that are over their hourly cap
-        if notification_type not in ("approval_request", "critical_alert"):
+        if notification_type not in _bypass_filter:
             allowed_surfaces = []
             for surface in surfaces:
                 if await self._check_rate_limit(user_id, surface):
@@ -224,7 +227,7 @@ class Notifier:
 
         results = {}
 
-        if notification_type in ("approval_request", "critical_alert"):
+        if notification_type in _broadcast_types:
             # Send to ALL active surfaces
             for surface in surfaces:
                 result = await self._deliver(surface, notification)
