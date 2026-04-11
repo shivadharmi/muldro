@@ -176,6 +176,57 @@ class GraphEngine:
                 "edges": record["edges"],
             }
 
+    async def traverse_weighted(
+        self,
+        entity_id: str,
+        user_id: str,
+        depth: int = 2,
+        relation_types: list[str] | None = None,
+        min_strength: float = 0.0,
+    ) -> list[dict]:
+        """Traverse the graph ranking connected entities by avg relationship strength.
+
+        Returns entities sorted by avg_strength descending, then distance ascending.
+        Filters out paths where avg strength < min_strength.
+        """
+        driver = await self._get_driver()
+        if not driver:
+            return []
+
+        try:
+            async with driver.session() as session:
+                result = await session.run(
+                    f"""
+                    MATCH path = (start:Entity {{entity_id: $entity_id,
+                                                  user_id: $user_id}})
+                          -[rels*1..{depth}]-(connected:Entity {{user_id: $user_id}})
+                    WHERE connected.entity_id <> $entity_id
+                    WITH connected, relationships(path) AS path_rels
+                    WITH connected,
+                         reduce(s = 0.0, r IN path_rels |
+                                s + coalesce(r.strength, 0.5)) / size(path_rels)
+                             AS avg_strength,
+                         size(path_rels) AS distance
+                    WHERE avg_strength >= $min_strength
+                    RETURN DISTINCT
+                        connected.entity_id AS entity_id,
+                        connected.name AS name,
+                        connected.entity_type AS entity_type,
+                        connected.attributes AS attributes,
+                        avg_strength,
+                        distance
+                    ORDER BY avg_strength DESC, distance ASC
+                    LIMIT 20
+                    """,
+                    entity_id=entity_id,
+                    user_id=user_id,
+                    min_strength=min_strength,
+                )
+                return await result.data()
+        except Exception:
+            logger.debug("Neo4j traverse_weighted failed for %s", entity_id, exc_info=True)
+            return []
+
     async def find_path(
         self, from_entity_id: str, to_entity_id: str, user_id: str, max_depth: int = 4
     ) -> list[dict]:
