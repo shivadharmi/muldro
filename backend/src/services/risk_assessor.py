@@ -119,7 +119,9 @@ async def assess_risk(
             messages=[{"role": "user", "content": user_message}],
         )
         text = response.content[0].text
-        data = json.loads(text)
+        from src.llm_utils import parse_llm_json
+
+        data = parse_llm_json(text)
         return RiskAssessment.model_validate(data)
     except Exception:
         logger.warning(

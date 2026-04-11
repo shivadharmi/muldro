@@ -24,6 +24,7 @@ _PREFIX_MAP: dict[str, tuple[str, str]] = {
     "briefing_": ("briefing", "briefing_id"),
     "priority_": ("alert", "run_id"),
     "rec_": ("recommendation", "index"),
+    "exec_": ("plan", "run_id"),
 }
 
 

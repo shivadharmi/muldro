@@ -132,6 +132,15 @@ class Notifier:
             interruptibility=data.get("interruptibility", 0.5) if data else 0.5,
         )
 
+        # Resolve workspace_id from user_id if not provided
+        if not workspace_id and self._db and user_id:
+            try:
+                from src.api.deps import resolve_workspace_id
+
+                workspace_id = await resolve_workspace_id(self._db, user_id)
+            except Exception:
+                logger.debug("Could not resolve workspace_id for user %s", user_id)
+
         payload = dict(data or {})
         if workspace_id and "workspace_id" not in payload:
             payload["workspace_id"] = workspace_id
