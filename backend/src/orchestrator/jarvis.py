@@ -1420,6 +1420,90 @@ class JarvisOrchestrator:
                 except Exception:
                     logger.warning("Correlation enrichment failed", exc_info=True)
 
+            # Step 2b: Assess relevance of signals against user context
+            try:
+                from src.services.relevance_assessor import (
+                    PerceptionSignal,
+                    UserContext,
+                    assess_relevance,
+                )
+
+                signal = PerceptionSignal(
+                    source=source,
+                    event_type=f"perception_{source}",
+                    summary=observer_summary[:500],
+                )
+
+                # Build user context from goals + preferences
+                user_goals = []
+                user_prefs = []
+                try:
+                    from src.services.memory_service import MemoryService
+
+                    async with self._db_factory() as db:
+                        mem_svc = MemoryService(db, self._settings)
+                        # get_user_preferences(user_id, category, max_results, workspace_id)
+                        prefs = await mem_svc.get_user_preferences(
+                            user_id, workspace_id=workspace_id
+                        )
+                        for p in prefs[:10]:
+                            if getattr(p, "memory_type", "") == "goal":
+                                user_goals.append(p.fact_text)
+                            else:
+                                user_prefs.append(p.fact_text)
+                except Exception:
+                    logger.debug("Failed to load user context for relevance", exc_info=True)
+
+                user_context = UserContext(
+                    goals=user_goals,
+                    preferences=user_prefs,
+                )
+
+                assessment = await assess_relevance(signal, user_context, self._client)
+
+                # Route by notification tier
+                if assessment.notification_tier == "briefing":
+                    try:
+                        async with self._db_factory() as db:
+                            mem_svc = MemoryService(db, self._settings)
+                            await mem_svc.store_briefing_memory(
+                                user_id=user_id,
+                                workspace_id=workspace_id,
+                                text=f"{observer_summary[:300]}\n\nWhy: {assessment.reasoning}",
+                                source=f"perception:{source}",
+                                relevance_score=assessment.relevance_score,
+                                signal_source=source,
+                            )
+                            await db.commit()
+                    except Exception:
+                        logger.warning("Failed to store briefing memory", exc_info=True)
+
+                elif assessment.notification_tier == "push":
+                    # Notify via existing notifier (interim until Spec 4B surfaces)
+                    try:
+                        notifier = self._services.notifier if self._services else None
+                        if notifier:
+                            await notifier.notify(
+                                user_id=user_id,
+                                notification_type="insight",
+                                title=f"Signal from {source}",
+                                body=assessment.reasoning[:200],
+                                data={
+                                    "urgency": 0.8 if assessment.urgency == "immediate" else 0.6,
+                                    "goal_relevance": assessment.relevance_score,
+                                    "novelty": 0.7,
+                                    "signal_source": source,
+                                },
+                                workspace_id=workspace_id,
+                            )
+                    except Exception:
+                        logger.warning("Failed to push notification for signal", exc_info=True)
+
+                # silent tier: already in world model from Librarian, no action needed
+
+            except Exception:
+                logger.warning("Relevance assessment failed, continuing without", exc_info=True)
+
             # Step 3: Planner evaluates if any action is needed
             planner_message = (
                 f"Evaluate these observations from {source}. "
