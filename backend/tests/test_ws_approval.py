@@ -195,3 +195,96 @@ class TestApprovalHardening:
             mock_db, "apr_01TEST", "usr_01TEST", "ws_01TEST", intended_action="reject"
         )
         assert result is mock_approval
+
+
+class TestArtifactRefsValidation:
+    def test_tool_approval_type_prefix_recognized(self):
+        """approval_type starting with 'tool:' should trigger validation."""
+        import inspect
+
+        from src.services import approval_service
+
+        source = inspect.getsource(approval_service)
+        assert "tool_name" in source
+        assert "artifact_refs" in source
+
+    @pytest.mark.asyncio
+    async def test_tool_approval_missing_tool_name_raises_value_error(self):
+        """create_approval with tool: type and artifact_refs lacking tool_name raises ValueError."""
+        from unittest.mock import AsyncMock
+
+        from src.services.approval_service import create_approval
+
+        mock_db = AsyncMock()
+
+        with pytest.raises(ValueError, match="tool_name"):
+            await create_approval(
+                mock_db,
+                user_id="usr_01TEST",
+                workspace_id="ws_01TEST",
+                approval_type="tool:email.send",
+                title="Send email",
+                requested_by="orchestrator",
+                artifact_refs={"tool_params": {"to": "user@example.com"}},
+            )
+
+    @pytest.mark.asyncio
+    async def test_tool_approval_with_tool_name_succeeds(self):
+        """create_approval with tool: type and artifact_refs containing tool_name proceeds."""
+        from unittest.mock import AsyncMock
+
+        from src.services.approval_service import create_approval
+
+        mock_db = AsyncMock()
+
+        approval = await create_approval(
+            mock_db,
+            user_id="usr_01TEST",
+            workspace_id="ws_01TEST",
+            approval_type="tool:email.send",
+            title="Send email",
+            requested_by="orchestrator",
+            artifact_refs={"tool_name": "send_email", "tool_params": {"to": "user@example.com"}},
+        )
+        assert approval.approval_type == "tool:email.send"
+        mock_db.add.assert_called_once_with(approval)
+
+    @pytest.mark.asyncio
+    async def test_non_tool_approval_without_tool_name_succeeds(self):
+        """create_approval with non-tool: type skips tool_name validation."""
+        from unittest.mock import AsyncMock
+
+        from src.services.approval_service import create_approval
+
+        mock_db = AsyncMock()
+
+        approval = await create_approval(
+            mock_db,
+            user_id="usr_01TEST",
+            workspace_id="ws_01TEST",
+            approval_type="plan:review",
+            title="Review plan",
+            requested_by="orchestrator",
+            artifact_refs={"plan_id": "plan_01TEST"},
+        )
+        assert approval.approval_type == "plan:review"
+
+    @pytest.mark.asyncio
+    async def test_tool_approval_with_no_artifact_refs_skips_validation(self):
+        """create_approval with tool: type but no artifact_refs does not raise."""
+        from unittest.mock import AsyncMock
+
+        from src.services.approval_service import create_approval
+
+        mock_db = AsyncMock()
+
+        approval = await create_approval(
+            mock_db,
+            user_id="usr_01TEST",
+            workspace_id="ws_01TEST",
+            approval_type="tool:email.send",
+            title="Send email",
+            requested_by="orchestrator",
+            artifact_refs=None,
+        )
+        assert approval.approval_type == "tool:email.send"

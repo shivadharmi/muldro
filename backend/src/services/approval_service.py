@@ -38,6 +38,14 @@ async def create_approval(
     This is the ONLY way to create approvals. Direct Approval() construction
     is prohibited in Governor, hooks, and GraphExecutor.
     """
+    # Validate artifact_refs for tool-level approvals
+    if artifact_refs and approval_type and approval_type.startswith("tool:"):
+        if "tool_name" not in artifact_refs:
+            raise ValueError(
+                f"Tool-level approval requires 'tool_name' in artifact_refs, "
+                f"got keys: {list(artifact_refs.keys())}"
+            )
+
     approval_id = f"apr_{ULID()}"
 
     if expires_at is None:
