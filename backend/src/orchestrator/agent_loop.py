@@ -482,6 +482,33 @@ async def agent_loop(
                     workspace_id=workspace_id,
                 )
 
+                # Per-tool cost attribution (Issue #13)
+                try:
+                    from ulid import ULID
+
+                    from src.models.token_usage import TokenUsage
+
+                    async with db_factory() as tool_db:
+                        tool_db.add(
+                            TokenUsage(
+                                usage_id=f"usage_{ULID()}",
+                                workspace_id=workspace_id,
+                                agent_name=agent_name,
+                                model=model,
+                                input_tokens=0,
+                                output_tokens=0,
+                                cache_creation_input_tokens=0,
+                                cache_read_input_tokens=0,
+                                thinking_tokens=0,
+                                cost_usd=0.0,
+                                trigger=f"tool:{tool_name}",
+                                trace_id=trace.trace_id if trace else None,
+                            )
+                        )
+                        await tool_db.commit()
+                except Exception:
+                    pass  # Non-critical — don't break the agent loop
+
             # Preserve content blocks for multi-turn continuity
             messages.append(
                 {"role": "assistant", "content": _sanitize_content_blocks(response.content)}
