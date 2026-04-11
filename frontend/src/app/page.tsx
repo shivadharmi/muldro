@@ -15,12 +15,13 @@ import { GreetingHero } from "@/components/dashboard/greeting-hero";
 import { WorkspaceStatusBar } from "@/components/workspace/workspace-status-bar";
 import { WorkspaceCanvas } from "@/components/workspace/workspace-canvas";
 import { SurfaceDetailModal } from "@/components/workspace/surface-detail-modal";
-import type { WorkspaceSurfacePush } from "@/lib/a2ui-types";
+import type { WorkspaceSurfacePush, SurfaceUpdate } from "@/lib/a2ui-types";
 import type { SurfaceKind } from "@/lib/types/surfaces";
 
 export default function WorkspacePage() {
   const { user } = useAuth();
   const { addSurface } = useSurfaceStore();
+  const updateSurface = useSurfaceStore((s) => s.updateSurface);
   const wsSurfaces = useSurfaceStore((s) => s.surfaces);
   const activeSurfaceId = useSurfaceStore((s) => s.activeSurfaceId);
   const detailModalOpen = useSurfaceStore((s) => s.detailModalOpen);
@@ -59,7 +60,17 @@ export default function WorkspacePage() {
     const map = new Map<string, WorkspaceSurface>();
     for (const s of restSurfaces) map.set(s.id, s);
     for (const s of wsSurfaces) map.set(s.id, s);
-    return Array.from(map.values());
+    const merged = Array.from(map.values());
+
+    // Active executions first (executing or approval_needed), then by created_at desc
+    const isActive = (s: WorkspaceSurface) =>
+      s.phase === "executing" || s.phase === "approval_needed" || s.phase === "planning";
+    return merged.sort((a, b) => {
+      const aActive = isActive(a) ? 0 : 1;
+      const bActive = isActive(b) ? 0 : 1;
+      if (aActive !== bActive) return aActive - bActive;
+      return b.created_at.localeCompare(a.created_at);
+    });
   }, [restSurfaces, wsSurfaces]);
 
   const sourceCount = system?.observations
@@ -89,6 +100,10 @@ export default function WorkspacePage() {
   const { sendAction } = useJarvisWs({
     userId: user?.user_id ?? "",
     onSurfacePush: handleSurfacePush,
+    onSurfaceUpdate: useCallback(
+      (update: SurfaceUpdate) => updateSurface(update.surface_id, update),
+      [updateSurface]
+    ),
     enabled: !!user,
   });
 
