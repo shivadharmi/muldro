@@ -266,7 +266,7 @@ async def approve_action(
                 trigger_type="approval_resume",
                 goal=f"Execute approved tool: {tool_name}",
                 priority="high",
-                decision="create_task",
+                decision="plan",
                 status="created",
             )
             plan.tasks = [

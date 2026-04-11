@@ -30,7 +30,7 @@ def mock_plan():
     plan.goal = "Build test feature"
     plan.priority = "high"
     plan.risk_level = "medium"
-    plan.decision = "create_task"
+    plan.decision = "plan"
     plan.status = "pending"
     plan.created_at = datetime(2026, 4, 3, 10, 0, tzinfo=timezone.utc)
     plan.tasks = []
@@ -76,7 +76,7 @@ async def test_plan_found_returns_metadata(mock_db, mock_plan_with_tasks):
     assert result["goal"] == "Build test feature"
     assert result["priority"] == "high"
     assert result["risk_level"] == "medium"
-    assert result["decision"] == "create_task"
+    assert result["decision"] == "plan"
     assert result["status"] == "pending"
     assert result["created_at"] == "2026-04-03T10:00:00+00:00"
     assert len(result["tasks"]) == 2
