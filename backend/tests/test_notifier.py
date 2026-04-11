@@ -2,6 +2,8 @@
 
 from unittest.mock import AsyncMock
 
+import pytest
+
 from src.services.notifier import Notifier
 from src.services.surface_registry import SurfaceRegistry
 from tests.conftest import TEST_USER_ID
@@ -28,7 +30,19 @@ class TestNotifier:
 
     async def test_no_surfaces_returns_queued(self):
         notifier = await self._make_notifier(surfaces=[])
-        result = await notifier.notify(TEST_USER_ID, "info_update", "Test", "Body")
+        result = await notifier.notify(
+            TEST_USER_ID,
+            "info_update",
+            "Test",
+            "Body",
+            data={
+                "urgency": 0.9,
+                "goal_relevance": 0.9,
+                "novelty": 0.9,
+                "confidence": 0.9,
+                "interruptibility": 0.9,
+            },
+        )
         assert result["status"] == "queued"
         assert result["surfaces"] == []
 
@@ -65,7 +79,17 @@ class TestNotifier:
         )
 
         result = await notifier.notify(
-            TEST_USER_ID, "info_update", "Status update", "Things are fine"
+            TEST_USER_ID,
+            "info_update",
+            "Status update",
+            "Things are fine",
+            data={
+                "urgency": 0.9,
+                "goal_relevance": 0.9,
+                "novelty": 0.9,
+                "confidence": 0.9,
+                "interruptibility": 0.9,
+            },
         )
 
         assert result["status"] == "sent"
@@ -83,7 +107,19 @@ class TestNotifier:
             telegram_sender=tg_sender,
         )
 
-        result = await notifier.notify(TEST_USER_ID, "info_update", "Update", "Content")
+        result = await notifier.notify(
+            TEST_USER_ID,
+            "info_update",
+            "Update",
+            "Content",
+            data={
+                "urgency": 0.9,
+                "goal_relevance": 0.9,
+                "novelty": 0.9,
+                "confidence": 0.9,
+                "interruptibility": 0.9,
+            },
+        )
 
         assert result["status"] == "sent"
         assert "telegram" in result["surfaces"]
@@ -139,7 +175,19 @@ class TestNotifier:
             telegram_sender=tg_sender,
         )
 
-        await notifier.notify(TEST_USER_ID, "info_update", "Test", "Body")
+        await notifier.notify(
+            TEST_USER_ID,
+            "info_update",
+            "Test",
+            "Body",
+            data={
+                "urgency": 0.9,
+                "goal_relevance": 0.9,
+                "novelty": 0.9,
+                "confidence": 0.9,
+                "interruptibility": 0.9,
+            },
+        )
 
         # Check that something was marked as delivered
         assert len(notifier._delivered) > 0
@@ -177,7 +225,19 @@ class TestNotifier:
         assert await notifier.is_delivered("notif_fake") is False
 
         # After notification to preferred surface (telegram is the only one)
-        await notifier.notify(TEST_USER_ID, "info_update", "Test", "Body")
+        await notifier.notify(
+            TEST_USER_ID,
+            "info_update",
+            "Test",
+            "Body",
+            data={
+                "urgency": 0.9,
+                "goal_relevance": 0.9,
+                "novelty": 0.9,
+                "confidence": 0.9,
+                "interruptibility": 0.9,
+            },
+        )
 
         # At least one notification was marked delivered
         assert len(notifier._delivered) > 0
@@ -190,8 +250,119 @@ class TestNotifier:
             telegram_sender=tg_sender,
         )
 
-        result = await notifier.notify(TEST_USER_ID, "info_update", "Test", "Body")
+        result = await notifier.notify(
+            TEST_USER_ID,
+            "info_update",
+            "Test",
+            "Body",
+            data={
+                "urgency": 0.9,
+                "goal_relevance": 0.9,
+                "novelty": 0.9,
+                "confidence": 0.9,
+                "interruptibility": 0.9,
+            },
+        )
 
         # Should not raise, error is captured per surface
         assert result["status"] == "sent"
         assert "error" in result["surfaces"]["telegram"]["error"]
+
+
+class TestPriorityScoreDelivery:
+    """Test that priority score drives delivery decisions."""
+
+    @pytest.mark.asyncio
+    async def test_low_priority_returns_silent(self):
+        """Score < 0.3 → silent, no delivery."""
+        from src.services.notifier import Notifier
+
+        registry = AsyncMock()
+        notifier = Notifier(surface_registry=registry)
+        result = await notifier.notify(
+            user_id="usr_test",
+            notification_type="info_update",
+            title="Low priority",
+            body="Not important",
+            data={
+                "urgency": 0.1,
+                "goal_relevance": 0.1,
+                "novelty": 0.1,
+                "confidence": 0.1,
+                "interruptibility": 0.1,
+            },
+        )
+        assert result["status"] == "silent"
+        registry.get_active_surfaces.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_medium_priority_held_for_briefing(self):
+        """Score 0.3-0.6 → held for briefing."""
+        from src.services.notifier import Notifier
+
+        registry = AsyncMock()
+        redis = AsyncMock()
+        redis.incr.return_value = 1
+        notifier = Notifier(surface_registry=registry, redis=redis)
+        result = await notifier.notify(
+            user_id="usr_test",
+            notification_type="info_update",
+            title="Medium priority",
+            body="Somewhat important",
+            data={
+                "urgency": 0.5,
+                "goal_relevance": 0.4,
+                "novelty": 0.4,
+                "confidence": 0.4,
+                "interruptibility": 0.4,
+            },
+        )
+        assert result["status"] == "held_for_briefing"
+
+    @pytest.mark.asyncio
+    async def test_high_priority_delivers_normally(self):
+        """Score >= 0.6 → normal delivery."""
+        from src.services.notifier import Notifier
+
+        registry = AsyncMock()
+        registry.get_active_surfaces.return_value = ["web"]
+        registry.get_preferred_surface.return_value = "web"
+        redis = AsyncMock()
+        redis.incr.return_value = 1
+        redis.publish = AsyncMock()
+        notifier = Notifier(surface_registry=registry, redis=redis)
+        result = await notifier.notify(
+            user_id="usr_test",
+            notification_type="info_update",
+            title="High priority",
+            body="Very important",
+            data={
+                "urgency": 0.9,
+                "goal_relevance": 0.9,
+                "novelty": 0.9,
+                "confidence": 0.9,
+                "interruptibility": 0.9,
+            },
+        )
+        assert result["status"] == "sent"
+
+    @pytest.mark.asyncio
+    async def test_approval_request_bypasses_priority_filter(self):
+        """approval_request and critical_alert always deliver."""
+        from src.services.notifier import Notifier
+
+        registry = AsyncMock()
+        registry.get_active_surfaces.return_value = ["telegram"]
+        telegram = AsyncMock(return_value={"status": "sent"})
+        redis = AsyncMock()
+        redis.incr.return_value = 1
+        redis.publish = AsyncMock()
+        notifier = Notifier(surface_registry=registry, redis=redis, telegram_sender=telegram)
+        result = await notifier.notify(
+            user_id="usr_test",
+            notification_type="approval_request",
+            title="Approve deploy",
+            body="Deploy to prod",
+            data={"urgency": 0.1, "approval_id": "apr_123"},
+        )
+        assert result["status"] == "sent"

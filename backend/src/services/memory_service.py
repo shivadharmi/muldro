@@ -363,6 +363,8 @@ class MemoryService:
         workspace_id: str,
         text: str,
         source: str = "perception",
+        relevance_score: float | None = None,
+        signal_source: str | None = None,
     ) -> str:
         """Store a briefing item as a short-lived memory (24h TTL).
 
@@ -381,7 +383,11 @@ class MemoryService:
             confidence=0.8,
             stability_score=0.3,
             source_event_ids=[],
-            provenance={"source": source},
+            provenance={
+                "source": source,
+                **({"relevance_score": relevance_score} if relevance_score is not None else {}),
+                **({"signal_source": signal_source} if signal_source is not None else {}),
+            },
             ttl_days=1,
             status="active",
         )

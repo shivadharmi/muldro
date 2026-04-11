@@ -106,3 +106,35 @@ class TestRateLimiting:
         notifier = Notifier(surface_registry=registry, redis=None)
         allowed = await notifier._check_rate_limit("user1", "telegram")
         assert allowed is True
+
+
+class TestRateLimitInDelivery:
+    """Test that rate limiting is enforced during actual delivery."""
+
+    @pytest.mark.asyncio
+    async def test_rate_limited_notification_held_for_briefing(self):
+        from src.services.notifier import Notifier
+
+        registry = AsyncMock()
+        registry.get_active_surfaces.return_value = ["telegram"]
+        registry.get_preferred_surface.return_value = "telegram"
+        redis = AsyncMock()
+        redis.incr.return_value = 6  # over telegram limit of 5
+        redis.publish = AsyncMock()
+        telegram = AsyncMock(return_value={"status": "sent"})
+        notifier = Notifier(surface_registry=registry, redis=redis, telegram_sender=telegram)
+        result = await notifier.notify(
+            user_id="usr_test",
+            notification_type="info_update",
+            title="Rate limited",
+            body="Too many",
+            data={
+                "urgency": 0.9,
+                "goal_relevance": 0.9,
+                "novelty": 0.9,
+                "confidence": 0.9,
+                "interruptibility": 0.9,
+            },
+        )
+        assert result["status"] == "rate_limited"
+        telegram.assert_not_called()

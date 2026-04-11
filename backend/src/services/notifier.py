@@ -75,6 +75,26 @@ class Notifier:
         # Track delivered notifications for dedup
         self._delivered: dict[str, set[str]] = {}
 
+    async def _hold_for_briefing(self, notification: Notification, priority: float) -> None:
+        """Store a notification as a briefing item instead of delivering it."""
+        if self._redis:
+            try:
+                key = f"notifier:briefing_hold:{notification.user_id}"
+                entry = json.dumps(
+                    {
+                        "notification_id": notification.notification_id,
+                        "title": notification.title,
+                        "body": notification.body,
+                        "type": notification.type,
+                        "priority": priority,
+                        "created_at": notification.created_at,
+                    }
+                )
+                await self._redis.lpush(key, entry)
+                await self._redis.expire(key, 86400)  # 24h TTL
+            except Exception:
+                logger.debug("Failed to hold notification for briefing", exc_info=True)
+
     async def _check_rate_limit(self, user_id: str, surface: str) -> bool:
         """Check if a notification can be sent to this surface within rate limits.
 
@@ -167,6 +187,21 @@ class Notifier:
             except Exception:
                 logger.warning("Failed to persist notification", exc_info=True)
 
+        # Priority-based delivery filter (approval_request + critical_alert bypass)
+        if notification_type not in ("approval_request", "critical_alert"):
+            if priority < 0.3:
+                logger.info(
+                    "notification_silent",
+                    extra={
+                        "notification_id": notification.notification_id,
+                        "priority": priority,
+                    },
+                )
+                return {"status": "silent", "priority": priority}
+            if priority < 0.6:
+                await self._hold_for_briefing(notification, priority)
+                return {"status": "held_for_briefing", "priority": priority}
+
         surfaces = await self._registry.get_active_surfaces(user_id)
         if not surfaces:
             # No active surfaces — queue for later delivery
@@ -175,6 +210,17 @@ class Notifier:
                 extra={"user_id": user_id, "notification_id": notification.notification_id},
             )
             return {"status": "queued", "surfaces": []}
+
+        # Rate-limit filtering: remove surfaces that are over their hourly cap
+        if notification_type not in ("approval_request", "critical_alert"):
+            allowed_surfaces = []
+            for surface in surfaces:
+                if await self._check_rate_limit(user_id, surface):
+                    allowed_surfaces.append(surface)
+            if not allowed_surfaces:
+                await self._hold_for_briefing(notification, priority)
+                return {"status": "rate_limited", "priority": priority}
+            surfaces = allowed_surfaces
 
         results = {}
 
