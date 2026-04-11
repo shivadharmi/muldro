@@ -156,35 +156,39 @@ class GraphEngine:
             rel_filter = "AND ALL(r IN rels WHERE r.relation_type IN $types)"
             params["types"] = relation_types
 
-        async with driver.session() as session:
-            result = await session.run(
-                f"""
-                MATCH path = (start:Entity {{entity_id: $entity_id, user_id: $user_id}})
-                      -[rels*1..{depth}]-(connected)
-                WHERE connected.user_id = $user_id {rel_filter}
-                UNWIND nodes(path) AS n
-                UNWIND relationships(path) AS r
-                RETURN DISTINCT
-                    collect(DISTINCT {{
-                        entity_id: n.entity_id,
-                        name: n.name, type: n.entity_type
-                    }}) AS nodes,
-                    collect(DISTINCT {{
-                        from: startNode(r).entity_id,
-                        to: endNode(r).entity_id,
-                        type: r.relation_type
-                    }}) AS edges
-                """,
-                **params,
-            )
-            record = await result.single()
-            if not record:
-                return {"nodes": [], "edges": []}
+        try:
+            async with driver.session() as session:
+                result = await session.run(
+                    f"""
+                    MATCH path = (start:Entity {{entity_id: $entity_id, user_id: $user_id}})
+                          -[rels*1..{depth}]-(connected)
+                    WHERE connected.user_id = $user_id {rel_filter}
+                    UNWIND nodes(path) AS n
+                    UNWIND relationships(path) AS r
+                    RETURN DISTINCT
+                        collect(DISTINCT {{
+                            entity_id: n.entity_id,
+                            name: n.name, type: n.entity_type
+                        }}) AS nodes,
+                        collect(DISTINCT {{
+                            from: startNode(r).entity_id,
+                            to: endNode(r).entity_id,
+                            type: r.relation_type
+                        }}) AS edges
+                    """,
+                    **params,
+                )
+                record = await result.single()
+                if not record:
+                    return {"nodes": [], "edges": []}
 
-            return {
-                "nodes": record["nodes"],
-                "edges": record["edges"],
-            }
+                return {
+                    "nodes": record["nodes"],
+                    "edges": record["edges"],
+                }
+        except Exception:
+            logger.warning("Neo4j traverse failed for %s", entity_id, exc_info=True)
+            return {"nodes": [], "edges": []}
 
     async def traverse_weighted(
         self,
@@ -234,7 +238,7 @@ class GraphEngine:
                 )
                 return await result.data()
         except Exception:
-            logger.debug("Neo4j traverse_weighted failed for %s", entity_id, exc_info=True)
+            logger.warning("Neo4j traverse_weighted failed for %s", entity_id, exc_info=True)
             return []
 
     async def find_path(
@@ -245,22 +249,30 @@ class GraphEngine:
         if not driver:
             return []
 
-        async with driver.session() as session:
-            result = await session.run(
-                f"""
-                MATCH path = shortestPath(
-                    (a:Entity {{entity_id: $from_id, user_id: $user_id}})
-                    -[*..{max_depth}]-
-                    (b:Entity {{entity_id: $to_id, user_id: $user_id}})
+        try:
+            async with driver.session() as session:
+                result = await session.run(
+                    f"""
+                    MATCH path = shortestPath(
+                        (a:Entity {{entity_id: $from_id, user_id: $user_id}})
+                        -[*..{max_depth}]-
+                        (b:Entity {{entity_id: $to_id, user_id: $user_id}})
+                    )
+                    RETURN [n IN nodes(path) |
+                        {{entity_id: n.entity_id, name: n.name}}
+                    ] AS path_nodes
+                    """,
+                    from_id=from_entity_id,
+                    to_id=to_entity_id,
+                    user_id=user_id,
                 )
-                RETURN [n IN nodes(path) | {{entity_id: n.entity_id, name: n.name}}] AS path_nodes
-                """,
-                from_id=from_entity_id,
-                to_id=to_entity_id,
-                user_id=user_id,
+                record = await result.single()
+                return record["path_nodes"] if record else []
+        except Exception:
+            logger.warning(
+                "Neo4j find_path failed for %s -> %s", from_entity_id, to_entity_id, exc_info=True
             )
-            record = await result.single()
-            return record["path_nodes"] if record else []
+            return []
 
     async def get_related_people(self, entity_id: str, user_id: str) -> list[dict]:
         """Get people related to an entity within 2 hops."""
@@ -268,20 +280,24 @@ class GraphEngine:
         if not driver:
             return []
 
-        async with driver.session() as session:
-            result = await session.run(
-                """
-                MATCH (start:Entity {entity_id: $entity_id, user_id: $user_id})
-                      -[*1..2]-(p:Entity {entity_type: 'person', user_id: $user_id})
-                WHERE p.entity_id <> $entity_id
-                RETURN DISTINCT p.entity_id AS entity_id, p.name AS name
-                LIMIT 20
-                """,
-                entity_id=entity_id,
-                user_id=user_id,
-            )
-            records = await result.data()
-            return records
+        try:
+            async with driver.session() as session:
+                result = await session.run(
+                    """
+                    MATCH (start:Entity {entity_id: $entity_id, user_id: $user_id})
+                          -[*1..2]-(p:Entity {entity_type: 'person', user_id: $user_id})
+                    WHERE p.entity_id <> $entity_id
+                    RETURN DISTINCT p.entity_id AS entity_id, p.name AS name
+                    LIMIT 20
+                    """,
+                    entity_id=entity_id,
+                    user_id=user_id,
+                )
+                records = await result.data()
+                return records
+        except Exception:
+            logger.warning("Neo4j get_related_people failed for %s", entity_id, exc_info=True)
+            return []
 
     async def search_entities(
         self, user_id: str, query: str, entity_type: str | None = None, limit: int = 20
@@ -461,30 +477,40 @@ class GraphEngine:
         """Find relationships that haven't been updated recently.
 
         Returns relationships with low strength or where related entity's
-        last_seen_at is old.
+        last_seen_at is old. Filters by the `days` parameter using start_date.
         """
         driver = await self._get_driver()
         if not driver:
             return []
 
-        async with driver.session() as session:
-            result = await session.run(
-                """
-                MATCH (a:Entity {user_id: $user_id})-[r]-(b:Entity)
-                WHERE b.user_id = $user_id
-                RETURN DISTINCT
-                    r.relation_id AS relation_id,
-                    a.entity_id AS from_entity_id,
-                    a.name AS from_name,
-                    b.entity_id AS to_entity_id,
-                    b.name AS to_name,
-                    r.relation_type AS relation_type
-                LIMIT 100
-                """,
-                user_id=user_id,
-            )
-            records = await result.data()
-            return records
+        from datetime import datetime, timedelta, timezone
+
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+        try:
+            async with driver.session() as session:
+                result = await session.run(
+                    """
+                    MATCH (a:Entity {user_id: $user_id})-[r]-(b:Entity)
+                    WHERE b.user_id = $user_id
+                      AND (r.start_date IS NULL OR r.start_date <= $cutoff_date)
+                    RETURN DISTINCT
+                        r.relation_id AS relation_id,
+                        a.entity_id AS from_entity_id,
+                        a.name AS from_name,
+                        b.entity_id AS to_entity_id,
+                        b.name AS to_name,
+                        r.relation_type AS relation_type
+                    LIMIT 100
+                    """,
+                    user_id=user_id,
+                    cutoff_date=cutoff,
+                )
+                records = await result.data()
+                return records
+        except Exception:
+            logger.warning("Neo4j get_stale_relationships failed for %s", user_id, exc_info=True)
+            return []
 
     async def detect_communities(self, user_id: str) -> list[dict]:
         """Detect clusters of related entities using connected components."""
@@ -492,26 +518,30 @@ class GraphEngine:
         if not driver:
             return []
 
-        async with driver.session() as session:
-            result = await session.run(
-                """
-                MATCH (e:Entity {user_id: $user_id})
-                OPTIONAL MATCH path = (e)-[*]-(connected:Entity)
-                WHERE connected.user_id = $user_id
-                WITH e, collect(DISTINCT connected.entity_id) AS community_members
-                WHERE size(community_members) > 0
-                RETURN e.entity_id AS seed_entity_id,
-                       e.name AS seed_name,
-                       e.entity_type AS seed_type,
-                       community_members,
-                       size(community_members) AS community_size
-                ORDER BY community_size DESC
-                LIMIT 20
-                """,
-                user_id=user_id,
-            )
-            records = await result.data()
-            return records
+        try:
+            async with driver.session() as session:
+                result = await session.run(
+                    """
+                    MATCH (e:Entity {user_id: $user_id})
+                    OPTIONAL MATCH path = (e)-[*1..3]-(connected:Entity)
+                    WHERE connected.user_id = $user_id
+                    WITH e, collect(DISTINCT connected.entity_id) AS community_members
+                    WHERE size(community_members) > 0
+                    RETURN e.entity_id AS seed_entity_id,
+                           e.name AS seed_name,
+                           e.entity_type AS seed_type,
+                           community_members,
+                           size(community_members) AS community_size
+                    ORDER BY community_size DESC
+                    LIMIT 20
+                    """,
+                    user_id=user_id,
+                )
+                records = await result.data()
+                return records
+        except Exception:
+            logger.warning("Neo4j detect_communities failed for %s", user_id, exc_info=True)
+            return []
 
     async def traverse_temporal(
         self,
@@ -565,5 +595,5 @@ class GraphEngine:
                 )
                 return await result.data()
         except Exception:
-            logger.debug("Neo4j traverse_temporal failed for %s", entity_id, exc_info=True)
+            logger.warning("Neo4j traverse_temporal failed for %s", entity_id, exc_info=True)
             return []

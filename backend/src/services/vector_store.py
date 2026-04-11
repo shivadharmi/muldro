@@ -82,21 +82,26 @@ class VectorStore:
             COLLECTION_CONVERSATIONS,
             COLLECTION_APPROVALS,
         )
+        from qdrant_client.http.exceptions import UnexpectedResponse
+
         for name in collections:
             try:
                 await client.get_collection(name)
-            except Exception:
+            except UnexpectedResponse:
                 await client.create_collection(
                     collection_name=name,
                     vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
                 )
                 logger.info("Created Qdrant collection: %s", name)
+            except Exception:
+                logger.warning("Qdrant ensure_collections failed for %s", name, exc_info=True)
 
     async def ensure_indexes(self) -> None:
         """Create Qdrant payload indexes for filtered search."""
         client = await self._get_client()
         if not client:
             return
+        from qdrant_client.http.exceptions import UnexpectedResponse
         from qdrant_client.models import PayloadSchemaType
 
         indexes = {
@@ -121,8 +126,15 @@ class VectorStore:
                         field_name=field_name,
                         field_schema=schema_type,
                     )
+                except UnexpectedResponse:
+                    pass  # index already exists
                 except Exception:
-                    pass  # index may already exist
+                    logger.warning(
+                        "Qdrant create_payload_index failed: %s.%s",
+                        collection,
+                        field_name,
+                        exc_info=True,
+                    )
 
     async def upsert(
         self,

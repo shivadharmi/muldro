@@ -698,7 +698,7 @@ class JarvisOrchestrator:
                 payload={"surface": surface, "message_preview": message[:100]},
             )
 
-            history_block = await self._load_conversation_history(conversation_id)
+            history_block = await self._load_conversation_history(conversation_id, user_id=user_id)
 
             # Step 0: Fast intent classification
             intent, confidence, sources = await classify_intent(
@@ -932,7 +932,7 @@ class JarvisOrchestrator:
                 },
             )
 
-            history_block = await self._load_conversation_history(conversation_id)
+            history_block = await self._load_conversation_history(conversation_id, user_id=user_id)
 
             # Step 0: Fast intent classification
             intent, confidence, sources = await classify_intent(
@@ -2099,7 +2099,11 @@ class JarvisOrchestrator:
             logger.warning("Failed to push insight surface", exc_info=True)
 
     async def _load_conversation_history(
-        self, conversation_id: str | None, max_messages: int = 20, max_chars: int = 8000
+        self,
+        conversation_id: str | None,
+        max_messages: int = 20,
+        max_chars: int = 8000,
+        user_id: str = "",
     ) -> str:
         """Load recent conversation history from DB for multi-turn context.
 
@@ -2152,7 +2156,9 @@ class JarvisOrchestrator:
             if total > max_chars and len(lines) > 5:
                 recent = lines[-5:]
                 older = lines[:-5]
-                summary = await self._summarize_history(older, conversation_id=conversation_id)
+                summary = await self._summarize_history(
+                    older, conversation_id=conversation_id, user_id=user_id
+                )
                 lines = [f"[Earlier conversation summary]: {summary}"] + recent
 
             # Final trim to budget
@@ -2176,7 +2182,9 @@ class JarvisOrchestrator:
             logger.debug("Failed to load conversation history", exc_info=True)
             return ""
 
-    async def _summarize_history(self, lines: list[str], conversation_id: str | None = None) -> str:
+    async def _summarize_history(
+        self, lines: list[str], conversation_id: str | None = None, user_id: str = ""
+    ) -> str:
         """Summarize older conversation messages using Haiku (cheap, fast)."""
         try:
             if self._settings.use_bedrock:
@@ -2221,13 +2229,14 @@ class JarvisOrchestrator:
                             vector=embedding,
                             payload={
                                 "conversation_id": conversation_id,
+                                "summary": summary,
                                 "message_count": len(lines),
                                 "created_at": datetime.now(timezone.utc).isoformat(),
                             },
-                            user_id=getattr(self, "_current_user_id", None) or "",
+                            user_id=user_id,
                         )
                 except Exception:
-                    logger.debug(
+                    logger.warning(
                         "Conversation embedding failed for %s",
                         conversation_id,
                         exc_info=True,
