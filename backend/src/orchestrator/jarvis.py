@@ -850,24 +850,6 @@ class JarvisOrchestrator:
                 )
                 result["presentation"] = present_result
 
-            # Step 5: Persona learning (fire-and-forget for meaningful intents)
-            if intent in ("command", "complex"):
-                try:
-                    await self._call_agent(
-                        "persona",
-                        message=(
-                            f"Observe this user interaction on {surface}:\n"
-                            f"User said: {message}\n"
-                            f"Plan goal: {plan.goal}\n"
-                            f"Extract any preference signals."
-                        ),
-                        user_id=user_id,
-                        trace=trace,
-                        workspace_id=workspace_id,
-                    )
-                except Exception:
-                    logger.debug("Persona reflection skipped", exc_info=True)
-
             await self._emit_runtime_event(
                 "run_completed",
                 workspace_id=workspace_id,
@@ -1137,24 +1119,6 @@ class JarvisOrchestrator:
                             "event": "response",
                             "text": presenter_text,
                         }
-
-            # Persona learning (meaningful intents only)
-            if intent in ("command", "complex"):
-                try:
-                    await self._call_agent(
-                        "persona",
-                        message=(
-                            f"Observe this user interaction on {surface}:\n"
-                            f"User said: {message}\n"
-                            f"Plan goal: {plan.goal}\n"
-                            f"Extract any preference signals."
-                        ),
-                        user_id=user_id,
-                        trace=trace,
-                        workspace_id=workspace_id,
-                    )
-                except Exception:
-                    pass
 
             _fire_event(
                 "run_completed",

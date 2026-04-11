@@ -176,6 +176,7 @@ class PerceptionDecision(BaseModel):
     watch_entities: list[str] = Field(default_factory=list)
     urgency: Literal["low", "normal", "high"] = "normal"
     reasoning: str = ""
+    notification_tier: Literal["push", "briefing", "silent"] | None = None
 
 
 class PolicyDecision(BaseModel):
