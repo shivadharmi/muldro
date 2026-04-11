@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from src.services.presenter import Presenter
     from src.services.reranker_service import RerankerService
     from src.services.tri_search import TriSearchService
+    from src.services.trust_engine import TrustEngine
     from src.services.vector_store import VectorStore
     from src.services.world_model import WorldModel
 
@@ -44,6 +45,7 @@ class ServiceContainer:
     oauth_manager: OAuthManager | None = None
     notifier: Notifier | None = None
     graph_executor: GraphExecutor | None = None
+    trust_engine: TrustEngine | None = None
 
     # Services not yet promoted to a typed field
     extras: dict[str, Any] = field(default_factory=dict)

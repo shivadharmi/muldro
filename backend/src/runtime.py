@@ -211,6 +211,15 @@ def build(settings: Settings, db: AsyncSession) -> ServiceContainer:
         except Exception:
             logger.debug("ContextBuilder unavailable for GraphExecutor", exc_info=True)
 
+        trust_engine = None
+        try:
+            from src.services.trust_engine import TrustEngine
+
+            trust_engine = TrustEngine(db)
+            svc.trust_engine = trust_engine
+        except Exception:
+            logger.debug("TrustEngine unavailable for GraphExecutor", exc_info=True)
+
         svc.graph_executor = GraphExecutor(
             settings=settings,
             db=db,
@@ -220,6 +229,7 @@ def build(settings: Settings, db: AsyncSession) -> ServiceContainer:
             verifier=verifier,
             context_builder=context_builder,
             memory_service=svc.memory_service,
+            trust_engine=trust_engine,
         )
     except Exception:
         logger.warning("Tier 2: GraphExecutor unavailable", exc_info=True)

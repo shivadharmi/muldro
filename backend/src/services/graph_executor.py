@@ -153,6 +153,8 @@ class GraphExecutor:
         execute_tool_fn=None,
         budget=None,
         circuit_breaker=None,
+        # Trust infrastructure (Spec 2B-i)
+        trust_engine=None,
     ):
         self._settings = settings
         self._db = db
@@ -169,6 +171,7 @@ class GraphExecutor:
         self._execute_tool_fn = execute_tool_fn
         self._budget = budget
         self._circuit_breaker = circuit_breaker
+        self._trust_engine = trust_engine
 
     async def create_run(
         self,

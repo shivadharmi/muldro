@@ -193,6 +193,7 @@ class SubAgent:
     max_tokens: int = 4096
     temperature: float = 0.3
     thinking: ThinkingConfig = field(default_factory=ThinkingConfig)
+    edge_case_only: bool = False
 
     async def can_use_tool(self, tool_name: str, db, workspace_id: str | None = None) -> bool:
         """Registry-driven capability check. One lookup, no normalizer."""
@@ -219,6 +220,7 @@ def create_sub_agents() -> dict[str, SubAgent]:
             max_tokens=8192 if name == "planner" else 4096,
             temperature=0.1 if name == "governor" else 0.3,
             thinking=AGENT_THINKING.get(name, ThinkingConfig()),
+            edge_case_only=(name == "governor"),
         )
     return agents
 
