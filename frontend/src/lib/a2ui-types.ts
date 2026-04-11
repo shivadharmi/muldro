@@ -94,6 +94,49 @@ export interface ActionResult {
   error?: string;
 }
 
+// ── Execution surface types ───────────────────────────────────
+
+export type ExecutionPhase =
+  | "planning"
+  | "plan_ready"
+  | "executing"
+  | "approval_needed"
+  | "completed"
+  | "failed"
+  | "partial";
+
+export interface StepState {
+  step_id: string;
+  description: string;
+  status: "pending" | "executing" | "completed" | "failed" | "approval_needed" | "user_action";
+  output_summary: string | null;
+  duration_ms: number | null;
+}
+
+export interface ApprovalContext {
+  approval_id: string;
+  step_description: string;
+  risk_reasoning: string;
+  trust_context: string;
+  graduation_hint: string;
+}
+
+export interface ResultSummary {
+  key_findings: string[];
+  artifacts_created: string[];
+  suggested_next: string[];
+}
+
+export interface SurfaceUpdate {
+  surface_id: string;
+  phase: ExecutionPhase;
+  steps: StepState[];
+  current_step: string | null;
+  progress: string;
+  approval: ApprovalContext | null;
+  results: ResultSummary | null;
+}
+
 /** WebSocket message types from Jarvis backend */
 export type JarvisMessage =
   | { type: "surface"; surface: WorkspaceSurfacePush }
@@ -107,6 +150,7 @@ export type JarvisMessage =
     }
   | { type: "notification_resolved"; notification_id: string; resolved_on: string }
   | { type: "action_result"; action: string; status: string; result?: Record<string, unknown>; error?: string }
+  | { type: "surface_update"; surface_id: string; phase: string; steps: StepState[]; current_step: string | null; progress: string; approval: ApprovalContext | null; results: ResultSummary | null }
   | { type: "heartbeat" }
   | { type: "auth_ok" }
   | { type: "auth_error"; message: string };

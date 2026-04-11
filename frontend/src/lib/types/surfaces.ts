@@ -11,4 +11,5 @@ export type SurfaceKind =
   | "timeline"
   | "table"
   | "recommendation"
-  | "activity";
+  | "activity"
+  | "execution";
