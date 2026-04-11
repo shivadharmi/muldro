@@ -2154,7 +2154,7 @@ class JarvisOrchestrator:
             if total > max_chars and len(lines) > 5:
                 recent = lines[-5:]
                 older = lines[:-5]
-                summary = await self._summarize_history(older)
+                summary = await self._summarize_history(older, conversation_id=conversation_id)
                 lines = [f"[Earlier conversation summary]: {summary}"] + recent
 
             # Final trim to budget
@@ -2178,7 +2178,7 @@ class JarvisOrchestrator:
             logger.debug("Failed to load conversation history", exc_info=True)
             return ""
 
-    async def _summarize_history(self, lines: list[str]) -> str:
+    async def _summarize_history(self, lines: list[str], conversation_id: str | None = None) -> str:
         """Summarize older conversation messages using Haiku (cheap, fast)."""
         try:
             if self._settings.use_bedrock:
@@ -2203,7 +2203,39 @@ class JarvisOrchestrator:
                 ],
                 messages=[{"role": "user", "content": text}],
             )
-            return "".join(b.text for b in response.content if b.type == "text")
+            summary = "".join(b.text for b in response.content if b.type == "text")
+
+            # Embed conversation summary into Qdrant
+            if (
+                conversation_id
+                and summary
+                and getattr(self, "_vector_store", None)
+                and getattr(self, "_embedding_service", None)
+            ):
+                try:
+                    from datetime import datetime, timezone
+
+                    embedding = await self._embedding_service.embed_text(summary)
+                    if embedding:
+                        await self._vector_store.upsert(
+                            collection="conversations",
+                            id=conversation_id,
+                            vector=embedding,
+                            payload={
+                                "conversation_id": conversation_id,
+                                "message_count": len(lines),
+                                "created_at": datetime.now(timezone.utc).isoformat(),
+                            },
+                            user_id=getattr(self, "_current_user_id", None) or "",
+                        )
+                except Exception:
+                    logger.debug(
+                        "Conversation embedding failed for %s",
+                        conversation_id,
+                        exc_info=True,
+                    )
+
+            return summary
         except Exception:
             logger.debug("History summarization failed", exc_info=True)
             # Fallback: just truncate
