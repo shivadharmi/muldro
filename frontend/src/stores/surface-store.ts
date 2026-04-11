@@ -23,6 +23,8 @@ export interface WorkspaceSurface {
   progress?: string;
   approval?: ApprovalContext | null;
   results?: ResultSummary | null;
+  // Insight surface fields
+  insight_data?: Record<string, unknown> | null;
 }
 
 interface SurfaceState {
@@ -37,6 +39,7 @@ interface SurfaceState {
   closeDetailModal: () => void;
   setSurfaces: (surfaces: WorkspaceSurface[]) => void;
   updateSurface: (surfaceId: string, update: SurfaceUpdate) => void;
+  transitionToExecution: (surfaceId: string) => void;
 }
 
 export const useSurfaceStore = create<SurfaceState>((set) => ({
@@ -86,6 +89,19 @@ export const useSurfaceStore = create<SurfaceState>((set) => ({
         progress: update.progress,
         approval: update.approval,
         results: update.results,
+      };
+      return { surfaces: next };
+    }),
+
+  transitionToExecution: (surfaceId) =>
+    set((s) => {
+      const idx = s.surfaces.findIndex((sf) => sf.id === surfaceId);
+      if (idx === -1) return s;
+      const next = [...s.surfaces];
+      next[idx] = {
+        ...next[idx],
+        phase: "planning",
+        insight_data: null,
       };
       return { surfaces: next };
     }),

@@ -2,6 +2,8 @@
 
 import type { WorkspaceSurface } from "@/stores/surface-store";
 import { StepListCompact } from "@/components/a2ui/components/step-list";
+import { InsightSurface } from "@/components/a2ui/components/insight-surface";
+import type { InsightData } from "@/lib/a2ui-types";
 
 interface Props {
   surface: WorkspaceSurface;
@@ -15,6 +17,7 @@ const kindBorderColor: Record<string, string> = {
   alert: "border-l-red-500",
   summary: "border-l-gray-400",
   recommendation: "border-l-gray-400",
+  proactive_insight: "border-l-violet-500",
 };
 
 const statusDotColor: Record<string, string> = {
@@ -24,6 +27,7 @@ const statusDotColor: Record<string, string> = {
   failed: "bg-red-400",
   awaiting_approval: "bg-amber-400",
   cancelled: "bg-gray-500",
+  proposal: "bg-violet-400 animate-pulse",
 };
 
 const phaseDotColor: Record<string, string> = {
@@ -34,6 +38,7 @@ const phaseDotColor: Record<string, string> = {
   completed: "bg-green-400",
   failed: "bg-red-400",
   partial: "bg-amber-400",
+  proposal: "bg-violet-400 animate-pulse",
 };
 
 const priorityBadge: Record<string, string> = {
@@ -88,6 +93,16 @@ export function SurfaceCard({ surface, onClick }: Props) {
         <p className="text-xs text-t-tertiary line-clamp-2 mb-2">
           {preview.subtitle}
         </p>
+      )}
+
+      {/* Insight surface content */}
+      {kind === "proactive_insight" && surface.insight_data && (
+        <div className="mb-2" onClick={(e) => e.stopPropagation()}>
+          <InsightSurface
+            surfaceId={surface.id}
+            insightData={surface.insight_data as unknown as InsightData}
+          />
+        </div>
       )}
 
       {/* Execution step count */}

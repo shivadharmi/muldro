@@ -64,7 +64,10 @@ export default function WorkspacePage() {
 
     // Active executions first (executing or approval_needed), then by created_at desc
     const isActive = (s: WorkspaceSurface) =>
-      s.phase === "executing" || s.phase === "approval_needed" || s.phase === "planning";
+      s.phase === "executing" ||
+      s.phase === "approval_needed" ||
+      s.phase === "planning" ||
+      s.kind === "proactive_insight";
     return merged.sort((a, b) => {
       const aActive = isActive(a) ? 0 : 1;
       const bActive = isActive(b) ? 0 : 1;
