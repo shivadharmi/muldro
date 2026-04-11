@@ -512,6 +512,50 @@ class SchedulerLoop:
             logger.debug("DLQ retry tick failed", exc_info=True)
 
     # ------------------------------------------------------------------
+    # Memory expiration
+    # ------------------------------------------------------------------
+
+    async def _tick_memory_expiration(self, factory, vector_store=None) -> None:
+        """Mark expired memories and cascade delete from Qdrant."""
+        try:
+            from sqlalchemy import func, select, text
+
+            from src.models.memory import Memory
+
+            async with factory() as db:
+                result = await db.execute(
+                    select(Memory)
+                    .where(
+                        Memory.status == "active",
+                        Memory.ttl_days.isnot(None),
+                        Memory.created_at
+                        + func.cast(func.concat(Memory.ttl_days, " days"), type_=text("interval"))
+                        < func.now(),
+                    )
+                    .limit(100)
+                )
+                expired = list(result.scalars())
+
+                if not expired:
+                    return
+
+                for mem in expired:
+                    mem.status = "expired"
+                    if vector_store:
+                        try:
+                            await vector_store.delete("memories", mem.memory_id)
+                        except Exception:
+                            logger.debug(
+                                "Qdrant delete failed for %s",
+                                mem.memory_id,
+                                exc_info=True,
+                            )
+
+                await db.commit()
+                logger.info("Memory expiration: %d memories expired", len(expired))
+        except Exception:
+            logger.warning("Memory expiration tick error", exc_info=True)
+
     # Persona batch
     # ------------------------------------------------------------------
 

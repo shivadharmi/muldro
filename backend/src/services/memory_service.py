@@ -436,11 +436,14 @@ class MemoryService:
                 "memories",
                 memory_id,
                 embedding,
-                {
-                    "memory_type": "briefing_item",
-                    "fact_text": text,
-                    "user_id": user_id,
-                },
+                self._build_memory_payload(
+                    memory_type="briefing_item",
+                    fact_text=text,
+                    user_id=user_id,
+                    confidence=0.8,
+                    stability_score=0.3,
+                    scope="planning",
+                ),
                 user_id,
             )
 
@@ -487,11 +490,14 @@ class MemoryService:
                 "memories",
                 memory_id,
                 embedding,
-                {
-                    "memory_type": memory_type,
-                    "fact_text": fact_text,
-                    "user_id": user_id,
-                },
+                self._build_memory_payload(
+                    memory_type=memory_type,
+                    fact_text=fact_text,
+                    user_id=user_id,
+                    confidence=0.8,
+                    entity_ids=entity_ids,
+                    scope=scope,
+                ),
                 user_id,
             )
 
