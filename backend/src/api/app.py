@@ -32,6 +32,7 @@ from src.api.routes_settings import router as settings_router
 from src.api.routes_surface_detail import router as surface_detail_router
 from src.api.routes_system import router as system_router
 from src.api.routes_traces import router as traces_router
+from src.api.routes_trust import router as trust_router
 from src.api.routes_ui import router as ui_router
 from src.api.routes_webhooks import router as webhooks_router
 from src.api.routes_ws import router as ws_router
@@ -301,6 +302,9 @@ def create_app() -> FastAPI:
 
     # User settings
     app.include_router(settings_router, tags=["settings"])
+
+    # Trust management
+    app.include_router(trust_router, tags=["trust"])
 
     # Prometheus metrics
     app.include_router(metrics_router, tags=["metrics"])

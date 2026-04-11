@@ -12,7 +12,6 @@ Ceiling: user-set max autonomy per capability caps the effective trust level.
 """
 
 import logging
-from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from sqlalchemy import select
@@ -21,13 +20,64 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.orchestrator.contracts import PolicyDecision
 from src.services.risk_assessor import (
     RiskAssessment,
-    apply_rejection,
     get_or_create_trust_state,
-    graduate_trust,
     min_trust_level,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _trust_level_index(level: str) -> int:
+    """Index of trust level for ordering comparisons."""
+    _levels = ("first_use", "learning", "trusted", "autonomous")
+    try:
+        return _levels.index(level)
+    except ValueError:
+        return 0
+
+
+def _graduation_progress(state) -> dict:
+    """Compute graduation progress toward the next trust level.
+
+    Returns dict with: next_level, current, target, percentage.
+    """
+    level = state.trust_level
+    approved = state.approved_count
+    rejected = state.rejected_count
+    total = approved + rejected
+
+    if level == "first_use":
+        return {
+            "next_level": "learning",
+            "current": approved,
+            "target": 3,
+            "percentage": min(approved / 3, 1.0) if approved < 3 else 1.0,
+            "blocked_by_rejections": rejected > 0,
+        }
+    elif level == "learning":
+        return {
+            "next_level": "trusted",
+            "current": approved,
+            "target": 10,
+            "percentage": min(approved / 10, 1.0),
+            "blocked_by_rejections": (total > 0 and rejected / total >= 0.10),
+        }
+    elif level == "trusted":
+        return {
+            "next_level": "autonomous",
+            "current": approved,
+            "target": 25,
+            "percentage": min(approved / 25, 1.0),
+            "blocked_by_rejections": (total > 0 and rejected / total >= 0.05),
+        }
+    else:
+        return {
+            "next_level": None,
+            "current": approved,
+            "target": approved,
+            "percentage": 1.0,
+            "blocked_by_rejections": False,
+        }
 
 
 class TrustEngine:
@@ -91,83 +141,150 @@ class TrustEngine:
 
         return SimpleNamespace(max_level="autonomous")
 
-    # ── Compatibility shim for Governor (removed in Spec 2B) ─────
+    # ── Dashboard + Detail Methods ──────────────────────────────
 
-    async def record_decision(
-        self, user_id: str, action_type: str, approved: bool, workspace_id: str = ""
-    ) -> float:
-        """Compatibility shim — Governor still calls this."""
-        ws = workspace_id or self._workspace_id
-        state = await get_or_create_trust_state(self._db, ws, action_type, "low")
-        if approved:
-            state.approved_count += 1
+    async def get_trust_dashboard_grouped(self) -> list[dict]:
+        """All capabilities with trust levels, progress, and ceilings."""
+        from src.integrations.capabilities import CAPABILITY_CATALOG
+        from src.models.trust_state import TrustCeiling, TrustState
+
+        result = await self._db.execute(
+            select(TrustState).where(TrustState.workspace_id == self._workspace_id)
+        )
+        states = result.scalars().all()
+
+        ceil_result = await self._db.execute(
+            select(TrustCeiling).where(TrustCeiling.workspace_id == self._workspace_id)
+        )
+        ceilings = {c.capability: c.max_level for c in ceil_result.scalars().all()}
+
+        by_cap: dict[str, list] = {}
+        for s in states:
+            by_cap.setdefault(s.capability, []).append(s)
+
+        entries = []
+        for cap, cap_states in by_cap.items():
+            meta = CAPABILITY_CATALOG.get(cap)
+            family = meta.family if meta else "unknown"
+
+            best_level = "first_use"
+            for s in cap_states:
+                if _trust_level_index(s.trust_level) > _trust_level_index(best_level):
+                    best_level = s.trust_level
+
+            risk_levels = []
+            for s in cap_states:
+                risk_levels.append(
+                    {
+                        "risk_level": s.risk_level,
+                        "trust_level": s.trust_level,
+                        "approved_count": s.approved_count,
+                        "rejected_count": s.rejected_count,
+                        "graduation_progress": _graduation_progress(s),
+                    }
+                )
+
+            entries.append(
+                {
+                    "capability": cap,
+                    "family": str(family),
+                    "trust_level": best_level,
+                    "ceiling": ceilings.get(cap, "autonomous"),
+                    "risk_levels": risk_levels,
+                }
+            )
+
+        return entries
+
+    async def get_capability_detail(self, capability: str) -> dict:
+        """Detailed trust state across all risk levels for one capability."""
+        from src.integrations.capabilities import CAPABILITY_CATALOG
+        from src.models.trust_state import TrustCeiling, TrustState
+
+        result = await self._db.execute(
+            select(TrustState).where(
+                TrustState.workspace_id == self._workspace_id,
+                TrustState.capability == capability,
+            )
+        )
+        states = result.scalars().all()
+
+        ceil_result = await self._db.execute(
+            select(TrustCeiling).where(
+                TrustCeiling.workspace_id == self._workspace_id,
+                TrustCeiling.capability == capability,
+            )
+        )
+        ceiling = ceil_result.scalar_one_or_none()
+
+        meta = CAPABILITY_CATALOG.get(capability)
+        family = str(meta.family) if meta else "unknown"
+
+        risk_levels = []
+        for s in states:
+            risk_levels.append(
+                {
+                    "risk_level": s.risk_level,
+                    "trust_level": s.trust_level,
+                    "approved_count": s.approved_count,
+                    "rejected_count": s.rejected_count,
+                    "modified_count": s.modified_count,
+                    "last_decision_at": (
+                        s.last_decision_at.isoformat() if s.last_decision_at else None
+                    ),
+                    "cooldown_until": (s.cooldown_until.isoformat() if s.cooldown_until else None),
+                    "graduation_progress": _graduation_progress(s),
+                }
+            )
+
+        return {
+            "capability": capability,
+            "family": family,
+            "ceiling": ceiling.max_level if ceiling else "autonomous",
+            "risk_levels": risk_levels,
+        }
+
+    async def set_ceiling(self, capability: str, max_level: str) -> None:
+        """Set or update the trust ceiling for a capability."""
+        from src.models.trust_state import TrustCeiling
+
+        result = await self._db.execute(
+            select(TrustCeiling).where(
+                TrustCeiling.workspace_id == self._workspace_id,
+                TrustCeiling.capability == capability,
+            )
+        )
+        existing = result.scalar_one_or_none()
+        if existing:
+            existing.max_level = max_level
         else:
-            apply_rejection(state)
-
-        state.last_decision_at = datetime.now(timezone.utc)
-        state.trust_level = graduate_trust(state)
+            self._db.add(
+                TrustCeiling(
+                    workspace_id=self._workspace_id,
+                    capability=capability,
+                    max_level=max_level,
+                )
+            )
         await self._db.flush()
 
-        total = state.approved_count + state.rejected_count
-        return state.approved_count / total if total > 0 else 0.0
+    async def set_ceilings_batch(self, capabilities: list[str], max_level: str) -> int:
+        """Batch-set ceilings for multiple capabilities. Returns count updated."""
+        count = 0
+        for cap in capabilities:
+            await self.set_ceiling(cap, max_level)
+            count += 1
+        return count
 
-    async def should_auto_approve(
-        self, user_id: str, action_type: str, risk_level: str = "low", workspace_id: str = ""
-    ) -> bool:
-        """Compatibility shim."""
-        ws = workspace_id or self._workspace_id
-        state = await get_or_create_trust_state(self._db, ws, action_type, risk_level)
-
-        if risk_level == "high":
-            return False
-
-        total = state.approved_count + state.rejected_count
-        if total < 5:
-            return False
-
-        return state.trust_level in ("trusted", "autonomous")
-
-    async def get_trust_score(
-        self, user_id: str, action_type: str, workspace_id: str = ""
-    ) -> float:
-        """Compatibility shim."""
-        ws = workspace_id or self._workspace_id
-        state = await get_or_create_trust_state(self._db, ws, action_type, "low")
-        total = state.approved_count + state.rejected_count
-        return state.approved_count / total if total > 0 else 0.0
-
-    async def get_trust_dashboard(self, user_id: str, workspace_id: str = "") -> list[dict]:
-        """Compatibility shim."""
+    async def reset_trust_for_capability(self, capability: str) -> None:
+        """Reset all trust states for a capability back to first_use."""
         from src.models.trust_state import TrustState
 
-        ws = workspace_id or self._workspace_id
-        result = await self._db.execute(select(TrustState).where(TrustState.workspace_id == ws))
-        states = result.scalars().all()
-        return [
-            {
-                "action_type": s.capability,
-                "trust_level": s.trust_level,
-                "approved_count": s.approved_count,
-                "rejected_count": s.rejected_count,
-                "risk_level": s.risk_level,
-                "last_decision_at": (
-                    s.last_decision_at.isoformat() if s.last_decision_at else None
-                ),
-            }
-            for s in states
-        ]
-
-    async def reset_trust(
-        self, user_id: str, action_type: str | None = None, workspace_id: str = ""
-    ) -> None:
-        """Compatibility shim."""
-        from src.models.trust_state import TrustState
-
-        ws = workspace_id or self._workspace_id
-        conditions = [TrustState.workspace_id == ws]
-        if action_type:
-            conditions.append(TrustState.capability == action_type)
-        result = await self._db.execute(select(TrustState).where(*conditions))
+        result = await self._db.execute(
+            select(TrustState).where(
+                TrustState.workspace_id == self._workspace_id,
+                TrustState.capability == capability,
+            )
+        )
         for state in result.scalars().all():
             state.approved_count = 0
             state.rejected_count = 0
@@ -175,3 +292,22 @@ class TrustEngine:
             state.trust_level = "first_use"
             state.cooldown_until = None
         await self._db.flush()
+
+    # ── Time-Scoped Ceilings ────────────────────────────────────
+
+    async def get_time_policies(self) -> list[dict]:
+        """Get time-scoped ceiling overrides for this workspace."""
+        from src.services.settings_service import SettingsService
+
+        svc = SettingsService(self._db)
+        policies = await svc.get(self._workspace_id, "trust", "time_policies")
+        if not policies or not isinstance(policies, list):
+            return []
+        return policies
+
+    async def set_time_policies(self, policies: list[dict]) -> None:
+        """Set time-scoped ceiling overrides for this workspace."""
+        from src.services.settings_service import SettingsService
+
+        svc = SettingsService(self._db)
+        await svc.set(self._workspace_id, "trust", "time_policies", policies)

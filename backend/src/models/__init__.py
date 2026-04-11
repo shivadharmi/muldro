@@ -1,6 +1,5 @@
 from src.models.agent_decision_log import AgentDecisionLog
 from src.models.agents import Agent
-from src.models.approval_policy import ApprovalPolicy
 from src.models.approvals import Approval
 from src.models.artifacts import Artifact
 from src.models.audit import AuditLog
@@ -30,7 +29,6 @@ from src.models.token_usage import TokenUsage
 from src.models.tool_definitions import ToolDefinition
 from src.models.traces import ModelCall, Trace
 from src.models.triggers import Trigger
-from src.models.trust_score import TrustScore
 from src.models.trust_state import TrustCeiling, TrustState
 from src.models.ui_state import UISurface
 from src.models.users import (
@@ -80,7 +78,6 @@ __all__ = [
     "TaskStep",
     "TaskCheckpoint",
     # Trust
-    "TrustScore",
     "TrustState",
     "TrustCeiling",
     # Triggers
@@ -95,7 +92,6 @@ __all__ = [
     "ServerTrustRecord",
     "RuntimeEvent",
     "IntegrationInstallation",
-    "ApprovalPolicy",
     "WebhookSubscription",
     "MCPServerCatalog",
     "OrgAllowlist",
