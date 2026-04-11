@@ -1,42 +1,41 @@
-"""Golden tests for Governor policy enforcement.
+"""Golden tests for Governor hook audit-only behavior.
 
-Verifies the Governor correctly classifies tools as
-auto_execute, approval_required, or blocked.
+Post Spec 2B-i: the hook is audit-only — all non-blocked tools pass through.
+Approval gating moved to TrustEngine in GraphExecutor._execute_step().
 
-Uses catalog tool names (MCP server names and internal tool names)
-since the ToolPolicy fallback sets were removed in Phase 16-17.
+Verifies the hook correctly allows all tools (write and read)
+and only blocks tools disabled in the registry.
 """
 
 import pytest
 
 from tests.conftest import TEST_USER_ID
 
-_W = {"expected_allowed": False, "expected_approval": True}  # Write tool
-_R = {"expected_allowed": True}  # Read-only tool
+_A = {"expected_allowed": True}  # All non-blocked tools pass through
 
 POLICY_CASES = [
-    # Write tools -> approval required (catalog names)
-    {"tool": "send_gmail_message", "agent": "operator", **_W},
-    {"tool": "draft_gmail_message", "agent": "operator", **_W},
-    {"tool": "manage_event", "agent": "operator", **_W},
-    {"tool": "slack_post_message", "agent": "operator", **_W},
-    {"tool": "add_issue_comment", "agent": "operator", **_W},
-    {"tool": "send_telegram", "agent": "presenter", **_W},
-    {"tool": "issue_write", "agent": "operator", **_W},
-    {"tool": "create_pull_request", "agent": "operator", **_W},
-    # Read-only tools -> auto execute (catalog names)
-    {"tool": "search", "agent": "planner", **_R},
-    {"tool": "search_gmail_messages", "agent": "observer", **_R},
-    {"tool": "get_events", "agent": "observer", **_R},
-    {"tool": "get_observation_cursor", "agent": "observer", **_R},
-    {"tool": "report_observation", "agent": "observer", **_R},
-    {"tool": "slack_get_channel_history", "agent": "researcher", **_R},
-    # Internal tools -> auto execute
-    {"tool": "ingest_event", "agent": "observer", **_R},
-    {"tool": "update_execution", "agent": "operator", **_R},
-    {"tool": "build_context", "agent": "planner", **_R},
-    # Unknown tools -> default allow (not in any registry)
-    {"tool": "totally_unknown_tool_xyz", "agent": "operator", **_R},
+    # Write tools -> allowed (approval gating is now in GraphExecutor)
+    {"tool": "send_gmail_message", "agent": "operator", **_A},
+    {"tool": "draft_gmail_message", "agent": "operator", **_A},
+    {"tool": "manage_event", "agent": "operator", **_A},
+    {"tool": "slack_post_message", "agent": "operator", **_A},
+    {"tool": "add_issue_comment", "agent": "operator", **_A},
+    {"tool": "send_telegram", "agent": "presenter", **_A},
+    {"tool": "issue_write", "agent": "operator", **_A},
+    {"tool": "create_pull_request", "agent": "operator", **_A},
+    # Read-only tools -> allowed
+    {"tool": "search", "agent": "planner", **_A},
+    {"tool": "search_gmail_messages", "agent": "observer", **_A},
+    {"tool": "get_events", "agent": "observer", **_A},
+    {"tool": "get_observation_cursor", "agent": "observer", **_A},
+    {"tool": "report_observation", "agent": "observer", **_A},
+    {"tool": "slack_get_channel_history", "agent": "researcher", **_A},
+    # Internal tools -> allowed
+    {"tool": "ingest_event", "agent": "observer", **_A},
+    {"tool": "update_execution", "agent": "operator", **_A},
+    {"tool": "build_context", "agent": "planner", **_A},
+    # Unknown tools -> allowed (not blocked)
+    {"tool": "totally_unknown_tool_xyz", "agent": "operator", **_A},
 ]
 
 
@@ -46,7 +45,7 @@ POLICY_CASES = [
     ids=lambda c: f"{c['tool']}_{c['agent']}",
 )
 async def test_governor_policy(case):
-    """Verify Governor correctly enforces policies for each tool type."""
+    """Verify hook allows all non-blocked tools (audit-only post Spec 2B-i)."""
     from src.orchestrator.hooks import governor_pre_tool_hook
 
     result = await governor_pre_tool_hook(
@@ -60,9 +59,3 @@ async def test_governor_policy(case):
         f"Tool '{case['tool']}' by '{case['agent']}': "
         f"expected allowed={case['expected_allowed']}, got {result}"
     )
-
-    if "expected_approval" in case and not case["expected_allowed"]:
-        actual = result.get("approval_required", False)
-        assert actual == case["expected_approval"], (
-            f"Tool '{case['tool']}': expected approval_required={case['expected_approval']}"
-        )

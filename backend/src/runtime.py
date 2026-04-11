@@ -220,6 +220,16 @@ def build(settings: Settings, db: AsyncSession) -> ServiceContainer:
         except Exception:
             logger.debug("TrustEngine unavailable for GraphExecutor", exc_info=True)
 
+        # Reuse notifier_redis for risk assessment caching (avoid per-step leak)
+        executor_redis = notifier_redis if notifier else None
+        if executor_redis is None and settings.redis_url:
+            try:
+                import redis.asyncio as aioredis
+
+                executor_redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+            except Exception:
+                logger.debug("Redis unavailable for GraphExecutor", exc_info=True)
+
         svc.graph_executor = GraphExecutor(
             settings=settings,
             db=db,
@@ -230,6 +240,7 @@ def build(settings: Settings, db: AsyncSession) -> ServiceContainer:
             context_builder=context_builder,
             memory_service=svc.memory_service,
             trust_engine=trust_engine,
+            redis=executor_redis,
         )
     except Exception:
         logger.warning("Tier 2: GraphExecutor unavailable", exc_info=True)

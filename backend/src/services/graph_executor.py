@@ -156,6 +156,7 @@ class GraphExecutor:
         circuit_breaker=None,
         # Trust infrastructure (Spec 2B-i)
         trust_engine=None,
+        redis=None,
     ):
         self._settings = settings
         self._db = db
@@ -173,6 +174,7 @@ class GraphExecutor:
         self._budget = budget
         self._circuit_breaker = circuit_breaker
         self._trust_engine = trust_engine
+        self._redis = redis
 
     async def create_run(
         self,
@@ -525,6 +527,8 @@ class GraphExecutor:
 
             if self._trust_engine and capability:
                 # ── Single TrustEngine gate ──────────────────────────
+                # Scope engine to this run's workspace (engine is shared)
+                self._trust_engine._workspace_id = run.workspace_id or ""
                 risk = await self._assess_step_risk(capability, step, run)
                 decision = await self._trust_engine.evaluate(capability, risk)
 
@@ -663,19 +667,13 @@ class GraphExecutor:
     ) -> RiskAssessment:
         """Call get_or_assess_risk with appropriate context."""
         try:
-            redis = None
-            if self._settings.redis_url:
-                import redis.asyncio as aioredis
-
-                redis = aioredis.from_url(self._settings.redis_url, decode_responses=True)
-
             return await get_or_assess_risk(
                 capability=capability,
                 step_input=step.input_data or {},
                 user_context={"user_id": run.user_id},
                 workspace_id=run.workspace_id or "",
                 client=self._client,
-                redis=redis,
+                redis=self._redis,
             )
         except Exception:
             logger.warning(

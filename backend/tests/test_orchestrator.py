@@ -286,23 +286,24 @@ class TestHooks:
         result = await governor_pre_tool_hook("search", {}, "planner", user_id=TEST_USER_ID)
         assert result["allowed"] is True
 
-    async def test_write_tools_rejected_via_catalog(self):
+    async def test_write_tools_allowed_by_hook(self):
+        """Post Spec 2B-i: hook is audit-only, write tools pass through.
+        Approval gating moved to TrustEngine in GraphExecutor."""
         from src.orchestrator.hooks import governor_pre_tool_hook
 
-        # linear_delete_issue is critical in catalog — requires approval
         result = await governor_pre_tool_hook(
             "linear_delete_issue", {}, "operator", user_id=TEST_USER_ID
         )
-        assert result["allowed"] is False
+        assert result["allowed"] is True
 
-    async def test_write_tools_require_approval(self):
+    async def test_write_tools_pass_through_hook(self):
+        """Post Spec 2B-i: hook no longer creates approvals."""
         from src.orchestrator.hooks import governor_pre_tool_hook
 
         result = await governor_pre_tool_hook(
             "send_gmail_message", {}, "operator", user_id=TEST_USER_ID
         )
-        assert result["allowed"] is False
-        assert result["approval_required"] is True
+        assert result["allowed"] is True
 
     async def test_internal_tools_allowed(self):
         from src.orchestrator.hooks import governor_pre_tool_hook
