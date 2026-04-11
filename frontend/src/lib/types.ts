@@ -139,7 +139,6 @@ export interface Task {
   goal: string;
   priority: string;
   status: string;
-  decision: string;
   created_at: string | null;
 }
 
@@ -155,7 +154,6 @@ export interface TaskDetail {
   goal: string;
   priority: string;
   status: string;
-  decision: string;
   risk_level: string;
   reasoning_summary: string | null;
   steps: TaskStep[];

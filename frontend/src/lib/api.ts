@@ -149,7 +149,7 @@ export interface ChatSSEEvent {
   latency_ms?: number;
   message?: string;
   message_id?: string;
-  decision?: PlannerOutput;
+  plan?: PlanOutput;
   trace_id?: string;
   input_tokens?: number;
   output_tokens?: number;
@@ -395,7 +395,6 @@ interface WorkspaceSurfaceResponse {
   kind: string;
   preview: import("@/lib/a2ui-types").SurfacePreview;
   detail_config: import("@/lib/a2ui-types").DetailConfig | null;
-  decision?: string | null;
   source_run_id?: string | null;
   response_preview?: string | null;
   created_at?: string | null;
@@ -466,20 +465,38 @@ export interface MessageAgentStep {
   latency_ms: number | null;
 }
 
-export interface PlannerOutput {
-  decision: string;
+export interface PlanStep {
+  step_id: string;
+  description: string;
+  actor: "jarvis" | "user";
+  capability: string;
+  input: Record<string, unknown>;
+  depends_on: string[];
+  risk: "none" | "low" | "medium" | "high";
+  user_context: string | null;
+}
+
+export interface CapabilityGap {
+  description: string;
+  resolution: string;
+  workaround: string | null;
+}
+
+export interface PlanOutput {
   goal: string;
   reasoning: string;
+  achievable: "full" | "partial" | "not_achievable";
   priority: "low" | "medium" | "high" | "critical";
-  risk_level: "none" | "low" | "medium" | "high";
-  execution_mode: "auto_execute" | "approval_required" | "draft_only";
+  steps: PlanStep[];
+  success_criteria: string;
+  capability_gaps: CapabilityGap[];
   plan_id: string | null;
-  tasks: { task_type: string; input_data: Record<string, unknown> }[];
+  requires_user_input: boolean;
 }
 
 export interface MessageMetadata {
   trace_id: string | null;
-  decision: PlannerOutput | null;
+  plan: PlanOutput | null;
   agent_steps: MessageAgentStep[];
 }
 

@@ -10,7 +10,7 @@ export interface AgentConfig {
 
 export const AGENT_CONFIGS: AgentConfig[] = [
   {
-    name: "observer",
+    name: "perceiver",
     model_tier: "sonnet",
     max_tokens: 4096,
     temperature: 0.3,
@@ -21,6 +21,8 @@ export const AGENT_CONFIGS: AgentConfig[] = [
       "slack_list_channels", "slack_get_messages", "slack_search",
       "ingest_event", "report_observation",
       "get_observation_cursor", "update_observation_cursor",
+      "search", "perplexity_search",
+      "playwright_navigate", "playwright_screenshot", "playwright_get_text",
     ],
   },
   {
@@ -28,7 +30,7 @@ export const AGENT_CONFIGS: AgentConfig[] = [
     model_tier: "sonnet",
     max_tokens: 4096,
     temperature: 0.3,
-    tools: ["update_entity", "get_entities", "search_memory"],
+    tools: ["update_entity", "get_entities", "search"],
   },
   {
     name: "planner",
@@ -39,10 +41,10 @@ export const AGENT_CONFIGS: AgentConfig[] = [
   },
   {
     name: "governor",
-    model_tier: "sonnet",
-    max_tokens: 4096,
+    model_tier: "haiku",
+    max_tokens: 2048,
     temperature: 0.1,
-    tools: ["evaluate_policy", "approve_action"],
+    tools: ["evaluate_policy", "report_governor_verdict"],
   },
   {
     name: "operator",
@@ -63,23 +65,8 @@ export const AGENT_CONFIGS: AgentConfig[] = [
     max_tokens: 4096,
     temperature: 0.3,
     tools: [
-      "get_briefing", "search_memory", "get_entities",
+      "get_briefing", "search",
       "send_telegram", "send_approval_prompt", "push_ui_update",
-    ],
-  },
-  {
-    name: "researcher",
-    model_tier: "sonnet",
-    max_tokens: 4096,
-    temperature: 0.3,
-    tools: [
-      "search_memory", "get_entities",
-      "gmail_list", "gmail_read", "gmail_search",
-      "calendar_list", "calendar_get",
-      "drive_list", "drive_search",
-      "slack_list_channels", "slack_get_messages", "slack_search",
-      "perplexity_search",
-      "playwright_navigate", "playwright_screenshot", "playwright_get_text",
     ],
   },
   {
@@ -87,6 +74,6 @@ export const AGENT_CONFIGS: AgentConfig[] = [
     model_tier: "haiku",
     max_tokens: 4096,
     temperature: 0.3,
-    tools: ["search_memory", "extract_preferences"],
+    tools: ["search", "extract_preferences"],
   },
 ];

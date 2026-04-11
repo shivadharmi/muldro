@@ -79,7 +79,6 @@ export interface WorkspaceSurfacePush {
   kind: string;
   preview: SurfacePreview;
   detail_config: DetailConfig | null;
-  decision: string | null;
   source_run_id: string | null;
   response_preview: string | null;
   created_at: string;

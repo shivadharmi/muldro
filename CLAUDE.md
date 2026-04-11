@@ -8,14 +8,14 @@ Jarvis is a **Personal AI Operating System** for founders. It is NOT a chatbot �
 
 ## Architecture
 
-Multi-agent hub-and-spoke: a central `JarvisOrchestrator` (`backend/src/orchestrator/jarvis.py`) routes to 8 sub-agents via Claude API. Internal FastMCP servers wrap the intelligence layer; external MCP servers provide connectors (Google, GitHub, Slack).
+Multi-agent hub-and-spoke: a central `JarvisOrchestrator` (`backend/src/orchestrator/jarvis.py`) routes to 7 sub-agents via Claude API. Internal FastMCP servers wrap the intelligence layer; external MCP servers provide connectors (Google, GitHub, Slack).
 
 ```
 User <-> Telegram Bot / Next.js Frontend (A2UI)
               |
          JarvisOrchestrator (Claude API)
-         Routes to: Observer, Librarian, Planner, Governor,
-                    Operator, Presenter, Researcher, Persona
+         Routes to: Perceiver, Librarian, Planner, Governor,
+                    Operator, Presenter, Persona
               |
          Tool Layer: FastMCP (intelligence + communication) + external MCP servers
               |
@@ -28,7 +28,7 @@ User <-> Telegram Bot / Next.js Frontend (A2UI)
 - Orchestrator + agents: `backend/src/orchestrator/` (jarvis.py, agents.py, agent_loop.py, hooks.py, prompts.py, tracing.py, budget.py, perception.py, recovery.py, intent_classifier.py, api_circuit_breaker.py)
 - Services (business logic): `backend/src/services/` (planner, governor, operator, presenter, memory_service, world_model, event_processor, etc.)
 - Tool layer: `backend/src/tools/` (catalog.py, schemas.py, validation.py, intelligence_server.py, communication_server.py, server.py)
-- Runtime contracts: `backend/src/orchestrator/contracts.py` (PlannerOutput, PolicyDecision, StepResult, ToolCallRequest, DomainEvent, WorkspaceSurfaceMetadata, WorkspaceSurfacePush)
+- Runtime contracts: `backend/src/orchestrator/contracts.py` (PlanOutput, PolicyDecision, StepResult, ToolCallRequest, DomainEvent, WorkspaceSurfaceMetadata, WorkspaceSurfacePush)
 - A2UI component system: `backend/src/ui/` (contracts.py, renderer.py, views.py)
 - A2UI surface builder: `backend/src/services/surface_builder.py` (SurfaceService)
 - API routes: `backend/src/api/` (30 routers, all `/v1/` prefixed)
@@ -115,44 +115,15 @@ All backend settings via env vars with `JARVIS_` prefix (pydantic-settings in `s
 
 | Agent | Role | Write Scope |
 |-------|------|-------------|
-| Observer | Read sources, detect changes, ingest events | normalized_events |
+| Perceiver | Gather information from any source — email, calendar, Slack, GitHub, web, internal knowledge | normalized_events |
 | Librarian | Extract entities, update world model, store memories | entities, relationships, memories |
-| Planner | Produce task graphs, manage goals (structured JSON) | plans, plan_tasks, goal memories |
+| Planner | Produce capability-based plans (structured PlanOutput JSON) | plans, plan_tasks, goal memories |
 | Governor | Evaluate policies, gate approvals, verify plans | policy decisions, approvals |
 | Operator | Execute approved plans via tools (reads context first) | task_runs, task_steps |
 | Presenter | Generate user-facing output | briefings, A2UI surfaces (via SurfaceService + renderer.py) |
-| Researcher | Deep context gathering | None (read-only) |
 | Persona | Learn and store preferences | memories (preference type) |
 
 **Only Planner decides intent. Only Operator executes external actions. Only Presenter talks to the user. Governor sits before every external write.**
-
-## Agent Routing & Execution
-
-The `RouteResolver` (`src/services/route_resolver.py`) maps Planner decisions to agent pipelines via DB-backed routes. 17 default routes are seeded on startup (including `ignore`).
-
-**Decision → Pipeline mapping:**
-| Decision | Pipeline | Handler |
-|----------|----------|---------|
-| `create_task` | Governor → Operator (execute_plan) | GraphExecutor DAG |
-| `draft_reply` | Governor → Operator (execute_plan) | `_draft_action` → Gmail draft |
-| `read_source` | Observer → Presenter | MCP tool calls (data source tools) |
-| `research` | Researcher | search, web tools |
-| `observe` | Observer | Background observation |
-| `remember` | Librarian | Entity/memory updates |
-| `add_to_brief` | Librarian | Stores as `briefing_item` memory |
-| `search_memory` | Researcher | Knowledge search (via `search` tool) |
-| `watcher_create` | Observer | Watcher setup |
-| `goal_update` | Planner | Goal modification |
-| `set_goal` | (direct handler) | `_handle_set_goal` → memory |
-| `set_instruction` | (direct handler) | `_handle_set_instruction` → trigger/schedule |
-| `schedule_reminder` | (direct handler) | `_handle_schedule_reminder` → one-shot schedule |
-| `answer_directly` | (Presenter only) | Context-based answer |
-| `ask_user/recommend/summarize` | (Presenter only) | Format for user |
-| `acknowledge` | (Presenter only) | Default fallback |
-
-**Direct handlers** (`set_goal`, `set_instruction`, `schedule_reminder`, `add_to_brief`) execute before pipeline resolution in both `process_message` and `process_message_stream`.
-
-**Route conditions:** `has_key`, `has_truthy_key`, `not_has_key`, `field:<name>`, direct key=value.
 
 ## Agentic vs Scripted Execution
 
@@ -193,7 +164,7 @@ Tool identity lives in 2 files: `src/tools/catalog.py` (definitions) + `src/tool
 ## Agent Prompt Architecture
 
 System prompts are split into two parts (`src/orchestrator/prompts.py`):
-- `JARVIS_SOUL_CORE` — shared by all 8 agents (role, agent table, rules)
+- `JARVIS_SOUL_CORE` — shared by all 7 agents (role, agent table, rules)
 - `JARVIS_DECISION_FRAMEWORK` — Planner-only (decision routing logic)
 
 Only the Planner sees the decision framework. Other agents receive only the core soul + their role prompt. This prevents non-Planner agents from making routing decisions.
@@ -202,7 +173,7 @@ Only the Planner sees the decision framework. Other agents receive only the core
 
 Fast Haiku-based intent classification is extracted into `src/orchestrator/intent_classifier.py`:
 - `classify_intent()` — calls Haiku, returns `(intent, confidence, sources)`
-- `intent_to_decision()` — synthesizes lightweight PlannerOutput from fast intents
+- `intent_to_decision()` — synthesizes lightweight PlanOutput from fast intents
 - `extract_decision()` — parses structured JSON from Planner response text
 - Constants: `FAST_INTENTS`, `INTENT_CONFIDENCE_THRESHOLD` (0.7), `VALID_PERCEPTION_SOURCES`
 
@@ -325,11 +296,11 @@ All 51 data tables are scoped by `workspace_id` (NOT NULL FK to `workspaces`). O
 - Do not create client-side surface conversion functions — all surfaces are built server-side by `SurfaceService` or `_push_workspace_surface()`
 - Do not use `useSurfaceState` hook — it was deleted. Use `useSurfaceStore` (Zustand) as the single surface store
 - Do not add new REST endpoints for workspace data — add methods to `SurfaceService` instead
-- Do not add new PlannerOutput decision types without a matching route in `DEFAULT_ROUTES` (`route_resolver.py`) — unrouted decisions fall to the `acknowledge` fallback and nothing executes
-- Do not put `<decision_framework>` in non-Planner agent prompts — only `JARVIS_SOUL_CORE` is shared; `JARVIS_DECISION_FRAMEWORK` is Planner-only
 - Do not add direct decision handlers only to `process_message` — always wire into BOTH `process_message` and `process_message_stream` (the chat UI uses the streaming path)
-- Do not use `has_key` condition for plan_id checks — use `has_truthy_key` since Pydantic dumps include `plan_id: null`
 - Do not use `JARVIS_SOUL` directly — use `JARVIS_SOUL_CORE` (all agents) + `JARVIS_DECISION_FRAMEWORK` (Planner only)
+- Do not reference `PlannerOutput` — it was replaced by `PlanOutput` (no decision field, uses steps/capability_gaps)
+- Do not reference `observer` or `researcher` agents — they were merged into `perceiver`
+- Do not reference `RouteResolver` or `DEFAULT_ROUTES` — capability-based routing replaced decision-type routing
 - Do not use bare `asyncio.create_task()` in jarvis.py — use `self._spawn_background()` for lifecycle tracking
 - Do not import `classify_intent`/`extract_decision`/`intent_to_decision` from `jarvis.py` — they moved to `src/orchestrator/intent_classifier.py`
 - Do not create tool-level approvals without `run_id` and `artifact_refs` — the approval resume path needs these to re-execute the tool after user approval
