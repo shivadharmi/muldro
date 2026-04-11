@@ -80,7 +80,7 @@ export const useSurfaceStore = create<SurfaceState>((set) => ({
       const next = [...s.surfaces];
       next[idx] = {
         ...next[idx],
-        phase: update.phase as ExecutionPhase,
+        phase: update.phase,
         steps: update.steps,
         current_step: update.current_step,
         progress: update.progress,

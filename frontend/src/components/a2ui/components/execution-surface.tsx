@@ -1,6 +1,5 @@
 "use client";
 
-import { useMemo } from "react";
 import type { A2UIComponent } from "@/lib/a2ui-types";
 import type { ExecutionPhase, StepState, ApprovalContext, ResultSummary } from "@/lib/a2ui-types";
 import { StepList } from "./step-list";
@@ -11,8 +10,8 @@ interface Props {
 }
 
 /** Extract execution fields from component properties (set by backend or surface store merge). */
-function useExecutionProps(properties: Record<string, unknown>) {
-  return useMemo(() => ({
+function getExecutionProps(properties: Record<string, unknown>) {
+  return {
     goal: (properties.goal as string) ?? "Executing...",
     phase: (properties.phase as ExecutionPhase) ?? "planning",
     steps: (properties.steps as StepState[]) ?? [],
@@ -20,7 +19,7 @@ function useExecutionProps(properties: Record<string, unknown>) {
     progress: (properties.progress as string) ?? "",
     approval: (properties.approval as ApprovalContext) ?? null,
     results: (properties.results as ResultSummary) ?? null,
-  }), [properties]);
+  };
 }
 
 const phaseLabel: Record<string, { text: string; className: string }> = {
@@ -35,7 +34,7 @@ const phaseLabel: Record<string, { text: string; className: string }> = {
 
 export function A2UIExecutionSurface({ component }: Props) {
   const { goal, phase, steps, currentStep, approval, results, progress } =
-    useExecutionProps(component.properties);
+    getExecutionProps(component.properties);
 
   const completedCount = steps.filter((s) => s.status === "completed").length;
   const totalCount = steps.length;

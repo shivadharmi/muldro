@@ -106,7 +106,15 @@ export function useJarvisWs({
             error: msg.error,
           });
         } else if (msg.type === "surface_update" && onSurfaceUpdateRef.current) {
-          onSurfaceUpdateRef.current(msg as unknown as SurfaceUpdate);
+          onSurfaceUpdateRef.current({
+            surface_id: msg.surface_id,
+            phase: msg.phase,
+            steps: msg.steps,
+            current_step: msg.current_step,
+            progress: msg.progress,
+            approval: msg.approval,
+            results: msg.results,
+          });
         } else if (msg.type === "heartbeat") {
           // no-op
         } else if (onNotificationRef.current) {

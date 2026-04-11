@@ -150,7 +150,7 @@ export type JarvisMessage =
     }
   | { type: "notification_resolved"; notification_id: string; resolved_on: string }
   | { type: "action_result"; action: string; status: string; result?: Record<string, unknown>; error?: string }
-  | { type: "surface_update"; surface_id: string; phase: string; steps: StepState[]; current_step: string | null; progress: string; approval: ApprovalContext | null; results: ResultSummary | null }
+  | { type: "surface_update"; surface_id: string; phase: ExecutionPhase; steps: StepState[]; current_step: string | null; progress: string; approval: ApprovalContext | null; results: ResultSummary | null }
   | { type: "heartbeat" }
   | { type: "auth_ok" }
   | { type: "auth_error"; message: string };
