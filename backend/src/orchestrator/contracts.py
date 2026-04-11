@@ -183,7 +183,13 @@ class PolicyDecision(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    decision: Literal["auto_execute", "approval_required", "blocked"]
+    decision: Literal[
+        "auto_execute",
+        "auto_execute_notify",
+        "auto_execute_silent",
+        "approval_required",
+        "blocked",
+    ]
     justification: str = ""
     risk_level: str = "low"
     approval_id: str | None = None

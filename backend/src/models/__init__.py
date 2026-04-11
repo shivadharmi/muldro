@@ -31,6 +31,7 @@ from src.models.tool_definitions import ToolDefinition
 from src.models.traces import ModelCall, Trace
 from src.models.triggers import Trigger
 from src.models.trust_score import TrustScore
+from src.models.trust_state import TrustCeiling, TrustState
 from src.models.ui_state import UISurface
 from src.models.users import (
     MagicLink,
@@ -80,6 +81,8 @@ __all__ = [
     "TaskCheckpoint",
     # Trust
     "TrustScore",
+    "TrustState",
+    "TrustCeiling",
     # Triggers
     "Trigger",
     # Artifacts
