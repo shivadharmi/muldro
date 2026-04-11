@@ -1,6 +1,6 @@
 """Tests for the notification coordinator service."""
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -327,9 +327,12 @@ class TestPriorityScoreDelivery:
         registry = AsyncMock()
         registry.get_active_surfaces.return_value = ["web"]
         registry.get_preferred_surface.return_value = "web"
-        redis = AsyncMock()
-        redis.incr.return_value = 1
+        redis = MagicMock()
+        pipe = AsyncMock()
+        pipe.execute = AsyncMock(return_value=[1, True])
+        redis.pipeline = MagicMock(return_value=pipe)
         redis.publish = AsyncMock()
+        redis.set = AsyncMock()
         notifier = Notifier(surface_registry=registry, redis=redis)
         result = await notifier.notify(
             user_id="usr_test",
@@ -347,6 +350,78 @@ class TestPriorityScoreDelivery:
         assert result["status"] == "sent"
 
     @pytest.mark.asyncio
+    async def test_rate_limit_uses_atomic_pipeline(self):
+        """_check_rate_limit should use pipeline with both incr and expire."""
+        from src.services.notifier import Notifier
+
+        redis = MagicMock()
+        pipe = AsyncMock()
+        pipe.execute = AsyncMock(return_value=[1, True])
+        redis.pipeline = MagicMock(return_value=pipe)
+
+        registry = AsyncMock()
+        notifier = Notifier(surface_registry=registry, redis=redis)
+        result = await notifier._check_rate_limit("usr_test", "telegram")
+
+        assert result is True
+        redis.pipeline.assert_called_once()
+        pipe.incr.assert_called_once_with("notifier:rate:usr_test:telegram")
+        pipe.expire.assert_called_once_with("notifier:rate:usr_test:telegram", 3600)
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_returns_false_over_limit(self):
+        """Rate limit should deny when count exceeds surface limit."""
+        from src.services.notifier import Notifier
+
+        redis = MagicMock()
+        pipe = AsyncMock()
+        pipe.execute = AsyncMock(return_value=[6, True])  # telegram limit is 5
+        redis.pipeline = MagicMock(return_value=pipe)
+
+        registry = AsyncMock()
+        notifier = Notifier(surface_registry=registry, redis=redis)
+        result = await notifier._check_rate_limit("usr_test", "telegram")
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_expire_called_every_time(self):
+        """expire should be called on every increment, not just first."""
+        from src.services.notifier import Notifier
+
+        redis = MagicMock()
+        pipe = AsyncMock()
+        pipe.execute = AsyncMock(return_value=[3, True])  # 3rd call
+        redis.pipeline = MagicMock(return_value=pipe)
+
+        registry = AsyncMock()
+        notifier = Notifier(surface_registry=registry, redis=redis)
+        await notifier._check_rate_limit("usr_test", "web")
+
+        pipe.expire.assert_called_once_with("notifier:rate:usr_test:web", 3600)
+
+    @pytest.mark.asyncio
+    async def test_delivered_dict_eviction_at_10k(self):
+        """_delivered dict should evict oldest entries when exceeding 10k."""
+        from src.services.notifier import Notifier
+
+        registry = AsyncMock()
+        notifier = Notifier(surface_registry=registry)
+
+        # Fill with 10001 entries
+        for i in range(10_001):
+            notifier._delivered[f"notif_{i}"] = {"web"}
+
+        assert len(notifier._delivered) == 10_001
+
+        # mark_delivered should trigger eviction
+        await notifier._mark_delivered("notif_new", "web")
+
+        # Should have evicted 1000, then added 1
+        assert len(notifier._delivered) <= 9_002
+        assert "notif_new" in notifier._delivered
+
+    @pytest.mark.asyncio
     async def test_approval_request_bypasses_priority_filter(self):
         """approval_request and critical_alert always deliver."""
         from src.services.notifier import Notifier
@@ -354,8 +429,10 @@ class TestPriorityScoreDelivery:
         registry = AsyncMock()
         registry.get_active_surfaces.return_value = ["telegram"]
         telegram = AsyncMock(return_value={"status": "sent"})
-        redis = AsyncMock()
-        redis.incr.return_value = 1
+        redis = MagicMock()
+        pipe = AsyncMock()
+        pipe.execute = AsyncMock(return_value=[1, True])
+        redis.pipeline = MagicMock(return_value=pipe)
         redis.publish = AsyncMock()
         notifier = Notifier(surface_registry=registry, redis=redis, telegram_sender=telegram)
         result = await notifier.notify(

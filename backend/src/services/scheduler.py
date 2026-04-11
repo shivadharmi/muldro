@@ -10,7 +10,7 @@ Perception is driven by the ``perception_state`` table: sources with
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from croniter import croniter
 from sqlalchemy import select
@@ -65,6 +65,9 @@ class SchedulerLoop:
 
         # 2. Check follow-up notifications
         await self._check_follow_ups(factory)
+
+        # 2b. Re-deliver pending notifications reset by _check_follow_ups
+        await self._tick_pending_notifications(factory)
 
         # 3. Execute pending background tasks
         await self._tick_background_tasks(factory)
@@ -581,9 +584,14 @@ class SchedulerLoop:
                 from src.models.interaction_log import InteractionLog
 
                 last_batch = getattr(self, "_last_persona_batch_at", None)
-                query = select(InteractionLog).order_by(InteractionLog.created_at.desc()).limit(20)
-                if last_batch:
-                    query = query.where(InteractionLog.created_at > last_batch)
+                if last_batch is None:
+                    last_batch = datetime.now(timezone.utc) - timedelta(hours=24)
+                query = (
+                    select(InteractionLog)
+                    .where(InteractionLog.created_at > last_batch)
+                    .order_by(InteractionLog.created_at.desc())
+                    .limit(20)
+                )
 
                 result = await db.execute(query)
                 interactions = result.scalars().all()
@@ -648,6 +656,51 @@ class SchedulerLoop:
                     logger.info("Re-queued %d follow-up notifications", len(due))
         except Exception:
             logger.debug("Follow-up check failed", exc_info=True)
+
+    async def _tick_pending_notifications(self, factory) -> None:
+        """Deliver pending notifications that were re-queued by _check_follow_ups."""
+        try:
+            from src.models.notifications import Notification as NotifModel
+
+            async with factory() as db:
+                now = datetime.now(timezone.utc)
+                result = await db.execute(
+                    select(NotifModel)
+                    .where(
+                        NotifModel.status == "pending",
+                        NotifModel.follow_up_at.is_(None),
+                        NotifModel.created_at >= now - timedelta(hours=24),
+                    )
+                    .limit(10)
+                )
+                pending = result.scalars().all()
+                if not pending or not self._orchestrator:
+                    return
+
+                notifier = getattr(self._orchestrator, "_notifier", None)
+                if not notifier:
+                    return
+
+                for n in pending:
+                    try:
+                        await notifier.notify(
+                            user_id=n.user_id,
+                            notification_type=n.channel,
+                            title=n.title,
+                            body=n.body,
+                            data=n.payload_json or {},
+                            workspace_id=n.workspace_id or "",
+                        )
+                        n.status = "sent"
+                    except Exception:
+                        logger.debug(
+                            "Failed to re-deliver notification %s",
+                            n.notification_id,
+                            exc_info=True,
+                        )
+                await db.commit()
+        except Exception:
+            logger.debug("Pending notification tick failed", exc_info=True)
 
     # ------------------------------------------------------------------
     # Observation source helpers

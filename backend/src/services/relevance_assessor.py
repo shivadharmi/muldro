@@ -13,6 +13,26 @@ from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
 
+_HAIKU_MODEL_FALLBACK = "claude-haiku-4-5-20251001"
+
+
+def _get_haiku_model() -> str:
+    """Resolve Haiku model ID from settings, avoiding circular imports."""
+    try:
+        from src.config.settings import get_settings
+
+        settings = get_settings()
+        if settings.use_bedrock:
+            from src.orchestrator.jarvis import BEDROCK_MODEL_TIERS
+
+            return BEDROCK_MODEL_TIERS["haiku"]
+        else:
+            from src.orchestrator.jarvis import MODEL_TIERS
+
+            return MODEL_TIERS["haiku"]
+    except Exception:
+        return _HAIKU_MODEL_FALLBACK
+
 
 class SuggestedAction(BaseModel):
     """An action the system could take in response to a signal."""
@@ -62,12 +82,11 @@ def _determine_tier(
     """Pure function: map relevance score + urgency to notification tier.
 
     Routing logic:
-        relevance >= 0.7 AND urgency in (immediate, today)  → push
-        relevance >= 0.4 AND urgency in (today, this_week)  → briefing
-        relevance >= 0.4 AND urgency == whenever             → briefing
-        relevance < 0.4                                       → silent
+        relevance >= 0.7 AND urgency in (immediate, today, this_week) → push
+        relevance >= 0.4                                                → briefing
+        relevance < 0.4                                                 → silent
     """
-    if relevance_score >= 0.7 and urgency in ("immediate", "today"):
+    if relevance_score >= 0.7 and urgency in ("immediate", "today", "this_week"):
         return "push"
     if relevance_score >= 0.4:
         return "briefing"
@@ -102,10 +121,12 @@ async def assess_relevance(
     signal: PerceptionSignal,
     user_context: UserContext,
     client: Any,
-    model: str = "claude-haiku-4-5-20251001",
+    model: str | None = None,
     engagement_context: str = "",
 ) -> RelevanceAssessment:
     """Call Haiku to assess signal relevance. Returns silent assessment on failure."""
+    if model is None:
+        model = _get_haiku_model()
     try:
         prompt = _RELEVANCE_PROMPT.format(
             goals=", ".join(user_context.goals) or "none specified",

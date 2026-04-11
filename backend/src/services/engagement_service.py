@@ -11,6 +11,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.engagement_history import EngagementHistory
@@ -53,6 +54,18 @@ class EngagementService:
             suppressed=False,
         )
         self._db.add(row)
+        try:
+            await self._db.flush()
+        except IntegrityError:
+            await self._db.rollback()
+            result = await self._db.execute(
+                select(EngagementHistory).where(
+                    EngagementHistory.workspace_id == self._workspace_id,
+                    EngagementHistory.signal_source == signal_source,
+                    EngagementHistory.signal_category == signal_category,
+                )
+            )
+            row = result.scalar_one()
         return row
 
     async def record_engagement(

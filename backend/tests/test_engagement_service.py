@@ -221,6 +221,34 @@ async def test_is_suppressed_clears_after_ttl():
 
 
 @pytest.mark.asyncio
+async def test_get_or_create_handles_concurrent_insert():
+    """When flush raises IntegrityError, should rollback and re-query."""
+    from sqlalchemy.exc import IntegrityError
+
+    db = _make_mock_db()
+    db.flush = AsyncMock(side_effect=IntegrityError("dup", params=None, orig=None))
+    db.rollback = AsyncMock()
+
+    # First execute: no existing row (triggers insert path)
+    first_result = MagicMock()
+    first_result.scalar_one_or_none.return_value = None
+
+    # Second execute (after rollback): return existing row
+    existing_row = _make_history_row(engaged=1)
+    second_result = MagicMock()
+    second_result.scalar_one.return_value = existing_row
+
+    db.execute = AsyncMock(side_effect=[first_result, second_result])
+
+    svc = EngagementService(db, "ws_test")
+    row = await svc._get_or_create("gmail", "reply")
+
+    assert row == existing_row
+    db.rollback.assert_called_once()
+    assert db.execute.call_count == 2
+
+
+@pytest.mark.asyncio
 async def test_is_suppressed_persists_within_ttl():
     """is_suppressed should return True within 7 days."""
     db = _make_mock_db()

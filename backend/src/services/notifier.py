@@ -98,15 +98,17 @@ class Notifier:
     async def _check_rate_limit(self, user_id: str, surface: str) -> bool:
         """Check if a notification can be sent to this surface within rate limits.
 
-        Uses Redis INCR with 1-hour TTL. Returns True if under limit.
-        Counts attempts (not deliveries) — denied notifications still increment.
+        Uses Redis pipeline with INCR + EXPIRE (always applied) for atomicity.
+        If EXPIRE fails after INCR, the next call will re-apply TTL.
         """
         if not self._redis:
             return True
         key = f"notifier:rate:{user_id}:{surface}"
-        count = await self._redis.incr(key)
-        if count == 1:
-            await self._redis.expire(key, 3600)
+        pipe = self._redis.pipeline()
+        pipe.incr(key)
+        pipe.expire(key, 3600)
+        results = await pipe.execute()
+        count = results[0]
         return count <= SURFACE_RATE_LIMITS.get(surface, 10)
 
     async def notify(
@@ -549,6 +551,11 @@ class Notifier:
         if self._redis:
             key = f"jarvis:notif_delivered:{notification_id}"
             await self._redis.set(key, surface, ex=86400)  # 24h TTL
+        # Evict oldest entries when in-memory cache exceeds limit
+        if len(self._delivered) >= 10_000:
+            keys_to_remove = list(self._delivered.keys())[:1000]
+            for k in keys_to_remove:
+                del self._delivered[k]
         self._delivered.setdefault(notification_id, set()).add(surface)
 
     async def is_delivered(self, notification_id: str) -> bool:

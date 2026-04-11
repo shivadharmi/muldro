@@ -62,18 +62,18 @@ class TestDetermineTier:
         tier = _determine_tier(relevance_score=0.39, urgency="today")
         assert tier == "silent"
 
-    def test_high_relevance_whenever_is_briefing_not_push(self):
+    def test_high_relevance_this_week_is_push(self):
+        """relevance >= 0.7 and urgency=this_week → push (after fix)."""
+        from src.services.relevance_assessor import _determine_tier
+
+        tier = _determine_tier(relevance_score=0.8, urgency="this_week")
+        assert tier == "push"
+
+    def test_high_relevance_whenever_still_briefing(self):
         """relevance >= 0.7 but urgency=whenever → briefing, not push."""
         from src.services.relevance_assessor import _determine_tier
 
         tier = _determine_tier(relevance_score=0.9, urgency="whenever")
-        assert tier == "briefing"
-
-    def test_high_relevance_this_week_is_briefing_not_push(self):
-        """relevance >= 0.7 but urgency=this_week → briefing, not push."""
-        from src.services.relevance_assessor import _determine_tier
-
-        tier = _determine_tier(relevance_score=0.8, urgency="this_week")
         assert tier == "briefing"
 
 
@@ -167,6 +167,30 @@ class TestAssessRelevance:
         result = await assess_relevance(signal, context, mock_client)
         assert result.relevance_score == 0.5
         assert result.notification_tier == "briefing"
+
+    @pytest.mark.asyncio
+    async def test_accepts_custom_model_parameter(self):
+        from src.services.relevance_assessor import (
+            PerceptionSignal,
+            UserContext,
+            assess_relevance,
+        )
+
+        mock_client = AsyncMock()
+        mock_client.messages.create.return_value = MagicMock(
+            content=[
+                MagicMock(
+                    text='{"relevance_score": 0.5, "reasoning": "ok",'
+                    ' "relates_to_goals": [], "urgency": "whenever",'
+                    ' "suggested_actions": []}'
+                )
+            ]
+        )
+        signal = PerceptionSignal(source="test", event_type="test", summary="test")
+        context = UserContext()
+        await assess_relevance(signal, context, mock_client, model="custom-model-id")
+        call_kwargs = mock_client.messages.create.call_args[1]
+        assert call_kwargs["model"] == "custom-model-id"
 
     @pytest.mark.asyncio
     async def test_returns_silent_on_malformed_json(self):

@@ -17,6 +17,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
+from ulid import ULID
 
 from src.models.base import Base, TimestampMixin
 
@@ -24,7 +25,7 @@ from src.models.base import Base, TimestampMixin
 class EngagementHistory(Base, TimestampMixin):
     __tablename__ = "engagement_history"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: f"eng_{ULID()}")
     workspace_id: Mapped[str] = mapped_column(
         String(64),
         ForeignKey("workspaces.workspace_id", ondelete="CASCADE"),
