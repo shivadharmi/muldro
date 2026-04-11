@@ -4,6 +4,7 @@ import { create } from "zustand";
 
 import type { DetailConfig, SurfacePreview } from "@/lib/a2ui-types";
 import type { A2UIComponent } from "@/lib/a2ui-types";
+import type { ExecutionPhase, StepState, ApprovalContext, ResultSummary, SurfaceUpdate } from "@/lib/a2ui-types";
 import type { SurfaceKind } from "@/lib/types/surfaces";
 
 export interface WorkspaceSurface {
@@ -15,6 +16,13 @@ export interface WorkspaceSurface {
   response_preview: string | null;
   created_at: string;
   children?: A2UIComponent[];
+  // Execution surface fields (populated by surface_update messages)
+  phase?: ExecutionPhase;
+  steps?: StepState[];
+  current_step?: string | null;
+  progress?: string;
+  approval?: ApprovalContext | null;
+  results?: ResultSummary | null;
 }
 
 interface SurfaceState {
@@ -28,6 +36,7 @@ interface SurfaceState {
   openDetailModal: (id: string) => void;
   closeDetailModal: () => void;
   setSurfaces: (surfaces: WorkspaceSurface[]) => void;
+  updateSurface: (surfaceId: string, update: SurfaceUpdate) => void;
 }
 
 export const useSurfaceStore = create<SurfaceState>((set) => ({
@@ -63,4 +72,21 @@ export const useSurfaceStore = create<SurfaceState>((set) => ({
     set({ detailModalOpen: false }),
 
   setSurfaces: (surfaces) => set({ surfaces }),
+
+  updateSurface: (surfaceId, update) =>
+    set((s) => {
+      const idx = s.surfaces.findIndex((sf) => sf.id === surfaceId);
+      if (idx === -1) return s;
+      const next = [...s.surfaces];
+      next[idx] = {
+        ...next[idx],
+        phase: update.phase as ExecutionPhase,
+        steps: update.steps,
+        current_step: update.current_step,
+        progress: update.progress,
+        approval: update.approval,
+        results: update.results,
+      };
+      return { surfaces: next };
+    }),
 }));
