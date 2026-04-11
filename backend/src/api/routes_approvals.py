@@ -178,6 +178,27 @@ async def approve_action(
 
     await db.commit()
 
+    # Embed approval decision into Qdrant
+    try:
+        from src.services.embedding_service import EmbeddingService
+        from src.services.vector_store import VectorStore
+
+        if settings.qdrant_url:
+            vs = VectorStore(settings)
+            es = EmbeddingService(settings)
+            await _embed_approval_decision(
+                approval_id=approval_id,
+                approval_type=approval.approval_type or "",
+                summary=approval.summary or "",
+                risk_level=approval.risk_level or "low",
+                outcome="approved",
+                user_id=user_id,
+                embedding_service=es,
+                vector_store=vs,
+            )
+    except Exception:
+        logger.debug("Approval embedding failed", exc_info=True)
+
     # Publish approval.approved domain event via SSE
     try:
         import redis.asyncio as aioredis
@@ -390,6 +411,27 @@ async def reject_action(
 
     await db.commit()
 
+    # Embed rejection decision into Qdrant
+    try:
+        from src.services.embedding_service import EmbeddingService
+        from src.services.vector_store import VectorStore
+
+        if settings.qdrant_url:
+            vs = VectorStore(settings)
+            es = EmbeddingService(settings)
+            await _embed_approval_decision(
+                approval_id=approval_id,
+                approval_type=approval.approval_type or "",
+                summary=approval.summary or "",
+                risk_level=approval.risk_level or "low",
+                outcome="rejected",
+                user_id=user_id,
+                embedding_service=es,
+                vector_store=vs,
+            )
+    except Exception:
+        logger.debug("Rejection embedding failed", exc_info=True)
+
     # Publish approval.rejected domain event via SSE
     try:
         import redis.asyncio as aioredis
@@ -503,6 +545,37 @@ async def get_approval_impact(
             for e in affected
         ],
     }
+
+
+async def _embed_approval_decision(
+    approval_id: str,
+    approval_type: str,
+    summary: str,
+    risk_level: str,
+    outcome: str,
+    user_id: str,
+    embedding_service,
+    vector_store,
+) -> None:
+    """Embed approval decision into Qdrant (best-effort)."""
+    try:
+        text = f"{approval_type}: {summary} → {outcome}"
+        embedding = await embedding_service.embed_text(text)
+        if embedding:
+            await vector_store.upsert(
+                collection="approvals",
+                id=approval_id,
+                vector=embedding,
+                payload={
+                    "capability": approval_type,
+                    "risk_level": risk_level,
+                    "outcome": outcome,
+                    "decided_at": datetime.now(timezone.utc).isoformat(),
+                },
+                user_id=user_id,
+            )
+    except Exception:
+        logger.debug("Approval embedding failed for %s", approval_id, exc_info=True)
 
 
 async def _get_approval(

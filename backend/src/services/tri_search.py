@@ -69,13 +69,20 @@ def _compute_final_score(result: dict) -> float:
     confidence = result.get("confidence", 0.5)
     stability = result.get("stability", 0.5)
     entity_overlap = result.get("entity_overlap", 0.0)
-    return (
+    score = (
         _W_RERANK * rerank
         + _W_RECENCY * recency
         + _W_CONFIDENCE * confidence
         + _W_STABILITY * stability
         + _W_ENTITY_OVERLAP * entity_overlap
     )
+    # Boost strong preferences (Issue #25 fix)
+    strength = result.get("preference_strength")
+    if strength == "strong":
+        score += 0.05
+    elif strength == "weak":
+        score -= 0.03
+    return score
 
 
 class TriSearchService:
@@ -261,6 +268,8 @@ class TriSearchService:
                         "created_at",
                         payload.get("occurred_at"),
                     ),
+                    "entity_ids": payload.get("entity_ids"),
+                    "preference_strength": payload.get("preference_strength"),
                 }
             )
         return results
