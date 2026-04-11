@@ -319,29 +319,33 @@ class TestEnrichedGraphContext:
         from src.services.context_builder import ContextBuilder
 
         mock_graph = AsyncMock()
-        mock_graph.traverse_weighted = AsyncMock(return_value=[
-            {
-                "entity_id": "ent_b",
-                "name": "Alice Chen",
-                "entity_type": "person",
-                "avg_strength": 0.85,
-                "distance": 1,
-                "attributes": "{}",
-            },
-            {
-                "entity_id": "ent_c",
-                "name": "Acme Corp",
-                "entity_type": "organization",
-                "avg_strength": 0.6,
-                "distance": 2,
-                "attributes": "{}",
-            },
-        ])
+        mock_graph.traverse_weighted = AsyncMock(
+            return_value=[
+                {
+                    "entity_id": "ent_b",
+                    "name": "Alice Chen",
+                    "entity_type": "person",
+                    "avg_strength": 0.85,
+                    "distance": 1,
+                    "attributes": "{}",
+                },
+                {
+                    "entity_id": "ent_c",
+                    "name": "Acme Corp",
+                    "entity_type": "organization",
+                    "avg_strength": 0.6,
+                    "distance": 2,
+                    "attributes": "{}",
+                },
+            ]
+        )
 
         mock_world = AsyncMock()
-        mock_world.find_entity = AsyncMock(return_value=[
-            {"entity_id": "ent_a", "entity_type": "person", "canonical_name": "Bob"},
-        ])
+        mock_world.find_entity = AsyncMock(
+            return_value=[
+                {"entity_id": "ent_a", "entity_type": "person", "canonical_name": "Bob"},
+            ]
+        )
 
         builder = ContextBuilder(
             world_model=mock_world,

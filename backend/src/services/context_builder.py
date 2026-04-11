@@ -170,14 +170,16 @@ class ContextBuilder:
                         min_strength=0.3,
                     )
                     for r in related[:8]:
-                        pack.graph_relationships.append({
-                            "entity_id": r["entity_id"],
-                            "name": r["name"],
-                            "entity_type": r.get("entity_type"),
-                            "strength": r.get("avg_strength", 0.5),
-                            "distance": r.get("distance", 1),
-                            "attributes": r.get("attributes"),
-                        })
+                        pack.graph_relationships.append(
+                            {
+                                "entity_id": r["entity_id"],
+                                "name": r["name"],
+                                "entity_type": r.get("entity_type"),
+                                "strength": r.get("avg_strength", 0.5),
+                                "distance": r.get("distance", 1),
+                                "attributes": r.get("attributes"),
+                            }
+                        )
             except Exception:
                 logger.debug("Graph relationship lookup failed", exc_info=True)
 
@@ -373,9 +375,7 @@ class ContextBuilder:
                 if distance is not None:
                     parts.append(f"distance={distance}")
                 rel_lines.append(" ".join(parts))
-            sections.append(
-                "## Entity Relationships\n" + "\n".join(rel_lines)
-            )
+            sections.append("## Entity Relationships\n" + "\n".join(rel_lines))
 
         if pack.preferences:
             pref_lines = [f"- {p.get('fact_text', '')}" for p in pack.preferences]
