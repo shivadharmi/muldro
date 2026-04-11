@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.tool_definitions import ToolDefinition
+
+logger = logging.getLogger(__name__)
 
 
 class CapabilityResolver:
@@ -103,7 +107,11 @@ async def route_step(step_capability: str, resolver: CapabilityResolver) -> str:
     # Check if any tools exist for this capability before read/write classification
     tools = await resolver.resolve(step_capability)
     if not tools:
-        return "operator"
+        logger.warning(
+            "No tools found for capability %s — cannot route step",
+            step_capability,
+        )
+        return ""  # Empty string signals unroutable
 
     if all(not t.requires_approval for t in tools):
         return "perceiver"

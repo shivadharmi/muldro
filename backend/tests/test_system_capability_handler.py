@@ -201,8 +201,9 @@ class TestPlannerSystemPrompt:
         planner = AGENTS["planner"]
         blocks = orch._build_system_prompt(planner, context="")
         prompt_text = blocks[0]["text"]
-        # Raw placeholder should remain when no summary provided
-        assert "{capability_summary}" in prompt_text
+        # Placeholder should be replaced with default message when no summary provided
+        assert "No capabilities connected yet." in prompt_text
+        assert "{capability_summary}" not in prompt_text
 
 
 class TestPlanPersistence:

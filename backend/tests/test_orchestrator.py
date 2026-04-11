@@ -38,13 +38,11 @@ class TestTracing:
             input_tokens=100,
             output_tokens=50,
             tools_called=["search"],
-            decision="plan",
         )
         assert span.ended_at is not None
         assert span.input_tokens == 100
         assert span.output_tokens == 50
         assert span.tools_called == ["search"]
-        assert span.decision == "plan"
         assert span.duration_ms() >= 0
 
     def test_trace_total_tokens(self):

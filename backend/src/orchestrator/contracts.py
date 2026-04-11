@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class AgentEnvelope(BaseModel):
@@ -29,7 +29,7 @@ class AgentResult(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     agent_name: str
-    response_text: str = ""
+    response_text: str | None = None
     tools_called: list[str] = Field(default_factory=list)
     tokens_used: int = 0
 
@@ -43,7 +43,7 @@ class StepResult(BaseModel):
     status: str
     output_data: dict[str, Any] | None = None
     error: str | None = None
-    duration_ms: int = 0
+    duration_ms: int | None = None
 
 
 class ToolCallRequest(BaseModel):
@@ -103,7 +103,6 @@ class SpanRecord(BaseModel):
     tool_call_details: list[SpanToolCall] = Field(default_factory=list)
     thinking_summary: str | None = None
     response_text: str | None = None
-    decision: str | None = None
     error: str | None = None
 
 
@@ -378,3 +377,33 @@ class PlanOutput(BaseModel):
     capability_gaps: list[CapabilityGap] = Field(default_factory=list)
     plan_id: str | None = None
     requires_user_input: bool = False
+
+    @model_validator(mode="after")
+    def _validate_step_dependencies(self) -> PlanOutput:
+        step_ids = {s.step_id for s in self.steps if s.step_id}
+        for step in self.steps:
+            if step.step_id and step.step_id in step.depends_on:
+                raise ValueError(f"Step '{step.step_id}' depends on itself")
+            for dep in step.depends_on:
+                if dep and dep not in step_ids:
+                    raise ValueError(f"Step '{step.step_id}' depends on unknown step '{dep}'")
+        # Cycle detection via DFS
+        visited: set[str] = set()
+        temp: set[str] = set()
+        adj = {s.step_id: s.depends_on for s in self.steps if s.step_id}
+
+        def visit(node: str) -> None:
+            if node in temp:
+                raise ValueError(f"Circular dependency detected involving '{node}'")
+            if node in visited:
+                return
+            temp.add(node)
+            for dep in adj.get(node, []):
+                if dep:
+                    visit(dep)
+            temp.remove(node)
+            visited.add(node)
+
+        for sid in adj:
+            visit(sid)
+        return self

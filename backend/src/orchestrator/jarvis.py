@@ -98,6 +98,7 @@ def _derive_surface_kind(plan: "PlanOutput") -> tuple[str, str] | None:
     caps = {s.capability for s in plan.steps if s.actor == "jarvis"}
 
     # Respond/reason only -> no surface (chat-only)
+    # "none" = planner indicated no external capability needed (pure reasoning)
     if caps <= {"reason", "respond", "none"}:
         return None
 
@@ -809,6 +810,12 @@ class JarvisOrchestrator:
                     result[f"system_{step.capability}"] = sys_result
                     continue
 
+                if not agent_name:
+                    error_msg = f"No tools available for capability '{step.capability}'"
+                    logger.warning(error_msg)
+                    result[f"error_{step.step_id}"] = error_msg
+                    continue
+
                 agent_message = (
                     f"Execute this step: {step.description}\n"
                     f"Goal: {plan.goal}\n"
@@ -827,9 +834,23 @@ class JarvisOrchestrator:
                 )
                 result[agent_name] = agent_result
 
+            # Build user action block from user_steps
+            user_action_block = ""
+            if user_steps:
+                actions = "\n".join(
+                    f"- {s.description}" + (f" ({s.user_context})" if s.user_context else "")
+                    for s in user_steps
+                )
+                user_action_block = f"\n\nUser actions required:\n{actions}"
+                result["user_actions"] = [
+                    {"description": s.description, "context": s.user_context} for s in user_steps
+                ]
+
             # Step 4: Presenter formats response (if no respond step)
             has_presenter_step = any(
-                s.capability in ("reason", "respond") for s in plan.steps if s.actor == "jarvis"
+                s.capability in ("reason", "respond", "system.respond", "system.acknowledge")
+                for s in plan.steps
+                if s.actor == "jarvis"
             )
             if not has_presenter_step:
                 presenter_msg = (
@@ -840,6 +861,8 @@ class JarvisOrchestrator:
                 )
                 if plan_text:
                     presenter_msg += f"\nAnalysis: {plan_text[:2000]}"
+                if user_action_block:
+                    presenter_msg += user_action_block
                 if history_block:
                     presenter_msg = f"{history_block}\n\n{presenter_msg}"
                 present_result = await self._call_agent(
@@ -1055,9 +1078,16 @@ class JarvisOrchestrator:
                         step_routing.append((step, agent_name, tools))
 
             # Step 3: Execute steps with streaming
+            presenter_text = ""
             for step, agent_name, tools in step_routing:
                 if step.capability.startswith("system."):
                     await self._handle_system_capability(step, plan, user_id, workspace_id)
+                    continue
+
+                if not agent_name:
+                    error_msg = f"No tools available for capability '{step.capability}'"
+                    logger.warning(error_msg)
+                    yield {"event": "step_error", "step_id": step.step_id, "error": error_msg}
                     continue
 
                 # Plan mode: skip risky execution, present the plan
@@ -1086,12 +1116,35 @@ class JarvisOrchestrator:
                     tools_override=tools if tools else None,
                 ):
                     yield evt
+                    # Capture text from respond/reason steps for surface preview
+                    if (
+                        step.capability in ("reason", "respond")
+                        and evt.get("event") == "agent_done"
+                    ):
+                        presenter_text = evt.get("text", "")
+
+            # Build user action block from user_steps
+            user_action_block = ""
+            if user_steps:
+                actions = "\n".join(
+                    f"- {s.description}" + (f" ({s.user_context})" if s.user_context else "")
+                    for s in user_steps
+                )
+                user_action_block = f"\n\nUser actions required:\n{actions}"
+                yield {
+                    "event": "user_actions",
+                    "steps": [
+                        {"description": s.description, "context": s.user_context}
+                        for s in user_steps
+                    ],
+                }
 
             # Step 4: Presenter formatting (if no respond step)
             has_presenter_step = any(
-                s.capability in ("reason", "respond") for s in plan.steps if s.actor == "jarvis"
+                s.capability in ("reason", "respond", "system.respond", "system.acknowledge")
+                for s in plan.steps
+                if s.actor == "jarvis"
             )
-            presenter_text = ""
             if not has_presenter_step:
                 presenter_msg = (
                     f"Respond to the user ({surface}). "
@@ -1103,6 +1156,8 @@ class JarvisOrchestrator:
                     presenter_msg += (
                         f"Plan: {json.dumps(plan_dict)}\nAnalysis: {plan_text[:2000]}\n"
                     )
+                if user_action_block:
+                    presenter_msg += user_action_block
                 if history_block:
                     presenter_msg = f"{history_block}\n\n{presenter_msg}"
 
@@ -1129,16 +1184,17 @@ class JarvisOrchestrator:
                 payload={"trace_id": trace.trace_id},
             )
 
-            # Push workspace surface (fire-and-forget)
-            self._spawn_background(
-                self._push_workspace_surface(
+            # Push workspace surface before done to avoid race with SSE
+            try:
+                await self._push_workspace_surface(
                     plan,
                     user_id,
                     workspace_id,
                     None,
                     response_text=presenter_text,
                 )
-            )
+            except Exception:
+                logger.warning("Surface push failed", exc_info=True)
 
             yield {
                 "event": "done",
@@ -1510,7 +1566,19 @@ class JarvisOrchestrator:
                             exc_info=True,
                         )
 
-                # silent tier: already in world model from Librarian, no action needed
+                else:
+                    # silent tier: in world model from Librarian, record as ignored
+                    try:
+                        async with self._db_factory() as db:
+                            from src.services.engagement_service import EngagementService
+
+                            eng_svc = EngagementService(db, workspace_id)
+                            await eng_svc.record_engagement(
+                                signal.source, signal.event_type, "ignored"
+                            )
+                            await db.commit()
+                    except Exception:
+                        logger.debug("Failed to record silent tier engagement", exc_info=True)
 
             except Exception:
                 logger.warning("Relevance assessment failed, continuing without", exc_info=True)
@@ -2211,37 +2279,6 @@ class JarvisOrchestrator:
             )
             summary = "".join(b.text for b in response.content if b.type == "text")
 
-            # Embed conversation summary into Qdrant
-            if (
-                conversation_id
-                and summary
-                and getattr(self, "_vector_store", None)
-                and getattr(self, "_embedding_service", None)
-            ):
-                try:
-                    from datetime import datetime, timezone
-
-                    embedding = await self._embedding_service.embed_text(summary)
-                    if embedding:
-                        await self._vector_store.upsert(
-                            collection="conversations",
-                            id=conversation_id,
-                            vector=embedding,
-                            payload={
-                                "conversation_id": conversation_id,
-                                "summary": summary,
-                                "message_count": len(lines),
-                                "created_at": datetime.now(timezone.utc).isoformat(),
-                            },
-                            user_id=user_id,
-                        )
-                except Exception:
-                    logger.warning(
-                        "Conversation embedding failed for %s",
-                        conversation_id,
-                        exc_info=True,
-                    )
-
             return summary
         except Exception:
             logger.debug("History summarization failed", exc_info=True)
@@ -2504,8 +2541,10 @@ class JarvisOrchestrator:
         soul = JARVIS_SOUL_CORE
 
         prompt = agent.prompt
-        if agent.name == "planner" and capability_summary:
-            prompt = prompt.format(capability_summary=capability_summary)
+        if agent.name == "planner":
+            prompt = prompt.format(
+                capability_summary=capability_summary or "No capabilities connected yet."
+            )
 
         blocks = [
             {
@@ -2793,6 +2832,7 @@ class JarvisOrchestrator:
         )
 
         text = ""
+        error = None
         async for evt in agent_loop(
             client=self._client,
             agent=agent,
@@ -2825,7 +2865,15 @@ class JarvisOrchestrator:
                         "trace_id": trace.trace_id if trace else None,
                     },
                 )
+            elif isinstance(evt, LoopError):
+                error = evt.message
+                logger.warning(
+                    "agent_call_failed",
+                    extra={"agent": agent_name, "error": error},
+                )
 
+        if error and not text:
+            return f"[Agent error: {error}]"
         return text
 
     async def _call_composite_tool(
@@ -2968,97 +3016,3 @@ class JarvisOrchestrator:
                 {"tool": tool_name, "error": str(e)[:200]},
             )
             return {"error": f"Tool execution failed for {tool_name}: {e}"}
-
-    async def _execute_plan_via_graph(
-        self, plan_id: str, user_id: str, workspace_id: str, trace=None
-    ) -> dict:
-        """Bridge: create a run from a plan and execute it via GraphExecutor.
-
-        This is the critical connection between the orchestrator (agent routing)
-        and the GraphExecutor (DAG execution). Without this bridge, plans generated
-        by the Planner would never actually execute.
-        """
-        from src.services.context_builder import ContextBuilder
-        from src.services.graph_executor import GraphExecutor
-        from src.services.tool_registry import ToolRegistry
-
-        try:
-            async with self._db_factory() as db:
-                svc = self._services
-                tool_registry = ToolRegistry(db)
-
-                context_builder = ContextBuilder(
-                    world_model=svc.world_model,
-                    memory_service=svc.memory_service,
-                    artifact_store=svc.artifact_store,
-                )
-
-                async def get_credentials(connector_type: str) -> dict:
-                    if svc.oauth_manager:
-                        provider_map = {
-                            "gmail": "google",
-                            "calendar": "google",
-                            "drive": "google",
-                            "github": "github",
-                            "slack": "slack",
-                            "linear": "linear",
-                            "notion": "notion",
-                            "jira": "jira",
-                        }
-                        oauth_provider = provider_map.get(connector_type, connector_type)
-                        token = await svc.oauth_manager.get_valid_token(user_id, oauth_provider)
-                        if token:
-                            return {"access_token": token}
-                    return {}
-
-                executor = GraphExecutor(
-                    settings=self._settings,
-                    db=db,
-                    event_bus=self._event_bus,
-                    notifier=svc.notifier,
-                    tool_registry=tool_registry,
-                    context_builder=context_builder,
-                    connector_credentials_fn=get_credentials,
-                    memory_service=svc.memory_service,
-                    # Agent loop dependencies
-                    db_factory=self._db_factory,
-                    execute_tool_fn=self._execute_tool,
-                    budget=self._budget,
-                    circuit_breaker=getattr(self, "_circuit_breaker", None),
-                )
-
-                run = await executor.create_run(plan_id, user_id, workspace_id)
-                surface_id = f"surf_{ULID()}"
-
-                await self._publish_event(
-                    "execution_started",
-                    user_id,
-                    {"plan_id": plan_id, "run_id": run.run_id},
-                    trace_id=trace.trace_id if trace else None,
-                )
-
-                completed_run = await executor.execute_run(
-                    run.run_id,
-                    trace_id=trace.trace_id if trace else None,
-                    surface_id=surface_id,
-                )
-
-                await self._publish_event(
-                    "execution_completed",
-                    user_id,
-                    {
-                        "plan_id": plan_id,
-                        "run_id": run.run_id,
-                        "status": completed_run.status,
-                    },
-                    trace_id=trace.trace_id if trace else None,
-                )
-
-                return {
-                    "run_id": run.run_id,
-                    "status": completed_run.status,
-                    "error": completed_run.error,
-                }
-        except Exception as e:
-            logger.error("Plan execution via graph failed: %s", e, exc_info=True)
-            return {"status": "error", "error": str(e)}

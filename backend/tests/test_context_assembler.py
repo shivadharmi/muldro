@@ -205,7 +205,9 @@ class TestSystemPromptBuilding:
         assert "cache_control" in blocks[0]
         assert blocks[0]["cache_control"]["type"] == "ephemeral"
         assert "Jarvis" in blocks[0]["text"]
-        assert agent.prompt in blocks[0]["text"]
+        # Planner prompt has {capability_summary} replaced at build time
+        expected_prompt = agent.prompt.format(capability_summary="No capabilities connected yet.")
+        assert expected_prompt in blocks[0]["text"]
 
     @patch("src.orchestrator.jarvis.get_anthropic_client")
     def test_build_system_prompt_includes_context_block(self, mock_get_client):

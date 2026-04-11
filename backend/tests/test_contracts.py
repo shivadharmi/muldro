@@ -47,7 +47,7 @@ class TestAgentResult:
 
     def test_defaults(self):
         r = AgentResult(agent_name="persona")
-        assert r.response_text == ""
+        assert r.response_text is None
         assert r.tools_called == []
         assert r.tokens_used == 0
 

@@ -251,7 +251,8 @@ class TestRouteStep:
         assert await route_step("email.send", resolver) == "operator"
 
     @pytest.mark.asyncio
-    async def test_unknown_capability_routes_to_operator(self):
+    async def test_unknown_capability_returns_empty_string(self):
+        """Unknown capability returns empty string (unroutable) instead of fallback."""
         db = _mock_db_with_tools([])
         resolver = CapabilityResolver(db)
-        assert await route_step("totally.unknown", resolver) == "operator"
+        assert await route_step("totally.unknown", resolver) == ""

@@ -273,16 +273,15 @@ class TestEnsureIndexesExceptionHandling:
 
 
 class TestConversationEmbedding:
-    """Tasks 4.1-4.4: user_id parameter, summary in payload, log level."""
+    """Tasks 4.1-4.4: summarize_history returns summary text."""
 
-    async def test_summary_included_in_payload(self):
-        """Verify summary text is stored in Qdrant payload."""
+    async def test_summary_returned(self):
+        """Verify _summarize_history returns the Claude summary text."""
         from src.orchestrator.jarvis import JarvisOrchestrator
 
         settings = make_mock_settings()
         mock_client = MagicMock()
 
-        # Mock Claude response for summarization
         mock_response = MagicMock()
         mock_text_block = MagicMock()
         mock_text_block.type = "text"
@@ -291,17 +290,10 @@ class TestConversationEmbedding:
         mock_client.messages = AsyncMock()
         mock_client.messages.create = AsyncMock(return_value=mock_response)
 
-        mock_embedding_svc = AsyncMock()
-        mock_embedding_svc.embed_text = AsyncMock(return_value=[0.1] * 1024)
-
-        mock_vector_store = AsyncMock()
-
         with patch("src.orchestrator.jarvis.get_anthropic_client", return_value=mock_client):
             orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
             orch._client = mock_client
             orch._settings = settings
-            orch._embedding_service = mock_embedding_svc
-            orch._vector_store = mock_vector_store
 
             summary = await orch._summarize_history(
                 lines=["User: hello", "Assistant: hi"],
@@ -310,51 +302,6 @@ class TestConversationEmbedding:
             )
 
             assert summary == "Discussion about project planning."
-
-            # Verify upsert was called with summary in payload
-            mock_vector_store.upsert.assert_called_once()
-            call_kwargs = mock_vector_store.upsert.call_args[1]
-            assert call_kwargs["payload"]["summary"] == "Discussion about project planning."
-            assert call_kwargs["user_id"] == "usr_456"
-            assert call_kwargs["payload"]["conversation_id"] == "conv_123"
-
-    async def test_user_id_passed_not_instance_attr(self):
-        """Verify user_id comes from parameter, not _current_user_id."""
-        from src.orchestrator.jarvis import JarvisOrchestrator
-
-        settings = make_mock_settings()
-        mock_client = MagicMock()
-
-        mock_response = MagicMock()
-        mock_text_block = MagicMock()
-        mock_text_block.type = "text"
-        mock_text_block.text = "Summary"
-        mock_response.content = [mock_text_block]
-        mock_client.messages = AsyncMock()
-        mock_client.messages.create = AsyncMock(return_value=mock_response)
-
-        mock_embedding_svc = AsyncMock()
-        mock_embedding_svc.embed_text = AsyncMock(return_value=[0.1] * 1024)
-
-        mock_vector_store = AsyncMock()
-
-        with patch("src.orchestrator.jarvis.get_anthropic_client", return_value=mock_client):
-            orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
-            orch._client = mock_client
-            orch._settings = settings
-            orch._embedding_service = mock_embedding_svc
-            orch._vector_store = mock_vector_store
-            # Set _current_user_id to something DIFFERENT to prove we use the param
-            orch._current_user_id = "usr_WRONG"
-
-            await orch._summarize_history(
-                lines=["User: test"],
-                conversation_id="conv_1",
-                user_id="usr_CORRECT",
-            )
-
-            call_kwargs = mock_vector_store.upsert.call_args[1]
-            assert call_kwargs["user_id"] == "usr_CORRECT"
 
 
 # ---------------------------------------------------------------------------
