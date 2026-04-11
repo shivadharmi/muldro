@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.models.approvals import Approval
 from src.models.briefings import Briefing
 from src.models.task_graph import TaskRun
+from src.models.trust_state import TrustState
 from src.models.ui_state import UISurface
 from src.ui.contracts import SurfaceMetric, SurfacePreview
 from src.ui.renderer import build_detail_config
@@ -66,14 +67,26 @@ class SurfaceService:
             risk_level = apr.risk_level or "medium"
             risk_variant = "warning" if risk_level in ("high", "critical") else "default"
 
+            trust_context = await self._get_trust_context(apr)
+
+            metrics = [
+                SurfaceMetric(label="Risk", value=risk_level, variant=risk_variant),
+            ]
+            if trust_context:
+                metrics.append(
+                    SurfaceMetric(
+                        label="Trust",
+                        value=trust_context["label"],
+                        variant=trust_context.get("variant", "default"),
+                    )
+                )
+
             preview = SurfacePreview(
                 title=apr.title or "Pending Approval",
                 subtitle=apr.summary[:120] if apr.summary else None,
                 status="awaiting_approval",
                 priority="high" if risk_level in ("high", "critical") else "medium",
-                metrics=[
-                    SurfaceMetric(label="Risk", value=risk_level, variant=risk_variant),
-                ],
+                metrics=metrics,
             )
             detail_config = build_detail_config("approval", surface_id)
 
@@ -86,10 +99,63 @@ class SurfaceService:
                         detail_config.model_dump(mode="json") if detail_config else None
                     ),
                     "created_at": apr.created_at.isoformat() if apr.created_at else None,
+                    "trust_context": trust_context,
                 }
             )
 
         return surfaces
+
+    async def _get_trust_context(self, approval) -> dict[str, str] | None:
+        """Build trust context dict from approval artifact_refs."""
+        refs = approval.artifact_refs
+        if not refs or not isinstance(refs, dict):
+            return None
+
+        capability = refs.get("tool_name")
+        if not capability:
+            return None
+
+        risk_level = approval.risk_level or "low"
+
+        result = await self._db.execute(
+            select(TrustState).where(
+                TrustState.workspace_id == self._workspace_id,
+                TrustState.capability == capability,
+                TrustState.risk_level == risk_level,
+            )
+        )
+        state = result.scalar_one_or_none()
+        if not state:
+            return {
+                "trust_level": "first_use",
+                "label": "First time",
+                "variant": "default",
+            }
+
+        level = state.trust_level
+        approved = state.approved_count
+
+        if level == "first_use":
+            return {
+                "trust_level": "first_use",
+                "label": "First time",
+                "variant": "default",
+            }
+        elif level == "learning":
+            remaining = 10 - approved
+            hint = f"{remaining} more to auto-approve" if remaining > 0 else ""
+            return {
+                "trust_level": "learning",
+                "label": f"Similar to {approved} approvals",
+                "variant": "default",
+                "graduation_hint": hint,
+            }
+
+        return {
+            "trust_level": level,
+            "label": level.replace("_", " ").title(),
+            "variant": "success" if level in ("trusted", "autonomous") else "default",
+        }
 
     async def _build_briefing_surface(self, user_id: str) -> dict[str, Any] | None:
         today = date.today()
