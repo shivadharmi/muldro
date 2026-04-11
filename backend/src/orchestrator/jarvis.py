@@ -821,6 +821,21 @@ class JarvisOrchestrator:
                     f"Goal: {plan.goal}\n"
                     f"User message: {message}"
                 )
+                # Inject prior step results so downstream agents see earlier outputs
+                prior_outputs = {
+                    k: v
+                    for k, v in result.items()
+                    if k not in ("presentation", "user_actions") and v
+                }
+                if prior_outputs:
+                    parts = []
+                    for key, output in prior_outputs.items():
+                        parts.append(f"[{key} output]:\n{str(output)[:3000]}")
+                    agent_message += (
+                        "\n\n--- Prior step results ---\n"
+                        + "\n\n".join(parts)
+                        + "\n--- End of prior step results ---\n"
+                    )
                 if history_block:
                     agent_message = f"{history_block}\n\n{agent_message}"
 
@@ -853,12 +868,32 @@ class JarvisOrchestrator:
                 if s.actor == "jarvis"
             )
             if not has_presenter_step:
+                # Collect prior step results so Presenter can reference them
+                prior_results_block = ""
+                step_outputs = {
+                    k: v
+                    for k, v in result.items()
+                    if k not in ("presentation", "user_actions") and v
+                }
+                if step_outputs:
+                    parts = []
+                    for agent_key, output in step_outputs.items():
+                        truncated = str(output)[:3000]
+                        parts.append(f"[{agent_key} output]:\n{truncated}")
+                    prior_results_block = (
+                        "\n\n--- Prior step results (use these to answer the user) ---\n"
+                        + "\n\n".join(parts)
+                        + "\n--- End of prior step results ---\n"
+                    )
+
                 presenter_msg = (
                     f"Format this for the user ({surface}). "
                     f"Be conversational and helpful.\n\n"
                     f"User message: {message}\n"
                     f"Plan: {json.dumps(plan_dict)}"
                 )
+                if prior_results_block:
+                    presenter_msg += prior_results_block
                 if plan_text:
                     presenter_msg += f"\nAnalysis: {plan_text[:2000]}"
                 if user_action_block:
@@ -1081,6 +1116,7 @@ class JarvisOrchestrator:
 
             # Step 3: Execute steps with streaming
             presenter_text = ""
+            step_outputs: dict[str, str] = {}
             for step, agent_name, tools in step_routing:
                 if step.capability.startswith("system."):
                     await self._handle_system_capability(step, plan, user_id, workspace_id)
@@ -1106,6 +1142,16 @@ class JarvisOrchestrator:
                     f"Goal: {plan.goal}\n"
                     f"User message: {message}"
                 )
+                # Inject prior step results so downstream agents see earlier outputs
+                if step_outputs:
+                    parts = []
+                    for key, output in step_outputs.items():
+                        parts.append(f"[{key} output]:\n{str(output)[:3000]}")
+                    agent_message += (
+                        "\n\n--- Prior step results ---\n"
+                        + "\n\n".join(parts)
+                        + "\n--- End of prior step results ---\n"
+                    )
                 if history_block:
                     agent_message = f"{history_block}\n\n{agent_message}"
 
@@ -1118,12 +1164,14 @@ class JarvisOrchestrator:
                     tools_override=tools if tools else None,
                 ):
                     yield evt
-                    # Capture text from respond/reason steps for surface preview
-                    if (
-                        step.capability in ("reason", "respond")
-                        and evt.get("event") == "agent_done"
-                    ):
-                        presenter_text = evt.get("text", "")
+                    if evt.get("event") == "agent_done":
+                        done_text = evt.get("text", "")
+                        # Capture all step outputs for downstream agents
+                        if done_text:
+                            step_outputs[agent_name] = done_text
+                        # Capture text from respond/reason steps for surface preview
+                        if step.capability in ("reason", "respond"):
+                            presenter_text = done_text
 
             # Build user action block from user_steps
             user_action_block = ""
@@ -1148,12 +1196,27 @@ class JarvisOrchestrator:
                 if s.actor == "jarvis"
             )
             if not has_presenter_step:
+                # Collect prior step results so Presenter can reference them
+                prior_results_block = ""
+                if step_outputs:
+                    parts = []
+                    for agent_key, output in step_outputs.items():
+                        truncated = str(output)[:3000]
+                        parts.append(f"[{agent_key} output]:\n{truncated}")
+                    prior_results_block = (
+                        "\n\n--- Prior step results (use these to answer the user) ---\n"
+                        + "\n\n".join(parts)
+                        + "\n--- End of prior step results ---\n"
+                    )
+
                 presenter_msg = (
                     f"Respond to the user ({surface}). "
                     f"Be conversational and helpful.\n\n"
                     f"User message: {message}\n"
                     f"Intent: {intent}\n"
                 )
+                if prior_results_block:
+                    presenter_msg += prior_results_block
                 if plan_text:
                     presenter_msg += (
                         f"Plan: {json.dumps(plan_dict)}\nAnalysis: {plan_text[:2000]}\n"
