@@ -462,6 +462,7 @@ class SchedulerLoop:
 
                     vector_store = VectorStore(self._settings)
                     await vector_store.ensure_collections()
+                    await vector_store.ensure_indexes()
 
                 if self._settings.neo4j_url:
                     from src.services.graph_engine import GraphEngine

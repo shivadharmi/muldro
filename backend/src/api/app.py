@@ -168,6 +168,7 @@ def create_app() -> FastAPI:
 
             vector_store = VectorStore(settings)
             await vector_store.ensure_collections()
+            await vector_store.ensure_indexes()
         except Exception:
             logger.debug("Qdrant collection init skipped", exc_info=True)
 

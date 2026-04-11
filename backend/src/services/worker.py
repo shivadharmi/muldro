@@ -55,6 +55,7 @@ class StreamConsumerManager:
 
             self._vector_store = VectorStore(self._settings)
             await self._vector_store.ensure_collections()
+            await self._vector_store.ensure_indexes()
 
     async def run(self, user_ids: list[str]) -> None:
         """Main loop: consume from event bus streams.
