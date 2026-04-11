@@ -68,6 +68,9 @@ class GraphSyncService:
             to_entity_id=rel.to_entity_id,
             relation_type=rel.relation_type,
             user_id=rel.user_id,
+            strength=rel.strength or 1.0,
+            start_date=rel.start_date.isoformat() if rel.start_date else None,
+            end_date=rel.end_date.isoformat() if rel.end_date else None,
         )
         logger.debug("Synced relationship %s to Neo4j", rel_id)
 
@@ -104,6 +107,9 @@ class GraphSyncService:
                 to_entity_id=rel.to_entity_id,
                 relation_type=rel.relation_type,
                 user_id=rel.user_id,
+                strength=rel.strength or 1.0,
+                start_date=rel.start_date.isoformat() if rel.start_date else None,
+                end_date=rel.end_date.isoformat() if rel.end_date else None,
             )
 
     async def batch_sync_entities(self, entity_ids: list[str]) -> dict:
@@ -148,6 +154,9 @@ class GraphSyncService:
                     to_entity_id=rel.to_entity_id,
                     relation_type=rel.relation_type,
                     user_id=rel.user_id,
+                    strength=rel.strength or 1.0,
+                    start_date=rel.start_date.isoformat() if rel.start_date else None,
+                    end_date=rel.end_date.isoformat() if rel.end_date else None,
                 )
                 rels_synced += 1
             except Exception as exc:
@@ -200,6 +209,9 @@ class GraphSyncService:
                     to_entity_id=rel.to_entity_id,
                     relation_type=rel.relation_type,
                     user_id=rel.user_id,
+                    strength=rel.strength or 1.0,
+                    start_date=rel.start_date.isoformat() if rel.start_date else None,
+                    end_date=rel.end_date.isoformat() if rel.end_date else None,
                 )
                 rel_count += 1
             except Exception:

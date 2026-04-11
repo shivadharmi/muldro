@@ -260,6 +260,8 @@ class TestGraphSyncPassesStrength:
         from src.services.event_bus import BusEvent
 
         event = BusEvent(
+            event_id="bus_001",
+            stream="jarvis:events:usr_1",
             event_type="relationship.updated",
             payload={"relation_id": "rel_100"},
             user_id="usr_1",

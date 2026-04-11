@@ -502,3 +502,58 @@ class GraphEngine:
             )
             records = await result.data()
             return records
+
+    async def traverse_temporal(
+        self,
+        entity_id: str,
+        user_id: str,
+        after: str | None = None,
+        before: str | None = None,
+        depth: int = 2,
+    ) -> list[dict]:
+        """Traverse the graph scoped to a time window.
+
+        Filters relationships by start_date within [after, before].
+        Relationships with NULL start_date are included (no temporal info).
+        """
+        driver = await self._get_driver()
+        if not driver:
+            return []
+
+        temporal_filter = ""
+        if after:
+            temporal_filter += (
+                " AND ALL(r IN rels WHERE r.start_date IS NULL OR r.start_date >= $after)"
+            )
+        if before:
+            temporal_filter += (
+                " AND ALL(r IN rels WHERE r.start_date IS NULL OR r.start_date <= $before)"
+            )
+
+        try:
+            async with driver.session() as session:
+                result = await session.run(
+                    f"""
+                    MATCH path = (start:Entity {{entity_id: $entity_id,
+                                                  user_id: $user_id}})
+                          -[rels*1..{depth}]-(connected:Entity {{user_id: $user_id}})
+                    WHERE connected.entity_id <> $entity_id
+                    {temporal_filter}
+                    UNWIND rels AS r
+                    RETURN DISTINCT
+                        connected.entity_id AS entity_id,
+                        connected.name AS name,
+                        connected.entity_type AS entity_type,
+                        r.relation_type AS relation_type,
+                        r.strength AS strength
+                    LIMIT 20
+                    """,
+                    entity_id=entity_id,
+                    user_id=user_id,
+                    after=after,
+                    before=before,
+                )
+                return await result.data()
+        except Exception:
+            logger.debug("Neo4j traverse_temporal failed for %s", entity_id, exc_info=True)
+            return []
