@@ -57,9 +57,14 @@ class RiskAssessment(BaseModel):
     )
 
 
-def build_risk_cache_key(capability: str, step_input: dict) -> str:
-    """Build a deterministic cache key from capability + step input."""
-    raw = json.dumps({"capability": capability, "input": step_input}, sort_keys=True)
+def build_risk_cache_key(
+    capability: str, step_input: dict, user_context: dict | None = None
+) -> str:
+    """Build a deterministic cache key from capability + step input + user context."""
+    raw = json.dumps(
+        {"capability": capability, "input": step_input, "user_context": user_context or {}},
+        sort_keys=True,
+    )
     return hashlib.sha256(raw.encode()).hexdigest()[:24]
 
 
@@ -117,7 +122,7 @@ async def get_or_assess_risk(
     model: str = "claude-haiku-4-5-20251001",
 ) -> RiskAssessment:
     """Redis-cached risk assessment. 24h TTL."""
-    cache_key = build_risk_cache_key(capability, step_input)
+    cache_key = build_risk_cache_key(capability, step_input, user_context)
     full_key = f"risk:{workspace_id}:{cache_key}"
 
     # Try cache

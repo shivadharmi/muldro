@@ -106,7 +106,9 @@ class TestSingleGateApprovalRequired:
 
         await executor._execute_step(run, step)
 
-        mock_trust_engine.evaluate.assert_called_once_with("email.send", risk)
+        mock_trust_engine.evaluate.assert_called_once_with(
+            "email.send", risk, workspace_id="ws_test"
+        )
         executor._create_approval_and_pause.assert_called_once()
 
 

@@ -87,11 +87,17 @@ class TrustEngine:
         self._db = db
         self._workspace_id = workspace_id
 
-    async def evaluate(self, capability: str, risk_assessment: RiskAssessment) -> PolicyDecision:
+    async def evaluate(
+        self,
+        capability: str,
+        risk_assessment: RiskAssessment,
+        workspace_id: str | None = None,
+    ) -> PolicyDecision:
         """Evaluate trust for a capability + risk assessment → PolicyDecision."""
+        ws = workspace_id if workspace_id is not None else self._workspace_id
         risk = risk_assessment.risk_level
-        state = await self._get_trust_state(capability, risk)
-        ceiling = await self._get_ceiling(capability)
+        state = await self._get_trust_state(capability, risk, workspace_id=ws)
+        ceiling = await self._get_ceiling(capability, workspace_id=ws)
         effective_level = min_trust_level(state.trust_level, ceiling.max_level)
 
         decision = self._matrix_lookup(effective_level, risk)
@@ -101,6 +107,16 @@ class TrustEngine:
             justification=risk_assessment.reasoning,
             risk_level=risk,
         )
+
+    async def evaluate_plan_risk(
+        self, capability: str, risk_level: str, workspace_id: str | None = None
+    ) -> PolicyDecision:
+        """Convenience: evaluate trust using a static risk level (no LLM call)."""
+        assessment = RiskAssessment(
+            risk_level=risk_level,
+            reasoning=f"Plan-level risk: {risk_level}",
+        )
+        return await self.evaluate(capability, assessment, workspace_id=workspace_id)
 
     def _matrix_lookup(self, trust_level: str, risk_level: str) -> str:
         """4×4 matrix: trust_level × risk_level → decision string."""
@@ -121,17 +137,19 @@ class TrustEngine:
 
         return "approval_required"
 
-    async def _get_trust_state(self, capability: str, risk_level: str):
+    async def _get_trust_state(self, capability: str, risk_level: str, workspace_id: str = ""):
         """Fetch or create TrustState for this workspace + capability + risk."""
-        return await get_or_create_trust_state(self._db, self._workspace_id, capability, risk_level)
+        ws = workspace_id or self._workspace_id
+        return await get_or_create_trust_state(self._db, ws, capability, risk_level)
 
-    async def _get_ceiling(self, capability: str):
+    async def _get_ceiling(self, capability: str, workspace_id: str = ""):
         """Fetch TrustCeiling or return default (autonomous)."""
         from src.models.trust_state import TrustCeiling
 
+        ws = workspace_id or self._workspace_id
         result = await self._db.execute(
             select(TrustCeiling).where(
-                TrustCeiling.workspace_id == self._workspace_id,
+                TrustCeiling.workspace_id == ws,
                 TrustCeiling.capability == capability,
             )
         )

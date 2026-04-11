@@ -119,6 +119,22 @@ async def create_graph_executor(
     except Exception:
         logger.debug("Verifier unavailable for GraphExecutor", exc_info=True)
 
+    trust_engine = None
+    try:
+        from src.services.trust_engine import TrustEngine
+
+        trust_engine = TrustEngine(db, workspace_id)
+    except Exception:
+        logger.debug("TrustEngine unavailable for GraphExecutor", exc_info=True)
+
+    redis_conn = None
+    try:
+        import redis.asyncio as aioredis
+
+        redis_conn = aioredis.from_url(settings.redis_url, decode_responses=True)
+    except Exception:
+        logger.debug("Redis unavailable for GraphExecutor", exc_info=True)
+
     return GraphExecutor(
         settings=settings,
         db=db,
@@ -132,6 +148,8 @@ async def create_graph_executor(
         execute_tool_fn=execute_tool_fn,
         budget=budget,
         circuit_breaker=circuit_breaker,
+        trust_engine=trust_engine,
+        redis=redis_conn,
     )
 
 
@@ -597,10 +615,10 @@ class GraphExecutor:
 
             if self._trust_engine and capability:
                 # ── Single TrustEngine gate ──────────────────────────
-                # Scope engine to this run's workspace (engine is shared)
-                self._trust_engine._workspace_id = run.workspace_id or ""
                 risk = await self._assess_step_risk(capability, step, run)
-                decision = await self._trust_engine.evaluate(capability, risk)
+                decision = await self._trust_engine.evaluate(
+                    capability, risk, workspace_id=run.workspace_id or ""
+                )
 
                 if decision.decision == "approval_required":
                     await self._create_approval_and_pause(run, step, capability, risk, decision)

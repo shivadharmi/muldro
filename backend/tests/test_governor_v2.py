@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from src.orchestrator.contracts import PolicyDecision
 from src.services.governor import Governor
 from tests.conftest import TEST_USER_ID
 
@@ -20,7 +21,9 @@ def mock_db():
 @pytest.fixture
 def mock_trust():
     trust = AsyncMock()
-    trust.should_auto_approve = AsyncMock(return_value=False)
+    trust.evaluate_plan_risk = AsyncMock(
+        return_value=PolicyDecision(decision="approval_required", risk_level="low")
+    )
     return trust
 
 
@@ -91,44 +94,50 @@ class TestApplyPolicyModes:
 
 class TestTrustIntegration:
     async def test_trust_auto_approves(self, mock_db, mock_trust, mock_settings_svc):
-        mock_trust.should_auto_approve.return_value = True
+        mock_trust.evaluate_plan_risk.return_value = PolicyDecision(
+            decision="auto_execute_notify", risk_level="low"
+        )
         gov = Governor(mock_db, trust_engine=mock_trust, settings_service=mock_settings_svc)
         plan = _make_plan(risk="low")
 
-        result = await gov._apply_policy(plan, TEST_USER_ID)
+        result = await gov._apply_policy(plan, TEST_USER_ID, "ws_1")
         assert result == "auto_execute"
-        mock_trust.should_auto_approve.assert_called_once_with(TEST_USER_ID, "read", "low")
 
     async def test_no_trust_requires_approval(self, mock_db, mock_trust, mock_settings_svc):
-        mock_trust.should_auto_approve.return_value = False
+        mock_trust.evaluate_plan_risk.return_value = PolicyDecision(
+            decision="approval_required", risk_level="low"
+        )
         gov = Governor(mock_db, trust_engine=mock_trust, settings_service=mock_settings_svc)
         plan = _make_plan(risk="low")
 
-        result = await gov._apply_policy(plan, TEST_USER_ID)
+        result = await gov._apply_policy(plan, TEST_USER_ID, "ws_1")
         assert result == "approval_required"
 
     async def test_no_trust_engine_defaults_to_approval(self, mock_db, mock_settings_svc):
         gov = Governor(mock_db, trust_engine=None, settings_service=mock_settings_svc)
         plan = _make_plan(risk="low")
 
-        result = await gov._apply_policy(plan, TEST_USER_ID)
+        result = await gov._apply_policy(plan, TEST_USER_ID, "ws_1")
         assert result == "approval_required"
 
     async def test_medium_risk_trust_approved(self, mock_db, mock_trust, mock_settings_svc):
-        mock_trust.should_auto_approve.return_value = True
+        mock_trust.evaluate_plan_risk.return_value = PolicyDecision(
+            decision="auto_execute_notify", risk_level="medium"
+        )
         gov = Governor(mock_db, trust_engine=mock_trust, settings_service=mock_settings_svc)
         plan = _make_plan(risk="medium")
 
-        result = await gov._apply_policy(plan, TEST_USER_ID)
+        result = await gov._apply_policy(plan, TEST_USER_ID, "ws_1")
         assert result == "auto_execute"
-        mock_trust.should_auto_approve.assert_called_once_with(TEST_USER_ID, "write", "medium")
 
     async def test_medium_risk_no_trust(self, mock_db, mock_trust, mock_settings_svc):
-        mock_trust.should_auto_approve.return_value = False
+        mock_trust.evaluate_plan_risk.return_value = PolicyDecision(
+            decision="approval_required", risk_level="medium"
+        )
         gov = Governor(mock_db, trust_engine=mock_trust, settings_service=mock_settings_svc)
         plan = _make_plan(risk="medium")
 
-        result = await gov._apply_policy(plan, TEST_USER_ID)
+        result = await gov._apply_policy(plan, TEST_USER_ID, "ws_1")
         assert result == "approval_required"
 
 

@@ -481,7 +481,7 @@ class TestExecuteStepCapabilityReading:
         await executor._execute_step(run, step)
 
         # Verify trust engine was called with the correct capability
-        trust_engine.evaluate.assert_called_once_with("email.draft", "low")
+        trust_engine.evaluate.assert_called_once_with("email.draft", "low", workspace_id="ws_test")
 
     @patch("src.services.graph_executor.get_anthropic_client")
     async def test_execute_step_falls_back_to_task_type_when_no_capability(
@@ -523,7 +523,7 @@ class TestExecuteStepCapabilityReading:
         await executor._execute_step(run, step)
 
         # Should fall back to task_type value
-        trust_engine.evaluate.assert_called_once_with("summarize", "low")
+        trust_engine.evaluate.assert_called_once_with("summarize", "low", workspace_id="ws_test")
 
 
 class TestCapabilityFieldReading:

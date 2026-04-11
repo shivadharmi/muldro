@@ -291,7 +291,22 @@ async def approve_action(
                 trace_id=None,
             )
             db.add(bg_run)
+            await db.flush()
+
+            # Populate steps and execute immediately (user just approved)
+            from src.services.graph_executor import create_graph_executor
+
+            executor = await create_graph_executor(
+                settings=settings, db=db, workspace_id=workspace_id
+            )
+            await executor.populate_run_steps(bg_run.run_id, plan_id)
             await db.commit()
+
+            try:
+                await executor.execute_run(bg_run.run_id)
+            except Exception:
+                logger.exception("Execution failed for tool-level resume run: %s", bg_run.run_id)
+
             logger.info(
                 "Tool-level approval resumed: %s → run %s",
                 approval.approval_id,
