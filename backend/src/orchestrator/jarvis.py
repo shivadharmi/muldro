@@ -3021,6 +3021,7 @@ class JarvisOrchestrator:
                 )
 
                 run = await executor.create_run(plan_id, user_id, workspace_id)
+                surface_id = f"surf_{ULID()}"
 
                 await self._publish_event(
                     "execution_started",
@@ -3032,6 +3033,7 @@ class JarvisOrchestrator:
                 completed_run = await executor.execute_run(
                     run.run_id,
                     trace_id=trace.trace_id if trace else None,
+                    surface_id=surface_id,
                 )
 
                 await self._publish_event(

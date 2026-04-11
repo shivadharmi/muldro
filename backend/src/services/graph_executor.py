@@ -320,6 +320,8 @@ class GraphExecutor:
 
         transition_run(run, "running")
         run.started_at = datetime.now(timezone.utc)
+        if surface_id:
+            run.checkpoint = {**(run.checkpoint or {}), "surface_id": surface_id}
         await self._db.flush()
 
         await self._audit.log(
@@ -428,8 +430,9 @@ class GraphExecutor:
         transition_run(run, "running")
         await self._db.flush()
 
+        surface_id = (run.checkpoint or {}).get("surface_id")
         try:
-            await self._execute_dag(run, surface_id=None)
+            await self._execute_dag(run, surface_id=surface_id)
         except Exception as exc:
             transition_run(run, "failed")
             run.completed_at = datetime.now(timezone.utc)
@@ -487,7 +490,6 @@ class GraphExecutor:
 
     async def _execute_dag(self, run: TaskRun, surface_id: str | None = None) -> None:
         """Main DAG execution loop."""
-        self._current_surface_id = surface_id
         while True:
             ready_steps = await self._get_ready_steps(run.run_id)
             if not ready_steps:
@@ -554,10 +556,22 @@ class GraphExecutor:
                         "failed_steps": [s.step_id for s in failed],
                     }
                     if surface_id:
+                        _fail_steps = await self._get_all_steps(run.run_id)
+                        _fail_states = [
+                            StepState(
+                                step_id=s.step_id,
+                                description=(
+                                    s.name or (s.input_data or {}).get("capability", s.task_id)
+                                ),
+                                status=s.status,
+                            )
+                            for s in _fail_steps
+                        ]
                         await self._emit_surface_update(
                             surface_id=surface_id,
                             user_id=run.user_id,
                             phase="failed",
+                            steps=_fail_states,
                             progress=f"{len(failed)} step(s) failed",
                         )
                     break
@@ -595,7 +609,7 @@ class GraphExecutor:
 
             for step in ready_steps:
                 try:
-                    await self._execute_step(run, step)
+                    await self._execute_step(run, step, surface_id=surface_id)
                 except Exception:
                     logger.error("Step %s raised unexpectedly", step.step_id, exc_info=True)
 
@@ -604,7 +618,9 @@ class GraphExecutor:
             if run.status in ("paused", "awaiting_approval"):
                 break
 
-    async def _execute_step(self, run: TaskRun, step: TaskStep) -> None:
+    async def _execute_step(
+        self, run: TaskRun, step: TaskStep, surface_id: str | None = None
+    ) -> None:
         """Execute a single step, with single TrustEngine approval gate."""
         already_approved = step.status == "running"
 
@@ -621,7 +637,9 @@ class GraphExecutor:
                 )
 
                 if decision.decision == "approval_required":
-                    await self._create_approval_and_pause(run, step, capability, risk, decision)
+                    await self._create_approval_and_pause(
+                        run, step, capability, risk, decision, surface_id=surface_id
+                    )
                     return
 
                 # auto_execute_notify or auto_execute_silent — proceed
@@ -646,7 +664,9 @@ class GraphExecutor:
                     elapsed_ms = int((time.monotonic() - t0) * 1000)
                 except Exception as exc:
                     elapsed_ms = int((time.monotonic() - t0) * 1000)
-                    await self._handle_step_failure(run, step, exc, elapsed_ms)
+                    await self._handle_step_failure(
+                        run, step, exc, elapsed_ms, surface_id=surface_id
+                    )
                     return
 
                 if decision.decision == "auto_execute_notify":
@@ -718,12 +738,11 @@ class GraphExecutor:
                                 "Failed to notify for step approval",
                                 exc_info=True,
                             )
-                    _surf_id = getattr(self, "_current_surface_id", None)
-                    if _surf_id:
+                    if surface_id:
                         from src.orchestrator.contracts import ApprovalContext
 
                         await self._emit_surface_update(
-                            surface_id=_surf_id,
+                            surface_id=surface_id,
                             user_id=run.user_id,
                             phase="approval_needed",
                             approval=ApprovalContext(
@@ -758,7 +777,7 @@ class GraphExecutor:
             elapsed_ms = int((time.monotonic() - t0) * 1000)
         except Exception as exc:
             elapsed_ms = int((time.monotonic() - t0) * 1000)
-            await self._handle_step_failure(run, step, exc, elapsed_ms)
+            await self._handle_step_failure(run, step, exc, elapsed_ms, surface_id=surface_id)
             return
 
         await self._finalize_step(run, step, output, elapsed_ms)
@@ -796,6 +815,7 @@ class GraphExecutor:
         capability: str,
         risk: RiskAssessment,
         decision: PolicyDecision,
+        surface_id: str | None = None,
     ) -> None:
         """Create approval record, pause step and run, notify user."""
         from src.services.approval_service import create_approval
@@ -852,12 +872,11 @@ class GraphExecutor:
                 logger.warning("Failed to notify for step approval", exc_info=True)
 
         # Surface update: approval needed
-        _surf_id = getattr(self, "_current_surface_id", None)
-        if _surf_id:
+        if surface_id:
             from src.orchestrator.contracts import ApprovalContext
 
             await self._emit_surface_update(
-                surface_id=_surf_id,
+                surface_id=surface_id,
                 user_id=run.user_id,
                 phase="approval_needed",
                 approval=ApprovalContext(
@@ -905,6 +924,7 @@ class GraphExecutor:
         step: TaskStep,
         exc: Exception,
         elapsed_ms: int,
+        surface_id: str | None = None,
     ) -> None:
         """Handle step execution failure with retry logic."""
         step.retry_count += 1
@@ -944,6 +964,23 @@ class GraphExecutor:
                 },
                 workspace_id=run.workspace_id,
             )
+            if surface_id:
+                all_steps = await self._get_all_steps(run.run_id)
+                step_states = [
+                    StepState(
+                        step_id=s.step_id,
+                        description=(s.name or (s.input_data or {}).get("capability", s.task_id)),
+                        status="failed" if s.step_id == step.step_id else s.status,
+                    )
+                    for s in all_steps
+                ]
+                await self._emit_surface_update(
+                    surface_id=surface_id,
+                    user_id=run.user_id,
+                    phase="failed",
+                    steps=step_states,
+                    progress=f"Step {step.step_id} permanently failed",
+                )
         await self._db.flush()
 
     async def _finalize_step(
@@ -1403,14 +1440,19 @@ class GraphExecutor:
     async def _publish_progress(self, run_id: str, data: dict) -> None:
         """Publish step progress to Redis pubsub for WebSocket consumers."""
         try:
-            import redis.asyncio as aioredis
+            channel = f"jarvis:run_progress:{run_id}"
+            payload = json.dumps(data)
 
-            redis = aioredis.from_url(self._settings.redis_url)
-            try:
-                channel = f"jarvis:run_progress:{run_id}"
-                await redis.publish(channel, json.dumps(data))
-            finally:
-                await redis.aclose()
+            if self._redis:
+                await self._redis.publish(channel, payload)
+            else:
+                import redis.asyncio as aioredis
+
+                redis = aioredis.from_url(self._settings.redis_url)
+                try:
+                    await redis.publish(channel, payload)
+                finally:
+                    await redis.aclose()
         except Exception:
             logger.debug("Failed to publish run progress", exc_info=True)
 

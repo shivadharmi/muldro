@@ -34,6 +34,7 @@ SurfaceKind = Literal[
     "table",
     "recommendation",
     "activity",
+    "proactive_insight",
 ]
 
 
@@ -144,6 +145,7 @@ class SurfacePreview(BaseModel):
             "failed",
             "awaiting_approval",
             "cancelled",
+            "proposal",
         ]
         | None
     ) = None
