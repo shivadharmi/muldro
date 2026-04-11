@@ -1422,7 +1422,9 @@ class JarvisOrchestrator:
             # Ingest raw events into normalized_events table
             event_summaries = await self._ingest_raw_events(raw_events, user_id, workspace_id)
 
-            # Update the observation cursor
+            # Update the observation cursor immediately after ingestion so that
+            # downstream failures (Librarian, Planner) don't cause re-polling
+            # the same events on the next cycle.
             await self._update_cursor(source, user_id, workspace_id, new_cursor, cursor_type)
 
             # Fetch full thread context for reply emails
@@ -1778,6 +1780,7 @@ class JarvisOrchestrator:
                         summary += f" (event_id={event_id})"
                     summaries.append(summary)
                 except Exception as e:
+                    await db.rollback()
                     logger.warning(
                         "event_ingest_failed",
                         extra={

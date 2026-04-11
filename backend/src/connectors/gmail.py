@@ -36,6 +36,7 @@ class GmailConnector(BaseConnector):
             return [], cursor
 
         events = []
+        seen_msg_ids: set[str] = set()
         new_cursor = cursor
 
         try:
@@ -54,6 +55,9 @@ class GmailConnector(BaseConnector):
                         for history in data.get("history", []):
                             for msg_added in history.get("messagesAdded", []):
                                 msg_id = msg_added["message"]["id"]
+                                if msg_id in seen_msg_ids:
+                                    continue
+                                seen_msg_ids.add(msg_id)
                                 event = await self._fetch_message_as_event(
                                     client, access_token, user_id, msg_id
                                 )
@@ -73,8 +77,12 @@ class GmailConnector(BaseConnector):
                     if resp.status_code == 200:
                         data = resp.json()
                         for msg_meta in data.get("messages", []):
+                            msg_id = msg_meta["id"]
+                            if msg_id in seen_msg_ids:
+                                continue
+                            seen_msg_ids.add(msg_id)
                             event = await self._fetch_message_as_event(
-                                client, access_token, user_id, msg_meta["id"]
+                                client, access_token, user_id, msg_id
                             )
                             if event:
                                 events.append(event)

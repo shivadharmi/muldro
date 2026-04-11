@@ -9,7 +9,7 @@ import logging
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +53,17 @@ class RelevanceAssessment(BaseModel):
     urgency: Literal["immediate", "today", "this_week", "whenever"] = "whenever"
     suggested_actions: list[SuggestedAction] = Field(default_factory=list)
     notification_tier: Literal["push", "briefing", "silent"] = "silent"
+
+    @field_validator("suggested_actions", mode="before")
+    @classmethod
+    def _coerce_string_actions(cls, v: Any) -> list[dict[str, Any]]:
+        """Coerce plain strings into SuggestedAction dicts."""
+        if not isinstance(v, list):
+            return []
+        return [
+            {"description": item, "capability": "system.respond"} if isinstance(item, str) else item
+            for item in v
+        ]
 
 
 class PerceptionSignal(BaseModel):
@@ -104,7 +115,7 @@ Respond with a JSON object (no markdown fences):
   "reasoning": "<why this matters or doesn't>",
   "relates_to_goals": ["<goal text if relevant>"],
   "urgency": "<immediate|today|this_week|whenever>",
-  "suggested_actions": []
+  "suggested_actions": [{{"description": "<what to do>", "capability": "<capability.name>"}}]
 }}
 
 User goals: {goals}
