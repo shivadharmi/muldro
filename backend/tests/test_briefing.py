@@ -98,38 +98,43 @@ async def test_generate_briefing_handles_claude_failure(mock_get_client, setting
 
 def test_briefing_endpoint_returns_response():
     """The briefing endpoint should return a valid BriefingResponse."""
-    with patch("src.api.routes_briefings.Presenter") as mock_cls:
-        mock_instance = MagicMock()
-        mock_briefing = MagicMock()
-        mock_briefing.briefing_id = "brief_test"
-        mock_briefing.briefing_date = date(2026, 3, 13)
-        mock_briefing.headline = "Test headline"
-        mock_briefing.top_priorities = [{"title": "Test"}]
-        mock_briefing.changes_since_last = []
-        mock_briefing.pending_approvals = []
-        mock_briefing.recommended_actions = ["Do something"]
-        mock_briefing.full_text = "Test briefing"
-        mock_instance.generate_briefing = AsyncMock(return_value=mock_briefing)
-        mock_cls.return_value = mock_instance
+    from src.models.briefings import Briefing
 
-        from fastapi.testclient import TestClient
+    mock_briefing = MagicMock(spec=Briefing)
+    mock_briefing.briefing_id = "brief_test"
+    mock_briefing.briefing_date = date(2026, 3, 13)
+    mock_briefing.headline = "Test headline"
+    mock_briefing.top_priorities = [{"title": "Test"}]
+    mock_briefing.changes_since_last = []
+    mock_briefing.pending_approvals = []
+    mock_briefing.recommended_actions = ["Do something"]
+    mock_briefing.full_text = "Test briefing"
 
-        from src.api.app import app
-        from src.api.deps import get_current_user, get_current_user_id
+    mock_db = MagicMock()
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = mock_briefing
+    mock_db.execute = AsyncMock(return_value=mock_result)
 
-        mock_user = MagicMock()
-        mock_user.user_id = TEST_USER_ID
+    from fastapi.testclient import TestClient
 
-        app.dependency_overrides[get_current_user] = lambda: mock_user
-        app.dependency_overrides[get_current_user_id] = lambda: TEST_USER_ID
-        try:
-            client = TestClient(app)
-            response = client.get("/v1/briefings/2026-03-13")
-        finally:
-            app.dependency_overrides.pop(get_current_user, None)
-            app.dependency_overrides.pop(get_current_user_id, None)
+    from src.api.app import app
+    from src.api.deps import get_current_user, get_current_user_id, get_session
 
-        assert response.status_code == 200
-        data = response.json()
-        assert data["briefing_id"] == "brief_test"
-        assert data["headline"] == "Test headline"
+    mock_user = MagicMock()
+    mock_user.user_id = TEST_USER_ID
+
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_current_user_id] = lambda: TEST_USER_ID
+    app.dependency_overrides[get_session] = lambda: mock_db
+    try:
+        client = TestClient(app)
+        response = client.get("/v1/briefings/2026-03-13")
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.pop(get_current_user_id, None)
+        app.dependency_overrides.pop(get_session, None)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["briefing_id"] == "brief_test"
+    assert data["headline"] == "Test headline"

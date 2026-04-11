@@ -119,8 +119,34 @@ def test_meeting_prep_with_attendees(mock_presenter_cls):
 # ---------------------------------------------------------------------------
 
 
-@patch("src.api.routes_briefings.Presenter")
-def test_github_pr_in_briefing(mock_presenter_cls):
+def _mock_briefing_db(mock_briefing):
+    """Override get_session to return a DB that yields the given briefing."""
+    from src.api import deps
+    from src.models.briefings import Briefing
+
+    briefing = MagicMock(spec=Briefing)
+    for attr in (
+        "briefing_id",
+        "briefing_date",
+        "headline",
+        "top_priorities",
+        "changes_since_last",
+        "pending_approvals",
+        "recommended_actions",
+        "full_text",
+    ):
+        setattr(briefing, attr, getattr(mock_briefing, attr, None))
+
+    mock_db = MagicMock()
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = briefing
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    app.dependency_overrides[deps.get_session] = lambda: mock_db
+    return deps.get_session
+
+
+def test_github_pr_in_briefing():
     """Briefing includes GitHub PR in changes_since_last."""
     mock_briefing = MagicMock()
     mock_briefing.briefing_id = "brief_pr_001"
@@ -138,16 +164,17 @@ def test_github_pr_in_briefing(mock_presenter_cls):
     mock_briefing.recommended_actions = ["Review PR #42 from Alice"]
     mock_briefing.full_text = "A new PR needs your review."
 
-    mock_instance = MagicMock()
-    mock_instance.generate_briefing = AsyncMock(return_value=mock_briefing)
-    mock_presenter_cls.return_value = mock_instance
+    dep_key = _mock_briefing_db(mock_briefing)
 
-    response = client.get("/v1/briefings/2026-03-14")
+    try:
+        response = client.get("/v1/briefings/2026-03-14")
 
-    assert response.status_code == 200
-    data = response.json()
-    assert any("github" in c["source"] for c in data["changes_since_last"])
-    assert any("PR" in a for a in data["recommended_actions"])
+        assert response.status_code == 200
+        data = response.json()
+        assert any("github" in c["source"] for c in data["changes_since_last"])
+        assert any("PR" in a for a in data["recommended_actions"])
+    finally:
+        app.dependency_overrides.pop(dep_key, None)
 
 
 # ---------------------------------------------------------------------------
@@ -155,8 +182,7 @@ def test_github_pr_in_briefing(mock_presenter_cls):
 # ---------------------------------------------------------------------------
 
 
-@patch("src.api.routes_briefings.Presenter")
-def test_followup_in_briefing(mock_presenter_cls):
+def test_followup_in_briefing():
     """Briefing recommends follow-up for stale sent email."""
     mock_briefing = MagicMock()
     mock_briefing.briefing_id = "brief_followup_001"
@@ -170,15 +196,16 @@ def test_followup_in_briefing(mock_presenter_cls):
     ]
     mock_briefing.full_text = "You have an outstanding follow-up."
 
-    mock_instance = MagicMock()
-    mock_instance.generate_briefing = AsyncMock(return_value=mock_briefing)
-    mock_presenter_cls.return_value = mock_instance
+    dep_key = _mock_briefing_db(mock_briefing)
 
-    response = client.get("/v1/briefings/2026-03-14")
+    try:
+        response = client.get("/v1/briefings/2026-03-14")
 
-    assert response.status_code == 200
-    data = response.json()
-    assert any("follow up" in a.lower() for a in data["recommended_actions"])
+        assert response.status_code == 200
+        data = response.json()
+        assert any("follow up" in a.lower() for a in data["recommended_actions"])
+    finally:
+        app.dependency_overrides.pop(dep_key, None)
 
 
 # ---------------------------------------------------------------------------
@@ -186,8 +213,7 @@ def test_followup_in_briefing(mock_presenter_cls):
 # ---------------------------------------------------------------------------
 
 
-@patch("src.api.routes_briefings.Presenter")
-def test_conflicting_meetings_in_briefing(mock_presenter_cls):
+def test_conflicting_meetings_in_briefing():
     """Briefing flags overlapping calendar events."""
     mock_briefing = MagicMock()
     mock_briefing.briefing_id = "brief_conflict_001"
@@ -203,16 +229,17 @@ def test_conflicting_meetings_in_briefing(mock_presenter_cls):
     mock_briefing.recommended_actions = ["Reschedule one of the 2pm meetings to avoid conflict"]
     mock_briefing.full_text = "You have a scheduling conflict at 2pm."
 
-    mock_instance = MagicMock()
-    mock_instance.generate_briefing = AsyncMock(return_value=mock_briefing)
-    mock_presenter_cls.return_value = mock_instance
+    dep_key = _mock_briefing_db(mock_briefing)
 
-    response = client.get("/v1/briefings/2026-03-14")
+    try:
+        response = client.get("/v1/briefings/2026-03-14")
 
-    assert response.status_code == 200
-    data = response.json()
-    assert "conflict" in data["headline"].lower()
-    assert any("overlap" in p["reason"].lower() for p in data["top_priorities"])
+        assert response.status_code == 200
+        data = response.json()
+        assert "conflict" in data["headline"].lower()
+        assert any("overlap" in p["reason"].lower() for p in data["top_priorities"])
+    finally:
+        app.dependency_overrides.pop(dep_key, None)
 
 
 # ---------------------------------------------------------------------------

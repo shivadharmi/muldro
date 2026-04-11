@@ -113,11 +113,13 @@ def test_duplicate_event_returns_duplicate_status(mock_ep_cls, mock_wm_cls, mock
 # ---------------------------------------------------------------------------
 
 
-@patch("src.api.routes_briefings.Presenter")
-def test_morning_briefing_returns_structured_brief(mock_presenter_cls):
+def test_morning_briefing_returns_structured_brief():
     """GET /v1/briefings/{date} should return a structured briefing with
     headline, priorities, changes, pending approvals, and recommended actions."""
-    mock_briefing = MagicMock()
+    from src.api import deps
+    from src.models.briefings import Briefing
+
+    mock_briefing = MagicMock(spec=Briefing)
     mock_briefing.briefing_id = "brief_morning_001"
     mock_briefing.briefing_date = date(2026, 3, 14)
     mock_briefing.headline = "3 priorities, 2 follow-ups, 1 meeting risk"
@@ -147,25 +149,30 @@ def test_morning_briefing_returns_structured_brief(mock_presenter_cls):
         "Your board meeting is Monday — the deck needs 2 more hours of work."
     )
 
-    mock_instance = MagicMock()
-    mock_instance.generate_briefing = AsyncMock(return_value=mock_briefing)
-    mock_presenter_cls.return_value = mock_instance
+    mock_db = MagicMock()
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = mock_briefing
+    mock_db.execute = AsyncMock(return_value=mock_result)
 
-    response = client.get("/v1/briefings/2026-03-14")
+    app.dependency_overrides[deps.get_session] = lambda: mock_db
 
-    assert response.status_code == 200
-    data = response.json()
+    try:
+        response = client.get("/v1/briefings/2026-03-14")
 
-    # Verify structured briefing content
-    assert data["briefing_id"] == "brief_morning_001"
-    assert data["headline"] == "3 priorities, 2 follow-ups, 1 meeting risk"
-    assert len(data["top_priorities"]) == 3
-    assert data["top_priorities"][0]["title"] == "Review Series A term sheet"
-    assert len(data["changes_since_last"]) == 2
-    assert len(data["pending_approvals"]) == 1
-    assert data["pending_approvals"][0]["approval_id"] == "apr_001"
-    assert len(data["recommended_actions"]) == 3
-    assert "term sheet" in data["full_text"].lower()
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["briefing_id"] == "brief_morning_001"
+        assert data["headline"] == "3 priorities, 2 follow-ups, 1 meeting risk"
+        assert len(data["top_priorities"]) == 3
+        assert data["top_priorities"][0]["title"] == "Review Series A term sheet"
+        assert len(data["changes_since_last"]) == 2
+        assert len(data["pending_approvals"]) == 1
+        assert data["pending_approvals"][0]["approval_id"] == "apr_001"
+        assert len(data["recommended_actions"]) == 3
+        assert "term sheet" in data["full_text"].lower()
+    finally:
+        app.dependency_overrides.pop(deps.get_session, None)
 
 
 # ---------------------------------------------------------------------------
