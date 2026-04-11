@@ -119,7 +119,20 @@ async def approve_action(
     settings: Settings = Depends(get_settings),
 ):
     """Approve a pending action and trigger execution."""
-    approval = await _get_approval(db, approval_id, user_id, workspace_id)
+    approval = await _get_approval(
+        db, approval_id, user_id, workspace_id, intended_action="approve"
+    )
+
+    # Idempotent: already approved — return without re-executing (T6)
+    if approval.status == "approved":
+        return ApprovalResponse(
+            approval_id=approval.approval_id,
+            status=approval.status,
+            title=approval.title,
+            summary=approval.summary,
+            risk_level=approval.risk_level,
+            created_at=approval.created_at,
+        )
 
     approval.status = "approved"
     approval.decided_at = datetime.now(timezone.utc)
@@ -226,10 +239,12 @@ async def approve_action(
         executor = await create_graph_executor(settings=settings, db=db, workspace_id=workspace_id)
         try:
             step_result = await db.execute(
-                select(TaskStep).where(
+                select(TaskStep)
+                .where(
                     TaskStep.step_id == approval.step_id,
                     TaskStep.run_id == approval.run_id,
                 )
+                .with_for_update()
             )
             step = step_result.scalar_one_or_none()
             if step and step.status == "waiting_approval":
@@ -349,7 +364,18 @@ async def reject_action(
     settings: Settings = Depends(get_settings),
 ):
     """Reject a pending action."""
-    approval = await _get_approval(db, approval_id, user_id, workspace_id)
+    approval = await _get_approval(db, approval_id, user_id, workspace_id, intended_action="reject")
+
+    # Idempotent: already rejected — return without re-executing (T6)
+    if approval.status == "rejected":
+        return ApprovalResponse(
+            approval_id=approval.approval_id,
+            status=approval.status,
+            title=approval.title,
+            summary=approval.summary,
+            risk_level=approval.risk_level,
+            created_at=approval.created_at,
+        )
 
     approval.status = "rejected"
     approval.decided_at = datetime.now(timezone.utc)
@@ -617,11 +643,21 @@ async def _embed_approval_decision(
 
 
 async def _get_approval(
-    db: AsyncSession, approval_id: str, user_id: str, workspace_id: str
+    db: AsyncSession,
+    approval_id: str,
+    user_id: str,
+    workspace_id: str,
+    intended_action: str = "approve",
 ) -> Approval:
-    """Fetch an approval with row-level locking, raising 404 if not found or not pending.
+    """Fetch an approval with row-level locking.
 
     Uses SELECT ... FOR UPDATE to prevent concurrent approval race conditions.
+
+    - Raises 404 if approval is not found.
+    - Raises 410 if the approval has expired (T4).
+    - Returns already-decided approvals when the status matches the intended action,
+      enabling idempotent double-click protection (T6).
+    - Raises 400 if the approval is already decided in a conflicting state.
     """
     result = await db.execute(
         select(Approval)
@@ -635,9 +671,25 @@ async def _get_approval(
     approval = result.scalar_one_or_none()
     if not approval:
         raise HTTPException(status_code=404, detail=f"Approval {approval_id} not found")
+
+    # Check expiry before allowing action (T4)
+    if (
+        approval.status == "pending"
+        and approval.expires_at
+        and approval.expires_at < datetime.now(timezone.utc)
+    ):
+        approval.status = "expired"
+        await db.flush()
+        raise HTTPException(status_code=410, detail="Approval has expired")
+
     if approval.status != "pending":
+        # Idempotent: if already in the intended terminal state, return it (T6)
+        expected = "approved" if intended_action == "approve" else "rejected"
+        if approval.status == expected:
+            return approval  # caller detects via status field and short-circuits
         raise HTTPException(
             status_code=400,
             detail=f"Approval already {approval.status}",
         )
+
     return approval
