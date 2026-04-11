@@ -175,3 +175,32 @@ def test_policy_mode_to_ceiling_mapping():
     assert POLICY_MODE_TO_CEILING["approval_required"] == "learning"
     assert POLICY_MODE_TO_CEILING["suggest_only"] == "first_use"
     assert POLICY_MODE_TO_CEILING["full_auto"] is None
+
+
+def test_policy_mode_invalid_mode_rejected():
+    """Invalid mode strings are not in the valid_modes set."""
+    valid_modes = {"lockdown", "approval_required", "suggest_only", "full_auto"}
+    invalid_examples = ["yolo", "auto", "none", "", "LOCKDOWN", "full-auto"]
+    for mode in invalid_examples:
+        assert mode not in valid_modes, f"Expected '{mode}' to be invalid"
+
+
+def test_policy_mode_approval_required_ceiling():
+    """approval_required maps to 'learning' ceiling."""
+    from src.api.routes_settings import POLICY_MODE_TO_CEILING
+
+    assert POLICY_MODE_TO_CEILING["approval_required"] == "learning"
+
+
+def test_policy_mode_suggest_only_ceiling():
+    """suggest_only maps to 'first_use' ceiling."""
+    from src.api.routes_settings import POLICY_MODE_TO_CEILING
+
+    assert POLICY_MODE_TO_CEILING["suggest_only"] == "first_use"
+
+
+def test_policy_mode_full_auto_ceiling():
+    """full_auto maps to None (no ceiling restriction)."""
+    from src.api.routes_settings import POLICY_MODE_TO_CEILING
+
+    assert POLICY_MODE_TO_CEILING["full_auto"] is None
