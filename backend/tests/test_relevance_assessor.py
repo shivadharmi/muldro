@@ -1,5 +1,9 @@
 """Tests for the relevance assessor: tier logic and LLM call."""
 
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
 
 class TestDetermineTier:
     """Test the pure _determine_tier() function."""
@@ -71,3 +75,71 @@ class TestDetermineTier:
 
         tier = _determine_tier(relevance_score=0.8, urgency="this_week")
         assert tier == "briefing"
+
+
+class TestAssessRelevance:
+    """Test the assess_relevance() async function with mocked Haiku."""
+
+    @pytest.mark.asyncio
+    async def test_returns_assessment_from_llm_response(self):
+        from src.services.relevance_assessor import (
+            PerceptionSignal,
+            UserContext,
+            assess_relevance,
+        )
+
+        mock_client = AsyncMock()
+        mock_client.messages.create.return_value = MagicMock(
+            content=[
+                MagicMock(
+                    text='{"relevance_score": 0.8, "reasoning": "PR from key collaborator",'
+                    ' "relates_to_goals": ["ship v2"], "urgency": "today",'
+                    ' "suggested_actions": []}'
+                )
+            ]
+        )
+        signal = PerceptionSignal(
+            source="github",
+            event_type="pr_review_requested",
+            summary="PR #42 review requested by Alice",
+        )
+        context = UserContext(goals=["ship v2 by Friday"])
+        result = await assess_relevance(signal, context, mock_client)
+        assert result.relevance_score == 0.8
+        assert result.notification_tier == "push"  # 0.8 + today = push
+        assert result.urgency == "today"
+        mock_client.messages.create.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_returns_silent_on_llm_error(self):
+        from src.services.relevance_assessor import (
+            PerceptionSignal,
+            UserContext,
+            assess_relevance,
+        )
+
+        mock_client = AsyncMock()
+        mock_client.messages.create.side_effect = Exception("API error")
+        signal = PerceptionSignal(source="gmail", event_type="new_email", summary="Newsletter")
+        context = UserContext()
+        result = await assess_relevance(signal, context, mock_client)
+        assert result.relevance_score == 0.0
+        assert result.notification_tier == "silent"
+
+    @pytest.mark.asyncio
+    async def test_returns_silent_on_malformed_json(self):
+        from src.services.relevance_assessor import (
+            PerceptionSignal,
+            UserContext,
+            assess_relevance,
+        )
+
+        mock_client = AsyncMock()
+        mock_client.messages.create.return_value = MagicMock(
+            content=[MagicMock(text="not json at all")]
+        )
+        signal = PerceptionSignal(source="slack", event_type="message", summary="Hey")
+        context = UserContext()
+        result = await assess_relevance(signal, context, mock_client)
+        assert result.relevance_score == 0.0
+        assert result.notification_tier == "silent"

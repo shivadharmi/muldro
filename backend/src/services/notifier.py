@@ -48,6 +48,14 @@ def compute_priority_score(
     )
 
 
+SURFACE_RATE_LIMITS: dict[str, int] = {
+    "telegram": 5,  # per hour
+    "web": 15,
+    "slack": 8,
+    "email": 3,
+}
+
+
 class Notifier:
     """Coordinates notification delivery across surfaces with persistence."""
 
@@ -66,6 +74,19 @@ class Notifier:
         self._db = db
         # Track delivered notifications for dedup
         self._delivered: dict[str, set[str]] = {}
+
+    async def _check_rate_limit(self, user_id: str, surface: str) -> bool:
+        """Check if a notification can be sent to this surface within rate limits.
+
+        Uses Redis INCR with 1-hour TTL. Returns True if under limit.
+        """
+        if not self._redis:
+            return True
+        key = f"notifier:rate:{user_id}:{surface}"
+        count = await self._redis.incr(key)
+        if count == 1:
+            await self._redis.expire(key, 3600)
+        return count <= SURFACE_RATE_LIMITS.get(surface, 10)
 
     async def notify(
         self,

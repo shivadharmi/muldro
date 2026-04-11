@@ -4,6 +4,7 @@ Evaluates whether a user should care about a signal right now,
 scoring relevance against their goals and routing to push/briefing/silent tiers.
 """
 
+import json
 import logging
 from typing import Any, Literal
 
@@ -70,3 +71,64 @@ def _determine_tier(
     if relevance_score >= 0.4:
         return "briefing"
     return "silent"
+
+
+_RELEVANCE_PROMPT = """\
+You are a relevance assessor for a personal AI assistant. Given a signal from \
+a data source and the user's current context, assess whether the user should \
+care about this right now.
+
+Respond with a JSON object (no markdown fences):
+{{
+  "relevance_score": <float 0.0-1.0>,
+  "reasoning": "<why this matters or doesn't>",
+  "relates_to_goals": ["<goal text if relevant>"],
+  "urgency": "<immediate|today|this_week|whenever>",
+  "suggested_actions": []
+}}
+
+User goals: {goals}
+Recent activity: {recent_activity}
+User preferences: {preferences}
+
+Signal source: {source}
+Event type: {event_type}
+Summary: {summary}
+"""
+
+
+async def assess_relevance(
+    signal: PerceptionSignal,
+    user_context: UserContext,
+    client: Any,
+    model: str = "claude-haiku-4-5-20251001",
+) -> RelevanceAssessment:
+    """Call Haiku to assess signal relevance. Returns silent assessment on failure."""
+    try:
+        prompt = _RELEVANCE_PROMPT.format(
+            goals=", ".join(user_context.goals) or "none specified",
+            recent_activity=user_context.recent_activity or "none",
+            preferences=", ".join(user_context.preferences) or "none",
+            source=signal.source,
+            event_type=signal.event_type,
+            summary=signal.summary,
+        )
+        response = await client.messages.create(
+            model=model,
+            max_tokens=512,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = response.content[0].text
+        data = json.loads(text)
+        assessment = RelevanceAssessment(**data)
+        assessment.notification_tier = _determine_tier(
+            assessment.relevance_score, assessment.urgency
+        )
+        return assessment
+    except Exception:
+        logger.warning("Relevance assessment failed, defaulting to silent", exc_info=True)
+        return RelevanceAssessment(
+            relevance_score=0.0,
+            reasoning="Assessment failed — defaulting to silent",
+            notification_tier="silent",
+        )

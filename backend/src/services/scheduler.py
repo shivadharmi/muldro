@@ -70,11 +70,14 @@ class SchedulerLoop:
         # 3. Execute pending background tasks
         await self._tick_background_tasks(factory)
 
-        # 4. Eviction + DLQ retry — every 5th tick (~150s)
+        # 4a. Eviction + DLQ retry — every 5th tick (~150s)
         self._tick_count = getattr(self, "_tick_count", 0) + 1
         if self._tick_count % 5 == 0:
             await self._tick_eviction(factory)
             await self._tick_dlq_retry(factory)
+
+        # 4b. Persona batch — every 10th tick (~5 min)
+        await self._tick_persona_batch()
 
         # 5. Process due schedules
         async with factory() as db:
@@ -246,23 +249,19 @@ class SchedulerLoop:
                 await db.commit()
                 logger.info("Perception tick: %d sources processed", len(due_states))
 
-                # D2: Cross-source synthesis — when 2+ sources had new events,
-                # ask the Planner to synthesize cross-cutting insights
-                import time
+                # D2: Cross-source synthesis — trigger on signal volume
+                # (2+ sources with events AND 3+ total events)
+                source_event_counts = {}
+                for i, r in enumerate(results):
+                    if not isinstance(r, BaseException):
+                        src_name, evt_count = r
+                        if evt_count > 0:
+                            source_event_counts[src_name] = evt_count
 
-                sources_with_events = sum(
-                    1
-                    for s in due_states
-                    if not s.pending_run  # was processed (not skipped)
-                )
-                now = time.monotonic()
-                synthesis_cooldown = 1800  # 30 minutes
-                if (
-                    sources_with_events >= 2
-                    and self._orchestrator
-                    and (now - self._last_synthesis_at) > synthesis_cooldown
-                ):
-                    self._last_synthesis_at = now
+                sources_with_events = len(source_event_counts)
+                total_event_count = sum(source_event_counts.values())
+
+                if sources_with_events >= 2 and total_event_count >= 3 and self._orchestrator:
                     try:
                         user_id = due_states[0].user_id
                         # Resolve workspace_id with fallback
@@ -504,6 +503,60 @@ class SchedulerLoop:
                     await db.commit()
         except Exception:
             logger.debug("DLQ retry tick failed", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Persona batch
+    # ------------------------------------------------------------------
+
+    async def _tick_persona_batch(self, factory=None) -> None:
+        """Run Persona agent on recent interactions every 10th tick (~5 min).
+
+        Only fires when there are 5+ interactions since last batch.
+        """
+        if getattr(self, "_tick_count", 0) % 10 != 0:
+            return
+        if not self._orchestrator:
+            return
+
+        try:
+            factory = factory or get_session_factory()
+            async with factory() as db:
+                from sqlalchemy import select
+
+                from src.models.interaction_log import InteractionLog
+
+                last_batch = getattr(self, "_last_persona_batch_at", None)
+                query = select(InteractionLog).order_by(InteractionLog.created_at.desc()).limit(20)
+                if last_batch:
+                    query = query.where(InteractionLog.created_at > last_batch)
+
+                result = await db.execute(query)
+                interactions = result.scalars().all()
+
+                if len(interactions) < 5:
+                    return
+
+                summary = "\n".join(
+                    f"- {i.message_preview or '(no preview)'} → {i.intent or 'unknown'}"
+                    for i in interactions
+                )
+                user_id = interactions[0].user_id
+                workspace_id = getattr(interactions[0], "workspace_id", "") or ""
+
+                await self._orchestrator._call_agent(
+                    "persona",
+                    message=(
+                        "Analyze these recent user interactions and extract"
+                        f" preference patterns:\n{summary}"
+                    ),
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                )
+                self._last_persona_batch_at = datetime.now(timezone.utc)
+                logger.info("Persona batch completed: %d interactions analyzed", len(interactions))
+
+        except Exception:
+            logger.warning("Persona batch tick failed", exc_info=True)
 
     # ------------------------------------------------------------------
     # Follow-up notifications
