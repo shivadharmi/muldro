@@ -100,38 +100,6 @@ _VALID_INTENTS = {
     "acknowledgment",
 }
 
-# Keyword-to-capability mapping for fast-path single-read intents
-_READ_CAPABILITY_KEYWORDS: list[tuple[list[str], str]] = [
-    (["email", "mail", "inbox", "gmail"], "email.search"),
-    (["calendar", "schedule", "meeting", "event"], "calendar.read"),
-    (["slack", "message", "channel", "dm"], "messaging.read"),
-    (["github", "pr", "pull request", "issue", "repo", "commit"], "repo.read"),
-]
-
-
-def _match_read_capability(message: str, capabilities: list[str]) -> str:
-    """Match user message keywords to the best read capability for fast path.
-
-    Checks keyword matches against the message, validates the matched
-    capability exists in the available list (with family-prefix fallback),
-    and returns ``"knowledge.search"`` if no keyword matches.
-    """
-    msg_lower = message.lower()
-    cap_set = set(capabilities)
-
-    for keywords, default_cap in _READ_CAPABILITY_KEYWORDS:
-        if any(kw in msg_lower for kw in keywords):
-            if default_cap in cap_set:
-                return default_cap
-            # Fallback: any capability in the same family
-            family = default_cap.split(".")[0]
-            for cap in capabilities:
-                if cap.startswith(f"{family}."):
-                    return cap
-            return default_cap
-
-    return "knowledge.search"
-
 
 def extract_plan(response_text: str) -> PlanOutput:
     """Parse Planner agent response into validated PlanOutput.
@@ -208,18 +176,14 @@ def intent_to_plan(intent: str, message: str, capabilities: list[str]) -> PlanOu
             steps=[PlanStep(description="Answer question", capability="reason")],
         )
 
-    if intent == "single_read":
-        cap = _match_read_capability(message, capabilities)
+    if intent in ("single_read", "data_fetch"):
+        # Use "perceive" as a broad read capability — the Perceiver agent
+        # receives ALL its read tools and autonomously decides which to use.
+        # This avoids restricting to a single capability family when the
+        # user asks about multiple sources (e.g. "check email and calendar").
         return PlanOutput(
             goal=goal,
-            steps=[PlanStep(description=goal, capability=cap, risk="none")],
-        )
-
-    if intent == "data_fetch":
-        cap = _match_read_capability(message, capabilities)
-        return PlanOutput(
-            goal=goal,
-            steps=[PlanStep(description=goal, capability=cap, risk="none")],
+            steps=[PlanStep(description=goal, capability="perceive", risk="none")],
         )
 
     if intent == "status_query":

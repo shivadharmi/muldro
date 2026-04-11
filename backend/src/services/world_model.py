@@ -231,7 +231,7 @@ class WorldModel:
         embedding = None
         if self._embedding_service:
             try:
-                embedding = await self._embedding_service.embed(canonical_name)
+                embedding = await self._embedding_service.embed_text(canonical_name)
             except Exception:
                 logger.debug("Failed to generate entity embedding", exc_info=True)
         entity = Entity(
@@ -279,7 +279,7 @@ class WorldModel:
             try:
                 emb = embedding
                 if emb is None and self._embedding_service:
-                    emb = await self._embedding_service.embed(canonical_name)
+                    emb = await self._embedding_service.embed_text(canonical_name)
                 if emb:
                     await self._vector_store.upsert(
                         "entities",
@@ -406,7 +406,7 @@ class WorldModel:
         # Fuzzy match via Qdrant vector similarity
         if self._vector_store and self._embedding_service:
             try:
-                embedding = await self._embedding_service.embed(canonical_name)
+                embedding = await self._embedding_service.embed_text(canonical_name)
                 if embedding:
                     similar = await self._vector_store.find_similar(
                         "entities",
@@ -469,6 +469,52 @@ class WorldModel:
                 to_entity_id=to_entities[0]["entity_id"],
                 workspace_id=workspace_id,
             )
+
+    async def extract_from_text(self, text: str, user_id: str, workspace_id: str = "") -> list[str]:
+        """Extract entities from free text (e.g. user messages). Returns entity_ids."""
+        try:
+            response = await self._client.messages.create(
+                model=self._settings.resolved_model,
+                max_tokens=1024,
+                system=ENTITY_EXTRACTION_PROMPT,
+                messages=[{"role": "user", "content": f"Source: user_message\nSummary: {text}"}],
+            )
+            from src.llm_utils import parse_llm_json
+
+            extracted = parse_llm_json(response.content[0].text)
+        except Exception:
+            logger.warning("Text entity extraction failed", exc_info=True)
+            return []
+
+        entity_ids = []
+        for ent_data in extracted.get("entities", []):
+            raw_type = ent_data.get("entity_type", "person")
+            entity_type = raw_type if raw_type in ENTITY_TYPES else "person"
+            importance = min(max(float(ent_data.get("importance", 0.5)), 0.0), 1.0)
+            entity_id = await self.upsert_entity(
+                user_id=user_id,
+                entity_type=entity_type,
+                canonical_name=ent_data.get("canonical_name", "Unknown"),
+                attributes=ent_data.get("attributes"),
+                aliases=ent_data.get("aliases"),
+                importance=importance,
+                workspace_id=workspace_id,
+            )
+            if entity_id:
+                entity_ids.append(entity_id)
+
+        for rel_data in extracted.get("relationships", []):
+            raw_rel = rel_data.get("relation_type", "related_to")
+            relation_type = raw_rel if raw_rel in RELATION_TYPES else "related_to"
+            await self._create_relationship_by_name(
+                user_id=user_id,
+                from_name=rel_data.get("from_name", ""),
+                relation_type=relation_type,
+                to_name=rel_data.get("to_name", ""),
+                workspace_id=workspace_id,
+            )
+
+        return entity_ids
 
     async def _call_extraction(self, event: NormalizedEvent) -> dict:
         """Call Claude to extract entities from an event."""

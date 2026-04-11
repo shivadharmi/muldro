@@ -796,6 +796,10 @@ class JarvisOrchestrator:
                         step_routing.append((step, "", []))
                     elif step.capability in ("reason", "respond"):
                         step_routing.append((step, "presenter", []))
+                    elif step.capability == "perceive":
+                        # Broad read: Perceiver gets ALL its tools, decides
+                        # autonomously which sources to query.
+                        step_routing.append((step, "perceiver", []))
                     else:
                         agent_name = await route_step(step.capability, resolver)
                         tools = await resolver.resolve_for_step(step.capability)
@@ -861,13 +865,9 @@ class JarvisOrchestrator:
                     {"description": s.description, "context": s.user_context} for s in user_steps
                 ]
 
-            # Step 4: Presenter formats response (if no respond step)
-            has_presenter_step = any(
-                s.capability in ("reason", "respond", "system.respond", "system.acknowledge")
-                for s in plan.steps
-                if s.actor == "jarvis"
-            )
-            if not has_presenter_step:
+            # Step 4: Presenter formats response — always call so user
+            # gets a conversational answer (see streaming path comment).
+            if True:
                 # Collect prior step results so Presenter can reference them
                 prior_results_block = ""
                 step_outputs = {
@@ -1109,6 +1109,10 @@ class JarvisOrchestrator:
                         step_routing.append((step, "", []))
                     elif step.capability in ("reason", "respond"):
                         step_routing.append((step, "presenter", []))
+                    elif step.capability == "perceive":
+                        # Broad read: Perceiver gets ALL its tools, decides
+                        # autonomously which sources to query.
+                        step_routing.append((step, "perceiver", []))
                     else:
                         agent_name = await route_step(step.capability, resolver)
                         tools = await resolver.resolve_for_step(step.capability)
@@ -1189,13 +1193,12 @@ class JarvisOrchestrator:
                     ],
                 }
 
-            # Step 4: Presenter formatting (if no respond step)
-            has_presenter_step = any(
-                s.capability in ("reason", "respond", "system.respond", "system.acknowledge")
-                for s in plan.steps
-                if s.actor == "jarvis"
-            )
-            if not has_presenter_step:
+            # Step 4: Presenter formatting — always call the Presenter so
+            # the user receives a conversational response.  system.respond
+            # steps are no-ops in _handle_system_capability, and
+            # reason/respond steps execute with wrong context, so relying on
+            # them to produce the user-facing answer leaves the chat empty.
+            if True:
                 # Collect prior step results so Presenter can reference them
                 prior_results_block = ""
                 if step_outputs:
@@ -1480,6 +1483,9 @@ class JarvisOrchestrator:
                     "perception_no_new_events",
                     extra={"source": source},
                 )
+                # Save cursor even on empty polls so incremental sync
+                # advances (e.g. Gmail historyId, Calendar syncToken).
+                await self._update_cursor(source, user_id, workspace_id, new_cursor, cursor_type)
                 return {"status": "completed", "source": source, "events": 0}
 
             # Ingest raw events into normalized_events table
@@ -1829,6 +1835,8 @@ class JarvisOrchestrator:
                 dead_letter=dead_letter,
                 event_bus=event_bus,
                 notifier=self._services.notifier,
+                embedding_service=self._services.extras.get("embedding_service"),
+                vector_store=self._services.vector_store,
             )
             for raw in raw_events:
                 try:
