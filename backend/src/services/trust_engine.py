@@ -20,20 +20,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.orchestrator.contracts import PolicyDecision
 from src.services.risk_assessor import (
     RiskAssessment,
+    _trust_level_index,
     get_or_create_trust_state,
     min_trust_level,
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _trust_level_index(level: str) -> int:
-    """Index of trust level for ordering comparisons."""
-    _levels = ("first_use", "learning", "trusted", "autonomous")
-    try:
-        return _levels.index(level)
-    except ValueError:
-        return 0
 
 
 def _graduation_progress(state) -> dict:
@@ -47,7 +39,7 @@ def _graduation_progress(state) -> dict:
     total = approved + rejected
 
     if level == "first_use":
-        return {
+        result = {
             "next_level": "learning",
             "current": approved,
             "target": 3,
@@ -55,7 +47,7 @@ def _graduation_progress(state) -> dict:
             "blocked_by_rejections": rejected > 0,
         }
     elif level == "learning":
-        return {
+        result = {
             "next_level": "trusted",
             "current": approved,
             "target": 10,
@@ -63,7 +55,7 @@ def _graduation_progress(state) -> dict:
             "blocked_by_rejections": (total > 0 and rejected / total >= 0.10),
         }
     elif level == "trusted":
-        return {
+        result = {
             "next_level": "autonomous",
             "current": approved,
             "target": 25,
@@ -71,13 +63,20 @@ def _graduation_progress(state) -> dict:
             "blocked_by_rejections": (total > 0 and rejected / total >= 0.05),
         }
     else:
-        return {
+        result = {
             "next_level": None,
             "current": approved,
             "target": approved,
             "percentage": 1.0,
             "blocked_by_rejections": False,
         }
+
+    # Cap percentage when blocked so UI never shows 100% + blocked simultaneously
+    if result["blocked_by_rejections"]:
+        result["percentage"] = min(result["percentage"], 0.95)
+        result["status"] = "blocked_by_rejections"
+
+    return result
 
 
 class TrustEngine:
@@ -287,11 +286,31 @@ class TrustEngine:
 
     async def set_ceilings_batch(self, capabilities: list[str], max_level: str) -> int:
         """Batch-set ceilings for multiple capabilities. Returns count updated."""
-        count = 0
+        from src.models.trust_state import TrustCeiling
+
+        # Load all existing ceilings in one query
+        result = await self._db.execute(
+            select(TrustCeiling).where(
+                TrustCeiling.workspace_id == self._workspace_id,
+                TrustCeiling.capability.in_(capabilities),
+            )
+        )
+        existing = {c.capability: c for c in result.scalars().all()}
+
         for cap in capabilities:
-            await self.set_ceiling(cap, max_level)
-            count += 1
-        return count
+            if cap in existing:
+                existing[cap].max_level = max_level
+            else:
+                self._db.add(
+                    TrustCeiling(
+                        workspace_id=self._workspace_id,
+                        capability=cap,
+                        max_level=max_level,
+                    )
+                )
+
+        await self._db.flush()
+        return len(capabilities)
 
     async def reset_trust_for_capability(self, capability: str) -> None:
         """Reset all trust states for a capability back to first_use."""

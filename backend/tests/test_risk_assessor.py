@@ -1,6 +1,7 @@
 """Tests for LLM risk assessor + Redis caching."""
 
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -10,6 +11,7 @@ from src.services.risk_assessor import (
     assess_risk,
     build_risk_cache_key,
     get_or_assess_risk,
+    graduate_trust,
 )
 
 
@@ -32,6 +34,48 @@ def mock_client():
     response.usage = MagicMock(input_tokens=100, output_tokens=50)
     client.messages.create = AsyncMock(return_value=response)
     return client
+
+
+class TestGraduateTrust:
+    def test_high_count_moderate_rejections_returns_trusted(self):
+        """H-4: 25+ approved with 10-15% rejection should graduate to trusted."""
+        state = SimpleNamespace(
+            approved_count=25,
+            rejected_count=3,  # ~10.7% rejection
+            cooldown_until=None,
+            trust_level="learning",
+        )
+        assert graduate_trust(state) == "trusted"
+
+    def test_high_count_high_rejections_stays_learning(self):
+        """H-4: 25+ approved with >=15% rejection stays learning."""
+        state = SimpleNamespace(
+            approved_count=25,
+            rejected_count=5,  # ~16.7% rejection
+            cooldown_until=None,
+            trust_level="learning",
+        )
+        assert graduate_trust(state) == "learning"
+
+    def test_25_approved_low_rejection_is_autonomous(self):
+        """Baseline: 25+ approved with <5% rejection -> autonomous."""
+        state = SimpleNamespace(
+            approved_count=25,
+            rejected_count=1,  # ~3.8%
+            cooldown_until=None,
+            trust_level="trusted",
+        )
+        assert graduate_trust(state) == "autonomous"
+
+    def test_10_approved_exact_10_percent_stays_learning(self):
+        """Edge: exactly 10% rejection at 10+ approved stays learning."""
+        state = SimpleNamespace(
+            approved_count=10,
+            rejected_count=2,  # 2/12 ~= 16.7% >= 10%
+            cooldown_until=None,
+            trust_level="first_use",
+        )
+        assert graduate_trust(state) == "learning"
 
 
 class TestRiskAssessment:

@@ -21,6 +21,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
+_HAIKU_MODEL_FALLBACK = "claude-haiku-4-5-20251001"
+
+
+def _get_haiku_model() -> str:
+    """Resolve Haiku model ID from settings, avoiding circular imports."""
+    try:
+        from src.config.settings import get_settings
+
+        settings = get_settings()
+        if settings.use_bedrock:
+            from src.orchestrator.jarvis import BEDROCK_MODEL_TIERS
+
+            return BEDROCK_MODEL_TIERS["haiku"]
+        else:
+            from src.orchestrator.jarvis import MODEL_TIERS
+
+            return MODEL_TIERS["haiku"]
+    except Exception:
+        return _HAIKU_MODEL_FALLBACK
+
+
 # ── Risk Assessment ──────────────────────────────────────────────
 
 _RISK_SYSTEM_PROMPT = """You assess the contextual risk of actions Jarvis is about to perform
@@ -73,12 +94,14 @@ async def assess_risk(
     step_input: dict,
     user_context: dict,
     client: Any,
-    model: str = "claude-haiku-4-5-20251001",
+    model: str | None = None,
 ) -> RiskAssessment:
     """Call Haiku to assess contextual risk for an action.
 
     Falls back to medium risk on any failure (API error, invalid JSON, etc.).
     """
+    if model is None:
+        model = _get_haiku_model()
     user_message = json.dumps(
         {
             "capability": capability,
@@ -119,9 +142,11 @@ async def get_or_assess_risk(
     workspace_id: str,
     client: Any,
     redis: Any,
-    model: str = "claude-haiku-4-5-20251001",
+    model: str | None = None,
 ) -> RiskAssessment:
     """Redis-cached risk assessment. 24h TTL."""
+    if model is None:
+        model = _get_haiku_model()
     cache_key = build_risk_cache_key(capability, step_input, user_context)
     full_key = f"risk:{workspace_id}:{cache_key}"
 
@@ -185,6 +210,9 @@ def graduate_trust(state) -> str:
 
     if state.approved_count >= 25 and rejection_rate < 0.05:
         return "autonomous"
+    elif state.approved_count >= 25 and rejection_rate < 0.15:
+        # High volume with moderate rejections -- trust earned despite some rejections
+        return "trusted"
     elif state.approved_count >= 10 and rejection_rate < 0.10:
         return "trusted"
     elif state.approved_count >= 10 and rejection_rate >= 0.10:

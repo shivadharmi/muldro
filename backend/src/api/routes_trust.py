@@ -13,7 +13,10 @@ from src.services.trust_engine import TrustEngine
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-VALID_TRUST_LEVELS = {"first_use", "learning", "trusted", "autonomous", "blocked"}
+# Graduation levels -- produced by graduate_trust() in risk_assessor.py
+VALID_TRUST_LEVELS = {"first_use", "learning", "trusted", "autonomous"}
+# Ceiling levels -- "blocked" prevents any auto-execution for a capability
+VALID_CEILING_LEVELS = VALID_TRUST_LEVELS | {"blocked"}
 
 
 class TrustRiskLevel(BaseModel):
@@ -134,10 +137,10 @@ async def set_trust_ceiling(
     db: AsyncSession = Depends(get_session),
 ):
     """Set the maximum trust level for a capability."""
-    if req.max_level not in VALID_TRUST_LEVELS:
+    if req.max_level not in VALID_CEILING_LEVELS:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid level. Must be one of: {VALID_TRUST_LEVELS}",
+            detail=f"Invalid level. Must be one of: {VALID_CEILING_LEVELS}",
         )
     engine = TrustEngine(db, workspace_id=workspace_id)
     await engine.set_ceiling(capability, req.max_level)
@@ -183,10 +186,10 @@ async def set_time_policies(
 ):
     """Set time-based trust ceiling overrides."""
     for p in req.policies:
-        if p.max_level not in VALID_TRUST_LEVELS:
+        if p.max_level not in VALID_CEILING_LEVELS:
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid level '{p.max_level}'. Must be one of: {VALID_TRUST_LEVELS}",
+                detail=f"Invalid level '{p.max_level}'. Must be one of: {VALID_CEILING_LEVELS}",
             )
         if not (0 <= p.start_hour <= 23 and 0 <= p.end_hour <= 23):
             raise HTTPException(status_code=400, detail="Hours must be 0-23")

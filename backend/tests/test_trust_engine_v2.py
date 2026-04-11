@@ -1,11 +1,12 @@
 """Tests for rewritten TrustEngine — deterministic 4×4 matrix."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.services.risk_assessor import RiskAssessment
-from src.services.trust_engine import TrustEngine
+from src.services.trust_engine import TrustEngine, _graduation_progress
 
 
 @pytest.fixture
@@ -121,6 +122,44 @@ class TestEvaluateAutonomous:
         engine._get_ceiling = AsyncMock(return_value=_make_ceiling())
         result = await engine.evaluate("email.send", _make_risk("high"))
         assert result.decision == "approval_required"
+
+
+class TestGraduationProgress:
+    def test_blocked_caps_percentage(self):
+        """M-25: blocked_by_rejections should cap percentage below 1.0."""
+        state = SimpleNamespace(
+            trust_level="learning",
+            approved_count=15,
+            rejected_count=3,  # 3/18 = 16.7% >= 10%
+        )
+        progress = _graduation_progress(state)
+        assert progress["blocked_by_rejections"] is True
+        assert progress["percentage"] < 1.0
+        assert progress["status"] == "blocked_by_rejections"
+
+    def test_not_blocked_no_cap(self):
+        """M-25: when not blocked, percentage can reach 1.0."""
+        state = SimpleNamespace(
+            trust_level="learning",
+            approved_count=15,
+            rejected_count=1,  # 1/16 = 6.25% < 10%
+        )
+        progress = _graduation_progress(state)
+        assert progress["blocked_by_rejections"] is False
+        assert progress["percentage"] == 1.0
+        assert progress.get("status") is None
+
+    def test_blocked_at_first_use(self):
+        """Blocked at first_use caps percentage."""
+        state = SimpleNamespace(
+            trust_level="first_use",
+            approved_count=2,
+            rejected_count=1,
+        )
+        progress = _graduation_progress(state)
+        assert progress["blocked_by_rejections"] is True
+        assert progress["percentage"] <= 0.95
+        assert progress["status"] == "blocked_by_rejections"
 
 
 class TestCeilingRespected:

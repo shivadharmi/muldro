@@ -250,7 +250,7 @@ class SurfaceService:
             select(TaskRun)
             .where(
                 TaskRun.workspace_id == self._workspace_id,
-                TaskRun.status.in_(["running", "paused"]),
+                TaskRun.status.in_(["running", "paused", "awaiting_approval"]),
                 TaskRun.source != "user_message",
             )
             .order_by(TaskRun.started_at.desc())

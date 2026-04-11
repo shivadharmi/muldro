@@ -85,6 +85,37 @@ class TestBuildActiveExecutionSurfaces:
         assert len(surfaces) == 0
 
     @pytest.mark.asyncio
+    async def test_awaiting_approval_run_included(self):
+        """H-14: Runs with awaiting_approval should appear in active execution surfaces."""
+        db = AsyncMock()
+        service = SurfaceService(db=db, workspace_id="ws_01")
+
+        run = _mock_run("run_03", "awaiting_approval")
+        steps = [
+            _mock_step("s1", "completed", "Search"),
+            _mock_step("s2", "running", "Send email"),
+        ]
+
+        call_count = 0
+
+        async def mock_execute(stmt):
+            nonlocal call_count
+            call_count += 1
+            result = MagicMock()
+            if call_count == 1:
+                result.scalars.return_value.all.return_value = [run]
+            else:
+                result.scalars.return_value.all.return_value = steps
+            return result
+
+        db.execute = mock_execute
+
+        surfaces = await service._build_active_execution_surfaces()
+        assert len(surfaces) == 1
+        assert surfaces[0]["kind"] == "plan"
+        assert surfaces[0]["source_run_id"] == "run_03"
+
+    @pytest.mark.asyncio
     async def test_paused_run_included(self):
         db = AsyncMock()
         service = SurfaceService(db=db, workspace_id="ws_01")

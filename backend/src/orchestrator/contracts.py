@@ -184,6 +184,8 @@ class PolicyDecision(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    # Produced by: Governor (auto_execute, blocked), TrustEngine (auto_execute_notify,
+    # auto_execute_silent, approval_required). Union of all producers.
     decision: Literal[
         "auto_execute",
         "auto_execute_notify",
