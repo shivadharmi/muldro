@@ -276,10 +276,92 @@ async def _handle_orchestrator_action(user_id: str, action: str, payload: dict, 
         return {"status": "error", "error": str(e)}
 
 
+async def _handle_execute_insight(user_id: str, payload: dict, app) -> dict:
+    """Handle insight action execution — transitions insight to execution surface.
+
+    When a user clicks a suggested action on an insight surface, this handler:
+    1. Fetches the insight surface and the selected action
+    2. Records engagement
+    3. Executes via the orchestrator
+    """
+    from src.api.deps import resolve_workspace_id
+    from src.models.database import get_session_factory
+
+    surface_id = payload.get("surface_id", "")
+    action_index = payload.get("action_index", 0)
+
+    if not surface_id:
+        return {"status": "error", "error": "surface_id required"}
+
+    async with get_session_factory()() as db:
+        try:
+            workspace_id = await resolve_workspace_id(db, user_id)
+        except Exception as e:
+            logger.warning("ws_insight_workspace_resolve_failed: %s", e)
+            return {"status": "error", "error": "Could not resolve workspace"}
+
+        # Fetch the insight surface
+        from sqlalchemy import select
+
+        from src.models.ui_state import UISurface
+
+        result = await db.execute(
+            select(UISurface).where(
+                UISurface.surface_id == surface_id,
+                UISurface.user_id == user_id,
+                UISurface.surface_type == "proactive_insight",
+            )
+        )
+        surface = result.scalar_one_or_none()
+        if not surface:
+            return {"status": "error", "error": "Insight surface not found"}
+
+        payload_data = surface.payload or {}
+        insight_data = payload_data.get("insight_data", {})
+        actions = insight_data.get("suggested_actions", [])
+
+        if action_index >= len(actions):
+            return {"status": "error", "error": "Invalid action index"}
+
+        selected = actions[action_index]
+
+        # Record engagement
+        from src.services.engagement_service import EngagementService
+
+        eng_svc = EngagementService(db, workspace_id)
+        await eng_svc.record_engagement(
+            insight_data.get("signal_source", "unknown"),
+            insight_data.get("signal_category", "unknown"),
+            "engaged",
+        )
+        await db.commit()
+
+    # Execute via orchestrator
+    orchestrator = getattr(app.state, "orchestrator", None)
+    if not orchestrator:
+        return {"status": "error", "error": "Orchestrator not available"}
+
+    try:
+        result = await orchestrator.process_message(
+            user_id=user_id,
+            workspace_id=workspace_id,
+            message=f"[Execute insight action] {selected.get('description', '')}",
+        )
+        return {
+            "status": "success",
+            "surface_id": surface_id,
+            "action": selected.get("description", ""),
+        }
+    except Exception as e:
+        logger.warning("ws_execute_insight_failed: %s", e, exc_info=True)
+        return {"status": "error", "error": str(e)}
+
+
 # Registry of named action handlers
 ACTION_HANDLERS: dict[str, object] = {
     "approve": _handle_approve,
     "reject": _handle_reject,
+    "execute_insight": _handle_execute_insight,
 }
 
 
