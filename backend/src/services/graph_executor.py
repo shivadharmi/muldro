@@ -342,6 +342,24 @@ class GraphExecutor:
             workspace_id=run.workspace_id,
         )
 
+        # Emit plan_ready so the frontend knows steps are populated and execution begins
+        if surface_id:
+            all_steps = await self._get_all_steps(run.run_id)
+            plan_ready_steps = [
+                StepState(
+                    step_id=s.step_id,
+                    description=s.name or (s.input_data or {}).get("capability", s.task_id),
+                    status="pending",
+                )
+                for s in all_steps
+            ]
+            await self._emit_surface_update(
+                surface_id=surface_id,
+                user_id=run.user_id,
+                phase="plan_ready",
+                steps=plan_ready_steps,
+            )
+
         try:
             # Enforce timeout for background runs to prevent indefinite hangs
             timeout = run.timeout_seconds or (600 if run.source == "background" else None)

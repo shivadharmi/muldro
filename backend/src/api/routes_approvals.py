@@ -195,6 +195,7 @@ async def approve_action(
                 user_id=user_id,
                 embedding_service=es,
                 vector_store=vs,
+                workspace_id=workspace_id,
             )
     except Exception:
         logger.debug("Approval embedding failed", exc_info=True)
@@ -247,7 +248,9 @@ async def approve_action(
             executor = await create_graph_executor(
                 settings=settings, db=db, workspace_id=workspace_id
             )
-            await executor.execute_run(run.run_id)
+            # Pass surface_id from checkpoint if available
+            _surface_id = (run.checkpoint or {}).get("surface_id")
+            await executor.execute_run(run.run_id, surface_id=_surface_id)
         except Exception:
             logger.exception("Execution failed after approval: %s", run.run_id)
     elif approval.artifact_refs and approval.artifact_refs.get("tool_name"):
@@ -443,6 +446,7 @@ async def reject_action(
                 user_id=user_id,
                 embedding_service=es,
                 vector_store=vs,
+                workspace_id=workspace_id,
             )
     except Exception:
         logger.debug("Rejection embedding failed", exc_info=True)
@@ -571,6 +575,7 @@ async def _embed_approval_decision(
     user_id: str,
     embedding_service,
     vector_store,
+    workspace_id: str = "",
 ) -> None:
     """Embed approval decision into Qdrant (best-effort)."""
     try:
@@ -582,10 +587,14 @@ async def _embed_approval_decision(
                 id=approval_id,
                 vector=embedding,
                 payload={
+                    "approval_id": approval_id,
+                    "approval_type": approval_type,
                     "capability": approval_type,
                     "risk_level": risk_level,
+                    "decision": outcome,
                     "outcome": outcome,
-                    "decided_at": datetime.now(timezone.utc).isoformat(),
+                    "workspace_id": workspace_id,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
                 },
                 user_id=user_id,
             )

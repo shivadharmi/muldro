@@ -883,13 +883,15 @@ class JarvisOrchestrator:
             )
 
             # Push surface to workspace
-            await self._push_workspace_surface(
+            surface_id = await self._push_workspace_surface(
                 plan,
                 user_id,
                 workspace_id,
-                None,
+                run_id=result.get("run_id"),
                 response_text=result.get("presentation", result.get("presenter", "")),
             )
+            if surface_id:
+                result["surface_id"] = surface_id
 
             return result
 
@@ -1185,12 +1187,13 @@ class JarvisOrchestrator:
             )
 
             # Push workspace surface before done to avoid race with SSE
+            surface_id = None
             try:
-                await self._push_workspace_surface(
+                surface_id = await self._push_workspace_surface(
                     plan,
                     user_id,
                     workspace_id,
-                    None,
+                    run_id=None,
                     response_text=presenter_text,
                 )
             except Exception:
@@ -1200,6 +1203,7 @@ class JarvisOrchestrator:
                 "event": "done",
                 "trace_id": trace.trace_id,
                 "run_id": None,
+                **({"surface_id": surface_id} if surface_id else {}),
             }
 
         except Exception as e:
@@ -1992,11 +1996,12 @@ class JarvisOrchestrator:
         workspace_id: str,
         run_id: str | None = None,
         response_text: str = "",
-    ) -> None:
+    ) -> str | None:
         """Push a typed surface to the workspace via Redis Pub/Sub.
 
         Derives surface kind from plan step capabilities.
         Only pushes for plans with visual value beyond the chat response.
+        Returns the generated surface_id on success, None otherwise.
         """
         from datetime import datetime, timedelta, timezone
 
@@ -2005,7 +2010,7 @@ class JarvisOrchestrator:
 
         mapping = _derive_surface_kind(plan)
         if not mapping:
-            return
+            return None
 
         kind, default_title = mapping
 
@@ -2065,8 +2070,10 @@ class JarvisOrchestrator:
                     "Failed to persist workspace surface to DB",
                     exc_info=True,
                 )
+            return surface_id
         except Exception:
             logger.warning("Failed to push workspace surface", exc_info=True)
+            return None
 
     async def _push_insight_surface(
         self,
@@ -2278,6 +2285,39 @@ class JarvisOrchestrator:
                 messages=[{"role": "user", "content": text}],
             )
             summary = "".join(b.text for b in response.content if b.type == "text")
+
+            # Embed conversation summary into Qdrant for semantic search
+            if summary and conversation_id:
+                try:
+                    from datetime import datetime, timezone
+
+                    from src.services.embedding_service import EmbeddingService
+                    from src.services.vector_store import VectorStore
+
+                    if self._settings.qdrant_url:
+                        vs = VectorStore(self._settings)
+                        es = EmbeddingService(self._settings)
+                        embedding = await es.embed_text(summary)
+                        if embedding:
+                            await vs.upsert(
+                                collection="conversations",
+                                id=conversation_id,
+                                vector=embedding,
+                                payload={
+                                    "conversation_id": conversation_id,
+                                    "workspace_id": "",
+                                    "message_count": len(lines),
+                                    "summary": summary[:500],
+                                    "created_at": datetime.now(timezone.utc).isoformat(),
+                                },
+                                user_id=user_id,
+                            )
+                except Exception:
+                    logger.debug(
+                        "Conversation embedding failed for %s",
+                        conversation_id,
+                        exc_info=True,
+                    )
 
             return summary
         except Exception:
