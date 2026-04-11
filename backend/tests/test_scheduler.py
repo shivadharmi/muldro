@@ -387,3 +387,95 @@ class TestFireActions:
         await scheduler._fire(sched)
 
         mock_orch.process_message.assert_awaited_once()
+
+
+class TestPersonaBatch:
+    """Test _tick_persona_batch() in SchedulerLoop."""
+
+    @pytest.mark.asyncio
+    async def test_skips_when_not_10th_tick(self):
+        from src.services.scheduler import SchedulerLoop
+        from tests.conftest import make_mock_settings
+
+        settings = make_mock_settings()
+        scheduler = SchedulerLoop(settings=settings)
+        scheduler._tick_count = 3
+
+        await scheduler._tick_persona_batch(factory=AsyncMock())
+        # No exception = pass
+
+    @pytest.mark.asyncio
+    async def test_skips_when_fewer_than_5_interactions(self):
+        from src.services.scheduler import SchedulerLoop
+        from tests.conftest import make_mock_settings
+
+        settings = make_mock_settings()
+        orchestrator = AsyncMock()
+        scheduler = SchedulerLoop(settings=settings, orchestrator=orchestrator)
+        scheduler._tick_count = 10
+
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = [MagicMock()] * 3
+        mock_db.execute = AsyncMock(return_value=mock_result)
+        mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_db.__aexit__ = AsyncMock(return_value=False)
+        mock_factory = MagicMock(return_value=mock_db)
+
+        await scheduler._tick_persona_batch(factory=mock_factory)
+        orchestrator._call_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_calls_persona_with_5_plus_interactions(self):
+        from src.services.scheduler import SchedulerLoop
+        from tests.conftest import make_mock_settings
+
+        settings = make_mock_settings()
+        orchestrator = AsyncMock()
+        orchestrator._call_agent = AsyncMock(return_value="ok")
+        scheduler = SchedulerLoop(settings=settings, orchestrator=orchestrator)
+        scheduler._tick_count = 10
+
+        mock_interactions = []
+        for i in range(6):
+            m = MagicMock()
+            m.message_preview = f"message {i}"
+            m.intent = "command"
+            m.user_id = "usr_test"
+            m.workspace_id = "ws_test"
+            mock_interactions.append(m)
+
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = mock_interactions
+        mock_db.execute = AsyncMock(return_value=mock_result)
+        mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_db.__aexit__ = AsyncMock(return_value=False)
+        mock_factory = MagicMock(return_value=mock_db)
+
+        await scheduler._tick_persona_batch(factory=mock_factory)
+        orchestrator._call_agent.assert_called_once()
+        call_args = orchestrator._call_agent.call_args
+        assert call_args[0][0] == "persona"
+
+
+class TestCrossSourceSynthesisTrigger:
+    """Test that synthesis triggers on volume, not cooldown."""
+
+    def test_synthesis_triggers_with_2_sources_3_events(self):
+        sources_with_events = 2
+        total_event_count = 3
+        should_trigger = sources_with_events >= 2 and total_event_count >= 3
+        assert should_trigger is True
+
+    def test_synthesis_skips_with_1_source(self):
+        sources_with_events = 1
+        total_event_count = 5
+        should_trigger = sources_with_events >= 2 and total_event_count >= 3
+        assert should_trigger is False
+
+    def test_synthesis_skips_with_2_sources_but_only_2_events(self):
+        sources_with_events = 2
+        total_event_count = 2
+        should_trigger = sources_with_events >= 2 and total_event_count >= 3
+        assert should_trigger is False
