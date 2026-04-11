@@ -342,6 +342,21 @@ async def agent_loop(
                 break
 
             # Process tool calls
+            # Divide response tokens equally across all tools in this response
+            _n_tools = len(tool_use_blocks)
+            _resp_input = response.usage.input_tokens // _n_tools if _n_tools else 0
+            _resp_output = response.usage.output_tokens // _n_tools if _n_tools else 0
+            _resp_cache_create = (
+                (getattr(response.usage, "cache_creation_input_tokens", 0) or 0) // _n_tools
+                if _n_tools
+                else 0
+            )
+            _resp_cache_read = (
+                (getattr(response.usage, "cache_read_input_tokens", 0) or 0) // _n_tools
+                if _n_tools
+                else 0
+            )
+
             tool_results = []
             for tool_block in tool_use_blocks:
                 tool_name = tool_block.name
@@ -495,10 +510,10 @@ async def agent_loop(
                                 workspace_id=workspace_id,
                                 agent_name=agent_name,
                                 model=model,
-                                input_tokens=0,
-                                output_tokens=0,
-                                cache_creation_input_tokens=0,
-                                cache_read_input_tokens=0,
+                                input_tokens=_resp_input,
+                                output_tokens=_resp_output,
+                                cache_creation_input_tokens=_resp_cache_create,
+                                cache_read_input_tokens=_resp_cache_read,
                                 thinking_tokens=0,
                                 cost_usd=0.0,
                                 trigger=f"tool:{tool_name}",

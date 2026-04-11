@@ -336,6 +336,196 @@ class TestAgenticStepExecution:
         assert result["status"] == "completed"
 
 
+class TestPopulateStepsCapabilityMapping:
+    """Integration tests for _populate_steps preserving capability through input_data."""
+
+    @patch("src.services.graph_executor.get_anthropic_client")
+    async def test_populate_steps_maps_capability_from_plan_task(
+        self, mock_client, settings, mock_db
+    ):
+        """_populate_steps copies capability from PlanTask.input_data into TaskStep.input_data."""
+        mock_client.return_value = MagicMock()
+        from src.services.graph_executor import GraphExecutor
+
+        # Build a PlanTask with capability in input_data
+        plan_task = _make_plan_task(
+            "t1",
+            task_type="draft_email",
+            input_data={
+                "capability": "email.draft",
+                "task_type": "draft_email",
+                "goal": "Send update",
+            },
+        )
+        plan = _make_plan(tasks=[plan_task])
+
+        tasks_result = MagicMock()
+        tasks_result.scalars.return_value.all.return_value = [plan_task]
+        mock_db.execute = AsyncMock(return_value=tasks_result)
+
+        executor = GraphExecutor(settings, mock_db)
+
+        run = MagicMock()
+        run.run_id = "run_cap_test"
+        run.workspace_id = "ws_test"
+        run.user_id = "usr_test"
+
+        added_steps = []
+
+        def capture_add(obj):
+            added_steps.append(obj)
+
+        mock_db.add = MagicMock(side_effect=capture_add)
+
+        await executor._populate_steps(run, plan)
+
+        # Should have added exactly one TaskStep
+        from src.models.task_graph import TaskStep
+
+        step_objects = [s for s in added_steps if isinstance(s, TaskStep)]
+        assert len(step_objects) == 1
+        step = step_objects[0]
+        assert step.input_data is not None
+        assert step.input_data.get("capability") == "email.draft"
+        assert step.input_data.get("task_type") == "draft_email"
+
+    @patch("src.services.graph_executor.get_anthropic_client")
+    async def test_populate_steps_capability_preserved_without_task_type(
+        self, mock_client, settings, mock_db
+    ):
+        """_populate_steps preserves capability even when task_type is absent from input_data."""
+        mock_client.return_value = MagicMock()
+        from src.services.graph_executor import GraphExecutor
+
+        plan_task = _make_plan_task(
+            "t2",
+            task_type="search",
+            input_data={"capability": "search.web", "query": "quarterly results"},
+        )
+        plan = _make_plan(tasks=[plan_task])
+
+        tasks_result = MagicMock()
+        tasks_result.scalars.return_value.all.return_value = [plan_task]
+        mock_db.execute = AsyncMock(return_value=tasks_result)
+
+        executor = GraphExecutor(settings, mock_db)
+
+        run = MagicMock()
+        run.run_id = "run_cap_test2"
+        run.workspace_id = "ws_test"
+        run.user_id = "usr_test"
+
+        added_steps = []
+
+        def capture_add(obj):
+            added_steps.append(obj)
+
+        mock_db.add = MagicMock(side_effect=capture_add)
+
+        await executor._populate_steps(run, plan)
+
+        from src.models.task_graph import TaskStep
+
+        step_objects = [s for s in added_steps if isinstance(s, TaskStep)]
+        assert len(step_objects) == 1
+        step = step_objects[0]
+        assert step.input_data.get("capability") == "search.web"
+        # task_type should be backfilled from plan_task.task_type
+        assert step.input_data.get("task_type") == "search"
+
+
+class TestExecuteStepCapabilityReading:
+    """Integration tests for _execute_step reading capability from step.input_data."""
+
+    @patch("src.services.graph_executor.get_anthropic_client")
+    async def test_execute_step_calls_trust_engine_with_capability(
+        self, mock_client, settings, mock_db
+    ):
+        """_execute_step extracts capability from step.input_data and passes it to trust engine."""
+        mock_client.return_value = MagicMock()
+        from src.services.graph_executor import GraphExecutor
+
+        executor = GraphExecutor(settings, mock_db)
+
+        # Attach a mock trust engine
+        trust_engine = MagicMock()
+        trust_engine._workspace_id = ""
+        from src.orchestrator.contracts import PolicyDecision
+
+        auto_decision = PolicyDecision(decision="auto_execute_silent", reason="ok")
+        trust_engine.evaluate = AsyncMock(return_value=auto_decision)
+        executor._trust_engine = trust_engine
+
+        # Mock _assess_step_risk
+        executor._assess_step_risk = AsyncMock(return_value="low")
+
+        # Mock _run_step_action so we don't need full agent infra
+        executor._run_step_action = AsyncMock(return_value={"status": "completed", "result": "ok"})
+        executor._resolve_step_references = AsyncMock(return_value={"capability": "email.draft"})
+        executor._finalize_step = AsyncMock()
+        executor._emit_event = AsyncMock()
+
+        step = MagicMock()
+        step.step_id = "step_cap_exec"
+        step.status = "ready"
+        step.input_data = {"capability": "email.draft", "task_type": "draft_email"}
+        step.started_at = None
+        step.name = "Draft email"
+
+        run = MagicMock()
+        run.run_id = "run_cap_exec"
+        run.user_id = "usr_test"
+        run.workspace_id = "ws_test"
+        run.status = "running"
+
+        await executor._execute_step(run, step)
+
+        # Verify trust engine was called with the correct capability
+        trust_engine.evaluate.assert_called_once_with("email.draft", "low")
+
+    @patch("src.services.graph_executor.get_anthropic_client")
+    async def test_execute_step_falls_back_to_task_type_when_no_capability(
+        self, mock_client, settings, mock_db
+    ):
+        """_execute_step falls back to task_type when capability is absent from input_data."""
+        mock_client.return_value = MagicMock()
+        from src.services.graph_executor import GraphExecutor
+
+        executor = GraphExecutor(settings, mock_db)
+
+        trust_engine = MagicMock()
+        trust_engine._workspace_id = ""
+        from src.orchestrator.contracts import PolicyDecision
+
+        auto_decision = PolicyDecision(decision="auto_execute_silent", reason="ok")
+        trust_engine.evaluate = AsyncMock(return_value=auto_decision)
+        executor._trust_engine = trust_engine
+
+        executor._assess_step_risk = AsyncMock(return_value="low")
+        executor._run_step_action = AsyncMock(return_value={"status": "completed", "result": "ok"})
+        executor._resolve_step_references = AsyncMock(return_value={"task_type": "summarize"})
+        executor._finalize_step = AsyncMock()
+        executor._emit_event = AsyncMock()
+
+        step = MagicMock()
+        step.step_id = "step_fallback_exec"
+        step.status = "ready"
+        step.input_data = {"task_type": "summarize"}
+        step.started_at = None
+        step.name = "Summarize"
+
+        run = MagicMock()
+        run.run_id = "run_fallback_exec"
+        run.user_id = "usr_test"
+        run.workspace_id = "ws_test"
+        run.status = "running"
+
+        await executor._execute_step(run, step)
+
+        # Should fall back to task_type value
+        trust_engine.evaluate.assert_called_once_with("summarize", "low")
+
+
 class TestCapabilityFieldReading:
     """GraphExecutor reads 'capability' field with 'task_type' fallback."""
 
