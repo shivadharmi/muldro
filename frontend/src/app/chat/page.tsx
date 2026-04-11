@@ -13,7 +13,7 @@ import type { WorkspaceSurface } from "@/stores/surface-store";
 import { useCommandStore } from "@/stores/command-store";
 import { useWsActionStore } from "@/stores/ws-action-store";
 import { fetchConversationMessages, type ConversationMessage } from "@/lib/api";
-import type { WorkspaceSurfacePush, SurfacePreview } from "@/lib/a2ui-types";
+import type { WorkspaceSurfacePush, SurfacePreview, SurfaceUpdate } from "@/lib/a2ui-types";
 import type { SurfaceKind } from "@/lib/types/surfaces";
 
 export default function ChatPage() {
@@ -27,6 +27,7 @@ export default function ChatPage() {
   const detailModalOpen = useSurfaceStore((s) => s.detailModalOpen);
   const openDetailModal = useSurfaceStore((s) => s.openDetailModal);
   const closeDetailModal = useSurfaceStore((s) => s.closeDetailModal);
+  const updateSurface = useSurfaceStore((s) => s.updateSurface);
 
   const { mode, setMode } = useCommandStore();
   const setGlobalSendAction = useWsActionStore((s) => s.setSendAction);
@@ -56,6 +57,10 @@ export default function ChatPage() {
   const { connected, sendAction } = useJarvisWs({
     userId,
     onSurfacePush: handleSurfacePush,
+    onSurfaceUpdate: useCallback(
+      (update: SurfaceUpdate) => updateSurface(update.surface_id, update),
+      [updateSurface]
+    ),
     enabled: !!user,
   });
 
@@ -194,13 +199,22 @@ export default function ChatPage() {
                 </span>
               </div>
 
-              {surfaces.map((surface) => (
-                <SurfaceCard
-                  key={surface.id}
-                  surface={surface}
-                  onClick={() => openDetailModal(surface.id)}
-                />
-              ))}
+              {[...surfaces]
+                .sort((a, b) => {
+                  const isActive = (s: WorkspaceSurface) =>
+                    s.phase === "executing" || s.phase === "approval_needed" || s.phase === "planning";
+                  const aActive = isActive(a) ? 0 : 1;
+                  const bActive = isActive(b) ? 0 : 1;
+                  if (aActive !== bActive) return aActive - bActive;
+                  return b.created_at.localeCompare(a.created_at);
+                })
+                .map((surface) => (
+                  <SurfaceCard
+                    key={surface.id}
+                    surface={surface}
+                    onClick={() => openDetailModal(surface.id)}
+                  />
+                ))}
             </div>
           ) : undefined
         }
