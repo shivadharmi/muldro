@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.services.risk_assessor import RiskAssessment
 from tests.conftest import make_mock_settings
 
 
@@ -37,6 +38,37 @@ def _make_executor(settings, mock_db, trust_engine=None):
         return GraphExecutor(settings, mock_db, trust_engine=trust_engine)
 
 
+def _make_step(step_id="step_001", capability="email.send", status="pending"):
+    step = MagicMock()
+    step.step_id = step_id
+    step.name = f"Step: {capability}"
+    step.status = status
+    step.input_data = {"capability": capability}
+    step.started_at = None
+    step.completed_at = None
+    step.output_data = None
+    step.depends_on = []
+    step.task_id = "task_001"
+    step.retry_count = 0
+    step.max_retries = 3
+    step.error = None
+    return step
+
+
+def _make_run(
+    run_id="run_001",
+    user_id="usr_test",
+    workspace_id="ws_test",
+    status="running",
+):
+    run = MagicMock()
+    run.run_id = run_id
+    run.user_id = user_id
+    run.workspace_id = workspace_id
+    run.status = status
+    return run
+
+
 class TestTrustEngineWiring:
     def test_executor_accepts_trust_engine(self, settings, mock_db, mock_trust_engine):
         executor = _make_executor(settings, mock_db, trust_engine=mock_trust_engine)
@@ -45,3 +77,182 @@ class TestTrustEngineWiring:
     def test_executor_works_without_trust_engine(self, settings, mock_db):
         executor = _make_executor(settings, mock_db)
         assert executor._trust_engine is None
+
+
+class TestSingleGateApprovalRequired:
+    """TrustEngine returns approval_required -> step pauses."""
+
+    @patch("src.services.graph_executor.get_or_assess_risk")
+    async def test_approval_required_pauses_step(
+        self, mock_risk, settings, mock_db, mock_trust_engine
+    ):
+        from src.orchestrator.contracts import PolicyDecision
+
+        risk = RiskAssessment(risk_level="low", reasoning="test")
+        mock_risk.return_value = risk
+        mock_trust_engine.evaluate.return_value = PolicyDecision(
+            decision="approval_required",
+            justification="first_use capability",
+            risk_level="low",
+        )
+
+        executor = _make_executor(settings, mock_db, trust_engine=mock_trust_engine)
+        executor._create_approval_and_pause = AsyncMock()
+        executor._emit_event = AsyncMock()
+        executor._checkpoint = AsyncMock()
+
+        step = _make_step()
+        run = _make_run()
+
+        await executor._execute_step(run, step)
+
+        mock_trust_engine.evaluate.assert_called_once_with("email.send", risk)
+        executor._create_approval_and_pause.assert_called_once()
+
+
+class TestSingleGateAutoExecuteNotify:
+    """TrustEngine returns auto_execute_notify -> execute then notify."""
+
+    @patch("src.services.graph_executor.get_or_assess_risk")
+    async def test_auto_notify_executes_and_notifies(
+        self, mock_risk, settings, mock_db, mock_trust_engine
+    ):
+        from src.orchestrator.contracts import PolicyDecision
+
+        risk = RiskAssessment(risk_level="low", reasoning="trusted capability")
+        mock_risk.return_value = risk
+        mock_trust_engine.evaluate.return_value = PolicyDecision(
+            decision="auto_execute_notify",
+            justification="trusted capability",
+            risk_level="low",
+        )
+
+        executor = _make_executor(settings, mock_db, trust_engine=mock_trust_engine)
+        executor._run_step_action = AsyncMock(return_value={"ok": True})
+        executor._notify_auto_executed = AsyncMock()
+        executor._emit_event = AsyncMock()
+        executor._checkpoint = AsyncMock()
+        executor._resolve_step_references = AsyncMock(return_value={"capability": "email.send"})
+        executor._finalize_step = AsyncMock()
+
+        step = _make_step(status="pending")
+        run = _make_run()
+
+        with patch("src.services.graph_executor.transition_step"):
+            await executor._execute_step(run, step)
+
+        executor._run_step_action.assert_called_once()
+        executor._notify_auto_executed.assert_called_once()
+
+
+class TestSingleGateAutoExecuteSilent:
+    """TrustEngine returns auto_execute_silent -> execute silently."""
+
+    @patch("src.services.graph_executor.get_or_assess_risk")
+    async def test_auto_silent_executes_without_notify(
+        self, mock_risk, settings, mock_db, mock_trust_engine
+    ):
+        from src.orchestrator.contracts import PolicyDecision
+
+        risk = RiskAssessment(risk_level="none", reasoning="no risk")
+        mock_risk.return_value = risk
+        mock_trust_engine.evaluate.return_value = PolicyDecision(
+            decision="auto_execute_silent",
+            justification="autonomous + no risk",
+            risk_level="none",
+        )
+
+        executor = _make_executor(settings, mock_db, trust_engine=mock_trust_engine)
+        executor._run_step_action = AsyncMock(return_value={"ok": True})
+        executor._notify_auto_executed = AsyncMock()
+        executor._emit_event = AsyncMock()
+        executor._checkpoint = AsyncMock()
+        executor._resolve_step_references = AsyncMock(return_value={"capability": "email.send"})
+        executor._finalize_step = AsyncMock()
+
+        step = _make_step(status="pending")
+        run = _make_run()
+
+        with patch("src.services.graph_executor.transition_step"):
+            await executor._execute_step(run, step)
+
+        executor._run_step_action.assert_called_once()
+        executor._notify_auto_executed.assert_not_called()
+
+
+class TestSingleGateResumedStep:
+    """Step already running (resumed after approval) -> skip gate."""
+
+    @patch("src.services.graph_executor.get_or_assess_risk")
+    async def test_resumed_step_skips_trust_check(
+        self, mock_risk, settings, mock_db, mock_trust_engine
+    ):
+        executor = _make_executor(settings, mock_db, trust_engine=mock_trust_engine)
+        executor._run_step_action = AsyncMock(return_value={"ok": True})
+        executor._emit_event = AsyncMock()
+        executor._checkpoint = AsyncMock()
+        executor._resolve_step_references = AsyncMock(return_value={"capability": "email.send"})
+        executor._finalize_step = AsyncMock()
+
+        step = _make_step(status="running")
+        run = _make_run()
+
+        await executor._execute_step(run, step)
+
+        mock_risk.assert_not_called()
+        mock_trust_engine.evaluate.assert_not_called()
+        executor._run_step_action.assert_called_once()
+
+
+class TestSingleGateFallbackNoTrustEngine:
+    """No TrustEngine -> fall back to old per-tool requires_approval."""
+
+    async def test_no_trust_engine_falls_back_no_approval(self, settings, mock_db):
+        executor = _make_executor(settings, mock_db, trust_engine=None)
+        executor._run_step_action = AsyncMock(return_value={"ok": True})
+        executor._emit_event = AsyncMock()
+        executor._checkpoint = AsyncMock()
+        executor._resolve_step_references = AsyncMock(return_value={"capability": "email.send"})
+        executor._finalize_step = AsyncMock()
+
+        step = _make_step(status="pending")
+        run = _make_run()
+
+        with patch("src.services.graph_executor.transition_step"):
+            await executor._execute_step(run, step)
+        executor._run_step_action.assert_called_once()
+
+
+class TestStepFailureHandling:
+    """_handle_step_failure retries or marks permanent failure."""
+
+    async def test_failure_with_retries_remaining(self, settings, mock_db):
+        executor = _make_executor(settings, mock_db)
+        executor._emit_event = AsyncMock()
+
+        step = _make_step()
+        step.retry_count = 0
+        step.max_retries = 3
+        run = _make_run()
+
+        with patch("src.services.graph_executor.transition_step"):
+            await executor._handle_step_failure(run, step, RuntimeError("boom"), 100)
+
+        assert step.retry_count == 1
+        assert step.error["attempt"] == 1
+
+    async def test_failure_permanent(self, settings, mock_db):
+        executor = _make_executor(settings, mock_db)
+        executor._emit_event = AsyncMock()
+
+        step = _make_step()
+        step.retry_count = 2
+        step.max_retries = 3
+        run = _make_run()
+
+        with patch("src.services.graph_executor.transition_step"):
+            await executor._handle_step_failure(run, step, RuntimeError("final"), 200)
+
+        assert step.retry_count == 3
+        assert step.error["final"] is True
+        executor._emit_event.assert_called()

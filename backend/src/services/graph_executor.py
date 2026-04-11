@@ -22,9 +22,10 @@ from src.config.settings import Settings, get_anthropic_client
 from src.llm_utils import parse_llm_json
 from src.models.plans import Plan, PlanTask
 from src.models.task_graph import TaskCheckpoint, TaskRun, TaskStep
-from src.orchestrator.contracts import StepResult
+from src.orchestrator.contracts import PolicyDecision, StepResult
 from src.services.audit import AuditService
 from src.services.execution_state import transition_run, transition_step
+from src.services.risk_assessor import RiskAssessment, get_or_assess_risk
 
 if TYPE_CHECKING:
     from src.services.context_builder import ContextBuilder
@@ -514,132 +515,131 @@ class GraphExecutor:
                 break
 
     async def _execute_step(self, run: TaskRun, step: TaskStep) -> None:
-        """Execute a single step, with approval gate if required.
-
-        Approval is required if EITHER:
-        1. The tool's requires_approval flag is True (per-tool setting)
-        2. An ApprovalPolicy for the workspace matches the capability/tool
-
-        If the step is already in ``running`` state (resumed after approval),
-        the approval gate is skipped and execution proceeds directly.
-        """
-        # Step already running → resumed after approval, skip to execution
+        """Execute a single step, with single TrustEngine approval gate."""
         already_approved = step.status == "running"
 
         if not already_approved:
-            needs_approval = False
-            risk_level = "low"
-            task_type = (step.input_data or {}).get(
+            capability = (step.input_data or {}).get(
                 "capability", (step.input_data or {}).get("task_type", "")
             )
 
-            # Check 1: per-tool requires_approval flag
-            if self._tool_registry and task_type:
-                tool = await self._tool_registry.get_tool(task_type)
-                if tool and tool.requires_approval:
-                    needs_approval = True
-                    risk_level = tool.risk_level or "low"
+            if self._trust_engine and capability:
+                # ── Single TrustEngine gate ──────────────────────────
+                risk = await self._assess_step_risk(capability, step, run)
+                decision = await self._trust_engine.evaluate(capability, risk)
 
-            # Check 2: workspace approval policies (capability-pattern based)
-            if not needs_approval and task_type and run.workspace_id:
-                try:
-                    from src.services.approval_policy_engine import ApprovalPolicyEngine
-                    from src.tools.catalog import EXTERNAL_TOOL_SEEDS, INTERNAL_TOOLS
+                if decision.decision == "approval_required":
+                    await self._create_approval_and_pause(run, step, capability, risk, decision)
+                    return
 
-                    capability = None
-                    for _t in INTERNAL_TOOLS:
-                        if _t.name == task_type:
-                            capability = _t.capability
-                            break
-                    if capability is None:
-                        for _s in EXTERNAL_TOOL_SEEDS:
-                            if _s.name == task_type:
-                                capability = _s.capability
-                                break
-                    engine = ApprovalPolicyEngine(self._db, run.workspace_id)
-                    decision = await engine.check(
-                        capability=capability,
-                        tool_name=task_type,
-                        risk_level=risk_level,
-                    )
-                    if decision.requires_approval:
-                        needs_approval = True
-                        logger.info(
-                            "Approval required by policy: %s (reason: %s)",
-                            decision.policy_id,
-                            decision.reason,
-                        )
-                except Exception:
-                    logger.debug("Approval policy check failed", exc_info=True)
-
-            if needs_approval:
-                from src.services.approval_service import create_approval
-
-                approval = await create_approval(
-                    self._db,
-                    user_id=run.user_id,
-                    workspace_id=run.workspace_id,
-                    approval_type=f"step:{task_type}",
-                    title=f"Approve step: {step.name or task_type}",
-                    summary=f"Step in run {run.run_id} requires approval",
-                    risk_level=risk_level,
-                    execution_id=run.run_id,
-                    run_id=run.run_id,
-                    step_id=step.step_id,
-                    requested_by=run.user_id,
-                )
+                # auto_execute_notify or auto_execute_silent — proceed
                 transition_step(step, "running")
-                transition_step(step, "waiting_approval")
-                transition_run(run, "awaiting_approval")
-                await self._checkpoint(run, step.step_id, "approval_gate")
+                step.started_at = step.started_at or datetime.now(timezone.utc)
                 await self._db.flush()
-
                 await self._emit_event(
-                    "approval_requested",
+                    "step.started",
                     run.user_id,
-                    {
-                        "run_id": run.run_id,
-                        "step_id": step.step_id,
-                        "approval_id": approval.approval_id,
-                        "task_type": task_type,
-                        "risk_level": risk_level,
-                    },
+                    {"run_id": run.run_id, "step_id": step.step_id},
                     workspace_id=run.workspace_id,
                 )
 
-                if self._notifier:
-                    try:
-                        await self._notifier.notify(
-                            user_id=run.user_id,
-                            notification_type="approval_request",
-                            title=f"Approve: {step.name or task_type}",
-                            body=f"Step requires approval in run {run.run_id}",
-                            data={
-                                "approval_id": approval.approval_id,
-                                "run_id": run.run_id,
-                                "step_id": step.step_id,
-                            },
-                            workspace_id=run.workspace_id,
-                        )
-                    except Exception:
-                        logger.warning("Failed to notify for step approval", exc_info=True)
+                resolved_input = await self._resolve_step_references(step, run.run_id)
+                if resolved_input != (step.input_data or {}):
+                    step.input_data = resolved_input
+                    await self._db.flush()
+
+                t0 = time.monotonic()
+                try:
+                    output = await self._run_step_action(step, run)
+                    elapsed_ms = int((time.monotonic() - t0) * 1000)
+                except Exception as exc:
+                    elapsed_ms = int((time.monotonic() - t0) * 1000)
+                    await self._handle_step_failure(run, step, exc, elapsed_ms)
+                    return
+
+                if decision.decision == "auto_execute_notify":
+                    await self._notify_auto_executed(run, step, risk, output)
+
+                await self._finalize_step(run, step, output, elapsed_ms)
                 return
+
+            elif not self._trust_engine:
+                # ── Fallback: old per-tool requires_approval flag ────
+                needs_approval = False
+                risk_level = "low"
+
+                if self._tool_registry and capability:
+                    tool = await self._tool_registry.get_tool(capability)
+                    if tool and tool.requires_approval:
+                        needs_approval = True
+                        risk_level = tool.risk_level or "low"
+
+                if needs_approval:
+                    from src.services.approval_service import create_approval
+
+                    approval = await create_approval(
+                        self._db,
+                        user_id=run.user_id,
+                        workspace_id=run.workspace_id,
+                        approval_type=f"step:{capability}",
+                        title=f"Approve step: {step.name or capability}",
+                        summary=f"Step in run {run.run_id} requires approval",
+                        risk_level=risk_level,
+                        execution_id=run.run_id,
+                        run_id=run.run_id,
+                        step_id=step.step_id,
+                        requested_by=run.user_id,
+                    )
+                    transition_step(step, "running")
+                    transition_step(step, "waiting_approval")
+                    transition_run(run, "awaiting_approval")
+                    await self._checkpoint(run, step.step_id, "approval_gate")
+                    await self._db.flush()
+                    await self._emit_event(
+                        "approval_requested",
+                        run.user_id,
+                        {
+                            "run_id": run.run_id,
+                            "step_id": step.step_id,
+                            "approval_id": approval.approval_id,
+                            "task_type": capability,
+                            "risk_level": risk_level,
+                        },
+                        workspace_id=run.workspace_id,
+                    )
+                    if self._notifier:
+                        try:
+                            await self._notifier.notify(
+                                user_id=run.user_id,
+                                notification_type="approval_request",
+                                title=f"Approve: {step.name or capability}",
+                                body=(f"Step requires approval in run {run.run_id}"),
+                                data={
+                                    "approval_id": approval.approval_id,
+                                    "run_id": run.run_id,
+                                    "step_id": step.step_id,
+                                },
+                                workspace_id=run.workspace_id,
+                            )
+                        except Exception:
+                            logger.warning(
+                                "Failed to notify for step approval",
+                                exc_info=True,
+                            )
+                    return
 
             transition_step(step, "running")
 
+        # ── Common execution path (resumed or no-gate-needed) ────────
         step.started_at = step.started_at or datetime.now(timezone.utc)
         await self._db.flush()
         await self._emit_event(
             "step.started",
             run.user_id,
-            {
-                "run_id": run.run_id,
-                "step_id": step.step_id,
-            },
+            {"run_id": run.run_id, "step_id": step.step_id},
             workspace_id=run.workspace_id,
         )
 
-        # Resolve step output references: {task_id}.output.field → actual value
         resolved_input = await self._resolve_step_references(step, run.run_id)
         if resolved_input != (step.input_data or {}):
             step.input_data = resolved_input
@@ -649,101 +649,247 @@ class GraphExecutor:
         try:
             output = await self._run_step_action(step, run)
             elapsed_ms = int((time.monotonic() - t0) * 1000)
+        except Exception as exc:
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            await self._handle_step_failure(run, step, exc, elapsed_ms)
+            return
 
+        await self._finalize_step(run, step, output, elapsed_ms)
+
+    # ── TrustEngine helper methods ───────────────────────────────────
+
+    async def _assess_step_risk(
+        self, capability: str, step: TaskStep, run: TaskRun
+    ) -> RiskAssessment:
+        """Call get_or_assess_risk with appropriate context."""
+        try:
+            redis = None
+            if self._settings.redis_url:
+                import redis.asyncio as aioredis
+
+                redis = aioredis.from_url(self._settings.redis_url, decode_responses=True)
+
+            return await get_or_assess_risk(
+                capability=capability,
+                step_input=step.input_data or {},
+                user_context={"user_id": run.user_id},
+                workspace_id=run.workspace_id or "",
+                client=self._client,
+                redis=redis,
+            )
+        except Exception:
+            logger.warning(
+                "Risk assessment failed for %s, defaulting to medium",
+                capability,
+                exc_info=True,
+            )
+            return RiskAssessment(
+                risk_level="medium",
+                reasoning="Fallback — risk assessment unavailable",
+            )
+
+    async def _create_approval_and_pause(
+        self,
+        run: TaskRun,
+        step: TaskStep,
+        capability: str,
+        risk: RiskAssessment,
+        decision: PolicyDecision,
+    ) -> None:
+        """Create approval record, pause step and run, notify user."""
+        from src.services.approval_service import create_approval
+
+        approval = await create_approval(
+            self._db,
+            user_id=run.user_id,
+            workspace_id=run.workspace_id,
+            approval_type=f"step:{capability}",
+            title=f"Approve step: {step.name or capability}",
+            summary=decision.justification or f"Trust gate: {risk.reasoning}",
+            risk_level=risk.risk_level,
+            execution_id=run.run_id,
+            run_id=run.run_id,
+            step_id=step.step_id,
+            requested_by=run.user_id,
+        )
+        transition_step(step, "running")
+        transition_step(step, "waiting_approval")
+        transition_run(run, "awaiting_approval")
+        await self._checkpoint(run, step.step_id, "approval_gate")
+        await self._db.flush()
+
+        await self._emit_event(
+            "approval_requested",
+            run.user_id,
+            {
+                "run_id": run.run_id,
+                "step_id": step.step_id,
+                "approval_id": approval.approval_id,
+                "capability": capability,
+                "risk_level": risk.risk_level,
+                "trust_decision": decision.decision,
+            },
+            workspace_id=run.workspace_id,
+        )
+
+        if self._notifier:
+            try:
+                await self._notifier.notify(
+                    user_id=run.user_id,
+                    notification_type="approval_request",
+                    title=f"Approve: {step.name or capability}",
+                    body=decision.justification or risk.reasoning,
+                    data={
+                        "approval_id": approval.approval_id,
+                        "run_id": run.run_id,
+                        "step_id": step.step_id,
+                        "risk_level": risk.risk_level,
+                    },
+                    workspace_id=run.workspace_id,
+                )
+            except Exception:
+                logger.warning("Failed to notify for step approval", exc_info=True)
+
+    async def _notify_auto_executed(
+        self,
+        run: TaskRun,
+        step: TaskStep,
+        risk: RiskAssessment,
+        output: dict | None,
+    ) -> None:
+        """Send post-execution notification for auto_execute_notify."""
+        if not self._notifier:
+            return
+
+        capability = (step.input_data or {}).get(
+            "capability", (step.input_data or {}).get("task_type", "unknown")
+        )
+        try:
+            await self._notifier.notify(
+                user_id=run.user_id,
+                notification_type="auto_execute_notify",
+                title=f"Auto-executed: {step.name or capability}",
+                body=risk.reasoning,
+                data={
+                    "run_id": run.run_id,
+                    "step_id": step.step_id,
+                    "capability": capability,
+                    "risk_level": risk.risk_level,
+                },
+                workspace_id=run.workspace_id,
+            )
+        except Exception:
+            logger.warning("Failed to send auto_execute notification", exc_info=True)
+
+    async def _handle_step_failure(
+        self,
+        run: TaskRun,
+        step: TaskStep,
+        exc: Exception,
+        elapsed_ms: int,
+    ) -> None:
+        """Handle step execution failure with retry logic."""
+        step.retry_count += 1
+        if step.retry_count < step.max_retries:
+            transition_step(step, "failed")
+            transition_step(step, "pending")  # Retry: failed → pending
+            step.error = {
+                "attempt": step.retry_count,
+                "message": str(exc)[:500],
+            }
+            logger.warning(
+                "Step %s failed (attempt %d/%d): %s",
+                step.step_id,
+                step.retry_count,
+                step.max_retries,
+                exc,
+            )
+        else:
+            logger.error(
+                "Step %s permanently failed after %dms: %s",
+                step.step_id,
+                elapsed_ms,
+                exc,
+            )
+            transition_step(step, "failed")
+            step.output_data = {"error": str(exc)[:500]}
+            step.completed_at = datetime.now(timezone.utc)
+            step.error = {"message": str(exc)[:500], "final": True}
             await self._emit_event(
-                "tool_call_completed",
+                "step.failed",
                 run.user_id,
                 {
                     "run_id": run.run_id,
                     "step_id": step.step_id,
-                    "tool_name": (step.input_data or {}).get(
-                        "capability",
-                        (step.input_data or {}).get("task_type", "unknown"),
-                    ),
+                    "error": str(exc)[:500],
                     "duration_ms": elapsed_ms,
                 },
                 workspace_id=run.workspace_id,
             )
+        await self._db.flush()
 
-            transition_step(step, "completed")
-            step.output_data = output
-            step.completed_at = datetime.now(timezone.utc)
-            await self._db.flush()
+    async def _finalize_step(
+        self,
+        run: TaskRun,
+        step: TaskStep,
+        output: dict | None,
+        elapsed_ms: int,
+    ) -> None:
+        """Mark step completed, emit events, checkpoint."""
+        await self._emit_event(
+            "tool_call_completed",
+            run.user_id,
+            {
+                "run_id": run.run_id,
+                "step_id": step.step_id,
+                "tool_name": (step.input_data or {}).get(
+                    "capability",
+                    (step.input_data or {}).get("task_type", "unknown"),
+                ),
+                "duration_ms": elapsed_ms,
+            },
+            workspace_id=run.workspace_id,
+        )
 
-            result = StepResult(
-                step_id=step.step_id,
-                status="completed",
-                output_data=output,
-                duration_ms=elapsed_ms,
-            )
+        transition_step(step, "completed")
+        step.output_data = output
+        step.completed_at = datetime.now(timezone.utc)
+        await self._db.flush()
 
-            await self._checkpoint(run, step.step_id, "step_completed")
+        result = StepResult(
+            step_id=step.step_id,
+            status="completed",
+            output_data=output,
+            duration_ms=elapsed_ms,
+        )
 
+        await self._checkpoint(run, step.step_id, "step_completed")
+
+        await self._emit_event(
+            "step_completed",
+            run.user_id,
+            {
+                "run_id": run.run_id,
+                "step_id": step.step_id,
+                "task_id": step.task_id,
+                "duration_ms": result.duration_ms,
+            },
+            workspace_id=run.workspace_id,
+        )
+
+        # Emit surface.updated for A2UI live streaming
+        if output and any(k in output for k in ("draft", "report", "summary", "result", "view")):
             await self._emit_event(
-                "step_completed",
+                "surface_created",
                 run.user_id,
                 {
                     "run_id": run.run_id,
                     "step_id": step.step_id,
-                    "task_id": step.task_id,
-                    "duration_ms": result.duration_ms,
+                    "surface_type": "step_output",
+                    "preview": str(output.get("result", output.get("summary", "")))[:200],
                 },
                 workspace_id=run.workspace_id,
             )
-            # Emit surface.updated for A2UI live streaming
-            if output and any(
-                k in output for k in ("draft", "report", "summary", "result", "view")
-            ):
-                await self._emit_event(
-                    "surface_created",
-                    run.user_id,
-                    {
-                        "run_id": run.run_id,
-                        "step_id": step.step_id,
-                        "surface_type": "step_output",
-                        "preview": str(output.get("result", output.get("summary", "")))[:200],
-                    },
-                    workspace_id=run.workspace_id,
-                )
-
-        except Exception as exc:
-            elapsed_ms = int((time.monotonic() - t0) * 1000)
-            step.retry_count += 1
-            if step.retry_count < step.max_retries:
-                transition_step(step, "failed")
-                transition_step(step, "pending")  # Retry: failed → pending
-                step.error = {"attempt": step.retry_count, "message": str(exc)[:500]}
-                logger.warning(
-                    "Step %s failed (attempt %d/%d): %s",
-                    step.step_id,
-                    step.retry_count,
-                    step.max_retries,
-                    exc,
-                )
-            else:
-                transition_step(step, "failed")
-                step.completed_at = datetime.now(timezone.utc)
-                step.error = {"message": str(exc)[:500], "final": True}
-                logger.error("Step %s permanently failed: %s", step.step_id, exc)
-                StepResult(
-                    step_id=step.step_id,
-                    status="failed",
-                    error=str(exc)[:500],
-                    duration_ms=elapsed_ms,
-                )
-                await self._emit_event(
-                    "step.failed",
-                    run.user_id,
-                    {
-                        "run_id": run.run_id,
-                        "step_id": step.step_id,
-                        "error": str(exc)[:500],
-                        "duration_ms": elapsed_ms,
-                    },
-                    workspace_id=run.workspace_id,
-                )
-
-        await self._db.flush()
 
     async def _run_step_action(self, step: TaskStep, run: TaskRun) -> dict:
         """Execute the actual action for a step.
