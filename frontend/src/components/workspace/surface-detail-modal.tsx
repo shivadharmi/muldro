@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { A2UIRenderer } from "@/components/a2ui/renderer";
+import { A2UIExecutionSurface } from "@/components/a2ui/components/execution-surface";
 import { handleA2UIAction } from "@/components/a2ui/action-handler";
 import { fetchSurfaceDetail } from "@/lib/api";
 import { useWsActionStore } from "@/stores/ws-action-store";
@@ -191,6 +192,27 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
                 </CollapsibleSection>
               ))}
             </div>
+          )}
+
+          {/* Live execution surface */}
+          {surface.phase && (
+            <A2UIExecutionSurface
+              component={{
+                type: "ExecutionSurface",
+                id: `exec-${surface.id}`,
+                properties: {
+                  goal: surface.preview.title,
+                  phase: surface.phase,
+                  steps: surface.steps ?? [],
+                  current_step: surface.current_step ?? null,
+                  progress: surface.progress ?? "",
+                  approval: surface.approval ?? null,
+                  results: surface.results ?? null,
+                },
+                children: [],
+                actions: [],
+              }}
+            />
           )}
 
           {!loading && !error && !activeData && tabs.length === 0 && (
