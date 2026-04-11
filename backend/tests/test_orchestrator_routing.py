@@ -59,8 +59,7 @@ class TestProcessMessageRouting:
             return "Hello! How can I help?"
 
         orch._call_agent = mock_call_agent
-        orch._create_lightweight_run = AsyncMock(return_value="run_1")
-        orch._complete_lightweight_run = AsyncMock()
+        orch._log_interaction = AsyncMock(return_value="ilog_01")
         orch._push_workspace_surface = AsyncMock()
         orch._emit_runtime_event = AsyncMock()
         orch._load_conversation_history = AsyncMock(return_value="")
@@ -95,8 +94,7 @@ class TestProcessMessageRouting:
             return "Goal set!"
 
         orch._call_agent = mock_call_agent
-        orch._create_lightweight_run = AsyncMock(return_value="run_1")
-        orch._complete_lightweight_run = AsyncMock()
+        orch._log_interaction = AsyncMock(return_value="ilog_01")
         orch._push_workspace_surface = AsyncMock()
         orch._emit_runtime_event = AsyncMock()
         orch._load_conversation_history = AsyncMock(return_value="")
@@ -121,8 +119,7 @@ class TestProcessMessageRouting:
             return "Hi!"
 
         orch._call_agent = mock_call_agent
-        orch._create_lightweight_run = AsyncMock(return_value="run_1")
-        orch._complete_lightweight_run = AsyncMock()
+        orch._log_interaction = AsyncMock(return_value="ilog_01")
         orch._push_workspace_surface = AsyncMock()
         orch._emit_runtime_event = AsyncMock()
         orch._load_conversation_history = AsyncMock(return_value="")
@@ -150,8 +147,7 @@ class TestProcessMessageRouting:
             return "Here are your emails."
 
         orch._call_agent = mock_call_agent
-        orch._create_lightweight_run = AsyncMock(return_value="run_1")
-        orch._complete_lightweight_run = AsyncMock()
+        orch._log_interaction = AsyncMock(return_value="ilog_01")
         orch._push_workspace_surface = AsyncMock()
         orch._emit_runtime_event = AsyncMock()
         orch._load_conversation_history = AsyncMock(return_value="")
@@ -179,8 +175,7 @@ class TestProcessMessageStreamRouting:
 
         orch._call_agent_stream = mock_call_agent_stream
         orch._call_agent = AsyncMock(return_value="")
-        orch._create_lightweight_run = AsyncMock(return_value="run_1")
-        orch._complete_lightweight_run = AsyncMock()
+        orch._log_interaction = AsyncMock(return_value="ilog_01")
         orch._push_workspace_surface = AsyncMock()
         orch._spawn_background = MagicMock()
         orch._emit_runtime_event = AsyncMock()
@@ -211,8 +206,7 @@ class TestProcessMessageStreamRouting:
 
         orch._call_agent_stream = mock_call_agent_stream
         orch._call_agent = AsyncMock(return_value="")
-        orch._create_lightweight_run = AsyncMock(return_value="run_1")
-        orch._complete_lightweight_run = AsyncMock()
+        orch._log_interaction = AsyncMock(return_value="ilog_01")
         orch._push_workspace_surface = AsyncMock()
         orch._spawn_background = MagicMock()
         orch._emit_runtime_event = AsyncMock()
