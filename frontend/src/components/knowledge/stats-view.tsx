@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { fetchKnowledgeStats } from "@/lib/api";
 import { useKnowledgeStore } from "@/stores/knowledge-store";
+import { SkeletonGrid, Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "./stat-card";
 import { BarChart } from "./bar-chart";
 import { DonutChart } from "./donut-chart";
@@ -142,26 +143,10 @@ export function StatsView() {
 
   if (isLoading) {
     return (
-      <div className="h-full overflow-y-auto p-4 sm:p-6 space-y-4">
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <div
-              key={i}
-              className="bg-surface-1 border border-b-secondary rounded-[var(--radius-md)] px-4 py-3 animate-pulse"
-            >
-              <div className="h-3 w-16 bg-surface-3 rounded-[var(--radius-sm)] mb-2" />
-              <div className="h-7 w-12 bg-surface-3 rounded-[var(--radius-sm)]" />
-            </div>
-          ))}
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {Array.from({ length: 2 }).map((_, i) => (
-            <div
-              key={i}
-              className="bg-surface-1 border border-b-secondary rounded-[var(--radius-md)] h-48 animate-pulse"
-            />
-          ))}
-        </div>
+      <div className="p-4 sm:p-6 space-y-6">
+        <SkeletonGrid count={4} />
+        <Skeleton className="h-48 w-full" />
+        <Skeleton className="h-48 w-full" />
       </div>
     );
   }
