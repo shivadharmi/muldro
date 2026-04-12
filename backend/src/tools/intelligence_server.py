@@ -230,6 +230,22 @@ async def update_entity(
 
             await db.flush()
             await db.commit()
+
+            # Sync to Neo4j (inline, best-effort)
+            try:
+                if _settings and _settings.neo4j_url:
+                    from src.services.graph_sync import GraphSyncService
+
+                    gs = GraphSyncService(_settings, db)
+                    await gs.sync_entity_by_id(entity_id)
+                    await gs.close()
+            except Exception:
+                logger.debug(
+                    "Neo4j sync after update_entity failed for %s",
+                    entity_id,
+                    exc_info=True,
+                )
+
             return {"status": "updated", "entity_id": entity_id}
         except Exception as e:
             logger.error("update_entity failed: %s", e, exc_info=True)
@@ -457,11 +473,17 @@ async def extract_preferences(
     The Persona agent calls this to store learned preferences as memories.
     source_text: description of the interaction to analyze
     """
-    async with _get_db():
+    async with _get_db() as db:
         try:
-            memory_service = _services.memory_service
-            if not memory_service:
-                return {"status": "error", "error": "Memory service not available"}
+            from src.services.memory_service import MemoryService
+
+            # Create a MemoryService bound to THIS session so the
+            # commit below actually persists extracted preferences.
+            memory_service = MemoryService(
+                settings=_settings,
+                db=db,
+                vector_store=_services.vector_store,
+            )
 
             memory_ids = await memory_service.extract_preferences(
                 user_id=user_id,
@@ -469,6 +491,7 @@ async def extract_preferences(
                 source_event_ids=[],
                 workspace_id=workspace_id,
             )
+            await db.commit()
             return {
                 "status": "ok",
                 "memories_created": len(memory_ids),
@@ -476,6 +499,7 @@ async def extract_preferences(
             }
         except Exception as e:
             logger.error("extract_preferences failed: %s", e, exc_info=True)
+            await db.rollback()
             return make_error_response(e)
 
 
@@ -927,9 +951,15 @@ async def store_memory(
     """Store a memory in the knowledge base."""
     async with _get_db() as db:
         try:
-            memory_svc = _services.memory_service
-            if not memory_svc:
-                return make_error_response(RuntimeError("Memory service not available"))
+            from src.services.memory_service import MemoryService
+
+            # Create a MemoryService bound to THIS session so the
+            # commit below actually persists the memory.
+            memory_svc = MemoryService(
+                settings=_settings,
+                db=db,
+                vector_store=_services.vector_store,
+            )
 
             linked_ids = (
                 [e.strip() for e in entity_ids.split(",") if e.strip()] if entity_ids else None
@@ -961,8 +991,34 @@ async def store_memory(
                     source=source,
                 )
             await db.commit()
+
+            # Best-effort entity extraction from the stored text so that
+            # entities mentioned in chat (e.g. company names, people) are
+            # captured in the knowledge graph.
+            entity_ids: list[str] = []
+            try:
+                from src.services.world_model import WorldModel
+
+                wm = WorldModel(
+                    _settings,
+                    db,
+                    embedding_service=_services.extras.get("embedding_service"),
+                    vector_store=_services.vector_store,
+                )
+                entity_ids = await wm.extract_from_text(
+                    text, user_id=user_id, workspace_id=workspace_id
+                )
+                if entity_ids:
+                    await db.commit()
+            except Exception:
+                logger.debug("Entity extraction from memory text failed", exc_info=True)
+
             await ctx.info(f"Stored {memory_type} memory: {text[:80]}")
-            return {"status": "stored", "memory_id": mid}
+            return {
+                "status": "stored",
+                "memory_id": mid,
+                "entity_ids": entity_ids,
+            }
         except Exception as e:
             logger.error("store_memory failed: %s", e, exc_info=True)
             await db.rollback()
@@ -984,9 +1040,15 @@ async def store_preference(
     """Store a user preference extracted from interactions."""
     async with _get_db() as db:
         try:
-            memory_svc = _services.memory_service
-            if not memory_svc:
-                return make_error_response(RuntimeError("Memory service not available"))
+            from src.services.memory_service import MemoryService
+
+            # Create a MemoryService bound to THIS session so the
+            # commit below actually persists the preference.
+            memory_svc = MemoryService(
+                settings=_settings,
+                db=db,
+                vector_store=_services.vector_store,
+            )
 
             mid = await memory_svc.store_instruction_memory(
                 user_id=user_id,
