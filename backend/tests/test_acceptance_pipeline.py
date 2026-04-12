@@ -322,6 +322,7 @@ def test_rejection_audit_trail(mock_audit_cls):
     mock_approval.summary = "Automated weekly report to team"
     mock_approval.risk_level = "low"
     mock_approval.created_at = datetime(2026, 3, 14, 9, 0, tzinfo=timezone.utc)
+    mock_approval.expires_at = None
     mock_approval.run_id = None
     mock_approval.step_id = None
     mock_approval.requested_by = None
