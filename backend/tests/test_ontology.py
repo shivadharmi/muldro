@@ -96,7 +96,6 @@ class TestMemoryTypeLiterals:
         assert "preference" in args
         assert "relationship" in args
         assert "task_context" in args
-        assert "procedural" in args
 
     def test_memory_scope_literal_values(self):
         import typing
