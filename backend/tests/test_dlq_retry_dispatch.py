@@ -61,6 +61,7 @@ class TestDlqRetryDispatchBackgroundTask:
 
         mock_db = MagicMock()
         mock_db.get = AsyncMock(return_value=mock_run)
+        mock_db.flush = AsyncMock()
         mock_db.commit = AsyncMock()
         mock_db.__aenter__ = AsyncMock(return_value=mock_db)
         mock_db.__aexit__ = AsyncMock(return_value=False)
@@ -78,6 +79,7 @@ class TestDlqRetryDispatchBackgroundTask:
             mock_dlq.mark_retrying.assert_awaited_once_with(entry.entry_id)
             mock_db.get.assert_awaited_once()
             mock_transition.assert_called_once_with(mock_run, "pending")
+            mock_db.flush.assert_awaited_once()
             mock_dlq.mark_resolved.assert_awaited_once_with(entry.entry_id)
 
 
@@ -157,24 +159,21 @@ class TestDlqRetryHandlerFailure:
             mock_db.commit.assert_awaited()
 
 
-class TestDlqRetryDispatchEmbedding:
-    """Verify failed_embedding DLQ entries are re-dispatched via EmbeddingService."""
+class TestDlqRetryFailedEmbeddingDeferred:
+    """Verify failed_embedding entries are not dispatched (requires dedicated retry service)."""
 
     @pytest.mark.asyncio
-    async def test_dlq_retry_dispatches_failed_embedding(self):
-        """Verify EmbeddingService.embed_text called and mark_resolved on success."""
+    async def test_dlq_retry_failed_embedding_deferred(self):
+        """failed_embedding entries return False and do NOT call mark_resolved."""
         entry = _make_dlq_entry(
             operation_type="failed_embedding",
-            payload={"text": "some text to embed"},
+            payload={"record_id": "mem_abc123", "collection": "memories", "record_type": "memory"},
         )
 
         mock_dlq = MagicMock()
         mock_dlq.list_pending = AsyncMock(return_value=[entry])
         mock_dlq.mark_retrying = AsyncMock(return_value=True)
         mock_dlq.mark_resolved = AsyncMock()
-
-        mock_embed_svc = MagicMock()
-        mock_embed_svc.embed_text = AsyncMock(return_value=[0.1, 0.2, 0.3])
 
         mock_db = MagicMock()
         mock_db.commit = AsyncMock()
@@ -185,17 +184,11 @@ class TestDlqRetryDispatchEmbedding:
 
         scheduler = _make_scheduler()
 
-        with (
-            patch("src.services.scheduler.DeadLetterService", return_value=mock_dlq),
-            patch(
-                "src.services.scheduler.EmbeddingService",
-                return_value=mock_embed_svc,
-            ),
-        ):
+        with patch("src.services.scheduler.DeadLetterService", return_value=mock_dlq):
             await scheduler._tick_dlq_retry(mock_factory)
 
-            mock_embed_svc.embed_text.assert_awaited_once_with("some text to embed")
-            mock_dlq.mark_resolved.assert_awaited_once_with(entry.entry_id)
+            # mark_resolved should NOT be called — handler returns False
+            mock_dlq.mark_resolved.assert_not_called()
 
 
 class TestDlqRetryDispatchPerception:

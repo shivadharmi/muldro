@@ -21,7 +21,6 @@ from src.models.database import get_session_factory
 from src.models.schedules import Schedule
 from src.models.task_graph import TaskRun
 from src.services.dead_letter import DeadLetterService
-from src.services.embedding_service import EmbeddingService
 from src.services.execution_state import transition_run
 from src.services.heartbeat import HeartbeatService
 
@@ -564,16 +563,23 @@ class SchedulerLoop:
                     return False
                 if run.status == "failed":
                     transition_run(run, "pending")
+                    await db.flush()
+                else:
+                    logger.debug(
+                        "DLQ background_task run %s already in status '%s' — skipping transition",
+                        run_id,
+                        run.status,
+                    )
                 return True
 
             if op == "failed_embedding":
-                text = payload.get("text")
-                if not text:
-                    logger.warning("DLQ failed_embedding missing text: %s", entry.entry_id)
-                    return False
-                svc = EmbeddingService(self._settings)
-                vector = await svc.embed_text(text)
-                return vector is not None
+                # Full re-embed requires looking up source record by record_id
+                # to retrieve text — deferred to a dedicated embedding retry service.
+                logger.info(
+                    "DLQ failed_embedding entry %s — skipping (requires dedicated retry service)",
+                    entry.entry_id,
+                )
+                return False
 
             if op == "perception_cycle":
                 source = payload.get("source")
