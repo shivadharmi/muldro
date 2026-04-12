@@ -471,6 +471,9 @@ class TestExecuteStepCapabilityReading:
         step.input_data = {"capability": "email.draft", "task_type": "draft_email"}
         step.started_at = None
         step.name = "Draft email"
+        step.timeout_seconds = None
+        step.retry_count = 0
+        step.max_retries = 3
 
         run = MagicMock()
         run.run_id = "run_cap_exec"
@@ -513,6 +516,9 @@ class TestExecuteStepCapabilityReading:
         step.input_data = {"task_type": "summarize"}
         step.started_at = None
         step.name = "Summarize"
+        step.timeout_seconds = None
+        step.retry_count = 0
+        step.max_retries = 3
 
         run = MagicMock()
         run.run_id = "run_fallback_exec"

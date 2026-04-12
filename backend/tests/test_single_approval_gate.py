@@ -51,6 +51,7 @@ def _make_step(step_id="step_001", capability="email.send", status="pending"):
     step.task_id = "task_001"
     step.retry_count = 0
     step.max_retries = 3
+    step.timeout_seconds = None
     step.error = None
     return step
 

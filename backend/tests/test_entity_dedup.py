@@ -83,7 +83,7 @@ class TestEntityFuzzyDedup:
         db.execute = AsyncMock(side_effect=[no_match, entity_result])
 
         embed_svc = AsyncMock()
-        embed_svc.embed = AsyncMock(return_value=[0.1] * 1024)
+        embed_svc.embed_text = AsyncMock(return_value=[0.1] * 1024)
 
         # Mock Qdrant vector_store.find_similar
         mock_vector_store = AsyncMock()
@@ -105,7 +105,7 @@ class TestEntityFuzzyDedup:
         found = await wm._find_by_name_or_alias("usr_1", "Jon Doe", None)
 
         assert found is entity
-        embed_svc.embed.assert_called_once_with("Jon Doe")
+        embed_svc.embed_text.assert_called_once_with("Jon Doe")
 
     async def test_no_embedding_service_skips_fuzzy(self):
         """Without embedding_service, fuzzy match is skipped."""
@@ -127,7 +127,7 @@ class TestEntityFuzzyDedup:
         db.execute = AsyncMock(return_value=no_match)
 
         embed_svc = AsyncMock()
-        embed_svc.embed = AsyncMock(side_effect=RuntimeError("Bedrock error"))
+        embed_svc.embed_text = AsyncMock(side_effect=RuntimeError("Bedrock error"))
 
         wm = _make_world_model(db=db, embedding_service=embed_svc)
         found = await wm._find_by_name_or_alias("usr_1", "Some Name", None)
@@ -143,7 +143,7 @@ class TestEntityFuzzyDedup:
         db.execute = AsyncMock(return_value=no_match)
 
         embed_svc = AsyncMock()
-        embed_svc.embed = AsyncMock(return_value=[0.1] * 1024)
+        embed_svc.embed_text = AsyncMock(return_value=[0.1] * 1024)
 
         wm = _make_world_model(db=db, embedding_service=embed_svc)
         found = await wm._find_by_name_or_alias("usr_1", "Totally New Person", None)
@@ -164,7 +164,7 @@ class TestEntityEmbeddingOnUpsert:
         db.execute = AsyncMock(return_value=no_match)
 
         embed_svc = AsyncMock()
-        embed_svc.embed = AsyncMock(return_value=[0.5] * 1024)
+        embed_svc.embed_text = AsyncMock(return_value=[0.5] * 1024)
 
         vs = AsyncMock()
         vs.upsert = AsyncMock()
@@ -179,7 +179,7 @@ class TestEntityEmbeddingOnUpsert:
             )
 
         assert entity_id.startswith("ent_")
-        assert embed_svc.embed.call_count >= 1
+        assert embed_svc.embed_text.call_count >= 1
         # Embedding stored in Qdrant, not on the Entity model
         vs.upsert.assert_called_once()
         call_args = vs.upsert.call_args

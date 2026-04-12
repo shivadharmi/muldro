@@ -98,8 +98,8 @@ class Notifier:
     async def _check_rate_limit(self, user_id: str, surface: str) -> bool:
         """Check if a notification can be sent to this surface within rate limits.
 
-        Uses Redis pipeline with INCR + EXPIRE (always applied) for atomicity.
-        If EXPIRE fails after INCR, the next call will re-apply TTL.
+        Uses a Redis pipeline to atomically INCR the counter and always refresh
+        the TTL, ensuring the window expires correctly even under concurrent writes.
         """
         if not self._redis:
             return True

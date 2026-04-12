@@ -2,7 +2,9 @@
 
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
+from qdrant_client.http.exceptions import UnexpectedResponse
 
 from src.services.vector_store import (
     COLLECTION_APPROVALS,
@@ -30,8 +32,14 @@ async def test_ensure_collections_creates_all_six():
     settings = make_mock_settings()
     store = VectorStore(settings)
 
+    not_found = UnexpectedResponse(
+        status_code=404,
+        reason_phrase="Not Found",
+        content=b"Not Found",
+        headers=httpx.Headers({}),
+    )
     mock_client = AsyncMock()
-    mock_client.get_collection.side_effect = Exception("not found")
+    mock_client.get_collection.side_effect = not_found
     mock_client.create_collection = AsyncMock()
 
     with patch.object(store, "_get_client", return_value=mock_client):

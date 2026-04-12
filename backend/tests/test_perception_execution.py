@@ -168,8 +168,8 @@ class TestPersistPlanIdempotency:
             idempotency_key="perception:gmail:create_task:abc123",
         )
 
-        # Should return original plan WITHOUT plan_id (skipped)
-        assert result.plan_id is None
+        # Idempotency: returns plan with the existing plan_id, nothing new persisted
+        assert result.plan_id == "plan_existing_123"
 
     @pytest.mark.asyncio
     @patch("src.orchestrator.jarvis.get_anthropic_client")

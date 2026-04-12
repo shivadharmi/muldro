@@ -291,7 +291,11 @@ class TestPlanPersistence:
 
         plans = [o for o in added_objects if isinstance(o, Plan)]
         assert len(plans) == 1
-        assert len(plans[0].tasks) == 1  # Only jarvis step becomes a task
+        # Both jarvis and user-actor steps become PlanTasks (user step is awaiting_input)
+        assert len(plans[0].tasks) == 2
+        user_tasks = [t for t in plans[0].tasks if t.task_type == "user_action"]
+        assert len(user_tasks) == 1
+        assert user_tasks[0].status == "awaiting_input"
 
     @pytest.mark.asyncio
     async def test_persist_plan_record_maps_depends_on(self):
@@ -444,6 +448,6 @@ class TestPlanPersistence:
         )
 
         result = await orch._persist_plan_record(plan, "usr_1", "ws_1", idempotency_key="test_key")
-        # Should return original plan without plan_id (not persisted)
-        assert result.plan_id is None
+        # Idempotency: returns plan with the existing plan_id, nothing new persisted
+        assert result.plan_id == "plan_existing123"
         mock_db.add.assert_not_called()

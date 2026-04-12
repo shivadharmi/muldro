@@ -10,7 +10,7 @@ Covers:
 """
 
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -146,7 +146,9 @@ class TestSurfaceIdPropagation:
         with patch("src.services.graph_executor.transition_run"):
             await executor.resume_run("run_01")
 
-        executor._execute_dag.assert_called_once_with(run, surface_id="surf_resume_456")
+        executor._execute_dag.assert_called_once_with(
+            run, surface_id="surf_resume_456", cancel_event=ANY
+        )
 
     @pytest.mark.asyncio
     async def test_resume_run_passes_none_when_no_checkpoint_surface(self):
@@ -163,7 +165,7 @@ class TestSurfaceIdPropagation:
         with patch("src.services.graph_executor.transition_run"):
             await executor.resume_run("run_01")
 
-        executor._execute_dag.assert_called_once_with(run, surface_id=None)
+        executor._execute_dag.assert_called_once_with(run, surface_id=None, cancel_event=ANY)
 
 
 # ── Phase 2.3: Permanent failure surface emission ────────────────

@@ -238,6 +238,7 @@ class TestStepTransitions:
             "failed",
             "skipped",
             "timed_out",
+            "cancelled",
         }
         assert set(STEP_TRANSITIONS.keys()) == expected
 

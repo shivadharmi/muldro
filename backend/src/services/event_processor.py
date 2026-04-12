@@ -235,7 +235,7 @@ class EventProcessor:
                             "source": event.source,
                             "importance_score": event.importance_score,
                             "workspace_id": workspace_id,
-                            "created_at": event.occurred_at.isoformat()
+                            "occurred_at": event.occurred_at.isoformat()
                             if event.occurred_at
                             else None,
                             "actor": (event.actor_entities[0] or {}).get("name")
