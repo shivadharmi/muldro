@@ -146,22 +146,25 @@ export function KnowledgeSearch() {
 
   const groups = useMemo(
     () => (data?.results ? groupResults(data.results) : []),
-    [data?.results],
+    [data],
   );
 
   const flatResults = useMemo(() => flattenGroups(groups), [groups]);
 
-  // Open dropdown when we have results
-  useEffect(() => {
-    if (groups.length > 0 && debouncedQuery.length > 1) {
-      setIsOpen(true);
-    }
-  }, [groups, debouncedQuery]);
+  // Render-phase: open dropdown when results arrive (replaces setState-in-effect).
+  const openTrigger = `${groups.length}:${debouncedQuery}`;
+  const [prevOpenTrigger, setPrevOpenTrigger] = useState(openTrigger);
+  if (groups.length > 0 && debouncedQuery.length > 1 && prevOpenTrigger !== openTrigger) {
+    setPrevOpenTrigger(openTrigger);
+    setIsOpen(true);
+  }
 
-  // Reset highlight when results change
-  useEffect(() => {
+  // Render-phase: reset highlight index when result count changes.
+  const [prevResultsLen, setPrevResultsLen] = useState(flatResults.length);
+  if (prevResultsLen !== flatResults.length) {
+    setPrevResultsLen(flatResults.length);
     setHighlightIndex(-1);
-  }, [flatResults.length]);
+  }
 
   // Global "/" shortcut to focus input
   useEffect(() => {
@@ -244,8 +247,11 @@ export function KnowledgeSearch() {
     }
   }
 
-  // Track a running index across groups for highlight matching
-  let runningIndex = 0;
+  // Precompute the flat start index for each group (avoids mutating a variable in render)
+  const groupOffsets = groups.reduce<number[]>((acc, _, i) => {
+    acc[i] = i === 0 ? 0 : acc[i - 1] + groups[i - 1].results.length;
+    return acc;
+  }, []);
 
   return (
     <div ref={wrapperRef} className="relative w-full sm:min-w-64 sm:w-auto">
@@ -305,9 +311,9 @@ export function KnowledgeSearch() {
           role="listbox"
           className="absolute top-full left-0 right-0 mt-1 bg-surface-1 border border-b-secondary rounded-[var(--radius-md)] shadow-lg z-50 overflow-hidden max-h-[60vh] sm:max-h-80 overflow-y-auto"
         >
-          {groups.map((group) => {
+          {groups.map((group, groupIdx) => {
             const groupItems = group.results.map((result, i) => {
-              const itemIndex = runningIndex + i;
+              const itemIndex = groupOffsets[groupIdx] + i;
               const isHighlighted = itemIndex === highlightIndex;
 
               return (
@@ -345,8 +351,6 @@ export function KnowledgeSearch() {
                 </button>
               );
             });
-
-            runningIndex += group.results.length;
 
             return (
               <div key={group.label}>

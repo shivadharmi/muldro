@@ -22,7 +22,6 @@ export default function ChatPage() {
 
   const surfaces = useSurfaceStore((s) => s.surfaces);
   const addSurface = useSurfaceStore((s) => s.addSurface);
-  const removeSurface = useSurfaceStore((s) => s.removeSurface);
   const activeSurfaceId = useSurfaceStore((s) => s.activeSurfaceId);
   const detailModalOpen = useSurfaceStore((s) => s.detailModalOpen);
   const openDetailModal = useSurfaceStore((s) => s.openDetailModal);

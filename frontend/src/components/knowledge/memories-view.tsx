@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { fetchKnowledgeMemories } from "@/lib/api";
@@ -43,16 +43,26 @@ export function MemoriesView() {
   const setActiveTab = useKnowledgeStore((s) => s.setActiveTab);
   const selectEntity = useKnowledgeStore((s) => s.selectEntity);
 
+  // Build a filter key to detect when filters change
+  const filterKey = `${memoryTypeFilter}|${memorySortBy}|${searchQuery}`;
+  const [prevFilterKey, setPrevFilterKey] = useState(filterKey);
   const [page, setPage] = useState(1);
-  const [allItems, setAllItems] = useState<KnowledgeMemoryItem[]>([]);
+
+  // Render-phase reset when filters change (React-recommended pattern for
+  // "adjust state when props change" — avoids setState-in-effect).
+  if (prevFilterKey !== filterKey) {
+    setPrevFilterKey(filterKey);
+    setPage(1);
+  }
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Reset accumulated items when filters change
-  useEffect(() => {
-    setPage(1);
-    setAllItems([]);
-  }, [memoryTypeFilter, memorySortBy, searchQuery]);
+  // Cache per-(filterKey, page) results so we can accumulate without an effect.
+  const pageCache = useRef<Map<string, KnowledgeMemoryItem[]>>(new Map());
+  // Clear cache when filters change (ref mutation during render is safe).
+  if (prevFilterKey !== filterKey) {
+    pageCache.current = new Map();
+  }
 
   const { data, isLoading, isFetching } = useQuery({
     queryKey: ["knowledge-memories", memoryTypeFilter, memorySortBy, searchQuery, page],
@@ -66,17 +76,26 @@ export function MemoriesView() {
       }),
   });
 
-  // Accumulate items as pages load
-  useEffect(() => {
-    if (!data?.items) return;
-    setAllItems((prev) => {
-      if (page === 1) return data.items;
-      // Deduplicate by memory_id
-      const existingIds = new Set(prev.map((m) => m.memory_id));
-      const newItems = data.items.filter((m) => !existingIds.has(m.memory_id));
-      return [...prev, ...newItems];
-    });
-  }, [data?.items, page]);
+  // Store current page results in the cache (ref mutation during render is safe).
+  if (data?.items) {
+    pageCache.current.set(`${filterKey}:${page}`, data.items);
+  }
+
+  // Derive accumulated items from the per-page cache.
+  const allItems = useMemo(() => {
+    const result: KnowledgeMemoryItem[] = [];
+    const seen = new Set<string>();
+    for (let p = 1; p <= page; p++) {
+      for (const item of pageCache.current.get(`${filterKey}:${p}`) ?? []) {
+        if (!seen.has(item.memory_id)) {
+          seen.add(item.memory_id);
+          result.push(item);
+        }
+      }
+    }
+    return result;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterKey, page, data?.items]);
 
   const hasMore = data ? page < data.pages : false;
 

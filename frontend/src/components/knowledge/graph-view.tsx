@@ -207,7 +207,6 @@ export function GraphView() {
 
   // ── Interaction handlers ────────────────────────────────────
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleNodeClick = useCallback(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (node: any) => {
@@ -217,7 +216,6 @@ export function GraphView() {
     [selectEntity],
   );
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleNodeRightClick = useCallback(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (node: any, event: MouseEvent) => {

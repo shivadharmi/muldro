@@ -30,25 +30,30 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
 
   const [activeTabId, setActiveTabId] = useState<string | null>(defaultTabId);
   const [tabCache, setTabCache] = useState<Record<string, DetailTabResponse>>({});
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
 
-  // Reset state when surface changes
-  useEffect(() => {
+  // Render-phase reset when surface changes (React-recommended alternative to
+  // setState-in-effect for "reset when prop changes" patterns).
+  const [prevSurfaceId, setPrevSurfaceId] = useState(surface.id);
+  if (prevSurfaceId !== surface.id) {
+    setPrevSurfaceId(surface.id);
     setActiveTabId(defaultTabId);
     setTabCache({});
     setError(null);
-  }, [surface.id, defaultTabId]);
+  }
 
-  // Fetch tab data on tab change
+  // Derive loading from state: we are loading when the active tab has no
+  // cached data and no error.  Eliminates synchronous setLoading calls in effects.
+  const loading = !!activeTabId && open && !tabCache[activeTabId] && !error;
+
+  // Fetch tab data on tab change — only setState inside async callbacks (allowed).
   useEffect(() => {
     if (!activeTabId || !open) return;
     if (tabCache[activeTabId]) return;
+    if (error) return;
 
     let cancelled = false;
-    setLoading(true);
-    setError(null);
 
     fetchSurfaceDetail(surface.id, activeTabId)
       .then((data) => {
@@ -61,12 +66,10 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
           const msg = err instanceof Error ? err.message : "Failed to load tab";
           setError(msg);
         }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
       });
 
     return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTabId, surface.id, open, tabCache]);
 
   // Close on backdrop click
@@ -134,7 +137,7 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
             {tabs.map((tab: DetailTab) => (
               <button
                 key={tab.id}
-                onClick={() => setActiveTabId(tab.id)}
+                onClick={() => { setActiveTabId(tab.id); if (error) setError(null); }}
                 className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
                   activeTabId === tab.id
                     ? "border-accent-primary text-accent-primary"
