@@ -1,6 +1,7 @@
 "use client";
 
 import type { StepState } from "@/lib/a2ui-types";
+import { statusTextColor } from "@/lib/design-tokens";
 
 interface StepListProps {
   steps: StepState[];
@@ -9,11 +10,11 @@ interface StepListProps {
 
 const statusIcon: Record<string, { icon: string; className: string }> = {
   pending: { icon: "○", className: "text-t-tertiary" },
-  executing: { icon: "◉", className: "text-blue-400 animate-pulse" },
-  completed: { icon: "✓", className: "text-green-400" },
-  failed: { icon: "✗", className: "text-red-400" },
-  approval_needed: { icon: "⚠", className: "text-amber-400" },
-  user_action: { icon: "👤", className: "text-purple-400" },
+  executing: { icon: "◉", className: `${statusTextColor("executing")} animate-pulse` },
+  completed: { icon: "✓", className: statusTextColor("completed") },
+  failed: { icon: "✗", className: statusTextColor("failed") },
+  approval_needed: { icon: "⚠", className: statusTextColor("awaiting_approval") },
+  user_action: { icon: "👤", className: statusTextColor("user_action") },
 };
 
 export function StepList({ steps, currentStep }: StepListProps) {
@@ -26,7 +27,7 @@ export function StepList({ steps, currentStep }: StepListProps) {
         return (
           <div
             key={step.step_id}
-            className={`flex items-start gap-2 py-1.5 px-2 rounded text-sm ${
+            className={`flex items-start gap-2 py-1.5 px-2 rounded-[var(--radius-sm)] text-sm ${
               isCurrent ? "bg-surface-1" : ""
             }`}
           >
@@ -41,7 +42,7 @@ export function StepList({ steps, currentStep }: StepListProps) {
                 </p>
               )}
               {step.status === "failed" && step.output_summary && (
-                <p className="text-xs text-red-400 mt-0.5 line-clamp-2">
+                <p className="text-xs text-j-error mt-0.5 line-clamp-2">
                   {step.output_summary}
                 </p>
               )}
@@ -67,7 +68,7 @@ export function StepListCompact({ steps }: { steps: StepState[] }) {
   return (
     <div className="flex items-center gap-2 text-xs text-t-tertiary">
       <span>{completed}/{total} steps</span>
-      {failed > 0 && <span className="text-red-400">{failed} failed</span>}
+      {failed > 0 && <span className="text-j-error">{failed} failed</span>}
     </div>
   );
 }

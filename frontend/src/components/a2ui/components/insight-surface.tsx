@@ -51,11 +51,11 @@ export function InsightSurface({ surfaceId, insightData }: InsightSurfaceProps) 
       {/* Source badge */}
       <div className="flex items-center gap-2">
         <span className="text-base">{icon}</span>
-        <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-400 font-medium uppercase tracking-wide">
+        <span className="text-[10px] px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-j-secondary-soft text-j-secondary font-medium uppercase tracking-wide">
           {insightData.signal_source}
         </span>
         {insightData.relevance_score >= 0.8 && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 font-medium">
+          <span className="text-[10px] px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-j-warning-soft text-j-warning font-medium">
             High relevance
           </span>
         )}
@@ -79,7 +79,7 @@ export function InsightSurface({ surfaceId, insightData }: InsightSurfaceProps) 
           {insightData.related_goals.map((goal, i) => (
             <span
               key={i}
-              className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/15 text-blue-400"
+              className="text-[10px] px-1.5 py-0.5 rounded-full bg-j-info-soft text-j-info"
             >
               {goal}
             </span>
@@ -96,7 +96,7 @@ export function InsightSurface({ surfaceId, insightData }: InsightSurfaceProps) 
               type="button"
               onClick={() => handleAction(i)}
               disabled={acting !== null}
-              className="text-xs px-3 py-1.5 rounded-md bg-violet-500/20 text-violet-300 hover:bg-violet-500/30 transition-colors disabled:opacity-50"
+              className="text-xs px-3 py-1.5 rounded-[var(--radius-md)] bg-j-secondary-soft text-j-secondary hover:bg-j-secondary/20 transition-colors disabled:opacity-50"
             >
               {acting === i ? "Starting..." : action.description}
             </button>

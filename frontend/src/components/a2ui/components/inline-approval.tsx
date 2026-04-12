@@ -24,10 +24,10 @@ export function InlineApprovalCard({ approval }: InlineApprovalCardProps) {
   }, [sendAction, approval.approval_id]);
 
   return (
-    <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 space-y-3">
+    <div className="rounded-[var(--radius-lg)] border border-j-warning/30 bg-j-warning-soft p-4 space-y-3">
       {/* Header */}
       <div className="flex items-center gap-2">
-        <span className="text-amber-400">⚠</span>
+        <span className="text-j-warning">⚠</span>
         <span className="text-sm font-medium text-t-primary">Approval Required</span>
       </div>
 
@@ -48,7 +48,7 @@ export function InlineApprovalCard({ approval }: InlineApprovalCardProps) {
 
       {/* Graduation hint */}
       {approval.graduation_hint && (
-        <p className="text-xs text-blue-400/80 italic">
+        <p className="text-xs text-j-info/80 italic">
           {approval.graduation_hint}
         </p>
       )}
@@ -58,21 +58,21 @@ export function InlineApprovalCard({ approval }: InlineApprovalCardProps) {
         <button
           type="button"
           onClick={handleApprove}
-          className="px-3 py-1.5 text-xs font-medium rounded-md bg-green-600 text-white hover:bg-green-500 transition-colors"
+          className="px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] bg-j-success text-white hover:bg-j-success/90 transition-colors"
         >
           Approve
         </button>
         <button
           type="button"
           onClick={handleEdit}
-          className="px-3 py-1.5 text-xs font-medium rounded-md border border-b-primary text-t-secondary hover:bg-surface-1 transition-colors"
+          className="px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border border-b-primary text-t-secondary hover:bg-surface-1 transition-colors"
         >
           Edit
         </button>
         <button
           type="button"
           onClick={handleReject}
-          className="px-3 py-1.5 text-xs font-medium rounded-md text-red-400 hover:bg-red-500/10 transition-colors"
+          className="px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] text-j-error hover:bg-j-error-soft transition-colors"
         >
           Reject
         </button>
