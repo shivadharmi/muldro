@@ -270,8 +270,8 @@ async def chat_stream(
             error_data = json.dumps({"event": "error", "message": str(e)})
             yield f"event: error\ndata: {error_data}\n\n"
         finally:
-            # Save assistant response with typed metadata
-            if conversation_id and final_response_text:
+            # Save assistant response and update conversation aggregates
+            if conversation_id:
                 try:
                     from datetime import datetime, timezone
 
@@ -289,23 +289,30 @@ async def chat_stream(
                     total_output = sum(s.output_tokens or 0 for s in agent_steps)
                     total_cost = sum(s.cost_usd or 0.0 for s in agent_steps)
 
+                    # Count: always 1 for user message; +1 if assistant responded
+                    msg_increment = 1
                     async with get_session_factory()() as db:
-                        db.add(
-                            Message(
-                                message_id=assistant_message_id,
-                                conversation_id=conversation_id,
-                                workspace_id=workspace_id,
-                                role="assistant",
-                                content=final_response_text,
-                                metadata_=metadata.model_dump(mode="json"),
-                                surface=req.surface,
-                                trace_id=final_trace_id,
-                                input_tokens=total_input if total_input else None,
-                                output_tokens=total_output if total_output else None,
-                                cost_usd=total_cost if total_cost else None,
+                        if final_response_text:
+                            db.add(
+                                Message(
+                                    message_id=assistant_message_id,
+                                    conversation_id=conversation_id,
+                                    workspace_id=workspace_id,
+                                    role="assistant",
+                                    content=final_response_text,
+                                    metadata_=metadata.model_dump(mode="json"),
+                                    surface=req.surface,
+                                    trace_id=final_trace_id,
+                                    input_tokens=total_input if total_input else None,
+                                    output_tokens=total_output if total_output else None,
+                                    cost_usd=total_cost if total_cost else None,
+                                )
                             )
-                        )
-                        # Update conversation aggregates
+                            msg_increment = 2
+
+                        # Always update conversation aggregates (timestamps,
+                        # cost) so the sidebar stays accurate even when the
+                        # Presenter doesn't produce a response.
                         from sqlalchemy import update
 
                         await db.execute(
@@ -313,7 +320,7 @@ async def chat_stream(
                             .where(Conversation.conversation_id == conversation_id)
                             .values(
                                 last_active_at=datetime.now(timezone.utc),
-                                message_count=Conversation.message_count + 2,  # user + assistant
+                                message_count=Conversation.message_count + msg_increment,
                                 total_input_tokens=Conversation.total_input_tokens + total_input,
                                 total_output_tokens=Conversation.total_output_tokens + total_output,
                                 total_cost_usd=Conversation.total_cost_usd + total_cost,

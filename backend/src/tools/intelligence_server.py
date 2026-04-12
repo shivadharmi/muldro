@@ -1013,6 +1013,20 @@ async def store_memory(
             except Exception:
                 logger.debug("Entity extraction from memory text failed", exc_info=True)
 
+            # Sync extracted entities + their relationships to Neo4j
+            if entity_ids and _settings and _settings.neo4j_url:
+                try:
+                    from src.services.graph_sync import GraphSyncService
+
+                    gs = GraphSyncService(_settings, db)
+                    await gs.batch_sync_entities(entity_ids)
+                    await gs.close()
+                except Exception:
+                    logger.debug(
+                        "Neo4j sync after store_memory entity extraction failed",
+                        exc_info=True,
+                    )
+
             await ctx.info(f"Stored {memory_type} memory: {text[:80]}")
             return {
                 "status": "stored",

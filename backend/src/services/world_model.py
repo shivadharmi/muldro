@@ -372,6 +372,11 @@ class WorldModel:
         )
         self._db.add(rel)
         await self._db.commit()
+        await self._emit_event(
+            "relationship.created",
+            user_id,
+            {"relation_id": relation_id, "relationship_id": relation_id},
+        )
         return relation_id
 
     async def find_entity(self, user_id: str, query: str, workspace_id: str = "") -> list[dict]:
@@ -517,7 +522,10 @@ class WorldModel:
             )
             from src.llm_utils import parse_llm_json
 
-            extracted = parse_llm_json(response.content[0].text)
+            extracted = parse_llm_json(
+                response.content[0].text,
+                default={"entities": [], "relationships": []},
+            )
         except Exception:
             logger.warning("Text entity extraction failed", exc_info=True)
             return []
@@ -572,7 +580,10 @@ class WorldModel:
             )
             from src.llm_utils import parse_llm_json
 
-            return parse_llm_json(response.content[0].text)
+            return parse_llm_json(
+                response.content[0].text,
+                default={"entities": [], "relationships": []},
+            )
         except Exception:
             logger.warning("Entity extraction failed", exc_info=True)
             return {"entities": [], "relationships": []}

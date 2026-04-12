@@ -315,18 +315,18 @@ class StreamConsumerManager:
                 logger.info("Triggers fired for event: %d", len(fired))
 
     async def _handle_graph_sync(self, event) -> None:
-        """Sync entity change to Neo4j.
+        """Sync entity/relationship changes to Neo4j.
 
-        Triggered by entity.created / entity.updated events on the agent
-        events stream (jarvis:agent_events:{user_id}).  Skips silently when:
-        - entity_id is absent/empty in the payload
-        - neo4j_url is not configured
+        Triggered by entity.created / entity.updated / relationship.created
+        events on the agent events stream (jarvis:agent_events:{user_id}).
+        Skips silently when neo4j_url is not configured.
         """
-        entity_id = event.payload.get("entity_id", "")
-        if not entity_id:
+        if not self._settings.neo4j_url:
             return
 
-        if not self._settings.neo4j_url:
+        entity_id = event.payload.get("entity_id", "")
+        relation_id = event.payload.get("relationship_id", event.payload.get("relation_id", ""))
+        if not entity_id and not relation_id:
             return
 
         from src.services.graph_sync import GraphSyncService
@@ -336,12 +336,16 @@ class StreamConsumerManager:
             workspace_id = await resolve_workspace_id(db, event.user_id)  # noqa: F841
             graph_sync = GraphSyncService(self._settings, db)
             try:
-                await graph_sync.on_entity_change(event)
-                logger.debug("Graph sync completed for entity %s", entity_id)
+                if entity_id:
+                    await graph_sync.on_entity_change(event)
+                    logger.debug("Graph sync completed for entity %s", entity_id)
+                elif relation_id:
+                    await graph_sync.on_relationship_change(event)
+                    logger.debug("Graph sync completed for relationship %s", relation_id)
             except Exception:
                 logger.warning(
-                    "Neo4j graph sync failed for entity %s",
-                    entity_id,
+                    "Neo4j graph sync failed for %s",
+                    entity_id or relation_id,
                     exc_info=True,
                 )
             finally:

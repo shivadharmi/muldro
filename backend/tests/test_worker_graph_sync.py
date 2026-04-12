@@ -110,18 +110,98 @@ class TestHandleGraphSyncEntityPresent:
         mock_graph_sync.close.assert_awaited_once()
 
 
-class TestHandleGraphSyncNoEntityId:
-    """Handler does nothing when entity_id is absent from the payload."""
+class TestHandleGraphSyncRelationship:
+    """Handler syncs relationships to Neo4j when relation_id is in the payload."""
 
     @pytest.mark.asyncio
-    async def test_skips_when_entity_id_missing(self):
+    async def test_syncs_relationship_via_graph_sync_service(self):
         mgr = _make_manager()
-        event = _make_bus_event({"some_other_field": "value"})  # no entity_id
+        event = _make_bus_event(
+            {"relationship_id": "rel_001", "relation_id": "rel_001"},
+            event_type="relationship.created",
+        )
+
+        mock_graph_sync = AsyncMock()
+        mock_graph_sync.on_relationship_change = AsyncMock()
+        mock_graph_sync.close = AsyncMock()
+
+        mock_db = AsyncMock()
+        mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_db.__aexit__ = AsyncMock(return_value=False)
+
+        mock_factory_instance = MagicMock()
+        mock_factory_instance.return_value = mock_db
+
+        with (
+            patch(
+                "src.services.worker.get_session_factory",
+                return_value=mock_factory_instance,
+            ),
+            patch(
+                "src.services.worker.resolve_workspace_id",
+                new_callable=AsyncMock,
+                return_value=TEST_WORKSPACE_ID,
+            ),
+            patch(
+                "src.services.graph_sync.GraphSyncService",
+                return_value=mock_graph_sync,
+            ),
+        ):
+            await mgr._handle_graph_sync(event)
+
+        mock_graph_sync.on_relationship_change.assert_awaited_once_with(event)
+        mock_graph_sync.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_entity_id_takes_precedence_over_relation_id(self):
+        """When both entity_id and relation_id are in payload, entity path wins."""
+        mgr = _make_manager()
+        event = _make_bus_event({"entity_id": "ent_001", "relation_id": "rel_001"})
+
+        mock_graph_sync = AsyncMock()
+        mock_graph_sync.on_entity_change = AsyncMock()
+        mock_graph_sync.on_relationship_change = AsyncMock()
+        mock_graph_sync.close = AsyncMock()
+
+        mock_db = AsyncMock()
+        mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_db.__aexit__ = AsyncMock(return_value=False)
+
+        mock_factory_instance = MagicMock()
+        mock_factory_instance.return_value = mock_db
+
+        with (
+            patch(
+                "src.services.worker.get_session_factory",
+                return_value=mock_factory_instance,
+            ),
+            patch(
+                "src.services.worker.resolve_workspace_id",
+                new_callable=AsyncMock,
+                return_value=TEST_WORKSPACE_ID,
+            ),
+            patch(
+                "src.services.graph_sync.GraphSyncService",
+                return_value=mock_graph_sync,
+            ),
+        ):
+            await mgr._handle_graph_sync(event)
+
+        mock_graph_sync.on_entity_change.assert_awaited_once()
+        mock_graph_sync.on_relationship_change.assert_not_awaited()
+
+
+class TestHandleGraphSyncNoEntityId:
+    """Handler does nothing when neither entity_id nor relation_id is present."""
+
+    @pytest.mark.asyncio
+    async def test_skips_when_no_ids_in_payload(self):
+        mgr = _make_manager()
+        event = _make_bus_event({"some_other_field": "value"})
 
         with patch("src.services.worker.get_session_factory") as mock_factory:
             await mgr._handle_graph_sync(event)
 
-        # get_session_factory should never be called if entity_id absent
         mock_factory.assert_not_called()
 
     @pytest.mark.asyncio

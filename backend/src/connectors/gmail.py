@@ -70,7 +70,7 @@ class GmailConnector(BaseConnector):
                     # Initial: list recent messages
                     resp = await client.get(
                         "https://gmail.googleapis.com/gmail/v1/users/me/messages",
-                        params={"maxResults": 10, "q": "is:inbox newer_than:1d"},
+                        params={"maxResults": 25, "q": "is:inbox newer_than:3d"},
                         headers={"Authorization": f"Bearer {access_token}"},
                         timeout=15,
                     )
