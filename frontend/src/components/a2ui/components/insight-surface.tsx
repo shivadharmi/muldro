@@ -48,73 +48,75 @@ export function InsightSurface({ surfaceId, insightData }: InsightSurfaceProps) 
 
   return (
     <div className="space-y-3">
-      {/* Source badge */}
-      <div className="flex items-center gap-2">
-        <span className="text-base">{icon}</span>
-        <span className="text-[10px] px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-j-secondary-soft text-j-secondary font-medium uppercase tracking-wide">
-          {insightData.signal_source}
-        </span>
-        {insightData.relevance_score >= 0.8 && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-j-warning-soft text-j-warning font-medium">
-            High relevance
-          </span>
-        )}
-      </div>
-
-      {/* Signal summary */}
-      <p className="text-sm text-t-primary font-medium">
+      {/* 1. Signal summary — headline first */}
+      <p className="text-sm text-t-primary font-semibold">
         {insightData.signal_summary}
       </p>
 
-      {/* Relevance reasoning */}
+      {/* 2. Source + relevance — compact metadata line */}
+      <div className="flex items-center gap-1.5 text-xs text-t-muted">
+        <span>{icon}</span>
+        <span>{insightData.signal_source}</span>
+        {insightData.relevance_score >= 0.7 && (
+          <>
+            <span>&middot;</span>
+            <span className="text-j-warning font-medium">High relevance</span>
+          </>
+        )}
+      </div>
+
+      {/* 3. Relevance reasoning */}
       {insightData.relevance_reasoning && (
         <p className="text-xs text-t-tertiary">
           {insightData.relevance_reasoning}
         </p>
       )}
 
-      {/* Related goals */}
+      {/* 4. Related goals */}
       {insightData.related_goals.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {insightData.related_goals.map((goal, i) => (
-            <span
-              key={i}
-              className="text-[10px] px-1.5 py-0.5 rounded-full bg-j-info-soft text-j-info"
-            >
-              {goal}
-            </span>
-          ))}
+        <div>
+          <p className="text-[11px] text-t-muted font-medium uppercase tracking-wider mb-1.5">Related goals</p>
+          <div className="flex flex-wrap gap-1">
+            {insightData.related_goals.map((goal, i) => (
+              <span
+                key={i}
+                className="text-[10px] px-1.5 py-0.5 rounded-full bg-j-info-soft text-j-info"
+              >
+                {goal}
+              </span>
+            ))}
+          </div>
         </div>
       )}
 
-      {/* Suggested actions */}
-      {insightData.suggested_actions.length > 0 && (
-        <div className="flex flex-wrap gap-2 pt-1">
+      {/* 5. Suggested actions + dismiss */}
+      {(insightData.suggested_actions.length > 0 || insightData.dismiss_available) && (
+        <div className="flex flex-wrap items-center gap-2 pt-1">
           {insightData.suggested_actions.map((action, i) => (
             <button
               key={i}
               type="button"
               onClick={() => handleAction(i)}
               disabled={acting !== null}
-              className="text-xs px-3 py-1.5 rounded-[var(--radius-md)] bg-j-secondary-soft text-j-secondary hover:bg-j-secondary/20 transition-colors disabled:opacity-50"
+              className={`text-xs px-3 py-1.5 rounded-[var(--radius-md)] transition-colors disabled:opacity-50 cursor-pointer ${
+                i === 0
+                  ? "bg-j-primary text-j-primary-fg font-medium hover:bg-j-primary-hover"
+                  : "bg-surface-2 text-t-secondary hover:bg-surface-3"
+              }`}
             >
               {acting === i ? "Starting..." : action.description}
             </button>
           ))}
-        </div>
-      )}
-
-      {/* Dismiss */}
-      {insightData.dismiss_available && (
-        <div className="pt-1 border-t border-b-primary">
-          <button
-            type="button"
-            onClick={handleDismiss}
-            disabled={dismissing}
-            className="text-[10px] text-t-tertiary hover:text-t-secondary transition-colors disabled:opacity-50"
-          >
-            {dismissing ? "Dismissing..." : "Dismiss"}
-          </button>
+          {insightData.dismiss_available && (
+            <button
+              type="button"
+              onClick={handleDismiss}
+              disabled={dismissing}
+              className="text-xs text-t-muted hover:text-t-secondary transition-colors disabled:opacity-50 cursor-pointer ml-auto"
+            >
+              {dismissing ? "Dismissing..." : "Dismiss"}
+            </button>
+          )}
         </div>
       )}
     </div>
