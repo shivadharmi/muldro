@@ -1136,6 +1136,8 @@ async def active_plans_resource(workspace_id: str) -> str:
 async def discover_capabilities(
     query: str,
     ctx: Context,
+    user_id: str = "",
+    workspace_id: str = "",
 ) -> dict:
     """Search available capabilities by query.
 
