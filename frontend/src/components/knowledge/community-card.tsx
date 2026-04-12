@@ -3,18 +3,27 @@
 // ── Community Card ────────────────────────────────────────────────
 // Small card representing a detected community around a seed entity.
 
+function resolveCssVar(varExpr: string): string {
+  if (typeof window === "undefined") return "#888";
+  return (
+    getComputedStyle(document.documentElement)
+      .getPropertyValue(varExpr.replace("var(", "").replace(")", ""))
+      .trim() || "#888"
+  );
+}
+
 const SEED_TYPE_COLORS: Record<string, string> = {
-  person: "hsl(193, 100%, 66%)",
-  organization: "hsl(247, 92%, 74%)",
-  project: "hsl(159, 78%, 54%)",
-  document: "hsl(36, 100%, 64%)",
-  repository: "hsl(351, 100%, 71%)",
+  person: "var(--jarvis-primary)",
+  organization: "var(--jarvis-secondary)",
+  project: "var(--jarvis-accent)",
+  document: "var(--jarvis-warning)",
+  repository: "var(--jarvis-error)",
 };
 
-const DEFAULT_SEED_COLOR = "hsl(214, 16%, 58%)";
+const DEFAULT_SEED_COLOR = "var(--jarvis-text-muted)";
 
 function getSeedColor(type: string): string {
-  return SEED_TYPE_COLORS[type.toLowerCase()] ?? DEFAULT_SEED_COLOR;
+  return resolveCssVar(SEED_TYPE_COLORS[type.toLowerCase()] ?? DEFAULT_SEED_COLOR);
 }
 
 interface CommunityCardProps {

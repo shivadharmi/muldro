@@ -6,6 +6,8 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchKnowledgeMemories } from "@/lib/api";
 import type { KnowledgeMemoryItem } from "@/lib/api";
 import { useKnowledgeStore } from "@/stores/knowledge-store";
+import { EmptyState } from "@/components/ui/empty-state";
+import { FOCUS_RING } from "@/lib/focus-ring";
 import { MemoryRow } from "./memory-row";
 import { MemoryDetailPanel } from "./memory-detail-panel";
 
@@ -154,7 +156,7 @@ export function MemoriesView() {
                 key={opt.key}
                 type="button"
                 onClick={() => setMemorySortBy(opt.key)}
-                className={`px-3 py-1 rounded-full text-xs cursor-pointer transition-colors ${
+                className={`px-3 py-1 rounded-full text-xs cursor-pointer transition-colors ${FOCUS_RING} ${
                   memorySortBy === opt.key
                     ? "bg-j-primary-soft text-j-primary border border-j-primary"
                     : "border border-b-secondary text-t-tertiary bg-surface-2 hover:text-t-secondary"
@@ -177,16 +179,14 @@ export function MemoriesView() {
               <p className="text-sm text-t-tertiary">Loading memories...</p>
             </div>
           ) : allItems.length === 0 ? (
-            <div className="flex items-center justify-center h-32">
-              <div className="text-center">
-                <p className="text-sm text-t-tertiary">No memories found</p>
-                <p className="text-xs text-t-muted mt-1">
-                  {searchQuery
-                    ? "Try a different search term"
-                    : "Memories will appear as Jarvis processes your data"}
-                </p>
-              </div>
-            </div>
+            <EmptyState
+              title="No memories found"
+              description={
+                searchQuery
+                  ? "Try a different search term"
+                  : "Memories will appear as Jarvis learns from interactions"
+              }
+            />
           ) : (
             <>
               {allItems.map((memory) => (
@@ -251,7 +251,7 @@ function FilterChip({
       <button
         type="button"
         onClick={onClick}
-        className={`px-3 py-1 rounded-full text-xs cursor-pointer border transition-colors ${
+        className={`px-3 py-1 rounded-full text-xs cursor-pointer border transition-colors ${FOCUS_RING} ${
           activeBorderClass ?? "border-j-primary"
         } ${activeColorClass ?? "text-j-primary"} ${activeBgClass ?? "bg-j-primary-soft"}`}
       >
@@ -264,7 +264,7 @@ function FilterChip({
     <button
       type="button"
       onClick={onClick}
-      className="border border-b-secondary text-t-tertiary bg-surface-2 px-3 py-1 rounded-full text-xs cursor-pointer hover:text-t-secondary transition-colors"
+      className={`border border-b-secondary text-t-tertiary bg-surface-2 px-3 py-1 rounded-full text-xs cursor-pointer hover:text-t-secondary transition-colors ${FOCUS_RING}`}
     >
       {label}
     </button>

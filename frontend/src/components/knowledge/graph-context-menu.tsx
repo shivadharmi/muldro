@@ -95,7 +95,8 @@ export function GraphContextMenu({
   return (
     <div
       ref={menuRef}
-      className="fixed z-50 bg-surface-1 border border-b-secondary shadow-lg rounded-lg py-1 min-w-[180px]"
+      role="menu"
+      className="fixed z-50 bg-surface-1 border border-b-secondary shadow-lg rounded-[var(--radius-lg)] py-1 min-w-[180px]"
       style={{ left: x, top: y }}
     >
       {/* Header */}
@@ -110,6 +111,7 @@ export function GraphContextMenu({
         <button
           key={item.label}
           type="button"
+          role="menuitem"
           onClick={item.action}
           className="w-full text-left px-3 py-2 text-sm text-t-secondary hover:bg-surface-2 cursor-pointer transition-colors flex items-center gap-2"
         >

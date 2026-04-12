@@ -80,7 +80,7 @@ function SearchIcon() {
 
 function EntityIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="shrink-0 text-[hsl(193_100%_66%)]">
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="shrink-0 text-j-primary">
       <circle cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="1.2" />
       <circle cx="7" cy="7" r="2" fill="currentColor" />
     </svg>
@@ -89,7 +89,7 @@ function EntityIcon() {
 
 function MemoryIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="shrink-0 text-[hsl(247_92%_74%)]">
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="shrink-0 text-j-secondary">
       <path
         d="M7 1.75v10.5M3.5 4.083h7M4.375 7h5.25M5.25 9.917h3.5"
         stroke="currentColor"

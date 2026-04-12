@@ -4,29 +4,24 @@ import { useKnowledgeStore } from "@/stores/knowledge-store";
 
 const ENTITY_TYPE_COLORS: Record<string, { active: string; dot: string }> = {
   person: {
-    active:
-      "border-[hsl(193_100%_66%)] text-[hsl(193_100%_66%)] bg-[hsl(193_100%_66%/0.1)]",
-    dot: "bg-[hsl(193_100%_66%)]",
+    active: "border-j-primary text-j-primary bg-j-primary-soft",
+    dot: "bg-j-primary",
   },
   organization: {
-    active:
-      "border-[hsl(247_92%_74%)] text-[hsl(247_92%_74%)] bg-[hsl(247_92%_74%/0.1)]",
-    dot: "bg-[hsl(247_92%_74%)]",
+    active: "border-j-secondary text-j-secondary bg-j-secondary-soft",
+    dot: "bg-j-secondary",
   },
   project: {
-    active:
-      "border-[hsl(159_78%_54%)] text-[hsl(159_78%_54%)] bg-[hsl(159_78%_54%/0.1)]",
-    dot: "bg-[hsl(159_78%_54%)]",
+    active: "border-j-accent text-j-accent bg-j-accent-soft",
+    dot: "bg-j-accent",
   },
   document: {
-    active:
-      "border-[hsl(36_100%_64%)] text-[hsl(36_100%_64%)] bg-[hsl(36_100%_64%/0.1)]",
-    dot: "bg-[hsl(36_100%_64%)]",
+    active: "border-j-warning text-j-warning bg-j-warning-soft",
+    dot: "bg-j-warning",
   },
   repository: {
-    active:
-      "border-[hsl(351_100%_71%)] text-[hsl(351_100%_71%)] bg-[hsl(351_100%_71%/0.1)]",
-    dot: "bg-[hsl(351_100%_71%)]",
+    active: "border-j-error text-j-error bg-j-error-soft",
+    dot: "bg-j-error",
   },
 };
 

@@ -10,30 +10,41 @@ import type {
 } from "@/lib/api";
 import { useKnowledgeStore } from "@/stores/knowledge-store";
 
+// ── CSS variable resolver (for inline style props) ──────────────
+
+function resolveCssVar(varExpr: string): string {
+  if (typeof window === "undefined") return "#888";
+  return (
+    getComputedStyle(document.documentElement)
+      .getPropertyValue(varExpr.replace("var(", "").replace(")", ""))
+      .trim() || "#888"
+  );
+}
+
 // ── Color mappings ─────────────────────────────────────────────
 
 const ENTITY_TYPE_COLORS: Record<string, string> = {
-  person: "hsl(193 100% 66%)",
-  organization: "hsl(247 92% 74%)",
-  project: "hsl(159 78% 54%)",
-  document: "hsl(36 100% 64%)",
-  repository: "hsl(351 100% 71%)",
+  person: "var(--jarvis-primary)",
+  organization: "var(--jarvis-secondary)",
+  project: "var(--jarvis-accent)",
+  document: "var(--jarvis-warning)",
+  repository: "var(--jarvis-error)",
 };
 
 const MEMORY_TYPE_COLORS: Record<string, string> = {
-  semantic: "hsl(247 92% 74%)",
-  episodic: "hsl(193 100% 66%)",
-  preference: "hsl(36 100% 64%)",
-  goal: "hsl(159 78% 54%)",
-  relationship: "hsl(214 16% 58%)",
+  semantic: "var(--jarvis-secondary)",
+  episodic: "var(--jarvis-primary)",
+  preference: "var(--jarvis-warning)",
+  goal: "var(--jarvis-accent)",
+  relationship: "var(--jarvis-text-muted)",
 };
 
 function getEntityColor(type: string): string {
-  return ENTITY_TYPE_COLORS[type.toLowerCase()] ?? "hsl(214 16% 58%)";
+  return resolveCssVar(ENTITY_TYPE_COLORS[type.toLowerCase()] ?? "var(--jarvis-text-muted)");
 }
 
 function getMemoryColor(type: string): string {
-  return MEMORY_TYPE_COLORS[type.toLowerCase()] ?? "hsl(214 16% 58%)";
+  return resolveCssVar(MEMORY_TYPE_COLORS[type.toLowerCase()] ?? "var(--jarvis-text-muted)");
 }
 
 // ── Helpers ────────────────────────────────────────────────────
