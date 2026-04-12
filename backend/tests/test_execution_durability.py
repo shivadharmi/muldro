@@ -81,3 +81,10 @@ class TestCheckpointValidation:
         from src.services.graph_executor import GraphExecutor
 
         assert hasattr(GraphExecutor, "resume_run")
+
+
+class TestStuckRunDetection:
+    def test_scheduler_has_health_check_method(self):
+        from src.services.scheduler import SchedulerLoop
+
+        assert hasattr(SchedulerLoop, "_tick_run_health_check")
