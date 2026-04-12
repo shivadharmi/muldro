@@ -1534,7 +1534,11 @@ class GraphExecutor:
                 workspace_id=run.workspace_id,
             )
         except Exception:
-            logger.debug("Memory writeback failed", exc_info=True)
+            logger.warning(
+                "Memory writeback failed for run %s — execution memories not stored",
+                run.run_id,
+                exc_info=True,
+            )
 
     async def _run_verification(self, run: TaskRun) -> None:
         """Run verification on a completed run."""
