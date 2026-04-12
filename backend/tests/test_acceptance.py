@@ -284,6 +284,7 @@ def test_rejected_approval_cancels_execution_and_audits(mock_audit_cls):
     mock_approval.title = "Approve: Reply to investor"
     mock_approval.summary = "Draft reply about term sheet"
     mock_approval.risk_level = "medium"
+    mock_approval.expires_at = None
     mock_approval.created_at = datetime(2026, 3, 14, 9, 0, tzinfo=timezone.utc)
     mock_approval.run_id = None
     mock_approval.step_id = None
