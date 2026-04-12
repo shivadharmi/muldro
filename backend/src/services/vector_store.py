@@ -266,9 +266,7 @@ class VectorStore:
             points_selector=[qdrant_id],
         )
 
-    async def set_payload(
-        self, collection: str, point_id: str, payload: dict
-    ) -> None:
+    async def set_payload(self, collection: str, point_id: str, payload: dict) -> None:
         """Update payload fields on an existing point without re-embedding."""
         client = await self._get_client()
         if not client:

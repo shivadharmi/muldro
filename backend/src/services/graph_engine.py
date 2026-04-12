@@ -7,11 +7,46 @@ path finding, and community detection.
 
 import json
 import logging
+import time
 
 from src.config.settings import Settings
 from src.services.world_model import RELATION_TYPES
 
 logger = logging.getLogger(__name__)
+
+
+class _Neo4jCircuit:
+    """Simple circuit breaker for Neo4j connections."""
+
+    FAILURE_THRESHOLD = 5
+    COOLDOWN_SECONDS = 120
+
+    def __init__(self) -> None:
+        self._failures = 0
+        self._state = "closed"  # closed, open, half_open
+        self._opened_at: float = 0
+
+    def record_success(self) -> None:
+        self._failures = 0
+        self._state = "closed"
+
+    def record_failure(self) -> None:
+        self._failures += 1
+        if self._failures >= self.FAILURE_THRESHOLD:
+            self._state = "open"
+            self._opened_at = time.monotonic()
+            logger.warning("neo4j_circuit_opened after %d consecutive failures", self._failures)
+
+    def allow_request(self) -> bool:
+        if self._state == "closed":
+            return True
+        if self._state == "open":
+            if time.monotonic() - self._opened_at >= self.COOLDOWN_SECONDS:
+                self._state = "half_open"
+                logger.info("neo4j_circuit_half_open: allowing probe request")
+                return True
+            return False
+        return True  # half_open: allow one probe
 
 
 class GraphEngine:
@@ -20,6 +55,7 @@ class GraphEngine:
     def __init__(self, settings: Settings):
         self._settings = settings
         self._driver = None
+        self._circuit = _Neo4jCircuit()
 
     async def _get_driver(self):
         """Lazy-init Neo4j driver."""
@@ -49,6 +85,9 @@ class GraphEngine:
         driver = await self._get_driver()
         if not driver:
             return
+        if not self._circuit.allow_request():
+            logger.debug("neo4j_circuit_open: skipping delete_entity for %s", entity_id)
+            return
 
         try:
             async with driver.session() as session:
@@ -56,7 +95,9 @@ class GraphEngine:
                     "MATCH (e:Entity {entity_id: $entity_id}) DETACH DELETE e",
                     entity_id=entity_id,
                 )
+            self._circuit.record_success()
         except Exception:
+            self._circuit.record_failure()
             logger.warning("Neo4j delete_entity failed for %s", entity_id, exc_info=True)
 
     async def sync_entity(
@@ -70,6 +111,9 @@ class GraphEngine:
         """Upsert an entity node to Neo4j."""
         driver = await self._get_driver()
         if not driver:
+            return
+        if not self._circuit.allow_request():
+            logger.debug("neo4j_circuit_open: skipping sync_entity for %s", entity_id)
             return
 
         try:
@@ -88,7 +132,9 @@ class GraphEngine:
                     user_id=user_id,
                     attributes=json.dumps(attributes or {}, default=str),
                 )
+            self._circuit.record_success()
         except Exception:
+            self._circuit.record_failure()
             logger.warning("Neo4j sync_entity failed for %s", entity_id, exc_info=True)
 
     async def sync_relationship(
@@ -111,6 +157,10 @@ class GraphEngine:
             raise ValueError(
                 f"Invalid relation_type {relation_type!r}; must be one of {sorted(RELATION_TYPES)}"
             )
+
+        if not self._circuit.allow_request():
+            logger.debug("neo4j_circuit_open: skipping sync_relationship for %s", relation_id)
+            return
 
         label = relation_type.upper().replace(" ", "_")
 
@@ -136,7 +186,9 @@ class GraphEngine:
                     start_date=start_date,
                     end_date=end_date,
                 )
+            self._circuit.record_success()
         except Exception:
+            self._circuit.record_failure()
             logger.warning("Neo4j sync_relationship failed for %s", relation_id, exc_info=True)
 
     async def traverse(
@@ -145,6 +197,9 @@ class GraphEngine:
         """Traverse the graph from an entity. Returns nodes and edges."""
         driver = await self._get_driver()
         if not driver:
+            return {"nodes": [], "edges": []}
+        if not self._circuit.allow_request():
+            logger.debug("neo4j_circuit_open: skipping traverse for %s", entity_id)
             return {"nodes": [], "edges": []}
 
         rel_filter = ""
@@ -180,13 +235,16 @@ class GraphEngine:
                 )
                 record = await result.single()
                 if not record:
+                    self._circuit.record_success()
                     return {"nodes": [], "edges": []}
 
+                self._circuit.record_success()
                 return {
                     "nodes": record["nodes"],
                     "edges": record["edges"],
                 }
         except Exception:
+            self._circuit.record_failure()
             logger.warning("Neo4j traverse failed for %s", entity_id, exc_info=True)
             return {"nodes": [], "edges": []}
 
@@ -205,6 +263,9 @@ class GraphEngine:
         """
         driver = await self._get_driver()
         if not driver:
+            return []
+        if not self._circuit.allow_request():
+            logger.debug("neo4j_circuit_open: skipping traverse_weighted for %s", entity_id)
             return []
 
         try:
@@ -236,8 +297,11 @@ class GraphEngine:
                     user_id=user_id,
                     min_strength=min_strength,
                 )
-                return await result.data()
+                data = await result.data()
+            self._circuit.record_success()
+            return data
         except Exception:
+            self._circuit.record_failure()
             logger.warning("Neo4j traverse_weighted failed for %s", entity_id, exc_info=True)
             return []
 
@@ -247,6 +311,13 @@ class GraphEngine:
         """Find shortest path between two entities."""
         driver = await self._get_driver()
         if not driver:
+            return []
+        if not self._circuit.allow_request():
+            logger.debug(
+                "neo4j_circuit_open: skipping find_path for %s -> %s",
+                from_entity_id,
+                to_entity_id,
+            )
             return []
 
         try:
@@ -267,8 +338,11 @@ class GraphEngine:
                     user_id=user_id,
                 )
                 record = await result.single()
-                return record["path_nodes"] if record else []
+                data = record["path_nodes"] if record else []
+            self._circuit.record_success()
+            return data
         except Exception:
+            self._circuit.record_failure()
             logger.warning(
                 "Neo4j find_path failed for %s -> %s", from_entity_id, to_entity_id, exc_info=True
             )
@@ -278,6 +352,9 @@ class GraphEngine:
         """Get people related to an entity within 2 hops."""
         driver = await self._get_driver()
         if not driver:
+            return []
+        if not self._circuit.allow_request():
+            logger.debug("neo4j_circuit_open: skipping get_related_people for %s", entity_id)
             return []
 
         try:
@@ -294,8 +371,10 @@ class GraphEngine:
                     user_id=user_id,
                 )
                 records = await result.data()
-                return records
+            self._circuit.record_success()
+            return records
         except Exception:
+            self._circuit.record_failure()
             logger.warning("Neo4j get_related_people failed for %s", entity_id, exc_info=True)
             return []
 
@@ -306,32 +385,41 @@ class GraphEngine:
         driver = await self._get_driver()
         if not driver:
             return []
+        if not self._circuit.allow_request():
+            logger.debug("neo4j_circuit_open: skipping search_entities for user %s", user_id)
+            return []
 
         type_filter = ""
         if entity_type:
             type_filter = "AND e.entity_type = $entity_type"
 
-        async with driver.session() as session:
-            result = await session.run(
-                f"""
-                MATCH (e:Entity {{user_id: $user_id}})
-                WHERE e.name IS NOT NULL
-                  AND toLower(e.name) CONTAINS toLower($search_query)
-                {type_filter}
-                RETURN e.entity_id AS entity_id,
-                       e.name AS name,
-                       e.entity_type AS entity_type,
-                       e.attributes AS attributes
-                ORDER BY e.name
-                LIMIT $limit
-                """,
-                user_id=user_id,
-                search_query=query,
-                entity_type=entity_type,
-                limit=limit,
-            )
-            records = await result.data()
+        try:
+            async with driver.session() as session:
+                result = await session.run(
+                    f"""
+                    MATCH (e:Entity {{user_id: $user_id}})
+                    WHERE e.name IS NOT NULL
+                      AND toLower(e.name) CONTAINS toLower($search_query)
+                    {type_filter}
+                    RETURN e.entity_id AS entity_id,
+                           e.name AS name,
+                           e.entity_type AS entity_type,
+                           e.attributes AS attributes
+                    ORDER BY e.name
+                    LIMIT $limit
+                    """,
+                    user_id=user_id,
+                    search_query=query,
+                    entity_type=entity_type,
+                    limit=limit,
+                )
+                records = await result.data()
+            self._circuit.record_success()
             return records
+        except Exception:
+            self._circuit.record_failure()
+            logger.warning("Neo4j search_entities failed for user %s", user_id, exc_info=True)
+            return []
 
     async def full_sync(self, user_id: str, entities: list[dict], relationships: list[dict]) -> int:
         """Bulk sync all entities and relationships to Neo4j."""
@@ -482,6 +570,9 @@ class GraphEngine:
         driver = await self._get_driver()
         if not driver:
             return []
+        if not self._circuit.allow_request():
+            logger.debug("neo4j_circuit_open: skipping get_stale_relationships for %s", user_id)
+            return []
 
         from datetime import datetime, timedelta, timezone
 
@@ -507,8 +598,10 @@ class GraphEngine:
                     cutoff_date=cutoff,
                 )
                 records = await result.data()
-                return records
+            self._circuit.record_success()
+            return records
         except Exception:
+            self._circuit.record_failure()
             logger.warning("Neo4j get_stale_relationships failed for %s", user_id, exc_info=True)
             return []
 
@@ -516,6 +609,9 @@ class GraphEngine:
         """Detect clusters of related entities using connected components."""
         driver = await self._get_driver()
         if not driver:
+            return []
+        if not self._circuit.allow_request():
+            logger.debug("neo4j_circuit_open: skipping detect_communities for %s", user_id)
             return []
 
         try:
@@ -538,8 +634,10 @@ class GraphEngine:
                     user_id=user_id,
                 )
                 records = await result.data()
-                return records
+            self._circuit.record_success()
+            return records
         except Exception:
+            self._circuit.record_failure()
             logger.warning("Neo4j detect_communities failed for %s", user_id, exc_info=True)
             return []
 
@@ -558,6 +656,9 @@ class GraphEngine:
         """
         driver = await self._get_driver()
         if not driver:
+            return []
+        if not self._circuit.allow_request():
+            logger.debug("neo4j_circuit_open: skipping traverse_temporal for %s", entity_id)
             return []
 
         temporal_filter = ""
@@ -593,7 +694,10 @@ class GraphEngine:
                     after=after,
                     before=before,
                 )
-                return await result.data()
+                data = await result.data()
+            self._circuit.record_success()
+            return data
         except Exception:
+            self._circuit.record_failure()
             logger.warning("Neo4j traverse_temporal failed for %s", entity_id, exc_info=True)
             return []

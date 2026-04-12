@@ -204,21 +204,30 @@ class MemoryService:
             memory_ids.append(memory_id)
             new_facts.append((memory_id, fact_text))
 
-            if self._vector_store and embedding:
-                await self._vector_store.upsert(
-                    "memories",
-                    memory_id,
-                    embedding,
-                    self._build_memory_payload(
-                        memory_type=mem_data.get("memory_type", "semantic"),
-                        fact_text=fact_text,
-                        user_id=user_id,
-                        confidence=mem_data.get("confidence", 0.5),
-                        entity_ids=entity_ids,
-                        scope=mem_data.get("scope"),
-                    ),
-                    user_id,
-                )
+            if embedding:
+                if self._vector_store:
+                    try:
+                        await self._vector_store.upsert(
+                            "memories",
+                            memory_id,
+                            embedding,
+                            self._build_memory_payload(
+                                memory_type=mem_data.get("memory_type", "semantic"),
+                                fact_text=fact_text,
+                                user_id=user_id,
+                                confidence=mem_data.get("confidence", 0.5),
+                                entity_ids=entity_ids,
+                                scope=mem_data.get("scope"),
+                            ),
+                            user_id,
+                        )
+                    except Exception:
+                        logger.debug("Qdrant upsert failed for %s", memory_id, exc_info=True)
+                        await self._enqueue_failed_embedding(memory_id, user_id)
+                else:
+                    await self._enqueue_failed_embedding(memory_id, user_id)
+            else:
+                await self._enqueue_failed_embedding(memory_id, user_id)
 
         if memory_ids:
             await self._db.flush()
@@ -298,21 +307,30 @@ class MemoryService:
             self._db.add(memory)
             memory_ids.append(memory_id)
 
-            if self._vector_store and embedding:
-                await self._vector_store.upsert(
-                    "memories",
-                    memory_id,
-                    embedding,
-                    self._build_memory_payload(
-                        memory_type="preference",
-                        fact_text=fact_text,
-                        user_id=user_id,
-                        confidence=pref_data.get("confidence", 0.5),
-                        scope=pref_data.get("category"),
-                        preference_strength=pref_data.get("strength"),
-                    ),
-                    user_id,
-                )
+            if embedding:
+                if self._vector_store:
+                    try:
+                        await self._vector_store.upsert(
+                            "memories",
+                            memory_id,
+                            embedding,
+                            self._build_memory_payload(
+                                memory_type="preference",
+                                fact_text=fact_text,
+                                user_id=user_id,
+                                confidence=pref_data.get("confidence", 0.5),
+                                scope=pref_data.get("category"),
+                                preference_strength=pref_data.get("strength"),
+                            ),
+                            user_id,
+                        )
+                    except Exception:
+                        logger.debug("Qdrant upsert failed for %s", memory_id, exc_info=True)
+                        await self._enqueue_failed_embedding(memory_id, user_id)
+                else:
+                    await self._enqueue_failed_embedding(memory_id, user_id)
+            else:
+                await self._enqueue_failed_embedding(memory_id, user_id)
 
         if memory_ids:
             await self._db.flush()
@@ -362,22 +380,31 @@ class MemoryService:
         self._db.add(memory)
         await self._db.flush()
 
-        if self._vector_store and embedding:
-            await self._vector_store.upsert(
-                "memories",
-                memory_id,
-                embedding,
-                self._build_memory_payload(
-                    memory_type="goal",
-                    fact_text=fact_text,
-                    user_id=user_id,
-                    confidence=0.9,
-                    stability_score=0.5,
-                    entity_ids=entity_ids,
-                    scope="planning",
-                ),
-                user_id,
-            )
+        if embedding:
+            if self._vector_store:
+                try:
+                    await self._vector_store.upsert(
+                        "memories",
+                        memory_id,
+                        embedding,
+                        self._build_memory_payload(
+                            memory_type="goal",
+                            fact_text=fact_text,
+                            user_id=user_id,
+                            confidence=0.9,
+                            stability_score=0.5,
+                            entity_ids=entity_ids,
+                            scope="planning",
+                        ),
+                        user_id,
+                    )
+                except Exception:
+                    logger.debug("Qdrant upsert failed for %s", memory_id, exc_info=True)
+                    await self._enqueue_failed_embedding(memory_id, user_id)
+            else:
+                await self._enqueue_failed_embedding(memory_id, user_id)
+        else:
+            await self._enqueue_failed_embedding(memory_id, user_id)
 
         logger.info("Goal memory stored: %s '%s'", memory_id, title)
         return memory_id
@@ -416,21 +443,30 @@ class MemoryService:
         self._db.add(memory)
         await self._db.flush()
 
-        if self._vector_store and embedding:
-            await self._vector_store.upsert(
-                "memories",
-                memory_id,
-                embedding,
-                self._build_memory_payload(
-                    memory_type="preference",
-                    fact_text=fact_text,
-                    user_id=user_id,
-                    confidence=0.95,
-                    stability_score=0.8,
-                    scope="general",
-                ),
-                user_id,
-            )
+        if embedding:
+            if self._vector_store:
+                try:
+                    await self._vector_store.upsert(
+                        "memories",
+                        memory_id,
+                        embedding,
+                        self._build_memory_payload(
+                            memory_type="preference",
+                            fact_text=fact_text,
+                            user_id=user_id,
+                            confidence=0.95,
+                            stability_score=0.8,
+                            scope="general",
+                        ),
+                        user_id,
+                    )
+                except Exception:
+                    logger.debug("Qdrant upsert failed for %s", memory_id, exc_info=True)
+                    await self._enqueue_failed_embedding(memory_id, user_id)
+            else:
+                await self._enqueue_failed_embedding(memory_id, user_id)
+        else:
+            await self._enqueue_failed_embedding(memory_id, user_id)
 
         logger.info(
             "Instruction memory stored: %s '%s'",
@@ -476,21 +512,30 @@ class MemoryService:
         self._db.add(memory)
         await self._db.flush()
 
-        if self._vector_store and embedding:
-            await self._vector_store.upsert(
-                "memories",
-                memory_id,
-                embedding,
-                self._build_memory_payload(
-                    memory_type="briefing_item",
-                    fact_text=text,
-                    user_id=user_id,
-                    confidence=0.8,
-                    stability_score=0.3,
-                    scope="planning",
-                ),
-                user_id,
-            )
+        if embedding:
+            if self._vector_store:
+                try:
+                    await self._vector_store.upsert(
+                        "memories",
+                        memory_id,
+                        embedding,
+                        self._build_memory_payload(
+                            memory_type="briefing_item",
+                            fact_text=text,
+                            user_id=user_id,
+                            confidence=0.8,
+                            stability_score=0.3,
+                            scope="planning",
+                        ),
+                        user_id,
+                    )
+                except Exception:
+                    logger.debug("Qdrant upsert failed for %s", memory_id, exc_info=True)
+                    await self._enqueue_failed_embedding(memory_id, user_id)
+            else:
+                await self._enqueue_failed_embedding(memory_id, user_id)
+        else:
+            await self._enqueue_failed_embedding(memory_id, user_id)
 
         logger.info("Briefing memory stored: %s '%s'", memory_id, text[:80])
         return memory_id
@@ -530,21 +575,30 @@ class MemoryService:
         self._db.add(memory)
         await self._db.flush()
 
-        if self._vector_store and embedding:
-            await self._vector_store.upsert(
-                "memories",
-                memory_id,
-                embedding,
-                self._build_memory_payload(
-                    memory_type=memory_type,
-                    fact_text=fact_text,
-                    user_id=user_id,
-                    confidence=0.8,
-                    entity_ids=entity_ids,
-                    scope=scope,
-                ),
-                user_id,
-            )
+        if embedding:
+            if self._vector_store:
+                try:
+                    await self._vector_store.upsert(
+                        "memories",
+                        memory_id,
+                        embedding,
+                        self._build_memory_payload(
+                            memory_type=memory_type,
+                            fact_text=fact_text,
+                            user_id=user_id,
+                            confidence=0.8,
+                            entity_ids=entity_ids,
+                            scope=scope,
+                        ),
+                        user_id,
+                    )
+                except Exception:
+                    logger.debug("Qdrant upsert failed for %s", memory_id, exc_info=True)
+                    await self._enqueue_failed_embedding(memory_id, user_id)
+            else:
+                await self._enqueue_failed_embedding(memory_id, user_id)
+        else:
+            await self._enqueue_failed_embedding(memory_id, user_id)
 
         logger.info("Memory stored: %s type=%s '%s'", memory_id, memory_type, fact_text[:80])
         await self._emit_event("memory.created", user_id, {"memory_id": memory_id})

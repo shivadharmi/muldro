@@ -143,6 +143,7 @@ class WorldModel:
         event_bus=None,
         embedding_service=None,
         vector_store=None,
+        dead_letter=None,
     ):
         self._settings = settings
         self._db = db
@@ -150,6 +151,32 @@ class WorldModel:
         self._event_bus = event_bus
         self._embedding_service = embedding_service
         self._vector_store = vector_store
+        self._dead_letter = dead_letter
+
+    async def _enqueue_failed_embedding(
+        self, record_id: str, user_id: str, collection: str = "entities"
+    ) -> None:
+        """Enqueue a failed embedding for retry via DLQ."""
+        if not self._dead_letter:
+            return
+        try:
+            await self._dead_letter.enqueue(
+                user_id=user_id,
+                operation_type="failed_embedding",
+                error_type="EmbeddingFailure",
+                error_message=f"Embedding/upsert failed for {collection}:{record_id}",
+                payload={
+                    "record_id": record_id,
+                    "collection": collection,
+                    "record_type": "entity",
+                },
+            )
+        except Exception:
+            logger.warning(
+                "Failed to enqueue embedding retry for %s",
+                record_id,
+                exc_info=True,
+            )
 
     async def extract_from_event(
         self, event_id: str, user_id: str, workspace_id: str = ""
@@ -275,12 +302,16 @@ class WorldModel:
             raise
 
         # Upsert entity vector to Qdrant
-        if self._vector_store:
+        emb = embedding
+        if emb is None and self._embedding_service:
             try:
-                emb = embedding
-                if emb is None and self._embedding_service:
-                    emb = await self._embedding_service.embed_text(canonical_name)
-                if emb:
+                emb = await self._embedding_service.embed_text(canonical_name)
+            except Exception:
+                logger.debug("Failed to generate entity embedding", exc_info=True)
+
+        if emb:
+            if self._vector_store:
+                try:
                     await self._vector_store.upsert(
                         "entities",
                         entity_id,
@@ -292,8 +323,13 @@ class WorldModel:
                         },
                         user_id,
                     )
-            except Exception:
-                logger.debug("Qdrant entity upsert failed", exc_info=True)
+                except Exception:
+                    logger.debug("Qdrant entity upsert failed for %s", entity_id, exc_info=True)
+                    await self._enqueue_failed_embedding(entity_id, user_id)
+            else:
+                await self._enqueue_failed_embedding(entity_id, user_id)
+        else:
+            await self._enqueue_failed_embedding(entity_id, user_id)
 
         logger.info(
             "Entity created: %s type=%s name=%s",
