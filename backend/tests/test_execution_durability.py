@@ -1,4 +1,4 @@
-"""Tests for execution durability: cancellation tokens and state transitions."""
+"""Tests for execution durability: cancellation, timeouts, retry backoff, checkpoints."""
 
 import asyncio
 import inspect
@@ -46,3 +46,38 @@ class TestCancellationToken:
         assert issubclass(CancellationRequested, Exception)
         exc = CancellationRequested("test message")
         assert str(exc) == "test message"
+
+
+class TestStepTimeout:
+    def test_task_step_has_timeout_field(self):
+        from src.models.task_graph import TaskStep
+
+        assert hasattr(TaskStep, "timeout_seconds")
+
+    def test_timed_out_transition_valid(self):
+        from src.services.execution_state import STEP_TRANSITIONS
+
+        assert "timed_out" in STEP_TRANSITIONS["running"]
+
+
+class TestRetryBackoff:
+    def test_backoff_delay_increases(self):
+        from src.services.graph_executor import _compute_retry_delay
+
+        assert _compute_retry_delay(0) == 1
+        assert _compute_retry_delay(1) == 2
+        assert _compute_retry_delay(2) == 4
+        assert _compute_retry_delay(3) == 8
+
+    def test_backoff_capped_at_30(self):
+        from src.services.graph_executor import _compute_retry_delay
+
+        assert _compute_retry_delay(5) == 30
+        assert _compute_retry_delay(10) == 30
+
+
+class TestCheckpointValidation:
+    def test_resume_run_exists(self):
+        from src.services.graph_executor import GraphExecutor
+
+        assert hasattr(GraphExecutor, "resume_run")

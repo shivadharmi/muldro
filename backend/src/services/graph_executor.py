@@ -37,6 +37,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _compute_retry_delay(retry_count: int) -> int:
+    """Compute exponential backoff delay in seconds, capped at 30."""
+    return min(2**retry_count, 30)
+
+
 async def create_graph_executor(
     settings: Settings,
     db: AsyncSession,
@@ -453,6 +458,19 @@ class GraphExecutor:
             except Exception:
                 logger.debug("Context refresh failed, using cached", exc_info=True)
 
+        # Validate checkpoint consistency
+        if run.checkpoint:
+            cp_completed = set(run.checkpoint.get("completed_steps", {}).keys())
+            actual_steps = await self._get_all_steps(run.run_id)
+            actual_completed = {s.step_id for s in actual_steps if s.status == "completed"}
+            if cp_completed != actual_completed:
+                logger.warning(
+                    "Checkpoint/DB mismatch for run %s: checkpoint=%d completed, DB=%d completed",
+                    run.run_id,
+                    len(cp_completed),
+                    len(actual_completed),
+                )
+
         transition_run(run, "running")
         await self._db.flush()
 
@@ -715,10 +733,22 @@ class GraphExecutor:
                     step.input_data = resolved_input
                     await self._db.flush()
 
+                step_timeout = step.timeout_seconds or 120
                 t0 = time.monotonic()
                 try:
-                    output = await self._run_step_action(step, run, cancel_event=cancel_event)
+                    output = await asyncio.wait_for(
+                        self._run_step_action(step, run, cancel_event=cancel_event),
+                        timeout=step_timeout,
+                    )
                     elapsed_ms = int((time.monotonic() - t0) * 1000)
+                except asyncio.TimeoutError:
+                    elapsed_ms = int((time.monotonic() - t0) * 1000)
+                    transition_step(step, "timed_out")
+                    step.error = {"message": f"Step timed out after {step_timeout}s"}
+                    step.completed_at = datetime.now(timezone.utc)
+                    await self._db.flush()
+                    logger.warning("Step %s timed out after %ds", step.step_id, step_timeout)
+                    return
                 except CancellationRequested:
                     transition_step(step, "cancelled")
                     step.completed_at = datetime.now(timezone.utc)
@@ -833,10 +863,22 @@ class GraphExecutor:
             step.input_data = resolved_input
             await self._db.flush()
 
+        step_timeout = step.timeout_seconds or 120
         t0 = time.monotonic()
         try:
-            output = await self._run_step_action(step, run, cancel_event=cancel_event)
+            output = await asyncio.wait_for(
+                self._run_step_action(step, run, cancel_event=cancel_event),
+                timeout=step_timeout,
+            )
             elapsed_ms = int((time.monotonic() - t0) * 1000)
+        except asyncio.TimeoutError:
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            transition_step(step, "timed_out")
+            step.error = {"message": f"Step timed out after {step_timeout}s"}
+            step.completed_at = datetime.now(timezone.utc)
+            await self._db.flush()
+            logger.warning("Step %s timed out after %ds", step.step_id, step_timeout)
+            return
         except CancellationRequested:
             transition_step(step, "cancelled")
             step.completed_at = datetime.now(timezone.utc)
@@ -996,19 +1038,24 @@ class GraphExecutor:
         """Handle step execution failure with retry logic."""
         step.retry_count += 1
         if step.retry_count < step.max_retries:
+            delay = _compute_retry_delay(step.retry_count)
+            logger.warning(
+                "Step %s failed (attempt %d/%d), retrying in %ds: %s",
+                step.step_id,
+                step.retry_count,
+                step.max_retries,
+                delay,
+                exc,
+            )
             transition_step(step, "failed")
             transition_step(step, "pending")  # Retry: failed → pending
             step.error = {
                 "attempt": step.retry_count,
                 "message": str(exc)[:500],
+                "retry_after_seconds": delay,
             }
-            logger.warning(
-                "Step %s failed (attempt %d/%d): %s",
-                step.step_id,
-                step.retry_count,
-                step.max_retries,
-                exc,
-            )
+            await self._db.flush()
+            await asyncio.sleep(delay)
         else:
             logger.error(
                 "Step %s permanently failed after %dms: %s",
