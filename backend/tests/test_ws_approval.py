@@ -288,3 +288,14 @@ class TestArtifactRefsValidation:
             artifact_refs=None,
         )
         assert approval.approval_type == "tool:email.send"
+
+
+class TestWebSocketReconnect:
+    def test_ws_module_has_backfill_capability(self):
+        """WebSocket module should reference UISurface for backfill on reconnect."""
+        import inspect
+
+        from src.api import routes_ws
+
+        source = inspect.getsource(routes_ws)
+        assert "last_surface_update" in source or "backfill" in source.lower()

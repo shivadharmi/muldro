@@ -365,6 +365,7 @@ class GraphExecutor:
                 user_id=run.user_id,
                 phase="plan_ready",
                 steps=plan_ready_steps,
+                workspace_id=run.workspace_id,
             )
 
         cancel_event = asyncio.Event()
@@ -614,6 +615,7 @@ class GraphExecutor:
                             steps=_final_states,
                             progress=f"{len(_comp_steps)}/{len(_comp_steps)} steps",
                             results=ResultSummary(key_findings=_findings[:5]),
+                            workspace_id=run.workspace_id,
                         )
                     break
                 # If there are pending steps but none ready, we're blocked
@@ -643,6 +645,7 @@ class GraphExecutor:
                             phase="failed",
                             steps=_fail_states,
                             progress=f"{len(failed)} step(s) failed",
+                            workspace_id=run.workspace_id,
                         )
                     break
                 # Must be waiting for approval or external event
@@ -675,6 +678,7 @@ class GraphExecutor:
                     steps=_step_states,
                     current_step=ready_steps[0].step_id if ready_steps else None,
                     progress=f"{_done_count}/{len(_all_for_surface)} steps",
+                    workspace_id=run.workspace_id,
                 )
 
             for step in ready_steps:
@@ -847,6 +851,7 @@ class GraphExecutor:
                                 risk_reasoning=f"Risk: {risk_level}",
                                 trust_context="Legacy approval gate",
                             ),
+                            workspace_id=run.workspace_id,
                         )
                     return
 
@@ -998,6 +1003,7 @@ class GraphExecutor:
                     risk_reasoning=risk.reasoning,
                     trust_context=decision.justification or "",
                 ),
+                workspace_id=run.workspace_id,
             )
 
     async def _notify_auto_executed(
@@ -1098,6 +1104,7 @@ class GraphExecutor:
                     phase="failed",
                     steps=step_states,
                     progress=f"Step {step.step_id} permanently failed",
+                    workspace_id=run.workspace_id,
                 )
         await self._db.flush()
 
@@ -1599,8 +1606,12 @@ class GraphExecutor:
         progress: str = "",
         approval: object | None = None,
         results: object | None = None,
+        workspace_id: str | None = None,
     ) -> None:
         """Publish a SurfaceUpdate to Redis for live workspace streaming.
+
+        Also persists the latest surface state to the DB as a durable fallback
+        so reconnecting clients can recover missed updates.
 
         Best-effort — failures are logged but never raised.
         """
@@ -1634,6 +1645,51 @@ class GraphExecutor:
                 await self._event_bus.publish_to_channel(channel, payload)
         except Exception:
             logger.debug("Failed to emit surface update", exc_info=True)
+
+        # Durable fallback: persist latest surface state to DB so reconnecting
+        # clients can recover updates that were missed while disconnected.
+        try:
+            if self._db_factory and workspace_id:
+                from sqlalchemy import select
+
+                from src.models.ui_state import UISurface
+
+                async with self._db_factory() as persist_db:
+                    result = await persist_db.execute(
+                        select(UISurface).where(UISurface.surface_id == surface_id)
+                    )
+                    existing = result.scalar_one_or_none()
+
+                    from src.orchestrator.contracts import SurfaceUpdate
+
+                    surface_data = SurfaceUpdate(
+                        surface_id=surface_id,
+                        phase=phase,
+                        steps=steps or [],
+                        current_step=current_step,
+                        progress=progress,
+                        approval=approval,
+                        results=results,
+                    ).model_dump(mode="json")
+
+                    if existing:
+                        existing.payload = {
+                            **(existing.payload or {}),
+                            "last_surface_update": surface_data,
+                        }
+                    else:
+                        persist_db.add(
+                            UISurface(
+                                surface_id=surface_id,
+                                user_id=user_id,
+                                workspace_id=workspace_id,
+                                surface_type="execution",
+                                payload={"last_surface_update": surface_data},
+                            )
+                        )
+                    await persist_db.commit()
+        except Exception:
+            logger.debug("Failed to persist surface update to DB", exc_info=True)
 
     @staticmethod
     def _build_graph_definition(tasks: list[PlanTask]) -> dict:

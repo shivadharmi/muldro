@@ -84,6 +84,33 @@ async def jarvis_ws(websocket: WebSocket, user_id: str):
     # Auth succeeded
     await websocket.send_json({"type": "auth_ok"})
 
+    # Backfill: send current active execution surfaces on reconnect so clients
+    # recover surface state that was missed while disconnected.
+    try:
+        from sqlalchemy import select
+
+        from src.models.database import get_session_factory
+        from src.models.ui_state import UISurface
+
+        async with get_session_factory()() as db:
+            result = await db.execute(
+                select(UISurface)
+                .where(
+                    UISurface.user_id == user_id,
+                    UISurface.surface_type == "execution",
+                )
+                .order_by(UISurface.updated_at.desc())
+                .limit(5)
+            )
+            active_surfaces = result.scalars().all()
+
+            for surface in active_surfaces:
+                last_update = (surface.payload or {}).get("last_surface_update")
+                if last_update:
+                    await websocket.send_text(json.dumps({"type": "surface_update", **last_update}))
+    except Exception:
+        logger.debug("Failed to backfill surfaces on WS connect", exc_info=True)
+
     # Track connection
     _connections.setdefault(user_id, []).append(websocket)
     logger.info("ws_connected", extra={"user_id": user_id})

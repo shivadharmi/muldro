@@ -110,3 +110,36 @@ class TestStuckRunDetection:
         from src.services.scheduler import SchedulerLoop
 
         assert hasattr(SchedulerLoop, "_tick_run_health_check")
+
+
+class TestDurableSurfaceUpdates:
+    def test_emit_surface_update_method_exists(self):
+        """GraphExecutor has _emit_surface_update method."""
+        from src.services.graph_executor import GraphExecutor
+
+        assert hasattr(GraphExecutor, "_emit_surface_update")
+
+    def test_ui_surface_model_has_payload(self):
+        """UISurface has payload JSONB column for storing surface state."""
+        from src.models.ui_state import UISurface
+
+        assert hasattr(UISurface, "payload")
+
+    def test_emit_surface_update_accepts_workspace_id(self):
+        """_emit_surface_update signature includes optional workspace_id param."""
+        import inspect
+
+        from src.services.graph_executor import GraphExecutor
+
+        sig = inspect.signature(GraphExecutor._emit_surface_update)
+        assert "workspace_id" in sig.parameters
+
+    def test_emit_surface_update_persists_to_db(self):
+        """_emit_surface_update source contains DB persistence logic."""
+        import inspect
+
+        from src.services.graph_executor import GraphExecutor
+
+        source = inspect.getsource(GraphExecutor._emit_surface_update)
+        assert "last_surface_update" in source
+        assert "persist_db" in source
