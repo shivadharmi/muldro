@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import type { StepState } from "@/lib/a2ui-types";
 import { statusTextColor } from "@/lib/design-tokens";
 
@@ -18,33 +19,70 @@ const statusIcon: Record<string, { icon: string; className: string }> = {
 };
 
 export function StepList({ steps, currentStep }: StepListProps) {
+  const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
+
+  const toggleExpand = (stepId: string) => {
+    setExpandedSteps((prev) => {
+      const next = new Set(prev);
+      if (next.has(stepId)) next.delete(stepId);
+      else next.add(stepId);
+      return next;
+    });
+  };
+
   return (
-    <div className="space-y-1">
+    <div className="space-y-1.5">
       {steps.map((step) => {
         const isCurrent = step.step_id === currentStep;
         const { icon, className } = statusIcon[step.status] ?? statusIcon.pending;
+        const isExpanded = expandedSteps.has(step.step_id);
+        const hasLongOutput = (step.output_summary?.length ?? 0) > 120;
 
         return (
           <div
             key={step.step_id}
-            className={`flex items-start gap-2 py-1.5 px-2 rounded-[var(--radius-sm)] text-sm ${
-              isCurrent ? "bg-surface-1" : ""
+            className={`flex items-start gap-2 text-sm ${
+              isCurrent
+                ? "bg-j-primary-soft border-l-2 border-l-j-primary py-2 px-3 rounded-[var(--radius-sm)]"
+                : "py-1.5 px-2"
             }`}
           >
             <span className={`shrink-0 w-5 text-center ${className}`}>{icon}</span>
             <div className="flex-1 min-w-0">
-              <span className={`${isCurrent ? "text-t-primary font-medium" : "text-t-secondary"}`}>
+              <span className={isCurrent ? "text-t-primary font-medium" : "text-t-secondary"}>
                 {step.description}
               </span>
               {step.output_summary && step.status === "completed" && (
-                <p className="text-xs text-t-tertiary mt-0.5 line-clamp-2">
-                  {step.output_summary}
-                </p>
+                <div className="mt-0.5">
+                  <p className={`text-xs text-t-tertiary ${!isExpanded && hasLongOutput ? "line-clamp-2" : ""}`}>
+                    {step.output_summary}
+                  </p>
+                  {hasLongOutput && (
+                    <button
+                      type="button"
+                      onClick={() => toggleExpand(step.step_id)}
+                      className="text-[11px] text-j-primary cursor-pointer hover:underline mt-0.5"
+                    >
+                      {isExpanded ? "Show less" : "Show more"}
+                    </button>
+                  )}
+                </div>
               )}
               {step.status === "failed" && step.output_summary && (
-                <p className="text-xs text-j-error mt-0.5 line-clamp-2">
-                  {step.output_summary}
-                </p>
+                <div className="mt-0.5">
+                  <p className={`text-xs text-j-error ${!isExpanded && hasLongOutput ? "line-clamp-2" : ""}`}>
+                    {step.output_summary}
+                  </p>
+                  {hasLongOutput && (
+                    <button
+                      type="button"
+                      onClick={() => toggleExpand(step.step_id)}
+                      className="text-[11px] text-j-primary cursor-pointer hover:underline mt-0.5"
+                    >
+                      {isExpanded ? "Show less" : "Show more"}
+                    </button>
+                  )}
+                </div>
               )}
             </div>
             {step.duration_ms != null && step.status === "completed" && (
@@ -68,7 +106,15 @@ export function StepListCompact({ steps }: { steps: StepState[] }) {
   return (
     <div className="flex items-center gap-2 text-xs text-t-tertiary">
       <span>{completed}/{total} steps</span>
-      {failed > 0 && <span className="text-j-error">{failed} failed</span>}
+      {failed > 0 && <span className="text-j-error font-medium">{failed} failed</span>}
+      {total > 0 && (
+        <div className="w-12 h-1 bg-surface-3 rounded-full overflow-hidden ml-1">
+          <div
+            className={`h-full rounded-full transition-all duration-300 ${failed > 0 ? "bg-j-error" : "bg-j-success"}`}
+            style={{ width: `${(completed / total) * 100}%` }}
+          />
+        </div>
+      )}
     </div>
   );
 }
