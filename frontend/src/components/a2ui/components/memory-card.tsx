@@ -19,7 +19,7 @@ export function A2UIMemoryCard({ component }: Props) {
   const pct = Math.round(confidence * 100);
 
   return (
-    <div className="rounded-lg border border-b-primary bg-surface-1 p-3">
+    <div className="rounded-[var(--radius-lg)] border border-b-primary bg-surface-1 p-3">
       <div className="flex items-start justify-between mb-1">
         <span className="text-[10px] font-medium text-j-primary uppercase">
           {typeLabels[memoryType] || memoryType}

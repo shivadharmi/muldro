@@ -18,7 +18,7 @@ export function A2UIAlert({ component }: Props) {
   const cls = severityClasses[severity] || severityClasses.info;
 
   return (
-    <div className={`rounded-lg border p-3 ${cls}`}>
+    <div className={`rounded-[var(--radius-lg)] border p-3 ${cls}`}>
       {title && <p className="text-sm font-medium mb-1">{title}</p>}
       <p className="text-sm">{message}</p>
     </div>

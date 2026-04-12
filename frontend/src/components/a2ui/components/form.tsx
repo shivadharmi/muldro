@@ -8,7 +8,7 @@ interface Props {
 
 export function A2UIForm({ children }: Props) {
   return (
-    <div className="space-y-3 rounded-lg border border-b-primary bg-surface-1 p-4">
+    <div className="space-y-3 rounded-[var(--radius-lg)] border border-b-primary bg-surface-1 p-4">
       {children}
     </div>
   );
