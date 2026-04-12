@@ -19,6 +19,10 @@ from src.api.deps import resolve_workspace_id
 from src.config.settings import Settings
 from src.models.database import get_session_factory
 from src.models.schedules import Schedule
+from src.models.task_graph import TaskRun
+from src.services.dead_letter import DeadLetterService
+from src.services.embedding_service import EmbeddingService
+from src.services.execution_state import transition_run
 from src.services.heartbeat import HeartbeatService
 
 logger = logging.getLogger(__name__)
@@ -512,8 +516,6 @@ class SchedulerLoop:
         """Retry DLQ entries that haven't exceeded max attempts."""
         try:
             async with factory() as db:
-                from src.services.dead_letter import DeadLetterService
-
                 dlq = DeadLetterService(db)
                 for uid in self._user_ids:
                     pending = await dlq.list_pending(uid, limit=10)
@@ -529,9 +531,81 @@ class SchedulerLoop:
                                 entry.entry_id,
                                 entry.attempt_count,
                             )
+                            dispatched = await self._dispatch_dlq_entry(db, entry, factory)
+                            if dispatched:
+                                await dlq.mark_resolved(entry.entry_id)
+                            else:
+                                logger.warning(
+                                    "DLQ entry %s dispatch failed for op=%s",
+                                    entry.entry_id,
+                                    entry.operation_type,
+                                )
                     await db.commit()
         except Exception:
             logger.warning("DLQ retry tick failed", exc_info=True)
+
+    async def _dispatch_dlq_entry(self, db, entry, factory) -> bool:
+        """Dispatch a single DLQ entry based on its operation_type.
+
+        Returns True if the operation was successfully re-executed.
+        """
+        op = entry.operation_type
+        payload = entry.payload or {}
+
+        try:
+            if op == "background_task":
+                run_id = payload.get("run_id")
+                if not run_id:
+                    logger.warning("DLQ background_task missing run_id: %s", entry.entry_id)
+                    return False
+                run = await db.get(TaskRun, run_id)
+                if not run:
+                    logger.warning("DLQ TaskRun not found: %s", run_id)
+                    return False
+                if run.status == "failed":
+                    transition_run(run, "pending")
+                return True
+
+            if op == "failed_embedding":
+                text = payload.get("text")
+                if not text:
+                    logger.warning("DLQ failed_embedding missing text: %s", entry.entry_id)
+                    return False
+                svc = EmbeddingService(self._settings)
+                vector = await svc.embed_text(text)
+                return vector is not None
+
+            if op == "perception_cycle":
+                source = payload.get("source")
+                if not source:
+                    logger.warning("DLQ perception_cycle missing source: %s", entry.entry_id)
+                    return False
+                if not self._orchestrator:
+                    logger.warning(
+                        "DLQ perception_cycle requires orchestrator: %s",
+                        entry.entry_id,
+                    )
+                    return False
+                await self._orchestrator._bump_perception_for_sources(
+                    [source], entry.user_id, entry.workspace_id
+                )
+                return True
+
+            logger.warning(
+                "DLQ unknown operation_type %r for entry %s",
+                op,
+                entry.entry_id,
+            )
+            return False
+
+        except Exception:
+            logger.warning(
+                "DLQ dispatch failed for entry %s (op=%s)",
+                entry.entry_id,
+                op,
+                exc_info=True,
+            )
+            return False
 
     # ------------------------------------------------------------------
     # Memory expiration
