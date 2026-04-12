@@ -12,15 +12,15 @@ export function InlineApprovalCard({ approval }: InlineApprovalCardProps) {
   const sendAction = useWsActionStore((s) => s.sendAction);
 
   const handleApprove = useCallback(() => {
-    sendAction("approve", { approval_id: approval.approval_id });
+    sendAction("approve", { id: approval.approval_id });
   }, [sendAction, approval.approval_id]);
 
   const handleReject = useCallback(() => {
-    sendAction("reject", { approval_id: approval.approval_id });
+    sendAction("reject", { id: approval.approval_id });
   }, [sendAction, approval.approval_id]);
 
   const handleEdit = useCallback(() => {
-    sendAction("edit_before_approve", { approval_id: approval.approval_id });
+    sendAction("edit_before_approve", { id: approval.approval_id });
   }, [sendAction, approval.approval_id]);
 
   return (
