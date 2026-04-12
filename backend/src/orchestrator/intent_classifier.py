@@ -143,9 +143,15 @@ def extract_plan(response_text: str) -> PlanOutput:
             pass
         start = end + 1
 
+    logger.warning(
+        "Planner response did not contain valid JSON — falling back to minimal respond plan. "
+        "Response preview: %.300s",
+        response_text,
+    )
     return PlanOutput(
         goal=response_text[:200],
-        steps=[PlanStep(description="Respond to user", capability="respond")],
+        steps=[PlanStep(step_id="s1", description="Respond to user", capability="respond")],
+        achievable="partial",
     )
 
 
@@ -160,20 +166,20 @@ def intent_to_plan(intent: str, message: str, capabilities: list[str]) -> PlanOu
     if intent in ("greeting", "chitchat", "acknowledgment"):
         return PlanOutput(
             goal=goal,
-            steps=[PlanStep(description="Respond to user", capability="respond")],
+            steps=[PlanStep(step_id="s1", description="Respond to user", capability="respond")],
             priority="low",
         )
 
     if intent == "direct_answer":
         return PlanOutput(
             goal=goal,
-            steps=[PlanStep(description="Answer from context", capability="reason")],
+            steps=[PlanStep(step_id="s1", description="Answer from context", capability="reason")],
         )
 
     if intent == "simple_question":
         return PlanOutput(
             goal=goal,
-            steps=[PlanStep(description="Answer question", capability="reason")],
+            steps=[PlanStep(step_id="s1", description="Answer question", capability="reason")],
         )
 
     if intent in ("single_read", "data_fetch"):
@@ -183,14 +189,18 @@ def intent_to_plan(intent: str, message: str, capabilities: list[str]) -> PlanOu
         # user asks about multiple sources (e.g. "check email and calendar").
         return PlanOutput(
             goal=goal,
-            steps=[PlanStep(description=goal, capability="perceive", risk="none")],
+            steps=[PlanStep(step_id="s1", description=goal, capability="perceive", risk="none")],
         )
 
     if intent == "status_query":
         return PlanOutput(
             goal=goal,
             steps=[
-                PlanStep(description="Retrieve status", capability="knowledge.search"),
+                PlanStep(
+                    step_id="s1",
+                    description="Retrieve status",
+                    capability="knowledge.search",
+                ),
             ],
         )
 
@@ -199,6 +209,7 @@ def intent_to_plan(intent: str, message: str, capabilities: list[str]) -> PlanOu
             goal=goal,
             steps=[
                 PlanStep(
+                    step_id="s1",
                     description="Store or recall knowledge",
                     capability="knowledge.search",
                 ),
@@ -208,13 +219,13 @@ def intent_to_plan(intent: str, message: str, capabilities: list[str]) -> PlanOu
     if intent == "approval_response":
         return PlanOutput(
             goal=goal,
-            steps=[PlanStep(description="Process approval", capability="respond")],
+            steps=[PlanStep(step_id="s1", description="Process approval", capability="respond")],
         )
 
     # Fallback for unknown intents
     return PlanOutput(
         goal=goal,
-        steps=[PlanStep(description="Respond to user", capability="respond")],
+        steps=[PlanStep(step_id="s1", description="Respond to user", capability="respond")],
         priority="low",
     )
 

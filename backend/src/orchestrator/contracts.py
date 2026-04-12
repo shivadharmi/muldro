@@ -380,6 +380,14 @@ class PlanOutput(BaseModel):
 
     @model_validator(mode="after")
     def _validate_step_dependencies(self) -> PlanOutput:
+        # Check step_id uniqueness
+        seen_ids: set[str] = set()
+        for step in self.steps:
+            if step.step_id:
+                if step.step_id in seen_ids:
+                    raise ValueError(f"Duplicate step_id: '{step.step_id}'")
+                seen_ids.add(step.step_id)
+
         step_ids = {s.step_id for s in self.steps if s.step_id}
         for step in self.steps:
             if step.step_id and step.step_id in step.depends_on:

@@ -138,6 +138,18 @@ class TestIntentToPlan:
             assert isinstance(result, PlanOutput), f"Failed for intent: {intent}"
             assert len(result.steps) >= 1, f"No steps for intent: {intent}"
 
+    def test_all_fast_intents_have_step_ids(self):
+        """Every step from intent_to_plan must have a non-empty step_id."""
+        for intent in FAST_INTENTS:
+            result = intent_to_plan(intent, "test message", self.CAPS)
+            for i, step in enumerate(result.steps):
+                assert step.step_id, f"Empty step_id for intent={intent}, step={i}"
+
+    def test_step_ids_are_sequential(self):
+        """Step IDs follow s1, s2, ... pattern."""
+        result = intent_to_plan("greeting", "Hey!", self.CAPS)
+        assert result.steps[0].step_id == "s1"
+
     def test_single_read_risk_is_none(self):
         result = intent_to_plan("single_read", "Check email", self.CAPS)
         assert result.steps[0].risk == "none"
