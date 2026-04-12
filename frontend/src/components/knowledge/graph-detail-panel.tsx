@@ -9,6 +9,7 @@ import type {
   KnowledgeMemoryItem,
 } from "@/lib/api";
 import { useKnowledgeStore } from "@/stores/knowledge-store";
+import { EmptyState } from "@/components/ui/empty-state";
 
 // ── CSS variable resolver (for inline style props) ──────────────
 
@@ -145,7 +146,11 @@ export function GraphDetailPanel() {
   });
 
   if (!selectedEntityId || !selectedNode) {
-    return null;
+    return (
+      <div className="w-80 shrink-0 border-l border-b-secondary hidden lg:flex items-center justify-center">
+        <EmptyState title="Select an entity" description="Click a node in the graph to see details" />
+      </div>
+    );
   }
 
   const closePanel = () => selectEntity(null);
