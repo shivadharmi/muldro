@@ -8,6 +8,7 @@ path finding, and community detection.
 import json
 import logging
 import time
+from datetime import datetime, timezone
 
 from src.config.settings import Settings
 from src.services.world_model import RELATION_TYPES
@@ -56,6 +57,12 @@ class GraphEngine:
         self._settings = settings
         self._driver = None
         self._circuit = _Neo4jCircuit()
+        self._metrics: dict = {
+            "sync_success": 0,
+            "sync_failure": 0,
+            "last_failure_at": None,
+            "last_failure_error": None,
+        }
 
     async def _get_driver(self):
         """Lazy-init Neo4j driver."""
@@ -70,6 +77,27 @@ class GraphEngine:
                 auth=(self._settings.neo4j_user, self._settings.neo4j_password),
             )
         return self._driver
+
+    async def health(self) -> dict:
+        """Lightweight health check — runs RETURN 1."""
+        if not self._settings.neo4j_url:
+            return {"status": "disabled", "configured": False}
+        try:
+            driver = await self._get_driver()
+            if not driver:
+                return {"status": "unreachable", "configured": True}
+            async with driver.session() as session:
+                await session.run("RETURN 1")
+            return {
+                "status": "healthy",
+                "configured": True,
+                "circuit_state": self._circuit._state,
+            }
+        except Exception as exc:
+            return {"status": "unreachable", "configured": True, "error": str(exc)[:200]}
+
+    def get_metrics(self) -> dict:
+        return {**self._metrics, "circuit_state": self._circuit._state}
 
     async def close(self) -> None:
         """Close the Neo4j driver."""
@@ -133,8 +161,12 @@ class GraphEngine:
                     attributes=json.dumps(attributes or {}, default=str),
                 )
             self._circuit.record_success()
-        except Exception:
+            self._metrics["sync_success"] += 1
+        except Exception as exc:
             self._circuit.record_failure()
+            self._metrics["sync_failure"] += 1
+            self._metrics["last_failure_at"] = datetime.now(timezone.utc).isoformat()
+            self._metrics["last_failure_error"] = str(exc)[:200]
             logger.warning("Neo4j sync_entity failed for %s", entity_id, exc_info=True)
 
     async def sync_relationship(
@@ -187,8 +219,12 @@ class GraphEngine:
                     end_date=end_date,
                 )
             self._circuit.record_success()
-        except Exception:
+            self._metrics["sync_success"] += 1
+        except Exception as exc:
             self._circuit.record_failure()
+            self._metrics["sync_failure"] += 1
+            self._metrics["last_failure_at"] = datetime.now(timezone.utc).isoformat()
+            self._metrics["last_failure_error"] = str(exc)[:200]
             logger.warning("Neo4j sync_relationship failed for %s", relation_id, exc_info=True)
 
     async def traverse(
@@ -574,7 +610,7 @@ class GraphEngine:
             logger.debug("neo4j_circuit_open: skipping get_stale_relationships for %s", user_id)
             return []
 
-        from datetime import datetime, timedelta, timezone
+        from datetime import timedelta
 
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 

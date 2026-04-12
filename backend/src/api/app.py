@@ -170,8 +170,22 @@ def create_app() -> FastAPI:
             vector_store = VectorStore(settings)
             await vector_store.ensure_collections()
             await vector_store.ensure_indexes()
+            app.state.vector_store = vector_store
         except Exception:
             logger.debug("Qdrant collection init skipped", exc_info=True)
+            app.state.vector_store = None
+
+        # Initialize GraphEngine persistent instance
+        try:
+            from src.services.graph_engine import GraphEngine
+
+            if settings.neo4j_url:
+                app.state.graph_engine = GraphEngine(settings)
+            else:
+                app.state.graph_engine = None
+        except Exception:
+            logger.debug("GraphEngine init skipped", exc_info=True)
+            app.state.graph_engine = None
 
         # Create OAuthManager for MCP bridge token resolution.
         # Lightweight instance (db_factory + encryption key, no state).

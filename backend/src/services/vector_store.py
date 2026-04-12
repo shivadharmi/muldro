@@ -38,6 +38,12 @@ class VectorStore:
     def __init__(self, settings: Settings):
         self._settings = settings
         self._client = None
+        self._metrics: dict = {
+            "upsert_success": 0,
+            "upsert_failure": 0,
+            "delete_success": 0,
+            "delete_failure": 0,
+        }
 
     async def _get_client(self):
         """Lazy-init Qdrant client with reconnection on failure."""
@@ -59,6 +65,26 @@ class VectorStore:
             api_key=self._settings.qdrant_api_key or None,
         )
         return self._client
+
+    async def health(self) -> dict:
+        """Lightweight health check — lists Qdrant collections."""
+        if not self._settings.qdrant_url:
+            return {"status": "disabled", "configured": False}
+        try:
+            client = await self._get_client()
+            if not client:
+                return {"status": "unreachable", "configured": True}
+            collections = await client.get_collections()
+            return {
+                "status": "healthy",
+                "configured": True,
+                "collections": len(collections.collections),
+            }
+        except Exception as exc:
+            return {"status": "unreachable", "configured": True, "error": str(exc)[:200]}
+
+    def get_metrics(self) -> dict:
+        return dict(self._metrics)
 
     async def close(self) -> None:
         """Close the Qdrant client connection."""
@@ -165,10 +191,15 @@ class VectorStore:
         payload["user_id"] = user_id
         payload["_original_id"] = id
         qdrant_id = _to_qdrant_id(id)
-        await client.upsert(
-            collection_name=collection,
-            points=[PointStruct(id=qdrant_id, vector=vector, payload=payload)],
-        )
+        try:
+            await client.upsert(
+                collection_name=collection,
+                points=[PointStruct(id=qdrant_id, vector=vector, payload=payload)],
+            )
+            self._metrics["upsert_success"] += 1
+        except Exception:
+            self._metrics["upsert_failure"] += 1
+            raise
 
     async def batch_upsert(
         self,
@@ -261,10 +292,15 @@ class VectorStore:
             return
 
         qdrant_id = _to_qdrant_id(id)
-        await client.delete(
-            collection_name=collection,
-            points_selector=[qdrant_id],
-        )
+        try:
+            await client.delete(
+                collection_name=collection,
+                points_selector=[qdrant_id],
+            )
+            self._metrics["delete_success"] += 1
+        except Exception:
+            self._metrics["delete_failure"] += 1
+            raise
 
     async def set_payload(self, collection: str, point_id: str, payload: dict) -> None:
         """Update payload fields on an existing point without re-embedding."""
