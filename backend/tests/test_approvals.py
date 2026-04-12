@@ -36,7 +36,9 @@ async def test_get_approval_already_decided(mock_db):
     mock_db.execute = AsyncMock(return_value=result_mock)
 
     with pytest.raises(HTTPException) as exc_info:
-        await _get_approval(mock_db, "apr_001", TEST_USER_ID, TEST_WORKSPACE_ID)
+        await _get_approval(
+            mock_db, "apr_001", TEST_USER_ID, TEST_WORKSPACE_ID, intended_action="reject"
+        )
     assert exc_info.value.status_code == 400
 
 
@@ -45,6 +47,7 @@ async def test_get_approval_success(mock_db):
     """Should return pending approval successfully."""
     approval = MagicMock()
     approval.status = "pending"
+    approval.expires_at = None
     result_mock = MagicMock()
     result_mock.scalar_one_or_none.return_value = approval
     mock_db.execute = AsyncMock(return_value=result_mock)
