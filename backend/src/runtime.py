@@ -124,6 +124,14 @@ def build(settings: Settings, db: AsyncSession) -> ServiceContainer:
         logger.debug("Tier 3: GraphEngine unavailable", exc_info=True)
 
     try:
+        if svc.graph_engine:
+            from src.services.graph_sync import GraphSyncService
+
+            svc.extras["graph_sync"] = GraphSyncService(settings, db)
+    except Exception:
+        logger.debug("Tier 3: GraphSyncService unavailable", exc_info=True)
+
+    try:
         from src.services.reranker_service import RerankerService
 
         if settings.reranker_enabled:
