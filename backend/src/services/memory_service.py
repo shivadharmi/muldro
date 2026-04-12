@@ -95,13 +95,46 @@ def _compute_decayed_stability(current_stability: float, days_since_access: int)
 class MemoryService:
     """Manage Jarvis long-term memory."""
 
-    def __init__(self, settings: Settings, db: AsyncSession, event_bus=None, vector_store=None):
+    def __init__(
+        self,
+        settings: Settings,
+        db: AsyncSession,
+        event_bus=None,
+        vector_store=None,
+        dead_letter=None,
+    ):
         self._settings = settings
         self._db = db
         self._client = get_anthropic_client(settings)
         self._embedder = EmbeddingService(settings)
         self._event_bus = event_bus
         self._vector_store = vector_store
+        self._dead_letter = dead_letter
+
+    async def _enqueue_failed_embedding(
+        self, record_id: str, user_id: str, collection: str = "memories"
+    ) -> None:
+        """Enqueue a failed embedding for retry via DLQ."""
+        if not self._dead_letter:
+            return
+        try:
+            await self._dead_letter.enqueue(
+                user_id=user_id,
+                operation_type="failed_embedding",
+                error_type="EmbeddingFailure",
+                error_message=f"Embedding/upsert failed for {collection}:{record_id}",
+                payload={
+                    "record_id": record_id,
+                    "collection": collection,
+                    "record_type": "memory",
+                },
+            )
+        except Exception:
+            logger.warning(
+                "Failed to enqueue embedding retry for %s",
+                record_id,
+                exc_info=True,
+            )
 
     @staticmethod
     def _build_memory_payload(
