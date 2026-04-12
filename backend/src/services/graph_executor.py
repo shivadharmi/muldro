@@ -557,6 +557,7 @@ class GraphExecutor:
         cancel_event: asyncio.Event | None = None,
     ) -> None:
         """Main DAG execution loop."""
+        _dag_start = time.monotonic()
         while True:
             ready_steps = await self._get_ready_steps(run.run_id)
             if not ready_steps:
@@ -696,6 +697,15 @@ class GraphExecutor:
             await self._db.refresh(run)
             if run.status in ("paused", "awaiting_approval"):
                 break
+
+        _dag_elapsed = time.monotonic() - _dag_start
+        if _dag_elapsed > 120:
+            logger.warning(
+                "Long DAG execution: run %s took %.1fs — "
+                "consider db_factory pattern for connection pool safety",
+                run.run_id,
+                _dag_elapsed,
+            )
 
     async def _execute_step(
         self,
