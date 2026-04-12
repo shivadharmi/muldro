@@ -25,6 +25,7 @@ from src.api.routes_memories import router as memories_router
 from src.api.routes_metrics import router as metrics_router
 from src.api.routes_notifications import router as notifications_router
 from src.api.routes_observation import router as observation_router
+from src.api.routes_plans import router as plans_router
 from src.api.routes_realtime import router as realtime_router
 from src.api.routes_runs import router as runs_router
 from src.api.routes_runtime import router as runtime_router
@@ -328,6 +329,9 @@ def create_app() -> FastAPI:
 
     # Notifications
     app.include_router(notifications_router, tags=["notifications"])
+
+    # Plans (plan tracking)
+    app.include_router(plans_router, tags=["plans"])
 
     # Runs (task execution runs)
     app.include_router(runs_router, tags=["runs"])

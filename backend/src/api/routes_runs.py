@@ -1,8 +1,9 @@
 """Run API routes — view task run state, steps, traces, and artifacts."""
 
 import logging
+from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -338,6 +339,160 @@ async def resume_run(
 
     executor = await create_graph_executor(settings=settings, db=db, workspace_id=workspace_id)
     run = await executor.resume_run(run_id)
+
+    return RunResponse(
+        run_id=run.run_id,
+        plan_id=run.plan_id,
+        user_id=run.user_id,
+        status=run.status,
+        started_at=run.started_at.isoformat() if run.started_at else None,
+        completed_at=run.completed_at.isoformat() if run.completed_at else None,
+        error=run.error,
+        retry_count=run.retry_count,
+    )
+
+
+@router.get("/v1/runs", response_model=list[RunResponse])
+async def list_runs(
+    status: str | None = None,
+    source: str | None = None,
+    created_after: datetime | None = None,
+    created_before: datetime | None = None,
+    limit: int = Query(default=50, le=200),
+    offset: int = Query(default=0, ge=0),
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+    db=Depends(get_session),
+):
+    """List task runs with optional filters."""
+    from src.models.task_graph import TaskRun
+
+    stmt = select(TaskRun).where(
+        TaskRun.user_id == user_id,
+        TaskRun.workspace_id == workspace_id,
+    )
+
+    if status:
+        stmt = stmt.where(TaskRun.status == status)
+    if source:
+        stmt = stmt.where(TaskRun.source == source)
+    if created_after:
+        stmt = stmt.where(TaskRun.created_at >= created_after)
+    if created_before:
+        stmt = stmt.where(TaskRun.created_at <= created_before)
+
+    stmt = stmt.order_by(TaskRun.created_at.desc()).limit(limit).offset(offset)
+
+    result = await db.execute(stmt)
+    runs = result.scalars().all()
+
+    return [
+        RunResponse(
+            run_id=r.run_id,
+            plan_id=r.plan_id,
+            user_id=r.user_id,
+            status=r.status,
+            started_at=r.started_at.isoformat() if r.started_at else None,
+            completed_at=r.completed_at.isoformat() if r.completed_at else None,
+            error=r.error,
+            retry_count=r.retry_count,
+        )
+        for r in runs
+    ]
+
+
+@router.post(
+    "/v1/runs/{run_id}/cancel",
+    response_model=RunResponse,
+    dependencies=[Depends(per_endpoint_rate_limit(30))],
+)
+async def cancel_run(
+    run_id: str,
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+    db=Depends(get_session),
+):
+    """Cancel a running or paused run."""
+    from src.config.settings import get_settings
+    from src.models.task_graph import TaskRun
+
+    settings = get_settings()
+
+    result = await db.execute(
+        select(TaskRun).where(
+            TaskRun.run_id == run_id,
+            TaskRun.workspace_id == workspace_id,
+        )
+    )
+    run = result.scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if run.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not your run")
+
+    terminal_statuses = {"completed", "failed", "cancelled", "archived", "timed_out"}
+    if run.status in terminal_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Run is already in terminal state (status={run.status})",
+        )
+
+    from src.services.graph_executor import create_graph_executor
+
+    executor = await create_graph_executor(settings=settings, db=db, workspace_id=workspace_id)
+    run = await executor.cancel_run(run_id)
+
+    return RunResponse(
+        run_id=run.run_id,
+        plan_id=run.plan_id,
+        user_id=run.user_id,
+        status=run.status,
+        started_at=run.started_at.isoformat() if run.started_at else None,
+        completed_at=run.completed_at.isoformat() if run.completed_at else None,
+        error=run.error,
+        retry_count=run.retry_count,
+    )
+
+
+@router.post(
+    "/v1/runs/{run_id}/retry",
+    response_model=RunResponse,
+    dependencies=[Depends(per_endpoint_rate_limit(10))],
+)
+async def retry_run(
+    run_id: str,
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+    db=Depends(get_session),
+):
+    """Retry a failed or timed-out run."""
+    from src.models.task_graph import TaskRun
+    from src.services.execution_state import transition_run
+
+    result = await db.execute(
+        select(TaskRun).where(
+            TaskRun.run_id == run_id,
+            TaskRun.workspace_id == workspace_id,
+        )
+    )
+    run = result.scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if run.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not your run")
+    if run.status not in ("failed", "timed_out"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Run cannot be retried (status={run.status}). "
+            "Only failed or timed_out runs can be retried.",
+        )
+
+    transition_run(run, "pending")
+    run.retry_count = run.retry_count + 1
+    run.error = None
+    run.completed_at = None
+    await db.commit()
+    await db.refresh(run)
 
     return RunResponse(
         run_id=run.run_id,
