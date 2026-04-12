@@ -260,9 +260,7 @@ async def approve_action(
             executor = await create_graph_executor(
                 settings=settings, db=db, workspace_id=workspace_id
             )
-            # Pass surface_id from checkpoint if available
-            _surface_id = (run.checkpoint or {}).get("surface_id")
-            await executor.execute_run(run.run_id, surface_id=_surface_id)
+            await executor.execute_run(run.run_id)
         except Exception as exc:
             logger.exception("Execution failed after approval: %s", run.run_id)
             await _mark_run_failed_after_resume(db, run.run_id, exc)

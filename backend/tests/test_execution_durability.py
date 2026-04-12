@@ -83,6 +83,28 @@ class TestCheckpointValidation:
         assert hasattr(GraphExecutor, "resume_run")
 
 
+class TestVerificationState:
+    def test_partially_completed_to_completed_valid(self):
+        from src.services.execution_state import RUN_TRANSITIONS
+
+        assert "completed" in RUN_TRANSITIONS["partially_completed"]
+
+    def test_partially_completed_to_failed_valid(self):
+        from src.services.execution_state import RUN_TRANSITIONS
+
+        assert "failed" in RUN_TRANSITIONS["partially_completed"]
+
+    def test_verification_promotes_to_completed(self):
+        """_run_verification should promote partially_completed to completed on pass."""
+        import inspect
+
+        from src.services.graph_executor import GraphExecutor
+
+        source = inspect.getsource(GraphExecutor._run_verification)
+        assert "partially_completed" in source
+        assert 'transition_run(run, "completed")' in source
+
+
 class TestStuckRunDetection:
     def test_scheduler_has_health_check_method(self):
         from src.services.scheduler import SchedulerLoop

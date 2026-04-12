@@ -563,7 +563,11 @@ class GraphExecutor:
                 all_steps = await self._get_all_steps(run.run_id)
                 pending = [s for s in all_steps if s.status in ("pending", "ready", "running")]
                 if not pending:
-                    transition_run(run, "completed")
+                    # Use partially_completed before verification (if verifier exists)
+                    if self._verifier:
+                        transition_run(run, "partially_completed")
+                    else:
+                        transition_run(run, "completed")
                     run.completed_at = datetime.now(timezone.utc)
                     await self._emit_event(
                         "run_completed",
@@ -1520,6 +1524,10 @@ class GraphExecutor:
                 transition_run(run, "failed")
                 run.error = {"verification_failed": result.details}
                 logger.warning("Run %s failed verification: %s", run.run_id, result.details)
+            else:
+                # Verification passed — promote from partially_completed to completed
+                if run.status == "partially_completed":
+                    transition_run(run, "completed")
         except Exception:
             logger.warning("Verification failed for run %s", run.run_id, exc_info=True)
 

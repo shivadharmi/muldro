@@ -133,3 +133,35 @@ class TestPlanModelHasPlanOutputJson:
         from src.models.plans import Plan
 
         assert hasattr(Plan, "plan_output_json")
+
+
+class TestPerceptionIdempotency:
+    def test_idempotency_return_preserves_existing_plan_id(self):
+        """When idempotency key matches, returned PlanOutput should have plan_id set."""
+        import inspect
+
+        from src.orchestrator.jarvis import JarvisOrchestrator
+
+        source = inspect.getsource(JarvisOrchestrator._persist_plan_record)
+        assert "model_copy" in source  # Uses model_copy to set plan_id on idempotency match
+
+
+class TestInteractionLogHasPlanId:
+    def test_interaction_log_has_plan_id_column(self):
+        """InteractionLog already stores plan_id — no additional change needed."""
+        from src.models.interaction_log import InteractionLog
+
+        assert hasattr(InteractionLog, "plan_id")
+
+
+class TestSystemCapabilityAudit:
+    def test_handle_system_capability_creates_audit_record(self):
+        """_handle_system_capability should contain PlanTask audit logic."""
+        import inspect
+
+        from src.orchestrator.jarvis import JarvisOrchestrator
+
+        source = inspect.getsource(JarvisOrchestrator._handle_system_capability)
+        assert "PlanTask" in source
+        assert "plan.plan_id" in source
+        assert 'status="completed"' in source

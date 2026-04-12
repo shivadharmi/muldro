@@ -372,12 +372,13 @@ class JarvisOrchestrator:
                             Plan.status.notin_(["completed", "failed", "cancelled"]),
                         )
                     )
-                    if existing.scalar_one_or_none():
+                    existing_plan_id = existing.scalar_one_or_none()
+                    if existing_plan_id:
                         logger.info(
                             "Skipping duplicate plan: idempotency_key=%s",
                             idempotency_key,
                         )
-                        return plan_output
+                        return plan_output.model_copy(update={"plan_id": existing_plan_id})
 
                 # Pass 1: Pre-build step_id → task_id map for ALL steps
                 # so forward dependencies resolve correctly.
@@ -2918,24 +2919,46 @@ class JarvisOrchestrator:
         goal_text = step.description or plan.goal
         reasoning = plan.reasoning
 
+        # Execute the system capability
+        result: dict = {}
         if cap == "system.set_goal":
-            return await self._handle_set_goal(
+            result = await self._handle_set_goal(
                 goal_text, reasoning, plan.priority, user_id, workspace_id
             )
         elif cap == "system.set_instruction":
             instruction = step.input.get("instruction", {})
-            return await self._handle_set_instruction(
+            result = await self._handle_set_instruction(
                 goal_text, reasoning, instruction, user_id, workspace_id
             )
         elif cap == "system.schedule_reminder":
             tasks = step.input.get("tasks", [])
-            return await self._handle_schedule_reminder(
+            result = await self._handle_schedule_reminder(
                 goal_text, reasoning, tasks, user_id, workspace_id
             )
         elif cap == "system.add_to_brief":
-            return await self._handle_add_to_brief(goal_text, user_id, workspace_id)
+            result = await self._handle_add_to_brief(goal_text, user_id, workspace_id)
 
-        return {}  # unreachable due to early guard, but satisfies type checker
+        # Audit: record as completed PlanTask
+        if plan.plan_id:
+            try:
+                from src.models.plans import PlanTask
+
+                async with self._db_factory() as db:
+                    db.add(
+                        PlanTask(
+                            task_id=f"ptask_{ULID()}",
+                            plan_id=plan.plan_id,
+                            workspace_id=workspace_id,
+                            task_type=cap,
+                            input_data=step.input or {"description": step.description},
+                            status="completed",
+                        )
+                    )
+                    await db.commit()
+            except Exception:
+                logger.debug("Failed to audit system capability step", exc_info=True)
+
+        return result
 
     async def _call_agent(
         self,
