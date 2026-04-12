@@ -352,6 +352,7 @@ class SchedulerLoop:
                     )
                     .order_by(TaskRun.created_at.asc())
                     .limit(3)
+                    .with_for_update(skip_locked=True)
                 )
                 pending = list(result.scalars().all())
 
