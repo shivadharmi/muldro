@@ -72,9 +72,10 @@ class RerankerService:
         """Synchronous call to Bedrock Rerank API."""
         client = self._get_client()
 
-        # Build the sources list for the Bedrock API
+        # Build the sources list for the Bedrock API, skipping empty-text docs
         sources = []
-        for doc in documents:
+        source_idx_to_doc_idx: list[int] = []
+        for i, doc in enumerate(documents):
             text = doc.get("text", "")
             if not text:
                 # Try common text fields
@@ -86,6 +87,9 @@ class RerankerService:
                     or doc.get("content", "")
                     or ""
                 )
+            if not text:
+                continue
+            source_idx_to_doc_idx.append(i)
             sources.append(
                 {
                     "type": "INLINE",
@@ -104,20 +108,21 @@ class RerankerService:
                 "type": "BEDROCK_RERANKING_MODEL",
                 "bedrockRerankingConfiguration": {
                     "modelConfiguration": {"modelArn": self._resolve_model_arn()},
-                    "numberOfResults": min(top_k, len(documents)),
+                    "numberOfResults": min(top_k, len(sources)),
                 },
             },
             sources=sources,
             queries=[{"type": "TEXT", "textQuery": {"text": query}}],
         )
 
-        # Map rerank scores back to documents
+        # Map rerank scores back to original documents
         results = response.get("results", [])
         scored_docs = []
         for result in results:
-            idx = result["index"]
-            if 0 <= idx < len(documents):
-                doc = dict(documents[idx])
+            source_idx = result["index"]
+            if 0 <= source_idx < len(source_idx_to_doc_idx):
+                doc_idx = source_idx_to_doc_idx[source_idx]
+                doc = dict(documents[doc_idx])
                 doc["rerank_score"] = result["relevanceScore"]
                 scored_docs.append(doc)
 

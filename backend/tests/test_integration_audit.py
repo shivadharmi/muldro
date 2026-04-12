@@ -98,31 +98,3 @@ class TestAgentAnalytics:
         assert report.agents == []
         assert report.total_calls_24h == 0
         assert report.busiest_agent is None
-
-
-class TestRouteAnalytics:
-    async def test_empty_report(self):
-        from src.services.route_analytics import RouteAnalyticsService
-
-        mock_routes = MagicMock()
-        mock_routes.scalars.return_value.all.return_value = []
-        mock_traces = MagicMock()
-        mock_traces.scalars.return_value.all.return_value = []
-
-        call_count = 0
-
-        async def mock_execute(stmt):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                return mock_routes
-            return mock_traces
-
-        db = AsyncMock()
-        db.execute = mock_execute
-
-        svc = RouteAnalyticsService(db, TEST_WORKSPACE_ID)
-        report = await svc.get_report()
-        assert report.routes == []
-        assert report.total_routes == 0
-        assert report.most_used_route is None

@@ -3,17 +3,19 @@
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
 from src.api.schemas import BriefingResponse
 from src.config.settings import Settings, get_settings
-from src.services.presenter import Presenter
+from src.models.briefings import Briefing
 
 router = APIRouter()
 
 
-@router.get("/v1/briefings/{briefing_date}", response_model=BriefingResponse)
+@router.get("/v1/briefings/{briefing_date}")
 async def get_briefing(
     briefing_date: str,
     user_id: str = Depends(get_current_user_id),
@@ -24,25 +26,42 @@ async def get_briefing(
     """Fetch or generate the daily briefing.
 
     If a briefing for this date exists, return it.
-    Otherwise, trigger generation from recent events.
+    Otherwise, return 202 Accepted to indicate async generation.
     """
     try:
         parsed_date = date.fromisoformat(briefing_date)
     except ValueError:
         parsed_date = date.today()
 
-    presenter = Presenter(settings=settings, db=db)
-    briefing = await presenter.generate_briefing(user_id, parsed_date, workspace_id=workspace_id)
+    # Check if briefing already exists for this date
+    result = await db.execute(
+        select(Briefing).where(
+            Briefing.workspace_id == workspace_id,
+            Briefing.briefing_date == parsed_date,
+        )
+    )
+    existing = result.scalar_one_or_none()
 
-    return BriefingResponse(
-        briefing_id=briefing.briefing_id,
-        date=briefing.briefing_date,
-        headline=briefing.headline,
-        top_priorities=briefing.top_priorities or [],
-        changes_since_last=briefing.changes_since_last or [],
-        pending_approvals=briefing.pending_approvals or [],
-        recommended_actions=briefing.recommended_actions or [],
-        full_text=briefing.full_text,
+    if existing:
+        return BriefingResponse(
+            briefing_id=existing.briefing_id,
+            date=existing.briefing_date,
+            headline=existing.headline,
+            top_priorities=existing.top_priorities or [],
+            changes_since_last=existing.changes_since_last or [],
+            pending_approvals=existing.pending_approvals or [],
+            recommended_actions=existing.recommended_actions or [],
+            full_text=existing.full_text,
+        )
+
+    # Briefing not ready — return 202 Accepted
+    return JSONResponse(
+        status_code=202,
+        content={
+            "status": "generating",
+            "briefing_date": briefing_date,
+            "message": "Briefing is being generated. Check back shortly.",
+        },
     )
 
 

@@ -13,11 +13,15 @@ import type {
   MeetingPrep,
   MemoryItem,
   Notification,
+  PlanOutput,
   SearchResponse,
   SystemDashboard,
+  TrustDashboardEntry,
+  TrustCapabilityDetail,
+  TimePolicyRule,
 } from "./types";
 
-import type { A2UISurface } from "./a2ui-types";
+
 import { getStoredToken } from "./auth";
 
 // ── Typed API Error ─────────────────────────────────────────────
@@ -149,7 +153,7 @@ export interface ChatSSEEvent {
   latency_ms?: number;
   message?: string;
   message_id?: string;
-  decision?: PlannerOutput;
+  plan?: PlanOutput;
   trace_id?: string;
   input_tokens?: number;
   output_tokens?: number;
@@ -380,6 +384,15 @@ export function fetchMemories(
 }
 
 
+// ── Insights ───────────────────────────────────────────────────
+
+export function dismissInsight(
+  surfaceId: string,
+  reason?: string
+): Promise<{ status: string; surface_id: string }> {
+  return post(`/insights/${surfaceId}/dismiss`, { reason: reason || null });
+}
+
 // ── UI Surfaces ─────────────────────────────────────────────────
 
 export function fetchSurfaces() {
@@ -390,8 +403,25 @@ export function fetchSurface(surfaceId: string) {
   return api(`/ui/surfaces/${surfaceId}`);
 }
 
-export function fetchWorkspaceSurfaces(): Promise<{ surfaces: A2UISurface[]; count: number }> {
+interface WorkspaceSurfaceResponse {
+  id: string;
+  kind: string;
+  preview: import("@/lib/a2ui-types").SurfacePreview;
+  detail_config: import("@/lib/a2ui-types").DetailConfig | null;
+  source_run_id?: string | null;
+  response_preview?: string | null;
+  created_at?: string | null;
+}
+
+export function fetchWorkspaceSurfaces(): Promise<{ surfaces: WorkspaceSurfaceResponse[]; count: number }> {
   return api("/workspace/surfaces");
+}
+
+export function fetchSurfaceDetail(
+  surfaceId: string,
+  tabId: string
+): Promise<import("@/lib/a2ui-types").DetailTabResponse> {
+  return api(`/surfaces/${surfaceId}/detail/${tabId}`);
 }
 
 // ── Message Context / Evidence ──────────────────────────────────
@@ -448,20 +478,11 @@ export interface MessageAgentStep {
   latency_ms: number | null;
 }
 
-export interface PlannerOutput {
-  decision: string;
-  goal: string;
-  reasoning: string;
-  priority: "low" | "medium" | "high" | "critical";
-  risk_level: "none" | "low" | "medium" | "high";
-  execution_mode: "auto_execute" | "approval_required" | "draft_only";
-  plan_id: string | null;
-  tasks: { task_type: string; input_data: Record<string, unknown> }[];
-}
+export type { PlanStep, CapabilityGap, PlanOutput } from "./types";
 
 export interface MessageMetadata {
   trace_id: string | null;
-  decision: PlannerOutput | null;
+  plan: PlanOutput | null;
   agent_steps: MessageAgentStep[];
 }
 
@@ -646,4 +667,164 @@ export function checkInstallationHealth(
   installId: string
 ): Promise<{ install_id?: string; server_name?: string; health_status: string }> {
   return api(`/integrations/${installId}/health`);
+}
+
+// ── Knowledge Page ──────────────────────────────────────────────
+
+export interface KnowledgeGraphNode {
+  entity_id: string;
+  canonical_name: string;
+  entity_type: string;
+  importance_score: number;
+  interaction_count: number;
+  last_seen_at: string | null;
+  attributes: Record<string, unknown> | null;
+  aliases: string[];
+}
+
+export interface KnowledgeGraphEdge {
+  from_entity_id?: string;
+  to_entity_id?: string;
+  from?: string;
+  to?: string;
+  relation_type?: string;
+  type?: string;
+  relation_id?: string;
+}
+
+export interface KnowledgeGraphResponse {
+  nodes: KnowledgeGraphNode[];
+  edges: KnowledgeGraphEdge[];
+  stats: { total_entities: number; total_relationships: number };
+}
+
+export interface KnowledgeMemoryItem {
+  memory_id: string;
+  memory_type: string;
+  fact_text: string;
+  confidence: number;
+  stability_score: number;
+  refresh_count: number;
+  scope: string | null;
+  created_at: string | null;
+  last_accessed_at: string | null;
+  expires_at: string | null;
+  entity_ids: string[];
+  entity_names: string[];
+}
+
+export interface KnowledgeMemoryListResponse {
+  items: KnowledgeMemoryItem[];
+  total: number;
+  page: number;
+  pages: number;
+}
+
+export interface KnowledgeMemoryDetail {
+  memory_id: string;
+  memory_type: string;
+  fact_text: string;
+  confidence: number;
+  stability_score: number;
+  refresh_count: number;
+  scope: string | null;
+  created_at: string | null;
+  last_accessed_at: string | null;
+  expires_at: string | null;
+  linked_entities: { entity_id: string; canonical_name: string; entity_type: string }[];
+  provenance: { source_event_ids: string[]; source_description: string | null };
+}
+
+export interface KnowledgeStatsResponse {
+  total_entities: number;
+  total_relationships: number;
+  total_memories: number;
+  avg_confidence: number;
+  weekly_delta: { entities: number; relationships: number; memories: number };
+  entity_counts_by_type: { entity_type: string; count: number }[];
+  memory_counts_by_type: { memory_type: string; count: number }[];
+  central_entities: { entity_id: string; name: string; entity_type: string; degree: number }[];
+  communities: { seed_entity_id: string; seed_name: string; seed_type: string; community_size: number; community_members: string[] }[];
+  stale_relationships: { relation_id: string; from_name: string; to_name: string; relation_type: string }[];
+  growth_by_day: { date: string; entities: number; memories: number }[];
+}
+
+export function fetchKnowledgeGraph(): Promise<KnowledgeGraphResponse> {
+  return api("/knowledge/graph");
+}
+
+export function fetchKnowledgeMemories(params?: {
+  type?: string;
+  sort_by?: string;
+  search?: string;
+  entity_id?: string;
+  page?: number;
+  limit?: number;
+}): Promise<KnowledgeMemoryListResponse> {
+  const qs = new URLSearchParams();
+  if (params?.type) qs.set("type", params.type);
+  if (params?.sort_by) qs.set("sort_by", params.sort_by);
+  if (params?.search) qs.set("search", params.search);
+  if (params?.entity_id) qs.set("entity_id", params.entity_id);
+  if (params?.page) qs.set("page", String(params.page));
+  if (params?.limit) qs.set("limit", String(params.limit));
+  const q = qs.toString();
+  return api(`/knowledge/memories${q ? `?${q}` : ""}`);
+}
+
+export function fetchKnowledgeMemoryDetail(
+  memoryId: string,
+): Promise<KnowledgeMemoryDetail> {
+  return api(`/knowledge/memories/${memoryId}`);
+}
+
+export function fetchKnowledgeStats(): Promise<KnowledgeStatsResponse> {
+  return api("/knowledge/stats");
+}
+
+// ── Trust ──────────────────────────────────────────────────────
+
+export async function fetchTrustDashboard(): Promise<{
+  capabilities: TrustDashboardEntry[];
+}> {
+  return api("/trust/dashboard");
+}
+
+export async function fetchTrustCapability(
+  capability: string
+): Promise<TrustCapabilityDetail> {
+  return api(`/trust/${capability}`);
+}
+
+export async function setTrustCeiling(
+  capability: string,
+  maxLevel: string
+): Promise<{ capability: string; max_level: string }> {
+  return api(`/trust/${capability}/ceiling`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ max_level: maxLevel }),
+  });
+}
+
+export async function resetTrust(
+  capability: string
+): Promise<{ capability: string; status: string }> {
+  return api(`/trust/${capability}/reset`, { method: "POST" });
+}
+
+export async function fetchTimePolicies(): Promise<{
+  policies: TimePolicyRule[];
+}> {
+  return api("/trust-time-policies");
+}
+
+export async function setTimePolicies(
+  policies: TimePolicyRule[]
+): Promise<{ policies: TimePolicyRule[] }> {
+  return api("/trust-time-policies", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ policies }),
+  });
 }

@@ -11,6 +11,7 @@ But all *write actions* (send_email, create_draft, create_issue, etc.) go throug
 
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Any
 
 from src.integrations.session_pool import UserMCPSessionPool
@@ -21,6 +22,22 @@ logger = logging.getLogger(__name__)
 # Module-level session pool — initialized once at startup
 _session_pool: UserMCPSessionPool | None = None
 _circuit_breaker = MCPCircuitBreaker()
+_discovery_failures: dict[str, dict] = {}
+
+
+def record_discovery_failure(server_name: str, error: str) -> None:
+    """Record a tool discovery failure for a server."""
+    existing = _discovery_failures.get(server_name, {"count": 0})
+    _discovery_failures[server_name] = {
+        "error": error[:200],
+        "count": existing["count"] + 1,
+        "last_failure": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def clear_discovery_failure(server_name: str) -> None:
+    """Clear discovery failure record after successful discovery."""
+    _discovery_failures.pop(server_name, None)
 
 
 async def get_mcp_config() -> dict:
@@ -155,6 +172,27 @@ def get_mcp_tool_names() -> list[str]:
     return list(_session_pool.get_all_tools().keys())
 
 
+async def _resolve_server_from_registry(tool_name: str, workspace_id: str) -> str | None:
+    """Look up the MCP server name for a tool from the DB registry.
+
+    Used as fallback when no active session exists for the tool yet.
+    Seed records carry the server name (e.g., "google-workspace") from
+    EXTERNAL_TOOL_SEEDS, allowing session creation before first use.
+    """
+    try:
+        from src.models.database import get_session_factory
+        from src.services.tool_registry import ToolRegistry
+
+        async with get_session_factory()() as db:
+            registry = ToolRegistry(db, workspace_id=workspace_id or None)
+            tool = await registry.get_tool(tool_name)
+            if tool and tool.server:
+                return tool.server
+    except Exception:
+        logger.debug("Registry lookup failed for %s", tool_name, exc_info=True)
+    return None
+
+
 async def call_mcp_tool(
     tool_name: str,
     arguments: dict[str, Any] | None = None,
@@ -174,20 +212,35 @@ async def call_mcp_tool(
         Dict with either the result or an error.
     """
     if not _session_pool:
+        logger.warning("[mcp:bridge] bridge not initialized for tool %s", tool_name)
         return {"status": "error", "error": "MCP bridge not initialized"}
 
-    # Find which server provides this tool
+    # Find which server provides this tool.
+    # First check active sessions, then fall back to DB registry
+    # (seeds know server names before any session is created).
     server_name = _session_pool.get_server_for_tool(tool_name, workspace_id=workspace_id)
     if not server_name:
+        server_name = await _resolve_server_from_registry(tool_name, workspace_id)
+    if not server_name:
+        logger.warning("[mcp:bridge] no server found for tool %s", tool_name)
         return {"status": "error", "error": f"Unknown MCP tool: {tool_name}"}
 
-    return await _session_pool.call_tool(
+    logger.info(
+        "[mcp:bridge] %s → server=%s user=%s",
+        tool_name,
+        server_name,
+        user_id[:16] if user_id else "none",
+    )
+    result = await _session_pool.call_tool(
         tool_name,
         arguments or {},
         user_id=user_id,
         server_name=server_name,
         workspace_id=workspace_id,
     )
+    status = result.get("status", "unknown")
+    logger.info("[mcp:bridge] %s ← status=%s", tool_name, status)
+    return result
 
 
 async def refresh_server_auth(
@@ -207,8 +260,13 @@ async def refresh_server_auth(
 def get_bridge_health() -> dict:
     """Get health status for the MCP bridge."""
     if not _session_pool:
-        return {"status": "inactive", "servers": {}}
+        return {
+            "status": "inactive",
+            "servers": {},
+            "discovery_failures": dict(_discovery_failures),
+        }
     return {
         "status": "active",
         "servers": _session_pool.get_health(),
+        "discovery_failures": dict(_discovery_failures),
     }

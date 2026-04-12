@@ -30,6 +30,7 @@ MEMORY_EXPIRED_GRACE_DAYS = 7
 SURFACE_GRACE_HOURS = 24
 APPROVAL_RETENTION_DAYS = 30
 EVENT_RETENTION_DAYS = 90
+INTERACTION_LOG_RETENTION_DAYS = 90
 LOW_STABILITY_AGE_DAYS = 60
 LOW_STABILITY_THRESHOLD = 0.2
 LOW_STABILITY_ACCESS_THRESHOLD = 3
@@ -37,6 +38,7 @@ LOW_STABILITY_ACCESS_THRESHOLD = 3
 # Batch limits per tick to avoid long-running transactions
 MEMORY_BATCH = 500
 EVENT_BATCH = 1000
+INTERACTION_LOG_BATCH = 1000
 LOW_STABILITY_BATCH = 100
 
 
@@ -63,6 +65,7 @@ class EvictionService:
         results["ui_surfaces"] = await self._evict_surfaces()
         results["approvals"] = await self._evict_approvals()
         results["events"] = await self._evict_old_events()
+        results["interaction_logs"] = await self._evict_interaction_logs()
         results["low_stability"] = await self._evict_low_stability_memories()
 
         total = sum(results.values())
@@ -201,16 +204,22 @@ class EvictionService:
         from src.models.approvals import Approval
 
         cutoff = datetime.now(timezone.utc) - timedelta(days=APPROVAL_RETENTION_DAYS)
-        result = await self._db.execute(
-            delete(Approval).where(
-                Approval.status.in_(["expired", "approved", "rejected"]),
-                Approval.created_at < cutoff,
-            )
+        stmt = select(Approval.approval_id).where(
+            Approval.status.in_(["expired", "approved", "rejected"]),
+            Approval.created_at < cutoff,
         )
-        count = result.rowcount or 0
-        if count:
-            await self._db.flush()
-        return count
+        result = await self._db.execute(stmt)
+        approval_ids = [row[0] for row in result.all()]
+
+        if not approval_ids:
+            return 0
+
+        await self._cascade_qdrant_delete("approvals", approval_ids)
+
+        await self._db.execute(delete(Approval).where(Approval.approval_id.in_(approval_ids)))
+        await self._db.flush()
+        logger.info("Evicted %d approvals", len(approval_ids))
+        return len(approval_ids)
 
     # ------------------------------------------------------------------
     # Event eviction (old events past retention)
@@ -249,6 +258,24 @@ class EvictionService:
 
         logger.info("Evicted %d events older than %d days", len(event_ids), EVENT_RETENTION_DAYS)
         return len(event_ids)
+
+    # ------------------------------------------------------------------
+    # Interaction log eviction
+    # ------------------------------------------------------------------
+
+    async def _evict_interaction_logs(self) -> int:
+        """Delete interaction logs older than retention period."""
+        from src.models.interaction_log import InteractionLog
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=INTERACTION_LOG_RETENTION_DAYS)
+        result = await self._db.execute(
+            delete(InteractionLog).where(InteractionLog.created_at < cutoff)
+        )
+        count = result.rowcount or 0
+        if count:
+            await self._db.flush()
+            logger.info("Evicted %d interaction logs", count)
+        return count
 
     # ------------------------------------------------------------------
     # Cascade helpers

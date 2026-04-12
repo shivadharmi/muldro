@@ -16,7 +16,7 @@ class Memory(Base, TimestampMixin):
         String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
     )
     memory_type: Mapped[str] = mapped_column(String(32), nullable=False)
-    # episodic, semantic, preference, relationship, task_context, procedural
+    # episodic, semantic, preference, relationship, task_context
     scope: Mapped[str | None] = mapped_column(String(64))  # presentation, planning, general
     fact_text: Mapped[str] = mapped_column(Text, nullable=False)
     confidence: Mapped[float] = mapped_column(Float, default=0.5)

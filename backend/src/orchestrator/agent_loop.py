@@ -90,6 +90,18 @@ LoopEvent = (
 )
 
 
+class CancellationRequested(Exception):  # noqa: N818
+    """Raised when a run cancellation token is set."""
+
+    pass
+
+
+def _check_cancellation(cancel_event: asyncio.Event | None) -> None:
+    """Check cancellation token between tool rounds. Raises if set."""
+    if cancel_event and cancel_event.is_set():
+        raise CancellationRequested("Run cancelled by user")
+
+
 _MAX_API_RETRIES = 3
 _RETRY_BASE_DELAY = 2.0  # seconds
 
@@ -127,6 +139,25 @@ def _sanitize_content_blocks(content) -> list[dict]:
     ]
 
 
+def _is_thinking_error(err: Exception) -> bool:
+    """Check if an API error is specifically about thinking block incompatibility."""
+    msg = str(err).lower()
+    return "thinking" in msg and (
+        "disabled" in msg or "not supported" in msg or "cannot contain" in msg
+    )
+
+
+def _strip_thinking_from_messages(messages: list[dict]) -> None:
+    """Remove thinking blocks from assistant messages in-place.
+
+    Required when disabling thinking mid-loop: the API rejects messages
+    containing thinking blocks when thinking is disabled.
+    """
+    for msg in messages:
+        if msg.get("role") == "assistant" and isinstance(msg.get("content"), list):
+            msg["content"] = [b for b in msg["content"] if b.get("type") != "thinking"]
+
+
 async def agent_loop(
     *,
     client,
@@ -146,6 +177,7 @@ async def agent_loop(
     stream: bool = False,
     circuit_breaker=None,  # AnthropicCircuitBreaker | None
     run_id: str | None = None,  # B1: link tool-level approvals to execution context
+    cancel_event: asyncio.Event | None = None,
 ) -> AsyncGenerator[LoopEvent, None]:
     """Core agent loop — yields LoopEvent instances.
 
@@ -188,6 +220,8 @@ async def agent_loop(
             return
 
         for _round in range(max_tool_rounds):
+            _check_cancellation(cancel_event)
+
             api_kwargs: dict[str, Any] = {
                 "model": model,
                 "max_tokens": agent.max_tokens,
@@ -207,7 +241,8 @@ async def agent_loop(
             if tools:
                 api_kwargs["tools"] = tools
 
-            # Governor structured output: force tool_choice for governor
+            # Governor structured output: force tool_choice for governor.
+            # Forced tool_choice is incompatible with thinking — disable it.
             if agent_name == "governor" and tools:
                 governor_tool = next(
                     (t for t in tools if t["name"] == "report_governor_verdict"), None
@@ -217,6 +252,9 @@ async def agent_loop(
                         "type": "tool",
                         "name": "report_governor_verdict",
                     }
+                    api_kwargs.pop("thinking", None)
+                    if "temperature" not in api_kwargs:
+                        api_kwargs["temperature"] = agent.temperature
 
             response = None
 
@@ -241,23 +279,46 @@ async def agent_loop(
                             agent_name,
                             stream_err,
                         )
-                        if thinking_enabled:
+                        # Only disable thinking if the error is specifically about
+                        # thinking blocks — not for transient network/Bedrock errors.
+                        if thinking_enabled and _is_thinking_error(stream_err):
                             api_kwargs["temperature"] = agent.temperature
                             api_kwargs.pop("thinking", None)
+                            _strip_thinking_from_messages(api_kwargs.get("messages", []))
                             thinking_enabled = False
-                        response = await _api_call_with_retry(client, api_kwargs, agent_name)
+                        try:
+                            response = await _api_call_with_retry(client, api_kwargs, agent_name)
+                        except Exception as fallback_err:
+                            # If fallback also fails due to thinking contamination,
+                            # strip thinking and retry once more.
+                            if thinking_enabled and _is_thinking_error(fallback_err):
+                                logger.warning(
+                                    "Fallback failed for %s due to thinking, retrying: %s",
+                                    agent_name,
+                                    fallback_err,
+                                )
+                                api_kwargs["temperature"] = agent.temperature
+                                api_kwargs.pop("thinking", None)
+                                _strip_thinking_from_messages(api_kwargs.get("messages", []))
+                                thinking_enabled = False
+                                response = await _api_call_with_retry(
+                                    client, api_kwargs, agent_name
+                                )
+                            else:
+                                raise
             else:
                 try:
                     response = await _api_call_with_retry(client, api_kwargs, agent_name)
                 except Exception as think_err:
-                    if thinking_enabled:
+                    if thinking_enabled and _is_thinking_error(think_err):
                         logger.warning(
-                            "Thinking failed for %s, falling back: %s",
+                            "Thinking error for %s, disabling and retrying: %s",
                             agent_name,
                             think_err,
                         )
                         api_kwargs["temperature"] = agent.temperature
                         api_kwargs.pop("thinking", None)
+                        _strip_thinking_from_messages(api_kwargs.get("messages", []))
                         thinking_enabled = False
                         response = await _api_call_with_retry(client, api_kwargs, agent_name)
                     else:
@@ -296,6 +357,21 @@ async def agent_loop(
                 break
 
             # Process tool calls
+            # Divide response tokens equally across all tools in this response
+            _n_tools = len(tool_use_blocks)
+            _resp_input = response.usage.input_tokens // _n_tools if _n_tools else 0
+            _resp_output = response.usage.output_tokens // _n_tools if _n_tools else 0
+            _resp_cache_create = (
+                (getattr(response.usage, "cache_creation_input_tokens", 0) or 0) // _n_tools
+                if _n_tools
+                else 0
+            )
+            _resp_cache_read = (
+                (getattr(response.usage, "cache_read_input_tokens", 0) or 0) // _n_tools
+                if _n_tools
+                else 0
+            )
+
             tool_results = []
             for tool_block in tool_use_blocks:
                 tool_name = tool_block.name
@@ -303,6 +379,15 @@ async def agent_loop(
                 tools_called.append(tool_name)
 
                 yield LoopToolCall(agent=agent_name, tool_name=tool_name, tool_input=tool_input)
+
+                # Log tool dispatch
+                input_summary = str(tool_input)[:200] if tool_input else "{}"
+                logger.info(
+                    "[tool] %s → %s | input: %s",
+                    agent_name,
+                    tool_name,
+                    input_summary,
+                )
 
                 # Governor pre-hook
                 pre_result = await governor_pre_tool_hook(
@@ -359,7 +444,18 @@ async def agent_loop(
                     )
                 except asyncio.TimeoutError:
                     result = {"error": f"Tool '{tool_name}' timed out after 60s", "timed_out": True}
+                    logger.warning("[tool] %s TIMEOUT after 60s", tool_name)
                 tool_latency = int((time.time() - tool_start) * 1000)
+
+                # Log tool result
+                result_summary = str(result)[:200] if result else "null"
+                logger.info(
+                    "[tool] %s ← %s | %dms | result: %s",
+                    agent_name,
+                    tool_name,
+                    tool_latency,
+                    result_summary,
+                )
 
                 # Detect tool errors and signal them to Claude via is_error
                 is_error = (
@@ -416,6 +512,33 @@ async def agent_loop(
                     workspace_id=workspace_id,
                 )
 
+                # Per-tool cost attribution (Issue #13)
+                try:
+                    from ulid import ULID
+
+                    from src.models.token_usage import TokenUsage
+
+                    async with db_factory() as tool_db:
+                        tool_db.add(
+                            TokenUsage(
+                                usage_id=f"usage_{ULID()}",
+                                workspace_id=workspace_id,
+                                agent_name=agent_name,
+                                model=model,
+                                input_tokens=_resp_input,
+                                output_tokens=_resp_output,
+                                cache_creation_input_tokens=_resp_cache_create,
+                                cache_read_input_tokens=_resp_cache_read,
+                                thinking_tokens=0,
+                                cost_usd=0.0,
+                                trigger=f"tool:{tool_name}",
+                                trace_id=trace.trace_id if trace else None,
+                            )
+                        )
+                        await tool_db.commit()
+                except Exception:
+                    pass  # Non-critical — don't break the agent loop
+
             # Preserve content blocks for multi-turn continuity
             messages.append(
                 {"role": "assistant", "content": _sanitize_content_blocks(response.content)}
@@ -424,6 +547,9 @@ async def agent_loop(
         else:
             text = f"[Agent {agent_name} hit max tool rounds ({max_tool_rounds})]"
 
+    except CancellationRequested:
+        logger.info("Agent %s cancelled via cancellation token", agent_name)
+        raise
     except anthropic.APIError as e:
         logger.error("Claude API error in %s: %s", agent_name, e)
         if circuit_breaker:
@@ -451,6 +577,11 @@ async def agent_loop(
     thinking_summary = thinking_summary or None
 
     # Record token usage
+    # NOTE: record_from_span() exists on BudgetTracker but cannot be used here
+    # because the span hasn't been populated with token counts yet — those are
+    # set by trace.end_span() below. The local variables are the source of truth
+    # at this point. When span lifecycle is refactored to populate tokens before
+    # budget recording, switch to budget.record_from_span(db, span=span, ...).
     cost_usd = 0.0
     try:
         async with db_factory() as db:

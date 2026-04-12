@@ -5,7 +5,7 @@ capabilities, risk levels, and metadata. Serves as a parallel registry during
 the Unified Tool Registry migration (Phase 6).
 
 Tools are organized by server:
-- intelligence: 15 tools (search, ingest, policies, context, briefing, etc.)
+- intelligence: 19 tools (search, ingest, policies, context, briefing, etc.)
 - communication: 3 tools (telegram, approval prompts, UI updates)
 - _special: 1 tool (report_governor_verdict — inline-dispatched, not MCP)
 """
@@ -19,12 +19,14 @@ from pydantic import BaseModel
 from src.tools.schemas import (
     ApproveActionInput,
     BuildContextInput,
+    DiscoverCapabilitiesInput,
     EvaluatePolicyInput,
     ExtractPreferencesInput,
     GetActivePlansInput,
     GetBriefingInput,
     GetGoalMemoriesInput,
     GetObservationCursorInput,
+    GetPlanDetailsInput,
     IngestEventInput,
     PushUiUpdateInput,
     ReportGovernorVerdictInput,
@@ -32,6 +34,8 @@ from src.tools.schemas import (
     SearchInput,
     SendApprovalPromptInput,
     SendTelegramInput,
+    StoreMemoryInput,
+    StorePreferenceInput,
     UpdateEntityInput,
     UpdateExecutionInput,
     UpdateObservationCursorInput,
@@ -62,7 +66,7 @@ def _desc(model_cls: type[BaseModel]) -> str:
 
 
 INTERNAL_TOOLS: list[InternalToolDef] = [
-    # Intelligence server tools (15 tools)
+    # Intelligence server tools (19 tools)
     InternalToolDef(
         name="ingest_event",
         input_model=IngestEventInput,
@@ -211,6 +215,46 @@ INTERNAL_TOOLS: list[InternalToolDef] = [
         requires_approval=False,
         server="intelligence",
         description=_desc(VerifyRunInput),
+        read_only=True,
+    ),
+    InternalToolDef(
+        name="store_memory",
+        input_model=StoreMemoryInput,
+        capability="internal.store_memory",
+        risk_level="low",
+        requires_approval=False,
+        server="intelligence",
+        description=_desc(StoreMemoryInput),
+        read_only=False,
+    ),
+    InternalToolDef(
+        name="store_preference",
+        input_model=StorePreferenceInput,
+        capability="internal.store_preference",
+        risk_level="low",
+        requires_approval=False,
+        server="intelligence",
+        description=_desc(StorePreferenceInput),
+        read_only=False,
+    ),
+    InternalToolDef(
+        name="get_plan_details",
+        input_model=GetPlanDetailsInput,
+        capability="internal.get_plan_details",
+        risk_level="low",
+        requires_approval=False,
+        server="intelligence",
+        description=_desc(GetPlanDetailsInput),
+        read_only=True,
+    ),
+    InternalToolDef(
+        name="discover_capabilities",
+        input_model=DiscoverCapabilitiesInput,
+        capability="system.discovery",
+        risk_level="none",
+        requires_approval=False,
+        server="intelligence",
+        description=_desc(DiscoverCapabilitiesInput),
         read_only=True,
     ),
     # Special: inline-dispatched (not a real MCP tool).

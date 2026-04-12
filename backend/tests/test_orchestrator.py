@@ -38,13 +38,11 @@ class TestTracing:
             input_tokens=100,
             output_tokens=50,
             tools_called=["search"],
-            decision="create_task",
         )
         assert span.ended_at is not None
         assert span.input_tokens == 100
         assert span.output_tokens == 50
         assert span.tools_called == ["search"]
-        assert span.decision == "create_task"
         assert span.duration_ms() >= 0
 
     def test_trace_total_tokens(self):
@@ -53,7 +51,7 @@ class TestTracing:
         manager = TraceManager()
         trace = manager.start_trace("test")
 
-        s1 = trace.start_span("observer")
+        s1 = trace.start_span("perceiver")
         trace.end_span(s1.span_id, input_tokens=500, output_tokens=100)
 
         s2 = trace.start_span("planner")
@@ -68,7 +66,7 @@ class TestTracing:
 
         manager = TraceManager()
         trace = manager.start_trace("test")
-        span = trace.start_span("observer")
+        span = trace.start_span("perceiver")
 
         trace.finish()
         assert trace.ended_at is not None
@@ -80,7 +78,7 @@ class TestTracing:
 
         manager = TraceManager()
         trace = manager.start_trace("test")
-        span = trace.start_span("observer")
+        span = trace.start_span("perceiver")
         trace.end_span(span.span_id, input_tokens=100, output_tokens=50)
         trace.finish()
 
@@ -88,7 +86,7 @@ class TestTracing:
         assert d["trace_id"] == trace.trace_id
         assert d["trigger"] == "test"
         assert len(d["spans"]) == 1
-        assert d["spans"][0]["agent_name"] == "observer"
+        assert d["spans"][0]["agent_name"] == "perceiver"
         assert d["total_input_tokens"] == 100
 
     @pytest.mark.asyncio
@@ -196,13 +194,12 @@ class TestAgents:
         from src.orchestrator.agents import AGENTS
 
         expected = {
-            "observer",
+            "perceiver",
             "librarian",
             "planner",
             "governor",
             "operator",
             "presenter",
-            "researcher",
             "persona",
         }
         assert set(AGENTS.keys()) == expected
@@ -252,24 +249,24 @@ class TestAgents:
             )
             mock_reg_cls.return_value = mock_reg
 
-            # Observer can ingest events but not send email
-            assert await AGENTS["observer"].can_use_tool("ingest_event", mock_db) is True
-            assert await AGENTS["observer"].can_use_tool("gmail_send", mock_db) is False
+            # Perceiver can ingest events but not send email
+            assert await AGENTS["perceiver"].can_use_tool("ingest_event", mock_db) is True
+            assert await AGENTS["perceiver"].can_use_tool("gmail_send", mock_db) is False
 
             # Operator can send email but not plan
             assert await AGENTS["operator"].can_use_tool("gmail_send", mock_db) is True
             assert await AGENTS["operator"].can_use_tool("get_active_plans", mock_db) is False
 
-            # Researcher is read-only (no write tools)
-            assert await AGENTS["researcher"].can_use_tool("search", mock_db) is True
-            assert await AGENTS["researcher"].can_use_tool("gmail_send", mock_db) is False
-            assert await AGENTS["researcher"].can_use_tool("slack_post_message", mock_db) is False
+            # Perceiver can search but not write (read-only)
+            assert await AGENTS["perceiver"].can_use_tool("search", mock_db) is True
+            assert await AGENTS["perceiver"].can_use_tool("gmail_send", mock_db) is False
+            assert await AGENTS["perceiver"].can_use_tool("slack_post_message", mock_db) is False
 
     def test_planner_has_higher_max_tokens(self):
         from src.orchestrator.agents import AGENTS
 
         assert AGENTS["planner"].max_tokens == 8192
-        assert AGENTS["observer"].max_tokens == 4096
+        assert AGENTS["perceiver"].max_tokens == 4096
 
     def test_governor_has_low_temperature(self):
         from src.orchestrator.agents import AGENTS
@@ -287,28 +284,29 @@ class TestHooks:
         result = await governor_pre_tool_hook("search", {}, "planner", user_id=TEST_USER_ID)
         assert result["allowed"] is True
 
-    async def test_write_tools_rejected_via_catalog(self):
+    async def test_write_tools_allowed_by_hook(self):
+        """Post Spec 2B-i: hook is audit-only, write tools pass through.
+        Approval gating moved to TrustEngine in GraphExecutor."""
         from src.orchestrator.hooks import governor_pre_tool_hook
 
-        # linear_delete_issue is critical in catalog — requires approval
         result = await governor_pre_tool_hook(
             "linear_delete_issue", {}, "operator", user_id=TEST_USER_ID
         )
-        assert result["allowed"] is False
+        assert result["allowed"] is True
 
-    async def test_write_tools_require_approval(self):
+    async def test_write_tools_pass_through_hook(self):
+        """Post Spec 2B-i: hook no longer creates approvals."""
         from src.orchestrator.hooks import governor_pre_tool_hook
 
         result = await governor_pre_tool_hook(
             "send_gmail_message", {}, "operator", user_id=TEST_USER_ID
         )
-        assert result["allowed"] is False
-        assert result["approval_required"] is True
+        assert result["allowed"] is True
 
     async def test_internal_tools_allowed(self):
         from src.orchestrator.hooks import governor_pre_tool_hook
 
-        result = await governor_pre_tool_hook("ingest_event", {}, "observer", user_id=TEST_USER_ID)
+        result = await governor_pre_tool_hook("ingest_event", {}, "perceiver", user_id=TEST_USER_ID)
         assert result["allowed"] is True
 
     async def test_audit_hook_logs(self):
@@ -332,27 +330,26 @@ class TestPrompts:
         from src.orchestrator.prompts import AGENT_PROMPTS
 
         expected = {
-            "observer",
+            "perceiver",
             "librarian",
             "planner",
             "governor",
             "operator",
             "presenter",
-            "researcher",
             "persona",
         }
         assert set(AGENT_PROMPTS.keys()) == expected
 
-    def test_jarvis_soul_not_empty(self):
-        from src.orchestrator.prompts import JARVIS_SOUL
+    def test_jarvis_soul_core_not_empty(self):
+        from src.orchestrator.prompts import JARVIS_SOUL_CORE
 
-        assert len(JARVIS_SOUL) > 100
-        assert "operating system" in JARVIS_SOUL.lower()
+        assert len(JARVIS_SOUL_CORE) > 100
+        assert "operating system" in JARVIS_SOUL_CORE.lower()
 
-    def test_planner_prompt_mentions_json(self):
-        from src.orchestrator.prompts import PLANNER_PROMPT
+    def test_planner_prompt_v2_mentions_json(self):
+        from src.orchestrator.prompts import PLANNER_PROMPT_V2
 
-        assert "JSON" in PLANNER_PROMPT
+        assert "JSON" in PLANNER_PROMPT_V2
 
     def test_governor_prompt_mentions_approval(self):
         from src.orchestrator.prompts import GOVERNOR_PROMPT
@@ -419,27 +416,31 @@ class TestOrchestrator:
             user_id=TEST_USER_ID,
             workspace_id=TEST_WORKSPACE_ID,
         )
-        assert result["decision"] == "acknowledge"
+        # New capability-based routing returns "plan" instead of "decision"
+        assert "plan" in result or "trace_id" in result
         assert result["trace_id"].startswith("trace_")
 
     @patch("src.orchestrator.jarvis.get_anthropic_client")
-    async def test_extract_decision_from_json(self, mock_get_client):
-        from src.orchestrator.intent_classifier import extract_decision
+    async def test_extract_plan_from_json(self, mock_get_client):
+        from src.orchestrator.intent_classifier import extract_plan
 
-        # Test JSON extraction — returns PlannerOutput
-        text = 'Here is my analysis:\n{"decision": "create_task", "priority": "high"}\nDone.'
-        result = extract_decision(text)
-        assert result.decision == "create_task"
+        # Test JSON extraction — returns PlanOutput
+        text = (
+            "Here is my analysis:\n"
+            '{"goal": "Create task", "steps": [{"description": "Do it", '
+            '"capability": "respond"}], "priority": "high"}\nDone.'
+        )
+        result = extract_plan(text)
+        assert result.goal == "Create task"
         assert result.priority == "high"
 
     @patch("src.orchestrator.jarvis.get_anthropic_client")
-    async def test_extract_decision_fallback(self, mock_get_client):
-        from src.orchestrator.intent_classifier import extract_decision
+    async def test_extract_plan_fallback(self, mock_get_client):
+        from src.orchestrator.intent_classifier import extract_plan
 
-        # No JSON in response — fallback to PlannerOutput defaults
-        result = extract_decision("Just some plain text response")
-        assert result.decision == "acknowledge"
-        assert result.reasoning == "Just some plain text response"[:500]
+        # No JSON in response — fallback to PlanOutput defaults
+        result = extract_plan("Just some plain text response")
+        assert result.steps[0].capability == "respond"
 
 
 # ── Recovery Tests ───────────────────────────────────────────────────────

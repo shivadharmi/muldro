@@ -531,3 +531,129 @@ class TestAgentLoop:
 
         # Now a new probe should be allowed
         assert breaker.is_available(model) is True
+
+    async def test_tool_token_usage_records_input_output(self, client, agent, trace):
+        """Per-tool TokenUsage records should have non-zero input/output tokens."""
+        from src.orchestrator.agent_loop import agent_loop
+
+        tool_response = make_tool_response("search_memory", {"query": "test"})
+        tool_response.usage = FakeUsage(input_tokens=100, output_tokens=40)
+        tool_response.usage.cache_creation_input_tokens = 5
+        tool_response.usage.cache_read_input_tokens = 10
+
+        client.messages.create = AsyncMock(side_effect=[tool_response, make_text_response("Done")])
+
+        added_records = []
+
+        class CapturingDB:
+            def add(self, obj):
+                added_records.append(obj)
+
+            async def commit(self):
+                pass
+
+        class CapturingFactory:
+            def __call__(self):
+                return self
+
+            async def __aenter__(self):
+                return CapturingDB()
+
+            async def __aexit__(self, *args):
+                pass
+
+        await _collect_events(
+            agent_loop(
+                client=client,
+                agent=agent,
+                model="claude-sonnet-4-20250514",
+                system_blocks=[],
+                tools=[{"name": "search_memory", "description": "Search", "input_schema": {}}],
+                message="Search test",
+                user_id="usr_test",
+                workspace_id="ws_test",
+                db_factory=CapturingFactory(),
+                services=MagicMock(),
+                budget=_make_budget(),
+                trace=trace,
+                execute_tool_fn=AsyncMock(return_value={"results": []}),
+            )
+        )
+
+        from src.models.token_usage import TokenUsage
+
+        tool_usages = [r for r in added_records if isinstance(r, TokenUsage)]
+        assert len(tool_usages) == 1, f"Expected 1 tool TokenUsage, got {len(tool_usages)}"
+        record = tool_usages[0]
+        assert record.input_tokens == 100, f"Expected 100 input_tokens, got {record.input_tokens}"
+        assert record.output_tokens == 40, f"Expected 40 output_tokens, got {record.output_tokens}"
+        assert record.cache_creation_input_tokens == 5
+        assert record.cache_read_input_tokens == 10
+        assert record.trigger == "tool:search_memory"
+
+    async def test_tool_token_usage_divided_across_multiple_tools(self, client, agent, trace):
+        """When multiple tools called in one response, tokens are divided equally."""
+        from src.orchestrator.agent_loop import agent_loop
+
+        multi_tool_response = FakeResponse(
+            [
+                FakeToolUseBlock("t1", "search_memory", {"query": "a"}),
+                FakeToolUseBlock("t2", "search_memory", {"query": "b"}),
+            ],
+            stop_reason="tool_use",
+        )
+        multi_tool_response.usage = FakeUsage(input_tokens=100, output_tokens=40)
+        multi_tool_response.usage.cache_creation_input_tokens = 0
+        multi_tool_response.usage.cache_read_input_tokens = 0
+
+        client.messages.create = AsyncMock(
+            side_effect=[multi_tool_response, make_text_response("Done")]
+        )
+
+        added_records = []
+
+        class CapturingDB:
+            def add(self, obj):
+                added_records.append(obj)
+
+            async def commit(self):
+                pass
+
+        class CapturingFactory:
+            def __call__(self):
+                return self
+
+            async def __aenter__(self):
+                return CapturingDB()
+
+            async def __aexit__(self, *args):
+                pass
+
+        await _collect_events(
+            agent_loop(
+                client=client,
+                agent=agent,
+                model="claude-sonnet-4-20250514",
+                system_blocks=[],
+                tools=[{"name": "search_memory", "description": "Search", "input_schema": {}}],
+                message="Search test",
+                user_id="usr_test",
+                workspace_id="ws_test",
+                db_factory=CapturingFactory(),
+                services=MagicMock(),
+                budget=_make_budget(),
+                trace=trace,
+                execute_tool_fn=AsyncMock(return_value={"results": []}),
+            )
+        )
+
+        from src.models.token_usage import TokenUsage
+
+        tool_usages = [r for r in added_records if isinstance(r, TokenUsage)]
+        assert len(tool_usages) == 2, f"Expected 2 tool TokenUsage records, got {len(tool_usages)}"
+        # Each tool gets 100//2=50 input, 40//2=20 output
+        for record in tool_usages:
+            assert record.input_tokens == 50, f"Expected 50 input_tokens, got {record.input_tokens}"
+            assert record.output_tokens == 20, (
+                f"Expected 20 output_tokens, got {record.output_tokens}"
+            )

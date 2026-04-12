@@ -29,18 +29,6 @@ MODEL_PRICING = {
 CACHE_WRITE_MULTIPLIER = 1.25
 CACHE_READ_MULTIPLIER = 0.10
 
-# Default agent model assignments
-AGENT_MODELS = {
-    "observer": "sonnet",
-    "librarian": "sonnet",
-    "planner": "opus",
-    "governor": "sonnet",
-    "operator": "sonnet",
-    "presenter": "sonnet",
-    "researcher": "sonnet",
-    "persona": "haiku",
-}
-
 # Per-perception-cycle token budget (input tokens)
 PERCEPTION_CYCLE_BUDGET = 50_000
 
@@ -110,6 +98,8 @@ class BudgetTracker:
         trace_id: str | None = None,
         workspace_id: str = "",
     ) -> TokenUsage:
+        if not workspace_id:
+            raise ValueError("workspace_id is required for record_usage")
         cost = self.calculate_cost(
             model,
             input_tokens,
@@ -172,6 +162,34 @@ class BudgetTracker:
             },
         )
         return usage
+
+    async def record_from_span(
+        self,
+        db: AsyncSession,
+        *,
+        span,
+        agent_name: str,
+        model: str,
+        trigger: str,
+        trace_id: str | None = None,
+        conversation_id: str | None = None,
+        workspace_id: str,
+    ) -> TokenUsage:
+        """Record budget usage from a completed trace span (single source of truth)."""
+        return await self.record_usage(
+            db,
+            agent_name=agent_name,
+            model=model,
+            input_tokens=getattr(span, "input_tokens", 0) or 0,
+            output_tokens=getattr(span, "output_tokens", 0) or 0,
+            cache_creation_input_tokens=getattr(span, "cache_creation_input_tokens", 0) or 0,
+            cache_read_input_tokens=getattr(span, "cache_read_input_tokens", 0) or 0,
+            thinking_tokens=getattr(span, "thinking_tokens", 0) or 0,
+            trigger=trigger,
+            trace_id=trace_id,
+            conversation_id=conversation_id,
+            workspace_id=workspace_id,
+        )
 
     async def get_daily_spend(self, db: AsyncSession, *, workspace_id: str = "") -> float:
         # Fast path: read from Redis if available

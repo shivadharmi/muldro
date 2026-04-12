@@ -14,8 +14,8 @@ from src.tools.catalog import (
 
 
 def test_internal_tools_count():
-    """Verify exactly 19 internal tools are registered."""
-    assert len(INTERNAL_TOOLS) == 19
+    """Verify exactly 23 internal tools are registered."""
+    assert len(INTERNAL_TOOLS) == 23
 
 
 def test_internal_tool_names_match_jarvis():
@@ -38,6 +38,10 @@ def test_internal_tool_names_match_jarvis():
         "extract_preferences",
         "build_context",
         "verify_run",
+        "store_memory",
+        "store_preference",
+        "get_plan_details",
+        "discover_capabilities",
         "report_governor_verdict",
         "send_telegram",
         "send_approval_prompt",
@@ -57,12 +61,12 @@ def test_all_input_models_are_pydantic():
 
 
 def test_server_distribution():
-    """Verify correct server counts: 15 intelligence, 3 communication, 1 _special."""
+    """Verify correct server counts: 19 intelligence, 3 communication, 1 _special."""
     server_counts = {}
     for tool in INTERNAL_TOOLS:
         server_counts[tool.server] = server_counts.get(tool.server, 0) + 1
 
-    assert server_counts.get("intelligence", 0) == 15, "Expected 15 intelligence tools"
+    assert server_counts.get("intelligence", 0) == 19, "Expected 19 intelligence tools"
     assert server_counts.get("communication", 0) == 3, "Expected 3 communication tools"
     assert server_counts.get("_special", 0) == 1, "Expected 1 _special tool"
 
@@ -92,9 +96,9 @@ def test_get_internal_tools_for_server_communication():
 
 
 def test_get_internal_tools_for_server_intelligence():
-    """Verify get_internal_tools_for_server returns 15 intelligence tools."""
+    """Verify get_internal_tools_for_server returns 19 intelligence tools."""
     tools = get_internal_tools_for_server("intelligence")
-    assert len(tools) == 15
+    assert len(tools) == 19
 
 
 def test_get_internal_tools_for_server_special():
@@ -124,12 +128,13 @@ def test_requires_approval_implies_risk():
 
 
 def test_read_only_tools_are_safe():
-    """Verify read_only tools have low risk and no approval required."""
+    """Verify read_only tools have safe risk levels and no approval required."""
     read_only_tools = [tool for tool in INTERNAL_TOOLS if tool.read_only]
     assert len(read_only_tools) > 0, "Should have at least one read_only tool"
 
+    safe_risk_levels = {"none", "low"}
     for tool in read_only_tools:
-        assert tool.risk_level == "low", (
+        assert tool.risk_level in safe_risk_levels, (
             f"{tool.name} is read_only but has risk_level={tool.risk_level}"
         )
         assert not tool.requires_approval, f"{tool.name} is read_only but requires approval"
@@ -144,9 +149,10 @@ def test_all_tools_have_descriptions():
 
 def test_all_tools_have_capabilities():
     """Verify all tools have properly formatted capability strings."""
+    allowed_prefixes = ("internal.", "system.")
     for tool in INTERNAL_TOOLS:
-        assert tool.capability.startswith("internal."), (
-            f"{tool.name} capability should start with 'internal.'"
+        assert tool.capability.startswith(allowed_prefixes), (
+            f"{tool.name} capability should start with one of {allowed_prefixes}"
         )
         assert len(tool.capability.split(".")) == 2, f"{tool.name} capability malformed"
 

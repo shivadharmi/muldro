@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { streamChat, type ChatSSEEvent, type ConversationMessage, type PlannerOutput } from "@/lib/api";
+import { streamChat, type ChatSSEEvent, type ConversationMessage, type PlanOutput } from "@/lib/api";
 import { useCommandStore } from "@/stores/command-store";
 import { useShellStore } from "@/stores/shell-store";
 import { CommandInput } from "./command-input";
@@ -36,7 +36,7 @@ interface ChatMessage {
   content: string;
   timestamp: string;
   traceId?: string;
-  decision?: PlannerOutput;
+  plan?: PlanOutput;
   agents: AgentStep[];
   streaming?: boolean;
 }
@@ -83,7 +83,7 @@ function backendMessagesToChat(messages: ConversationMessage[]): ChatMessage[] {
         content: m.content,
         timestamp: m.created_at || new Date().toISOString(),
         traceId: m.metadata_?.trace_id ?? undefined,
-        decision: m.metadata_?.decision ?? undefined,
+        plan: m.metadata_?.plan ?? undefined,
         agents,
       };
     });
@@ -277,10 +277,10 @@ export function ChatPanel({
               scrollToBottom();
               break;
 
-            case "decision":
+            case "plan":
               updateAssistant((m) => ({
                 ...m,
-                decision: event.decision,
+                plan: event.plan,
               }));
               break;
 
@@ -330,6 +330,44 @@ export function ChatPanel({
                   metadata: event.metadata,
                 });
               }
+              break;
+
+            case "tool_call":
+              updateAssistant((m) => ({
+                ...m,
+                agents: m.agents.map((a) =>
+                  a.agent === event.agent && a.status === "running"
+                    ? {
+                        ...a,
+                        toolCalls: [
+                          ...a.toolCalls,
+                          {
+                            tool: event.tool || "unknown",
+                            input: (event.input ?? {}) as Record<string, unknown>,
+                          },
+                        ],
+                      }
+                    : a
+                ),
+              }));
+              break;
+
+            case "tool_result":
+              updateAssistant((m) => ({
+                ...m,
+                agents: m.agents.map((a) =>
+                  a.agent === event.agent && a.status === "running"
+                    ? {
+                        ...a,
+                        toolCalls: a.toolCalls.map((tc, i) =>
+                          i === a.toolCalls.length - 1
+                            ? { ...tc, result: event.result }
+                            : tc
+                        ),
+                      }
+                    : a
+                ),
+              }));
               break;
 
             case "done":
@@ -458,15 +496,20 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
           </div>
         )}
 
-        {/* Decision badge */}
-        {msg.decision && (
+        {/* Plan badge */}
+        {msg.plan && (
           <div className="flex items-center gap-2 px-2">
             <span className="text-[10px] uppercase tracking-wider text-t-tertiary">
-              Decision
+              Plan
             </span>
             <span className="text-xs px-2 py-0.5 rounded-full bg-j-secondary-soft text-j-secondary border border-j-secondary/30">
-              {msg.decision.decision}
+              {msg.plan.goal}
             </span>
+            {msg.plan.steps.length > 0 && (
+              <span className="text-[10px] text-t-muted">
+                {msg.plan.steps.length} step{msg.plan.steps.length !== 1 ? "s" : ""}
+              </span>
+            )}
           </div>
         )}
 

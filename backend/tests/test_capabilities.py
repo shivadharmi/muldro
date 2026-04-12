@@ -24,17 +24,17 @@ class TestCapabilityCatalog:
             assert len(parts) == 2, f"Capability '{cap}' should have exactly one dot"
 
     def test_capability_meta_has_valid_risk_levels(self):
-        valid_risks = {"low", "medium", "high", "critical"}
+        valid_risks = {"none", "low", "medium", "high", "critical"}
         for cap, meta in CAPABILITY_CATALOG.items():
             assert meta.risk_level in valid_risks, (
                 f"Capability '{cap}' has invalid risk_level: {meta.risk_level}"
             )
 
-    def test_read_only_capabilities_are_low_risk(self):
+    def test_read_only_capabilities_are_safe_risk(self):
         for cap, meta in CAPABILITY_CATALOG.items():
             if meta.read_only:
-                assert meta.risk_level == "low", (
-                    f"Read-only capability '{cap}' should be low risk, got {meta.risk_level}"
+                assert meta.risk_level in ("none", "low"), (
+                    f"Read-only capability '{cap}' should be none/low risk, got {meta.risk_level}"
                 )
 
     def test_catalog_not_empty(self):
@@ -54,6 +54,7 @@ class TestCapabilityCatalog:
                 "repo",
                 "issue",
                 "workflow",
+                "system",
             }
 
 

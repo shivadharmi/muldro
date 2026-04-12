@@ -1,6 +1,6 @@
 """Sub-agent definitions for the Jarvis orchestrator.
 
-Defines 8 specialized agents with their prompts, model assignments,
+Defines 7 specialized agents with their prompts, model assignments,
 capability-based access scopes, and per-agent thinking configuration.
 """
 
@@ -10,13 +10,12 @@ from src.orchestrator.prompts import AGENT_PROMPTS
 
 # Model tier assignments per agent
 AGENT_MODEL_TIERS = {
-    "observer": "sonnet",
+    "perceiver": "sonnet",
     "librarian": "sonnet",
     "planner": "opus",
     "governor": "sonnet",
     "operator": "sonnet",
     "presenter": "sonnet",
-    "researcher": "sonnet",
     "persona": "haiku",
 }
 
@@ -24,7 +23,8 @@ AGENT_MODEL_TIERS = {
 # If a tool's canonical capability is in an agent's capability scope,
 # the agent is allowed to use that tool regardless of its raw name.
 AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
-    "observer": {
+    "perceiver": {
+        # External data source reads (perception)
         "email.list",
         "email.read",
         "email.search",
@@ -45,6 +45,10 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "issue.get",
         "issue.search",
         "repo.search_code",
+        "repo.search_repos",
+        "repo.list_prs",
+        "repo.get_diff",
+        "repo.get_reviews",
         "workflow.list",
         "workflow.get",
         "workflow.search",
@@ -52,31 +56,54 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "filesystem.read",
         "filesystem.list",
         "filesystem.search",
+        # Internal observation tools
         "internal.ingest_event",
         "internal.report_observation",
         "internal.get_cursor",
         "internal.update_cursor",
+        # Knowledge + web search
+        "internal.search",
+        "search.web",
+        "browser.open",
+        "browser.snapshot",
+        "browser.extract",
+        "browser.screenshot",
     },
     "librarian": {
         "internal.update_entity",
         "internal.search",
+        "internal.store_memory",
     },
     "planner": {
         "internal.get_plans",
         "internal.get_goals",
         "internal.search",
+        "internal.store_memory",
+        "system.discovery",
     },
     "governor": {
         "internal.evaluate_policy",
         "internal.approve_action",
+        "internal.get_plan_details",
     },
     "operator": {
+        # Email
+        "email.list",
+        "email.read",
+        "email.search",
         "email.send",
         "email.draft",
         "email.reply",
+        # Calendar
+        "calendar.list",
+        "calendar.get",
         "calendar.create",
         "calendar.update",
         "calendar.delete",
+        # Messaging
+        "messaging.list_channels",
+        "messaging.get_history",
+        "messaging.get_thread",
         "messaging.send",
         "messaging.reply",
         "messaging.react",
@@ -84,14 +111,26 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "messaging.send_template",
         "messaging.post",
         "messaging.share",
+        # Issues
+        "issue.list",
+        "issue.get",
+        "issue.search",
         "issue.create",
         "issue.update",
         "issue.comment",
         "issue.transition",
         "issue.sub_issue",
+        # Repos
+        "repo.list_prs",
+        "repo.get_diff",
+        "repo.get_reviews",
         "repo.create_pr",
         "repo.merge_pr",
         "repo.update_pr",
+        # Workflow
+        "workflow.list",
+        "workflow.get",
+        "workflow.search",
         "workflow.create_issue",
         "workflow.update_issue",
         "workflow.transition",
@@ -99,10 +138,12 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "workflow.delete",
         "workflow.delete_comment",
         "workflow.delete_milestone",
+        # Docs
         "doc.create",
         "doc.update",
         "doc.comment",
         "doc.append",
+        # Internal
         "internal.update_execution",
     },
     "presenter": {
@@ -113,46 +154,10 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "internal.push_ui",
         "messaging.send",
     },
-    "researcher": {
-        "internal.search",
-        "email.list",
-        "email.read",
-        "email.search",
-        "calendar.list",
-        "calendar.get",
-        "doc.drive_list",
-        "doc.drive_search",
-        "doc.get",
-        "doc.search",
-        "doc.query",
-        "messaging.list_channels",
-        "messaging.get_history",
-        "messaging.get_thread",
-        "messaging.get_users",
-        "messaging.search",
-        "issue.list",
-        "issue.get",
-        "issue.search",
-        "repo.search_code",
-        "repo.search_repos",
-        "repo.list_prs",
-        "repo.get_diff",
-        "repo.get_reviews",
-        "workflow.list",
-        "workflow.get",
-        "workflow.search",
-        "filesystem.read",
-        "filesystem.list",
-        "filesystem.search",
-        "search.web",
-        "browser.open",
-        "browser.snapshot",
-        "browser.extract",
-        "browser.screenshot",
-    },
     "persona": {
         "internal.search",
         "internal.extract_preferences",
+        "internal.store_preference",
     },
 }
 
@@ -168,12 +173,11 @@ class ThinkingConfig:
 # Per-agent thinking assignments
 AGENT_THINKING: dict[str, ThinkingConfig] = {
     "planner": ThinkingConfig(enabled=True, budget_tokens=8192),
-    "researcher": ThinkingConfig(enabled=True, budget_tokens=6144),
+    "perceiver": ThinkingConfig(enabled=True, budget_tokens=6144),
     "librarian": ThinkingConfig(enabled=True, budget_tokens=4096),
     "presenter": ThinkingConfig(enabled=True, budget_tokens=4096),
     "governor": ThinkingConfig(enabled=True, budget_tokens=2048),
     "operator": ThinkingConfig(enabled=True, budget_tokens=2048),
-    "observer": ThinkingConfig(enabled=True, budget_tokens=2048),
     "persona": ThinkingConfig(enabled=True, budget_tokens=2048),
 }
 
@@ -189,6 +193,7 @@ class SubAgent:
     max_tokens: int = 4096
     temperature: float = 0.3
     thinking: ThinkingConfig = field(default_factory=ThinkingConfig)
+    edge_case_only: bool = False
 
     async def can_use_tool(self, tool_name: str, db, workspace_id: str | None = None) -> bool:
         """Registry-driven capability check. One lookup, no normalizer."""
@@ -204,7 +209,7 @@ class SubAgent:
 
 
 def create_sub_agents() -> dict[str, SubAgent]:
-    """Create all 8 sub-agent definitions."""
+    """Create all 7 sub-agent definitions."""
     agents = {}
     for name, prompt in AGENT_PROMPTS.items():
         agents[name] = SubAgent(
@@ -215,6 +220,7 @@ def create_sub_agents() -> dict[str, SubAgent]:
             max_tokens=8192 if name == "planner" else 4096,
             temperature=0.1 if name == "governor" else 0.3,
             thinking=AGENT_THINKING.get(name, ThinkingConfig()),
+            edge_case_only=(name == "governor"),
         )
     return agents
 

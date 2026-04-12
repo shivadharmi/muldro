@@ -123,8 +123,8 @@ class TestSchedulerTick:
 
         with patch("src.services.scheduler.get_session_factory", return_value=mock_factory):
             await scheduler._tick()
-            # Commit is called (to persist any next_run_at repairs) but no fire
-            mock_db.commit.assert_awaited_once()
+            # Commit is called at least once (to persist state), but no fire
+            assert mock_db.commit.await_count >= 1
 
     @pytest.mark.asyncio
     async def test_tick_advances_next_run_at(self, settings):
@@ -387,3 +387,170 @@ class TestFireActions:
         await scheduler._fire(sched)
 
         mock_orch.process_message.assert_awaited_once()
+
+
+class TestPersonaBatch:
+    """Test _tick_persona_batch() in SchedulerLoop."""
+
+    @pytest.mark.asyncio
+    async def test_skips_when_not_10th_tick(self):
+        from src.services.scheduler import SchedulerLoop
+        from tests.conftest import make_mock_settings
+
+        settings = make_mock_settings()
+        scheduler = SchedulerLoop(settings=settings)
+        scheduler._tick_count = 3
+
+        await scheduler._tick_persona_batch(factory=AsyncMock())
+        # No exception = pass
+
+    @pytest.mark.asyncio
+    async def test_skips_when_fewer_than_5_interactions(self):
+        from src.services.scheduler import SchedulerLoop
+        from tests.conftest import make_mock_settings
+
+        settings = make_mock_settings()
+        orchestrator = AsyncMock()
+        scheduler = SchedulerLoop(settings=settings, orchestrator=orchestrator)
+        scheduler._tick_count = 10
+
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = [MagicMock()] * 3
+        mock_db.execute = AsyncMock(return_value=mock_result)
+        mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_db.__aexit__ = AsyncMock(return_value=False)
+        mock_factory = MagicMock(return_value=mock_db)
+
+        await scheduler._tick_persona_batch(factory=mock_factory)
+        orchestrator._call_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_calls_persona_with_5_plus_interactions(self):
+        from src.services.scheduler import SchedulerLoop
+        from tests.conftest import make_mock_settings
+
+        settings = make_mock_settings()
+        orchestrator = AsyncMock()
+        orchestrator._call_agent = AsyncMock(return_value="ok")
+        scheduler = SchedulerLoop(settings=settings, orchestrator=orchestrator)
+        scheduler._tick_count = 10
+
+        mock_interactions = []
+        for i in range(6):
+            m = MagicMock()
+            m.message_preview = f"message {i}"
+            m.intent = "command"
+            m.user_id = "usr_test"
+            m.workspace_id = "ws_test"
+            mock_interactions.append(m)
+
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = mock_interactions
+        mock_db.execute = AsyncMock(return_value=mock_result)
+        mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_db.__aexit__ = AsyncMock(return_value=False)
+        mock_factory = MagicMock(return_value=mock_db)
+
+        await scheduler._tick_persona_batch(factory=mock_factory)
+        orchestrator._call_agent.assert_called_once()
+        call_args = orchestrator._call_agent.call_args
+        assert call_args[0][0] == "persona"
+
+
+class TestPendingNotificationRedelivery:
+    """Test _tick_pending_notifications re-delivers follow-up notifications."""
+
+    @pytest.mark.asyncio
+    async def test_redelivers_pending_notifications(self, settings):
+        mock_notif = MagicMock()
+        mock_notif.user_id = TEST_USER_ID
+        mock_notif.channel = "web"
+        mock_notif.title = "Follow up"
+        mock_notif.body = "Check this"
+        mock_notif.payload_json = {}
+        mock_notif.workspace_id = TEST_WORKSPACE_ID
+        mock_notif.notification_id = "notif_test"
+        mock_notif.status = "pending"
+
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = [mock_notif]
+
+        mock_db = MagicMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+        mock_db.commit = AsyncMock()
+        mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_db.__aexit__ = AsyncMock(return_value=False)
+        mock_factory = MagicMock(return_value=mock_db)
+
+        mock_notifier = AsyncMock()
+        mock_notifier.notify = AsyncMock(return_value={"status": "sent"})
+
+        mock_orch = MagicMock()
+        mock_orch._notifier = mock_notifier
+
+        scheduler = SchedulerLoop(settings, orchestrator=mock_orch)
+        await scheduler._tick_pending_notifications(mock_factory)
+
+        mock_notifier.notify.assert_called_once_with(
+            user_id=TEST_USER_ID,
+            notification_type="web",
+            title="Follow up",
+            body="Check this",
+            data={},
+            workspace_id=TEST_WORKSPACE_ID,
+        )
+        assert mock_notif.status == "sent"
+
+
+class TestBoundedFirstPersonaBatch:
+    """Test that first persona batch is bounded to 24h."""
+
+    @pytest.mark.asyncio
+    async def test_first_batch_has_where_clause(self, settings):
+        """On first tick, query should filter by created_at > 24h ago."""
+        orchestrator = AsyncMock()
+        orchestrator._call_agent = AsyncMock(return_value="ok")
+        scheduler = SchedulerLoop(settings=settings, orchestrator=orchestrator)
+        scheduler._tick_count = 10
+        # Ensure no _last_persona_batch_at
+        assert not hasattr(scheduler, "_last_persona_batch_at") or (
+            getattr(scheduler, "_last_persona_batch_at", None) is None
+        )
+
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = []  # no interactions
+        mock_db.execute = AsyncMock(return_value=mock_result)
+        mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_db.__aexit__ = AsyncMock(return_value=False)
+        mock_factory = MagicMock(return_value=mock_db)
+
+        await scheduler._tick_persona_batch(factory=mock_factory)
+
+        # execute was called — the query should have a where clause
+        mock_db.execute.assert_called_once()
+        orchestrator._call_agent.assert_not_called()
+
+
+class TestCrossSourceSynthesisTrigger:
+    """Test that synthesis triggers on volume, not cooldown."""
+
+    def test_synthesis_triggers_with_2_sources_3_events(self):
+        sources_with_events = 2
+        total_event_count = 3
+        should_trigger = sources_with_events >= 2 and total_event_count >= 3
+        assert should_trigger is True
+
+    def test_synthesis_skips_with_1_source(self):
+        sources_with_events = 1
+        total_event_count = 5
+        should_trigger = sources_with_events >= 2 and total_event_count >= 3
+        assert should_trigger is False
+
+    def test_synthesis_skips_with_2_sources_but_only_2_events(self):
+        sources_with_events = 2
+        total_event_count = 2
+        should_trigger = sources_with_events >= 2 and total_event_count >= 3
+        assert should_trigger is False

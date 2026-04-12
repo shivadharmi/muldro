@@ -5,6 +5,7 @@ workspace-scoped DB rows managed by the IntegrationControlPlane.
 """
 
 import logging
+import os
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,19 +16,41 @@ from src.models.server_trust import ServerTrustRecord
 
 logger = logging.getLogger(__name__)
 
+
+async def _clear_stale_tool_schemas(db: AsyncSession, server_name: str, workspace_id: str) -> None:
+    """Clear cached input_schema for tools belonging to a server.
+
+    Called when the server's transport changes (e.g., stdio → HTTP), because
+    tool schemas may differ between transport modes (OAuth 2.0 vs 2.1).
+    """
+    from sqlalchemy import update
+
+    from src.models.tool_definitions import ToolDefinition
+
+    await db.execute(
+        update(ToolDefinition)
+        .where(
+            ToolDefinition.server == server_name,
+            ToolDefinition.input_schema.isnot(None),
+        )
+        .values(input_schema=None)
+    )
+    logger.info("Cleared stale tool schemas for server %s", server_name)
+
+
 # Default installations — each maps to a former get_*_config() function
 _DEFAULT_INSTALLATIONS: list[dict] = [
     {
         "server_name": "google-workspace",
         "display_name": "Google Workspace",
-        "transport": "stdio",
-        "command": "uvx",
-        "args": ["workspace-mcp", "--tool-tier", "complete", "--tools", "gmail", "calendar"],
-        "env_template": {
-            "GOOGLE_OAUTH_CLIENT_ID": "Google OAuth client ID",
-            "GOOGLE_OAUTH_CLIENT_SECRET": "Google OAuth client secret",
-        },
-        "auth_provider": "oauth",
+        "transport": "streamable-http",
+        "remote_url": os.environ.get(
+            "JARVIS_GOOGLE_WORKSPACE_MCP_URL", "http://localhost:8001/mcp"
+        ),
+        "command": None,
+        "args": None,
+        "env_template": {},
+        "auth_provider": "google",
         "scopes_granted": [
             "email.send",
             "email.list",
@@ -59,7 +82,7 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
         "env_template": {
             "GITHUB_PERSONAL_ACCESS_TOKEN": "GitHub personal access token",
         },
-        "auth_provider": "token",
+        "auth_provider": "github",
         "scopes_granted": [
             "issue.create",
             "issue.list",
@@ -129,7 +152,7 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
         "env_template": {
             "LINEAR_ACCESS_TOKEN": "Linear API access token",
         },
-        "auth_provider": "token",
+        "auth_provider": "linear",
         "scopes_granted": [
             "workflow.create_issue",
             "workflow.update_issue",
@@ -147,7 +170,7 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
         "env_template": {
             "NOTION_TOKEN": "Notion integration token",
         },
-        "auth_provider": "token",
+        "auth_provider": "notion",
         "scopes_granted": [
             "doc.create",
             "doc.update",
@@ -229,6 +252,7 @@ async def seed_installations(db: AsyncSession, workspace_id: str, user_id: str) 
                 command=inst_data.get("command"),
                 args=inst_data.get("args"),
                 env_template=inst_data.get("env_template"),
+                remote_url=inst_data.get("remote_url"),
                 trust_id=trust_by_name.get(server_name),
                 auth_provider=inst_data.get("auth_provider"),
                 scopes_granted=inst_data.get("scopes_granted"),
@@ -241,11 +265,26 @@ async def seed_installations(db: AsyncSession, workspace_id: str, user_id: str) 
         inst = existing[server_name]
         needs_update = False
 
+        if inst.transport != inst_data.get("transport", "stdio"):
+            inst.transport = inst_data.get("transport", "stdio")
+            needs_update = True
+
+        # HTTP servers get schemas from live discovery — always clear stale
+        # DB schemas so they don't override live ones.  This handles both
+        # transport changes and schema drift (e.g., OAuth 2.1 mode changes).
+        if inst_data.get("transport", "stdio") in ("sse", "streamable-http"):
+            await _clear_stale_tool_schemas(db, server_name, workspace_id)
+        if inst.remote_url != inst_data.get("remote_url"):
+            inst.remote_url = inst_data.get("remote_url")
+            needs_update = True
         if inst.command != inst_data.get("command"):
             inst.command = inst_data.get("command")
             needs_update = True
         if inst.args != inst_data.get("args"):
             inst.args = inst_data.get("args")
+            needs_update = True
+        if inst.auth_provider != inst_data.get("auth_provider"):
+            inst.auth_provider = inst_data.get("auth_provider")
             needs_update = True
         if inst.scopes_granted != inst_data.get("scopes_granted"):
             inst.scopes_granted = inst_data.get("scopes_granted")

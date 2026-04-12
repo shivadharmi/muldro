@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -49,6 +49,7 @@ class TaskRun(Base, TimestampMixin):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[dict | None] = mapped_column(JSONB)
     timeout_seconds: Mapped[int | None] = mapped_column(Integer)
+    idempotency_key: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
     steps: Mapped[list["TaskStep"]] = relationship(
         back_populates="run", cascade="all, delete-orphan"
@@ -58,6 +59,14 @@ class TaskRun(Base, TimestampMixin):
         Index("ix_task_runs_user_status", "user_id", "status", "created_at"),
         Index("ix_task_runs_source", "source", "created_at"),
         Index("ix_task_runs_ws_status", "workspace_id", "status"),
+        Index(
+            "ix_task_runs_idempotency",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text(
+                "idempotency_key IS NOT NULL AND status NOT IN ('completed', 'failed', 'cancelled')"
+            ),
+        ),
     )
 
 
@@ -86,6 +95,7 @@ class TaskStep(Base, TimestampMixin):
     error: Mapped[dict | None] = mapped_column(JSONB)
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     max_retries: Mapped[int] = mapped_column(Integer, default=3)
+    timeout_seconds: Mapped[int | None] = mapped_column(Integer)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

@@ -104,7 +104,6 @@ class JarvisTrace:
         tool_call_details: list[SpanToolCall] | None = None,
         thinking_summary: str | None = None,
         response_text: str | None = None,
-        decision: str | None = None,
         error: str | None = None,
     ) -> AgentSpan | None:
         span = self._active_spans.pop(span_id, None)
@@ -123,7 +122,6 @@ class JarvisTrace:
         span.tool_call_details = tool_call_details or []
         span.thinking_summary = thinking_summary
         span.response_text = response_text
-        span.decision = decision
         span.error = error
         return span
 

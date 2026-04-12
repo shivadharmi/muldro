@@ -5,11 +5,20 @@ StreamConsumerManager: Processes event bus streams via consumer groups.
 
 import asyncio
 import logging
+import os
+import socket
 
 from src.api.deps import resolve_workspace_id
 from src.config.settings import Settings
+from src.models.database import get_session_factory
 
 logger = logging.getLogger(__name__)
+
+
+def _get_consumer_name() -> str:
+    """Generate unique consumer name from hostname + PID."""
+    return f"worker-{socket.gethostname()}-{os.getpid()}"
+
 
 NOTIFICATIONS_STREAM = "jarvis:notifications"
 
@@ -18,20 +27,23 @@ class StreamConsumerManager:
     """Manages event bus consumer groups for downstream processing.
 
     Subscribes to per-user event streams and dispatches to handlers:
-    - entity_extractor: Extract entities from processed events
-    - memory_extractor: Extract memories from event summaries
-    - trigger_evaluator: Evaluate user-defined triggers
+    - entity_extractor: Extract entities from processed events (main stream)
+    - memory_extractor: Extract memories from event summaries (main stream)
+    - trigger_evaluator: Evaluate user-defined triggers (main stream)
+    - contradiction_checker: Check memory contradictions on new memory events (main stream)
+    - graph_syncer: Sync entity changes to Neo4j (agent events stream)
 
     Each consumer group runs in its own asyncio task for parallel
-    processing — slow handlers (e.g., entity_extractor with Neo4j sync)
-    don't block other groups.
+    processing — slow handlers don't block other groups.
     """
 
-    CONSUMER_GROUPS = (
+    MAIN_STREAM_GROUPS = (
         "entity_extractor",
         "memory_extractor",
         "trigger_evaluator",
+        "contradiction_checker",
     )
+    AGENT_STREAM_GROUPS = ("graph_syncer",)
     HANDLER_CONCURRENCY = 3  # max concurrent handler invocations per group
 
     def __init__(self, settings: Settings):
@@ -47,6 +59,7 @@ class StreamConsumerManager:
 
             self._vector_store = VectorStore(self._settings)
             await self._vector_store.ensure_collections()
+            await self._vector_store.ensure_indexes()
 
     async def run(self, user_ids: list[str]) -> None:
         """Main loop: consume from event bus streams.
@@ -74,15 +87,27 @@ class StreamConsumerManager:
             "entity_extractor": self._handle_entity_extraction,
             "memory_extractor": self._handle_memory_extraction,
             "trigger_evaluator": self._handle_trigger_evaluation,
+            "contradiction_checker": self._handle_contradiction_check,
+            "graph_syncer": self._handle_graph_sync,
         }
 
         # Create consumer groups and launch parallel tasks
         for uid in user_ids:
-            stream = bus.event_stream(uid)
-            for group in self.CONSUMER_GROUPS:
-                await bus.create_consumer_group(stream, group)
+            main_stream = bus.event_stream(uid)
+            agent_stream = f"jarvis:agent_events:{uid}"
+
+            for group in self.MAIN_STREAM_GROUPS:
+                await bus.create_consumer_group(main_stream, group)
                 task = asyncio.create_task(
-                    self._consumer_loop(bus, stream, group, handler_map[group]),
+                    self._consumer_loop(bus, main_stream, group, handler_map[group]),
+                    name=f"consumer-{uid}-{group}",
+                )
+                self._tasks.append(task)
+
+            for group in self.AGENT_STREAM_GROUPS:
+                await bus.create_consumer_group(agent_stream, group)
+                task = asyncio.create_task(
+                    self._consumer_loop(bus, agent_stream, group, handler_map[group]),
                     name=f"consumer-{uid}-{group}",
                 )
                 self._tasks.append(task)
@@ -110,7 +135,7 @@ class StreamConsumerManager:
                     await bus.subscribe(
                         stream,
                         group,
-                        "worker-1",
+                        _get_consumer_name(),
                         handler,
                         count=10,
                         block_ms=2000,
@@ -118,6 +143,56 @@ class StreamConsumerManager:
             except Exception:
                 logger.warning("Consumer %s error on %s", group, stream, exc_info=True)
                 await asyncio.sleep(1)
+
+    async def _handle_with_retry(
+        self,
+        handler,
+        event,
+        redis,
+        dlq,
+        bus,
+        stream: str,
+        group: str,
+    ) -> None:
+        """Wrap handler with retry tracking. After 3 failures -> DLQ."""
+        event_id = event.payload.get("event_id", "unknown")
+        retry_key = f"jarvis:worker:retry:{event_id}"
+
+        try:
+            await handler(event)
+            # Success — clear retry counter
+            if redis:
+                await redis.delete(retry_key)
+        except Exception as exc:
+            attempts = 0
+            if redis:
+                attempts = await redis.incr(retry_key)
+                await redis.expire(retry_key, 3600)
+            else:
+                attempts = 1
+
+            if attempts > 3 and dlq:
+                logger.error(
+                    "Event %s exhausted %d retries, moving to DLQ",
+                    event_id,
+                    attempts,
+                )
+                await dlq.enqueue(
+                    user_id=event.user_id,
+                    operation_type=f"worker_{group}",
+                    error_type=type(exc).__name__,
+                    error_message=str(exc)[:500],
+                    payload={"event_id": event_id, "group": group},
+                )
+                if bus:
+                    await bus.ack(stream, group, event.message_id)
+            else:
+                logger.warning(
+                    "Handler failed for %s (attempt %d): %s",
+                    event_id,
+                    attempts,
+                    exc,
+                )
 
     async def stop(self) -> None:
         self._running = False
@@ -132,7 +207,6 @@ class StreamConsumerManager:
         if not event_id:
             return
 
-        from src.models.database import get_session_factory
         from src.services.world_model import WorldModel
 
         factory = get_session_factory()
@@ -153,20 +227,18 @@ class StreamConsumerManager:
                 len(entity_ids),
             )
 
-            # Sync extracted entities to Neo4j
+            # Sync extracted entities to Neo4j (batch)
             if entity_ids and self._settings.neo4j_url:
                 try:
                     from src.services.graph_sync import GraphSyncService
 
                     graph_sync = GraphSyncService(self._settings, db)
-                    for eid in entity_ids:
-                        await graph_sync.sync_entity_by_id(eid)
-                        await graph_sync.sync_relationships_for_entity(eid)
+                    result = await graph_sync.batch_sync_entities(entity_ids)
                     await graph_sync.close()
                     logger.info(
-                        "Neo4j sync for %d entities from event %s",
-                        len(entity_ids),
+                        "Neo4j batch sync for event %s: %s",
                         event_id,
+                        result,
                     )
                 except Exception:
                     logger.warning(
@@ -184,7 +256,6 @@ class StreamConsumerManager:
 
         from sqlalchemy import select
 
-        from src.models.database import get_session_factory
         from src.models.events import NormalizedEvent
         from src.services.memory_service import MemoryService
         from src.services.world_model import WorldModel
@@ -231,7 +302,6 @@ class StreamConsumerManager:
 
     async def _handle_trigger_evaluation(self, event) -> None:
         """Evaluate event against user-defined triggers."""
-        from src.models.database import get_session_factory
         from src.services.trigger_engine import TriggerEngine
 
         factory = get_session_factory()
@@ -243,3 +313,78 @@ class StreamConsumerManager:
             await db.commit()
             if fired:
                 logger.info("Triggers fired for event: %d", len(fired))
+
+    async def _handle_graph_sync(self, event) -> None:
+        """Sync entity/relationship changes to Neo4j.
+
+        Triggered by entity.created / entity.updated / relationship.created
+        events on the agent events stream (jarvis:agent_events:{user_id}).
+        Skips silently when neo4j_url is not configured.
+        """
+        if not self._settings.neo4j_url:
+            return
+
+        entity_id = event.payload.get("entity_id", "")
+        relation_id = event.payload.get("relationship_id", event.payload.get("relation_id", ""))
+        if not entity_id and not relation_id:
+            return
+
+        from src.services.graph_sync import GraphSyncService
+
+        factory = get_session_factory()
+        async with factory() as db:
+            workspace_id = await resolve_workspace_id(db, event.user_id)  # noqa: F841
+            graph_sync = GraphSyncService(self._settings, db)
+            try:
+                if entity_id:
+                    await graph_sync.on_entity_change(event)
+                    logger.debug("Graph sync completed for entity %s", entity_id)
+                elif relation_id:
+                    await graph_sync.on_relationship_change(event)
+                    logger.debug("Graph sync completed for relationship %s", relation_id)
+            except Exception:
+                logger.warning(
+                    "Neo4j graph sync failed for %s",
+                    entity_id or relation_id,
+                    exc_info=True,
+                )
+            finally:
+                await graph_sync.close()
+
+    async def _handle_contradiction_check(self, event) -> None:
+        """Check if a newly stored memory contradicts existing ones.
+
+        Triggered by memory.stored events on the main events stream
+        (jarvis:events:{user_id}).  Skips silently when:
+        - memory_id is absent/empty in the payload
+        - fact_text is absent/empty in the payload
+        """
+        memory_id = event.payload.get("memory_id", "")
+        fact_text = event.payload.get("fact_text", "")
+        if not memory_id or not fact_text:
+            return
+
+        from src.services.memory_service import MemoryService
+
+        factory = get_session_factory()
+        async with factory() as db:
+            user_id = event.user_id
+            workspace_id = await resolve_workspace_id(db, user_id)
+            memory_service = MemoryService(
+                settings=self._settings,
+                db=db,
+                vector_store=self._vector_store,
+            )
+            superseded = await memory_service.check_contradictions(
+                user_id=user_id,
+                new_fact=fact_text,
+                new_memory_id=memory_id,
+                workspace_id=workspace_id,
+            )
+            if superseded:
+                await db.commit()
+                logger.info(
+                    "Contradiction check for memory %s: %d superseded",
+                    memory_id,
+                    len(superseded),
+                )

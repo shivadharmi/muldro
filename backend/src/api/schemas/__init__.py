@@ -3,13 +3,11 @@
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # ── Shared Type Literals ─────────────────────────────────────────
 
-MemoryType = Literal[
-    "episodic", "semantic", "preference", "relationship", "task_context", "procedural"
-]
+MemoryType = Literal["episodic", "semantic", "preference", "relationship", "task_context"]
 MemoryScope = Literal["presentation", "planning", "general"]
 BriefingStyle = Literal["founder", "personal", "academic", "general"]
 
@@ -46,8 +44,8 @@ class BriefingResponse(BaseModel):
 
 
 class BriefingFeedbackRequest(BaseModel):
-    feedback_type: str
-    rating: int | None = None
+    feedback_type: Literal["rating", "item_acted_on", "item_dismissed", "follow_up_asked"]
+    rating: int | None = Field(None, ge=1, le=5)
     item_section: str | None = None
     item_index: int | None = None
     item_title: str | None = None
@@ -230,14 +228,14 @@ class PerceptionStatusResponse(BaseModel):
 class ScheduleCreateRequest(BaseModel):
     name: str
     description: str | None = None
-    schedule_type: str = "recurring"
+    schedule_type: Literal["recurring", "one_shot"] = "recurring"
     cron_expr: str | None = None
     run_at: datetime | None = None
     action_type: str
     action_config: dict | None = None
     enabled: bool = True
-    source: str = "user"
-    priority: str = "medium"
+    source: Literal["system", "user", "reflection"] = "user"
+    priority: Literal["low", "medium", "high"] = "medium"
 
 
 class ScheduleUpdateRequest(BaseModel):
@@ -248,7 +246,7 @@ class ScheduleUpdateRequest(BaseModel):
     action_type: str | None = None
     action_config: dict | None = None
     enabled: bool | None = None
-    priority: str | None = None
+    priority: Literal["low", "medium", "high"] | None = None
 
 
 class ScheduleResponse(BaseModel):

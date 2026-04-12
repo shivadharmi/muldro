@@ -9,12 +9,14 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncGenerator
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from src.services.relevance_assessor import PerceptionSignal, RelevanceAssessment
 
 from ulid import ULID
 
 from src.config.settings import Settings, get_anthropic_client
-from src.models.task_graph import TaskRun, TaskStep
 from src.orchestrator.agent_loop import (
     LoopAgentStart,
     LoopDone,
@@ -27,21 +29,20 @@ from src.orchestrator.agent_loop import (
 )
 from src.orchestrator.agents import AGENTS, SubAgent
 from src.orchestrator.budget import BudgetTracker
-from src.orchestrator.contracts import PlannerOutput
+from src.orchestrator.contracts import PlanOutput, PlanStep
 from src.orchestrator.intent_classifier import (
     FAST_INTENTS,
     INTENT_CONFIDENCE_THRESHOLD,
     classify_intent,
-    extract_decision,
-    intent_to_decision,
+    extract_plan,
+    intent_to_plan,
 )
-from src.orchestrator.prompts import JARVIS_DECISION_FRAMEWORK, JARVIS_SOUL_CORE
+from src.orchestrator.prompts import JARVIS_SOUL_CORE
 from src.orchestrator.services import ServiceContainer
 from src.orchestrator.tracing import TraceManager
 from src.services.agent_registry import AgentRegistry
+from src.services.capability_resolver import CapabilityResolver, route_step
 from src.services.context_builder import ContextBuilder, ContextPack
-from src.services.execution_state import transition_run, transition_step
-from src.services.route_resolver import RouteResolver
 from src.services.trace_store import TraceStore
 from src.tools.schemas import build_tool_definitions
 
@@ -50,8 +51,6 @@ logger = logging.getLogger(__name__)
 # Event types published to the agent events stream
 AGENT_EVENT_TYPES = {
     "plan_generated",
-    "research_started",
-    "research_completed",
     "approval_requested",
     "execution_started",
     "execution_completed",
@@ -76,81 +75,156 @@ BEDROCK_MODEL_TIERS = {
 }
 
 # Agents that benefit from context enrichment (read-heavy agents)
-CONTEXT_ENRICHED_AGENTS = {"planner", "presenter", "researcher", "librarian"}
+CONTEXT_ENRICHED_AGENTS = {
+    "planner",
+    "presenter",
+    "perceiver",
+    "librarian",
+    "operator",
+    "governor",
+}
 
 # Intent classification constants imported from intent_classifier module
 
 
-def _build_surface_children(
-    decision: PlannerOutput,
+def _derive_surface_kind(plan: "PlanOutput") -> tuple[str, str] | None:
+    """Derive workspace surface kind from PlanOutput step capabilities.
+
+    Returns (kind, default_title) or None if the plan is chat-only.
+    """
+    if not plan.steps:
+        return None
+
+    caps = {s.capability for s in plan.steps if s.actor == "jarvis"}
+
+    # Respond/reason only -> no surface (chat-only)
+    # "none" = planner indicated no external capability needed (pure reasoning)
+    if caps <= {"reason", "respond", "none"}:
+        return None
+
+    # System capabilities with visual value
+    if "system.add_to_brief" in caps:
+        return ("briefing", "Briefing Update")
+    if "system.schedule_reminder" in caps:
+        return ("alert", "Reminder Scheduled")
+
+    # Write actions -> plan surface
+    if any(s.risk in ("medium", "high") for s in plan.steps):
+        return ("plan", "New Plan")
+
+    # Multi-step -> plan surface
+    jarvis_steps = [s for s in plan.steps if s.actor == "jarvis"]
+    if len(jarvis_steps) > 2:
+        return ("plan", plan.goal[:80] or "Plan")
+
+    # Single/dual read -> summary
+    return ("summary", "Summary")
+
+
+def _build_surface_preview_from_plan(
+    plan: "PlanOutput",
     kind: str,
     default_title: str,
     response_text: str,
-) -> list:
-    """Build A2UI component children for a workspace surface push.
+):
+    """Build a SurfacePreview from a PlanOutput for workspace grid cards."""
+    from src.ui.contracts import SurfaceMetric, SurfacePreview
 
-    Uses renderer.py builders so the frontend A2UIRenderer has
-    actual component trees to render instead of empty children[].
-
-    The surface shows decision context (reasoning, priority, kind) — NOT the
-    full response text, which is already visible in the chat bubble.
-    """
-    from src.ui import renderer as r
-
-    title = decision.goal[:80] if decision.goal else default_title
-    reasoning = decision.reasoning[:200] if decision.reasoning else ""
+    title = plan.goal[:80] if plan.goal else default_title
+    subtitle = plan.reasoning[:120] if plan.reasoning else None
+    metrics: list[SurfaceMetric] = []
+    tags: list[str] = []
 
     if kind == "plan":
-        children = [r.heading("sf_title", title)]
-        if reasoning:
-            children.append(r.caption("sf_reasoning", reasoning))
-        children.append(r.badge("sf_priority", decision.priority, variant="default"))
-        if decision.tasks:
-            task_items = [
-                r.text(
-                    f"sf_task_{i}",
-                    f"• {t.task_type}: {(t.input_data or {}).get('description', '')[:60]}",
-                )
-                for i, t in enumerate(decision.tasks[:5])
-            ]
-            children.extend(task_items)
-        return [r.card("sf_card", children)]
+        step_count = len([s for s in plan.steps if s.actor == "jarvis"])
+        if step_count:
+            metrics.append(SurfaceMetric(label="Steps", value=str(step_count)))
+        metrics.append(SurfaceMetric(label="Priority", value=plan.priority))
+    elif kind == "summary":
+        tags.append("read")
+    elif kind == "briefing":
+        tags.append("briefing")
+    elif kind == "alert":
+        tags.append("reminder")
 
-    if kind == "recommendation":
-        children = [
-            r.heading("sf_title", title),
-            r.badge("sf_kind", "Recommendation", variant="default"),
-        ]
-        if reasoning:
-            children.append(r.text("sf_reasoning", reasoning))
-        return [r.card("sf_card", children)]
+    return SurfacePreview(
+        title=title,
+        subtitle=subtitle,
+        status=None,
+        priority=plan.priority if plan.priority != "medium" else None,
+        metrics=metrics,
+        entities=[],
+        progress=None,
+        tags=tags,
+    )
 
-    if kind == "summary":
-        children = [
-            r.heading("sf_title", title),
-            r.badge("sf_kind", default_title, variant="default"),
-        ]
-        if reasoning:
-            children.append(r.text("sf_reasoning", reasoning))
-        return [r.card("sf_card", children)]
 
-    if kind == "briefing":
-        children = [
-            r.heading("sf_title", title),
-            r.badge("sf_kind", "Briefing", variant="default"),
-        ]
-        if reasoning:
-            children.append(r.text("sf_reasoning", reasoning))
-        return [r.card("sf_card", children)]
+async def _fetch_thread_contexts(
+    raw_events: list,
+    user_id: str,
+    workspace_id: str,
+    max_threads: int = 3,
+) -> dict[str, dict]:
+    """Fetch full thread context for Gmail reply events via MCP.
 
-    if kind == "alert":
-        return [r.alert("sf_alert", reasoning or title, severity="info", title=title)]
+    When a reply arrives on a Gmail thread, the Librarian/Planner only see
+    the reply snippet with no context about the prior conversation. This
+    helper fetches the full thread via the ``get_gmail_thread_content`` MCP
+    tool so downstream agents can reason over the complete thread.
 
-    # Fallback: generic card with reasoning
-    children = [r.heading("sf_title", title)]
-    if reasoning:
-        children.append(r.text("sf_reasoning", reasoning))
-    return [r.card("sf_card", children)]
+    Returns a mapping of ``{thread_id: mcp_result}`` for successfully
+    fetched threads. On any failure the thread is silently skipped so
+    perception is never blocked by MCP availability.
+    """
+    from src.connectors.mcp_bridge import call_mcp_tool, is_mcp_tool
+
+    contexts: dict[str, dict] = {}
+    if not is_mcp_tool("get_gmail_thread_content"):
+        return contexts
+
+    fetched = 0
+    seen: set[str] = set()
+    for raw_evt in raw_events:
+        if fetched >= max_threads:
+            break
+        if raw_evt.source != "gmail":
+            continue
+        payload = raw_evt.raw_payload or {}
+        in_reply_to = payload.get("in_reply_to", "")
+        thread_id = raw_evt.entity_id
+        if not in_reply_to or thread_id in seen:
+            continue
+        seen.add(thread_id)
+
+        try:
+            result = await call_mcp_tool(
+                "get_gmail_thread_content",
+                {"thread_id": thread_id},
+                user_id=user_id,
+                workspace_id=workspace_id,
+            )
+            if isinstance(result, dict) and result.get("status") != "error":
+                contexts[thread_id] = result
+                fetched += 1
+        except Exception:
+            logger.debug("Failed to fetch thread %s context", thread_id, exc_info=True)
+
+    return contexts
+
+
+def _build_step_to_task_map(steps: list) -> dict[str, str]:
+    """First pass: create step_id -> task_id mapping for ALL steps.
+
+    Pre-builds the full mapping so that forward dependencies (e.g. step s1
+    depends on s3, which appears later in the list) resolve correctly.
+    Includes both jarvis and user actor steps since user steps can be
+    dependency targets.
+    """
+    step_to_task: dict[str, str] = {}
+    for step in steps:
+        if step.step_id:
+            step_to_task[step.step_id] = f"ptask_{ULID()}"
+    return step_to_task
 
 
 class JarvisOrchestrator:
@@ -205,6 +279,34 @@ class JarvisOrchestrator:
             logger.info("Awaiting %d background tasks", len(self._background_tasks))
             await asyncio.wait(self._background_tasks, timeout=5.0)
 
+    async def get_budget_status(self):
+        """Public accessor for budget status — replaces private _budget access."""
+        async with self._db_factory() as db:
+            return await self._budget.get_budget_status(db)
+
+    async def get_system_health(self) -> dict:
+        """Public accessor for system health — replaces private attribute access."""
+        return {
+            "circuit_breaker_open": (
+                self._circuit_breaker.is_open()
+                if hasattr(self._circuit_breaker, "is_open")
+                else False
+            ),
+            "background_tasks": len(self._background_tasks),
+            "agents": sorted(self._agents.keys()),
+        }
+
+    async def _get_available_capabilities(self, workspace_id: str) -> list[str]:
+        """Get list of available capability strings from the tool registry."""
+        try:
+            async with self._db_factory() as db:
+                resolver = CapabilityResolver(db, workspace_id)
+                tools = await resolver._list_enabled_tools()
+                return list({t.capability for t in tools if t.capability})
+        except Exception:
+            logger.debug("Failed to get available capabilities", exc_info=True)
+            return []
+
     async def load_agents_from_db(self) -> None:
         """Load agent definitions from the database, replacing hardcoded defaults."""
         try:
@@ -225,18 +327,25 @@ class JarvisOrchestrator:
 
     async def _persist_plan_record(
         self,
-        decision: PlannerOutput,
+        plan_output: PlanOutput,
         user_id: str,
         workspace_id: str,
         trigger_type: str = "user_message",
         idempotency_key: str | None = None,
-    ) -> PlannerOutput:
-        """Persist a Plan + PlanTasks to DB, returning decision with plan_id populated.
+    ) -> PlanOutput:
+        """Persist a Plan + PlanTasks to DB, returning PlanOutput with plan_id set.
 
-        The Planner LLM agent returns a PlannerOutput but does NOT create DB
-        records.  This method bridges that gap so the Governor can call
-        evaluate_policy(plan_id) and the Operator can execute_plan via
-        GraphExecutor — both of which require a DB-backed Plan.
+        Converts PlanOutput steps into DB Plan + PlanTask rows so the Governor
+        can evaluate_policy(plan_id) and the Operator can execute via
+        GraphExecutor — both require a DB-backed Plan.
+
+        Both ``jarvis`` and ``user`` actor steps become PlanTasks. User-actor
+        steps are persisted with ``task_type="user_action"`` and
+        ``status="awaiting_input"`` so they appear as dependency targets and
+        in execution surfaces.
+
+        A two-pass approach pre-builds step_id→task_id mappings so forward
+        dependencies (e.g. s1 depends on s3) resolve correctly.
 
         Args:
             trigger_type: Origin — "user_message" (interactive) or "perception"
@@ -247,6 +356,10 @@ class JarvisOrchestrator:
 
         plan_id = f"plan_{ULID()}"
 
+        # Risk ordinals for deriving max risk
+        risk_ord: dict[str, int] = {"none": 0, "low": 1, "medium": 2, "high": 3}
+        ord_risk: dict[int, str] = {v: k for k, v in risk_ord.items()}
+
         try:
             async with self._db_factory() as db:
                 # Idempotency check — skip if an active plan with this key exists
@@ -256,151 +369,156 @@ class JarvisOrchestrator:
                     existing = await db.execute(
                         select(Plan.plan_id).where(
                             Plan.idempotency_key == idempotency_key,
+                            Plan.workspace_id == workspace_id,
                             Plan.status.notin_(["completed", "failed", "cancelled"]),
                         )
                     )
-                    if existing.scalar_one_or_none():
+                    existing_plan_id = existing.scalar_one_or_none()
+                    if existing_plan_id:
                         logger.info(
                             "Skipping duplicate plan: idempotency_key=%s",
                             idempotency_key,
                         )
-                        return decision
+                        return plan_output.model_copy(update={"plan_id": existing_plan_id})
 
-                tasks = [
-                    PlanTask(
-                        task_id=f"ptask_{ULID()}",
-                        plan_id=plan_id,
-                        workspace_id=workspace_id,
-                        task_type=task.task_type,
-                        input_data=task.input_data,
-                        status="pending",
-                    )
-                    for task in decision.tasks
-                ]
+                # Pass 1: Pre-build step_id → task_id map for ALL steps
+                # so forward dependencies resolve correctly.
+                step_to_task = _build_step_to_task_map(plan_output.steps)
 
-                plan = Plan(
+                # Pass 2: Create PlanTask records for every step.
+                tasks: list[PlanTask] = []
+                max_risk_ord = 0
+
+                for step in plan_output.steps:
+                    max_risk_ord = max(max_risk_ord, risk_ord.get(step.risk, 0))
+
+                    # Reuse the pre-assigned task_id (or generate one for
+                    # steps without a step_id).
+                    task_id = step_to_task.get(step.step_id, f"ptask_{ULID()}")
+
+                    # Map step depends_on step_ids to task_ids
+                    dep_task_ids = [
+                        step_to_task[dep] for dep in step.depends_on if dep in step_to_task
+                    ]
+
+                    if step.actor == "user":
+                        tasks.append(
+                            PlanTask(
+                                task_id=task_id,
+                                plan_id=plan_id,
+                                workspace_id=workspace_id,
+                                task_type="user_action",
+                                input_data={
+                                    "description": step.description,
+                                    "capability": step.capability,
+                                },
+                                depends_on=dep_task_ids or None,
+                                status="awaiting_input",
+                            )
+                        )
+                    else:
+                        tasks.append(
+                            PlanTask(
+                                task_id=task_id,
+                                plan_id=plan_id,
+                                workspace_id=workspace_id,
+                                task_type=step.capability,
+                                input_data=step.input,
+                                depends_on=dep_task_ids or None,
+                                status="pending",
+                            )
+                        )
+
+                # Derive risk_level and execution_mode from max step risk
+                risk_level = ord_risk.get(max_risk_ord, "low")
+                execution_mode = "approval_required" if max_risk_ord >= 2 else "auto_execute"
+
+                plan_record = Plan(
                     plan_id=plan_id,
                     user_id=user_id,
                     workspace_id=workspace_id,
                     trigger_type=trigger_type,
                     trigger_ref=None,
                     idempotency_key=idempotency_key,
-                    goal=decision.goal or "",
-                    priority=decision.priority,
-                    decision=decision.decision,
-                    reasoning_summary=decision.reasoning or None,
-                    risk_level=decision.risk_level,
-                    execution_mode=decision.execution_mode,
+                    goal=plan_output.goal or "",
+                    priority=plan_output.priority,
+                    decision="plan",
+                    reasoning_summary=plan_output.reasoning or None,
+                    risk_level=risk_level,
+                    execution_mode=execution_mode,
                     status="created",
+                    success_conditions=(
+                        {"criteria": plan_output.success_criteria}
+                        if plan_output.success_criteria
+                        else None
+                    ),
+                    plan_output_json=plan_output.model_dump(mode="json"),
                 )
-                plan.tasks = tasks
-                db.add(plan)
+                plan_record.tasks = tasks
+                db.add(plan_record)
                 await db.commit()
 
             logger.info(
-                "Persisted plan %s decision=%s tasks=%d",
+                "Persisted plan %s tasks=%d risk=%s",
                 plan_id,
-                decision.decision,
                 len(tasks),
+                risk_level,
             )
-            return decision.model_copy(update={"plan_id": plan_id})
+            return plan_output.model_copy(update={"plan_id": plan_id})
         except Exception:
             logger.warning("Failed to persist plan record", exc_info=True)
-            return decision
+            return plan_output
 
-    async def _create_lightweight_run(
+    async def _log_interaction(
         self,
         user_id: str,
         workspace_id: str,
-        decision: PlannerOutput,
         trace_id: str,
+        message_preview: str | None = None,
+        intent: str | None = None,
+        plan: "PlanOutput | None" = None,
         conversation_id: str | None = None,
+        response_preview: str | None = None,
+        run_id: str | None = None,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cost_usd: float = 0.0,
+        latency_ms: int = 0,
     ) -> str | None:
-        """Create a lightweight TaskRun for every user interaction.
+        """Create a lightweight InteractionLog record for auditing.
 
-        Even simple decisions (acknowledge, answer_directly) get a single-step
-        run so ALL interactions are tracked in the runs table.
-        Returns the run_id on success, None if DB unavailable.
+        Replaces _create_lightweight_run + _complete_lightweight_run.
+        Returns the interaction_id on success, None on failure.
         """
-        run_id = f"run_{ULID()}"
+        from src.models.interaction_log import InteractionLog
 
+        interaction_id = f"ilog_{ULID()}"
         try:
             async with self._db_factory() as db:
-                run = TaskRun(
-                    run_id=run_id,
-                    user_id=user_id,
-                    workspace_id=workspace_id,
-                    plan_id=decision.plan_id,
-                    status="running",
-                    source="user_message",
-                    execution_mode=decision.execution_mode,
-                    policy_decision={"decision": decision.decision},
-                    conversation_id=conversation_id,
-                    trace_id=trace_id,
+                db.add(
+                    InteractionLog(
+                        interaction_id=interaction_id,
+                        workspace_id=workspace_id,
+                        user_id=user_id,
+                        trace_id=trace_id,
+                        conversation_id=conversation_id,
+                        message_preview=(message_preview[:500] if message_preview else None),
+                        plan_summary=(plan.reasoning[:500] if plan and plan.reasoning else None),
+                        plan_id=plan.plan_id if plan else None,
+                        run_id=run_id,
+                        intent=intent,
+                        response_preview=(response_preview[:500] if response_preview else None),
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        cost_usd=cost_usd,
+                        latency_ms=latency_ms,
+                    )
                 )
-                db.add(run)
-
-                step = TaskStep(
-                    step_id=f"step_{ULID()}",
-                    run_id=run_id,
-                    workspace_id=workspace_id,
-                    task_id=f"task_{ULID()}",
-                    plan_task_id=None,
-                    step_type=decision.decision,
-                    status="running",
-                    input_data=decision.model_dump(mode="json"),
-                )
-                db.add(step)
                 await db.commit()
         except Exception:
-            logger.warning("Failed to create lightweight run", exc_info=True)
+            logger.warning("Failed to log interaction", exc_info=True)
             return None
-
-        return run_id
-
-    async def _complete_lightweight_run(
-        self,
-        run_id: str,
-        result: dict,
-        success: bool = True,
-    ) -> None:
-        """Mark a lightweight run and its step as completed or failed."""
-        try:
-            async with self._db_factory() as db:
-                from sqlalchemy import select
-
-                res = await db.execute(select(TaskRun).where(TaskRun.run_id == run_id))
-                run = res.scalar_one_or_none()
-                if not run:
-                    return
-
-                target_status = "completed" if success else "failed"
-                try:
-                    transition_run(run, target_status)
-                except Exception:
-                    run.status = target_status  # fallback for edge-case states
-                if not success:
-                    run.error = {"message": result.get("summary", "unknown error")[:500]}
-
-                step_res = await db.execute(select(TaskStep).where(TaskStep.run_id == run_id))
-                for step in step_res.scalars().all():
-                    try:
-                        transition_step(step, target_status)
-                    except Exception:
-                        step.status = target_status  # fallback for edge-case states
-                    if success:
-                        step.output_data = {
-                            "decision": result.get("decision"),
-                            "summary": str(result.get("summary", ""))[:1000],
-                        }
-
-                await db.commit()
-
-                # D1: Learn from execution outcomes — store preference memories
-                # based on approval decisions and failures for future context
-                await self._learn_from_outcome(run_id, run, result, success)
-        except Exception:
-            logger.debug("Failed to complete lightweight run %s", run_id, exc_info=True)
+        return interaction_id
 
     async def _learn_from_outcome(
         self,
@@ -505,26 +623,78 @@ class JarvisOrchestrator:
         return set(TOOL_INPUT_MODELS.keys())
 
     async def _get_tools_for_agent(self, agent: SubAgent, workspace_id: str = "") -> list[dict]:
-        """Filter tool definitions using registry-driven capability check."""
-        from src.connectors.mcp_bridge import list_mcp_tools
+        """Build tool list from DB registry, filtered by agent capability scope.
 
-        tools = list(self._tools)
-        for mcp_tool in list_mcp_tools(workspace_id=workspace_id):
-            schema = mcp_tool.get("input_schema", {})
-            tools.append(
-                {
-                    "name": mcp_tool["name"],
-                    "description": mcp_tool.get("description", "External MCP tool"),
-                    "input_schema": schema if schema else {"type": "object", "properties": {}},
-                }
-            )
+        Internal tools come from build_tool_definitions() (Pydantic schemas).
+        External tools come from ToolDefinition DB records (seeded + discovered).
+        Session pool metadata enriches schema/description when DB records lack them.
+        """
+        from src.connectors.mcp_bridge import list_mcp_tools
+        from src.services.tool_registry import ToolRegistry
+
+        scope = agent.capability_scope
+        if not scope:
+            return []
+
+        # Start with internal tools, filtered by capability
+        tools: list[dict] = []
+        internal_names: set[str] = set()
 
         async with self._db_factory() as db:
-            return [
-                t
-                for t in tools
-                if await agent.can_use_tool(t["name"], db, workspace_id=workspace_id or None)
-            ]
+            registry = ToolRegistry(db, workspace_id=workspace_id or None)
+
+            for t in self._tools:
+                tool_def = await registry.get_tool(t["name"])
+                if tool_def and tool_def.capability and tool_def.capability in scope:
+                    tools.append(t)
+                    internal_names.add(t["name"])
+
+            # Build schema lookup from session pool (enriches DB records
+            # that lack input_schema — e.g., external seeds before discovery)
+            mcp_schemas: dict[str, dict] = {}
+            for mcp_tool in list_mcp_tools(workspace_id=workspace_id):
+                mcp_schemas[mcp_tool["name"]] = {
+                    "description": mcp_tool.get("description", ""),
+                    "input_schema": mcp_tool.get("input_schema", {}),
+                }
+
+            # Add external tools from DB registry, filtered by capability
+            all_db_tools = await registry.list_tools(enabled_only=True)
+
+            for tool_def in all_db_tools:
+                if tool_def.name in internal_names:
+                    continue
+                if not tool_def.capability or tool_def.capability not in scope:
+                    continue
+
+                # Live MCP schemas take priority for external tools — the
+                # MCP server is the source of truth (e.g., OAuth 2.1 mode
+                # strips user_google_email from schemas at runtime).
+                # Fallback to DB schema, then minimal.
+                schema = None
+                description = tool_def.description or tool_def.name
+
+                if tool_def.name in mcp_schemas:
+                    schema = mcp_schemas[tool_def.name].get("input_schema")
+                    live_desc = mcp_schemas[tool_def.name].get("description")
+                    if live_desc:
+                        description = live_desc
+
+                if not schema:
+                    schema = tool_def.input_schema
+
+                if not schema:
+                    schema = {"type": "object", "properties": {}}
+
+                tools.append(
+                    {
+                        "name": tool_def.name,
+                        "description": description,
+                        "input_schema": schema,
+                    }
+                )
+
+        return tools
 
     def _get_model_for_agent(self, agent: SubAgent) -> str:
         """Get the Claude model ID for an agent's tier."""
@@ -543,21 +713,23 @@ class JarvisOrchestrator:
     ) -> dict:
         """Process a user message through the orchestrator.
 
-        This is the main entry point for user interactions.
-        The orchestrator decides which sub-agents to invoke.
+        Routes through capability-based plan steps:
+        1. Classify intent (Haiku fast path or full Planner)
+        2. Generate PlanOutput with capability steps
+        3. Pre-resolve agent routing and tools for each step
+        4. Execute steps sequentially
+        5. Presenter formats the final response
         """
         if not user_id:
-            return {"error": "user_id is required", "decision": "error"}
+            return {"error": "user_id is required"}
         if not workspace_id:
-            return {"error": "workspace_id is required", "decision": "error"}
+            return {"error": "workspace_id is required"}
         if not message or not message.strip():
-            return {"error": "Empty message", "decision": "ignore"}
+            return {"error": "Empty message"}
 
         trace = self._trace_manager.start_trace("user_message")
-        run_id: str | None = None
 
         try:
-            # Emit command_received event
             await self._emit_runtime_event(
                 "command_received",
                 workspace_id=workspace_id,
@@ -565,8 +737,7 @@ class JarvisOrchestrator:
                 payload={"surface": surface, "message_preview": message[:100]},
             )
 
-            # Load conversation history for multi-turn context
-            history_block = await self._load_conversation_history(conversation_id)
+            history_block = await self._load_conversation_history(conversation_id, user_id=user_id)
 
             # Step 0: Fast intent classification
             intent, confidence, sources = await classify_intent(
@@ -574,110 +745,141 @@ class JarvisOrchestrator:
             )
             use_planner = intent not in FAST_INTENTS or confidence < INTENT_CONFIDENCE_THRESHOLD
 
-            # Bump perception for relevant sources (fire-and-forget)
             if sources:
                 await self._bump_perception_for_sources(sources, user_id, workspace_id)
 
-            # Emit route_selected event
             await self._emit_runtime_event(
                 "route_selected",
                 workspace_id=workspace_id,
                 user_id=user_id,
-                payload={"intent": intent, "confidence": confidence, "use_planner": use_planner},
+                payload={
+                    "intent": intent,
+                    "confidence": confidence,
+                    "use_planner": use_planner,
+                },
             )
+
+            # Step 1: Generate PlanOutput
+            plan: PlanOutput
+            plan_text = ""
 
             if use_planner:
                 planner_message = f"User message: {message}\n\nContext: {json.dumps(context or {})}"
                 if history_block:
                     planner_message = f"{history_block}\n\n{planner_message}"
 
-                plan_result = await self._call_agent(
+                plan_text = await self._call_agent(
                     "planner",
                     message=planner_message,
                     user_id=user_id,
                     trace=trace,
                     workspace_id=workspace_id,
                 )
-                decision = extract_decision(plan_result)
+                plan = extract_plan(plan_text)
             else:
-                decision = intent_to_decision(intent, message)
+                capabilities = await self._get_available_capabilities(workspace_id)
+                plan = intent_to_plan(intent, message, capabilities)
 
-            # Persist Plan record so Governor and Operator can reference it
-            if decision.tasks and not decision.plan_id:
-                decision = await self._persist_plan_record(decision, user_id, workspace_id)
+            # Persist Plan record if multi-step or has write risk
+            if len(plan.steps) > 1 or any(s.risk not in ("none",) for s in plan.steps):
+                import hashlib
 
-            decision_dict = decision.model_dump(mode="json")
-            decision_json = json.dumps(decision_dict)
+                goal_hash = hashlib.sha256((plan.goal or "").encode()).hexdigest()[:16]
+                plan = await self._persist_plan_record(
+                    plan,
+                    user_id,
+                    workspace_id,
+                    idempotency_key=f"user:{goal_hash}",
+                )
 
-            # Create a lightweight TaskRun for tracking
-            run_id = await self._create_lightweight_run(
+            plan_dict = plan.model_dump(mode="json")
+
+            # Log this interaction for auditing
+            ilog_id = await self._log_interaction(
                 user_id=user_id,
                 workspace_id=workspace_id,
-                decision=decision,
                 trace_id=trace.trace_id,
+                message_preview=message[:500],
+                intent=intent,
+                plan=plan,
                 conversation_id=conversation_id,
             )
 
-            # Step 2: Resolve route dynamically from DB
-            result = {
+            result: dict[str, Any] = {
                 "trace_id": trace.trace_id,
-                "run_id": run_id,
-                "decision": decision.decision,
-                "summary": decision.reasoning or plan_result,
+                "run_id": None,
+                "interaction_id": ilog_id,
+                "plan": plan_dict,
+                "summary": plan.reasoning or plan_text,
             }
 
-            # Publish plan event
             await self._publish_event(
                 "plan_generated",
                 user_id,
-                {"decision": decision_dict, "trace_id": trace.trace_id},
+                {"plan": plan_dict, "trace_id": trace.trace_id},
                 trace_id=trace.trace_id,
             )
 
-            # Handle direct decisions (no agent pipeline needed)
-            if decision.decision == "set_goal":
-                goal_result = await self._handle_set_goal(decision, user_id, workspace_id)
-                result["goal"] = goal_result
-            elif decision.decision == "set_instruction":
-                instr_result = await self._handle_set_instruction(decision, user_id, workspace_id)
-                result["instruction"] = instr_result
-            elif decision.decision == "schedule_reminder":
-                reminder_result = await self._handle_schedule_reminder(
-                    decision, user_id, workspace_id
+            # Step 2: Pre-resolve routing and tools for all steps
+            step_routing: list[tuple[PlanStep, str, list[dict]]] = []
+            user_steps: list[PlanStep] = []
+
+            async with self._db_factory() as db:
+                resolver = CapabilityResolver(db, workspace_id)
+                for step in plan.steps:
+                    if step.actor == "user":
+                        user_steps.append(step)
+                        continue
+                    if step.capability.startswith("system."):
+                        step_routing.append((step, "", []))
+                    elif step.capability in ("reason", "respond"):
+                        step_routing.append((step, "presenter", []))
+                    elif step.capability == "perceive":
+                        # Broad read: Perceiver gets ALL its tools, decides
+                        # autonomously which sources to query.
+                        step_routing.append((step, "perceiver", []))
+                    else:
+                        agent_name = await route_step(step.capability, resolver)
+                        tools = await resolver.resolve_for_step(step.capability)
+                        step_routing.append((step, agent_name, tools))
+
+            # Step 3: Execute steps sequentially
+            for step, agent_name, tools in step_routing:
+                if step.capability.startswith("system."):
+                    sys_result = await self._handle_system_capability(
+                        step, plan, user_id, workspace_id
+                    )
+                    result[f"system_{step.capability}"] = sys_result
+                    continue
+
+                if not agent_name:
+                    error_msg = f"No tools available for capability '{step.capability}'"
+                    logger.warning(error_msg)
+                    result[f"error_{step.step_id}"] = error_msg
+                    continue
+
+                agent_message = (
+                    f"Execute this step: {step.description}\n"
+                    f"Goal: {plan.goal}\n"
+                    f"User message: {message}"
                 )
-                result["reminder"] = reminder_result
-            elif decision.decision == "add_to_brief":
-                brief_result = await self._handle_add_to_brief(decision, user_id, workspace_id)
-                result["briefing_item"] = brief_result
-
-            # Resolve agent pipeline from routes
-            pipeline = await self._resolve_pipeline(decision_dict)
-
-            for step in pipeline:
-                agent_name = step.get("agent", "")
-                if not agent_name or agent_name not in self._agents:
-                    continue
-
-                # Check step-level condition
-                step_cond = step.get("condition")
-                if step_cond and not self._check_step_condition(step_cond, decision_dict):
-                    continue
-
-                # Handle special actions
-                action = step.get("action")
-                if action == "execute_plan":
-                    if decision.plan_id:
-                        exec_result = await self._execute_plan_via_graph(
-                            decision.plan_id, user_id, trace
-                        )
-                        result["execution"] = exec_result
-                    continue
-
-                # Format message from template
-                template = step.get("message_template", "Process this: {decision_json}")
-                agent_message = template.format(
-                    decision_json=decision_json, surface=surface, message=message
-                )
+                # Inject prior step results so downstream agents see earlier outputs
+                prior_outputs = {
+                    k: v
+                    for k, v in result.items()
+                    if k not in ("presentation", "user_actions") and v
+                }
+                if prior_outputs:
+                    parts = []
+                    for key, output in prior_outputs.items():
+                        parts.append(f"[{key} output]:\n{str(output)[:3000]}")
+                    agent_message += (
+                        "\n\n--- Prior step results ---\n"
+                        + "\n\n".join(parts)
+                        + "\n--- End of prior step results ---\n"
+                    )
+                if history_block:
+                    agent_message = f"{history_block}\n\n{agent_message}"
 
                 agent_result = await self._call_agent(
                     agent_name,
@@ -685,12 +887,55 @@ class JarvisOrchestrator:
                     user_id=user_id,
                     trace=trace,
                     workspace_id=workspace_id,
+                    tools_override=tools if tools else None,
                 )
                 result[agent_name] = agent_result
 
-            # Step 3: Presenter formats the response (if not already in pipeline)
-            if not any(s.get("agent") == "presenter" for s in pipeline):
-                presenter_msg = f"Format this for the user ({surface}): {decision_json}"
+            # Build user action block from user_steps
+            user_action_block = ""
+            if user_steps:
+                actions = "\n".join(
+                    f"- {s.description}" + (f" ({s.user_context})" if s.user_context else "")
+                    for s in user_steps
+                )
+                user_action_block = f"\n\nUser actions required:\n{actions}"
+                result["user_actions"] = [
+                    {"description": s.description, "context": s.user_context} for s in user_steps
+                ]
+
+            # Step 4: Presenter formats response — always call so user
+            # gets a conversational answer (see streaming path comment).
+            if True:
+                # Collect prior step results so Presenter can reference them
+                prior_results_block = ""
+                step_outputs = {
+                    k: v
+                    for k, v in result.items()
+                    if k not in ("presentation", "user_actions") and v
+                }
+                if step_outputs:
+                    parts = []
+                    for agent_key, output in step_outputs.items():
+                        truncated = str(output)[:3000]
+                        parts.append(f"[{agent_key} output]:\n{truncated}")
+                    prior_results_block = (
+                        "\n\n--- Prior step results (use these to answer the user) ---\n"
+                        + "\n\n".join(parts)
+                        + "\n--- End of prior step results ---\n"
+                    )
+
+                presenter_msg = (
+                    f"Format this for the user ({surface}). "
+                    f"Be conversational and helpful.\n\n"
+                    f"User message: {message}\n"
+                    f"Plan: {json.dumps(plan_dict)}"
+                )
+                if prior_results_block:
+                    presenter_msg += prior_results_block
+                if plan_text:
+                    presenter_msg += f"\nAnalysis: {plan_text[:2000]}"
+                if user_action_block:
+                    presenter_msg += user_action_block
                 if history_block:
                     presenter_msg = f"{history_block}\n\n{presenter_msg}"
                 present_result = await self._call_agent(
@@ -702,39 +947,24 @@ class JarvisOrchestrator:
                 )
                 result["presentation"] = present_result
 
-            # Step 4: Persona learns from this interaction (fire-and-forget)
-            try:
-                await self._call_agent(
-                    "persona",
-                    message=f"Observe this user interaction on {surface}:\n"
-                    f"User said: {message}\n"
-                    f"Decision: {decision.decision}\n"
-                    f"Extract any preference signals.",
-                    user_id=user_id,
-                    trace=trace,
-                    workspace_id=workspace_id,
-                )
-            except Exception:
-                logger.debug("Persona reflection skipped", exc_info=True)
-
-            # Complete the lightweight run
-            await self._complete_lightweight_run(run_id, result, success=True)
             await self._emit_runtime_event(
                 "run_completed",
                 workspace_id=workspace_id,
                 user_id=user_id,
-                run_id=run_id,
+                run_id=None,
                 payload={"trace_id": trace.trace_id},
             )
 
-            # Push surface to workspace for visual decision types
-            await self._push_workspace_surface(
-                decision,
+            # Push surface to workspace
+            surface_id = await self._push_workspace_surface(
+                plan,
                 user_id,
                 workspace_id,
-                run_id,
-                response_text=result.get("presenter", result.get("summary", "")),
+                run_id=result.get("run_id"),
+                response_text=result.get("presentation", result.get("presenter", "")),
             )
+            if surface_id:
+                result["surface_id"] = surface_id
 
             return result
 
@@ -745,15 +975,13 @@ class JarvisOrchestrator:
                 "decision": "error",
                 "summary": f"Error processing message: {e}",
             }
-            if run_id:
-                await self._complete_lightweight_run(run_id, error_result, success=False)
-                await self._emit_runtime_event(
-                    "run_failed",
-                    workspace_id=workspace_id,
-                    user_id=user_id,
-                    run_id=run_id,
-                    payload={"error": str(e)[:200]},
-                )
+            await self._emit_runtime_event(
+                "run_failed",
+                workspace_id=workspace_id,
+                user_id=user_id,
+                run_id=None,
+                payload={"error": str(e)[:200]},
+            )
             return error_result
         finally:
             await self._trace_manager.finish_trace(
@@ -770,74 +998,75 @@ class JarvisOrchestrator:
         context: dict | None = None,
         conversation_id: str | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
-        """Stream events while processing a user message through the orchestrator.
+        """Stream events while processing a user message.
 
-        Yields SSE-compatible dicts with event types:
-          agent_start, thinking, tool_call, tool_result, agent_done,
-          response, error, done
+        Yields SSE-compatible dicts. Uses capability-based plan step routing.
         """
         if not user_id or not workspace_id:
-            yield {"event": "error", "message": "user_id and workspace_id are required"}
+            yield {
+                "event": "error",
+                "message": "user_id and workspace_id are required",
+            }
             return
         if not message or not message.strip():
             yield {"event": "error", "message": "Empty message"}
             return
 
         trace = self._trace_manager.start_trace("user_message")
-        run_id: str | None = None
 
         def _fire_event(event_type: str, **kwargs: Any) -> None:
-            """Schedule a runtime event emission without blocking the SSE generator."""
             self._spawn_background(self._emit_runtime_event(event_type, **kwargs))
 
         try:
             yield {"event": "trace", "trace_id": trace.trace_id}
 
-            # Emit command_received runtime event (fire-and-forget)
             _fire_event(
                 "command_received",
                 workspace_id=workspace_id,
                 user_id=user_id,
-                payload={"surface": surface, "message_preview": message[:100]},
+                payload={
+                    "surface": surface,
+                    "message_preview": message[:100],
+                },
             )
 
-            # Load conversation history for multi-turn context
-            history_block = await self._load_conversation_history(conversation_id)
+            history_block = await self._load_conversation_history(conversation_id, user_id=user_id)
 
-            # Step 0: Fast intent classification (Haiku — <200ms)
+            # Step 0: Fast intent classification
             intent, confidence, sources = await classify_intent(
                 self._client, self._haiku_model, message, history_block
             )
-            yield {"event": "intent", "intent": intent, "confidence": confidence}
+            yield {
+                "event": "intent",
+                "intent": intent,
+                "confidence": confidence,
+            }
 
-            # Bump perception for relevant sources (fire-and-forget)
             if sources:
                 await self._bump_perception_for_sources(sources, user_id, workspace_id)
 
             # Decide routing based on intent AND mode
-            # execute mode: always plan, then auto-execute
-            # plan mode: always plan, but stop before execution
-            # ask mode: use intent classification (current default)
-            if mode == "execute":
-                use_planner = True
-            elif mode == "plan":
+            if mode in ("execute", "plan"):
                 use_planner = True
             else:
                 use_planner = intent not in FAST_INTENTS or confidence < INTENT_CONFIDENCE_THRESHOLD
 
-            # Emit route_selected runtime event (fire-and-forget)
             _fire_event(
                 "route_selected",
                 workspace_id=workspace_id,
                 user_id=user_id,
-                payload={"intent": intent, "confidence": confidence, "use_planner": use_planner},
+                payload={
+                    "intent": intent,
+                    "confidence": confidence,
+                    "use_planner": use_planner,
+                },
             )
 
-            decision: PlannerOutput
+            # Step 1: Generate PlanOutput
+            plan: PlanOutput
             plan_text = ""
 
             if use_planner:
-                # Full Planner path for commands/complex intents
                 planner_message = f"User message: {message}\n\nContext: {json.dumps(context or {})}"
                 if history_block:
                     planner_message = f"{history_block}\n\n{planner_message}"
@@ -853,252 +1082,249 @@ class JarvisOrchestrator:
                     if evt.get("event") == "agent_done":
                         plan_text = evt.get("text", "")
 
-                decision = extract_decision(plan_text)
+                plan = extract_plan(plan_text)
             else:
-                # Fast path — synthesize a lightweight decision from intent
-                decision = intent_to_decision(intent, message)
+                capabilities = await self._get_available_capabilities(workspace_id)
+                plan = intent_to_plan(intent, message, capabilities)
 
             # Apply mode overrides
-            if mode == "execute" and decision.execution_mode != "auto_execute":
-                decision = decision.model_copy(update={"execution_mode": "auto_execute"})
-            elif mode == "plan" and decision.execution_mode != "draft_only":
-                decision = decision.model_copy(update={"execution_mode": "draft_only"})
+            if mode == "plan":
+                plan = plan.model_copy(update={"requires_user_input": True})
 
-            # Persist Plan record so Governor and Operator can reference it
-            if decision.tasks and not decision.plan_id:
-                decision = await self._persist_plan_record(decision, user_id, workspace_id)
+            # Persist Plan record if needed
+            if len(plan.steps) > 1 or any(s.risk not in ("none",) for s in plan.steps):
+                import hashlib
 
-            decision_dict = decision.model_dump(mode="json")
-            decision_json = json.dumps(decision_dict)
+                goal_hash = hashlib.sha256((plan.goal or "").encode()).hexdigest()[:16]
+                plan = await self._persist_plan_record(
+                    plan,
+                    user_id,
+                    workspace_id,
+                    idempotency_key=f"user:{goal_hash}",
+                )
 
-            # Create a lightweight TaskRun for tracking
-            run_id = await self._create_lightweight_run(
+            plan_dict = plan.model_dump(mode="json")
+
+            await self._log_interaction(
                 user_id=user_id,
                 workspace_id=workspace_id,
-                decision=decision,
                 trace_id=trace.trace_id,
+                message_preview=message[:500],
+                intent=intent,
+                plan=plan,
                 conversation_id=conversation_id,
             )
 
+            # Emit plan event (replaces old "decision" event)
             yield {
-                "event": "decision",
-                "decision": decision_dict,
-                "run_id": run_id,
+                "event": "plan",
+                "plan": plan_dict,
+                "run_id": None,
             }
 
-            # Emit plan_created runtime event (fire-and-forget)
             _fire_event(
                 "plan_created",
                 workspace_id=workspace_id,
                 user_id=user_id,
-                run_id=run_id,
-                payload={"decision": decision.decision, "trace_id": trace.trace_id},
+                run_id=None,
+                payload={
+                    "goal": plan.goal,
+                    "trace_id": trace.trace_id,
+                },
             )
 
-            # Handle direct decisions (no agent pipeline needed)
-            if decision.decision == "set_goal":
-                await self._handle_set_goal(decision, user_id, workspace_id)
-            elif decision.decision == "set_instruction":
-                await self._handle_set_instruction(decision, user_id, workspace_id)
-            elif decision.decision == "schedule_reminder":
-                await self._handle_schedule_reminder(decision, user_id, workspace_id)
-            elif decision.decision == "add_to_brief":
-                await self._handle_add_to_brief(decision, user_id, workspace_id)
+            # Step 2: Pre-resolve routing and tools
+            step_routing: list[tuple[PlanStep, str, list[dict]]] = []
+            user_steps: list[PlanStep] = []
 
-            # Step 2: Route based on intent
-            if use_planner:
-                # Planner path: resolve pipeline from DB routes
-                pipeline = await self._resolve_pipeline(decision_dict)
-
-                for step in pipeline:
-                    agent_name = step.get("agent", "")
-                    if not agent_name or agent_name not in self._agents:
+            async with self._db_factory() as db:
+                resolver = CapabilityResolver(db, workspace_id)
+                for step in plan.steps:
+                    if step.actor == "user":
+                        user_steps.append(step)
                         continue
+                    if step.capability.startswith("system."):
+                        step_routing.append((step, "", []))
+                    elif step.capability in ("reason", "respond"):
+                        step_routing.append((step, "presenter", []))
+                    elif step.capability == "perceive":
+                        # Broad read: Perceiver gets ALL its tools, decides
+                        # autonomously which sources to query.
+                        step_routing.append((step, "perceiver", []))
+                    else:
+                        agent_name = await route_step(step.capability, resolver)
+                        tools = await resolver.resolve_for_step(step.capability)
+                        step_routing.append((step, agent_name, tools))
 
-                    step_cond = step.get("condition")
-                    if step_cond and not self._check_step_condition(step_cond, decision_dict):
-                        continue
-
-                    action = step.get("action")
-                    if action == "execute_plan":
-                        # Plan mode (draft_only): skip execution, just present the plan
-                        if decision.execution_mode == "draft_only":
-                            yield {
-                                "event": "plan_ready",
-                                "plan_id": decision.plan_id,
-                                "message": "Plan created. Review and approve to execute.",
-                            }
-                            continue
-                        if decision.plan_id:
-                            yield {
-                                "event": "execution_start",
-                                "plan_id": decision.plan_id,
-                            }
-                            exec_result = await self._execute_plan_via_graph(
-                                decision.plan_id, user_id, trace
-                            )
-                            yield {
-                                "event": "execution_result",
-                                "run_id": exec_result.get("run_id"),
-                                "status": exec_result.get("status"),
-                            }
-                        continue
-
-                    template = step.get("message_template", "Process this: {decision_json}")
-                    agent_message = template.format(
-                        decision_json=decision_json,
-                        surface=surface,
-                        message=message,
-                    )
-
-                    async for evt in self._call_agent_stream(
-                        agent_name,
-                        message=agent_message,
-                        user_id=user_id,
-                        trace=trace,
-                        workspace_id=workspace_id,
-                    ):
-                        yield evt
-
-            elif intent == "simple_question":
-                # Researcher gathers context, then Presenter responds
-                async for evt in self._call_agent_stream(
-                    "researcher",
-                    message=f"Research this question for the user: {message}",
-                    user_id=user_id,
-                    trace=trace,
-                    workspace_id=workspace_id,
-                ):
-                    yield evt
-                    if evt.get("event") == "agent_done":
-                        plan_text = f"Researcher findings:\n{evt.get('text', '')}"
-
-            elif intent == "data_fetch":
-                # Observer reads from external sources (Gmail, Calendar, Slack)
-                observer_text = ""
-                async for evt in self._call_agent_stream(
-                    "observer",
-                    message=(
-                        f"The user wants to check an external source. "
-                        f"Read the relevant data and report what you find.\n\n"
-                        f"User request: {message}"
-                    ),
-                    user_id=user_id,
-                    trace=trace,
-                    workspace_id=workspace_id,
-                ):
-                    yield evt
-                    if evt.get("event") == "agent_done":
-                        observer_text = evt.get("text", "")
-
-                # Feed observer results to presenter context
-                if observer_text:
-                    plan_text = f"Observer findings:\n{observer_text}"
-
-            elif intent == "status_query":
-                # Fetch status data via tools, then let Presenter format
-                pass  # Presenter will handle with context enrichment below
-
-            elif intent == "approval_response":
-                # Governor handles approval directly
-                async for evt in self._call_agent_stream(
-                    "governor",
-                    message=f"The user wants to approve/reject an action: {message}",
-                    user_id=user_id,
-                    trace=trace,
-                    workspace_id=workspace_id,
-                ):
-                    yield evt
-                    if evt.get("event") == "agent_done":
-                        plan_text = f"Governor response:\n{evt.get('text', '')}"
-
-            # Step 3: Presenter formats the response (always)
-            presenter_msg = (
-                f"Respond to the user ({surface}). Be conversational and helpful.\n\n"
-                f"User message: {message}\n"
-                f"Intent: {intent}\n"
-            )
-            if plan_text:
-                presenter_msg += (
-                    f"Planner decision: {decision_json}\nPlanner analysis: {plan_text[:2000]}\n"
-                )
-            if history_block:
-                presenter_msg = f"{history_block}\n\n{presenter_msg}"
-
+            # Step 3: Execute steps with streaming
             presenter_text = ""
-            async for evt in self._call_agent_stream(
-                "presenter",
-                message=presenter_msg,
-                user_id=user_id,
-                trace=trace,
-                workspace_id=workspace_id,
-            ):
-                yield evt
-                if evt.get("event") == "agent_done":
-                    presenter_text = evt.get("text", "")
-                    yield {"event": "response", "text": presenter_text}
+            step_outputs: dict[str, str] = {}
+            for step, agent_name, tools in step_routing:
+                if step.capability.startswith("system."):
+                    await self._handle_system_capability(step, plan, user_id, workspace_id)
+                    continue
 
-            # Persona learning — only for meaningful interactions
-            if intent in ("command", "complex"):
-                try:
-                    await self._call_agent(
-                        "persona",
-                        message=f"Observe this user interaction on {surface}:\n"
-                        f"User said: {message}\n"
-                        f"Decision: {decision.decision}\n"
-                        f"Extract any preference signals.",
-                        user_id=user_id,
-                        trace=trace,
-                        workspace_id=workspace_id,
+                if not agent_name:
+                    error_msg = f"No tools available for capability '{step.capability}'"
+                    logger.warning(error_msg)
+                    yield {"event": "step_error", "step_id": step.step_id, "error": error_msg}
+                    continue
+
+                # Plan mode: skip risky execution, present the plan
+                if mode == "plan" and step.risk in ("medium", "high"):
+                    yield {
+                        "event": "plan_ready",
+                        "plan_id": plan.plan_id,
+                        "message": ("Plan created. Review and approve to execute."),
+                    }
+                    continue
+
+                agent_message = (
+                    f"Execute this step: {step.description}\n"
+                    f"Goal: {plan.goal}\n"
+                    f"User message: {message}"
+                )
+                # Inject prior step results so downstream agents see earlier outputs
+                if step_outputs:
+                    parts = []
+                    for key, output in step_outputs.items():
+                        parts.append(f"[{key} output]:\n{str(output)[:3000]}")
+                    agent_message += (
+                        "\n\n--- Prior step results ---\n"
+                        + "\n\n".join(parts)
+                        + "\n--- End of prior step results ---\n"
                     )
-                except Exception:
-                    pass
+                if history_block:
+                    agent_message = f"{history_block}\n\n{agent_message}"
 
-            # Complete the lightweight run
-            if run_id:
-                await self._complete_lightweight_run(
-                    run_id,
-                    {"decision": decision.decision, "summary": presenter_text},
-                    success=True,
-                )
-                _fire_event(
-                    "run_completed",
-                    workspace_id=workspace_id,
+                async for evt in self._call_agent_stream(
+                    agent_name,
+                    message=agent_message,
                     user_id=user_id,
-                    run_id=run_id,
-                    payload={"trace_id": trace.trace_id},
-                )
+                    trace=trace,
+                    workspace_id=workspace_id,
+                    tools_override=tools if tools else None,
+                ):
+                    yield evt
+                    if evt.get("event") == "agent_done":
+                        done_text = evt.get("text", "")
+                        # Capture all step outputs for downstream agents
+                        if done_text:
+                            step_outputs[agent_name] = done_text
+                        # Capture text from respond/reason steps for surface preview
+                        if step.capability in ("reason", "respond"):
+                            presenter_text = done_text
 
-            # Push surface to workspace via Redis + persist to DB.
-            # The chat page receives it via WebSocket; workspace page via REST polling.
-            # SSE delivery removed to avoid duplicates (WS is the canonical path).
-            self._spawn_background(
-                self._push_workspace_surface(
-                    decision,
+            # Build user action block from user_steps
+            user_action_block = ""
+            if user_steps:
+                actions = "\n".join(
+                    f"- {s.description}" + (f" ({s.user_context})" if s.user_context else "")
+                    for s in user_steps
+                )
+                user_action_block = f"\n\nUser actions required:\n{actions}"
+                yield {
+                    "event": "user_actions",
+                    "steps": [
+                        {"description": s.description, "context": s.user_context}
+                        for s in user_steps
+                    ],
+                }
+
+            # Step 4: Presenter formatting — always call the Presenter so
+            # the user receives a conversational response.  system.respond
+            # steps are no-ops in _handle_system_capability, and
+            # reason/respond steps execute with wrong context, so relying on
+            # them to produce the user-facing answer leaves the chat empty.
+            if True:
+                # Collect prior step results so Presenter can reference them
+                prior_results_block = ""
+                if step_outputs:
+                    parts = []
+                    for agent_key, output in step_outputs.items():
+                        truncated = str(output)[:3000]
+                        parts.append(f"[{agent_key} output]:\n{truncated}")
+                    prior_results_block = (
+                        "\n\n--- Prior step results (use these to answer the user) ---\n"
+                        + "\n\n".join(parts)
+                        + "\n--- End of prior step results ---\n"
+                    )
+
+                presenter_msg = (
+                    f"Respond to the user ({surface}). "
+                    f"Be conversational and helpful.\n\n"
+                    f"User message: {message}\n"
+                    f"Intent: {intent}\n"
+                )
+                if prior_results_block:
+                    presenter_msg += prior_results_block
+                if plan_text:
+                    presenter_msg += (
+                        f"Plan: {json.dumps(plan_dict)}\nAnalysis: {plan_text[:2000]}\n"
+                    )
+                if user_action_block:
+                    presenter_msg += user_action_block
+                if history_block:
+                    presenter_msg = f"{history_block}\n\n{presenter_msg}"
+
+                async for evt in self._call_agent_stream(
+                    "presenter",
+                    message=presenter_msg,
+                    user_id=user_id,
+                    trace=trace,
+                    workspace_id=workspace_id,
+                ):
+                    yield evt
+                    if evt.get("event") == "agent_done":
+                        presenter_text = evt.get("text", "")
+                        yield {
+                            "event": "response",
+                            "text": presenter_text,
+                        }
+
+            _fire_event(
+                "run_completed",
+                workspace_id=workspace_id,
+                user_id=user_id,
+                run_id=None,
+                payload={"trace_id": trace.trace_id},
+            )
+
+            # Push workspace surface before done to avoid race with SSE
+            surface_id = None
+            try:
+                surface_id = await self._push_workspace_surface(
+                    plan,
                     user_id,
                     workspace_id,
-                    run_id,
+                    run_id=None,
                     response_text=presenter_text,
                 )
-            )
+            except Exception:
+                logger.warning("Surface push failed", exc_info=True)
 
-            yield {"event": "done", "trace_id": trace.trace_id, "run_id": run_id}
+            yield {
+                "event": "done",
+                "trace_id": trace.trace_id,
+                "run_id": None,
+                **({"surface_id": surface_id} if surface_id else {}),
+            }
 
         except Exception as e:
             logger.error("process_message_stream failed: %s", e, exc_info=True)
-            if run_id:
-                await self._complete_lightweight_run(run_id, {"summary": str(e)}, success=False)
-                _fire_event(
-                    "run_failed",
-                    workspace_id=workspace_id,
-                    user_id=user_id,
-                    run_id=run_id,
-                    payload={"error": str(e)[:200]},
-                )
+            _fire_event(
+                "run_failed",
+                workspace_id=workspace_id,
+                user_id=user_id,
+                run_id=None,
+                payload={"error": str(e)[:200]},
+            )
             yield {"event": "error", "message": str(e)}
         finally:
             await self._trace_manager.finish_trace(
-                trace.trace_id, user_id=user_id, workspace_id=workspace_id
+                trace.trace_id,
+                user_id=user_id,
+                workspace_id=workspace_id,
             )
 
     async def _call_agent_stream(
@@ -1109,6 +1335,8 @@ class JarvisOrchestrator:
         trace=None,
         max_tool_rounds: int = 10,
         workspace_id: str = "",
+        capability_summary: str = "",
+        tools_override: list[dict] | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Call a sub-agent with streaming, yielding SSE-compatible dicts."""
         agent = self._agents.get(agent_name)
@@ -1117,13 +1345,32 @@ class JarvisOrchestrator:
             return
 
         model = self._get_model_for_agent(agent)
-        tools = self._apply_cache_control_to_tools(
-            await self._get_tools_for_agent(agent, workspace_id=workspace_id)
-        )
+
+        if tools_override is not None:
+            tools = self._apply_cache_control_to_tools(tools_override)
+        else:
+            tools = self._apply_cache_control_to_tools(
+                await self._get_tools_for_agent(agent, workspace_id=workspace_id)
+            )
+
+        # Auto-generate capability summary for planner if not provided
+        if agent_name == "planner" and not capability_summary:
+            try:
+                from src.orchestrator.capability_summary import (
+                    generate_capability_summary,
+                )
+
+                async with self._db_factory() as db:
+                    capability_summary = await generate_capability_summary(db, workspace_id)
+            except Exception:
+                logger.debug("Failed to generate capability summary", exc_info=True)
+
         context_block = await self._assemble_context(
             agent_name, message, user_id=user_id, workspace_id=workspace_id
         )
-        system_blocks = self._build_system_prompt(agent, context_block)
+        system_blocks = self._build_system_prompt(
+            agent, context_block, capability_summary=capability_summary
+        )
 
         async for evt in agent_loop(
             client=self._client,
@@ -1216,7 +1463,7 @@ class JarvisOrchestrator:
                 workspace_id=workspace_id,
             )
             # Queue any actionable plans from the synthesis
-            decision = await self._queue_perception_plan(
+            plan = await self._queue_perception_plan(
                 planner_result,
                 "synthesis",
                 user_id,
@@ -1225,7 +1472,7 @@ class JarvisOrchestrator:
             )
             return {
                 "status": "completed",
-                "decision": decision.decision if decision else "none",
+                "plan_goal": plan.goal if plan else None,
             }
         except Exception as e:
             logger.warning("Cross-source synthesis failed: %s", e, exc_info=True)
@@ -1274,17 +1521,35 @@ class JarvisOrchestrator:
                     "perception_no_new_events",
                     extra={"source": source},
                 )
+                # Save cursor even on empty polls so incremental sync
+                # advances (e.g. Gmail historyId, Calendar syncToken).
+                await self._update_cursor(source, user_id, workspace_id, new_cursor, cursor_type)
                 return {"status": "completed", "source": source, "events": 0}
 
             # Ingest raw events into normalized_events table
             event_summaries = await self._ingest_raw_events(raw_events, user_id, workspace_id)
 
-            # Update the observation cursor
+            # Update the observation cursor immediately after ingestion so that
+            # downstream failures (Librarian, Planner) don't cause re-polling
+            # the same events on the next cycle.
             await self._update_cursor(source, user_id, workspace_id, new_cursor, cursor_type)
+
+            # Fetch full thread context for reply emails
+            thread_contexts = await _fetch_thread_contexts(raw_events, user_id, workspace_id)
 
             observer_summary = f"Polled {source}: {len(raw_events)} new event(s).\n" + "\n".join(
                 f"- {s}" for s in event_summaries[:20]
             )
+            if thread_contexts:
+                observer_summary += "\n\n--- Thread Context (full conversation) ---"
+                for tid, ctx in thread_contexts.items():
+                    messages = ctx.get("messages", [])
+                    if messages:
+                        observer_summary += f"\nThread {tid} ({len(messages)} messages):"
+                        for msg in messages[-5:]:
+                            snippet = msg.get("snippet", msg.get("body", ""))[:200]
+                            sender = msg.get("from", "unknown")
+                            observer_summary += f"\n  [{sender}]: {snippet}"
 
             # Step 2: Librarian extracts entities and memories
             librarian_result = await self._call_agent(
@@ -1296,13 +1561,154 @@ class JarvisOrchestrator:
                 workspace_id=workspace_id,
             )
 
+            # Enrich with correlation context for thread-aware planning
+            correlation_context = ""
+            if event_summaries:
+                try:
+                    from src.services.event_correlator import EventCorrelator
+
+                    async with self._db_factory() as db:
+                        correlator = EventCorrelator(db)
+                        seen_entities: set[str] = set()
+                        max_entities = 5
+                        for raw_evt in raw_events:
+                            if len(seen_entities) >= max_entities:
+                                break
+                            eid = getattr(raw_evt, "entity_id", None)
+                            if eid and eid not in seen_entities:
+                                seen_entities.add(eid)
+                                thread = await correlator.detect_thread(
+                                    user_id, eid, workspace_id=workspace_id
+                                )
+                                if thread and thread["event_count"] > 1:
+                                    correlation_context += (
+                                        f"\n[Thread detected] entity={thread['entity_id']} "
+                                        f"has {thread['event_count']} events "
+                                        f"(first: {thread['first_at']}, "
+                                        f"last: {thread['last_at']})"
+                                    )
+                except Exception:
+                    logger.warning("Correlation enrichment failed", exc_info=True)
+
+            # Step 2b: Assess relevance of signals against user context
+            try:
+                from src.services.memory_service import MemoryService
+                from src.services.relevance_assessor import (
+                    PerceptionSignal,
+                    UserContext,
+                    assess_relevance,
+                )
+
+                signal = PerceptionSignal(
+                    source=source,
+                    event_type=f"perception_{source}",
+                    summary=observer_summary[:500],
+                )
+
+                # Build user context from goals + preferences
+                user_goals = []
+                user_prefs = []
+                try:
+                    async with self._db_factory() as db:
+                        mem_svc = MemoryService(db, self._settings)
+                        # get_user_preferences(user_id, category, max_results, workspace_id)
+                        prefs = await mem_svc.get_user_preferences(
+                            user_id, workspace_id=workspace_id
+                        )
+                        for p in prefs[:10]:
+                            if getattr(p, "memory_type", "") == "goal":
+                                user_goals.append(p.fact_text)
+                            else:
+                                user_prefs.append(p.fact_text)
+                except Exception:
+                    logger.debug("Failed to load user context for relevance", exc_info=True)
+
+                user_context = UserContext(
+                    goals=user_goals,
+                    preferences=user_prefs,
+                )
+
+                # Fetch engagement context for the assessor
+                engagement_context = ""
+                try:
+                    from src.services.engagement_service import EngagementService
+
+                    async with self._db_factory() as db:
+                        eng_svc = EngagementService(db, workspace_id)
+                        if await eng_svc.is_suppressed(signal.source, signal.event_type):
+                            logger.debug(
+                                "Signal suppressed: %s/%s",
+                                signal.source,
+                                signal.event_type,
+                            )
+                            return {"status": "suppressed", "source": source}
+                        engagement_context = await eng_svc.get_engagement_context()
+                except Exception:
+                    logger.debug("Failed to load engagement context", exc_info=True)
+
+                assessment = await assess_relevance(
+                    signal,
+                    user_context,
+                    self._client,
+                    engagement_context=engagement_context,
+                )
+
+                # Route by notification tier
+                if assessment.notification_tier == "briefing":
+                    try:
+                        async with self._db_factory() as db:
+                            mem_svc = MemoryService(db, self._settings)
+                            await mem_svc.store_briefing_memory(
+                                user_id=user_id,
+                                workspace_id=workspace_id,
+                                text=f"{observer_summary[:300]}\n\nWhy: {assessment.reasoning}",
+                                source=f"perception:{source}",
+                                relevance_score=assessment.relevance_score,
+                                signal_source=source,
+                            )
+                            await db.commit()
+                    except Exception:
+                        logger.warning("Failed to store briefing memory", exc_info=True)
+
+                elif assessment.notification_tier == "push":
+                    try:
+                        await self._push_insight_surface(signal, assessment, user_id, workspace_id)
+                    except Exception:
+                        logger.warning(
+                            "Failed to push insight surface for signal",
+                            exc_info=True,
+                        )
+
+                else:
+                    # silent tier: in world model from Librarian, record as ignored
+                    try:
+                        async with self._db_factory() as db:
+                            from src.services.engagement_service import EngagementService
+
+                            eng_svc = EngagementService(db, workspace_id)
+                            await eng_svc.record_engagement(
+                                signal.source, signal.event_type, "ignored"
+                            )
+                            await db.commit()
+                    except Exception:
+                        logger.debug("Failed to record silent tier engagement", exc_info=True)
+
+            except Exception:
+                logger.warning("Relevance assessment failed, continuing without", exc_info=True)
+
             # Step 3: Planner evaluates if any action is needed
-            planner_result = await self._call_agent(
-                "planner",
-                message=f"Evaluate these observations from {source}. "
+            planner_message = (
+                f"Evaluate these observations from {source}. "
                 f"Create plans for anything important.\n"
                 f"Optionally include a perception_policy JSON block to control "
-                f"how soon {source} should next be checked:\n{observer_summary}",
+                f"how soon {source} should next be checked:\n{observer_summary}"
+            )
+            if correlation_context:
+                planner_message += f"\n\n--- Correlation Context ---{correlation_context}"
+
+            planner_result = await self._call_agent(
+                "planner",
+                message=planner_message,
                 user_id=user_id,
                 trace=trace,
                 workspace_id=workspace_id,
@@ -1313,8 +1719,8 @@ class JarvisOrchestrator:
                 planner_result, source, user_id, workspace_id, len(raw_events)
             )
 
-            # Step 5: Extract decision and queue execution if actionable
-            perception_decision = await self._queue_perception_plan(
+            # Step 5: Extract plan and queue execution if actionable
+            perception_plan = await self._queue_perception_plan(
                 planner_result,
                 source,
                 user_id,
@@ -1330,7 +1736,7 @@ class JarvisOrchestrator:
                     "source": source,
                     "trace_id": trace.trace_id,
                     "event_count": len(raw_events),
-                    "decision": perception_decision.decision if perception_decision else None,
+                    "plan_goal": perception_plan.goal if perception_plan else None,
                 },
                 trace_id=trace.trace_id,
             )
@@ -1342,8 +1748,8 @@ class JarvisOrchestrator:
                 "events": len(raw_events),
                 "librarian": librarian_result,
                 "planner": planner_result,
-                "decision": perception_decision.decision if perception_decision else None,
-                "plan_id": perception_decision.plan_id if perception_decision else None,
+                "plan_goal": perception_plan.goal if perception_plan else None,
+                "plan_id": perception_plan.plan_id if perception_plan else None,
             }
 
         except Exception as e:
@@ -1425,10 +1831,18 @@ class JarvisOrchestrator:
                 cursor = row[0]
 
         try:
-            events, new_cursor = await connector.poll(
-                user_id, cursor, {"access_token": access_token}
+            events, new_cursor = await asyncio.wait_for(
+                connector.poll(user_id, cursor, {"access_token": access_token}),
+                timeout=30,
             )
             return events, new_cursor, None, cursor_type
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Connector %s poll timed out after 30s for user %s",
+                source,
+                user_id,
+            )
+            return [], cursor, "Poll timed out after 30s", cursor_type
         except Exception as e:
             from src.integrations.mcp_errors import classify_error
 
@@ -1459,6 +1873,8 @@ class JarvisOrchestrator:
                 dead_letter=dead_letter,
                 event_bus=event_bus,
                 notifier=self._services.notifier,
+                embedding_service=self._services.extras.get("embedding_service"),
+                vector_store=self._services.vector_store,
             )
             for raw in raw_events:
                 try:
@@ -1473,6 +1889,7 @@ class JarvisOrchestrator:
                         summary += f" (event_id={event_id})"
                     summaries.append(summary)
                 except Exception as e:
+                    await db.rollback()
                     logger.warning(
                         "event_ingest_failed",
                         extra={
@@ -1591,10 +2008,15 @@ class JarvisOrchestrator:
                         workspace_id=workspace_id,
                     )
                 await self._push_workspace_surface(
-                    PlannerOutput(
-                        decision="add_to_brief",
+                    PlanOutput(
                         goal="Daily Briefing",
                         reasoning=str(result)[:200],
+                        steps=[
+                            PlanStep(
+                                description="Briefing update",
+                                capability="system.add_to_brief",
+                            )
+                        ],
                     ),
                     user_id=user_id,
                     workspace_id=workspace_id,
@@ -1681,39 +2103,26 @@ class JarvisOrchestrator:
 
     async def _push_workspace_surface(
         self,
-        decision: PlannerOutput,
+        plan: "PlanOutput",
         user_id: str,
         workspace_id: str,
         run_id: str | None = None,
         response_text: str = "",
-    ) -> None:
+    ) -> str | None:
         """Push a typed surface to the workspace via Redis Pub/Sub.
 
-        Uses ``WorkspaceSurfacePush`` to ensure the payload matches the
-        A2UISurface shape expected by the frontend WebSocket hook.
-        Only pushes for decision types that have visual representation.
+        Derives surface kind from plan step capabilities.
+        Only pushes for plans with visual value beyond the chat response.
+        Returns the generated surface_id on success, None otherwise.
         """
-        from src.orchestrator.contracts import WorkspaceSurfaceMetadata, WorkspaceSurfacePush
+        from datetime import datetime, timedelta, timezone
 
-        surface_kind_map: dict[str, tuple[str, str]] = {
-            "create_task": ("plan", "New Plan"),
-            "draft_reply": ("recommendation", "Draft Reply"),
-            "recommend": ("recommendation", "Recommendation"),
-            "summarize": ("summary", "Summary"),
-            "research": ("summary", "Research Results"),
-            "read_source": ("summary", "Source Summary"),
-            "observe": ("summary", "Observation"),
-            "add_to_brief": ("briefing", "Briefing Update"),
-            "set_goal": ("summary", "Goal Set"),
-            "set_instruction": ("summary", "Instruction Set"),
-            "schedule_reminder": ("alert", "Reminder Scheduled"),
-            "answer_directly": ("summary", "Answer"),
-            "search_memory": ("summary", "Knowledge Search"),
-            "remember": ("summary", "Memory Updated"),
-        }
-        mapping = surface_kind_map.get(decision.decision)
+        from src.orchestrator.contracts import WorkspaceSurfacePush
+        from src.ui.renderer import build_detail_config
+
+        mapping = _derive_surface_kind(plan)
         if not mapping:
-            return
+            return None
 
         kind, default_title = mapping
 
@@ -1724,30 +2133,32 @@ class JarvisOrchestrator:
 
             from ulid import ULID
 
-            children = _build_surface_children(decision, kind, default_title, response_text)
+            surface_id = f"surf_{ULID()}"
+            preview = _build_surface_preview_from_plan(plan, kind, default_title, response_text)
+            detail_config = build_detail_config(kind, surface_id)
 
             surface = WorkspaceSurfacePush(
-                id=f"surf_{ULID()}",
-                children=[c.model_dump(mode="json") for c in children],
-                metadata=WorkspaceSurfaceMetadata(
-                    kind=kind,
-                    title=(decision.goal[:80] if decision.goal else default_title),
-                    decision=decision.decision,
-                    reasoning=(decision.reasoning[:200] if decision.reasoning else ""),
-                    priority=decision.priority,
-                    source_run_id=run_id,
-                    response_preview=(response_text[:300] if response_text else ""),
-                ),
+                id=surface_id,
+                kind=kind,
+                preview=preview.model_dump(mode="json"),
+                detail_config=(detail_config.model_dump(mode="json") if detail_config else None),
+                decision=None,
+                source_run_id=run_id,
+                response_preview=(response_text[:300] if response_text else None),
+                created_at=datetime.now(timezone.utc).isoformat(),
             )
 
             channel = f"jarvis:a2ui:{user_id}"
-            ws_msg = json.dumps({"type": "surface", "surface": surface.model_dump(mode="json")})
+            ws_msg = json.dumps(
+                {
+                    "type": "surface",
+                    "surface": surface.model_dump(mode="json"),
+                }
+            )
             await event_bus.publish_to_channel(channel, ws_msg)
 
             # Persist to ui_surfaces table so the workspace survives page refresh
             try:
-                from datetime import datetime, timedelta, timezone
-
                 from src.models.ui_state import UISurface
 
                 async with self._db_factory() as db:
@@ -1758,17 +2169,128 @@ class JarvisOrchestrator:
                             workspace_id=workspace_id,
                             surface_type=kind,
                             payload=surface.model_dump(mode="json"),
+                            preview=preview.model_dump(mode="json"),
+                            detail_config=(
+                                detail_config.model_dump(mode="json") if detail_config else None
+                            ),
                             expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
                         )
                     )
                     await db.commit()
             except Exception:
-                logger.debug("Failed to persist workspace surface to DB", exc_info=True)
+                logger.debug(
+                    "Failed to persist workspace surface to DB",
+                    exc_info=True,
+                )
+            return surface_id
         except Exception:
             logger.warning("Failed to push workspace surface", exc_info=True)
+            return None
+
+    async def _push_insight_surface(
+        self,
+        signal: "PerceptionSignal",
+        assessment: "RelevanceAssessment",
+        user_id: str,
+        workspace_id: str,
+    ) -> None:
+        """Push a proactive insight surface to the workspace.
+
+        Called when the relevance assessor routes a signal to the push tier.
+        Creates a WorkspaceSurfacePush with kind='proactive_insight' and
+        persists to ui_surfaces for workspace reconnection.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        from ulid import ULID
+
+        from src.orchestrator.contracts import (
+            InsightSurfaceData,
+            SuggestedActionRef,
+            WorkspaceSurfacePush,
+        )
+        from src.ui.contracts import SurfacePreview
+
+        try:
+            event_bus = await self._ensure_event_bus()
+            if not event_bus:
+                return
+
+            surface_id = f"surf_{ULID()}"
+
+            suggested_actions = [
+                SuggestedActionRef(
+                    description=a.description,
+                    capability=a.capability,
+                    action_input=a.action_input,
+                )
+                for a in assessment.suggested_actions
+            ]
+
+            insight_data = InsightSurfaceData(
+                signal_source=signal.source,
+                signal_category=signal.event_type,
+                signal_summary=signal.summary,
+                relevance_score=assessment.relevance_score,
+                relevance_reasoning=assessment.reasoning,
+                related_goals=assessment.relates_to_goals,
+                suggested_actions=suggested_actions,
+            )
+
+            preview = SurfacePreview(
+                title=signal.summary[:120],
+                subtitle=assessment.reasoning[:200] if assessment.reasoning else None,
+                status="proposal",
+                priority="high" if assessment.urgency == "immediate" else "medium",
+                tags=[signal.source],
+            )
+
+            surface = WorkspaceSurfacePush(
+                id=surface_id,
+                kind="proactive_insight",
+                preview=preview.model_dump(mode="json"),
+                detail_config=None,
+                created_at=datetime.now(timezone.utc).isoformat(),
+            )
+
+            # Include insight data in the payload for the frontend
+            surface_payload = surface.model_dump(mode="json")
+            surface_payload["insight_data"] = insight_data.model_dump(mode="json")
+
+            channel = f"jarvis:a2ui:{user_id}"
+            ws_msg = json.dumps({"type": "surface", "surface": surface_payload})
+            await event_bus.publish_to_channel(channel, ws_msg)
+
+            # Persist to ui_surfaces
+            try:
+                from src.models.ui_state import UISurface
+
+                async with self._db_factory() as db:
+                    db.add(
+                        UISurface(
+                            surface_id=surface_id,
+                            user_id=user_id,
+                            workspace_id=workspace_id,
+                            surface_type="proactive_insight",
+                            payload=surface_payload,
+                            preview=preview.model_dump(mode="json"),
+                            detail_config=None,
+                            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+                        )
+                    )
+                    await db.commit()
+            except Exception:
+                logger.debug("Failed to persist insight surface to DB", exc_info=True)
+
+        except Exception:
+            logger.warning("Failed to push insight surface", exc_info=True)
 
     async def _load_conversation_history(
-        self, conversation_id: str | None, max_messages: int = 20, max_chars: int = 8000
+        self,
+        conversation_id: str | None,
+        max_messages: int = 20,
+        max_chars: int = 8000,
+        user_id: str = "",
     ) -> str:
         """Load recent conversation history from DB for multi-turn context.
 
@@ -1821,7 +2343,9 @@ class JarvisOrchestrator:
             if total > max_chars and len(lines) > 5:
                 recent = lines[-5:]
                 older = lines[:-5]
-                summary = await self._summarize_history(older)
+                summary = await self._summarize_history(
+                    older, conversation_id=conversation_id, user_id=user_id
+                )
                 lines = [f"[Earlier conversation summary]: {summary}"] + recent
 
             # Final trim to budget
@@ -1845,7 +2369,9 @@ class JarvisOrchestrator:
             logger.debug("Failed to load conversation history", exc_info=True)
             return ""
 
-    async def _summarize_history(self, lines: list[str]) -> str:
+    async def _summarize_history(
+        self, lines: list[str], conversation_id: str | None = None, user_id: str = ""
+    ) -> str:
         """Summarize older conversation messages using Haiku (cheap, fast)."""
         try:
             if self._settings.use_bedrock:
@@ -1870,7 +2396,42 @@ class JarvisOrchestrator:
                 ],
                 messages=[{"role": "user", "content": text}],
             )
-            return "".join(b.text for b in response.content if b.type == "text")
+            summary = "".join(b.text for b in response.content if b.type == "text")
+
+            # Embed conversation summary into Qdrant for semantic search
+            if summary and conversation_id:
+                try:
+                    from datetime import datetime, timezone
+
+                    from src.services.embedding_service import EmbeddingService
+                    from src.services.vector_store import VectorStore
+
+                    if self._settings.qdrant_url:
+                        vs = VectorStore(self._settings)
+                        es = EmbeddingService(self._settings)
+                        embedding = await es.embed_text(summary)
+                        if embedding:
+                            await vs.upsert(
+                                collection="conversations",
+                                id=conversation_id,
+                                vector=embedding,
+                                payload={
+                                    "conversation_id": conversation_id,
+                                    "workspace_id": "",
+                                    "message_count": len(lines),
+                                    "summary": summary[:500],
+                                    "created_at": datetime.now(timezone.utc).isoformat(),
+                                },
+                                user_id=user_id,
+                            )
+                except Exception:
+                    logger.debug(
+                        "Conversation embedding failed for %s",
+                        conversation_id,
+                        exc_info=True,
+                    )
+
+            return summary
         except Exception:
             logger.debug("History summarization failed", exc_info=True)
             # Fallback: just truncate
@@ -1954,26 +2515,6 @@ class JarvisOrchestrator:
         except Exception:
             logger.debug("Failed to apply perception policy", exc_info=True)
 
-    # Decisions from perception that should trigger execution or inline handling
-    PERCEPTION_ACTIONABLE_DECISIONS = {
-        "create_task",
-        "draft_reply",
-        "research",
-        "watcher_create",
-        "schedule_reminder",
-        "set_goal",
-        "set_instruction",
-        "add_to_brief",
-    }
-
-    # Subset handled inline (fast, no pipeline needed)
-    _PERCEPTION_INLINE_DECISIONS = {
-        "schedule_reminder",
-        "set_goal",
-        "set_instruction",
-        "add_to_brief",
-    }
-
     async def _queue_perception_plan(
         self,
         planner_result: str,
@@ -1981,83 +2522,91 @@ class JarvisOrchestrator:
         user_id: str,
         workspace_id: str,
         trace_id: str,
-    ) -> PlannerOutput | None:
-        """Extract a structured decision from the Planner's perception response
+    ) -> PlanOutput | None:
+        """Extract a structured plan from the Planner's perception response
         and queue actionable plans for background execution.
 
-        Lightweight decisions (set_goal, schedule_reminder, etc.) are handled
-        inline.  Heavier decisions with tasks (create_task, draft_reply) are
-        persisted as Plan + background TaskRun so the scheduler's
-        _tick_background_tasks() picks them up on the next 30s tick.
-
-        Returns the extracted PlannerOutput, or None if no action was needed.
+        System capability steps are handled inline. Steps with write
+        capabilities are persisted as Plan + background TaskRun.
         """
         import hashlib
 
-        decision = extract_decision(planner_result)
+        plan = extract_plan(planner_result)
 
-        if decision.decision not in self.PERCEPTION_ACTIONABLE_DECISIONS:
+        # Check if any steps are actionable
+        has_system_caps = any(
+            s.capability.startswith("system.") for s in plan.steps if s.actor == "jarvis"
+        )
+        has_write_steps = any(s.risk not in ("none",) for s in plan.steps if s.actor == "jarvis")
+        has_tool_steps = any(
+            not s.capability.startswith("system.")
+            and s.capability not in ("reason", "respond", "none")
+            for s in plan.steps
+            if s.actor == "jarvis"
+        )
+
+        if not has_system_caps and not has_write_steps and not has_tool_steps:
             logger.debug(
-                "Perception decision '%s' from %s — no action needed",
-                decision.decision,
+                "Perception plan from %s — no actionable steps",
                 source,
             )
-            return decision
+            return plan
 
-        # Handle lightweight decisions inline (fast, no pipeline)
-        if decision.decision in self._PERCEPTION_INLINE_DECISIONS:
-            try:
-                if decision.decision == "set_goal":
-                    await self._handle_set_goal(decision, user_id, workspace_id)
-                elif decision.decision == "set_instruction":
-                    await self._handle_set_instruction(decision, user_id, workspace_id)
-                elif decision.decision == "schedule_reminder":
-                    await self._handle_schedule_reminder(decision, user_id, workspace_id)
-                elif decision.decision == "add_to_brief":
-                    await self._handle_add_to_brief(decision, user_id, workspace_id)
-                logger.info(
-                    "Perception inline handler: %s from %s",
-                    decision.decision,
-                    source,
-                )
-            except Exception:
-                logger.warning(
-                    "Perception inline handler failed: %s",
-                    decision.decision,
-                    exc_info=True,
-                )
-            return decision
+        # Handle system capability steps inline
+        inline_caps = {
+            "system.set_goal",
+            "system.set_instruction",
+            "system.schedule_reminder",
+            "system.add_to_brief",
+        }
+        for step in plan.steps:
+            if step.capability in inline_caps:
+                try:
+                    await self._handle_system_capability(step, plan, user_id, workspace_id)
+                    logger.info(
+                        "Perception inline handler: %s from %s",
+                        step.capability,
+                        source,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Perception inline handler failed: %s",
+                        step.capability,
+                        exc_info=True,
+                    )
 
-        # For decisions with tasks, persist plan and queue for background execution
-        if not decision.tasks:
-            logger.debug(
-                "Perception decision '%s' from %s has no tasks — skipping",
-                decision.decision,
-                source,
-            )
-            return decision
+        # For steps requiring tool execution, persist and queue
+        tool_steps = [
+            s
+            for s in plan.steps
+            if s.actor == "jarvis"
+            and not s.capability.startswith("system.")
+            and s.capability not in ("reason", "respond", "none")
+        ]
+        if not tool_steps:
+            return plan
 
-        # Compute idempotency key to prevent duplicate plans from re-observed events
-        goal_hash = hashlib.sha256((decision.goal or "").encode()).hexdigest()[:16]
-        idempotency_key = f"perception:{source}:{decision.decision}:{goal_hash}"
+        # Compute idempotency key
+        goal_hash = hashlib.sha256((plan.goal or "").encode()).hexdigest()[:16]
+        idempotency_key = f"perception:{source}:{goal_hash}"
 
         # Persist Plan + PlanTasks
-        decision = await self._persist_plan_record(
-            decision,
+        plan = await self._persist_plan_record(
+            plan,
             user_id,
             workspace_id,
             trigger_type="perception",
             idempotency_key=idempotency_key,
         )
 
-        if not decision.plan_id:
+        if not plan.plan_id:
             logger.debug(
                 "Plan not persisted (idempotent skip or error) for %s",
                 source,
             )
-            return decision
+            return plan
 
-        # Create a background TaskRun with steps for the scheduler to execute
+        # Create a background TaskRun for the scheduler
         try:
             async with self._db_factory() as db:
                 from src.services.graph_executor import create_graph_executor
@@ -2068,7 +2617,7 @@ class JarvisOrchestrator:
                     workspace_id=workspace_id,
                 )
                 run = await executor.create_run(
-                    plan_id=decision.plan_id,
+                    plan_id=plan.plan_id,
                     user_id=user_id,
                     workspace_id=workspace_id,
                     source="background",
@@ -2076,20 +2625,19 @@ class JarvisOrchestrator:
                 await db.commit()
 
                 logger.info(
-                    "Perception queued plan %s → run %s (%d tasks) from %s",
-                    decision.plan_id,
+                    "Perception queued plan %s → run %s from %s",
+                    plan.plan_id,
                     run.run_id,
-                    len(decision.tasks),
                     source,
                 )
         except Exception:
             logger.warning(
                 "Failed to create background run for perception plan %s",
-                decision.plan_id,
+                plan.plan_id,
                 exc_info=True,
             )
 
-        return decision
+        return plan
 
     async def _bump_perception_for_sources(
         self, sources: list[str], user_id: str, workspace_id: str
@@ -2133,21 +2681,27 @@ class JarvisOrchestrator:
             logger.debug("Failed to parse perception_policy from planner", exc_info=True)
             return None
 
-    def _build_system_prompt(self, agent: SubAgent, context: str = "") -> list[dict]:
+    def _build_system_prompt(
+        self, agent: SubAgent, context: str = "", capability_summary: str = ""
+    ) -> list[dict]:
         """Build system prompt with cache_control for prompt caching.
 
-        Uses structured system blocks so the static soul + role prompt is cached
-        across calls (5-min TTL), saving ~90% on re-reads of the system prompt.
+        For the Planner, injects the runtime capability summary into
+        PLANNER_PROMPT_V2 (replacing the {capability_summary} placeholder).
+        Other agents get JARVIS_SOUL_CORE + their role prompt unchanged.
         """
-        # Only the Planner sees the decision framework; other agents just get the core soul
         soul = JARVIS_SOUL_CORE
+
+        prompt = agent.prompt
         if agent.name == "planner":
-            soul += "\n" + JARVIS_DECISION_FRAMEWORK
+            prompt = prompt.format(
+                capability_summary=capability_summary or "No capabilities connected yet."
+            )
 
         blocks = [
             {
                 "type": "text",
-                "text": f"{soul}\n\n--- YOUR ROLE ---\n{agent.prompt}",
+                "text": f"{soul}\n\n--- YOUR ROLE ---\n{prompt}",
                 "cache_control": {"type": "ephemeral"},
             },
         ]
@@ -2163,52 +2717,69 @@ class JarvisOrchestrator:
         tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral"}}
         return tools
 
-    async def _handle_set_goal(self, decision, user_id: str, workspace_id: str) -> dict:
+    async def _handle_set_goal(
+        self,
+        goal_text: str,
+        reasoning: str,
+        priority: str,
+        user_id: str,
+        workspace_id: str,
+    ) -> dict:
         """Store a goal as a memory via MemoryService."""
         memory_svc = self._services.memory_service
         if not memory_svc:
             return {"status": "error", "error": "Memory service unavailable"}
 
-        title = decision.goal or decision.reasoning or "Untitled goal"
+        title = goal_text or reasoning or "Untitled goal"
         memory_id = await memory_svc.store_goal_memory(
             user_id=user_id,
             workspace_id=workspace_id,
             title=title,
-            priority=decision.priority,
+            priority=priority,
         )
         logger.info("Goal stored as memory %s: %s", memory_id, title)
         return {"status": "created", "memory_id": memory_id, "title": title}
 
-    async def _handle_set_instruction(self, decision, user_id: str, workspace_id: str) -> dict:
+    async def _handle_set_instruction(
+        self,
+        instruction_text: str,
+        reasoning: str,
+        instruction: dict,
+        user_id: str,
+        workspace_id: str,
+    ) -> dict:
         """Handle set_instruction: create trigger/schedule/preference memory."""
-        spec = decision.instruction
-        if not spec:
+        if not instruction:
             return {"status": "error", "error": "No instruction spec provided"}
 
         memory_svc = self._services.memory_service
         if not memory_svc:
             return {"status": "error", "error": "Memory service unavailable"}
 
+        inst_text = instruction.get("instruction_text", instruction_text)
+        inst_type = instruction.get("instruction_type", "preference")
+
         # Store as a preference memory via public API
         memory_id = await memory_svc.store_instruction_memory(
             user_id=user_id,
             workspace_id=workspace_id,
-            instruction_text=spec.instruction_text,
-            instruction_type=spec.instruction_type,
+            instruction_text=inst_text,
+            instruction_type=inst_type,
         )
 
         result: dict = {
             "status": "created",
             "memory_id": memory_id,
-            "instruction_type": spec.instruction_type,
-            "text": spec.instruction_text,
+            "instruction_type": inst_type,
+            "text": inst_text,
         }
 
-        # Create trigger if applicable
-        if spec.instruction_type == "trigger" and spec.trigger_conditions:
-            try:
-                from ulid import ULID
+        trigger_conditions = instruction.get("trigger_conditions")
+        schedule_config = instruction.get("schedule_config")
 
+        # Create trigger if applicable
+        if inst_type == "trigger" and trigger_conditions:
+            try:
                 from src.models.triggers import Trigger
 
                 async with self._db_factory() as db:
@@ -2217,8 +2788,8 @@ class JarvisOrchestrator:
                         trigger_id=trigger_id,
                         user_id=user_id,
                         workspace_id=workspace_id,
-                        name=spec.instruction_text[:100],
-                        conditions=spec.trigger_conditions,
+                        name=inst_text[:100],
+                        conditions=trigger_conditions,
                         action_type="notify",
                         action_config={},
                         enabled=True,
@@ -2231,10 +2802,8 @@ class JarvisOrchestrator:
                 logger.warning("Failed to create trigger: %s", e)
 
         # Create schedule if applicable
-        if spec.instruction_type == "schedule" and spec.schedule_config:
+        if inst_type == "schedule" and schedule_config:
             try:
-                from ulid import ULID
-
                 from src.models.schedules import Schedule
 
                 async with self._db_factory() as db:
@@ -2243,11 +2812,11 @@ class JarvisOrchestrator:
                         schedule_id=schedule_id,
                         user_id=user_id,
                         workspace_id=workspace_id,
-                        name=spec.instruction_text[:100],
-                        schedule_type=spec.schedule_config.get("type", "recurring"),
-                        cron_expr=spec.schedule_config.get("cron_expr"),
-                        action_type=spec.schedule_config.get("action_type", "custom_agent_task"),
-                        action_config=spec.schedule_config.get("action_config", {}),
+                        name=inst_text[:100],
+                        schedule_type=schedule_config.get("type", "recurring"),
+                        cron_expr=schedule_config.get("cron_expr"),
+                        action_type=schedule_config.get("action_type", "custom_agent_task"),
+                        action_config=schedule_config.get("action_config", {}),
                         enabled=True,
                         source="user",
                         priority="medium",
@@ -2258,18 +2827,25 @@ class JarvisOrchestrator:
             except Exception as e:
                 logger.warning("Failed to create schedule: %s", e)
 
-        logger.info("Instruction stored: %s (%s)", spec.instruction_text, spec.instruction_type)
+        logger.info("Instruction stored: %s (%s)", inst_text, inst_type)
         return result
 
-    async def _handle_schedule_reminder(self, decision, user_id: str, workspace_id: str) -> dict:
+    async def _handle_schedule_reminder(
+        self,
+        reminder_text: str,
+        reasoning: str,
+        tasks: list[dict],
+        user_id: str,
+        workspace_id: str,
+    ) -> dict:
         """Create a one-shot schedule for a reminder."""
         from src.models.schedules import Schedule
 
-        title = decision.goal or decision.reasoning or "Reminder"
+        title = reminder_text or reasoning or "Reminder"
         # Extract timing from tasks if available
-        schedule_config = {}
-        if decision.tasks:
-            schedule_config = decision.tasks[0].input_data or {}
+        schedule_config: dict = {}
+        if tasks:
+            schedule_config = tasks[0].get("input_data") or {}
 
         try:
             async with self._db_factory() as db:
@@ -2288,7 +2864,7 @@ class JarvisOrchestrator:
                     },
                     enabled=True,
                     source="user",
-                    priority=decision.priority,
+                    priority="medium",
                 )
                 db.add(schedule)
                 await db.commit()
@@ -2299,13 +2875,13 @@ class JarvisOrchestrator:
             logger.warning("Failed to create reminder schedule: %s", e)
             return {"status": "error", "error": str(e)}
 
-    async def _handle_add_to_brief(self, decision, user_id: str, workspace_id: str) -> dict:
+    async def _handle_add_to_brief(self, text: str, user_id: str, workspace_id: str) -> dict:
         """Store a briefing item as a memory so the next briefing includes it."""
         memory_svc = self._services.memory_service
         if not memory_svc:
             return {"status": "error", "error": "Memory service unavailable"}
 
-        text = decision.goal or decision.reasoning or "Briefing item"
+        text = text or "Briefing item"
         try:
             memory_id = await memory_svc.store_briefing_memory(
                 user_id=user_id,
@@ -2318,6 +2894,73 @@ class JarvisOrchestrator:
             logger.warning("Failed to store briefing item: %s", e)
             return {"status": "error", "error": str(e)}
 
+    async def _handle_system_capability(
+        self,
+        step: PlanStep,
+        plan: PlanOutput,
+        user_id: str,
+        workspace_id: str,
+    ) -> dict:
+        """Route system.* capability steps to direct handlers."""
+        cap = step.capability
+
+        if cap in ("system.respond", "system.acknowledge"):
+            return {}
+
+        known_system_caps = {
+            "system.set_goal",
+            "system.set_instruction",
+            "system.schedule_reminder",
+            "system.add_to_brief",
+        }
+        if cap not in known_system_caps:
+            logger.warning("Unknown system capability: %s", cap)
+            return {}
+
+        goal_text = step.description or plan.goal
+        reasoning = plan.reasoning
+
+        # Execute the system capability
+        result: dict = {}
+        if cap == "system.set_goal":
+            result = await self._handle_set_goal(
+                goal_text, reasoning, plan.priority, user_id, workspace_id
+            )
+        elif cap == "system.set_instruction":
+            instruction = step.input.get("instruction", {})
+            result = await self._handle_set_instruction(
+                goal_text, reasoning, instruction, user_id, workspace_id
+            )
+        elif cap == "system.schedule_reminder":
+            tasks = step.input.get("tasks", [])
+            result = await self._handle_schedule_reminder(
+                goal_text, reasoning, tasks, user_id, workspace_id
+            )
+        elif cap == "system.add_to_brief":
+            result = await self._handle_add_to_brief(goal_text, user_id, workspace_id)
+
+        # Audit: record as completed PlanTask
+        if plan.plan_id:
+            try:
+                from src.models.plans import PlanTask
+
+                async with self._db_factory() as db:
+                    db.add(
+                        PlanTask(
+                            task_id=f"ptask_{ULID()}",
+                            plan_id=plan.plan_id,
+                            workspace_id=workspace_id,
+                            task_type=cap,
+                            input_data=step.input or {"description": step.description},
+                            status="completed",
+                        )
+                    )
+                    await db.commit()
+            except Exception:
+                logger.debug("Failed to audit system capability step", exc_info=True)
+
+        return result
+
     async def _call_agent(
         self,
         agent_name: str,
@@ -2326,6 +2969,8 @@ class JarvisOrchestrator:
         trace=None,
         max_tool_rounds: int = 10,
         workspace_id: str = "",
+        capability_summary: str = "",
+        tools_override: list[dict] | None = None,
     ) -> str:
         """Call a sub-agent (non-streaming). Returns final text response."""
         agent = self._agents.get(agent_name)
@@ -2333,15 +2978,35 @@ class JarvisOrchestrator:
             raise ValueError(f"Unknown agent: {agent_name}")
 
         model = self._get_model_for_agent(agent)
-        tools = self._apply_cache_control_to_tools(
-            await self._get_tools_for_agent(agent, workspace_id=workspace_id)
-        )
+
+        if tools_override is not None:
+            tools = self._apply_cache_control_to_tools(tools_override)
+        else:
+            tools = self._apply_cache_control_to_tools(
+                await self._get_tools_for_agent(agent, workspace_id=workspace_id)
+            )
+
+        # Auto-generate capability summary for planner if not provided
+        if agent_name == "planner" and not capability_summary:
+            try:
+                from src.orchestrator.capability_summary import (
+                    generate_capability_summary,
+                )
+
+                async with self._db_factory() as db:
+                    capability_summary = await generate_capability_summary(db, workspace_id)
+            except Exception:
+                logger.debug("Failed to generate capability summary", exc_info=True)
+
         context_block = await self._assemble_context(
             agent_name, message, user_id=user_id, workspace_id=workspace_id
         )
-        system_blocks = self._build_system_prompt(agent, context_block)
+        system_blocks = self._build_system_prompt(
+            agent, context_block, capability_summary=capability_summary
+        )
 
         text = ""
+        error = None
         async for evt in agent_loop(
             client=self._client,
             agent=agent,
@@ -2374,7 +3039,15 @@ class JarvisOrchestrator:
                         "trace_id": trace.trace_id if trace else None,
                     },
                 )
+            elif isinstance(evt, LoopError):
+                error = evt.message
+                logger.warning(
+                    "agent_call_failed",
+                    extra={"agent": agent_name, "error": error},
+                )
 
+        if error and not text:
+            return f"[Agent error: {error}]"
         return text
 
     async def _call_composite_tool(
@@ -2420,12 +3093,15 @@ class JarvisOrchestrator:
 
         # Map flat name to namespaced name (server-specific prefix)
         namespaced = f"{server_prefix}_{tool_name}"
+        logger.info("[mcp:internal] calling %s (ns: %s)", tool_name, namespaced)
         result = await self._internal_client.call_tool(namespaced, tool_input)
 
         # Extract result from CallToolResult
         if result.is_error:
             error_text = result.data if hasattr(result, "data") else str(result)
+            logger.warning("[mcp:internal] %s ERROR: %s", tool_name, str(error_text)[:200])
             return {"status": "error", "error": error_text}
+        logger.info("[mcp:internal] %s OK", tool_name)
 
         # Parse structured content if available
         if hasattr(result, "structured_content") and result.structured_content:
@@ -2451,29 +3127,38 @@ class JarvisOrchestrator:
             tool = await registry.get_tool(tool_name)
 
         if not tool:
+            logger.warning("[mcp] tool not found in registry: %s", tool_name)
             return {"error": f"Unknown tool: {tool_name}"}
         if not tool.enabled:
+            logger.warning("[mcp] tool disabled: %s", tool_name)
             return {"error": f"Tool '{tool_name}' is disabled", "blocked": True}
 
         # _special server returns input as-is (report_governor_verdict)
         if tool.backend == "internal_mcp" and tool.server == "_special":
             return tool_input
 
-        # Inject workspace_id so tools always have it
-        if workspace_id and "workspace_id" not in tool_input:
-            tool_input = {**tool_input, "workspace_id": workspace_id}
-
+        logger.info(
+            "[mcp] dispatch %s via %s/%s",
+            tool_name,
+            tool.backend,
+            tool.server or "default",
+        )
         await self._publish_event("tool.started", user_id, {"tool": tool_name})
 
         try:
             match tool.backend:
                 case "internal_mcp":
+                    # Internal tools receive workspace_id in input
+                    if workspace_id and "workspace_id" not in tool_input:
+                        tool_input = {**tool_input, "workspace_id": workspace_id}
                     result = await self._call_internal_tool(
                         tool_name,
                         {**tool_input, "user_id": user_id},
                         server_prefix=tool.server,
                     )
                 case "external_mcp":
+                    # External MCP servers do not accept workspace_id in tool input —
+                    # it is passed as a keyword arg for session routing only.
                     from src.connectors.mcp_bridge import call_mcp_tool
 
                     result = await call_mcp_tool(
@@ -2483,6 +3168,9 @@ class JarvisOrchestrator:
                         workspace_id=workspace_id,
                     )
                 case "composite":
+                    # Composite tools are Jarvis-internal, receive workspace_id
+                    if workspace_id and "workspace_id" not in tool_input:
+                        tool_input = {**tool_input, "workspace_id": workspace_id}
                     result = await self._call_composite_tool(
                         tool_name,
                         tool_input,
@@ -2495,135 +3183,10 @@ class JarvisOrchestrator:
             await self._publish_event("tool.completed", user_id, {"tool": tool_name})
             return result
         except Exception as e:
-            logger.warning("Tool %s failed: %s", tool_name, e)
+            logger.warning("[mcp] %s FAILED: %s", tool_name, e)
             await self._publish_event(
                 "tool.failed",
                 user_id,
                 {"tool": tool_name, "error": str(e)[:200]},
             )
             return {"error": f"Tool execution failed for {tool_name}: {e}"}
-
-    async def _execute_plan_via_graph(self, plan_id: str, user_id: str, trace=None) -> dict:
-        """Bridge: create a run from a plan and execute it via GraphExecutor.
-
-        This is the critical connection between the orchestrator (agent routing)
-        and the GraphExecutor (DAG execution). Without this bridge, plans generated
-        by the Planner would never actually execute.
-        """
-        from src.services.context_builder import ContextBuilder
-        from src.services.graph_executor import GraphExecutor
-        from src.services.tool_registry import ToolRegistry
-
-        try:
-            async with self._db_factory() as db:
-                svc = self._services
-                tool_registry = ToolRegistry(db)
-
-                context_builder = ContextBuilder(
-                    world_model=svc.world_model,
-                    memory_service=svc.memory_service,
-                    artifact_store=svc.artifact_store,
-                )
-
-                async def get_credentials(connector_type: str) -> dict:
-                    if svc.oauth_manager:
-                        provider_map = {
-                            "gmail": "google",
-                            "calendar": "google",
-                            "drive": "google",
-                            "github": "github",
-                            "slack": "slack",
-                            "linear": "linear",
-                            "notion": "notion",
-                            "jira": "jira",
-                        }
-                        oauth_provider = provider_map.get(connector_type, connector_type)
-                        token = await svc.oauth_manager.get_valid_token(user_id, oauth_provider)
-                        if token:
-                            return {"access_token": token}
-                    return {}
-
-                executor = GraphExecutor(
-                    settings=self._settings,
-                    db=db,
-                    event_bus=self._event_bus,
-                    notifier=svc.notifier,
-                    tool_registry=tool_registry,
-                    context_builder=context_builder,
-                    connector_credentials_fn=get_credentials,
-                    memory_service=svc.memory_service,
-                )
-
-                run = await executor.create_run(plan_id, user_id)
-
-                await self._publish_event(
-                    "execution_started",
-                    user_id,
-                    {"plan_id": plan_id, "run_id": run.run_id},
-                    trace_id=trace.trace_id if trace else None,
-                )
-
-                completed_run = await executor.execute_run(
-                    run.run_id,
-                    trace_id=trace.trace_id if trace else None,
-                )
-
-                await self._publish_event(
-                    "execution_completed",
-                    user_id,
-                    {
-                        "plan_id": plan_id,
-                        "run_id": run.run_id,
-                        "status": completed_run.status,
-                    },
-                    trace_id=trace.trace_id if trace else None,
-                )
-
-                return {
-                    "run_id": run.run_id,
-                    "status": completed_run.status,
-                    "error": completed_run.error,
-                }
-        except Exception as e:
-            logger.error("Plan execution via graph failed: %s", e, exc_info=True)
-            return {"status": "error", "error": str(e)}
-
-    async def _resolve_pipeline(self, decision: dict) -> list[dict]:
-        """Resolve a planner decision to an agent pipeline via RouteResolver."""
-        try:
-            async with self._db_factory() as db:
-                resolver = RouteResolver(db)
-                return await resolver.resolve(decision)
-        except Exception:
-            logger.warning("Route resolution failed, using empty pipeline", exc_info=True)
-            return []
-
-    @staticmethod
-    def _check_step_condition(condition: dict, decision: dict) -> bool:
-        """Check if a pipeline step's condition is satisfied.
-
-        Supported condition types (mirrors RouteResolver._matches_conditions):
-          has_key:        value exists in decision dict
-          not_has_key:    value does NOT exist in decision dict
-          has_truthy_key: value exists AND is truthy (not None/empty/False)
-          field:<name>:   decision[name] == value
-          <key>: <value>: decision[key] == value (direct equality)
-        """
-        for key, value in condition.items():
-            if key == "has_key":
-                if value not in decision:
-                    return False
-            elif key == "not_has_key":
-                if value in decision:
-                    return False
-            elif key == "has_truthy_key":
-                if not decision.get(value):
-                    return False
-            elif key.startswith("field:"):
-                field_name = key[len("field:") :]
-                if decision.get(field_name) != value:
-                    return False
-            else:
-                if decision.get(key) != value:
-                    return False
-        return True

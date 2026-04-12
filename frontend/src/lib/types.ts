@@ -132,84 +132,6 @@ export interface ApprovalDetail {
   trace_id: string | null;
 }
 
-// ── Tasks ───────────────────────────────────────────────────────
-
-export interface Task {
-  task_id: string;
-  goal: string;
-  priority: string;
-  status: string;
-  decision: string;
-  created_at: string | null;
-}
-
-export interface TaskStep {
-  task_id: string;
-  task_type: string;
-  status: string;
-  result_summary: string | null;
-}
-
-export interface TaskDetail {
-  task_id: string;
-  goal: string;
-  priority: string;
-  status: string;
-  decision: string;
-  risk_level: string;
-  reasoning_summary: string | null;
-  steps: TaskStep[];
-  execution_status: string | null;
-  created_at: string | null;
-}
-
-// ── Schedules ───────────────────────────────────────────────────
-
-export interface Schedule {
-  schedule_id: string;
-  user_id: string;
-  name: string;
-  description: string | null;
-  schedule_type: string;
-  cron_expr: string | null;
-  run_at: string | null;
-  action_type: string;
-  action_config: Record<string, unknown> | null;
-  enabled: boolean;
-  last_run_at: string | null;
-  next_run_at: string | null;
-  run_count: number;
-  consecutive_failures: number;
-  last_error: string | null;
-  source: string;
-  priority: string;
-  created_at: string | null;
-  updated_at: string | null;
-}
-
-export interface ScheduleCreateInput {
-  name: string;
-  description?: string;
-  schedule_type: string;
-  cron_expr?: string;
-  run_at?: string;
-  action_type: string;
-  action_config?: Record<string, unknown>;
-  enabled?: boolean;
-  priority?: string;
-}
-
-export interface ScheduleUpdateInput {
-  name?: string;
-  description?: string;
-  cron_expr?: string;
-  run_at?: string;
-  action_type?: string;
-  action_config?: Record<string, unknown>;
-  enabled?: boolean;
-  priority?: string;
-}
-
 // ── Briefings ───────────────────────────────────────────────────
 
 export interface Briefing {
@@ -289,56 +211,6 @@ export interface HeartbeatResult {
   timestamp: string;
 }
 
-// ── Standalone Tasks ────────────────────────────────────────────
-
-export interface StandaloneTask {
-  task_id: string;
-  title: string;
-  description: string | null;
-  task_type: string;
-  source: string;
-  priority: string;
-  status: string;
-  goal_id: string | null;
-  parent_task_id: string | null;
-  due_at: string | null;
-  assigned_agent: string | null;
-  created_at: string | null;
-}
-
-export interface StandaloneTaskCreateInput {
-  title: string;
-  description?: string;
-  task_type?: string;
-  priority?: string;
-  goal_id?: string;
-  parent_task_id?: string;
-  due_at?: string;
-}
-
-// ── Goals ───────────────────────────────────────────────────────
-
-export interface Goal {
-  goal_id: string;
-  title: string;
-  description: string | null;
-  status: string;
-  progress: number;
-  priority: string;
-  target_date: string | null;
-  success_criteria_json: Record<string, unknown> | null;
-  task_count: number;
-  completed_task_count: number;
-  created_at: string | null;
-}
-
-export interface GoalCreateInput {
-  title: string;
-  description?: string;
-  priority?: string;
-  target_date?: string;
-}
-
 // ── Notifications ───────────────────────────────────────────────
 
 export interface Notification {
@@ -351,15 +223,6 @@ export interface Notification {
   sent_at: string | null;
   read_at: string | null;
   created_at: string | null;
-}
-
-// ── Workflows ───────────────────────────────────────────────────
-
-export interface Workflow {
-  name: string;
-  description: string;
-  step_count: number;
-  tags: string[];
 }
 
 // ── Runs ────────────────────────────────────────────────────────
@@ -548,4 +411,86 @@ export interface MeetingPrep {
   related_threads: Record<string, unknown>[];
   action_items: Record<string, unknown>[];
   risks: string[];
+}
+
+// ── Trust ─────────────────────────────────────────────────────
+
+export interface GraduationProgress {
+  next_level: string | null;
+  current: number;
+  target: number;
+  percentage: number;
+  blocked_by_rejections: boolean;
+}
+
+export interface TrustRiskLevel {
+  risk_level: string;
+  trust_level: string;
+  approved_count: number;
+  rejected_count: number;
+  graduation_progress: GraduationProgress;
+}
+
+export interface TrustDashboardEntry {
+  capability: string;
+  family: string;
+  trust_level: string;
+  ceiling: string;
+  risk_levels: TrustRiskLevel[];
+}
+
+export interface TrustCapabilityDetailRisk {
+  risk_level: string;
+  trust_level: string;
+  approved_count: number;
+  rejected_count: number;
+  modified_count: number;
+  last_decision_at: string | null;
+  cooldown_until: string | null;
+  graduation_progress: GraduationProgress;
+}
+
+export interface TrustCapabilityDetail {
+  capability: string;
+  family: string;
+  ceiling: string;
+  risk_levels: TrustCapabilityDetailRisk[];
+}
+
+export interface TimePolicyRule {
+  start_hour: number;
+  end_hour: number;
+  max_level: string;
+  days?: number[] | null;
+}
+
+// ── Plan Output ──────────────────────────────────────────────────
+
+export interface PlanStep {
+  step_id: string;
+  description: string;
+  actor: "jarvis" | "user";
+  capability: string;
+  input: Record<string, unknown>;
+  depends_on: string[];
+  risk: "none" | "low" | "medium" | "high";
+  user_context: string | null;
+}
+
+export interface CapabilityGap {
+  description: string;
+  resolution: string;
+  workaround: string | null;
+}
+
+export interface PlanOutput {
+  goal: string;
+  reasoning: string;
+  achievable: "full" | "partial" | "not_achievable";
+  priority: "low" | "medium" | "high" | "critical";
+  steps: PlanStep[];
+  success_criteria: string;
+  capability_gaps: CapabilityGap[];
+  plan_id: string | null;
+  requires_user_input: boolean;
 }

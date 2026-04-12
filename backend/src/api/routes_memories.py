@@ -250,4 +250,17 @@ async def delete_memory(
 
     memory.status = "expired"
     await db.commit()
+
+    # Cascade: remove from Qdrant so the memory is no longer searchable
+    try:
+        from src.config.settings import get_settings
+        from src.services.vector_store import VectorStore
+
+        settings = get_settings()
+        if settings.qdrant_url:
+            vector_store = VectorStore(settings)
+            await vector_store.delete("memories", memory_id)
+    except Exception:
+        logger.warning("Qdrant delete failed for memory %s", memory_id, exc_info=True)
+
     return {"status": "archived", "memory_id": memory_id}

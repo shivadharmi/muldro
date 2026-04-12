@@ -6,9 +6,9 @@ Extracted from jarvis.py to reduce orchestrator size.
 
 import json
 import logging
-from typing import Any
 
-from src.orchestrator.contracts import PlannerOutput
+from src.llm_utils import parse_llm_json
+from src.orchestrator.contracts import PlanOutput, PlanStep
 
 logger = logging.getLogger(__name__)
 
@@ -20,14 +20,20 @@ Output ONLY a JSON object, nothing else.
 </role>
 
 <intents>
-- greeting: Greetings, pleasantries, "hey", "hi", "good morning", "thanks"
+- greeting: Greetings, pleasantries, "hey", "hi", "good morning"
 - chitchat: Casual conversation, "how are you", jokes, small talk
-- simple_question: Direct factual question answerable from context/memory
+- simple_question: Factual question answerable from Jarvis's stored memory or context
+  (contacts, prior conversations, stored facts)
 - data_fetch: Read from external source (check email, show calendar, read slack)
 - status_query: Asking about goals, plans, briefing, pending items, tasks
 - approval_response: Approving/rejecting a pending action
 - command: Actionable WRITE request needing planning (send email, schedule, create)
 - complex: Multi-step, ambiguous, or high-stakes requests needing deep planning
+- direct_answer: Question answerable from general world knowledge, no Jarvis memory or
+  external service needed ("what's the capital of France", "explain async/await")
+- single_read: One read from a specific external service (latest email, today's calendar)
+- memory_operation: Store, recall, or update knowledge ("remember this", "what do you know about X")
+- acknowledgment: Confirming, thanking, or acknowledging ("ok", "got it", "thanks", "sounds good")
 </intents>
 
 <sources>
@@ -44,7 +50,10 @@ Only include sources the user's intent clearly relates to. Omit if none apply.
 "Hey Jarvis" -> {"intent": "greeting", "confidence": 0.99}
 "What's John's email?" -> {"intent": "simple_question", "confidence": 0.9}
 "Check my gmail" -> {"intent":"data_fetch","confidence":0.95,"sources":["gmail"]}
-"Show my latest emails" -> {"intent":"data_fetch","confidence":0.95,"sources":["gmail"]}
+"What's the capital of France?" -> {"intent": "direct_answer", "confidence": 0.95}
+"Show my latest emails" -> {"intent": "single_read", "confidence": 0.95, "sources": ["gmail"]}
+"Remember that John prefers morning meetings" -> {"intent": "memory_operation", "confidence": 0.9}
+"Ok got it, thanks" -> {"intent": "acknowledgment", "confidence": 0.95}
 "What's on my calendar today" -> {"intent":"data_fetch","confidence":0.95,"sources":["calendar"]}
 "Any new Slack messages?" -> {"intent":"data_fetch","confidence":0.9,"sources":["slack"]}
 "Did Sarah reply?" -> {"intent":"data_fetch","confidence":0.85,"sources":["gmail","slack"]}
@@ -67,6 +76,10 @@ FAST_INTENTS = {
     "data_fetch",
     "status_query",
     "approval_response",
+    "direct_answer",
+    "single_read",
+    "memory_operation",
+    "acknowledgment",
 }
 
 # Confidence threshold — below this, fall back to Planner
@@ -81,7 +94,140 @@ _VALID_INTENTS = {
     "approval_response",
     "command",
     "complex",
+    "direct_answer",
+    "single_read",
+    "memory_operation",
+    "acknowledgment",
 }
+
+
+def extract_plan(response_text: str) -> PlanOutput:
+    """Parse Planner agent response into validated PlanOutput.
+
+    Uses ``parse_llm_json`` to handle code fences and whitespace,
+    then falls back to brace-matching for JSON embedded in prose.
+    Validates against the ``PlanOutput`` Pydantic model.
+    Falls back to a minimal single-step respond plan on parse failure.
+    """
+    # First try: code fences + raw JSON via parse_llm_json
+    try:
+        raw = parse_llm_json(response_text)
+        if isinstance(raw, dict):
+            return PlanOutput.model_validate(raw)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Second try: brace-matching for JSON embedded in prose — scan all top-level blocks
+    start = 0
+    while start < len(response_text):
+        idx = response_text.find("{", start)
+        if idx == -1:
+            break
+        depth = 0
+        end = -1
+        for i, ch in enumerate(response_text[idx:], idx):
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
+        if end == -1:
+            break  # unclosed brace — stop scanning
+        try:
+            raw = json.loads(response_text[idx : end + 1])
+            if isinstance(raw, dict):
+                return PlanOutput.model_validate(raw)
+        except (json.JSONDecodeError, ValueError):
+            pass
+        start = end + 1
+
+    logger.warning(
+        "Planner response did not contain valid JSON — falling back to minimal respond plan. "
+        "Response preview: %.300s",
+        response_text,
+    )
+    return PlanOutput(
+        goal=response_text[:200],
+        steps=[PlanStep(step_id="s1", description="Respond to user", capability="respond")],
+        achievable="partial",
+    )
+
+
+def intent_to_plan(intent: str, message: str, capabilities: list[str]) -> PlanOutput:
+    """Generate a lightweight PlanOutput from fast intent classification.
+
+    Maps each fast intent to a minimal plan with the appropriate
+    capability step.
+    """
+    goal = message[:200]
+
+    if intent in ("greeting", "chitchat", "acknowledgment"):
+        return PlanOutput(
+            goal=goal,
+            steps=[PlanStep(step_id="s1", description="Respond to user", capability="respond")],
+            priority="low",
+        )
+
+    if intent == "direct_answer":
+        return PlanOutput(
+            goal=goal,
+            steps=[PlanStep(step_id="s1", description="Answer from context", capability="reason")],
+        )
+
+    if intent == "simple_question":
+        return PlanOutput(
+            goal=goal,
+            steps=[PlanStep(step_id="s1", description="Answer question", capability="reason")],
+        )
+
+    if intent in ("single_read", "data_fetch"):
+        # Use "perceive" as a broad read capability — the Perceiver agent
+        # receives ALL its read tools and autonomously decides which to use.
+        # This avoids restricting to a single capability family when the
+        # user asks about multiple sources (e.g. "check email and calendar").
+        return PlanOutput(
+            goal=goal,
+            steps=[PlanStep(step_id="s1", description=goal, capability="perceive", risk="none")],
+        )
+
+    if intent == "status_query":
+        return PlanOutput(
+            goal=goal,
+            steps=[
+                PlanStep(
+                    step_id="s1",
+                    description="Retrieve status",
+                    capability="knowledge.search",
+                ),
+            ],
+        )
+
+    if intent == "memory_operation":
+        return PlanOutput(
+            goal=goal,
+            steps=[
+                PlanStep(
+                    step_id="s1",
+                    description="Store or recall knowledge",
+                    capability="knowledge.search",
+                ),
+            ],
+        )
+
+    if intent == "approval_response":
+        return PlanOutput(
+            goal=goal,
+            steps=[PlanStep(step_id="s1", description="Process approval", capability="respond")],
+        )
+
+    # Fallback for unknown intents
+    return PlanOutput(
+        goal=goal,
+        steps=[PlanStep(step_id="s1", description="Respond to user", capability="respond")],
+        priority="low",
+    )
 
 
 async def classify_intent(
@@ -141,48 +287,3 @@ async def classify_intent(
         logger.warning("Intent classification failed, defaulting to command: %s", e)
 
     return "command", 0.5, []
-
-
-def intent_to_decision(intent: str, message: str) -> PlannerOutput:
-    """Synthesize a lightweight PlannerOutput from a fast intent classification."""
-    intent_map = {
-        "greeting": "acknowledge",
-        "chitchat": "acknowledge",
-        "simple_question": "answer_directly",
-        "data_fetch": "read_source",
-        "status_query": "answer_directly",
-        "approval_response": "acknowledge",
-    }
-    return PlannerOutput(
-        decision=intent_map.get(intent, "acknowledge"),
-        reasoning=f"Fast-classified as {intent}",
-        priority="low" if intent in ("greeting", "chitchat") else "medium",
-        risk_level="none" if intent in ("greeting", "chitchat") else "low",
-        execution_mode="auto_execute",
-        goal=message[:200],
-    )
-
-
-def extract_decision(response_text: str) -> PlannerOutput:
-    """Extract and validate structured decision from planner response."""
-    raw: dict[str, Any] = {}
-    try:
-        if "{" in response_text:
-            start = response_text.index("{")
-            depth = 0
-            for i, ch in enumerate(response_text[start:], start):
-                if ch == "{":
-                    depth += 1
-                elif ch == "}":
-                    depth -= 1
-                    if depth == 0:
-                        json_str = response_text[start : i + 1]
-                        raw = json.loads(json_str)
-                        break
-    except (json.JSONDecodeError, ValueError):
-        pass
-
-    if not raw:
-        raw = {"decision": "acknowledge", "reasoning": response_text[:500]}
-
-    return PlannerOutput.model_validate(raw)

@@ -6,9 +6,11 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_current_user, get_session
+from src.api.deps import get_current_user, get_current_workspace_id, get_session
+from src.integrations.capabilities import CAPABILITY_CATALOG
 from src.models.users import User
 from src.services.settings_service import SettingsService
+from src.services.trust_engine import TrustEngine
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -20,6 +22,16 @@ class SettingUpdateRequest(BaseModel):
 
 class PolicyModeRequest(BaseModel):
     mode: str  # lockdown, approval_required, suggest_only, full_auto
+
+
+# Policy mode → trust ceiling level.
+# full_auto = None means remove ceiling restrictions.
+POLICY_MODE_TO_CEILING: dict[str, str | None] = {
+    "lockdown": "blocked",
+    "approval_required": "learning",
+    "suggest_only": "first_use",
+    "full_auto": None,
+}
 
 
 class BudgetLimitRequest(BaseModel):
@@ -74,14 +86,26 @@ async def get_policy_mode(
 async def set_policy_mode(
     req: PolicyModeRequest,
     user: User = Depends(get_current_user),
+    workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
-    """Change the global policy mode."""
+    """Change the global policy mode.
+
+    This batch-updates TrustCeiling records for all known capabilities
+    to match the selected policy mode, then persists the mode in settings.
+    """
     valid_modes = {"lockdown", "approval_required", "suggest_only", "full_auto"}
     if req.mode not in valid_modes:
         from fastapi import HTTPException
 
         raise HTTPException(status_code=400, detail=f"Invalid mode. Must be one of: {valid_modes}")
+
+    # Map policy mode to trust ceilings
+    ceiling_level = POLICY_MODE_TO_CEILING[req.mode]
+    if ceiling_level is not None:
+        all_caps = list(CAPABILITY_CATALOG.keys())
+        engine = TrustEngine(db, workspace_id=workspace_id)
+        await engine.set_ceilings_batch(all_caps, ceiling_level)
 
     svc = SettingsService(db)
     await svc.set(user.user_id, "policy", "mode", req.mode)

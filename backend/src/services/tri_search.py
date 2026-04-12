@@ -69,13 +69,20 @@ def _compute_final_score(result: dict) -> float:
     confidence = result.get("confidence", 0.5)
     stability = result.get("stability", 0.5)
     entity_overlap = result.get("entity_overlap", 0.0)
-    return (
+    score = (
         _W_RERANK * rerank
         + _W_RECENCY * recency
         + _W_CONFIDENCE * confidence
         + _W_STABILITY * stability
         + _W_ENTITY_OVERLAP * entity_overlap
     )
+    # Boost strong preferences (Issue #25 fix)
+    strength = result.get("preference_strength")
+    if strength == "strong":
+        score += 0.05
+    elif strength == "weak":
+        score -= 0.03
+    return score
 
 
 class TriSearchService:
@@ -202,6 +209,50 @@ class TriSearchService:
             grouped[r.get("result_type", "unknown")].append(r)
         return dict(grouped)
 
+    async def search_with_graph_boost(
+        self,
+        query: str,
+        user_id: str,
+        workspace_id: str,
+        db: AsyncSession,
+        context_entity_ids: list[str] | None = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Search with graph-based boosting for results connected to context entities.
+
+        Fetches 2x results, then boosts scores by 10% per entity overlap
+        with the graph neighborhood of context entities.
+        """
+        base_results = await self.search(
+            query=query,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            db=db,
+            limit=limit * 2,
+        )
+
+        if not context_entity_ids or not self._graph_engine:
+            return base_results[:limit]
+
+        # Build neighborhood set from context entities
+        neighborhood: set[str] = set()
+        for eid in context_entity_ids[:3]:
+            try:
+                related = await self._graph_engine.traverse_weighted(eid, user_id, depth=2)
+                neighborhood.update(r["entity_id"] for r in related)
+            except Exception:
+                logger.debug("Graph boost traversal failed for %s", eid, exc_info=True)
+
+        # Apply boost: 10% per overlapping entity
+        for result in base_results:
+            result_entities = set(result.get("entity_ids") or [])
+            overlap = result_entities & neighborhood
+            if overlap:
+                result["final_score"] = result.get("final_score", 0.0) * (1.0 + 0.1 * len(overlap))
+
+        base_results.sort(key=lambda r: r.get("final_score", 0.0), reverse=True)
+        return base_results[:limit]
+
     # ── Backend helpers ──────────────────────────────────────────
 
     async def _embed_query(self, query: str) -> list[float] | None:
@@ -230,7 +281,7 @@ class TriSearchService:
         raw = await self._vector_store.hybrid_search(
             user_id=user_id,
             query_vector=embedding,
-            collections=["memories", "events", "artifacts"],
+            collections=["memories", "events", "artifacts", "conversations", "approvals"],
             limit=limit,
         )
 
@@ -261,6 +312,8 @@ class TriSearchService:
                         "created_at",
                         payload.get("occurred_at"),
                     ),
+                    "entity_ids": payload.get("entity_ids"),
+                    "preference_strength": payload.get("preference_strength"),
                 }
             )
         return results
@@ -341,5 +394,7 @@ def _collection_to_type(collection: str) -> str:
         "entities": "entity",
         "events": "event",
         "artifacts": "artifact",
+        "conversations": "conversation",
+        "approvals": "approval",
     }
     return mapping.get(collection, collection)

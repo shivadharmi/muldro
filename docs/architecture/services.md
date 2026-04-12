@@ -9,15 +9,15 @@ Services are organized in dependency layers. Higher layers depend on lower layer
 | Layer | Services | Role |
 |-------|----------|------|
 | **L0 Infrastructure** | Postgres, Redis, Qdrant, Neo4j, MinIO/S3 | Storage, search, caching, streaming |
-| **L1 Data** | SQLAlchemy models, VectorStore, FTSService, TriSearchService, RerankerService, GraphEngine, ArtifactStore, EventBus, Cache, Locking | Data access layer |
+| **L1 Data** | SQLAlchemy models, VectorStore, FTSService, TriSearchService, RerankerService, GraphEngine, ArtifactStore, EventBus, Cache, Locking, DeadLetterService | Data access layer |
 | **L2 Perception** | EventProcessor | Event normalization, scoring, dedup |
 | **L3 Knowledge** | WorldModel, MemoryService | Entity graph, long-term memory |
-| **L4 Planning** | Planner, InitiativeScorer, ContextBuilder, ProcedureLibrary | Structured task graphs, proactive scoring, context assembly |
-| **L5 Governance** | Governor, TrustEngine, AuditService | Policy evaluation, approval gates, trust scoring, audit logging |
-| **L6 Execution** | Operator, GraphExecutor, ExecutionState | DAG execution, state machine |
-| **L7 Output** | Presenter, Notifier | Briefings, multi-surface notifications |
+| **L4 Planning** | Planner, InitiativeScorer, ContextBuilder, CapabilityResolver, ProcedureLibrary, RelevanceAssessor | Structured task graphs, proactive scoring, context assembly, capability routing |
+| **L5 Governance** | Governor (edge-case audit only), TrustEngine (4x4 matrix), RiskAssessor, AuditService | Trust-based approval gates, risk assessment, audit logging |
+| **L6 Execution** | Operator, GraphExecutor, ExecutionState, EvictionService | DAG execution, state machine, data retention |
+| **L7 Output** | Presenter, Notifier, BriefingReadModel, SurfaceDetailBuilders, EngagementService | Briefings, multi-surface notifications, engagement tracking |
 | **L8 Observability** | TraceStore, MetricsService, BudgetTracker | Traces, Prometheus metrics, per-agent cost tracking |
-| **L9 Coordination** | Scheduler, Worker, RouteResolver, AgentRegistry, WatcherService, ScheduleSeeder | Background jobs, routing, agent config |
+| **L9 Coordination** | Scheduler, Worker, AgentRegistry, WatcherService, ScheduleSeeder | Background jobs, agent config |
 
 ## Service Details
 
@@ -64,7 +64,7 @@ Services are organized in dependency layers. Higher layers depend on lower layer
 
 **File:** `src/services/memory_service.py`
 
-**Purpose:** Long-term memory with 5 types (episodic, semantic, preference, relationship, task_context).
+**Purpose:** Long-term memory with 7 types (episodic, semantic, preference, relationship, task_context, goal, briefing_item). Stability decays at 0.02/day with +0.1 boost on access.
 
 **Constructor:**
 - `settings`, `db`, `event_bus?`, `vector_store?`
@@ -107,7 +107,7 @@ score = 0.40 * cosine_similarity   (relevance)
 | `plan_for_command(command, user_id, context?)` | Create plan from user input |
 | `plan_for_event(event_id, user_id)` | Create plan from event (skips if importance < 0.4) |
 
-**Output:** `PlannerOutput` with 19 decision types, validated via Pydantic with text fallback.
+**Output:** `PlanOutput` with steps and capability_gaps, validated via Pydantic with text fallback. CapabilityResolver maps step capabilities to agents.
 
 **Calls:** Claude API (tool_use structured output), WorldModel, MemoryService
 
@@ -150,25 +150,42 @@ score = 0.40 * cosine_similarity   (relevance)
 
 ---
 
-### Governor (L5)
+### Governor (L5) — Edge-Case Audit Only
 
 **File:** `src/services/governor.py`
 
-**Purpose:** Trust & safety policy evaluator; approval gatekeeper.
+**Purpose:** Audit-only hooks for edge cases. The primary approval gate is now TrustEngine in GraphExecutor. Governor hooks run post-execution for audit logging only.
 
 **Constructor:**
 - `db`, `notifier?`, `trust_engine?`, `settings_service?`, `event_bus?`
 
-**Key Methods:**
-| Method | Description |
-|--------|-------------|
-| `evaluate_plan(plan_id, user_id)` | Evaluate plan against policies, return PolicyDecision |
+**Calls:** AuditService, EventBus
 
-**Policy Modes:** `lockdown`, `approval_required` (default), `suggest_only`, `full_auto`
+---
 
-**Always Requires Approval:** payment, deploy, delete_data, modify_permissions, security_change
+### TrustEngine (L5)
 
-**Calls:** Notifier, TrustEngine, AuditService, EventBus
+**File:** `src/services/trust_engine.py`
+
+**Purpose:** Single approval gate for all execution. Implements a 4x4 matrix of (trust_level x risk_level) to produce PolicyDecision. Trust graduates over time based on successful executions.
+
+**4x4 Matrix:** trust_level (new, developing, established, trusted) x risk_level (low, medium, high, critical)
+
+**PolicyDecision outcomes:** `auto_execute_silent`, `auto_execute_notify`, `approval_required`, `blocked`
+
+**Models:** TrustState (per-user trust level + history), TrustCeiling (per-capability max trust)
+
+**Called by:** GraphExecutor (per-step, before tool execution)
+
+---
+
+### RiskAssessor (L5)
+
+**File:** `src/services/risk_assessor.py`
+
+**Purpose:** Evaluates risk level for tool calls and plan steps. Provides the risk_level input to the TrustEngine 4x4 matrix.
+
+**Called by:** GraphExecutor (feeds into TrustEngine evaluation)
 
 ---
 
@@ -251,6 +268,10 @@ score = 0.40 * cosine_similarity   (relevance)
 
 **Priority Score:** `0.30*urgency + 0.25*goal_relevance + 0.20*novelty + 0.15*confidence + 0.10*interruptibility`
 
+**Rate Limits (per hour):** telegram: 5, web: 15, slack: 8, email: 3
+
+**Hold-for-Briefing:** Low-priority notifications below threshold are held and batched into the next briefing instead of immediate delivery.
+
 **Routing:** approval_request/critical_alert -> ALL surfaces; info_update -> preferred surface only
 
 ---
@@ -305,6 +326,16 @@ score = 0.40 * cosine_similarity   (relevance)
 
 **Actions:** `observe_source`, `generate_briefing`, `meeting_prep`, `heartbeat`, `consolidate_memories`, `check_slos`
 
+**Additional Ticks:**
+| Tick | Frequency | Purpose |
+|------|-----------|---------|
+| `_tick_background_tasks()` | Every 30s | Execute pending background TaskRuns |
+| `_tick_dlq_retry()` | Every 30s | Retry dead-letter queue entries |
+| `_tick_memory_expiration()` | Every 30s | Expire memories past TTL |
+| `_tick_eviction()` | Every 30s | Evict data older than 90-day retention |
+| `_tick_persona_batch()` | Every 10th tick (~5 min) | Batch persona preference extraction |
+| Cross-source synthesis | 30-min cooldown | Planner synthesis when 2+ perception sources have events |
+
 ---
 
 ### Worker (L9)
@@ -319,35 +350,18 @@ score = 0.40 * cosine_similarity   (relevance)
 
 ---
 
-### RouteResolver (L9)
-
-**File:** `src/services/route_resolver.py`
-
-**Purpose:** DB-backed intent routing (decision -> agent pipeline).
-
-**Constructor:** `db`
-
-**Key Methods:**
-| Method | Description |
-|--------|-------------|
-| `seed_defaults()` | Seed 16 default routes |
-| `resolve(decision)` | Map decision to agent pipeline |
-| CRUD | `list_routes`, `get_route`, `create_route`, `update_route`, `delete_route` |
-
----
-
 ### AgentRegistry (L9)
 
 **File:** `src/services/agent_registry.py`
 
-**Purpose:** DB-backed agent configuration (replaces hardcoded AGENTS dict).
+**Purpose:** DB-backed agent configuration. Seeds 7 agents: perceiver, librarian, planner, governor, operator, presenter, persona. No agent_routes table — routing is handled by CapabilityResolver.
 
 **Constructor:** `db`
 
 **Key Methods:**
 | Method | Description |
 |--------|-------------|
-| `seed_defaults()` | Seed 8 default agents |
+| `seed_defaults()` | Seed 7 default agents (syncs capability_scope + system_prompt on restart) |
 | `load_as_sub_agents()` | Convert DB agents to SubAgent instances |
 | CRUD | `list_agents`, `get_agent`, `create_agent`, `update_agent`, `toggle_agent` |
 
@@ -395,8 +409,8 @@ score = 0.40 * cosine_similarity   (relevance)
 **Key Methods:**
 | Method | Description |
 |--------|-------------|
-| `transition_run(run, new_status)` | Validate and apply TaskRun status transition (11 statuses) |
-| `transition_step(step, new_status)` | Validate and apply TaskStep status transition (9 statuses) |
+| `transition_run(run, new_status)` | Validate and apply TaskRun status transition (12 statuses, including awaiting_input) |
+| `transition_step(step, new_status)` | Validate and apply TaskStep status transition (10 statuses, including ready and awaiting_input) |
 
 Invalid transitions raise `InvalidTransitionError`. All status changes in GraphExecutor and Operator go through these functions — no direct status mutation is permitted.
 
@@ -441,13 +455,69 @@ Invalid transitions raise `InvalidTransitionError`. All status changes in GraphE
 
 ---
 
+### CapabilityResolver (L4)
+
+**File:** `src/services/capability_resolver.py`
+
+**Purpose:** Maps capability strings (e.g., `"email.search"`) to concrete tool definitions. Replaces the deleted RouteResolver — routing is now capability-based, not decision-type-based. PlanOutput steps declare capabilities; CapabilityResolver maps them to agents and tools.
+
+---
+
+### RelevanceAssessor (L4)
+
+**File:** `src/services/relevance_assessor.py`
+
+**Purpose:** Scores relevance of perception signals and context items. Provides signal scoring for the perception pipeline.
+
+---
+
+### EvictionService (L6)
+
+**File:** `src/services/eviction_service.py`
+
+**Purpose:** Enforces 90-day data retention. Evicts completed runs, expired approvals, and resolved dead-letter entries. Triggered by scheduler `_tick_eviction()`.
+
+---
+
+### BriefingReadModel (L7)
+
+**File:** `src/services/briefing_read_model.py`
+
+**Purpose:** Pre-computed read model for briefing data. Optimizes briefing surface rendering without querying the full event/memory pipeline.
+
+---
+
+### SurfaceDetailBuilders (L7)
+
+**File:** `src/services/surface_detail_builders.py`
+
+**Purpose:** Builds detailed A2UI component trees for specific surface types. Extracted from inline surface construction logic for reuse across surface kinds.
+
+---
+
+### EngagementService (L7)
+
+**File:** `src/services/engagement_service.py`
+
+**Purpose:** Tracks user engagement patterns (EngagementHistory model). Informs notification timing, priority scoring, and persona learning.
+
+---
+
+### DeadLetterService (L1)
+
+**File:** `src/services/dead_letter.py`
+
+**Purpose:** Dead-letter queue for failed event processing. Failed messages are stored for retry via scheduler `_tick_dlq_retry()`.
+
+---
+
 ## Infrastructure Services (L0)
 
 ### VectorStore (Qdrant)
 
 **File:** `src/services/vector_store.py`
 
-**Purpose:** Semantic vector search across 4 collections (memories, entities, events, artifacts).
+**Purpose:** Semantic vector search across 6 collections (memories, entities, events, artifacts, conversations, approvals).
 
 **Constructor:**
 - `qdrant_url`, `qdrant_api_key`
@@ -460,7 +530,7 @@ Invalid transitions raise `InvalidTransitionError`. All status changes in GraphE
 | `hybrid_search(collections, query_vector, filters)` | Cross-collection retrieval, merge by score |
 | `delete(collection, id)` | Remove vector |
 
-**Collections:** `memories` (1024-dim), `entities`, `events`, `artifacts`
+**Collections:** `memories` (1024-dim), `entities`, `events`, `artifacts`, `conversations`, `approvals`
 
 **Fallback:** Silent no-op if Qdrant unavailable; Postgres FTS provides keyword search.
 
@@ -480,8 +550,11 @@ Invalid transitions raise `InvalidTransitionError`. All status changes in GraphE
 |--------|-------------|
 | `search(query, user_id, workspace_id, db, types?, limit)` | Parallel search across all 3 backends + rerank |
 | `search_for_context(query, user_id, workspace_id, db, limit)` | Context-optimized search returning results grouped by type |
+| `search_with_graph_boost(query, user_id, workspace_id, db, limit)` | Search with graph-relationship boosting for connected entities |
 
 **Backends:** Qdrant (semantic), Postgres tsvector/GIN (keyword), Neo4j CONTAINS (graph entity)
+
+**Boosts:** Graph relationship boost for connected entities; preference strength boost for preference-type results.
 
 ---
 
@@ -521,12 +594,16 @@ Invalid transitions raise `InvalidTransitionError`. All status changes in GraphE
 | Method | Description |
 |--------|-------------|
 | `traverse(entity_id, depth)` | N-hop reachability from entity |
+| `traverse_weighted(entity_id, depth, min_weight)` | Weighted traversal using typed edge weights |
+| `traverse_temporal(entity_id, depth, since, until)` | Time-bounded traversal filtering edges by timestamp |
 | `find_path(from_id, to_id)` | Shortest path between entities |
 | `get_related_people(entity_id)` | People connected within 2 hops |
 | `find_central_entities(user_id)` | Degree centrality ranking |
 | `detect_communities(user_id)` | Connected component clustering |
 | `get_subgraph(entity_ids)` | Extract subgraph |
 | `search_entities(user_id, query, entity_type?, limit)` | Name-based entity search via Neo4j CONTAINS matching (used by TriSearch) |
+
+**Edge Types:** Typed edges with weight and timestamp metadata, enabling weighted and temporal traversal queries.
 
 **Fallback:** No-op if Neo4j unavailable; Postgres entity tables still provide flat queries.
 
@@ -658,14 +735,14 @@ graph TD
     PL --> WM
     PL --> MS
 
-    GOV[Governor] --> NT
-    GOV --> TE[TrustEngine]
+    GOV[Governor] --> AUD[AuditService]
 
     OP[Operator] --> GE[GraphExecutor]
     OP --> NT
 
     GE --> CB
     GE --> TR[ToolRegistry]
+    GE --> TE[TrustEngine]
     GE --> VER[Verifier]
     GE --> MS
     GE --> NT

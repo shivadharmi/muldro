@@ -289,3 +289,15 @@ async def list_trust_records(
         )
         for r in records
     ]
+
+
+@router.post("/circuit-breaker/{server_name}/reset")
+async def reset_circuit_breaker(
+    server_name: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Reset circuit breaker for an MCP server (admin action)."""
+    from src.connectors.mcp_bridge import _circuit_breaker
+
+    _circuit_breaker.reset(server_name)
+    return {"status": "reset", "server": server_name}

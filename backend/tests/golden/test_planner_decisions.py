@@ -1,7 +1,7 @@
-"""Golden tests for Planner agent decisions.
+"""Golden tests for Planner agent plans.
 
-Verifies the planner makes correct structured decisions for known scenarios.
-These tests validate prompt quality by checking that the planner's decision
+Verifies the planner makes correct structured plans for known scenarios.
+These tests validate prompt quality by checking that the planner's plan
 output matches expected patterns for well-defined inputs.
 """
 
@@ -21,30 +21,32 @@ GOLDEN_CASES = [
                 "importance": 0.95,
                 "urgency": 0.9,
             },
-            "world_model": {
-                "entity": "Sequoia Capital",
-                "relationship": "active_investor",
-            },
-            "memories": [{"fact": "Fundraising is top priority this quarter"}],
         },
         "mock_response": json.dumps(
             {
-                "decision": "draft_reply",
-                "priority": "critical",
-                "risk_level": "medium",
-                "reasoning": "Investor follow-up on term sheet requires immediate response.",
                 "goal": "Draft reply to investor email",
-                "tasks": [
-                    {"task_type": "fetch_email_thread", "description": "Get full thread"},
-                    {"task_type": "draft_reply", "description": "Draft response"},
-                    {"task_type": "request_approval", "description": "Get approval"},
+                "reasoning": "Investor follow-up on term sheet requires immediate response.",
+                "priority": "critical",
+                "steps": [
+                    {
+                        "step_id": "s1",
+                        "description": "Get full thread",
+                        "capability": "email.search",
+                        "risk": "none",
+                    },
+                    {
+                        "step_id": "s2",
+                        "description": "Draft response",
+                        "capability": "email.draft",
+                        "risk": "medium",
+                        "depends_on": ["s1"],
+                    },
                 ],
             }
         ),
-        "expected_decision": "draft_reply",
+        "expected_goal": "Draft reply to investor email",
         "expected_priority": "critical",
-        "expected_task_types": ["fetch_email_thread", "draft_reply", "request_approval"],
-        "must_not_decide": ["ignore", "summarize"],
+        "expected_capabilities": ["email.search", "email.draft"],
     },
     {
         "name": "spam_newsletter_low_importance",
@@ -54,24 +56,22 @@ GOLDEN_CASES = [
                 "type": "email_received",
                 "title": "Weekly Tech Digest #234",
                 "sender": "newsletter@techcrunch.com",
-                "importance": 0.1,
-                "urgency": 0.0,
             },
-            "world_model": {},
-            "memories": [],
         },
         "mock_response": json.dumps(
             {
-                "decision": "ignore",
+                "goal": "No action needed for newsletter",
                 "priority": "low",
-                "risk_level": "low",
-                "reasoning": "Newsletter, no action needed.",
-                "goal": "",
-                "tasks": [],
+                "steps": [
+                    {
+                        "description": "Acknowledge newsletter",
+                        "capability": "respond",
+                    },
+                ],
             }
         ),
-        "expected_decision": "ignore",
-        "must_not_decide": ["draft_reply", "create_task", "recommend"],
+        "expected_priority": "low",
+        "expected_capabilities": ["respond"],
     },
     {
         "name": "meeting_in_30_minutes",
@@ -80,29 +80,29 @@ GOLDEN_CASES = [
                 "source": "calendar",
                 "type": "meeting_upcoming",
                 "title": "Board Meeting",
-                "importance": 0.8,
-                "urgency": 0.95,
             },
-            "world_model": {
-                "entity": "Board of Directors",
-                "relationship": "governance",
-            },
-            "memories": [{"fact": "Board meetings require prep card with metrics"}],
         },
         "mock_response": json.dumps(
             {
-                "decision": "create_task",
-                "priority": "high",
-                "risk_level": "low",
-                "reasoning": "Board meeting approaching, prepare meeting card.",
                 "goal": "Prepare board meeting brief",
-                "tasks": [
-                    {"task_type": "meeting_prep", "description": "Generate prep card"},
-                    {"task_type": "notify_user", "description": "Send prep to user"},
+                "reasoning": "Board meeting approaching, prepare meeting card.",
+                "priority": "high",
+                "steps": [
+                    {
+                        "step_id": "s1",
+                        "description": "Generate prep card",
+                        "capability": "knowledge.search",
+                    },
+                    {
+                        "step_id": "s2",
+                        "description": "Send prep to user",
+                        "capability": "respond",
+                        "depends_on": ["s1"],
+                    },
                 ],
             }
         ),
-        "expected_decision": "create_task",
+        "expected_goal": "Prepare board meeting brief",
         "expected_priority": "high",
     },
     {
@@ -112,60 +112,52 @@ GOLDEN_CASES = [
                 "source": "internal",
                 "type": "follow_up_overdue",
                 "title": "No reply from CTO about API integration (3 days)",
-                "importance": 0.7,
-                "urgency": 0.6,
             },
-            "world_model": {
-                "entity": "CTO Partner Company",
-                "relationship": "partner",
-            },
-            "memories": [{"fact": "API integration is blocking launch"}],
         },
         "mock_response": json.dumps(
             {
-                "decision": "recommend",
-                "priority": "medium",
-                "risk_level": "low",
-                "reasoning": "Follow-up overdue on blocking dependency.",
                 "goal": "Suggest sending follow-up email to CTO",
-                "tasks": [
-                    {"task_type": "draft_reply", "description": "Draft follow-up"},
+                "reasoning": "Follow-up overdue on blocking dependency.",
+                "priority": "medium",
+                "steps": [
+                    {
+                        "description": "Draft follow-up",
+                        "capability": "email.draft",
+                        "risk": "low",
+                    },
                 ],
             }
         ),
-        "expected_decision": "recommend",
-        "must_not_decide": ["ignore"],
+        "expected_goal": "Suggest sending follow-up email to CTO",
+        "expected_capabilities": ["email.draft"],
     },
 ]
 
 
 @pytest.mark.parametrize("case", GOLDEN_CASES, ids=lambda c: c["name"])
 async def test_planner_golden(case):
-    """Verify planner makes correct structured decisions for golden cases."""
-    from src.orchestrator.intent_classifier import extract_decision
+    """Verify planner makes correct structured plans for golden cases."""
+    from src.orchestrator.intent_classifier import extract_plan
 
-    decision = extract_decision(case["mock_response"])
+    plan = extract_plan(case["mock_response"])
 
-    # Verify decision matches expected — extract_decision returns PlannerOutput
-    assert decision.decision == case["expected_decision"], (
-        f"Expected decision '{case['expected_decision']}' but got '{decision.decision}'"
-    )
+    # Check goal if specified
+    if "expected_goal" in case:
+        assert plan.goal == case["expected_goal"], (
+            f"Expected goal '{case['expected_goal']}' but got '{plan.goal}'"
+        )
 
     # Check priority if specified
     if "expected_priority" in case:
-        assert decision.priority == case["expected_priority"]
+        assert plan.priority == case["expected_priority"]
 
-    # Check task types if specified
-    if "expected_task_types" in case:
-        actual_types = [t.task_type for t in decision.tasks]
-        for expected_type in case["expected_task_types"]:
-            assert expected_type in actual_types, (
-                f"Expected task type '{expected_type}' not found in {actual_types}"
+    # Check capabilities if specified
+    if "expected_capabilities" in case:
+        actual_caps = [s.capability for s in plan.steps]
+        for expected_cap in case["expected_capabilities"]:
+            assert expected_cap in actual_caps, (
+                f"Expected capability '{expected_cap}' not found in {actual_caps}"
             )
 
-    # Check must_not_decide
-    if "must_not_decide" in case:
-        for forbidden in case["must_not_decide"]:
-            assert decision.decision != forbidden, (
-                f"Decision should not be '{forbidden}' for case '{case['name']}'"
-            )
+    # Steps should always be non-empty
+    assert len(plan.steps) >= 1, f"No steps for case '{case['name']}'"

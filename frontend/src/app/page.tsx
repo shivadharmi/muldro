@@ -9,17 +9,24 @@ import {
 import { useAuth } from "@/lib/auth";
 import { useJarvisWs } from "@/hooks/use-jarvis-ws";
 import { useSurfaceStore } from "@/stores/surface-store";
+import type { WorkspaceSurface } from "@/stores/surface-store";
 import { useWsActionStore } from "@/stores/ws-action-store";
 import { GreetingHero } from "@/components/dashboard/greeting-hero";
 import { WorkspaceStatusBar } from "@/components/workspace/workspace-status-bar";
 import { WorkspaceCanvas } from "@/components/workspace/workspace-canvas";
-import type { A2UISurface } from "@/lib/a2ui-types";
+import { SurfaceDetailModal } from "@/components/workspace/surface-detail-modal";
+import type { WorkspaceSurfacePush, SurfaceUpdate } from "@/lib/a2ui-types";
 import type { SurfaceKind } from "@/lib/types/surfaces";
 
 export default function WorkspacePage() {
   const { user } = useAuth();
   const { addSurface } = useSurfaceStore();
+  const updateSurface = useSurfaceStore((s) => s.updateSurface);
   const wsSurfaces = useSurfaceStore((s) => s.surfaces);
+  const activeSurfaceId = useSurfaceStore((s) => s.activeSurfaceId);
+  const detailModalOpen = useSurfaceStore((s) => s.detailModalOpen);
+  const openDetailModal = useSurfaceStore((s) => s.openDetailModal);
+  const closeDetailModal = useSurfaceStore((s) => s.closeDetailModal);
   const setGlobalSendAction = useWsActionStore((s) => s.setSendAction);
 
   const { data: system } = useQuery({
@@ -28,80 +35,67 @@ export default function WorkspacePage() {
     refetchInterval: 30_000,
   });
 
-  // Single unified API: returns pre-built A2UI surfaces with populated children
   const { data: workspaceData } = useQuery({
     queryKey: ["workspace-surfaces"],
     queryFn: fetchWorkspaceSurfaces,
     refetchInterval: 15_000,
   });
 
-  // Merge REST surfaces with real-time WS surfaces (WS wins on duplicate IDs)
-  const allSurfaces = useMemo(() => {
-    const restSurfaces: A2UISurface[] = workspaceData?.surfaces ?? [];
-    const wsWorkspaceSurfaces = wsSurfaces
-      .filter((s) => s.position === "workspace" && s.data?.a2ui_surface)
-      .map((s) => s.data.a2ui_surface as A2UISurface);
+  // Convert REST response to WorkspaceSurface
+  const restSurfaces = useMemo((): WorkspaceSurface[] => {
+    const raw = workspaceData?.surfaces ?? [];
+    return raw.map((s) => ({
+      id: s.id,
+      kind: (s.kind as SurfaceKind) || "summary",
+      preview: s.preview,
+      detail_config: s.detail_config,
+      source_run_id: s.source_run_id ?? null,
+      response_preview: s.response_preview ?? null,
+      created_at: s.created_at ?? new Date().toISOString(),
+    }));
+  }, [workspaceData]);
 
-    // Deduplicate: WS surfaces override REST surfaces with same ID
-    const surfaceMap = new Map<string, A2UISurface>();
-    for (const s of restSurfaces) {
-      surfaceMap.set(s.id, s);
-    }
-    for (const s of wsWorkspaceSurfaces) {
-      surfaceMap.set(s.id, s);
-    }
-    return Array.from(surfaceMap.values());
-  }, [workspaceData, wsSurfaces]);
+  // Merge REST + WS surfaces (WS wins on duplicate IDs)
+  const allSurfaces = useMemo(() => {
+    const map = new Map<string, WorkspaceSurface>();
+    for (const s of restSurfaces) map.set(s.id, s);
+    for (const s of wsSurfaces) map.set(s.id, s);
+    const merged = Array.from(map.values());
+
+    // Active executions first (executing or approval_needed), then by created_at desc
+    const isActive = (s: WorkspaceSurface) =>
+      s.phase === "executing" ||
+      s.phase === "approval_needed" ||
+      s.phase === "planning" ||
+      s.kind === "proactive_insight";
+    return merged.sort((a, b) => {
+      const aActive = isActive(a) ? 0 : 1;
+      const bActive = isActive(b) ? 0 : 1;
+      if (aActive !== bActive) return aActive - bActive;
+      const dateCompare = b.created_at.localeCompare(a.created_at);
+      return dateCompare !== 0 ? dateCompare : a.id.localeCompare(b.id);
+    });
+  }, [restSurfaces, wsSurfaces]);
 
   const sourceCount = system?.observations
     ? Object.keys(system.observations).length
     : 0;
 
-  // Derive greeting data from surfaces
-  const approvalCount = allSurfaces.filter(
-    (s) => (s.metadata as Record<string, unknown>)?.kind === "approval"
-  ).length;
-  const briefingSurface = allSurfaces.find(
-    (s) => (s.metadata as Record<string, unknown>)?.kind === "briefing"
-  );
-  const headline = briefingSurface
-    ? String((briefingSurface.metadata as Record<string, unknown>)?.title ?? "")
-    : null;
+  const approvalCount = allSurfaces.filter((s) => s.kind === "approval").length;
+  const briefing = allSurfaces.find((s) => s.kind === "briefing");
+  const headline = briefing?.preview.title ?? null;
 
-  // WebSocket: proactive surfaces from Jarvis go to workspace position
-  const handleWsSurface = useCallback(
-    (ws: A2UISurface) => {
+  // WS push → store
+  const handleSurfacePush = useCallback(
+    (push: WorkspaceSurfacePush) => {
       addSurface({
-        id: ws.id,
-        kind: (ws.metadata?.kind as SurfaceKind) || "summary",
-        title: String(ws.metadata?.title ?? "Update"),
-        data: { ...(ws.metadata ?? {}), a2ui_surface: ws },
-        created_at: new Date().toISOString(),
-        pinned: false,
-        position: ws.metadata?.source_message_id ? "inline" : "workspace",
-        schema_version: 1,
-        source_message_id: (ws.metadata?.source_message_id as string) ?? null,
-        source_run_id: (ws.metadata?.source_run_id as string) ?? null,
-        source_artifact_id: (ws.metadata?.source_artifact_id as string) ?? null,
-      });
-    },
-    [addSurface]
-  );
-
-  const handleWsSurfaceUpdate = useCallback(
-    (_surfaceId: string, ws: A2UISurface) => {
-      addSurface({
-        id: ws.id,
-        kind: (ws.metadata?.kind as SurfaceKind) || "summary",
-        title: String(ws.metadata?.title ?? "Update"),
-        data: { ...(ws.metadata ?? {}), a2ui_surface: ws },
-        created_at: new Date().toISOString(),
-        pinned: false,
-        position: ws.metadata?.source_message_id ? "inline" : "workspace",
-        schema_version: 1,
-        source_message_id: (ws.metadata?.source_message_id as string) ?? null,
-        source_run_id: (ws.metadata?.source_run_id as string) ?? null,
-        source_artifact_id: (ws.metadata?.source_artifact_id as string) ?? null,
+        id: push.id,
+        kind: (push.kind as SurfaceKind) || "summary",
+        preview: push.preview,
+        detail_config: push.detail_config,
+        source_run_id: push.source_run_id,
+        response_preview: push.response_preview,
+        created_at: push.created_at || new Date().toISOString(),
       });
     },
     [addSurface]
@@ -109,29 +103,44 @@ export default function WorkspacePage() {
 
   const { sendAction } = useJarvisWs({
     userId: user?.user_id ?? "",
-    onSurface: handleWsSurface,
-    onSurfaceUpdate: handleWsSurfaceUpdate,
+    onSurfacePush: handleSurfacePush,
+    onSurfaceUpdate: useCallback(
+      (update: SurfaceUpdate) => updateSurface(update.surface_id, update),
+      [updateSurface]
+    ),
     enabled: !!user,
   });
 
   useEffect(() => {
-    setGlobalSendAction(() => sendAction);
+    setGlobalSendAction(sendAction);
   }, [sendAction, setGlobalSendAction]);
+
+  const activeSurface = activeSurfaceId
+    ? allSurfaces.find((s) => s.id === activeSurfaceId) ?? null
+    : null;
 
   return (
     <div className="p-4 sm:p-6 space-y-5">
-      {/* Greeting */}
       <GreetingHero
         headline={headline}
         approvalCount={approvalCount}
         sourceCount={sourceCount}
       />
 
-      {/* System status bar */}
       <WorkspaceStatusBar system={system} />
 
-      {/* Living canvas of A2UI surfaces */}
-      <WorkspaceCanvas surfaces={allSurfaces} />
+      <WorkspaceCanvas
+        surfaces={allSurfaces}
+        onSurfaceClick={openDetailModal}
+      />
+
+      {activeSurface && (
+        <SurfaceDetailModal
+          surface={activeSurface}
+          open={detailModalOpen}
+          onClose={closeDetailModal}
+        />
+      )}
     </div>
   );
 }

@@ -16,6 +16,8 @@ from src.models.approvals import Approval
 from src.models.plans import Plan
 from src.models.task_graph import TaskRun, TaskStep
 from src.services.audit import AuditService
+from src.services.execution_state import transition_run, transition_step
+from src.services.graph_executor import create_graph_executor
 
 logger = logging.getLogger(__name__)
 
@@ -117,21 +119,32 @@ async def approve_action(
     settings: Settings = Depends(get_settings),
 ):
     """Approve a pending action and trigger execution."""
-    approval = await _get_approval(db, approval_id, user_id, workspace_id)
+    approval = await _get_approval(
+        db, approval_id, user_id, workspace_id, intended_action="approve"
+    )
 
-    from src.services.execution_state import transition_run
+    # Idempotent: already approved — return without re-executing (T6)
+    if approval.status == "approved":
+        return ApprovalResponse(
+            approval_id=approval.approval_id,
+            status=approval.status,
+            title=approval.title,
+            summary=approval.summary,
+            risk_level=approval.risk_level,
+            created_at=approval.created_at,
+        )
 
     approval.status = "approved"
     approval.decided_at = datetime.now(timezone.utc)
     approval.decision_reason = req.reason if req else None
     approval.approved_by = user_id
 
-    # Update run status via state machine (awaiting_approval -> running)
+    # Resolve the linked run for event emission and downstream resume.
+    # Do NOT transition the run here — resume_run() and execute_run()
+    # handle their own state transitions after re-reading the row.
     effective_run_id = approval.run_id or approval.execution_id
     run_result = await db.execute(select(TaskRun).where(TaskRun.run_id == effective_run_id))
     run = run_result.scalar_one_or_none()
-    if run and run.status == "awaiting_approval":
-        transition_run(run, "running")
 
     # Emit approval_resolved runtime event
     try:
@@ -157,13 +170,50 @@ async def approve_action(
     await audit.log(
         user_id=user_id,
         action_type="approval_approved",
+        workspace_id=workspace_id,
         approval_id=approval_id,
         execution_id=approval.execution_id,
         summary=f"Approved: {approval.title}",
         details={"reason": req.reason if req else None},
     )
 
+    # Trust feedback loop — record approval for graduated autonomy
+    try:
+        from src.services.risk_assessor import record_approval_decision
+
+        capability = approval.approval_type
+        if ":" in capability:
+            capability = capability.split(":", 1)[1]
+        decision_type = "modified" if req and req.reason else "approved"
+        await record_approval_decision(
+            db, workspace_id, capability, approval.risk_level or "low", decision_type
+        )
+    except Exception:
+        logger.warning("Trust feedback failed for approval %s", approval_id, exc_info=True)
+
     await db.commit()
+
+    # Embed approval decision into Qdrant
+    try:
+        from src.services.embedding_service import EmbeddingService
+        from src.services.vector_store import VectorStore
+
+        if settings.qdrant_url:
+            vs = VectorStore(settings)
+            es = EmbeddingService(settings)
+            await _embed_approval_decision(
+                approval_id=approval_id,
+                approval_type=approval.approval_type or "",
+                summary=approval.summary or "",
+                risk_level=approval.risk_level or "low",
+                outcome="approved",
+                user_id=user_id,
+                embedding_service=es,
+                vector_store=vs,
+                workspace_id=workspace_id,
+            )
+    except Exception:
+        logger.debug("Approval embedding failed", exc_info=True)
 
     # Publish approval.approved domain event via SSE
     try:
@@ -186,27 +236,24 @@ async def approve_action(
 
     # Resume the run (either step-level approval gate or plan-level)
     if approval.run_id:
-        from src.services.graph_executor import create_graph_executor
-
         executor = await create_graph_executor(settings=settings, db=db, workspace_id=workspace_id)
         try:
-            from src.models.task_graph import TaskStep
-
             step_result = await db.execute(
-                select(TaskStep).where(
+                select(TaskStep)
+                .where(
                     TaskStep.step_id == approval.step_id,
                     TaskStep.run_id == approval.run_id,
                 )
+                .with_for_update()
             )
-            from src.services.execution_state import transition_step
-
             step = step_result.scalar_one_or_none()
             if step and step.status == "waiting_approval":
                 transition_step(step, "running")
                 await db.flush()
             await executor.resume_run(approval.run_id)
-        except Exception:
+        except Exception as exc:
             logger.exception("Resume failed after approval: %s", approval.run_id)
+            await _mark_run_failed_after_resume(db, approval.run_id, exc)
     elif run and run.plan_id:
         # Plan-level approval: trigger execution via GraphExecutor directly
         try:
@@ -214,13 +261,14 @@ async def approve_action(
                 settings=settings, db=db, workspace_id=workspace_id
             )
             await executor.execute_run(run.run_id)
-        except Exception:
+        except Exception as exc:
             logger.exception("Execution failed after approval: %s", run.run_id)
+            await _mark_run_failed_after_resume(db, run.run_id, exc)
     elif approval.artifact_refs and approval.artifact_refs.get("tool_name"):
         # B1: Tool-level approval resume — create a background TaskRun to
         # re-execute the approved tool with the original parameters.
         try:
-            from src.models.plans import Plan, PlanTask
+            from src.models.plans import PlanTask
 
             tool_name = approval.artifact_refs["tool_name"]
             tool_params = approval.artifact_refs.get("tool_params", {})
@@ -232,7 +280,7 @@ async def approve_action(
                 trigger_type="approval_resume",
                 goal=f"Execute approved tool: {tool_name}",
                 priority="high",
-                decision="create_task",
+                decision="plan",
                 status="created",
             )
             plan.tasks = [
@@ -257,17 +305,39 @@ async def approve_action(
                 trace_id=None,
             )
             db.add(bg_run)
+            await db.flush()
+
+            # Populate steps and execute immediately (user just approved)
+            executor = await create_graph_executor(
+                settings=settings, db=db, workspace_id=workspace_id
+            )
+            await executor.populate_run_steps(bg_run.run_id, plan_id)
             await db.commit()
+
+            try:
+                await executor.execute_run(bg_run.run_id)
+            except Exception as exc:
+                logger.exception("Execution failed for tool-level resume run: %s", bg_run.run_id)
+                await _mark_run_failed_after_resume(db, bg_run.run_id, exc)
+
             logger.info(
                 "Tool-level approval resumed: %s → run %s",
                 approval.approval_id,
                 bg_run.run_id,
             )
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "Failed to create resume run for tool approval: %s",
                 approval.approval_id,
             )
+            # bg_run may not have been created/flushed yet — NameError
+            # or missing DB row is caught by _mark_run_failed_after_resume.
+            try:
+                _bg_run_id = bg_run.run_id  # type: ignore[possibly-undefined]
+            except NameError:
+                _bg_run_id = None
+            if _bg_run_id:
+                await _mark_run_failed_after_resume(db, _bg_run_id, exc)
 
     return ApprovalResponse(
         approval_id=approval.approval_id,
@@ -292,9 +362,18 @@ async def reject_action(
     settings: Settings = Depends(get_settings),
 ):
     """Reject a pending action."""
-    approval = await _get_approval(db, approval_id, user_id, workspace_id)
+    approval = await _get_approval(db, approval_id, user_id, workspace_id, intended_action="reject")
 
-    from src.services.execution_state import transition_run
+    # Idempotent: already rejected — return without re-executing (T6)
+    if approval.status == "rejected":
+        return ApprovalResponse(
+            approval_id=approval.approval_id,
+            status=approval.status,
+            title=approval.title,
+            summary=approval.summary,
+            risk_level=approval.risk_level,
+            created_at=approval.created_at,
+        )
 
     approval.status = "rejected"
     approval.decided_at = datetime.now(timezone.utc)
@@ -328,8 +407,6 @@ async def reject_action(
     if run and run.status in ("awaiting_approval", "running", "paused"):
         # Transition the waiting step to cancelled
         if approval.step_id:
-            from src.services.execution_state import transition_step
-
             step_result = await db.execute(
                 select(TaskStep).where(
                     TaskStep.step_id == approval.step_id,
@@ -341,8 +418,6 @@ async def reject_action(
                 transition_step(step, "cancelled")
 
         # Cancel the full run via graph executor (handles all remaining steps)
-        from src.services.graph_executor import create_graph_executor
-
         executor = await create_graph_executor(settings=settings, db=db, workspace_id=workspace_id)
         try:
             await executor.cancel_run(effective_run_id)
@@ -355,13 +430,49 @@ async def reject_action(
     await audit.log(
         user_id=user_id,
         action_type="approval_rejected",
+        workspace_id=workspace_id,
         approval_id=approval_id,
         execution_id=approval.execution_id,
         summary=f"Rejected: {approval.title}",
         details={"reason": req.reason if req else None},
     )
 
+    # Trust feedback loop — record rejection for graduated autonomy
+    try:
+        from src.services.risk_assessor import record_approval_decision
+
+        capability = approval.approval_type
+        if ":" in capability:
+            capability = capability.split(":", 1)[1]
+        await record_approval_decision(
+            db, workspace_id, capability, approval.risk_level or "low", "rejected"
+        )
+    except Exception:
+        logger.warning("Trust feedback failed for rejection %s", approval_id, exc_info=True)
+
     await db.commit()
+
+    # Embed rejection decision into Qdrant
+    try:
+        from src.services.embedding_service import EmbeddingService
+        from src.services.vector_store import VectorStore
+
+        if settings.qdrant_url:
+            vs = VectorStore(settings)
+            es = EmbeddingService(settings)
+            await _embed_approval_decision(
+                approval_id=approval_id,
+                approval_type=approval.approval_type or "",
+                summary=approval.summary or "",
+                risk_level=approval.risk_level or "low",
+                outcome="rejected",
+                user_id=user_id,
+                embedding_service=es,
+                vector_store=vs,
+                workspace_id=workspace_id,
+            )
+    except Exception:
+        logger.debug("Rejection embedding failed", exc_info=True)
 
     # Publish approval.rejected domain event via SSE
     try:
@@ -478,12 +589,73 @@ async def get_approval_impact(
     }
 
 
+async def _mark_run_failed_after_resume(db: AsyncSession, run_id: str, exc: Exception) -> None:
+    """Best-effort: rollback, re-fetch run, transition to failed."""
+    try:
+        await db.rollback()
+        result = await db.execute(select(TaskRun).where(TaskRun.run_id == run_id))
+        r = result.scalar_one_or_none()
+        if r and r.status not in ("completed", "failed", "cancelled"):
+            transition_run(r, "failed")
+            r.error = {"resume_failed": str(exc)[:500]}
+            r.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+    except Exception:
+        logger.warning("Failed to mark run as failed after resume error", exc_info=True)
+
+
+async def _embed_approval_decision(
+    approval_id: str,
+    approval_type: str,
+    summary: str,
+    risk_level: str,
+    outcome: str,
+    user_id: str,
+    embedding_service,
+    vector_store,
+    workspace_id: str = "",
+) -> None:
+    """Embed approval decision into Qdrant (best-effort)."""
+    try:
+        text = f"{approval_type}: {summary} → {outcome}"
+        embedding = await embedding_service.embed_text(text)
+        if embedding:
+            await vector_store.upsert(
+                collection="approvals",
+                id=approval_id,
+                vector=embedding,
+                payload={
+                    "approval_id": approval_id,
+                    "approval_type": approval_type,
+                    "capability": approval_type,
+                    "risk_level": risk_level,
+                    "decision": outcome,
+                    "outcome": outcome,
+                    "workspace_id": workspace_id,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                },
+                user_id=user_id,
+            )
+    except Exception:
+        logger.debug("Approval embedding failed for %s", approval_id, exc_info=True)
+
+
 async def _get_approval(
-    db: AsyncSession, approval_id: str, user_id: str, workspace_id: str
+    db: AsyncSession,
+    approval_id: str,
+    user_id: str,
+    workspace_id: str,
+    intended_action: str = "approve",
 ) -> Approval:
-    """Fetch an approval with row-level locking, raising 404 if not found or not pending.
+    """Fetch an approval with row-level locking.
 
     Uses SELECT ... FOR UPDATE to prevent concurrent approval race conditions.
+
+    - Raises 404 if approval is not found.
+    - Raises 410 if the approval has expired (T4).
+    - Returns already-decided approvals when the status matches the intended action,
+      enabling idempotent double-click protection (T6).
+    - Raises 400 if the approval is already decided in a conflicting state.
     """
     result = await db.execute(
         select(Approval)
@@ -497,9 +669,25 @@ async def _get_approval(
     approval = result.scalar_one_or_none()
     if not approval:
         raise HTTPException(status_code=404, detail=f"Approval {approval_id} not found")
+
+    # Check expiry before allowing action (T4)
+    if (
+        approval.status == "pending"
+        and approval.expires_at
+        and approval.expires_at < datetime.now(timezone.utc)
+    ):
+        approval.status = "expired"
+        await db.flush()
+        raise HTTPException(status_code=410, detail="Approval has expired")
+
     if approval.status != "pending":
+        # Idempotent: if already in the intended terminal state, return it (T6)
+        expected = "approved" if intended_action == "approve" else "rejected"
+        if approval.status == expected:
+            return approval  # caller detects via status field and short-circuits
         raise HTTPException(
             status_code=400,
             detail=f"Approval already {approval.status}",
         )
+
     return approval

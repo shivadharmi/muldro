@@ -12,17 +12,43 @@ class TestAgentScopeDeduplication:
         assert isinstance(operator_scope, set)
 
     def test_operator_capability_scope_has_expected_capabilities(self):
-        """Operator scope should have write capabilities."""
+        """Operator scope should have read + write capabilities for autonomous tool use."""
         from src.orchestrator.agents import AGENT_CAPABILITY_SCOPES
 
         scope = AGENT_CAPABILITY_SCOPES["operator"]
 
+        # Write capabilities
         assert "email.send" in scope
         assert "email.draft" in scope
         assert "calendar.create" in scope
         assert "messaging.send" in scope
         assert "issue.create" in scope
         assert "doc.create" in scope
+
+        # Read capabilities (needed for context gathering before writes)
+        # Email
+        assert "email.read" in scope
+        assert "email.list" in scope
+        assert "email.search" in scope
+        # Calendar
+        assert "calendar.list" in scope
+        assert "calendar.get" in scope
+        # Messaging
+        assert "messaging.list_channels" in scope
+        assert "messaging.get_history" in scope
+        assert "messaging.get_thread" in scope
+        # Issues
+        assert "issue.list" in scope
+        assert "issue.get" in scope
+        assert "issue.search" in scope
+        # Repos
+        assert "repo.list_prs" in scope
+        assert "repo.get_diff" in scope
+        assert "repo.get_reviews" in scope
+        # Workflow
+        assert "workflow.list" in scope
+        assert "workflow.get" in scope
+        assert "workflow.search" in scope
 
 
 class TestCatalogToolsHaveCapabilities:

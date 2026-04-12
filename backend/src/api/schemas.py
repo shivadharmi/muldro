@@ -3,13 +3,11 @@
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 # ── Shared Type Literals ─────────────────────────────────────────
 
-MemoryType = Literal[
-    "episodic", "semantic", "preference", "relationship", "task_context", "procedural"
-]
+MemoryType = Literal["episodic", "semantic", "preference", "relationship", "task_context"]
 MemoryScope = Literal["presentation", "planning", "general"]
 BriefingStyle = Literal["founder", "personal", "academic", "general"]
 
@@ -17,11 +15,13 @@ BriefingStyle = Literal["founder", "personal", "academic", "general"]
 
 
 class CommandRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     command: str
     context: str | None = None
 
 
 class CommandResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     plan_id: str | None = None
     decision: str
     summary: str
@@ -32,6 +32,7 @@ class CommandResponse(BaseModel):
 
 
 class BriefingResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     briefing_id: str
     date: date
     headline: str | None = None
@@ -46,8 +47,9 @@ class BriefingResponse(BaseModel):
 
 
 class BriefingFeedbackRequest(BaseModel):
-    feedback_type: str  # "rating" | "item_acted_on" | "item_dismissed" | "follow_up_asked"
-    rating: int | None = None  # 1-5 when feedback_type="rating"
+    model_config = ConfigDict(extra="ignore")
+    feedback_type: Literal["rating", "item_acted_on", "item_dismissed", "follow_up_asked"]
+    rating: int | None = Field(None, ge=1, le=5)
     item_section: str | None = None  # e.g. "top_priorities", "recommended_actions"
     item_index: int | None = None
     item_title: str | None = None
@@ -56,6 +58,7 @@ class BriefingFeedbackRequest(BaseModel):
 
 
 class BriefingFeedbackResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     feedback_id: str
     briefing_id: str
     feedback_type: str
@@ -63,6 +66,7 @@ class BriefingFeedbackResponse(BaseModel):
 
 
 class BriefingFeedbackSummary(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     briefing_id: str
     total_feedback: int = 0
     average_rating: float | None = None
@@ -75,10 +79,12 @@ class BriefingFeedbackSummary(BaseModel):
 
 
 class ApprovalDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     reason: str | None = None
 
 
 class ApprovalResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     approval_id: str
     status: str
     title: str
@@ -91,6 +97,7 @@ class ApprovalResponse(BaseModel):
 
 
 class TaskResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     task_id: str
     goal: str
     priority: str
@@ -103,11 +110,13 @@ class TaskResponse(BaseModel):
 
 
 class SearchRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     query: str
     scope: str | None = "all"  # memory, entities, events, all
 
 
 class SearchResult(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     type: str  # memory, entity, event
     id: str
     title: str
@@ -116,6 +125,7 @@ class SearchResult(BaseModel):
 
 
 class SearchResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     results: list[SearchResult] = []
 
 
@@ -123,11 +133,13 @@ class SearchResponse(BaseModel):
 
 
 class MeetingPrepRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     meeting_id: str | None = None
     next: bool | None = None
 
 
 class MeetingPrepResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     meeting_id: str
     title: str
     starts_at: datetime | None = None
@@ -142,6 +154,7 @@ class MeetingPrepResponse(BaseModel):
 
 
 class EventIngestRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     source: str
     event_type: str
     entity_type: str
@@ -154,6 +167,7 @@ class EventIngestRequest(BaseModel):
 
 
 class EventIngestResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     event_id: str | None = None
     status: str
     importance_score: float | None = None
@@ -163,6 +177,7 @@ class EventIngestResponse(BaseModel):
 
 
 class DashboardApproval(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     approval_id: str
     title: str
     summary: str | None = None
@@ -172,6 +187,7 @@ class DashboardApproval(BaseModel):
 
 
 class DashboardTask(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     task_id: str
     goal: str
     priority: str
@@ -183,6 +199,7 @@ class DashboardTask(BaseModel):
 
 
 class DashboardMeeting(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     event_id: str
     title: str
     starts_at: datetime | None = None
@@ -191,6 +208,7 @@ class DashboardMeeting(BaseModel):
 
 
 class DashboardTrace(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     trace_id: str
     trigger: str
     agents_invoked: list[str] = []
@@ -199,6 +217,7 @@ class DashboardTrace(BaseModel):
 
 
 class DashboardGoal(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     goal_id: str
     title: str
     progress: float = 0.0
@@ -208,6 +227,7 @@ class DashboardGoal(BaseModel):
 
 
 class DashboardEvent(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     source: str
     event_type: str
     title: str | None = None
@@ -215,6 +235,7 @@ class DashboardEvent(BaseModel):
 
 
 class DashboardResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     headline: str | None = None
     date: date
     pending_approvals: list[DashboardApproval] = []
@@ -231,6 +252,7 @@ class DashboardResponse(BaseModel):
 
 
 class ApprovalDetailResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     approval_id: str
     status: str
     title: str
@@ -250,6 +272,7 @@ class ApprovalDetailResponse(BaseModel):
 
 
 class TaskStepResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     task_id: str
     task_type: str
     status: str
@@ -257,6 +280,7 @@ class TaskStepResponse(BaseModel):
 
 
 class TaskDetailResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     task_id: str
     goal: str
     priority: str
@@ -273,6 +297,7 @@ class TaskDetailResponse(BaseModel):
 
 
 class PerceptionReportRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     source: str
     event_count: int = 0
     status: str = "ok"  # ok | error
@@ -280,6 +305,7 @@ class PerceptionReportRequest(BaseModel):
 
 
 class PerceptionStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     source: str
     last_run_at: datetime | None = None
     event_count: int = 0
@@ -294,19 +320,21 @@ class PerceptionStatusResponse(BaseModel):
 
 
 class ScheduleCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     name: str
     description: str | None = None
-    schedule_type: str = "recurring"  # recurring | one_shot
+    schedule_type: Literal["recurring", "one_shot"] = "recurring"
     cron_expr: str | None = None
     run_at: datetime | None = None
     action_type: str
     action_config: dict | None = None
     enabled: bool = True
-    source: str = "user"  # system | user | reflection
-    priority: str = "medium"  # low | medium | high
+    source: Literal["system", "user", "reflection"] = "user"
+    priority: Literal["low", "medium", "high"] = "medium"
 
 
 class ScheduleUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     name: str | None = None
     description: str | None = None
     cron_expr: str | None = None
@@ -314,10 +342,11 @@ class ScheduleUpdateRequest(BaseModel):
     action_type: str | None = None
     action_config: dict | None = None
     enabled: bool | None = None
-    priority: str | None = None
+    priority: Literal["low", "medium", "high"] | None = None
 
 
 class ScheduleResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     schedule_id: str
     user_id: str
     name: str
@@ -343,5 +372,6 @@ class ScheduleResponse(BaseModel):
 
 
 class HealthResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     status: str = "ok"
     version: str = "0.1.0"

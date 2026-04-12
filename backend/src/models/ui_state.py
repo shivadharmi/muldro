@@ -23,6 +23,8 @@ class UISurface(Base, TimestampMixin):
     )
     surface_type: Mapped[str] = mapped_column(String(32), nullable=False)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    preview: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    detail_config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (Index("ix_ui_surfaces_user_type", "user_id", "surface_type"),)

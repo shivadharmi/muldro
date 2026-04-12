@@ -10,9 +10,9 @@ sequenceDiagram
     participant API as FastAPI /v1/jarvis/chat
     participant O as Orchestrator
     participant P as Planner (Opus)
-    participant RR as RouteResolver
+    participant CR as CapabilityResolver
     participant A as Agent Pipeline
-    participant G as Governor
+    participant TE as TrustEngine
     participant GE as GraphExecutor
     participant PR as Presenter
     participant PA as Persona (Haiku)
@@ -24,24 +24,24 @@ sequenceDiagram
 
     Note over O,P: Step 1: Intent Classification
     O->>P: "Classify this message"
-    P->>P: Structured output (PlannerOutput)
-    P-->>O: {decision, goal, priority, risk_level, tasks[]}
+    P->>P: Structured output (PlanOutput)
+    P-->>O: {goal, reasoning, achievable, priority, steps[], capability_gaps[]}
 
-    Note over O,RR: Step 2: Route Resolution
-    O->>RR: resolve(decision)
-    RR-->>O: agent_pipeline [{agent, message_template, action}]
+    Note over O,CR: Step 2: Capability Resolution
+    O->>CR: resolve(step.capability)
+    CR-->>O: agent assignment per step
 
     Note over O,A: Step 3: Pipeline Execution
-    loop For each pipeline step
+    loop For each step in plan
         O->>A: _call_agent(agent, message)
         A->>A: Tool loop (max 10 rounds)
         A-->>O: agent_result
     end
 
-    alt decision = create_task
+    alt plan has executable steps
         Note over O,GE: Step 4: Plan Execution
-        O->>G: evaluate_plan()
-        G-->>O: PolicyDecision (auto_execute/approval_required/blocked)
+        O->>TE: evaluate trust_level x risk_level (4x4 matrix)
+        TE-->>O: PolicyDecision (auto_execute_silent/auto_execute_notify/approval_required/blocked)
         O->>GE: create_run() + execute_run()
         GE-->>O: run result
     end
@@ -82,7 +82,7 @@ sequenceDiagram
         S->>C: event: agent_done {agent, text, cost_usd, cache_creation_input_tokens, cache_read_input_tokens, thinking_tokens, latency_ms}
     end
 
-    S->>C: event: decision {decision, goal, priority}
+    S->>C: event: plan {goal, reasoning, steps[], capability_gaps[]}
 
     opt If plan execution triggered
         S->>C: event: execution_start {run_id}
@@ -105,92 +105,61 @@ sequenceDiagram
 | `tool_call` | `{agent, tool, input}` | Tool invocation |
 | `tool_result` | `{agent, tool, result, blocked?, latency_ms?}` | Tool output |
 | `agent_done` | `{agent, text, cost_usd, cache_creation_input_tokens, cache_read_input_tokens, thinking_tokens, latency_ms}` | Agent complete |
-| `decision` | `{decision}` | Planner decision extracted |
+| `plan` | `{goal, reasoning, steps[], capability_gaps[]}` | Planner plan extracted |
 | `execution_start` | `{run_id}` | GraphExecutor begins |
 | `execution_result` | `{status, steps}` | Execution outcome |
 | `response` | `{text}` | Final user-facing response |
 | `error` | `{message}` | Error occurred |
 | `done` | `{trace_id}` | Stream end |
 
-## Planner Decisions
+## Planner Output
 
-The Planner returns a structured `PlannerOutput` (Pydantic model) with one of 19 decision types:
+The Planner returns a structured `PlanOutput` (Pydantic model) with capability-based steps rather than decision types:
 
-| Decision | Meaning | Triggers Execution? |
-|----------|---------|-------------------|
-| `acknowledge` | Confirm message received | No |
-| `answer_directly` | Respond without planning | No |
-| `create_task` | Create structured task graph | Yes (Governor -> GraphExecutor) |
-| `draft_reply` | Prepare but don't send response | Yes (Governor -> Operator) |
-| `search_memory` | Query knowledge base | No |
-| `add_to_brief` | Include in daily briefing | No (direct handler) |
-| `ignore` | No action needed | No |
-| `watcher_create` | Create a monitoring rule | No |
-| `goal_update` | Create/update user goal | No |
-| `read_source` | Read from external source | No (Observer -> Presenter) |
-| `research` | Deep context gathering | No (Researcher) |
-| `observe` | Background observation | No (Observer) |
-| `remember` | Entity/memory updates | No (Librarian) |
-| `ask_user` | Request clarification | No (Presenter) |
-| `recommend` | Suggest options | No (Presenter) |
-| `summarize` | Summarize information | No (Presenter) |
-| `schedule_reminder` | Create one-shot reminder | No (direct handler) |
-| `set_goal` | Store goal in memory | No (direct handler) |
-| `set_instruction` | Create trigger/schedule | No (direct handler) |
-
-### PlannerOutput Contract
+### PlanOutput Contract
 
 ```python
-class PlannerOutput(BaseModel):
-    decision: Literal["acknowledge", "answer_directly", "create_task", ...]
-    goal: str = ""
-    reasoning_summary: str = ""
+class PlanOutput(BaseModel):
+    goal: str
+    reasoning: str
+    achievable: bool
     priority: Literal["low", "medium", "high", "critical"] = "medium"
-    risk_level: Literal["none", "low", "medium", "high"] = "low"
-    execution_mode: Literal["auto_execute", "approval_required", "draft_only"] = "approval_required"
-    tasks: list[PlannerTask] = []
+    steps: list[PlanStep] = []
+    success_criteria: str = ""
+    capability_gaps: list[CapabilityGap] = []
+    plan_id: str | None = None
+    requires_user_input: bool = False
+
+class PlanStep(BaseModel):
+    step_id: str
+    description: str
+    actor: str                    # agent name
+    capability: str               # e.g., "email.read", "search.web"
+    input: dict = {}
+    depends_on: list[str] = []    # step_id references
+    risk: str = "low"
+    user_context: str = ""
 ```
 
-The Planner uses Claude's `tool_use` structured output with a text fallback parser for resilience.
+The Planner uses Claude's `tool_use` structured output with a text fallback parser (`extract_plan`) for resilience. A circular dependency validator ensures step DAGs are acyclic.
 
-## Route Resolution
+## Capability Resolution
 
-The `RouteResolver` dynamically maps planner decisions to agent pipelines, replacing the previous hardcoded if/elif routing. Routes are stored in the database and seeded with 16 defaults:
+The `CapabilityResolver` (`src/services/capability_resolver.py`) maps step capabilities to agents. This replaces the former `RouteResolver` and decision-type routing.
 
-| Decision Type | Agent Pipeline | Notes |
-|--------------|---------------|-------|
-| `create_task` | governor -> operator | Execution via GraphExecutor |
-| `draft_reply` | governor -> operator | Gmail draft creation via `_draft_action` |
-| `read_source` | observer -> presenter | External source reads (gmail_*, calendar_*) |
-| `research` | researcher | Deep context gathering |
-| `observe` | observer | Source observation |
-| `remember` | librarian | Entity/memory extraction |
-| `add_to_brief` | librarian | Stores as `briefing_item` memory |
-| `search_memory` | researcher | Knowledge search |
-| `ask_user` | (empty) | Direct response |
-| `recommend` | (empty) | Direct response |
-| `summarize` | (empty) | Direct response |
-| `answer_directly` | (empty) | Context-based answer |
-| `watcher_create` | observer | Create monitoring rule |
-| `goal_update` | planner | Goal CRUD |
-| `schedule_reminder` | (empty) | Direct handler → one-shot schedule |
-| `acknowledge` | (empty) | Fallback |
+Each `PlanStep` has a `capability` field (e.g., `email.read`, `search.web`, `memory.store`). The `CapabilityResolver` looks up which agent owns that capability via the agent's `capability_scope` and assigns the step accordingly. The Planner can discover available capabilities via the `discover_capabilities` tool and `capability_summary` service.
 
-**Direct handlers** (`set_goal`, `set_instruction`, `schedule_reminder`, `add_to_brief`) execute before pipeline resolution in both `process_message` and `process_message_stream`.
-
-Each pipeline step can have conditions (`has_key`, `has_truthy_key`, `not_has_key`, `field:name`) and special actions (`execute_plan` for GraphExecutor bridging). The `has_truthy_key` condition checks that a key exists AND has a truthy value (avoids Pydantic null serialization issues).
-
-Routes are fully customizable via the `/v1/routes` CRUD API.
+There are no hardcoded decision-to-agent mappings. Routing is purely capability-driven.
 
 ## Context Assembly
 
-Four agents receive pre-loaded context (Planner, Presenter, Researcher, Librarian):
+Four agents receive pre-loaded context (Planner, Presenter, Perceiver, Librarian):
 
 ```mermaid
 graph TD
     CB[ContextBuilder] --> M[MemoryService<br/>Episodic + Preference memories]
     CB --> WM[WorldModel<br/>Relevant entities with importance]
-    CB --> GM[MemoryService<br/>Goal memories (memory_type=goal)]
+    CB --> GM["MemoryService<br/>Goal memories (memory_type=goal)"]
     CB --> P[ProcedureLibrary<br/>Task-type procedures]
 
     M --> CP[ContextPack]
@@ -198,12 +167,26 @@ graph TD
     GM --> CP
     P --> CP
 
-    CP --> SP[System Prompt<br/>--- CONTEXT ---<br/>goals, entities, memories, procedures]
+    CB --> GR[GraphEngine<br/>Neo4j graph relationships]
+    CB --> VS[VectorStore<br/>Qdrant semantic matches]
+    CB --> PP[Preferences<br/>Explicit preference injection]
+
+    M --> CP[ContextPack]
+    WM --> CP
+    GM --> CP
+    P --> CP
+    GR --> CP
+    VS --> CP
+    PP --> CP
+
+    CP --> SP[System Prompt<br/>--- CONTEXT ---<br/>goals, entities, memories, procedures,<br/>graph relationships, preferences]
 ```
 
 The `ContextPack` is converted to a markdown block appended to the agent's system prompt via `to_prompt(max_tokens)`. When the context exceeds `max_tokens`, it is truncated by priority order: goals > entities > events > preferences > artifacts > procedures. Memory retrieval uses a composite ranking formula (see [Services Reference](services.md)).
 
-**Prompt architecture:** System prompts are split into `JARVIS_SOUL_CORE` (shared by all 8 agents) and `JARVIS_DECISION_FRAMEWORK` (Planner-only). This prevents non-Planner agents from making routing decisions.
+The `ContextBuilder` also accepts `graph_engine` (Neo4j) and `vector_store` (Qdrant) for enrichment. Explicit preferences are always injected via `get_user_preferences()` to ensure they influence decisions even when they do not match the current query semantically.
+
+**Prompt architecture:** System prompts are split into `JARVIS_SOUL_CORE` (shared by all 7 agents) and `PLANNER_PROMPT_V2` (Planner-only 7-step decomposition). Perceiver has `PERCEIVER_PROMPT` (7-step read-only). This prevents non-Planner agents from making routing decisions.
 
 ## Streaming Implementation
 
@@ -220,7 +203,9 @@ All chat interactions create `Conversation` and `Message` records scoped by `wor
 
 All inter-agent communication is validated through Pydantic contracts:
 
-- **PlannerOutput** is validated after Planner returns (graceful fallback to text parsing on validation failure)
+- **PlanOutput** is validated after Planner returns (graceful fallback to text parsing via `extract_plan` on validation failure)
+- **PlanStep** defines each step with capability, actor, dependencies, and risk
 - **AgentEnvelope** / **AgentResult** wrap every `_call_agent()` invocation
-- **PolicyDecision** returned by Governor for plan evaluation
+- **PolicyDecision** returned by TrustEngine for plan evaluation (includes `auto_execute_notify` and `auto_execute_silent` modes)
 - **StepResult** / **ToolCallRequest** / **ToolCallResult** used in GraphExecutor execution
+- **SurfaceUpdate** tracks execution phases (plan_ready, executing, approval_needed, completed, failed) with 9 emission points in GraphExecutor

@@ -46,6 +46,47 @@ class ArtifactCreateRequest(BaseModel):
     metadata_: dict | None = None
 
 
+async def _embed_artifact(
+    artifact_id: str,
+    title: str | None,
+    description: str | None,
+    artifact_type: str,
+    mime_type: str | None,
+    user_id: str,
+    embedding_service,
+    vector_store,
+    workspace_id: str = "",
+) -> None:
+    """Embed artifact metadata into Qdrant (best-effort)."""
+    try:
+        if not (title or description):
+            return
+        parts = [artifact_type, title or "", description or ""]
+        text = " ".join(p for p in parts if p)
+        embedding = await embedding_service.embed_text(text)
+        if embedding:
+            from datetime import datetime, timezone
+
+            await vector_store.upsert(
+                collection="artifacts",
+                id=artifact_id,
+                vector=embedding,
+                payload={
+                    "artifact_id": artifact_id,
+                    "workspace_id": workspace_id,
+                    "artifact_type": artifact_type,
+                    "filename": title or "",
+                    "mime_type": mime_type or "",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                },
+                user_id=user_id,
+            )
+    except Exception:
+        logging.getLogger(__name__).debug(
+            "Artifact embedding failed for %s", artifact_id, exc_info=True
+        )
+
+
 def _to_item(a: Artifact) -> ArtifactItem:
     return ArtifactItem(
         artifact_id=a.artifact_id,
@@ -181,5 +222,28 @@ async def create_artifact(
     )
     db.add(artifact)
     await db.commit()
+
+    # Embed artifact into Qdrant for vector search
+    try:
+        from src.services.embedding_service import EmbeddingService
+        from src.services.vector_store import VectorStore
+
+        if settings.qdrant_url:
+            vs = VectorStore(settings)
+            es = EmbeddingService(settings)
+            await _embed_artifact(
+                artifact_id=artifact_id,
+                title=req.title,
+                description=(req.metadata_ or {}).get("description"),
+                artifact_type=req.artifact_type,
+                mime_type=req.mime_type,
+                user_id=user_id,
+                embedding_service=es,
+                vector_store=vs,
+                workspace_id=workspace_id,
+            )
+    except Exception:
+        pass
+
     await db.refresh(artifact)
     return _to_item(artifact)

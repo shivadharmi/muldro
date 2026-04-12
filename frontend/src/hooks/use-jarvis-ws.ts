@@ -1,11 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { A2UISurface, JarvisMessage } from "@/lib/a2ui-types";
+import type { ActionResult, JarvisMessage, SurfaceUpdate, WorkspaceSurfacePush } from "@/lib/a2ui-types";
 import { getStoredToken } from "@/lib/auth";
 
 function getWsUrl(userId: string): string {
-  // No token in URL — auth via message after connect
   if (process.env.NEXT_PUBLIC_WS_URL) {
     return `${process.env.NEXT_PUBLIC_WS_URL}/ws/${userId}`;
   }
@@ -18,16 +17,18 @@ function getWsUrl(userId: string): string {
 
 interface UseJarvisWsOptions {
   userId: string;
-  onSurface?: (surface: A2UISurface) => void;
-  onSurfaceUpdate?: (surfaceId: string, surface: A2UISurface) => void;
+  onSurfacePush?: (surface: WorkspaceSurfacePush) => void;
+  onSurfaceUpdate?: (update: SurfaceUpdate) => void;
+  onActionResult?: (result: ActionResult) => void;
   onNotification?: (msg: JarvisMessage) => void;
   enabled?: boolean;
 }
 
 export function useJarvisWs({
   userId,
-  onSurface,
+  onSurfacePush,
   onSurfaceUpdate,
+  onActionResult,
   onNotification,
   enabled = true,
 }: UseJarvisWsOptions) {
@@ -35,16 +36,19 @@ export function useJarvisWs({
   const [connected, setConnected] = useState(false);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  // Store callbacks in refs so the WebSocket effect doesn't re-run when they change
-  const onSurfaceRef = useRef(onSurface);
+  const onSurfacePushRef = useRef(onSurfacePush);
+  const onActionResultRef = useRef(onActionResult);
   const onSurfaceUpdateRef = useRef(onSurfaceUpdate);
   const onNotificationRef = useRef(onNotification);
   useEffect(() => {
-    onSurfaceRef.current = onSurface;
-  }, [onSurface]);
+    onSurfacePushRef.current = onSurfacePush;
+  }, [onSurfacePush]);
   useEffect(() => {
     onSurfaceUpdateRef.current = onSurfaceUpdate;
   }, [onSurfaceUpdate]);
+  useEffect(() => {
+    onActionResultRef.current = onActionResult;
+  }, [onActionResult]);
   useEffect(() => {
     onNotificationRef.current = onNotification;
   }, [onNotification]);
@@ -52,7 +56,6 @@ export function useJarvisWs({
   useEffect(() => {
     if (!enabled) return;
 
-    // Prevent duplicate connections
     if (
       wsRef.current?.readyState === WebSocket.OPEN ||
       wsRef.current?.readyState === WebSocket.CONNECTING
@@ -69,12 +72,10 @@ export function useJarvisWs({
       wsRef.current = ws;
 
       ws.onopen = () => {
-        // Send auth message immediately after connect
         const token = getStoredToken();
         if (token) {
           ws.send(JSON.stringify({ type: "auth", token }));
         } else {
-          // No token — close immediately
           ws.close();
         }
       };
@@ -84,31 +85,36 @@ export function useJarvisWs({
         try {
           msg = JSON.parse(event.data) as JarvisMessage;
         } catch {
-          console.warn(
-            "[jarvis-ws] Malformed JSON:",
-            typeof event.data === "string" ? event.data.slice(0, 200) : "non-string"
-          );
           return;
         }
 
-        if (!msg || typeof msg !== "object" || !("type" in msg)) {
-          console.warn("[jarvis-ws] Invalid message structure");
-          return;
-        }
+        if (!msg || typeof msg !== "object" || !("type" in msg)) return;
 
         if (msg.type === "auth_ok") {
           setConnected(true);
         } else if (msg.type === "auth_error") {
           ws.close();
-        } else if (msg.type === "surface" && onSurfaceRef.current) {
-          // Validate surface payload before dispatching
-          if (!msg.surface?.id || !Array.isArray(msg.surface?.children)) {
-            console.warn("[jarvis-ws] Invalid surface payload:", msg.surface?.id);
-            return;
+        } else if (msg.type === "surface" && onSurfacePushRef.current) {
+          if (msg.surface?.id) {
+            onSurfacePushRef.current(msg.surface);
           }
-          onSurfaceRef.current(msg.surface);
+        } else if (msg.type === "action_result" && onActionResultRef.current) {
+          onActionResultRef.current({
+            action: msg.action,
+            status: (msg.status as "success" | "error") ?? "success",
+            result: msg.result,
+            error: msg.error,
+          });
         } else if (msg.type === "surface_update" && onSurfaceUpdateRef.current) {
-          onSurfaceUpdateRef.current(msg.surface_id, msg.payload);
+          onSurfaceUpdateRef.current({
+            surface_id: msg.surface_id,
+            phase: msg.phase,
+            steps: msg.steps,
+            current_step: msg.current_step,
+            progress: msg.progress,
+            approval: msg.approval,
+            results: msg.results,
+          });
         } else if (msg.type === "heartbeat") {
           // no-op
         } else if (onNotificationRef.current) {

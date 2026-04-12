@@ -4,7 +4,6 @@ Uses Google Workspace MCP server (preferred) or Gmail integration fallback
 for real email operations, and Claude for classification and draft generation.
 """
 
-import json
 import logging
 
 from src.workflows.context import WorkflowContext
@@ -148,10 +147,9 @@ async def classify_emails(ctx: WorkflowContext) -> dict:
             system=CLASSIFY_PROMPT,
             messages=[{"role": "user", "content": "\n---\n".join(email_summaries)}],
         )
-        text = response.content[0].text
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1].rsplit("```", 1)[0]
-        classified = json.loads(text)
+        from src.llm_utils import parse_llm_json
+
+        classified = parse_llm_json(response.content[0].text)
     except Exception:
         logger.warning("Email classification failed", exc_info=True)
         classified = [
@@ -241,10 +239,9 @@ async def draft_responses(ctx: WorkflowContext) -> dict:
             system=DRAFT_PROMPT,
             messages=[{"role": "user", "content": "\n---\n".join(to_draft)}],
         )
-        text = response.content[0].text
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1].rsplit("```", 1)[0]
-        drafts = json.loads(text)
+        from src.llm_utils import parse_llm_json
+
+        drafts = parse_llm_json(response.content[0].text)
     except Exception:
         logger.warning("Draft generation failed", exc_info=True)
         drafts = []

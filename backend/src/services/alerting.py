@@ -57,8 +57,8 @@ class AlertingService:
             )
 
         perf = await self._trace_store.get_agent_performance(time_range_hours=1)
-        observer = perf.get("observer", {})
-        avg_ms = observer.get("avg_duration_ms", 0)
+        perceiver = perf.get("perceiver", {})
+        avg_ms = perceiver.get("avg_duration_ms", 0)
 
         status = "ok"
         if avg_ms > threshold:
@@ -71,7 +71,7 @@ class AlertingService:
             status=status,
             value=avg_ms,
             threshold=threshold,
-            message=f"Observer avg latency: {avg_ms}ms",
+            message=f"Perceiver avg latency: {avg_ms}ms",
         )
 
     async def _check_error_rate(self) -> SLOCheck:

@@ -36,6 +36,7 @@ class GmailConnector(BaseConnector):
             return [], cursor
 
         events = []
+        seen_msg_ids: set[str] = set()
         new_cursor = cursor
 
         try:
@@ -54,6 +55,9 @@ class GmailConnector(BaseConnector):
                         for history in data.get("history", []):
                             for msg_added in history.get("messagesAdded", []):
                                 msg_id = msg_added["message"]["id"]
+                                if msg_id in seen_msg_ids:
+                                    continue
+                                seen_msg_ids.add(msg_id)
                                 event = await self._fetch_message_as_event(
                                     client, access_token, user_id, msg_id
                                 )
@@ -66,15 +70,19 @@ class GmailConnector(BaseConnector):
                     # Initial: list recent messages
                     resp = await client.get(
                         "https://gmail.googleapis.com/gmail/v1/users/me/messages",
-                        params={"maxResults": 10, "q": "is:inbox newer_than:1d"},
+                        params={"maxResults": 25, "q": "is:inbox newer_than:3d"},
                         headers={"Authorization": f"Bearer {access_token}"},
                         timeout=15,
                     )
                     if resp.status_code == 200:
                         data = resp.json()
                         for msg_meta in data.get("messages", []):
+                            msg_id = msg_meta["id"]
+                            if msg_id in seen_msg_ids:
+                                continue
+                            seen_msg_ids.add(msg_id)
                             event = await self._fetch_message_as_event(
-                                client, access_token, user_id, msg_meta["id"]
+                                client, access_token, user_id, msg_id
                             )
                             if event:
                                 events.append(event)
@@ -129,7 +137,19 @@ class GmailConnector(BaseConnector):
         """Fetch a single Gmail message and convert to RawEvent."""
         resp = await client.get(
             f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg_id}",
-            params={"format": "metadata", "metadataHeaders": ["From", "Subject", "Date"]},
+            params={
+                "format": "metadata",
+                "metadataHeaders": [
+                    "From",
+                    "To",
+                    "Cc",
+                    "Subject",
+                    "Date",
+                    "Message-ID",
+                    "In-Reply-To",
+                    "References",
+                ],
+            },
             headers={"Authorization": f"Bearer {access_token}"},
             timeout=10,
         )
@@ -152,7 +172,15 @@ class GmailConnector(BaseConnector):
             title=subject,
             summary=snippet[:500],
             actor={"type": "person", "email": sender, "name": sender},
-            raw_payload={"message_id": msg_id, "labels": msg.get("labelIds", [])},
+            raw_payload={
+                "message_id": msg_id,
+                "labels": msg.get("labelIds", []),
+                "to": headers.get("To", ""),
+                "cc": headers.get("Cc", ""),
+                "rfc_message_id": headers.get("Message-ID", ""),
+                "in_reply_to": headers.get("In-Reply-To", ""),
+                "references": headers.get("References", ""),
+            },
         )
 
     async def execute_action(self, action: str, params: dict, credentials: dict) -> dict:
@@ -340,7 +368,16 @@ class GmailConnector(BaseConnector):
             f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg_id}",
             params={
                 "format": "metadata",
-                "metadataHeaders": ["From", "To", "Subject", "Date"],
+                "metadataHeaders": [
+                    "From",
+                    "To",
+                    "Cc",
+                    "Subject",
+                    "Date",
+                    "Message-ID",
+                    "In-Reply-To",
+                    "References",
+                ],
             },
             headers={"Authorization": f"Bearer {access_token}"},
             timeout=10,
@@ -355,8 +392,12 @@ class GmailConnector(BaseConnector):
             "thread_id": msg.get("threadId"),
             "from": headers.get("From", ""),
             "to": headers.get("To", ""),
+            "cc": headers.get("Cc", ""),
             "subject": headers.get("Subject", "(no subject)"),
             "date": headers.get("Date", ""),
             "snippet": msg.get("snippet", ""),
             "labels": msg.get("labelIds", []),
+            "rfc_message_id": headers.get("Message-ID", ""),
+            "in_reply_to": headers.get("In-Reply-To", ""),
+            "references": headers.get("References", ""),
         }

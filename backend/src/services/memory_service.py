@@ -10,11 +10,10 @@ Responsibilities:
 - Expire or demote low-value memories
 """
 
-import json
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import case, select, update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
@@ -81,16 +80,85 @@ Rules:
 """
 
 
+def _compute_decayed_stability(current_stability: float, days_since_access: int) -> float:
+    """Compute new stability score with time-based decay and access boost.
+
+    Formula: min(1.0, max(0.0, current - 0.02 * days) + 0.1)
+    - Decays by 0.02 per day since last access
+    - Adds 0.1 boost for the current access
+    - Clamped to [0.0, 1.0]
+    """
+    decayed = max(0.0, current_stability - 0.02 * days_since_access)
+    return min(1.0, decayed + 0.1)
+
+
 class MemoryService:
     """Manage Jarvis long-term memory."""
 
-    def __init__(self, settings: Settings, db: AsyncSession, event_bus=None, vector_store=None):
+    def __init__(
+        self,
+        settings: Settings,
+        db: AsyncSession,
+        event_bus=None,
+        vector_store=None,
+        dead_letter=None,
+    ):
         self._settings = settings
         self._db = db
         self._client = get_anthropic_client(settings)
         self._embedder = EmbeddingService(settings)
         self._event_bus = event_bus
         self._vector_store = vector_store
+        self._dead_letter = dead_letter
+
+    async def _enqueue_failed_embedding(
+        self, record_id: str, user_id: str, collection: str = "memories"
+    ) -> None:
+        """Enqueue a failed embedding for retry via DLQ."""
+        if not self._dead_letter:
+            return
+        try:
+            await self._dead_letter.enqueue(
+                user_id=user_id,
+                operation_type="failed_embedding",
+                error_type="EmbeddingFailure",
+                error_message=f"Embedding/upsert failed for {collection}:{record_id}",
+                payload={
+                    "record_id": record_id,
+                    "collection": collection,
+                    "record_type": "memory",
+                },
+            )
+        except Exception:
+            logger.warning(
+                "Failed to enqueue embedding retry for %s",
+                record_id,
+                exc_info=True,
+            )
+
+    @staticmethod
+    def _build_memory_payload(
+        memory_type: str,
+        fact_text: str,
+        user_id: str,
+        confidence: float = 0.5,
+        stability_score: float = 0.0,
+        entity_ids: list[str] | None = None,
+        scope: str | None = None,
+        preference_strength: str | None = None,
+    ) -> dict:
+        """Build enriched Qdrant payload for a memory."""
+        return {
+            "memory_type": memory_type,
+            "fact_text": fact_text,
+            "user_id": user_id,
+            "confidence": confidence,
+            "stability_score": stability_score,
+            "entity_ids": entity_ids or [],
+            "scope": scope or "general",
+            "preference_strength": preference_strength,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
 
     async def extract_and_store(
         self,
@@ -103,6 +171,7 @@ class MemoryService:
         """Extract memories from text and store them. Returns memory_ids."""
         extracted = await self._call_extraction(source_text)
         memory_ids = []
+        new_facts: list[tuple[str, str]] = []  # (memory_id, fact_text)
 
         for mem_data in extracted.get("memories", []):
             fact_text = mem_data.get("fact_text", "")
@@ -133,19 +202,32 @@ class MemoryService:
             )
             self._db.add(memory)
             memory_ids.append(memory_id)
+            new_facts.append((memory_id, fact_text))
 
-            if self._vector_store and embedding:
-                await self._vector_store.upsert(
-                    "memories",
-                    memory_id,
-                    embedding,
-                    {
-                        "memory_type": mem_data.get("memory_type"),
-                        "fact_text": fact_text,
-                        "user_id": user_id,
-                    },
-                    user_id,
-                )
+            if embedding:
+                if self._vector_store:
+                    try:
+                        await self._vector_store.upsert(
+                            "memories",
+                            memory_id,
+                            embedding,
+                            self._build_memory_payload(
+                                memory_type=mem_data.get("memory_type", "semantic"),
+                                fact_text=fact_text,
+                                user_id=user_id,
+                                confidence=mem_data.get("confidence", 0.5),
+                                entity_ids=entity_ids,
+                                scope=mem_data.get("scope"),
+                            ),
+                            user_id,
+                        )
+                    except Exception:
+                        logger.debug("Qdrant upsert failed for %s", memory_id, exc_info=True)
+                        await self._enqueue_failed_embedding(memory_id, user_id)
+                else:
+                    await self._enqueue_failed_embedding(memory_id, user_id)
+            else:
+                await self._enqueue_failed_embedding(memory_id, user_id)
 
         if memory_ids:
             await self._db.flush()
@@ -154,6 +236,29 @@ class MemoryService:
                 len(memory_ids),
                 len(source_event_ids),
             )
+
+            # Defer contradiction checks to background (avoids N Claude calls per store)
+            for mid, fact in new_facts:
+                if self._event_bus:
+                    try:
+                        await self._event_bus.publish(
+                            self._event_bus.event_stream(user_id),
+                            "contradiction_check_requested",
+                            {
+                                "memory_id": mid,
+                                "fact_text": fact,
+                                "user_id": user_id,
+                                "workspace_id": workspace_id,
+                            },
+                            user_id=user_id,
+                        )
+                    except Exception:
+                        logger.debug(
+                            "Deferred contradiction check publish failed for %s",
+                            mid,
+                            exc_info=True,
+                        )
+
             for mid in memory_ids:
                 await self._emit_event("memory.created", user_id, {"memory_id": mid})
 
@@ -202,18 +307,30 @@ class MemoryService:
             self._db.add(memory)
             memory_ids.append(memory_id)
 
-            if self._vector_store and embedding:
-                await self._vector_store.upsert(
-                    "memories",
-                    memory_id,
-                    embedding,
-                    {
-                        "memory_type": "preference",
-                        "fact_text": fact_text,
-                        "user_id": user_id,
-                    },
-                    user_id,
-                )
+            if embedding:
+                if self._vector_store:
+                    try:
+                        await self._vector_store.upsert(
+                            "memories",
+                            memory_id,
+                            embedding,
+                            self._build_memory_payload(
+                                memory_type="preference",
+                                fact_text=fact_text,
+                                user_id=user_id,
+                                confidence=pref_data.get("confidence", 0.5),
+                                scope=pref_data.get("category"),
+                                preference_strength=pref_data.get("strength"),
+                            ),
+                            user_id,
+                        )
+                    except Exception:
+                        logger.debug("Qdrant upsert failed for %s", memory_id, exc_info=True)
+                        await self._enqueue_failed_embedding(memory_id, user_id)
+                else:
+                    await self._enqueue_failed_embedding(memory_id, user_id)
+            else:
+                await self._enqueue_failed_embedding(memory_id, user_id)
 
         if memory_ids:
             await self._db.flush()
@@ -263,18 +380,31 @@ class MemoryService:
         self._db.add(memory)
         await self._db.flush()
 
-        if self._vector_store and embedding:
-            await self._vector_store.upsert(
-                "memories",
-                memory_id,
-                embedding,
-                {
-                    "memory_type": "goal",
-                    "fact_text": fact_text,
-                    "user_id": user_id,
-                },
-                user_id,
-            )
+        if embedding:
+            if self._vector_store:
+                try:
+                    await self._vector_store.upsert(
+                        "memories",
+                        memory_id,
+                        embedding,
+                        self._build_memory_payload(
+                            memory_type="goal",
+                            fact_text=fact_text,
+                            user_id=user_id,
+                            confidence=0.9,
+                            stability_score=0.5,
+                            entity_ids=entity_ids,
+                            scope="planning",
+                        ),
+                        user_id,
+                    )
+                except Exception:
+                    logger.debug("Qdrant upsert failed for %s", memory_id, exc_info=True)
+                    await self._enqueue_failed_embedding(memory_id, user_id)
+            else:
+                await self._enqueue_failed_embedding(memory_id, user_id)
+        else:
+            await self._enqueue_failed_embedding(memory_id, user_id)
 
         logger.info("Goal memory stored: %s '%s'", memory_id, title)
         return memory_id
@@ -313,18 +443,30 @@ class MemoryService:
         self._db.add(memory)
         await self._db.flush()
 
-        if self._vector_store and embedding:
-            await self._vector_store.upsert(
-                "memories",
-                memory_id,
-                embedding,
-                {
-                    "memory_type": "preference",
-                    "fact_text": fact_text,
-                    "user_id": user_id,
-                },
-                user_id,
-            )
+        if embedding:
+            if self._vector_store:
+                try:
+                    await self._vector_store.upsert(
+                        "memories",
+                        memory_id,
+                        embedding,
+                        self._build_memory_payload(
+                            memory_type="preference",
+                            fact_text=fact_text,
+                            user_id=user_id,
+                            confidence=0.95,
+                            stability_score=0.8,
+                            scope="general",
+                        ),
+                        user_id,
+                    )
+                except Exception:
+                    logger.debug("Qdrant upsert failed for %s", memory_id, exc_info=True)
+                    await self._enqueue_failed_embedding(memory_id, user_id)
+            else:
+                await self._enqueue_failed_embedding(memory_id, user_id)
+        else:
+            await self._enqueue_failed_embedding(memory_id, user_id)
 
         logger.info(
             "Instruction memory stored: %s '%s'",
@@ -339,6 +481,8 @@ class MemoryService:
         workspace_id: str,
         text: str,
         source: str = "perception",
+        relevance_score: float | None = None,
+        signal_source: str | None = None,
     ) -> str:
         """Store a briefing item as a short-lived memory (24h TTL).
 
@@ -357,27 +501,107 @@ class MemoryService:
             confidence=0.8,
             stability_score=0.3,
             source_event_ids=[],
-            provenance={"source": source},
+            provenance={
+                "source": source,
+                **({"relevance_score": relevance_score} if relevance_score is not None else {}),
+                **({"signal_source": signal_source} if signal_source is not None else {}),
+            },
             ttl_days=1,
             status="active",
         )
         self._db.add(memory)
         await self._db.flush()
 
-        if self._vector_store and embedding:
-            await self._vector_store.upsert(
-                "memories",
-                memory_id,
-                embedding,
-                {
-                    "memory_type": "briefing_item",
-                    "fact_text": text,
-                    "user_id": user_id,
-                },
-                user_id,
-            )
+        if embedding:
+            if self._vector_store:
+                try:
+                    await self._vector_store.upsert(
+                        "memories",
+                        memory_id,
+                        embedding,
+                        self._build_memory_payload(
+                            memory_type="briefing_item",
+                            fact_text=text,
+                            user_id=user_id,
+                            confidence=0.8,
+                            stability_score=0.3,
+                            scope="planning",
+                        ),
+                        user_id,
+                    )
+                except Exception:
+                    logger.debug("Qdrant upsert failed for %s", memory_id, exc_info=True)
+                    await self._enqueue_failed_embedding(memory_id, user_id)
+            else:
+                await self._enqueue_failed_embedding(memory_id, user_id)
+        else:
+            await self._enqueue_failed_embedding(memory_id, user_id)
 
         logger.info("Briefing memory stored: %s '%s'", memory_id, text[:80])
+        return memory_id
+
+    async def store_memory(
+        self,
+        user_id: str,
+        fact_text: str,
+        memory_type: str = "fact",
+        scope: str = "general",
+        entity_ids: list[str] | None = None,
+        workspace_id: str = "",
+        ttl_days: int | None = None,
+        source: str = "agent",
+    ) -> str:
+        """Store a single memory directly (no Claude extraction).
+
+        Returns the memory_id.
+        """
+        embedding = await self._embedder.embed_text(fact_text)
+        memory_id = f"mem_{ULID()}"
+        memory = Memory(
+            memory_id=memory_id,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            memory_type=memory_type,
+            scope=scope,
+            fact_text=fact_text,
+            confidence=0.8,
+            stability_score=0.0,
+            source_event_ids=[],
+            provenance={"source": source, "extraction_method": "direct"},
+            ttl_days=ttl_days,
+            status="active",
+            entity_ids=entity_ids,
+        )
+        self._db.add(memory)
+        await self._db.flush()
+
+        if embedding:
+            if self._vector_store:
+                try:
+                    await self._vector_store.upsert(
+                        "memories",
+                        memory_id,
+                        embedding,
+                        self._build_memory_payload(
+                            memory_type=memory_type,
+                            fact_text=fact_text,
+                            user_id=user_id,
+                            confidence=0.8,
+                            entity_ids=entity_ids,
+                            scope=scope,
+                        ),
+                        user_id,
+                    )
+                except Exception:
+                    logger.debug("Qdrant upsert failed for %s", memory_id, exc_info=True)
+                    await self._enqueue_failed_embedding(memory_id, user_id)
+            else:
+                await self._enqueue_failed_embedding(memory_id, user_id)
+        else:
+            await self._enqueue_failed_embedding(memory_id, user_id)
+
+        logger.info("Memory stored: %s type=%s '%s'", memory_id, memory_type, fact_text[:80])
+        await self._emit_event("memory.created", user_id, {"memory_id": memory_id})
         return memory_id
 
     async def retrieve(
@@ -517,6 +741,16 @@ class MemoryService:
                     cand_id,
                     new_memory_id,
                 )
+                # Cascade delete from Qdrant
+                if self._vector_store:
+                    try:
+                        await self._vector_store.delete("memories", cand_id)
+                    except Exception:
+                        logger.debug(
+                            "Qdrant cascade delete failed for superseded %s",
+                            cand_id,
+                            exc_info=True,
+                        )
 
         if superseded:
             await self._db.flush()
@@ -546,10 +780,9 @@ class MemoryService:
                     }
                 ],
             )
-            result_text = response.content[0].text
-            if result_text.startswith("```"):
-                result_text = result_text.split("\n", 1)[1].rsplit("```", 1)[0]
-            return json.loads(result_text).get("contradicts", False)
+            from src.llm_utils import parse_llm_json
+
+            return parse_llm_json(response.content[0].text).get("contradicts", False)
         except Exception:
             logger.debug("Contradiction check failed", exc_info=True)
             return False
@@ -621,6 +854,16 @@ class MemoryService:
                 duplicate.status = "merged"
                 merged_ids.add(duplicate.memory_id)
                 merged_count += 1
+                # Cascade delete from Qdrant
+                if self._vector_store:
+                    try:
+                        await self._vector_store.delete("memories", duplicate.memory_id)
+                    except Exception:
+                        logger.debug(
+                            "Qdrant cascade delete failed for merged %s",
+                            duplicate.memory_id,
+                            exc_info=True,
+                        )
 
                 score = s.get("score", 0.0)
                 logger.info(
@@ -646,22 +889,31 @@ class MemoryService:
         return merged_count
 
     async def refresh_stability(self, memory_id: str, user_id: str) -> None:
-        """Refresh memory stability when accessed.
+        """Refresh memory stability with time-based decay + access boost.
 
-        Increments refresh_count, updates last_accessed_at, and increases
-        stability_score by 0.1 (capped at 1.0).
+        Decays stability by 0.02 per day since last access, then adds 0.1.
+        This ensures unused memories gradually decay while accessed ones stay stable.
         """
         try:
+            now = datetime.now(timezone.utc)
+
+            # Fetch current memory to compute decay
+            result = await self._db.execute(select(Memory).where(Memory.memory_id == memory_id))
+            memory = result.scalar_one_or_none()
+            if not memory:
+                return
+
+            last_access = memory.last_accessed_at or memory.created_at
+            days_since = (now - last_access).days if last_access else 0
+            new_stability = _compute_decayed_stability(memory.stability_score or 0.0, days_since)
+
             stmt = (
                 update(Memory)
                 .where(Memory.memory_id == memory_id)
                 .values(
                     refresh_count=Memory.refresh_count + 1,
-                    last_accessed_at=datetime.now(timezone.utc),
-                    stability_score=case(
-                        (Memory.stability_score + 0.1 < 1.0, Memory.stability_score + 0.1),
-                        else_=1.0,
-                    ),
+                    last_accessed_at=now,
+                    stability_score=new_stability,
                 )
             )
             await self._db.execute(stmt)
@@ -672,7 +924,6 @@ class MemoryService:
                 {"action": "stability_refresh", "memory_id": memory_id},
             )
         except Exception:
-            # Rollback so the session isn't left in a failed transaction state
             try:
                 await self._db.rollback()
             except Exception:
@@ -703,10 +954,14 @@ class MemoryService:
             )
 
         # Step 1: Qdrant semantic search
+        qdrant_filters = {}
+        if workspace_id:
+            qdrant_filters["workspace_id"] = workspace_id
         qdrant_results = await self._vector_store.search(
             "memories",
             query_embedding,
             user_id,
+            filters=qdrant_filters if qdrant_filters else None,
             limit=max_results * 2,
         )
         if not qdrant_results:
@@ -717,6 +972,7 @@ class MemoryService:
         stmt = select(Memory).where(
             Memory.memory_id.in_(memory_ids),
             Memory.status == "active",
+            Memory.workspace_id == workspace_id,
         )
         if memory_types:
             stmt = stmt.where(Memory.memory_type.in_(memory_types))
@@ -813,12 +1069,9 @@ class MemoryService:
                 system=MEMORY_EXTRACTION_PROMPT,
                 messages=[{"role": "user", "content": source_text}],
             )
-            text = response.content[0].text.strip()
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-            if not text or text[0] not in "{[":
-                return {"memories": []}
-            return json.loads(text)
+            from src.llm_utils import parse_llm_json
+
+            return parse_llm_json(response.content[0].text)
         except Exception:
             logger.debug("Memory extraction returned non-JSON", exc_info=True)
             return {"memories": []}
@@ -832,12 +1085,9 @@ class MemoryService:
                 system=PREFERENCE_EXTRACTION_PROMPT,
                 messages=[{"role": "user", "content": source_text}],
             )
-            text = response.content[0].text.strip()
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-            if not text or text[0] not in "{[":
-                return {"preferences": []}
-            return json.loads(text)
+            from src.llm_utils import parse_llm_json
+
+            return parse_llm_json(response.content[0].text)
         except Exception:
             logger.debug("Preference extraction returned non-JSON", exc_info=True)
             return {"preferences": []}

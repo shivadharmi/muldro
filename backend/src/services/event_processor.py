@@ -11,7 +11,6 @@ Responsibilities:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -26,9 +25,11 @@ from src.models.events import NormalizedEvent
 
 if TYPE_CHECKING:
     from src.services.dead_letter import DeadLetterService
+    from src.services.embedding_service import EmbeddingService
     from src.services.event_bus import EventBus
     from src.services.memory_service import MemoryService
     from src.services.notifier import Notifier
+    from src.services.vector_store import VectorStore
     from src.services.world_model import WorldModel
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,19 @@ class RawEvent:
     raw_payload: dict | None = None
     correlation_id: str | None = None
     causation_id: str | None = None
+
+
+def make_idempotency_key(raw: RawEvent) -> str:
+    """Build a unique idempotency key for an event.
+
+    Includes message_id when available (e.g., Gmail) for per-message
+    granularity within threads. Falls back to source:entity_id:event_type
+    for sources without message-level IDs.
+    """
+    message_id = (raw.raw_payload or {}).get("message_id", "")
+    if message_id:
+        return f"{raw.source}:{raw.entity_id}:{message_id}:{raw.event_type}"
+    return f"{raw.source}:{raw.entity_id}:{raw.event_type}"
 
 
 SCORING_SYSTEM_PROMPT = """\
@@ -109,6 +123,8 @@ class EventProcessor:
         dead_letter: DeadLetterService | None = None,
         event_bus: EventBus | None = None,
         notifier: Notifier | None = None,
+        embedding_service: EmbeddingService | None = None,
+        vector_store: VectorStore | None = None,
     ):
         self._settings = settings
         self._db = db
@@ -119,6 +135,8 @@ class EventProcessor:
         self._dead_letter = dead_letter
         self._event_bus = event_bus
         self._notifier = notifier
+        self._embedding_service = embedding_service
+        self._vector_store = vector_store
         self._semaphore = asyncio.Semaphore(settings.event_processor_concurrency)
 
     async def process(self, raw: RawEvent, user_id: str, workspace_id: str = "") -> str | None:
@@ -133,7 +151,7 @@ class EventProcessor:
         self, raw: RawEvent, user_id: str, workspace_id: str = ""
     ) -> str | None:
         """Inner event processing — dedup, score, store, trigger downstream."""
-        idempotency_key = f"{raw.source}:{raw.entity_id}:{raw.event_type}"
+        idempotency_key = make_idempotency_key(raw)
 
         existing = await self._db.execute(
             select(NormalizedEvent.event_id).where(
@@ -185,8 +203,49 @@ class EventProcessor:
             from src.services.metrics_service import MetricsService
 
             MetricsService.record_event_ingested(raw.source, raw.event_type)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Metrics recording failed: %s", exc)
+            if self._dead_letter:
+                try:
+                    await self._dead_letter.enqueue(
+                        user_id=user_id,
+                        operation_type="metrics_recording",
+                        error_type=type(exc).__name__,
+                        error_message=str(exc)[:500],
+                        payload={"event_id": event_id, "source": raw.source},
+                        workspace_id=workspace_id,
+                    )
+                except Exception:
+                    logger.debug("DLQ enqueue failed for metrics", exc_info=True)
+
+        # Embed into Qdrant for vector search (importance >= 0.3 only)
+        if (event.importance_score or 0) >= 0.3 and self._embedding_service and self._vector_store:
+            try:
+                parts = [event.event_type, event.source, event.title or "", event.summary or ""]
+                text = " ".join(p for p in parts if p)
+                embedding = await self._embedding_service.embed_text(text)
+                if embedding:
+                    await self._vector_store.upsert(
+                        collection="events",
+                        id=event.event_id,
+                        vector=embedding,
+                        payload={
+                            "event_id": event.event_id,
+                            "event_type": event.event_type,
+                            "source": event.source,
+                            "importance_score": event.importance_score,
+                            "workspace_id": workspace_id,
+                            "occurred_at": event.occurred_at.isoformat()
+                            if event.occurred_at
+                            else None,
+                            "actor": (event.actor_entities[0] or {}).get("name")
+                            if event.actor_entities
+                            else None,
+                        },
+                        user_id=event.user_id,
+                    )
+            except Exception:
+                logger.debug("Event embedding failed for %s", event_id, exc_info=True)
 
         # Publish to event bus for decoupled downstream processing
         if self._event_bus:
@@ -419,10 +478,9 @@ class EventProcessor:
                 system=SCORING_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_message}],
             )
-            text = response.content[0].text
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1].rsplit("```", 1)[0]
-            return json.loads(text)
+            from src.llm_utils import parse_llm_json
+
+            return parse_llm_json(response.content[0].text)
         except Exception:
             logger.warning("Event scoring failed, using defaults", exc_info=True)
             return {**DEFAULT_SCORES, "summary": raw.summary}
@@ -502,8 +560,9 @@ class EventProcessor:
         self, events: list[RawEvent], user_id: str, workspace_id: str
     ) -> list[str | None]:
         """Score and store a chunk of events via a single Claude call."""
+
         # 1. Batch dedup check
-        keys = [f"{r.source}:{r.entity_id}:{r.event_type}" for r in events]
+        keys = [make_idempotency_key(r) for r in events]
         existing = await self._db.execute(
             select(NormalizedEvent.idempotency_key).where(NormalizedEvent.idempotency_key.in_(keys))
         )
@@ -601,10 +660,9 @@ class EventProcessor:
                 system=SCORING_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": batch_prompt}],
             )
-            text = response.content[0].text
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1].rsplit("```", 1)[0]
-            parsed = json.loads(text)
+            from src.llm_utils import parse_llm_json
+
+            parsed = parse_llm_json(response.content[0].text)
             if isinstance(parsed, list) and len(parsed) == len(events):
                 return parsed
             logger.warning(

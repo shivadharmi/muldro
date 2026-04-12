@@ -163,6 +163,7 @@ async def list_auth_providers(
         oauth_mgr = OAuthManager(
             db_factory,
             encryption_key=settings.oauth_encryption_key,
+            settings=settings,
         )
         for provider_name in SUPPORTED_PROVIDERS:
             # Map sub-providers to their OAuth parent
@@ -424,7 +425,9 @@ async def oauth_callback(
             workspace_id = await resolve_workspace_id(_db, user_id)
 
         # Store tokens via OAuthManager (encrypted at rest)
-        oauth_mgr = OAuthManager(db_factory, encryption_key=settings.oauth_encryption_key)
+        oauth_mgr = OAuthManager(
+            db_factory, encryption_key=settings.oauth_encryption_key, settings=settings
+        )
         await oauth_mgr.store_token(
             user_id=user_id,
             provider="google",
@@ -482,7 +485,9 @@ async def oauth_callback(
         async with db_factory() as _db:
             workspace_id = await resolve_workspace_id(_db, user_id)
 
-        oauth_mgr = OAuthManager(db_factory, encryption_key=settings.oauth_encryption_key)
+        oauth_mgr = OAuthManager(
+            db_factory, encryption_key=settings.oauth_encryption_key, settings=settings
+        )
         await oauth_mgr.store_token(
             user_id=user_id,
             provider="github",

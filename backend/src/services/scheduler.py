@@ -10,7 +10,7 @@ Perception is driven by the ``perception_state`` table: sources with
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from croniter import croniter
 from sqlalchemy import select
@@ -39,7 +39,6 @@ class SchedulerLoop:
         self._orchestrator = orchestrator
         self._user_ids = user_ids or []
         self._running = False
-        self._last_synthesis_at: float = 0.0  # D2: throttle cross-source synthesis
 
     async def run(self) -> None:
         """Main loop: every 30s, check for due schedules and fire them."""
@@ -67,13 +66,46 @@ class SchedulerLoop:
         # 2. Check follow-up notifications
         await self._check_follow_ups(factory)
 
+        # 2b. Re-deliver pending notifications reset by _check_follow_ups
+        await self._tick_pending_notifications(factory)
+
         # 3. Execute pending background tasks
         await self._tick_background_tasks(factory)
 
-        # 4. Eviction — clean up expired data every 5th tick (~150s)
+        # 4a. Eviction + DLQ retry — every 5th tick (~150s)
         self._tick_count = getattr(self, "_tick_count", 0) + 1
         if self._tick_count % 5 == 0:
             await self._tick_eviction(factory)
+            await self._tick_dlq_retry(factory)
+
+            # Memory expiration — cascade to Qdrant
+            vector_store = None
+            if self._settings.qdrant_url:
+                from src.services.vector_store import VectorStore
+
+                vector_store = VectorStore(self._settings)
+            await self._tick_memory_expiration(factory, vector_store)
+
+        # 4b. Persona batch — every 10th tick (~5 min)
+        await self._tick_persona_batch()
+
+        # 4c. Memory consolidation — once daily at ~2 AM UTC
+        from datetime import datetime, timezone
+
+        current_hour = datetime.now(timezone.utc).hour
+        if self._tick_count % 120 == 0 and current_hour == 2:
+            await self._tick_consolidation(factory)
+
+            # 4c-ii. Stability refresh — sync Qdrant payloads with Postgres scores
+            daily_vector_store = None
+            if self._settings.qdrant_url:
+                from src.services.vector_store import VectorStore
+
+                daily_vector_store = VectorStore(self._settings)
+            await self._tick_stability_refresh(factory, daily_vector_store)
+
+        # 4d. Stuck run health check — every tick
+        await self._tick_run_health_check(factory)
 
         # 5. Process due schedules
         async with factory() as db:
@@ -195,52 +227,69 @@ class SchedulerLoop:
                     state.pending_run = False
                 await db.flush()
 
-                for state in due_states:
-                    try:
-                        workspace_id = await self._resolve_workspace(state.user_id)
-                    except (ValueError, Exception):
-                        workspace_id = state.workspace_id or ""
+                concurrency = getattr(self._settings, "perception_concurrency", None)
+                if not isinstance(concurrency, int) or concurrency < 1:
+                    concurrency = 3
+                perception_semaphore = asyncio.Semaphore(concurrency)
 
-                    try:
-                        result = await self._orchestrator.run_perception_cycle(
-                            state.source,
-                            user_id=state.user_id,
-                            workspace_id=workspace_id,
-                        )
-                        event_count = result.get("events", 0)
-                        if result.get("status") == "error":
-                            await svc.record_failure(state, result.get("error", "unknown"))
-                        else:
-                            await svc.record_success(state, event_count)
-                    except Exception as e:
-                        await svc.record_failure(state, str(e)[:512])
+                async def _run_one(state):
+                    async with perception_semaphore:
+                        try:
+                            ws_id = await self._resolve_workspace(state.user_id)
+                        except (ValueError, Exception):
+                            ws_id = state.workspace_id or ""
+
+                        try:
+                            result = await self._orchestrator.run_perception_cycle(
+                                state.source,
+                                user_id=state.user_id,
+                                workspace_id=ws_id,
+                            )
+                            event_count = result.get("events", 0)
+                            if result.get("status") == "error":
+                                await svc.record_failure(state, result.get("error", "unknown"))
+                            else:
+                                await svc.record_success(state, event_count)
+                            return state.source, event_count
+                        except Exception as e:
+                            await svc.record_failure(state, str(e)[:512])
+                            logger.warning(
+                                "Perception cycle failed for %s/%s: %s",
+                                state.user_id,
+                                state.source,
+                                e,
+                            )
+                            return state.source, 0
+
+                results = await asyncio.gather(
+                    *(_run_one(s) for s in due_states),
+                    return_exceptions=True,
+                )
+
+                for i, r in enumerate(results):
+                    if isinstance(r, BaseException):
                         logger.warning(
-                            "Perception cycle failed for %s/%s: %s",
-                            state.user_id,
-                            state.source,
-                            e,
+                            "Perception gather exception for %s: %s",
+                            due_states[i].source if i < len(due_states) else "unknown",
+                            r,
                         )
 
                 await db.commit()
                 logger.info("Perception tick: %d sources processed", len(due_states))
 
-                # D2: Cross-source synthesis — when 2+ sources had new events,
-                # ask the Planner to synthesize cross-cutting insights
-                import time
+                # D2: Cross-source synthesis — trigger on signal volume
+                # (2+ sources with events AND 3+ total events)
+                source_event_counts = {}
+                for i, r in enumerate(results):
+                    if not isinstance(r, BaseException):
+                        src_name, evt_count = r
+                        if evt_count > 0:
+                            source_event_counts[src_name] = evt_count
 
-                sources_with_events = sum(
-                    1
-                    for s in due_states
-                    if not s.pending_run  # was processed (not skipped)
-                )
-                now = time.monotonic()
-                synthesis_cooldown = 1800  # 30 minutes
-                if (
-                    sources_with_events >= 2
-                    and self._orchestrator
-                    and (now - self._last_synthesis_at) > synthesis_cooldown
-                ):
-                    self._last_synthesis_at = now
+                sources_with_events = len(source_event_counts)
+                total_event_count = sum(source_event_counts.values())
+
+                if sources_with_events >= 2 and total_event_count >= 3 and self._orchestrator:
                     try:
                         user_id = due_states[0].user_id
                         # Resolve workspace_id with fallback
@@ -323,6 +372,10 @@ class SchedulerLoop:
                             settings=self._settings,
                             db=db,
                             workspace_id=ws_id,
+                            db_factory=factory,
+                            execute_tool_fn=self._orchestrator._execute_tool,
+                            budget=self._orchestrator._budget,
+                            circuit_breaker=getattr(self._orchestrator, "_circuit_breaker", None),
                         )
 
                         # Ensure steps exist before execution (defensive)
@@ -430,6 +483,7 @@ class SchedulerLoop:
 
                     vector_store = VectorStore(self._settings)
                     await vector_store.ensure_collections()
+                    await vector_store.ensure_indexes()
 
                 if self._settings.neo4j_url:
                     from src.services.graph_engine import GraphEngine
@@ -449,6 +503,221 @@ class SchedulerLoop:
                     await graph_engine.close()
         except Exception:
             logger.warning("Eviction tick error", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # DLQ retry — process dead-letter entries that can be retried
+    # ------------------------------------------------------------------
+
+    async def _tick_dlq_retry(self, factory) -> None:
+        """Retry DLQ entries that haven't exceeded max attempts."""
+        try:
+            async with factory() as db:
+                from src.services.dead_letter import DeadLetterService
+
+                dlq = DeadLetterService(db)
+                for uid in self._user_ids:
+                    pending = await dlq.list_pending(uid, limit=10)
+                    for entry in pending:
+                        if not await dlq.mark_retrying(entry.entry_id):
+                            logger.info(
+                                "DLQ entry %s exhausted, marked as exhausted",
+                                entry.entry_id,
+                            )
+                        else:
+                            logger.debug(
+                                "DLQ entry %s marked for retry (attempt %d)",
+                                entry.entry_id,
+                                entry.attempt_count,
+                            )
+                    await db.commit()
+        except Exception:
+            logger.warning("DLQ retry tick failed", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Memory expiration
+    # ------------------------------------------------------------------
+
+    async def _tick_memory_expiration(self, factory, vector_store=None) -> None:
+        """Mark expired memories and cascade delete from Qdrant."""
+        try:
+            from sqlalchemy import func, select
+            from sqlalchemy.dialects.postgresql import INTERVAL
+            from sqlalchemy.sql.expression import cast as sa_cast
+            from sqlalchemy.sql.expression import literal
+
+            from src.models.memory import Memory
+
+            async with factory() as db:
+                # Postgres: created_at + (ttl_days || ' days')::interval < now()
+                interval_expr = sa_cast(func.concat(Memory.ttl_days, literal(" days")), INTERVAL)
+                result = await db.execute(
+                    select(Memory)
+                    .where(
+                        Memory.status == "active",
+                        Memory.ttl_days.isnot(None),
+                        Memory.created_at + interval_expr < func.now(),
+                    )
+                    .limit(100)
+                )
+                expired = list(result.scalars())
+
+                if not expired:
+                    return
+
+                for mem in expired:
+                    mem.status = "expired"
+                    if vector_store:
+                        try:
+                            await vector_store.delete("memories", mem.memory_id)
+                        except Exception:
+                            logger.debug(
+                                "Qdrant delete failed for %s",
+                                mem.memory_id,
+                                exc_info=True,
+                            )
+
+                await db.commit()
+                logger.info("Memory expiration: %d memories expired", len(expired))
+        except Exception:
+            logger.warning("Memory expiration tick error", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Memory consolidation
+    # ------------------------------------------------------------------
+
+    async def _tick_consolidation(self, factory) -> None:
+        """Nightly memory consolidation — merge highly similar memories."""
+        try:
+            async with factory() as db:
+                from sqlalchemy import distinct, select
+
+                from src.models.memory import Memory
+                from src.services.memory_service import MemoryService
+
+                result = await db.execute(
+                    select(distinct(Memory.user_id)).where(Memory.status == "active")
+                )
+                user_ids = [r[0] for r in result.all()]
+
+                total_merged = 0
+                for uid in user_ids:
+                    ms = MemoryService(settings=self._settings, db=db)
+                    merged = await ms.consolidate_memories(uid)
+                    total_merged += merged
+
+                await db.commit()
+                if total_merged:
+                    logger.info("Nightly consolidation: %d memories merged", total_merged)
+        except Exception:
+            logger.warning("Memory consolidation tick failed", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Stability refresh — sync Qdrant payloads with Postgres stability_score
+    # ------------------------------------------------------------------
+
+    async def _tick_stability_refresh(self, factory, vector_store=None) -> None:
+        """Batch-update Qdrant stability_score for stale memories."""
+        if not vector_store:
+            return
+        try:
+            from datetime import datetime, timedelta, timezone
+
+            from sqlalchemy import select
+
+            from src.models.memory import Memory
+
+            async with factory() as db:
+                cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+                result = await db.execute(
+                    select(Memory.memory_id, Memory.stability_score)
+                    .where(
+                        Memory.status == "active",
+                        Memory.last_accessed_at < cutoff,
+                    )
+                    .limit(200)
+                )
+                updates = result.all()
+                if not updates:
+                    return
+
+                for memory_id, stability in updates:
+                    try:
+                        await vector_store.set_payload(
+                            "memories",
+                            memory_id,
+                            {"stability_score": stability or 0.0},
+                        )
+                    except Exception:
+                        pass  # best-effort per record
+
+                logger.info("Stability refresh: %d Qdrant payloads updated", len(updates))
+        except Exception:
+            logger.warning("Stability refresh tick failed", exc_info=True)
+
+    # Persona batch
+    # ------------------------------------------------------------------
+
+    async def _tick_persona_batch(self, factory=None) -> None:
+        """Run Persona agent on recent interactions every 10th tick (~5 min).
+
+        Only fires when there are 5+ interactions since last batch.
+        """
+        if getattr(self, "_tick_count", 0) % 10 != 0:
+            return
+        if not self._orchestrator:
+            return
+
+        try:
+            factory = factory or get_session_factory()
+            async with factory() as db:
+                from sqlalchemy import select
+
+                from src.models.interaction_log import InteractionLog
+
+                last_batch = getattr(self, "_last_persona_batch_at", None)
+                if last_batch is None:
+                    last_batch = datetime.now(timezone.utc) - timedelta(hours=24)
+                query = (
+                    select(InteractionLog)
+                    .where(InteractionLog.created_at > last_batch)
+                    .order_by(InteractionLog.created_at.desc())
+                    .limit(20)
+                )
+
+                result = await db.execute(query)
+                interactions = result.scalars().all()
+
+                if len(interactions) < 5:
+                    return
+
+                # Group by (workspace_id, user_id) to avoid cross-workspace mixing
+                grouped: dict[tuple[str, str], list] = {}
+                for i in interactions:
+                    key = (getattr(i, "workspace_id", "") or "", i.user_id)
+                    grouped.setdefault(key, []).append(i)
+
+                for (ws_id, uid), group in grouped.items():
+                    if len(group) < 5:
+                        continue
+                    summary = "\n".join(
+                        f"- {i.message_preview or '(no preview)'} → {i.intent or 'unknown'}"
+                        for i in group
+                    )
+                    await self._orchestrator._call_agent(
+                        "persona",
+                        message=(
+                            "Analyze these recent user interactions and extract"
+                            f" preference patterns:\n{summary}"
+                        ),
+                        user_id=uid,
+                        workspace_id=ws_id,
+                    )
+
+                self._last_persona_batch_at = datetime.now(timezone.utc)
+                logger.info("Persona batch completed: %d interactions analyzed", len(interactions))
+
+        except Exception:
+            logger.warning("Persona batch tick failed", exc_info=True)
 
     # ------------------------------------------------------------------
     # Follow-up notifications
@@ -478,6 +747,135 @@ class SchedulerLoop:
                     logger.info("Re-queued %d follow-up notifications", len(due))
         except Exception:
             logger.debug("Follow-up check failed", exc_info=True)
+
+    async def _tick_pending_notifications(self, factory) -> None:
+        """Deliver pending notifications that were re-queued by _check_follow_ups."""
+        try:
+            from src.models.notifications import Notification as NotifModel
+
+            async with factory() as db:
+                now = datetime.now(timezone.utc)
+                result = await db.execute(
+                    select(NotifModel)
+                    .where(
+                        NotifModel.status == "pending",
+                        NotifModel.follow_up_at.is_(None),
+                        NotifModel.created_at >= now - timedelta(hours=24),
+                    )
+                    .limit(10)
+                )
+                pending = result.scalars().all()
+                if not pending or not self._orchestrator:
+                    return
+
+                notifier = getattr(self._orchestrator, "_notifier", None)
+                if not notifier:
+                    return
+
+                for n in pending:
+                    try:
+                        await notifier.notify(
+                            user_id=n.user_id,
+                            notification_type=n.channel,
+                            title=n.title,
+                            body=n.body,
+                            data=n.payload_json or {},
+                            workspace_id=n.workspace_id or "",
+                        )
+                        n.status = "sent"
+                    except Exception:
+                        logger.debug(
+                            "Failed to re-deliver notification %s",
+                            n.notification_id,
+                            exc_info=True,
+                        )
+                await db.commit()
+        except Exception:
+            logger.debug("Pending notification tick failed", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Stuck run health check
+    # ------------------------------------------------------------------
+
+    async def _tick_run_health_check(self, factory) -> None:
+        """Detect and remediate stuck runs. Called every scheduler tick."""
+        try:
+            from src.models.approvals import Approval
+            from src.models.task_graph import TaskCheckpoint, TaskRun
+            from src.services.execution_state import transition_run
+
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=15)
+
+            async with factory() as db:
+                # 1. Stuck "running" runs — updated_at older than the cutoff
+                result = await db.execute(
+                    select(TaskRun).where(
+                        TaskRun.status == "running",
+                        TaskRun.updated_at < cutoff,
+                    )
+                )
+                stuck_runs = list(result.scalars().all())
+                remediated = 0
+
+                for run in stuck_runs:
+                    # Check latest checkpoint — if recent, give a grace period
+                    cp_result = await db.execute(
+                        select(TaskCheckpoint)
+                        .where(TaskCheckpoint.run_id == run.run_id)
+                        .order_by(TaskCheckpoint.created_at.desc())
+                        .limit(1)
+                    )
+                    latest_cp = cp_result.scalar_one_or_none()
+                    if latest_cp and latest_cp.created_at > cutoff:
+                        continue
+
+                    logger.warning(
+                        "Stuck run detected: %s (status=%s, last_update=%s)",
+                        run.run_id,
+                        run.status,
+                        run.updated_at,
+                    )
+                    try:
+                        transition_run(run, "timed_out")
+                        run.error = {"message": "Run stuck — no progress for 15 minutes"}
+                        run.completed_at = datetime.now(timezone.utc)
+                        remediated += 1
+                    except Exception:
+                        run.status = "timed_out"
+
+                # 2. Stuck "awaiting_approval" runs whose linked approval has expired
+                result = await db.execute(
+                    select(TaskRun).where(TaskRun.status == "awaiting_approval")
+                )
+                awaiting_runs = list(result.scalars().all())
+                expired_cancelled = 0
+
+                for run in awaiting_runs:
+                    apr_result = await db.execute(
+                        select(Approval).where(
+                            Approval.execution_id == run.run_id,
+                            Approval.status == "expired",
+                        )
+                    )
+                    if apr_result.scalar_one_or_none():
+                        logger.warning("Cancelling run %s — approval expired", run.run_id)
+                        try:
+                            transition_run(run, "cancelled")
+                            run.completed_at = datetime.now(timezone.utc)
+                            expired_cancelled += 1
+                        except Exception:
+                            run.status = "cancelled"
+
+                await db.commit()
+
+                if remediated or expired_cancelled:
+                    logger.info(
+                        "Health check: %d stuck runs timed out, %d expired-approval runs cancelled",
+                        remediated,
+                        expired_cancelled,
+                    )
+        except Exception:
+            logger.warning("Run health check failed", exc_info=True)
 
     # ------------------------------------------------------------------
     # Observation source helpers
@@ -677,9 +1075,9 @@ class SchedulerLoop:
                 raise RuntimeError("Orchestrator required for custom_agent_task")
         elif action == "wake_agent":
             # Agent-requested wakeup — bridge between agent decisions and perception
-            agent = config.get("agent", "observer")
+            agent = config.get("agent", "perceiver")
             source = config.get("source")
-            if agent == "observer" and source:
+            if agent == "perceiver" and source:
                 from src.services.perception_policy import PerceptionPolicyService
 
                 factory = get_session_factory()

@@ -102,7 +102,8 @@ async def whatsapp_verify(
     settings: Settings = Depends(get_settings),
 ):
     """Meta webhook verification challenge (GET)."""
-    if hub_mode == "subscribe" and hub_verify_token == settings.whatsapp_verify_token:
+    expected_token = getattr(settings, "whatsapp_verify_token", "")
+    if hub_mode == "subscribe" and hub_verify_token == expected_token:
         return Response(content=hub_challenge, media_type="text/plain")
     raise HTTPException(status_code=403, detail="Verification failed")
 
@@ -117,10 +118,10 @@ async def whatsapp_webhook(
     raw_body = await request.body()
 
     # Verify signature
-    if settings.whatsapp_app_secret:
+    whatsapp_secret = getattr(settings, "whatsapp_app_secret", "")
+    if whatsapp_secret:
         expected = (
-            "sha256="
-            + hmac.new(settings.whatsapp_app_secret.encode(), raw_body, hashlib.sha256).hexdigest()
+            "sha256=" + hmac.new(whatsapp_secret.encode(), raw_body, hashlib.sha256).hexdigest()
         )
         if not hmac.compare_digest(expected, x_hub_signature_256):
             raise HTTPException(status_code=403, detail="Invalid signature")
@@ -153,7 +154,8 @@ async def twilio_sms_webhook(
     params = dict(form_data)
 
     # Verify Twilio signature
-    if settings.twilio_auth_token:
+    twilio_token = getattr(settings, "twilio_auth_token", "")
+    if twilio_token:
         url = str(request.url)
         # Twilio signature = HMAC-SHA1(auth_token, url + sorted params)
         sorted_params = "".join(f"{k}{params[k]}" for k in sorted(params))
@@ -161,7 +163,7 @@ async def twilio_sms_webhook(
 
         signature = base64.b64encode(
             hmac.new(
-                settings.twilio_auth_token.encode(),
+                twilio_token.encode(),
                 (url + sorted_params).encode(),
                 hashlib.sha1,
             ).digest()

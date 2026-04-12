@@ -18,7 +18,7 @@ graph TB
     end
 
     subgraph API["API Layer"]
-        FA[FastAPI<br/>30 routers · /v1/ prefix · ~128 endpoints]
+        FA[FastAPI<br/>31 routers · /v1/ prefix]
     end
 
     subgraph ORCH["Orchestrator"]
@@ -28,10 +28,10 @@ graph TB
 
     subgraph AGENTS["Sub-Agents — Claude API"]
         direction LR
-        OBS[Observer<br/>Sonnet] ~~~ LIB[Librarian<br/>Sonnet]
+        PCV[Perceiver<br/>Sonnet] ~~~ LIB[Librarian<br/>Sonnet]
         PLN[Planner<br/>Opus] ~~~ GOV[Governor<br/>Sonnet]
         OPR[Operator<br/>Sonnet] ~~~ PRS[Presenter<br/>Sonnet]
-        RES[Researcher<br/>Sonnet] ~~~ PER[Persona<br/>Haiku]
+        PER[Persona<br/>Haiku]
     end
 
     subgraph TOOLS["Tool Layer"]
@@ -58,9 +58,9 @@ graph TB
     TG & WEB --> FA
     FA --> JO
     JO --> TR & BU
-    JO --> OBS & LIB & PLN & GOV & OPR & PRS & RES & PER
-    OBS & LIB & PLN & GOV & OPR & PRS --> INT
-    OPR & RES --> MCP
+    JO --> PCV & LIB & PLN & GOV & OPR & PRS & PER
+    PCV & LIB & PLN & GOV & OPR & PRS --> INT
+    OPR & PCV --> MCP
     INT --> SVC
     MCP --> SVC
     SVC --> PG & RD
@@ -69,20 +69,19 @@ graph TB
     GE -.->|artifact files| S3
 ```
 
-### The 8 Sub-Agents
+### The 7 Sub-Agents
 
 | Agent | Model | Role |
 |-------|-------|------|
-| **Observer** | Sonnet | Read external sources, detect changes, ingest events |
+| **Perceiver** | Sonnet | Observe external sources, gather context, detect changes (merges former Observer + Researcher) |
 | **Librarian** | Sonnet | Extract entities, update world model |
-| **Planner** | Opus | Determine intent, produce structured task graphs |
-| **Governor** | Sonnet | Evaluate policies, gate approvals |
+| **Planner** | Opus | Determine intent, produce capability-based plans |
+| **Governor** | Sonnet | Evaluate policies, gate approvals via TrustEngine |
 | **Operator** | Sonnet | Execute approved plans via MCP tools |
-| **Presenter** | Sonnet | Generate user-facing output |
-| **Researcher** | Sonnet | Deep context gathering (read-only) |
+| **Presenter** | Sonnet | Generate user-facing output and live execution surfaces |
 | **Persona** | Haiku | Learn user preferences from interactions |
 
-Only Planner decides intent. Only Operator executes external actions. Only Presenter talks to the user. Governor sits before every external write.
+Only Planner decides intent. Only Operator executes external actions. Only Presenter talks to the user. TrustEngine gates approvals with graduated autonomy (first_use, learning, trusted, autonomous).
 
 > **Detailed architecture docs:** [`docs/architecture/`](docs/architecture/README.md) — sequence diagrams, data model, service reference, design decisions
 
@@ -117,18 +116,18 @@ Infrastructure is managed with Terraform in `infra/`. A single EC2 instance runs
 jarvis/
 ├── backend/
 │   ├── src/
-│   │   ├── api/            # 30 REST/SSE routers (/v1/ prefix, ~128 endpoints)
+│   │   ├── api/            # 31 REST/SSE routers (/v1/ prefix)
 │   │   ├── config/         # Settings (pydantic-settings, JARVIS_ env prefix)
 │   │   ├── connectors/     # MCP bridge, perception connectors
 │   │   ├── interface/      # Telegram bot
-│   │   ├── models/         # 51 SQLAlchemy tables (all workspace-scoped)
+│   │   ├── models/         # 41 SQLAlchemy models (all workspace-scoped)
 │   │   ├── orchestrator/   # JarvisOrchestrator, agents, hooks, tracing, budget, contracts
 │   │   ├── services/       # Business logic (planner, governor, operator, tri_search, etc.)
 │   │   ├── tools/          # Tool catalog, schemas, validation, FastMCP servers
 │   │   ├── ui/             # A2UI renderer + contracts
 │   │   └── workflows/      # inbox_triage, meeting_prep, research
-│   ├── tests/              # ~1131 tests (pytest + pytest-asyncio)
-│   └── alembic/            # 51 database migrations
+│   ├── tests/              # 163 test files (pytest + pytest-asyncio)
+│   └── alembic/            # 62 database migrations
 ├── frontend/               # Next.js + A2UI renderer + chat panel (7 pages)
 ├── infra/                  # Terraform (AWS: EC2, VPC, Route53, IAM, SSM)
 ├── docs/architecture/      # Detailed architecture documentation
@@ -142,7 +141,7 @@ jarvis/
 | Backend | Python 3.13+ / FastAPI |
 | Frontend | Next.js / React / A2UI |
 | Database | PostgreSQL 17 (tsvector FTS) — source of truth |
-| Vector Search | Qdrant 1.12 — semantic similarity (4 collections) |
+| Vector Search | Qdrant 1.12 — semantic similarity (6 collections with enriched payloads) |
 | Reranking | AWS Bedrock amazon.rerank-v1:0 |
 | Knowledge Graph | Neo4j 5 — multi-hop traversal, community detection |
 | Object Storage | MinIO / S3 — artifact documents and media |
@@ -155,17 +154,19 @@ jarvis/
 
 ## Key Features
 
-- **Multi-tenant workspace isolation**: All 51 data tables scoped by `workspace_id` with CASCADE deletes
+- **Multi-tenant workspace isolation**: All data tables scoped by `workspace_id` with CASCADE deletes
 - **Real-time streaming**: Claude API streaming with extended thinking (Opus) + SSE to frontend
 - **Full cost tracking**: Cache tokens (1.25x write, 0.1x read), thinking tokens, per-agent cost breakdown
-- **Graduated trust**: TrustEngine scores + time-based policy overrides for autonomous operation
-- **Runtime contracts**: Pydantic-validated boundaries (PlannerOutput, PolicyDecision, StepResult, ToolCallRequest)
-- **Dynamic routing**: DB-backed agent routes with condition matching and pipeline composition
-- **Knowledge graph**: 15 entity types, 17 relation types, temporal tracking, embedding-based fuzzy dedup
-- **Proactive autonomy**: InitiativeScorer, time-based triggers, 7 default schedules
+- **Graduated autonomy**: TrustEngine with 4 trust tiers (first_use, learning, trusted, autonomous)
+- **Capability-based routing**: CapabilityResolver maps plans to agents by capability scope (not decision type)
+- **Live execution surfaces**: Real-time step progress via A2UI during plan execution
+- **TriSearch**: Parallel Qdrant + Postgres FTS + Neo4j search with Bedrock reranking
+- **Knowledge graph**: Neo4j with typed relationship edges, weighted traversal, temporal scoping
+- **Signal-driven perception**: Relevance assessment with tiered notification (not fixed-interval polling)
+- **Runtime contracts**: Pydantic-validated boundaries (PlanOutput, PolicyDecision, StepResult, ToolCallRequest)
 - **Auth system**: Magic links, OAuth (Google/GitHub), session tokens, Fernet-encrypted credentials
-- **Command palette**: Cmd+K with 8 quick commands, slash command support
+- **Command palette**: Cmd+K with quick commands, slash command support
 
 ## Status
 
-~1131 tests passing, 51 migrations, 51 tables, ~128 API endpoints, all lint clean. Unified tool registry with 163 cataloged tools (100 live-verified).
+163 test files, 62 migrations, 41 models, 31 routers, 7 frontend pages, all lint clean. Unified tool registry with 163 cataloged tools.

@@ -34,6 +34,7 @@ class CapabilityFamily(StrEnum):
     SEARCH = "search"
     INTERNAL = "internal"
     FILESYSTEM = "filesystem"
+    SYSTEM = "system"
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +140,7 @@ CAPABILITY_CATALOG: dict[str, CapabilityMeta] = {
     # Internal intelligence
     "internal.search": _cap(CapabilityFamily.INTERNAL, True),
     "internal.get_plans": _cap(CapabilityFamily.INTERNAL, True),
+    "internal.get_plan_details": _cap(CapabilityFamily.INTERNAL, True),
     "internal.get_goals": _cap(CapabilityFamily.INTERNAL, True),
     "internal.get_briefing": _cap(CapabilityFamily.INTERNAL, True),
     "internal.get_cursor": _cap(CapabilityFamily.INTERNAL, True),
@@ -153,6 +155,8 @@ CAPABILITY_CATALOG: dict[str, CapabilityMeta] = {
     "internal.verify_run": _cap(CapabilityFamily.INTERNAL, False),
     "internal.update_execution": _cap(CapabilityFamily.INTERNAL, False),
     "internal.push_ui": _cap(CapabilityFamily.INTERNAL, False),
+    "internal.store_memory": _cap(CapabilityFamily.INTERNAL, False),
+    "internal.store_preference": _cap(CapabilityFamily.INTERNAL, False),
     "internal.send_telegram": _cap(CapabilityFamily.MESSAGING, False, "medium"),
     "internal.send_approval": _cap(CapabilityFamily.MESSAGING, False, "medium"),
     # Drive
@@ -206,6 +210,8 @@ CAPABILITY_CATALOG: dict[str, CapabilityMeta] = {
     "doc.get_self": _cap(CapabilityFamily.DOC, True),
     "doc.get_user": _cap(CapabilityFamily.DOC, True),
     "doc.get_users": _cap(CapabilityFamily.DOC, True),
+    # System meta-tools (Spec 1A)
+    "system.discovery": _cap(CapabilityFamily.SYSTEM, True, "none"),
 }
 
 

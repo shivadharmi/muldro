@@ -121,6 +121,20 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           }
         />
         <NavItem
+          href="/knowledge"
+          label="Knowledge"
+          active={pathname === "/knowledge"}
+          collapsed={collapsed}
+          icon={
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <circle cx="5" cy="5" r="2" stroke="currentColor" strokeWidth="1.3" />
+              <circle cx="11" cy="5" r="2" stroke="currentColor" strokeWidth="1.3" />
+              <circle cx="8" cy="11" r="2" stroke="currentColor" strokeWidth="1.3" />
+              <path d="M6.5 6.5L7.5 9.5M9.5 6.5L8.5 9.5M7 5h2" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+            </svg>
+          }
+        />
+        <NavItem
           href="/integrations"
           label="Integrations"
           active={pathname === "/integrations"}

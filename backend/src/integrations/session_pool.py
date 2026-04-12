@@ -32,7 +32,7 @@ SESSION_TTL_SECONDS = 1800
 # The sessions are short-lived (30-min TTL) and per-user.
 _STDIO_TOKEN_ENV_VARS: dict[str, str] = {
     "github": "GITHUB_PERSONAL_ACCESS_TOKEN",
-    "slack": "SLACK_BOT_TOKEN",
+    "slack": "SLACK_MCP_XOXB_TOKEN",
     "linear": "LINEAR_ACCESS_TOKEN",
     "notion": "NOTION_TOKEN",
 }
@@ -177,10 +177,12 @@ class UserMCPSessionPool:
     async def _register_discovered_tools(
         self, raw_tools: list, server_name: str, workspace_id: str
     ) -> None:
-        """Register unknown discovered tools in DB with safe defaults.
+        """Register or enrich discovered tools in DB.
 
-        Unknown tools get capability=None, making them invisible to agents
-        until an admin maps their capability. Safe by design.
+        New tools get capability=None (invisible to agents until admin maps
+        capability). Existing tools (e.g., from seeds) get enriched with
+        input_schema and description from MCP discovery — seeds have
+        capability but lack schema; discovery provides schema.
         """
         try:
             from ulid import ULID
@@ -192,6 +194,13 @@ class UserMCPSessionPool:
             async with get_session_factory()() as db:
                 registry = ToolRegistry(db, workspace_id=workspace_id or None)
                 for t in raw_tools:
+                    discovered_schema = (
+                        getattr(t, "inputSchema", None)
+                        or getattr(t, "input_schema", None)
+                        or {"type": "object", "properties": {}}
+                    )
+                    discovered_desc = t.description or ""
+
                     existing = await registry.get_tool(t.name)
                     if not existing:
                         new_tool = ToolDefinition(
@@ -204,12 +213,8 @@ class UserMCPSessionPool:
                             capability=None,
                             risk_level="medium",
                             requires_approval=True,
-                            description=t.description or "",
-                            input_schema=(
-                                getattr(t, "inputSchema", None)
-                                or getattr(t, "input_schema", None)
-                                or {"type": "object", "properties": {}}
-                            ),
+                            description=discovered_desc,
+                            input_schema=discovered_schema,
                             enabled=True,
                             verified=True,
                         )
@@ -219,6 +224,21 @@ class UserMCPSessionPool:
                             t.name,
                             server_name,
                         )
+                    else:
+                        # Enrich existing seed record with discovered
+                        # schema/description (seeds lack these fields)
+                        enriched = False
+                        if not existing.input_schema and discovered_schema:
+                            existing.input_schema = discovered_schema
+                            enriched = True
+                        if not existing.description and discovered_desc:
+                            existing.description = discovered_desc
+                            enriched = True
+                        if enriched:
+                            logger.info(
+                                "Enriched tool %s with discovered metadata",
+                                t.name,
+                            )
                 await db.commit()
         except Exception:
             logger.debug("Failed to register discovered tools", exc_info=True)
@@ -249,6 +269,11 @@ class UserMCPSessionPool:
 
         # Circuit breaker check
         if not self._circuit_breaker.is_available(server_name):
+            logger.warning(
+                "[mcp:session] circuit OPEN for %s — rejecting %s",
+                server_name,
+                tool_name,
+            )
             return {
                 "status": "error",
                 "error_code": "circuit_open",
@@ -263,17 +288,27 @@ class UserMCPSessionPool:
                 workspace_id,
             )
         except Exception as e:
+            logger.warning(
+                "[mcp:session] session creation failed for %s/%s: %s",
+                server_name,
+                tool_name,
+                e,
+            )
             return make_error_response(e, tool_name=tool_name)
 
         # Resolve canonical → raw MCP tool name
         raw_name = tool_name
 
+        import time as _time
+
+        call_start = _time.monotonic()
         last_error: Exception | None = None
         for attempt in range(max_retries):
             try:
                 result = await session.client.call_tool(raw_name, tool_input)
                 self._circuit_breaker.record_success(server_name)
                 session.last_used = time.monotonic()
+                latency_ms = int((_time.monotonic() - call_start) * 1000)
 
                 # Extract content from CallToolResult
                 if hasattr(result, "content"):
@@ -283,8 +318,22 @@ class UserMCPSessionPool:
                             text_parts.append(block.text)
                         elif hasattr(block, "data"):
                             text_parts.append(str(block.data))
-                    return {"status": "ok", "result": "\n".join(text_parts)}
+                    output = "\n".join(text_parts)
+                    logger.info(
+                        "[mcp:session] %s on %s OK | %dms | %d chars",
+                        tool_name,
+                        server_name,
+                        latency_ms,
+                        len(output),
+                    )
+                    return {"status": "ok", "result": output}
 
+                logger.info(
+                    "[mcp:session] %s on %s OK | %dms",
+                    tool_name,
+                    server_name,
+                    latency_ms,
+                )
                 return {"status": "ok", "result": str(result)}
 
             except Exception as e:
@@ -408,6 +457,132 @@ class UserMCPSessionPool:
             for canonical in tools:
                 result[canonical] = key[1]  # server_name
         return result
+
+    async def discover_tools(
+        self,
+        server_name: str,
+        *,
+        workspace_id: str = "",
+        config: dict | None = None,
+    ) -> list[str]:
+        """Eagerly discover tools from an HTTP MCP server.
+
+        Tries unauthenticated first, falls back to using the first available
+        OAuth token from OAuthManager (some servers require auth for list_tools).
+        Populates _tool_metadata so schemas are available before the first
+        authenticated tool call.
+        """
+        cfg = config or self._server_configs.get((workspace_id, server_name))
+        if not cfg:
+            return []
+
+        transport = cfg.get("transport", "stdio")
+        if transport not in ("sse", "streamable-http"):
+            return []
+
+        url = cfg.get("url")
+        if not url:
+            return []
+
+        # Try unauthenticated, then with token if 401
+        raw_tools = None
+        try:
+            async with Client(url) as client:
+                raw_tools = await client.list_tools()
+        except Exception as unauth_err:
+            if "401" not in str(unauth_err):
+                logger.warning(
+                    "[mcp:pool] Tool discovery failed for %s: %s",
+                    server_name,
+                    unauth_err,
+                )
+                return []
+
+            # 401 — try with a user token from OAuthManager
+            if not self._oauth_manager:
+                logger.warning(
+                    "[mcp:pool] %s requires auth for tool discovery but no OAuthManager",
+                    server_name,
+                )
+                return []
+
+            auth_provider = cfg.get("auth_provider", "none")
+            provider_name = (
+                auth_provider
+                if auth_provider not in ("oauth", "none", "token")
+                else _infer_provider(server_name)
+            )
+
+            # Find any user with a valid token for this provider
+            token = await self._resolve_any_token(provider_name)
+            if not token:
+                logger.info(
+                    "[mcp:pool] No OAuth tokens available for %s discovery — "
+                    "schemas will be discovered on first authenticated call",
+                    server_name,
+                )
+                return []
+
+            try:
+                async with Client(url, auth=BearerAuth(token=token)) as client:
+                    raw_tools = await client.list_tools()
+            except Exception as auth_err:
+                logger.warning(
+                    "[mcp:pool] Authenticated discovery also failed for %s: %s",
+                    server_name,
+                    auth_err,
+                )
+                return []
+
+        if not raw_tools:
+            return []
+
+        discovered: list[str] = []
+        for t in raw_tools:
+            input_schema = (
+                getattr(t, "inputSchema", None)
+                or getattr(t, "input_schema", None)
+                or {"type": "object", "properties": {}}
+            )
+            self._tool_metadata[t.name] = {
+                "name": t.name,
+                "server": server_name,
+                "description": t.description or "",
+                "input_schema": input_schema,
+                "_workspace_id": workspace_id,
+            }
+            discovered.append(t.name)
+
+        logger.info(
+            "[mcp:pool] Discovered %d tools from HTTP server %s",
+            len(discovered),
+            server_name,
+        )
+        return discovered
+
+    async def _resolve_any_token(self, provider: str) -> str | None:
+        """Get any valid token for a provider — used for tool discovery only."""
+        if not self._oauth_manager:
+            return None
+        try:
+            from sqlalchemy import select
+
+            from src.models.oauth_token import OAuthToken
+
+            async with self._oauth_manager._db_factory() as db:
+                result = await db.execute(
+                    select(OAuthToken.user_id)
+                    .where(
+                        OAuthToken.provider == provider,
+                    )
+                    .limit(1)
+                )
+                row = result.first()
+                if row:
+                    return await self._oauth_manager.get_valid_token(row[0], provider)
+        except Exception as e:
+            logger.debug("[mcp:pool] Could not resolve token for discovery: %s", e)
+        return None
 
     def get_all_tool_metadata(self, workspace_id: str = "") -> list[dict[str, Any]]:
         """Return all tool metadata across servers."""

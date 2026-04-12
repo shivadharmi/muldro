@@ -210,7 +210,7 @@ class TestExecuteTool:
 
         mock_mcp.assert_called_once_with(
             "API-post-page",
-            {"title": "Test", "workspace_id": "ws_1"},
+            {"title": "Test"},
             user_id="usr_1",
             workspace_id="ws_1",
         )
@@ -285,7 +285,7 @@ class TestCanUseTool:
         from src.orchestrator.agents import SubAgent
 
         agent = SubAgent(
-            name="researcher",
+            name="perceiver",
             prompt="test",
             model_tier="sonnet",
             capability_scope={"internal.search", "search.web"},
@@ -329,7 +329,7 @@ class TestCanUseTool:
         from src.orchestrator.agents import SubAgent
 
         agent = SubAgent(
-            name="researcher",
+            name="perceiver",
             prompt="test",
             model_tier="sonnet",
             capability_scope={"internal.search"},

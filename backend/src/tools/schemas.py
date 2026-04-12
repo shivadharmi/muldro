@@ -186,6 +186,78 @@ class PushUiUpdateInput(BaseModel):
     payload: str = Field(description="JSON string of the A2UI surface payload")
 
 
+class StoreMemoryInput(BaseModel):
+    """Store a memory in the knowledge base.
+
+    Memories are typed (fact, goal, preference, briefing_item, task_context)
+    and scoped (general, planning, personal). TTL controls retention.
+    """
+
+    text: str = Field(description="Memory content text")
+    memory_type: str = Field(
+        default="fact",
+        description="Memory type: fact, goal, preference, briefing_item, task_context",
+    )
+    scope: str = Field(
+        default="general",
+        description="Memory scope: general, planning, personal",
+    )
+    ttl_days: int = Field(
+        default=0,
+        ge=0,
+        description="Time-to-live in days. 0 = no expiry.",
+    )
+    entity_ids: str = Field(
+        default="",
+        description="Comma-separated entity IDs to link to this memory",
+    )
+    source: str = Field(
+        default="agent",
+        description="Origin of this memory: agent, perception, user",
+    )
+
+
+class StorePreferenceInput(BaseModel):
+    """Store a user preference extracted from interactions.
+
+    Preferences are memories with memory_type='preference' and long TTL.
+    Used by Persona agent after extracting preference signals.
+    """
+
+    text: str = Field(description="Preference description (e.g., 'Prefers morning meetings')")
+    confidence: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Confidence in this preference (0.0-1.0)",
+    )
+    source_text: str = Field(
+        default="",
+        description="Original text the preference was extracted from",
+    )
+
+
+class GetPlanDetailsInput(BaseModel):
+    """Fetch plan metadata to verify existence and inspect tasks.
+
+    Returns plan goal, priority, risk level, decision type, status,
+    creation time, and task list. Used by Governor to independently
+    verify that a plan_id corresponds to a legitimate plan.
+    """
+
+    plan_id: str = Field(description="ID of the plan to look up")
+
+
+class DiscoverCapabilitiesInput(BaseModel):
+    """Search available capabilities by query.
+
+    Returns matching capabilities with descriptions, tools, risk levels,
+    and connection status.
+    """
+
+    query: str = Field(description="Search query, e.g. 'email', 'calendar management'")
+
+
 # ── Registry ───────────────────────────────────────────────────────
 
 TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
@@ -208,6 +280,10 @@ TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
     "send_telegram": SendTelegramInput,
     "send_approval_prompt": SendApprovalPromptInput,
     "push_ui_update": PushUiUpdateInput,
+    "store_memory": StoreMemoryInput,
+    "store_preference": StorePreferenceInput,
+    "get_plan_details": GetPlanDetailsInput,
+    "discover_capabilities": DiscoverCapabilitiesInput,
 }
 
 

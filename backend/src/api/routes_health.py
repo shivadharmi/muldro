@@ -10,8 +10,12 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.requests import Request
 
 from src.api.deps import get_current_user_id, get_current_workspace_id
+from src.config.settings import Settings, get_settings
+from src.models.database import get_db
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -25,6 +29,11 @@ class HealthDashboardResponse(BaseModel):
     agents: dict
     traces: dict = {}
     runs: dict = {}
+    components: dict = {}
+    mcp: dict = {}
+    # NOTE: graph_sync health (GraphSyncService.get_sync_stats()) is available
+    # per-request via the service but not yet wired here — requires a module-level
+    # stats accumulator or ServiceContainer singleton to expose without a DB session.
 
 
 @router.get("/v1/system/dashboard", response_model=HealthDashboardResponse)
@@ -41,6 +50,22 @@ async def system_dashboard(
     trace_info = await _get_trace_metrics(workspace_id)
     run_info = await _get_run_metrics(workspace_id)
 
+    components = {}
+    try:
+        from run import get_component_health
+
+        components = get_component_health()
+    except ImportError:
+        pass
+
+    mcp_health: dict = {}
+    try:
+        from src.connectors.mcp_bridge import get_bridge_health
+
+        mcp_health = get_bridge_health()
+    except Exception:
+        pass
+
     return HealthDashboardResponse(
         budget=budget_info,
         queues=queue_info,
@@ -48,6 +73,8 @@ async def system_dashboard(
         agents=agent_info,
         traces=trace_info,
         runs=run_info,
+        components=components,
+        mcp=mcp_health,
     )
 
 
@@ -270,3 +297,97 @@ async def _get_run_metrics(workspace_id: str) -> dict:
     except Exception as e:
         logger.error("Failed to get run metrics: %s", e)
         return {}
+
+
+async def _build_store_health(
+    settings: Settings,
+    graph_engine,
+    vector_store,
+    redis,
+    db: AsyncSession,
+) -> dict:
+    """Build health status for all data stores."""
+    # Neo4j
+    if graph_engine:
+        neo4j_health = await graph_engine.health()
+        neo4j_health["sync_stats"] = graph_engine.get_metrics()
+    elif settings.neo4j_url:
+        neo4j_health = {
+            "status": "unreachable",
+            "configured": True,
+            "error": "GraphEngine failed to initialize at startup",
+        }
+    else:
+        neo4j_health = {"status": "disabled", "configured": False}
+
+    # Qdrant
+    if vector_store:
+        qdrant_health = await vector_store.health()
+        qdrant_health["metrics"] = vector_store.get_metrics()
+    elif settings.qdrant_url:
+        qdrant_health = {
+            "status": "unreachable",
+            "configured": True,
+            "error": "VectorStore failed to initialize at startup",
+        }
+    else:
+        qdrant_health = {"status": "disabled", "configured": False}
+
+    # Postgres
+    postgres_health: dict = {"status": "healthy"}
+    try:
+        from src.models.dead_letter import DeadLetterEntry
+
+        result = await db.execute(
+            select(func.count()).where(DeadLetterEntry.status.in_(["pending", "retrying"]))
+        )
+        postgres_health["pending_dlq"] = result.scalar() or 0
+    except Exception:
+        postgres_health = {"status": "unreachable"}
+
+    # Redis
+    if redis:
+        try:
+            await redis.ping()
+            redis_health: dict = {"status": "healthy"}
+        except Exception:
+            redis_health = {"status": "unreachable"}
+    elif settings.redis_url:
+        redis_health = {"status": "unreachable", "error": "Redis failed to initialize"}
+    else:
+        redis_health = {"status": "disabled"}
+
+    # Collect degraded configured services
+    degraded = []
+    if neo4j_health.get("configured") and neo4j_health["status"] != "healthy":
+        degraded.append("neo4j")
+    if qdrant_health.get("configured") and qdrant_health["status"] != "healthy":
+        degraded.append("qdrant")
+
+    return {
+        "neo4j": neo4j_health,
+        "qdrant": qdrant_health,
+        "postgres": postgres_health,
+        "redis": redis_health,
+        "degraded_services": degraded,
+    }
+
+
+@router.get("/v1/health/stores")
+async def health_stores(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Data store health with sync metrics and degradation status."""
+    graph_engine = getattr(request.app.state, "graph_engine", None)
+    vector_store = getattr(request.app.state, "vector_store", None)
+    redis = getattr(request.app.state, "redis", None)
+
+    return await _build_store_health(
+        settings=settings,
+        graph_engine=graph_engine,
+        vector_store=vector_store,
+        redis=redis,
+        db=db,
+    )

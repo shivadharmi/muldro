@@ -15,7 +15,7 @@ EVENTS_INGESTED = Counter(
 PLANS_CREATED = Counter(
     "jarvis_plans_created_total",
     "Total plans created",
-    ["decision"],
+    ["capability"],
 )
 EXECUTIONS_COMPLETED = Counter(
     "jarvis_executions_completed_total",
@@ -101,8 +101,8 @@ class MetricsService:
         EVENTS_INGESTED.labels(source=source, event_type=event_type).inc()
 
     @staticmethod
-    def record_plan_created(decision: str) -> None:
-        PLANS_CREATED.labels(decision=decision).inc()
+    def record_plan_created(capability: str) -> None:
+        PLANS_CREATED.labels(capability=capability).inc()
 
     @staticmethod
     def record_execution_completed(status: str) -> None:

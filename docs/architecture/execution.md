@@ -5,9 +5,9 @@
 ```mermaid
 sequenceDiagram
     participant PL as Planner
-    participant GOV as Governor
     participant OP as Operator
     participant GE as GraphExecutor
+    participant TE as TrustEngine
     participant CB as ContextBuilder
     participant TR as ToolRegistry
     participant MCP as MCP Bridge
@@ -15,21 +15,9 @@ sequenceDiagram
     participant MS as MemoryService
     participant NT as Notifier
 
-    Note over PL,GOV: Phase 1: Planning & Policy
-    PL->>PL: Create Plan + PlanTasks
-    PL->>GOV: ExecutionPlan (plan_id, tasks, risk_level)
-    GOV->>GOV: Apply policy (mode, trust, risk)
-
-    alt auto_execute
-        GOV-->>OP: PolicyDecision(auto_execute, plan_id)
-    else approval_required
-        GOV->>GOV: Create Approval record (apr_ ID, 24h expiry)
-        GOV->>NT: Notify user (Telegram inline buttons / Web UI)
-        GOV-->>OP: PolicyDecision(approval_required, approval_id)
-        Note over GOV: Paused until user approves
-    else blocked
-        GOV-->>PL: PolicyDecision(blocked, justification)
-    end
+    Note over PL,OP: Phase 1: Planning
+    PL->>PL: Create PlanOutput (steps with capabilities)
+    PL-->>OP: PlanOutput (plan_id, steps, capability_gaps)
 
     Note over OP,GE: Phase 2: DAG Construction
     OP->>GE: create_run(plan_id)
@@ -38,19 +26,25 @@ sequenceDiagram
     GE->>CB: Build context pack
     CB-->>GE: ContextPack (goals, entities, memories)
     GE->>GE: Create TaskSteps from tasks
+    GE->>GE: _emit_surface_update(plan_ready)
 
-    Note over GE,MCP: Phase 3: DAG Execution
+    Note over GE,MCP: Phase 3: DAG Execution (single TrustEngine gate per step)
     loop Until all steps complete
         GE->>GE: Query ready_steps (deps satisfied)
+        GE->>GE: _emit_surface_update(executing)
 
         par Execute independent steps
-            GE->>TR: Check approval requirement
-            alt approval_required
-                GE->>GE: Create step-level Approval
-                GE->>GE: Pause run (awaiting_approval)
-            else proceed
+            GE->>TE: evaluate(trust_level, risk_level) → 4×4 matrix
+            alt auto_execute_silent / auto_execute_notify
                 GE->>MCP: Execute via MCP bridge
                 MCP-->>GE: Tool result
+            else approval_required
+                GE->>GE: Create Approval record
+                GE->>NT: Notify user
+                GE->>GE: _emit_surface_update(approval_needed)
+                GE->>GE: Pause run (awaiting_approval)
+            else blocked
+                GE->>GE: Mark step failed (blocked by policy)
             end
         end
 
@@ -66,31 +60,34 @@ sequenceDiagram
     GE->>MS: Extract facts from step outputs
     MS-->>GE: memory_ids[]
 
+    GE->>GE: _emit_surface_update(completed/failed)
     GE->>NT: Notify user of completion
 ```
 
 ## Execution State Machine
 
-### TaskRun Statuses (11)
+### TaskRun Statuses (12)
 
 ```mermaid
 stateDiagram-v2
     [*] --> pending
     pending --> running
     pending --> cancelled
+    pending --> blocked
     running --> paused
     running --> awaiting_approval
+    running --> awaiting_input
     running --> completed
     running --> failed
     running --> cancelled
-    running --> blocked
     running --> partially_completed
-    running --> timed_out
     paused --> running
     paused --> cancelled
     awaiting_approval --> running
     awaiting_approval --> cancelled
-    blocked --> running
+    awaiting_input --> running
+    awaiting_input --> cancelled
+    blocked --> pending
     blocked --> cancelled
     partially_completed --> running: resume
     partially_completed --> archived
@@ -103,24 +100,28 @@ stateDiagram-v2
     archived --> [*]
 ```
 
-### TaskStep Statuses (9)
+### TaskStep Statuses (10)
 
 ```mermaid
 stateDiagram-v2
     [*] --> pending
     pending --> ready
     pending --> skipped
+    pending --> blocked
     ready --> running
     ready --> skipped
     running --> completed
     running --> failed
     running --> waiting_approval
+    running --> awaiting_input
     running --> skipped
-    running --> blocked
     running --> timed_out
     waiting_approval --> running
     waiting_approval --> skipped
-    blocked --> ready
+    awaiting_input --> running
+    awaiting_input --> skipped
+    awaiting_input --> cancelled
+    blocked --> pending
     blocked --> skipped
     timed_out --> pending: retry
     timed_out --> skipped
@@ -156,8 +157,20 @@ All execution boundaries use typed contracts from `src/orchestrator/contracts.py
 - **StepResult** — Wraps the outcome of each TaskStep execution (status, output_data, error, duration)
 - **ToolCallRequest** — Typed request for tool invocation (tool_name, arguments, requires_approval)
 - **ToolCallResult** — Typed result from tool invocation (success, output, error, duration)
+- **SurfaceUpdate** — Live execution surface event (run_id, status, step_summary, progress). Emitted at 9 points in GraphExecutor: plan_ready, executing, step_started, step_completed, step_failed, approval_needed, approval_resolved, completed, failed.
+- **InsightSurfaceData** — Structured data for insight-type surfaces pushed during execution.
 
-These contracts ensure structured data flows between GraphExecutor, tool dispatch, and memory writeback.
+These contracts ensure structured data flows between GraphExecutor, tool dispatch, memory writeback, and live UI surfaces.
+
+## Live Execution Surfaces (SurfaceUpdate)
+
+The GraphExecutor emits `SurfaceUpdate` events via Redis pubsub at key execution milestones. The frontend receives these via WebSocket and renders live progress in the workspace.
+
+Surface update lifecycle: `plan_ready` → `executing` → `approval_needed` (if gated) → `completed` / `failed`
+
+## InteractionLog
+
+Simple interactions that do not produce a full TaskRun (e.g., greetings, quick answers, chitchat) are recorded in the `interaction_logs` table. This provides a lightweight audit trail without the overhead of the full execution state machine.
 
 ## Unified Registry Dispatch
 
@@ -199,19 +212,34 @@ Checkpoints enable:
 
 ## Approval Gates
 
-Approvals can occur at two levels:
+A single TrustEngine gate in GraphExecutor handles all approval decisions. There is no separate Governor plan-level check — Governor hooks are audit-only.
 
-### Plan-Level Approval (Governor)
-- Entire plan requires user consent before any execution
-- Created by Governor during `evaluate_plan()`
-- 24-hour expiry
+### TrustEngine 4x4 Matrix
 
-### Step-Level Approval (GraphExecutor)
-- Individual step requires consent (e.g., sending an email)
-- Checked via ToolRegistry `requires_approval` flag
-- Run pauses in `awaiting_approval` state
+The TrustEngine evaluates each step using a 4x4 matrix of `trust_level` (new, developing, established, trusted) x `risk_level` (low, medium, high, critical):
 
-Both approvals are delivered via Telegram inline buttons and/or web UI.
+| PolicyDecision | Meaning |
+|----------------|---------|
+| `auto_execute_silent` | Execute without notification |
+| `auto_execute_notify` | Execute and notify user |
+| `approval_required` | Pause run, require explicit user approval |
+| `blocked` | Reject execution entirely |
+
+Higher trust + lower risk = more autonomy. Trust graduates over time based on successful executions.
+
+### Step-Level Flow
+1. GraphExecutor calls `TrustEngine.evaluate()` per step
+2. If `approval_required`: create Approval record, pause run in `awaiting_approval`, notify user
+3. If `auto_execute_notify`: execute and send notification
+4. If `auto_execute_silent`: execute silently
+5. If `blocked`: mark step as failed
+
+Approvals are delivered via Telegram inline buttons and/or web UI.
+
+## Execution Timeout
+
+- **Background runs** (`source="background"`): 600-second timeout (configurable via `run.timeout_seconds`)
+- **User-initiated runs**: No timeout (unlimited)
 
 ## Memory Writeback
 
@@ -249,3 +277,7 @@ The optional `Verifier` service checks execution output quality:
 | `/v1/runs/{run_id}/trace` | GET | Linked orchestrator trace |
 | `/v1/runs/{run_id}/artifacts` | GET | Artifacts produced by the run |
 | `/v1/runs/{run_id}/resume` | POST | Resume a paused or partially completed run |
+
+## Data Retention
+
+The `EvictionService` enforces 90-day retention for completed runs, expired approvals, and resolved dead-letter entries. Eviction is triggered periodically by the scheduler via `_tick_eviction()`.

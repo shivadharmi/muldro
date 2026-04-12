@@ -75,7 +75,7 @@ async def test_search_by_agent_name(store):
             "trace_id": "trace_other",
             "trigger": "test",
             "started_at": _NOW,
-            "spans": [{"agent_name": "observer", "duration_ms": 50}],
+            "spans": [{"agent_name": "perceiver", "duration_ms": 50}],
         },
         user_id=TEST_USER_ID,
     )
@@ -123,7 +123,7 @@ async def test_agent_performance(store):
                     "output_tokens": 75,
                 },
                 {
-                    "agent_name": "observer",
+                    "agent_name": "perceiver",
                     "duration_ms": 50,
                     "input_tokens": 30,
                     "output_tokens": 10,
@@ -139,7 +139,7 @@ async def test_agent_performance(store):
     assert perf["planner"]["call_count"] == 2
     assert perf["planner"]["avg_duration_ms"] == 250
     assert perf["planner"]["total_input_tokens"] == 250
-    assert perf["observer"]["error_count"] == 1
+    assert perf["perceiver"]["error_count"] == 1
 
 
 @pytest.mark.asyncio

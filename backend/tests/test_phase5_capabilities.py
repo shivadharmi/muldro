@@ -184,13 +184,13 @@ class TestNewDocCapabilities:
 
 
 class TestAgentScopeFixes:
-    def test_observer_has_filesystem_read(self):
-        scope = AGENT_CAPABILITY_SCOPES["observer"]
+    def test_perceiver_has_filesystem_read(self):
+        scope = AGENT_CAPABILITY_SCOPES["perceiver"]
         for cap in ("filesystem.read", "filesystem.list", "filesystem.search"):
-            assert cap in scope, f"Observer missing {cap}"
+            assert cap in scope, f"Perceiver missing {cap}"
 
-    def test_observer_has_workflow_get_teams(self):
-        assert "workflow.get_teams" in AGENT_CAPABILITY_SCOPES["observer"]
+    def test_perceiver_has_workflow_get_teams(self):
+        assert "workflow.get_teams" in AGENT_CAPABILITY_SCOPES["perceiver"]
 
     def test_operator_has_calendar_delete(self):
         assert "calendar.delete" in AGENT_CAPABILITY_SCOPES["operator"]
@@ -200,7 +200,8 @@ class TestAgentScopeFixes:
         for cap in ("workflow.delete", "workflow.delete_comment", "workflow.delete_milestone"):
             assert cap in scope, f"Operator missing {cap}"
 
-    def test_researcher_has_filesystem_read(self):
-        scope = AGENT_CAPABILITY_SCOPES["researcher"]
+    def test_perceiver_has_filesystem_read_from_researcher(self):
+        """Perceiver absorbed researcher scope — verify filesystem read capabilities."""
+        scope = AGENT_CAPABILITY_SCOPES["perceiver"]
         for cap in ("filesystem.read", "filesystem.list", "filesystem.search"):
-            assert cap in scope, f"Researcher missing {cap}"
+            assert cap in scope, f"Perceiver missing {cap}"

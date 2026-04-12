@@ -117,8 +117,8 @@ class TestSubmitFeedback:
                 "feedback_type": "invalid_type",
             },
         )
-        assert resp.status_code == 400
-        assert "feedback_type" in resp.json()["detail"]
+        # Pydantic Literal constraint returns 422 for invalid enum values
+        assert resp.status_code == 422
 
     def test_reject_rating_without_value(self, client, mock_db):
         _mock_briefing_exists(mock_db)
@@ -140,7 +140,8 @@ class TestSubmitFeedback:
                 "rating": 6,
             },
         )
-        assert resp.status_code == 400
+        # Pydantic Field(ge=1, le=5) constraint returns 422 for out-of-range ratings
+        assert resp.status_code == 422
 
     def test_briefing_not_found(self, client, mock_db):
         _mock_briefing_not_found(mock_db)

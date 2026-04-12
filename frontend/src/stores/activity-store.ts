@@ -91,13 +91,14 @@ export const useActivityStore = create<ActivityState>((set, get) => ({
 
     // Listen for all runtime event types
     const runtimeTypes = [
-      "command_received", "route_selected", "plan_created", "run_created",
+      "command_received", "plan_created", "step_routed", "run_created",
       "step_started", "step_completed", "step_failed",
       "approval_requested", "approval_resolved",
       "tool_call_started", "tool_call_completed", "tool_call_failed",
       "artifact_created", "surface_created",
       "agent_started", "agent_completed",
       "run_completed", "run_failed", "run_cancelled",
+      "auto_execute_notify",
     ];
 
     for (const type of runtimeTypes) {

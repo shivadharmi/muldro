@@ -1,22 +1,23 @@
-"""Unified surface builder — converts DB state into A2UI surfaces.
+"""Unified surface builder — converts DB state into workspace surfaces.
 
-Returns pre-built A2UISurface objects with populated children[] using
-renderer.py builders. The frontend renders these directly via A2UIRenderer.
+Returns WorkspaceSurfaceData dicts with preview + detail_config for
+the two-layer surface model. No legacy A2UISurface children.
 """
 
 import logging
 from datetime import date, datetime, timedelta, timezone
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.approvals import Approval
 from src.models.briefings import Briefing
-from src.models.task_graph import TaskRun
+from src.models.task_graph import TaskRun, TaskStep
+from src.models.trust_state import TrustState
 from src.models.ui_state import UISurface
-from src.ui import renderer as r
-from src.ui.contracts import A2UISurface
-from src.ui.views import briefing_full_view
+from src.ui.contracts import SurfaceMetric, SurfacePreview
+from src.ui.renderer import build_detail_config
 
 logger = logging.getLogger(__name__)
 
@@ -28,34 +29,29 @@ class SurfaceService:
         self._db = db
         self._workspace_id = workspace_id
 
-    async def build_workspace_surfaces(self, user_id: str) -> list[A2UISurface]:
+    async def build_workspace_surfaces(self, user_id: str) -> list[dict[str, Any]]:
         """Build all workspace surfaces for the current user.
 
-        Returns a priority-ordered list: approvals first, then priorities,
-        briefing, recommendations, and finally persisted WS surfaces.
+        Returns a priority-ordered list of surface dicts, each with:
+        id, kind, preview, detail_config, created_at, etc.
         """
-        surfaces: list[A2UISurface] = []
+        surfaces: list[dict[str, Any]] = []
 
-        approval_surfaces = await self._build_approval_surfaces(user_id)
-        surfaces.extend(approval_surfaces)
+        surfaces.extend(await self._build_approval_surfaces(user_id))
+        surfaces.extend(await self._build_active_execution_surfaces())
+        surfaces.extend(await self._build_priority_surfaces())
 
-        priority_surfaces = await self._build_priority_surfaces()
-        surfaces.extend(priority_surfaces)
+        briefing = await self._build_briefing_surface(user_id)
+        if briefing:
+            surfaces.append(briefing)
 
-        briefing_surface = await self._build_briefing_surface(user_id)
-        if briefing_surface:
-            surfaces.append(briefing_surface)
-
-        recommendation_surfaces = await self._build_recommendation_surfaces()
-        surfaces.extend(recommendation_surfaces)
-
-        persisted = await self._load_persisted_surfaces(user_id)
-        surfaces.extend(persisted)
+        surfaces.extend(await self._build_insight_surfaces(user_id))
+        surfaces.extend(await self._build_recommendation_surfaces())
+        surfaces.extend(await self._load_persisted_surfaces(user_id))
 
         return surfaces
 
-    async def _build_approval_surfaces(self, user_id: str) -> list[A2UISurface]:
-        """Build one A2UI surface per pending approval."""
+    async def _build_approval_surfaces(self, user_id: str) -> list[dict[str, Any]]:
         result = await self._db.execute(
             select(Approval)
             .where(
@@ -66,60 +62,104 @@ class SurfaceService:
             .limit(10)
         )
         approvals = result.scalars().all()
-        surfaces: list[A2UISurface] = []
+        surfaces: list[dict[str, Any]] = []
 
         for apr in approvals:
-            risk_variant = "warning" if apr.risk_level in ("high", "critical") else "default"
-            children = [
-                r.heading(f"apr_{apr.approval_id}_title", apr.title or "Pending Approval"),
-                r.badge(
-                    f"apr_{apr.approval_id}_risk",
-                    apr.risk_level or "medium",
-                    variant=risk_variant,
-                ),
-                r.text(
-                    f"apr_{apr.approval_id}_summary",
-                    apr.summary or "No summary available.",
-                ),
-                r.row(
-                    f"apr_{apr.approval_id}_actions",
-                    [
-                        r.button(
-                            f"approve_{apr.approval_id}",
-                            "Approve",
-                            variant="primary",
-                            action_payload={
-                                "action": "approve",
-                                "id": apr.approval_id,
-                            },
-                        ),
-                        r.button(
-                            f"reject_{apr.approval_id}",
-                            "Reject",
-                            variant="danger",
-                            action_payload={
-                                "action": "reject",
-                                "id": apr.approval_id,
-                            },
-                        ),
-                    ],
-                ),
+            surface_id = f"approval_{apr.approval_id}"
+            risk_level = apr.risk_level or "medium"
+            risk_variant = "warning" if risk_level in ("high", "critical") else "default"
+
+            trust_context = await self._get_trust_context(apr)
+
+            metrics = [
+                SurfaceMetric(label="Risk", value=risk_level, variant=risk_variant),
             ]
-            surface = r.surface(
-                f"approval_{apr.approval_id}",
-                [r.card(f"apr_{apr.approval_id}_card", children)],
-                metadata={
-                    "kind": "approval",
-                    "title": apr.title or "Pending Approval",
-                    "priority": apr.risk_level or "medium",
-                },
+            if trust_context:
+                metrics.append(
+                    SurfaceMetric(
+                        label="Trust",
+                        value=trust_context["label"],
+                        variant=trust_context.get("variant", "default"),
+                    )
+                )
+
+            preview = SurfacePreview(
+                title=apr.title or "Pending Approval",
+                subtitle=apr.summary[:120] if apr.summary else None,
+                status="awaiting_approval",
+                priority="high" if risk_level in ("high", "critical") else "medium",
+                metrics=metrics,
             )
-            surfaces.append(surface)
+            detail_config = build_detail_config("approval", surface_id)
+
+            surfaces.append(
+                {
+                    "id": surface_id,
+                    "kind": "approval",
+                    "preview": preview.model_dump(mode="json"),
+                    "detail_config": (
+                        detail_config.model_dump(mode="json") if detail_config else None
+                    ),
+                    "created_at": apr.created_at.isoformat() if apr.created_at else None,
+                    "trust_context": trust_context,
+                }
+            )
 
         return surfaces
 
-    async def _build_briefing_surface(self, user_id: str) -> A2UISurface | None:
-        """Build a briefing surface from today's briefing using briefing_full_view."""
+    async def _get_trust_context(self, approval) -> dict[str, str] | None:
+        """Build trust context dict from approval artifact_refs."""
+        refs = approval.artifact_refs
+        if not refs or not isinstance(refs, dict):
+            return None
+
+        capability = refs.get("tool_name")
+        if not capability:
+            return None
+
+        risk_level = approval.risk_level or "low"
+
+        result = await self._db.execute(
+            select(TrustState).where(
+                TrustState.workspace_id == self._workspace_id,
+                TrustState.capability == capability,
+                TrustState.risk_level == risk_level,
+            )
+        )
+        state = result.scalar_one_or_none()
+        if not state:
+            return {
+                "trust_level": "first_use",
+                "label": "First time",
+                "variant": "default",
+            }
+
+        level = state.trust_level
+        approved = state.approved_count
+
+        if level == "first_use":
+            return {
+                "trust_level": "first_use",
+                "label": "First time",
+                "variant": "default",
+            }
+        elif level == "learning":
+            remaining = 10 - approved
+            hint = f"{remaining} more to auto-approve" if remaining > 0 else ""
+            return {
+                "trust_level": "learning",
+                "label": f"Similar to {approved} approvals",
+                "variant": "default",
+                "graduation_hint": hint,
+            }
+
+        return {
+            "trust_level": level,
+            "label": level.replace("_", " ").title(),
+            "variant": "success" if level in ("trusted", "autonomous") else "default",
+        }
+
+    async def _build_briefing_surface(self, user_id: str) -> dict[str, Any] | None:
         today = date.today()
         result = await self._db.execute(
             select(Briefing).where(
@@ -131,23 +171,36 @@ class SurfaceService:
         if not briefing:
             return None
 
-        briefing_dict = {
-            "headline": briefing.headline or "No briefing yet",
-            "top_priorities": briefing.top_priorities or [],
-            "recommended_actions": briefing.recommended_actions or [],
-        }
-        surface = briefing_full_view(user_id, briefing_dict)
+        surface_id = f"briefing_{briefing.briefing_id}"
+        priorities = briefing.top_priorities or []
+        actions = briefing.recommended_actions or []
 
-        # Enrich metadata for the frontend
-        surface.metadata = {
+        # First priority title as subtitle for context
+        first_priority = ""
+        if priorities:
+            p = priorities[0]
+            first_priority = p.get("title", "") if isinstance(p, dict) else str(p)
+
+        preview = SurfacePreview(
+            title=briefing.headline or "Daily Briefing",
+            subtitle=first_priority[:100] if first_priority else None,
+            metrics=[
+                SurfaceMetric(label="Priorities", value=str(len(priorities))),
+                SurfaceMetric(label="Actions", value=str(len(actions))),
+            ],
+            tags=["briefing"],
+        )
+        detail_config = build_detail_config("briefing", surface_id)
+
+        return {
+            "id": surface_id,
             "kind": "briefing",
-            "title": briefing.headline or "Daily Briefing",
-            "briefing_id": briefing.briefing_id,
+            "preview": preview.model_dump(mode="json"),
+            "detail_config": detail_config.model_dump(mode="json") if detail_config else None,
+            "created_at": briefing.created_at.isoformat() if briefing.created_at else None,
         }
-        return surface
 
-    async def _build_priority_surfaces(self) -> list[A2UISurface]:
-        """Build alert surfaces for blocked/awaiting runs."""
+    async def _build_priority_surfaces(self) -> list[dict[str, Any]]:
         result = await self._db.execute(
             select(TaskRun)
             .where(
@@ -158,41 +211,108 @@ class SurfaceService:
             .limit(5)
         )
         runs = result.scalars().all()
-        surfaces: list[A2UISurface] = []
+        surfaces: list[dict[str, Any]] = []
 
         for run in runs:
             short_id = run.run_id[:16]
-            surface = r.surface(
-                f"priority_{run.run_id}",
-                [
-                    r.card(
-                        f"pri_{run.run_id}_card",
-                        [
-                            r.alert(
-                                f"pri_{run.run_id}_alert",
-                                f"Run {short_id}... is {run.status}",
-                                severity="warning",
-                                title="Workflow Blocked",
-                            ),
-                        ],
-                    ),
-                ],
-                metadata={
-                    "kind": "alert",
-                    "title": f"Blocked: {short_id}...",
-                    "priority": "high",
-                },
+            surface_id = f"priority_{run.run_id}"
+
+            preview = SurfacePreview(
+                title=f"Blocked: {short_id}...",
+                subtitle=f"Run is {run.status}",
+                status=run.status,
+                priority="high",
+                metrics=[SurfaceMetric(label="Status", value=run.status, variant="warning")],
             )
-            surfaces.append(surface)
+            detail_config = build_detail_config("alert", surface_id)
+
+            surfaces.append(
+                {
+                    "id": surface_id,
+                    "kind": "alert",
+                    "preview": preview.model_dump(mode="json"),
+                    "detail_config": (
+                        detail_config.model_dump(mode="json") if detail_config else None
+                    ),
+                    "created_at": run.created_at.isoformat() if run.created_at else None,
+                }
+            )
 
         return surfaces
 
-    async def _build_recommendation_surfaces(self) -> list[A2UISurface]:
-        """Build recommendation cards from recommended actions logic."""
+    async def _build_active_execution_surfaces(self) -> list[dict[str, Any]]:
+        """Build surfaces for actively executing TaskRuns.
+
+        Includes runs with status in (running, paused). These appear
+        above completed surfaces in the workspace.
+        """
+        result = await self._db.execute(
+            select(TaskRun)
+            .where(
+                TaskRun.workspace_id == self._workspace_id,
+                TaskRun.status.in_(["running", "paused", "awaiting_approval"]),
+                TaskRun.source != "user_message",
+            )
+            .order_by(TaskRun.started_at.desc())
+            .limit(5)
+        )
+        runs = result.scalars().all()
+        surfaces: list[dict[str, Any]] = []
+
+        for run in runs:
+            step_result = await self._db.execute(
+                select(TaskStep).where(TaskStep.run_id == run.run_id).order_by(TaskStep.created_at)
+            )
+            steps = list(step_result.scalars().all())
+            completed = sum(1 for s in steps if s.status == "completed")
+            total = len(steps)
+
+            current_step_name = None
+            for s in steps:
+                if s.status in ("running", "ready"):
+                    current_step_name = s.name or (s.input_data or {}).get("capability", "")
+                    break
+
+            surface_id = f"exec_{run.run_id}"
+            subtitle = f"Step {completed + 1}/{total}"
+            if current_step_name:
+                subtitle += f": {current_step_name}"
+
+            preview = SurfacePreview(
+                title="Executing plan",
+                subtitle=subtitle,
+                status="running",
+                progress=completed / total if total > 0 else 0.0,
+                metrics=[
+                    SurfaceMetric(
+                        label="Progress",
+                        value=f"{completed}/{total} steps",
+                    ),
+                ],
+            )
+            detail_config = build_detail_config("plan", surface_id)
+
+            surfaces.append(
+                {
+                    "id": surface_id,
+                    "kind": "plan",
+                    "preview": preview.model_dump(mode="json"),
+                    "detail_config": (
+                        detail_config.model_dump(mode="json") if detail_config else None
+                    ),
+                    "source_run_id": run.run_id,
+                    "created_at": (
+                        run.started_at.isoformat() if run.started_at else run.created_at.isoformat()
+                    ),
+                }
+            )
+
+        return surfaces
+
+    async def _build_recommendation_surfaces(self) -> list[dict[str, Any]]:
         actions: list[dict] = []
         cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
 
-        # Failed runs → recommendation
         failed_result = await self._db.execute(
             select(func.count(TaskRun.run_id)).where(
                 TaskRun.workspace_id == self._workspace_id,
@@ -211,7 +331,6 @@ class SurfaceService:
                 }
             )
 
-        # Stale observations (backed by perception_state)
         try:
             from src.models.perception_state import PerceptionState
 
@@ -236,36 +355,79 @@ class SurfaceService:
         except Exception:
             logger.debug("Failed to check observation status", exc_info=True)
 
-        surfaces: list[A2UISurface] = []
+        surfaces: list[dict[str, Any]] = []
         for i, action in enumerate(actions[:3]):
-            surface = r.surface(
-                f"rec_{i}",
-                [
-                    r.card(
-                        f"rec_{i}_card",
-                        [
-                            r.heading(f"rec_{i}_title", action["title"]),
-                            r.text(f"rec_{i}_desc", action["description"]),
-                        ],
-                    ),
-                ],
-                metadata={
-                    "kind": "recommendation",
-                    "title": action["title"],
-                    "priority": action.get("priority", "medium"),
-                },
+            surface_id = f"rec_{i}"
+            priority = action.get("priority", "medium")
+
+            preview = SurfacePreview(
+                title=action["title"],
+                subtitle=action["description"][:120],
+                priority=priority if priority != "medium" else None,
+                tags=["recommendation"],
             )
-            surfaces.append(surface)
+            detail_config = build_detail_config("recommendation", surface_id)
+
+            surfaces.append(
+                {
+                    "id": surface_id,
+                    "kind": "recommendation",
+                    "preview": preview.model_dump(mode="json"),
+                    "detail_config": (
+                        detail_config.model_dump(mode="json") if detail_config else None
+                    ),
+                }
+            )
 
         return surfaces
 
-    async def _load_persisted_surfaces(self, user_id: str) -> list[A2UISurface]:
-        """Load non-expired persisted surfaces from ui_surfaces table.
+    async def _build_insight_surfaces(self, user_id: str) -> list[dict[str, Any]]:
+        """Load persisted proactive insight surfaces that haven't expired."""
+        now = datetime.now(timezone.utc)
+        result = await self._db.execute(
+            select(UISurface)
+            .where(
+                UISurface.user_id == user_id,
+                UISurface.workspace_id == self._workspace_id,
+                UISurface.surface_type == "proactive_insight",
+                UISurface.expires_at > now,
+            )
+            .order_by(UISurface.updated_at.desc())
+            .limit(10)
+        )
+        rows = result.scalars().all()
+        surfaces: list[dict[str, Any]] = []
 
-        These are surfaces pushed via WebSocket that were persisted for
-        page-refresh survival. Returns them as-is since they already
-        contain A2UI component trees (after Phase 2).
-        """
+        for db_row in rows:
+            try:
+                payload = db_row.payload or {}
+                preview_data = db_row.preview or payload.get("preview")
+                if not preview_data:
+                    continue
+
+                surfaces.append(
+                    {
+                        "id": payload.get("id", db_row.surface_id),
+                        "kind": "proactive_insight",
+                        "preview": preview_data,
+                        "detail_config": None,
+                        "insight_data": payload.get("insight_data"),
+                        "created_at": (
+                            db_row.created_at.isoformat() if db_row.created_at else None
+                        ),
+                    }
+                )
+            except Exception:
+                logger.debug(
+                    "Failed to parse insight surface %s",
+                    db_row.surface_id,
+                    exc_info=True,
+                )
+
+        return surfaces
+
+    async def _load_persisted_surfaces(self, user_id: str) -> list[dict[str, Any]]:
+        """Load non-expired persisted surfaces from ui_surfaces table."""
         now = datetime.now(timezone.utc)
         result = await self._db.execute(
             select(UISurface)
@@ -273,29 +435,38 @@ class SurfaceService:
                 UISurface.user_id == user_id,
                 UISurface.workspace_id == self._workspace_id,
                 UISurface.expires_at > now,
+                UISurface.surface_type != "proactive_insight",
             )
             .order_by(UISurface.updated_at.desc())
             .limit(20)
         )
         rows = result.scalars().all()
-        surfaces: list[A2UISurface] = []
+        surfaces: list[dict[str, Any]] = []
 
-        for row in rows:
+        for db_row in rows:
             try:
-                payload = row.payload or {}
-                surface = A2UISurface(
-                    id=payload.get("id", row.surface_id),
-                    children=[],
-                    metadata=payload.get("metadata", {}),
-                )
-                # If the payload has children (from Phase 2 WS push), use them
-                raw_children = payload.get("children", [])
-                if raw_children:
-                    from src.ui.contracts import A2UIComponent
+                payload = db_row.payload or {}
+                preview_data = db_row.preview or payload.get("preview")
+                if not preview_data:
+                    continue
 
-                    surface.children = [A2UIComponent.model_validate(c) for c in raw_children]
-                surfaces.append(surface)
+                surfaces.append(
+                    {
+                        "id": payload.get("id", db_row.surface_id),
+                        "kind": payload.get("kind", db_row.surface_type),
+                        "preview": preview_data,
+                        "detail_config": db_row.detail_config or payload.get("detail_config"),
+                        "capability": payload.get("capability"),
+                        "source_run_id": payload.get("source_run_id"),
+                        "response_preview": payload.get("response_preview"),
+                        "created_at": (
+                            db_row.created_at.isoformat() if db_row.created_at else None
+                        ),
+                    }
+                )
             except Exception:
-                logger.debug("Failed to parse persisted surface %s", row.surface_id, exc_info=True)
+                logger.debug(
+                    "Failed to parse persisted surface %s", db_row.surface_id, exc_info=True
+                )
 
         return surfaces

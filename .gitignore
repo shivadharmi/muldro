@@ -42,3 +42,4 @@ test-results/
 references/
 prompts/
 pytest-of-sivasankarreddybogala/
+.playwright-mcp/

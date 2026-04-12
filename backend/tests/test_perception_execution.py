@@ -1,211 +1,92 @@
 """Tests for perception plan extraction, execution queuing, and idempotency.
 
-Covers Phase 1 (_check_step_condition has_truthy_key),
-Phase 3 (_queue_perception_plan), and Phase 7 (idempotency).
+Covers _queue_perception_plan (Phase 3) and plan idempotency (Phase 7).
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.orchestrator.contracts import PlannerOutput, PlannerTask
-
-# ---------------------------------------------------------------------------
-# _check_step_condition — Phase 1
-# ---------------------------------------------------------------------------
-
-
-class TestCheckStepCondition:
-    """Verify _check_step_condition handles all condition types."""
-
-    @staticmethod
-    def _check(condition: dict, decision: dict) -> bool:
-        from src.orchestrator.jarvis import JarvisOrchestrator
-
-        return JarvisOrchestrator._check_step_condition(condition, decision)
-
-    def test_has_truthy_key_with_value(self):
-        """has_truthy_key returns True when key has a truthy value."""
-        assert self._check(
-            {"has_truthy_key": "plan_id"},
-            {"plan_id": "plan_abc123"},
-        )
-
-    def test_has_truthy_key_with_none(self):
-        """has_truthy_key returns False when key is None."""
-        assert not self._check(
-            {"has_truthy_key": "plan_id"},
-            {"plan_id": None},
-        )
-
-    def test_has_truthy_key_with_empty_string(self):
-        """has_truthy_key returns False when key is empty string."""
-        assert not self._check(
-            {"has_truthy_key": "plan_id"},
-            {"plan_id": ""},
-        )
-
-    def test_has_truthy_key_missing_key(self):
-        """has_truthy_key returns False when key is missing entirely."""
-        assert not self._check(
-            {"has_truthy_key": "plan_id"},
-            {"decision": "create_task"},
-        )
-
-    def test_has_key(self):
-        """has_key returns True when key exists (even if None)."""
-        assert self._check(
-            {"has_key": "plan_id"},
-            {"plan_id": None},
-        )
-
-    def test_has_key_missing(self):
-        assert not self._check(
-            {"has_key": "plan_id"},
-            {"decision": "create_task"},
-        )
-
-    def test_not_has_key(self):
-        assert self._check(
-            {"not_has_key": "plan_id"},
-            {"decision": "create_task"},
-        )
-
-    def test_not_has_key_present(self):
-        assert not self._check(
-            {"not_has_key": "plan_id"},
-            {"plan_id": "plan_123"},
-        )
-
-    def test_field_prefix(self):
-        """field:<name> checks decision[name] == value."""
-        assert self._check(
-            {"field:decision": "create_task"},
-            {"decision": "create_task"},
-        )
-
-    def test_field_prefix_mismatch(self):
-        assert not self._check(
-            {"field:decision": "create_task"},
-            {"decision": "draft_reply"},
-        )
-
-    def test_direct_equality(self):
-        """Fallback: key=value direct equality check."""
-        assert self._check(
-            {"decision": "create_task"},
-            {"decision": "create_task"},
-        )
-
-    def test_direct_equality_mismatch(self):
-        assert not self._check(
-            {"decision": "create_task"},
-            {"decision": "draft_reply"},
-        )
-
-    def test_multiple_conditions_all_pass(self):
-        """All conditions must be satisfied (AND logic)."""
-        assert self._check(
-            {"has_truthy_key": "plan_id", "field:decision": "create_task"},
-            {"plan_id": "plan_abc", "decision": "create_task"},
-        )
-
-    def test_multiple_conditions_one_fails(self):
-        assert not self._check(
-            {"has_truthy_key": "plan_id", "field:decision": "create_task"},
-            {"plan_id": None, "decision": "create_task"},
-        )
-
+from src.orchestrator.contracts import PlanOutput, PlanStep
 
 # ---------------------------------------------------------------------------
 # _queue_perception_plan — Phase 3
 # ---------------------------------------------------------------------------
 
 
-def _make_orchestrator_mock():
-    """Create a minimal JarvisOrchestrator mock for _queue_perception_plan tests."""
-    orch = MagicMock()
-    orch.PERCEPTION_ACTIONABLE_DECISIONS = {
-        "create_task",
-        "draft_reply",
-        "research",
-        "watcher_create",
-        "schedule_reminder",
-        "set_goal",
-        "set_instruction",
-        "add_to_brief",
-    }
-    orch._PERCEPTION_INLINE_DECISIONS = {
-        "schedule_reminder",
-        "set_goal",
-        "set_instruction",
-        "add_to_brief",
-    }
-    return orch
-
-
 class TestQueuePerceptionPlan:
     @pytest.mark.asyncio
     @patch("src.orchestrator.jarvis.get_anthropic_client")
-    async def test_acknowledge_decision_skipped(self, mock_client):
-        """acknowledge decisions should not create background runs."""
+    async def test_respond_only_plan_skipped(self, mock_client):
+        """Plans with only respond/reason steps should not create background runs."""
         from src.orchestrator.jarvis import JarvisOrchestrator
 
         orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
         orch._db_factory = MagicMock()
         orch._settings = MagicMock()
-        orch._handle_set_goal = AsyncMock()
-
-        planner_text = '{"decision": "acknowledge", "reasoning": "nothing important"}'
-        result = await orch._queue_perception_plan(
-            planner_text, "gmail", "usr_test", "ws_test", "trace_01"
-        )
-
-        # acknowledge is not in PERCEPTION_ACTIONABLE_DECISIONS
-        # so it should return the decision without creating a run
-        assert result is None or result.decision == "acknowledge"
-
-    @pytest.mark.asyncio
-    @patch("src.orchestrator.jarvis.get_anthropic_client")
-    async def test_schedule_reminder_handled_inline(self, mock_client):
-        """schedule_reminder should be handled inline, not as background run."""
-        from src.orchestrator.jarvis import JarvisOrchestrator
-
-        orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
-        orch._db_factory = MagicMock()
-        orch._settings = MagicMock()
-        orch._handle_schedule_reminder = AsyncMock()
 
         planner_text = (
-            '{"decision": "schedule_reminder", "goal": "Remind about call", '
-            '"reasoning": "user asked"}'
+            '{"goal": "Nothing important", "steps": ['
+            '{"description": "Acknowledge", "capability": "respond"}'
+            "]}"
         )
         result = await orch._queue_perception_plan(
             planner_text, "gmail", "usr_test", "ws_test", "trace_01"
         )
 
-        # Should have been handled inline
-        if result and result.decision == "schedule_reminder":
-            orch._handle_schedule_reminder.assert_awaited_once()
+        # respond-only plan has no actionable steps — should return without queuing
+        assert result is not None
+        assert result.goal == "Nothing important"
 
     @pytest.mark.asyncio
     @patch("src.orchestrator.jarvis.get_anthropic_client")
-    async def test_create_task_queues_background_run(self, mock_client):
-        """create_task with tasks should persist plan and create background run."""
+    async def test_system_capability_handled_inline(self, mock_client):
+        """system.schedule_reminder steps should be handled inline."""
+        from src.orchestrator.jarvis import JarvisOrchestrator
+
+        orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
+        orch._db_factory = MagicMock()
+        orch._settings = MagicMock()
+        orch._handle_system_capability = AsyncMock(return_value={})
+
+        planner_text = (
+            '{"goal": "Remind about call", "steps": ['
+            '{"description": "Schedule reminder", '
+            '"capability": "system.schedule_reminder"}'
+            "]}"
+        )
+        result = await orch._queue_perception_plan(
+            planner_text, "gmail", "usr_test", "ws_test", "trace_01"
+        )
+
+        # Should have been handled inline via _handle_system_capability
+        orch._handle_system_capability.assert_awaited_once()
+        assert result is not None
+
+    @pytest.mark.asyncio
+    @patch("src.orchestrator.jarvis.get_anthropic_client")
+    async def test_tool_steps_queue_background_run(self, mock_client):
+        """Plans with tool steps should persist plan and create background run."""
         from src.orchestrator.jarvis import JarvisOrchestrator
 
         orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
         orch._settings = MagicMock()
 
-        # Mock _persist_plan_record to return decision with plan_id
-        decision_with_plan = PlannerOutput(
-            decision="create_task",
+        # Mock _persist_plan_record to return plan with plan_id
+        plan_with_id = PlanOutput(
             goal="Send follow-up email",
             reasoning="Important investor",
             plan_id="plan_test_123",
-            tasks=[PlannerTask(task_type="send_email", input_data={"to": "test@test.com"})],
+            steps=[
+                PlanStep(
+                    step_id="s1",
+                    description="Draft email",
+                    capability="email.draft",
+                    risk="medium",
+                ),
+            ],
         )
-        orch._persist_plan_record = AsyncMock(return_value=decision_with_plan)
+        orch._persist_plan_record = AsyncMock(return_value=plan_with_id)
 
         # Mock db_factory and graph executor
         mock_db = AsyncMock()
@@ -221,9 +102,10 @@ class TestQueuePerceptionPlan:
         mock_executor.create_run = AsyncMock(return_value=mock_run)
 
         planner_text = (
-            '{"decision": "create_task", "goal": "Send follow-up email", '
+            '{"goal": "Send follow-up email", '
             '"reasoning": "Important investor", '
-            '"tasks": [{"task_type": "send_email", "input_data": {"to": "test@test.com"}}]}'
+            '"steps": [{"step_id": "s1", "description": "Draft email", '
+            '"capability": "email.draft", "risk": "medium"}]}'
         )
 
         with patch(
@@ -257,11 +139,10 @@ class TestPersistPlanIdempotency:
         orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
         orch._settings = MagicMock()
 
-        decision = PlannerOutput(
-            decision="create_task",
+        plan = PlanOutput(
             goal="Follow up with investor",
             reasoning="Important",
-            tasks=[PlannerTask(task_type="send_email", input_data={})],
+            steps=[PlanStep(step_id="s1", description="Send email", capability="email.send")],
         )
 
         # Mock DB that returns an existing plan for the idempotency key
@@ -280,15 +161,15 @@ class TestPersistPlanIdempotency:
         orch._db_factory = MagicMock(return_value=mock_cm)
 
         result = await orch._persist_plan_record(
-            decision,
+            plan,
             "usr_test",
             "ws_test",
             trigger_type="perception",
             idempotency_key="perception:gmail:create_task:abc123",
         )
 
-        # Should return original decision WITHOUT plan_id (skipped)
-        assert result.plan_id is None
+        # Idempotency: returns plan with the existing plan_id, nothing new persisted
+        assert result.plan_id == "plan_existing_123"
 
     @pytest.mark.asyncio
     @patch("src.orchestrator.jarvis.get_anthropic_client")
@@ -299,11 +180,16 @@ class TestPersistPlanIdempotency:
         orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
         orch._settings = MagicMock()
 
-        decision = PlannerOutput(
-            decision="create_task",
+        plan = PlanOutput(
             goal="Send report",
             reasoning="Scheduled",
-            tasks=[PlannerTask(task_type="generate_report", input_data={})],
+            steps=[
+                PlanStep(
+                    step_id="s1",
+                    description="Generate report",
+                    capability="report.generate",
+                ),
+            ],
         )
 
         # Mock DB that returns no existing plan (idempotency check passes)
@@ -323,7 +209,7 @@ class TestPersistPlanIdempotency:
         orch._db_factory = MagicMock(return_value=mock_cm)
 
         result = await orch._persist_plan_record(
-            decision,
+            plan,
             "usr_test",
             "ws_test",
             trigger_type="perception",

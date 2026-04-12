@@ -45,6 +45,19 @@ services:
     volumes:
       - neo4jdata:/data
 
+  google-workspace-mcp:
+    build:
+      context: ./infra/docker/google-workspace-mcp
+    ports:
+      - "8001:8000"
+    env_file:
+      - ./backend/.env
+    environment:
+      MCP_ENABLE_OAUTH21: "true"
+      EXTERNAL_OAUTH21_PROVIDER: "true"
+      WORKSPACE_MCP_STATELESS_MODE: "true"
+    restart: unless-stopped
+
 volumes:
   pgdata:
   miniodata:

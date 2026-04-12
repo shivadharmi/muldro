@@ -9,73 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
-
-
-class PlannerTask(BaseModel):
-    """A single task within a planner output."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    task_type: str
-    input_data: dict[str, Any] = Field(default_factory=dict)
-
-
-class PlannerOutput(BaseModel):
-    """Validated planner decision — replaces raw JSON dict from Claude.
-
-    Sources of truth for decision types:
-    - Planner prompt (prompts.py): ignore, acknowledge, summarize, ask_user,
-      recommend, create_task, draft_reply, schedule_reminder
-    - Route resolver (route_resolver.py): research, observe, remember,
-      watcher_create, goal_update
-    - Orchestrator direct handling: answer_directly, search_memory, add_to_brief
-
-    Add new decision types here FIRST, then to the planner prompt and routes.
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    decision: Literal[
-        "acknowledge",
-        "answer_directly",
-        "create_task",
-        "draft_reply",
-        "search_memory",
-        "add_to_brief",
-        "ignore",
-        "watcher_create",
-        "goal_update",
-        "research",
-        "observe",
-        "read_source",
-        "remember",
-        "ask_user",
-        "recommend",
-        "summarize",
-        "schedule_reminder",
-        "set_goal",
-        "set_instruction",
-    ] = "acknowledge"
-    goal: str = ""
-    reasoning: str = ""
-    priority: Literal["low", "medium", "high", "critical"] = "medium"
-    risk_level: Literal["none", "low", "medium", "high"] = "low"
-    execution_mode: Literal["auto_execute", "approval_required", "draft_only"] = "approval_required"
-    plan_id: str | None = None
-    tasks: list[PlannerTask] = Field(default_factory=list)
-    instruction: InstructionSpec | None = None
-
-
-class InstructionSpec(BaseModel):
-    """Specification for a user instruction (trigger, schedule, or preference)."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    instruction_text: str
-    instruction_type: Literal["trigger", "schedule", "preference"] = "preference"
-    trigger_conditions: dict[str, Any] | None = None
-    schedule_config: dict[str, Any] | None = None
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class AgentEnvelope(BaseModel):
@@ -95,7 +29,7 @@ class AgentResult(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     agent_name: str
-    response_text: str = ""
+    response_text: str | None = None
     tools_called: list[str] = Field(default_factory=list)
     tokens_used: int = 0
 
@@ -109,7 +43,7 @@ class StepResult(BaseModel):
     status: str
     output_data: dict[str, Any] | None = None
     error: str | None = None
-    duration_ms: int = 0
+    duration_ms: int | None = None
 
 
 class ToolCallRequest(BaseModel):
@@ -169,7 +103,6 @@ class SpanRecord(BaseModel):
     tool_call_details: list[SpanToolCall] = Field(default_factory=list)
     thinking_summary: str | None = None
     response_text: str | None = None
-    decision: str | None = None
     error: str | None = None
 
 
@@ -211,7 +144,7 @@ class MessageMetadata(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     trace_id: str | None = None
-    decision: PlannerOutput | None = None
+    decision: PlanOutput | None = None
     agent_steps: list[MessageAgentStep] = Field(default_factory=list)
 
 
@@ -227,20 +160,6 @@ class DomainEvent(BaseModel):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
-class ExecutionPlan(BaseModel):
-    """Structured plan DTO bridging Planner -> Governor."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    plan_id: str
-    goal: str
-    tasks: list[PlannerTask] = Field(default_factory=list)
-    risk_level: Literal["none", "low", "medium", "high"] = "low"
-    execution_mode: Literal["auto_execute", "approval_required", "draft_only"] = "approval_required"
-    priority: Literal["low", "medium", "high", "critical"] = "medium"
-    reasoning_summary: str = ""
-
-
 class PerceptionDecision(BaseModel):
     """Agent-informed perception policy returned after a perception cycle.
 
@@ -251,11 +170,12 @@ class PerceptionDecision(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    next_check_seconds: int | None = None
+    next_check_seconds: int | None = Field(None, ge=30)
     mode: Literal["poll", "push", "hybrid", "paused"] | None = None
     watch_entities: list[str] = Field(default_factory=list)
     urgency: Literal["low", "normal", "high"] = "normal"
     reasoning: str = ""
+    notification_tier: Literal["push", "briefing", "silent"] | None = None
 
 
 class PolicyDecision(BaseModel):
@@ -263,9 +183,17 @@ class PolicyDecision(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    decision: Literal["auto_execute", "approval_required", "blocked"]
+    # Produced by: Governor (auto_execute, blocked), TrustEngine (auto_execute_notify,
+    # auto_execute_silent, approval_required). Union of all producers.
+    decision: Literal[
+        "auto_execute",
+        "auto_execute_notify",
+        "auto_execute_silent",
+        "approval_required",
+        "blocked",
+    ]
     justification: str = ""
-    risk_level: str = "low"
+    risk_level: Literal["none", "low", "medium", "high", "critical"] = "low"
     approval_id: str | None = None
     execution_id: str | None = None
 
@@ -286,15 +214,21 @@ class RealtimeEventPayload(BaseModel):
     created_at: str = ""
 
 
-class WorkspaceSurfaceMetadata(BaseModel):
-    """Typed metadata for a workspace surface pushed via WebSocket.
+class WorkspaceSurfacePush(BaseModel):
+    """Full surface push payload sent via WebSocket / Redis Pub/Sub.
 
-    The frontend WebSocket hook reads ``kind``, ``title``, and the rest
-    of the metadata dict to build a ``GeneratedSurface`` object.
+    Two-layer model: ``preview`` drives the workspace grid card,
+    ``detail_config`` tells the frontend which tabs to show in the
+    detail modal and where to fetch each tab's content.
+
+    The old ``children`` + ``WorkspaceSurfaceMetadata`` shape is removed —
+    grid cards render from SurfacePreview data, not A2UI component trees.
     """
 
     model_config = ConfigDict(extra="ignore")
 
+    type: Literal["surface"] = "surface"
+    id: str
     kind: Literal[
         "summary",
         "briefing",
@@ -307,26 +241,177 @@ class WorkspaceSurfaceMetadata(BaseModel):
         "table",
         "recommendation",
         "activity",
+        "proactive_insight",
     ]
-    title: str
-    decision: str = ""
-    reasoning: str = ""
-    priority: Literal["low", "medium", "high", "critical"] = "medium"
+    preview: Any  # SurfacePreview — imported at runtime to avoid circular deps
+    detail_config: Any | None = None  # DetailConfig — same reason
+    decision: str | None = None
     source_run_id: str | None = None
-    source_message_id: str | None = None
-    response_preview: str = ""
+    response_preview: str | None = None
+    created_at: str = ""
+    ttl_hours: int = 24
 
 
-class WorkspaceSurfacePush(BaseModel):
-    """Full surface push payload sent via WebSocket / Redis Pub/Sub.
+class SuggestedActionRef(BaseModel):
+    """Reference to a suggested action stored in the surface payload."""
 
-    Matches the ``A2UISurface`` shape so the frontend WS hook can
-    convert it to a ``GeneratedSurface`` using metadata fields.
+    model_config = ConfigDict(extra="ignore")
+
+    description: str
+    capability: str
+    action_input: dict[str, Any] = Field(default_factory=dict)
+
+
+class InsightSurfaceData(BaseModel):
+    """Data payload for proactive_insight surfaces, stored in UISurface.payload."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    signal_source: str
+    signal_category: str = ""
+    signal_summary: str
+    relevance_score: float = 0.0
+    relevance_reasoning: str = ""
+    related_goals: list[str] = Field(default_factory=list)
+    suggested_actions: list[SuggestedActionRef] = Field(default_factory=list)
+    dismiss_available: bool = True
+
+
+# ── Execution surface update contracts ────────────────────────────
+
+
+class StepState(BaseModel):
+    """Live status of a single execution step."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    step_id: str
+    description: str
+    status: Literal["pending", "executing", "completed", "failed", "approval_needed", "user_action"]
+    output_summary: str | None = None
+    duration_ms: int | None = None
+
+
+class ApprovalContext(BaseModel):
+    """Context for an approval gate within a surface update."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    approval_id: str
+    step_description: str
+    risk_reasoning: str
+    trust_context: str
+    graduation_hint: str = ""
+
+
+class ResultSummary(BaseModel):
+    """Summary of completed execution results."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    key_findings: list[str] = Field(default_factory=list)
+    artifacts_created: list[str] = Field(default_factory=list)
+    suggested_next: list[str] = Field(default_factory=list)
+
+
+class SurfaceUpdate(BaseModel):
+    """Live execution progress pushed to workspace surfaces.
+
+    Published to Redis channel jarvis:a2ui:{user_id} with
+    type='surface_update'. The frontend applies incremental
+    updates to the matching surface_id.
     """
 
     model_config = ConfigDict(extra="ignore")
 
-    type: Literal["surface"] = "surface"
-    id: str
-    children: list[Any] = Field(default_factory=list)
-    metadata: WorkspaceSurfaceMetadata
+    surface_id: str
+    phase: Literal[
+        "planning", "plan_ready", "executing", "approval_needed", "completed", "failed", "partial"
+    ]
+    steps: list[StepState] = Field(default_factory=list)
+    current_step: str | None = None
+    progress: str = ""
+    approval: ApprovalContext | None = None
+    results: ResultSummary | None = None
+
+
+# ── Capability-based planning contracts ─────────────────────────────
+
+
+class CapabilityGap(BaseModel):
+    """A capability the plan needs but doesn't have."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    description: str
+    resolution: str  # e.g. "connect Notion" or "not currently possible"
+    workaround: str | None = None
+
+
+class PlanStep(BaseModel):
+    """A single step in a capability-based plan."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    step_id: str = ""
+    description: str
+    actor: Literal["jarvis", "user"] = "jarvis"
+    capability: str  # e.g. "email.search", "reason", "respond"
+    input: dict[str, Any] = Field(default_factory=dict)
+    depends_on: list[str] = Field(default_factory=list)
+    risk: Literal["none", "low", "medium", "high"] = "none"
+    user_context: str | None = None
+
+
+class PlanOutput(BaseModel):
+    """Validated planner output — a goal-decomposed plan."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    goal: str
+    reasoning: str = ""
+    achievable: Literal["full", "partial", "not_achievable"] = "full"
+    priority: Literal["low", "medium", "high", "critical"] = "medium"
+    steps: list[PlanStep] = Field(default_factory=list)
+    success_criteria: str = ""
+    capability_gaps: list[CapabilityGap] = Field(default_factory=list)
+    plan_id: str | None = None
+    requires_user_input: bool = False
+
+    @model_validator(mode="after")
+    def _validate_step_dependencies(self) -> PlanOutput:
+        # Check step_id uniqueness
+        seen_ids: set[str] = set()
+        for step in self.steps:
+            if step.step_id:
+                if step.step_id in seen_ids:
+                    raise ValueError(f"Duplicate step_id: '{step.step_id}'")
+                seen_ids.add(step.step_id)
+
+        step_ids = {s.step_id for s in self.steps if s.step_id}
+        for step in self.steps:
+            if step.step_id and step.step_id in step.depends_on:
+                raise ValueError(f"Step '{step.step_id}' depends on itself")
+            for dep in step.depends_on:
+                if dep and dep not in step_ids:
+                    raise ValueError(f"Step '{step.step_id}' depends on unknown step '{dep}'")
+        # Cycle detection via DFS
+        visited: set[str] = set()
+        temp: set[str] = set()
+        adj = {s.step_id: s.depends_on for s in self.steps if s.step_id}
+
+        def visit(node: str) -> None:
+            if node in temp:
+                raise ValueError(f"Circular dependency detected involving '{node}'")
+            if node in visited:
+                return
+            temp.add(node)
+            for dep in adj.get(node, []):
+                if dep:
+                    visit(dep)
+            temp.remove(node)
+            visited.add(node)
+
+        for sid in adj:
+            visit(sid)
+        return self

@@ -25,6 +25,8 @@ COLLECTION_MEMORIES = "memories"
 COLLECTION_ENTITIES = "entities"
 COLLECTION_EVENTS = "events"
 COLLECTION_ARTIFACTS = "artifacts"
+COLLECTION_CONVERSATIONS = "conversations"
+COLLECTION_APPROVALS = "approvals"
 
 # Vector dimensions (Bedrock Titan V2)
 VECTOR_SIZE = 1024
@@ -36,6 +38,12 @@ class VectorStore:
     def __init__(self, settings: Settings):
         self._settings = settings
         self._client = None
+        self._metrics: dict = {
+            "upsert_success": 0,
+            "upsert_failure": 0,
+            "delete_success": 0,
+            "delete_failure": 0,
+        }
 
     async def _get_client(self):
         """Lazy-init Qdrant client with reconnection on failure."""
@@ -58,6 +66,26 @@ class VectorStore:
         )
         return self._client
 
+    async def health(self) -> dict:
+        """Lightweight health check — lists Qdrant collections."""
+        if not self._settings.qdrant_url:
+            return {"status": "disabled", "configured": False}
+        try:
+            client = await self._get_client()
+            if not client:
+                return {"status": "unreachable", "configured": True}
+            collections = await client.get_collections()
+            return {
+                "status": "healthy",
+                "configured": True,
+                "collections": len(collections.collections),
+            }
+        except Exception as exc:
+            return {"status": "unreachable", "configured": True, "error": str(exc)[:200]}
+
+    def get_metrics(self) -> dict:
+        return dict(self._metrics)
+
     async def close(self) -> None:
         """Close the Qdrant client connection."""
         if self._client:
@@ -77,16 +105,73 @@ class VectorStore:
             COLLECTION_ENTITIES,
             COLLECTION_EVENTS,
             COLLECTION_ARTIFACTS,
+            COLLECTION_CONVERSATIONS,
+            COLLECTION_APPROVALS,
         )
+        from qdrant_client.http.exceptions import UnexpectedResponse
+
         for name in collections:
             try:
                 await client.get_collection(name)
-            except Exception:
+            except UnexpectedResponse:
                 await client.create_collection(
                     collection_name=name,
                     vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
                 )
                 logger.info("Created Qdrant collection: %s", name)
+            except Exception:
+                logger.warning("Qdrant ensure_collections failed for %s", name, exc_info=True)
+
+    async def ensure_indexes(self) -> None:
+        """Create Qdrant payload indexes for filtered search."""
+        client = await self._get_client()
+        if not client:
+            return
+        from qdrant_client.http.exceptions import UnexpectedResponse
+        from qdrant_client.models import PayloadSchemaType
+
+        indexes = {
+            COLLECTION_MEMORIES: [
+                ("memory_type", PayloadSchemaType.KEYWORD),
+                ("confidence", PayloadSchemaType.FLOAT),
+            ],
+            COLLECTION_ENTITIES: [
+                ("entity_type", PayloadSchemaType.KEYWORD),
+            ],
+            COLLECTION_EVENTS: [
+                ("source", PayloadSchemaType.KEYWORD),
+                ("event_type", PayloadSchemaType.KEYWORD),
+                ("importance_score", PayloadSchemaType.FLOAT),
+            ],
+            COLLECTION_APPROVALS: [
+                ("capability", PayloadSchemaType.KEYWORD),
+                ("outcome", PayloadSchemaType.KEYWORD),
+            ],
+            COLLECTION_CONVERSATIONS: [
+                ("conversation_id", PayloadSchemaType.KEYWORD),
+            ],
+            COLLECTION_ARTIFACTS: [
+                ("artifact_type", PayloadSchemaType.KEYWORD),
+                ("mime_type", PayloadSchemaType.KEYWORD),
+            ],
+        }
+        for collection, fields in indexes.items():
+            for field_name, schema_type in fields:
+                try:
+                    await client.create_payload_index(
+                        collection_name=collection,
+                        field_name=field_name,
+                        field_schema=schema_type,
+                    )
+                except UnexpectedResponse:
+                    pass  # index already exists
+                except Exception:
+                    logger.warning(
+                        "Qdrant create_payload_index failed: %s.%s",
+                        collection,
+                        field_name,
+                        exc_info=True,
+                    )
 
     async def upsert(
         self,
@@ -106,10 +191,15 @@ class VectorStore:
         payload["user_id"] = user_id
         payload["_original_id"] = id
         qdrant_id = _to_qdrant_id(id)
-        await client.upsert(
-            collection_name=collection,
-            points=[PointStruct(id=qdrant_id, vector=vector, payload=payload)],
-        )
+        try:
+            await client.upsert(
+                collection_name=collection,
+                points=[PointStruct(id=qdrant_id, vector=vector, payload=payload)],
+            )
+            self._metrics["upsert_success"] += 1
+        except Exception:
+            self._metrics["upsert_failure"] += 1
+            raise
 
     async def batch_upsert(
         self,
@@ -189,9 +279,10 @@ class VectorStore:
         user_id: str,
         threshold: float = 0.9,
         limit: int = 5,
+        filters: dict | None = None,
     ) -> list[dict]:
         """Find items above a similarity threshold. For dedup/contradiction checks."""
-        results = await self.search(collection, query_vector, user_id, limit=limit)
+        results = await self.search(collection, query_vector, user_id, filters=filters, limit=limit)
         return [r for r in results if r.get("score", 0) >= threshold]
 
     async def delete(self, collection: str, id: str) -> None:
@@ -201,9 +292,27 @@ class VectorStore:
             return
 
         qdrant_id = _to_qdrant_id(id)
-        await client.delete(
+        try:
+            await client.delete(
+                collection_name=collection,
+                points_selector=[qdrant_id],
+            )
+            self._metrics["delete_success"] += 1
+        except Exception:
+            self._metrics["delete_failure"] += 1
+            raise
+
+    async def set_payload(self, collection: str, point_id: str, payload: dict) -> None:
+        """Update payload fields on an existing point without re-embedding."""
+        client = await self._get_client()
+        if not client:
+            return
+        from qdrant_client.models import PointIdsList
+
+        await client.set_payload(
             collection_name=collection,
-            points_selector=[qdrant_id],
+            payload=payload,
+            points=PointIdsList(points=[_to_qdrant_id(point_id)]),
         )
 
     async def hybrid_search(
@@ -215,7 +324,13 @@ class VectorStore:
     ) -> list[dict]:
         """Search across multiple collections and merge results."""
         if not collections:
-            collections = [COLLECTION_MEMORIES, COLLECTION_ENTITIES, COLLECTION_EVENTS]
+            collections = [
+                COLLECTION_MEMORIES,
+                COLLECTION_ENTITIES,
+                COLLECTION_EVENTS,
+                COLLECTION_CONVERSATIONS,
+                COLLECTION_APPROVALS,
+            ]
 
         all_results = []
         for collection in collections:

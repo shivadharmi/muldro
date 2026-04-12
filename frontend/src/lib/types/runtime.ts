@@ -33,8 +33,8 @@ export interface RuntimeEvent {
 
 export type RuntimeEventType =
   | "command_received"
-  | "route_selected"
   | "plan_created"
+  | "step_routed"
   | "run_created"
   | "agent_started"
   | "agent_completed"

@@ -31,6 +31,19 @@ def build(settings: Settings, db: AsyncSession) -> ServiceContainer:
     """
     svc = ServiceContainer()
 
+    # ── Pre-flight: OAuth encryption key ──────────────────────────────
+    if not settings.oauth_encryption_key:
+        if getattr(settings, "environment", "development") == "production":
+            raise RuntimeBuildError(
+                "JARVIS_OAUTH_ENCRYPTION_KEY is required in production. "
+                "OAuth tokens will be stored in PLAINTEXT without it."
+            )
+        logger.error(
+            "JARVIS_OAUTH_ENCRYPTION_KEY is not set — "
+            "OAuth tokens will be stored in PLAINTEXT. "
+            "Set this variable to a Fernet-compatible key."
+        )
+
     # ── Tier 1: fail fast ──────────────────────────────────────────
     try:
         from src.services.world_model import WorldModel
@@ -100,7 +113,10 @@ def build(settings: Settings, db: AsyncSession) -> ServiceContainer:
 
         svc.vector_store = VectorStore(settings)
     except Exception:
-        logger.debug("Tier 3: VectorStore unavailable", exc_info=True)
+        logger.warning(
+            "Tier 3: VectorStore unavailable — semantic search and embedding disabled",
+            exc_info=True,
+        )
 
     try:
         from src.services.graph_engine import GraphEngine
@@ -109,6 +125,14 @@ def build(settings: Settings, db: AsyncSession) -> ServiceContainer:
             svc.graph_engine = GraphEngine(settings)
     except Exception:
         logger.debug("Tier 3: GraphEngine unavailable", exc_info=True)
+
+    try:
+        if svc.graph_engine:
+            from src.services.graph_sync import GraphSyncService
+
+            svc.extras["graph_sync"] = GraphSyncService(settings, db)
+    except Exception:
+        logger.debug("Tier 3: GraphSyncService unavailable", exc_info=True)
 
     try:
         from src.services.reranker_service import RerankerService
@@ -161,9 +185,18 @@ def build(settings: Settings, db: AsyncSession) -> ServiceContainer:
 
         notifier = None
         try:
-            from src.services.notifier import Notifier
+            import redis.asyncio as aioredis
 
-            notifier = Notifier(db, settings)
+            from src.services.notifier import Notifier
+            from src.services.surface_registry import SurfaceRegistry
+
+            notifier_redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+            surface_registry = SurfaceRegistry(redis=notifier_redis)
+            notifier = Notifier(
+                surface_registry=surface_registry,
+                redis=notifier_redis,
+                db=db,
+            )
             svc.notifier = notifier
         except Exception:
             logger.debug("Notifier unavailable for GraphExecutor", exc_info=True)
@@ -189,6 +222,25 @@ def build(settings: Settings, db: AsyncSession) -> ServiceContainer:
         except Exception:
             logger.debug("ContextBuilder unavailable for GraphExecutor", exc_info=True)
 
+        trust_engine = None
+        try:
+            from src.services.trust_engine import TrustEngine
+
+            trust_engine = TrustEngine(db)
+            svc.trust_engine = trust_engine
+        except Exception:
+            logger.debug("TrustEngine unavailable for GraphExecutor", exc_info=True)
+
+        # Reuse notifier_redis for risk assessment caching (avoid per-step leak)
+        executor_redis = notifier_redis if notifier else None
+        if executor_redis is None and settings.redis_url:
+            try:
+                import redis.asyncio as aioredis
+
+                executor_redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+            except Exception:
+                logger.debug("Redis unavailable for GraphExecutor", exc_info=True)
+
         svc.graph_executor = GraphExecutor(
             settings=settings,
             db=db,
@@ -198,6 +250,8 @@ def build(settings: Settings, db: AsyncSession) -> ServiceContainer:
             verifier=verifier,
             context_builder=context_builder,
             memory_service=svc.memory_service,
+            trust_engine=trust_engine,
+            redis=executor_redis,
         )
     except Exception:
         logger.warning("Tier 2: GraphExecutor unavailable", exc_info=True)
@@ -217,6 +271,32 @@ def build(settings: Settings, db: AsyncSession) -> ServiceContainer:
 
     _log_summary(svc)
     return svc
+
+
+def validate_tier3_health(settings: Settings, svc: ServiceContainer) -> list[str]:
+    """Check configured-but-missing Tier 3 services. Returns degraded names."""
+    degraded: list[str] = []
+
+    if settings.neo4j_url and not svc.graph_engine:
+        logger.warning(
+            "DEGRADED: Neo4j configured (JARVIS_NEO4J_URL set) but GraphEngine "
+            "failed to initialize. Entity graph traversal and sync are disabled."
+        )
+        degraded.append("neo4j")
+
+    if settings.qdrant_url and not svc.vector_store:
+        logger.warning(
+            "DEGRADED: Qdrant configured (JARVIS_QDRANT_URL set) but VectorStore "
+            "failed to initialize. Semantic search and embedding are disabled."
+        )
+        degraded.append("qdrant")
+
+    if getattr(settings, "reranker_enabled", False) and not svc.reranker:
+        logger.warning("DEGRADED: Reranker enabled but RerankerService failed to initialize.")
+        degraded.append("reranker")
+
+    svc.extras["degraded_services"] = degraded
+    return degraded
 
 
 def _log_summary(svc: ServiceContainer) -> None:

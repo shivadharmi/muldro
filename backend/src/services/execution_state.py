@@ -5,6 +5,7 @@ Used by GraphExecutor, Operator, and recovery to validate state changes.
 """
 
 import logging
+from typing import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -22,8 +23,8 @@ RUN_TRANSITIONS: dict[str, set[str]] = {
         "partially_completed",
     },
     "paused": {"running", "cancelled"},
-    "awaiting_approval": {"running", "cancelled"},
-    "awaiting_input": {"running", "cancelled"},
+    "awaiting_approval": {"running", "cancelled", "failed"},
+    "awaiting_input": {"running", "cancelled", "failed"},
     "blocked": {"pending", "cancelled"},
     "partially_completed": {"running", "completed", "failed", "cancelled"},
     "completed": {"archived"},
@@ -44,6 +45,7 @@ STEP_TRANSITIONS: dict[str, set[str]] = {
         "awaiting_input",
         "skipped",
         "timed_out",
+        "cancelled",
     },
     "waiting_approval": {"running", "skipped"},
     "awaiting_input": {"running", "skipped", "cancelled"},
@@ -51,6 +53,7 @@ STEP_TRANSITIONS: dict[str, set[str]] = {
     "completed": set(),
     "failed": {"pending"},  # Retry: failed → pending
     "skipped": set(),
+    "cancelled": set(),
     "timed_out": {"pending", "skipped"},
 }
 
@@ -74,10 +77,15 @@ class InvalidTransitionError(ValueError):
         )
 
 
-def transition_run(run, new_status: str) -> None:
+def transition_run(
+    run,
+    new_status: str,
+    emit_event: Callable | None = None,
+) -> None:
     """Transition a TaskRun to a new status, enforcing allowed transitions.
 
     Mutates run.status in place. Raises InvalidTransitionError if invalid.
+    If emit_event callback is provided, emits a status_transition event.
     """
     allowed = RUN_TRANSITIONS.get(run.status, set())
     if new_status not in allowed:
@@ -86,11 +94,29 @@ def transition_run(run, new_status: str) -> None:
     run.status = new_status
     logger.debug("Run %s: %s → %s", run.run_id, old, new_status)
 
+    if emit_event:
+        try:
+            emit_event(
+                "run.status_changed",
+                {
+                    "run_id": run.run_id,
+                    "from_status": old,
+                    "to_status": new_status,
+                },
+            )
+        except Exception:
+            logger.debug("Failed to emit run transition event", exc_info=True)
 
-def transition_step(step, new_status: str) -> None:
+
+def transition_step(
+    step,
+    new_status: str,
+    emit_event: Callable | None = None,
+) -> None:
     """Transition a TaskStep to a new status, enforcing allowed transitions.
 
     Mutates step.status in place. Raises InvalidTransitionError if invalid.
+    If emit_event callback is provided, emits a status_transition event.
     """
     allowed = STEP_TRANSITIONS.get(step.status, set())
     if new_status not in allowed:
@@ -98,3 +124,16 @@ def transition_step(step, new_status: str) -> None:
     old = step.status
     step.status = new_status
     logger.debug("Step %s: %s → %s", step.step_id, old, new_status)
+
+    if emit_event:
+        try:
+            emit_event(
+                "step.status_changed",
+                {
+                    "step_id": step.step_id,
+                    "from_status": old,
+                    "to_status": new_status,
+                },
+            )
+        except Exception:
+            logger.debug("Failed to emit step transition event", exc_info=True)

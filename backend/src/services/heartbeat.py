@@ -10,11 +10,15 @@ Runs on a cron schedule (or manual trigger) to:
 
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config.settings import Settings
+
+if TYPE_CHECKING:
+    from src.services.vector_store import VectorStore
 from src.models.approvals import Approval
 from src.models.memory import Memory
 from src.models.perception_state import PerceptionState
@@ -28,9 +32,15 @@ logger = logging.getLogger(__name__)
 class HeartbeatService:
     """Periodic system maintenance and re-evaluation."""
 
-    def __init__(self, settings: Settings, db: AsyncSession):
+    def __init__(
+        self,
+        settings: Settings,
+        db: AsyncSession,
+        vector_store: "VectorStore | None" = None,
+    ):
         self._settings = settings
         self._db = db
+        self._vector_store = vector_store
 
     STALE_THRESHOLDS = {
         "gmail": "observation_stale_gmail_minutes",
@@ -90,16 +100,26 @@ class HeartbeatService:
         memories = result.scalars().all()
 
         expired_count = 0
+        expired_ids: list[str] = []
         for mem in memories:
             if mem.created_at and mem.ttl_days:
                 expiry = mem.created_at + timedelta(days=mem.ttl_days)
                 if now > expiry:
                     mem.status = "expired"
                     expired_count += 1
+                    expired_ids.append(mem.memory_id)
 
         if expired_count:
             await self._db.flush()
             logger.info("Expired %d memories for %s", expired_count, user_id)
+
+        # Cascade: delete expired memory vectors from Qdrant
+        if expired_ids and self._vector_store:
+            for mid in expired_ids:
+                try:
+                    await self._vector_store.delete("memories", mid)
+                except Exception:
+                    logger.debug("Qdrant delete failed for memory %s", mid, exc_info=True)
 
         return expired_count
 

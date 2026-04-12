@@ -20,6 +20,7 @@ from ulid import ULID
 from src.integrations.mcp_errors import make_error_response
 from src.models.approvals import Approval
 from src.models.observation_cursor import ObservationCursor
+from src.models.tool_definitions import ToolDefinition
 
 logger = logging.getLogger(__name__)
 
@@ -229,6 +230,22 @@ async def update_entity(
 
             await db.flush()
             await db.commit()
+
+            # Sync to Neo4j (inline, best-effort)
+            try:
+                if _settings and _settings.neo4j_url:
+                    from src.services.graph_sync import GraphSyncService
+
+                    gs = GraphSyncService(_settings, db)
+                    await gs.sync_entity_by_id(entity_id)
+                    await gs.close()
+            except Exception:
+                logger.debug(
+                    "Neo4j sync after update_entity failed for %s",
+                    entity_id,
+                    exc_info=True,
+                )
+
             return {"status": "updated", "entity_id": entity_id}
         except Exception as e:
             logger.error("update_entity failed: %s", e, exc_info=True)
@@ -237,6 +254,79 @@ async def update_entity(
 
 
 # ── Planning ─────────────────────────────────────────────────────────────
+
+
+async def _get_plan_details_impl(
+    plan_id: str,
+    user_id: str,
+    workspace_id: str,
+    db,
+) -> dict:
+    """Core implementation for get_plan_details tool.
+
+    Returns plan metadata or {"status": "not_found"} if plan doesn't exist
+    or workspace doesn't match.
+    """
+    from src.models.plans import Plan
+
+    result = await db.execute(
+        select(Plan).where(
+            Plan.plan_id == plan_id,
+        )
+    )
+    plan = result.scalar_one_or_none()
+
+    if not plan:
+        return {"status": "not_found"}
+
+    # Workspace isolation check (skip if workspace_id not provided)
+    if workspace_id and plan.workspace_id != workspace_id:
+        return {"status": "not_found"}
+
+    # Build tasks list
+    tasks = [
+        {
+            "task_id": task.task_id,
+            "task_type": task.task_type,
+            "description": getattr(task, "description", ""),
+            "depends_on": task.depends_on or [],
+        }
+        for task in (plan.tasks or [])
+    ]
+
+    return {
+        "plan_id": plan.plan_id,
+        "goal": plan.goal,
+        "priority": plan.priority,
+        "risk_level": plan.risk_level,
+        "decision": plan.decision,
+        "status": plan.status,
+        "created_at": plan.created_at.isoformat() if plan.created_at else None,
+        "tasks": tasks,
+    }
+
+
+@intelligence.tool(
+    tags={"governor", "read"},
+    annotations=ToolAnnotations(readOnlyHint=True),
+)
+async def get_plan_details(
+    user_id: str,
+    plan_id: str,
+    ctx: Context,
+    workspace_id: str = "",
+) -> dict:
+    """Fetch plan metadata to verify existence and inspect tasks.
+
+    Returns plan metadata including tasks list, or not_found status.
+    Used by Governor to verify plan existence before policy evaluation.
+    """
+    async with _get_db() as db:
+        try:
+            return await _get_plan_details_impl(plan_id, user_id, workspace_id, db)
+        except Exception as e:
+            logger.error("get_plan_details failed: %s", e, exc_info=True)
+            return {"status": "not_found", "error": str(e)}
 
 
 @intelligence.tool(
@@ -383,11 +473,17 @@ async def extract_preferences(
     The Persona agent calls this to store learned preferences as memories.
     source_text: description of the interaction to analyze
     """
-    async with _get_db():
+    async with _get_db() as db:
         try:
-            memory_service = _services.memory_service
-            if not memory_service:
-                return {"status": "error", "error": "Memory service not available"}
+            from src.services.memory_service import MemoryService
+
+            # Create a MemoryService bound to THIS session so the
+            # commit below actually persists extracted preferences.
+            memory_service = MemoryService(
+                settings=_settings,
+                db=db,
+                vector_store=_services.vector_store,
+            )
 
             memory_ids = await memory_service.extract_preferences(
                 user_id=user_id,
@@ -395,6 +491,7 @@ async def extract_preferences(
                 source_event_ids=[],
                 workspace_id=workspace_id,
             )
+            await db.commit()
             return {
                 "status": "ok",
                 "memories_created": len(memory_ids),
@@ -402,6 +499,7 @@ async def extract_preferences(
             }
         except Exception as e:
             logger.error("extract_preferences failed: %s", e, exc_info=True)
+            await db.rollback()
             return make_error_response(e)
 
 
@@ -832,6 +930,155 @@ async def verify_run(
             return {"verdict": "skipped", "error": str(e)}
 
 
+# ── Memory Storage ──────────────────────────────────────────────────────
+
+
+@intelligence.tool(
+    tags={"librarian", "write"},
+    annotations=ToolAnnotations(readOnlyHint=False, idempotentHint=False),
+)
+async def store_memory(
+    user_id: str,
+    text: str,
+    ctx: Context,
+    memory_type: str = "fact",
+    scope: str = "general",
+    ttl_days: int = 0,
+    entity_ids: str = "",
+    source: str = "agent",
+    workspace_id: str = "",
+) -> dict:
+    """Store a memory in the knowledge base."""
+    async with _get_db() as db:
+        try:
+            from src.services.memory_service import MemoryService
+
+            # Create a MemoryService bound to THIS session so the
+            # commit below actually persists the memory.
+            memory_svc = MemoryService(
+                settings=_settings,
+                db=db,
+                vector_store=_services.vector_store,
+            )
+
+            linked_ids = (
+                [e.strip() for e in entity_ids.split(",") if e.strip()] if entity_ids else None
+            )
+
+            if memory_type == "goal":
+                mid = await memory_svc.store_goal_memory(
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    title=text,
+                    entity_ids=linked_ids,
+                )
+            elif memory_type == "briefing_item":
+                mid = await memory_svc.store_briefing_memory(
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    text=text,
+                    source=source,
+                )
+            else:
+                mid = await memory_svc.store_memory(
+                    user_id=user_id,
+                    fact_text=text,
+                    memory_type=memory_type,
+                    scope=scope,
+                    entity_ids=linked_ids or [],
+                    workspace_id=workspace_id,
+                    ttl_days=ttl_days if ttl_days > 0 else None,
+                    source=source,
+                )
+            await db.commit()
+
+            # Best-effort entity extraction from the stored text so that
+            # entities mentioned in chat (e.g. company names, people) are
+            # captured in the knowledge graph.
+            entity_ids: list[str] = []
+            try:
+                from src.services.world_model import WorldModel
+
+                wm = WorldModel(
+                    _settings,
+                    db,
+                    embedding_service=_services.extras.get("embedding_service"),
+                    vector_store=_services.vector_store,
+                )
+                entity_ids = await wm.extract_from_text(
+                    text, user_id=user_id, workspace_id=workspace_id
+                )
+                if entity_ids:
+                    await db.commit()
+            except Exception:
+                logger.debug("Entity extraction from memory text failed", exc_info=True)
+
+            # Sync extracted entities + their relationships to Neo4j
+            if entity_ids and _settings and _settings.neo4j_url:
+                try:
+                    from src.services.graph_sync import GraphSyncService
+
+                    gs = GraphSyncService(_settings, db)
+                    await gs.batch_sync_entities(entity_ids)
+                    await gs.close()
+                except Exception:
+                    logger.debug(
+                        "Neo4j sync after store_memory entity extraction failed",
+                        exc_info=True,
+                    )
+
+            await ctx.info(f"Stored {memory_type} memory: {text[:80]}")
+            return {
+                "status": "stored",
+                "memory_id": mid,
+                "entity_ids": entity_ids,
+            }
+        except Exception as e:
+            logger.error("store_memory failed: %s", e, exc_info=True)
+            await db.rollback()
+            return make_error_response(e)
+
+
+@intelligence.tool(
+    tags={"persona", "write"},
+    annotations=ToolAnnotations(readOnlyHint=False, idempotentHint=False),
+)
+async def store_preference(
+    user_id: str,
+    text: str,
+    ctx: Context,
+    confidence: float = 0.5,
+    source_text: str = "",
+    workspace_id: str = "",
+) -> dict:
+    """Store a user preference extracted from interactions."""
+    async with _get_db() as db:
+        try:
+            from src.services.memory_service import MemoryService
+
+            # Create a MemoryService bound to THIS session so the
+            # commit below actually persists the preference.
+            memory_svc = MemoryService(
+                settings=_settings,
+                db=db,
+                vector_store=_services.vector_store,
+            )
+
+            mid = await memory_svc.store_instruction_memory(
+                user_id=user_id,
+                workspace_id=workspace_id,
+                instruction_text=text,
+                instruction_type="preference",
+            )
+            await db.commit()
+            await ctx.info(f"Stored preference: {text[:80]} (confidence={confidence})")
+            return {"status": "stored", "memory_id": mid, "confidence": confidence}
+        except Exception as e:
+            logger.error("store_preference failed: %s", e, exc_info=True)
+            await db.rollback()
+            return make_error_response(e)
+
+
 # ── MCP Resources — Live Data ───────────────────────────────────────────
 
 
@@ -891,3 +1138,62 @@ async def active_plans_resource(workspace_id: str) -> str:
                 for p in plans
             ]
         )
+
+
+# ── Capability Discovery ────────────────────────────────────────────────
+
+
+@intelligence.tool(
+    tags={"planner", "read"},
+    annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True),
+)
+async def discover_capabilities(
+    query: str,
+    ctx: Context,
+    user_id: str = "",
+    workspace_id: str = "",
+) -> dict:
+    """Search available capabilities by query.
+
+    Returns matching capabilities with descriptions, tools,
+    risk levels, and connection status.
+    """
+    try:
+        async with _get_db() as db:
+            stmt = select(ToolDefinition).where(ToolDefinition.enabled.is_(True))
+            result = await db.execute(stmt)
+            all_tools = list(result.scalars().all())
+
+        matches: list[dict] = []
+        query_lower = query.lower()
+        seen_capabilities: set[str] = set()
+
+        for tool in all_tools:
+            if not tool.capability:
+                continue
+            cap = tool.capability
+            desc = tool.description or ""
+            if query_lower not in cap.lower() and query_lower not in desc.lower():
+                continue
+            if cap in seen_capabilities:
+                for m in matches:
+                    if m["capability"] == cap:
+                        m["tools"].append(tool.name)
+                        break
+                continue
+
+            seen_capabilities.add(cap)
+            matches.append(
+                {
+                    "capability": cap,
+                    "tools": [tool.name],
+                    "risk": tool.risk_level or "none",
+                    "status": "connected",
+                    "description": desc,
+                }
+            )
+
+        return {"capabilities": matches}
+    except Exception as e:
+        logger.error("discover_capabilities failed: %s", e, exc_info=True)
+        return make_error_response(e)

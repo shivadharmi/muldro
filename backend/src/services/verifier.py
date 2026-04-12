@@ -4,7 +4,7 @@ import json
 import logging
 from enum import Enum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +22,7 @@ class Verdict(str, Enum):
 
 
 class VerificationResult(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     verdict: Verdict
     score: float = 0.0
     details: str = ""
@@ -214,10 +215,9 @@ class Verifier:
                 ),
                 messages=[{"role": "user", "content": prompt}],
             )
-            text = response.content[0].text
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1].rsplit("```", 1)[0]
-            result = json.loads(text)
+            from src.llm_utils import parse_llm_json
+
+            result = parse_llm_json(response.content[0].text)
             return result.get("passed", False)
         except Exception:
             logger.warning("LLM judge verification failed", exc_info=True)

@@ -84,6 +84,33 @@ async def jarvis_ws(websocket: WebSocket, user_id: str):
     # Auth succeeded
     await websocket.send_json({"type": "auth_ok"})
 
+    # Backfill: send current active execution surfaces on reconnect so clients
+    # recover surface state that was missed while disconnected.
+    try:
+        from sqlalchemy import select
+
+        from src.models.database import get_session_factory
+        from src.models.ui_state import UISurface
+
+        async with get_session_factory()() as db:
+            result = await db.execute(
+                select(UISurface)
+                .where(
+                    UISurface.user_id == user_id,
+                    UISurface.surface_type == "execution",
+                )
+                .order_by(UISurface.updated_at.desc())
+                .limit(5)
+            )
+            active_surfaces = result.scalars().all()
+
+            for surface in active_surfaces:
+                last_update = (surface.payload or {}).get("last_surface_update")
+                if last_update:
+                    await websocket.send_text(json.dumps({"type": "surface_update", **last_update}))
+    except Exception:
+        logger.debug("Failed to backfill surfaces on WS connect", exc_info=True)
+
     # Track connection
     _connections.setdefault(user_id, []).append(websocket)
     logger.info("ws_connected", extra={"user_id": user_id})
@@ -176,8 +203,264 @@ async def jarvis_ws(websocket: WebSocket, user_id: str):
         logger.info("ws_disconnected", extra={"user_id": user_id})
 
 
+async def _handle_approve(user_id: str, payload: dict, app) -> dict:
+    """Handle approval action via the REST handler (full execution resume)."""
+    return await _process_approval_ws(user_id, payload.get("id", ""), "approve", app)
+
+
+async def _handle_reject(user_id: str, payload: dict, app) -> dict:
+    """Handle rejection action via the REST handler (full execution resume)."""
+    return await _process_approval_ws(user_id, payload.get("id", ""), "reject", app)
+
+
+async def _process_approval_ws(user_id: str, approval_id: str, action: str, app) -> dict:
+    """Bridge WS approval actions to the REST endpoint handlers.
+
+    Resolves workspace_id and DB session manually (no FastAPI DI available
+    in the WebSocket action path), then delegates to the same approve_action /
+    reject_action functions that power the REST API.
+    """
+    from fastapi import HTTPException
+
+    from src.api.deps import resolve_workspace_id
+    from src.config.settings import get_settings
+    from src.models.database import get_session_factory
+
+    settings = get_settings()
+
+    async with get_session_factory()() as db:
+        try:
+            workspace_id = await resolve_workspace_id(db, user_id)
+        except Exception as e:
+            logger.warning("ws_approval_workspace_resolve_failed: %s", e)
+            return {"status": "error", "error": "Could not resolve workspace"}
+
+        try:
+            if action == "approve":
+                from src.api.routes_approvals import approve_action
+
+                result = await approve_action(
+                    approval_id=approval_id,
+                    req=None,
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    db=db,
+                    settings=settings,
+                )
+            else:
+                from src.api.routes_approvals import reject_action
+
+                result = await reject_action(
+                    approval_id=approval_id,
+                    req=None,
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    db=db,
+                    settings=settings,
+                )
+
+            return {
+                "status": "success",
+                "approval_id": result.approval_id,
+                "decision": result.status,
+            }
+        except HTTPException as e:
+            return {"status": "error", "error": e.detail}
+        except Exception as e:
+            logger.error("ws_approval_failed: %s", e, exc_info=True)
+            return {"status": "error", "error": str(e)}
+
+
+async def _handle_orchestrator_action(user_id: str, action: str, payload: dict, app) -> dict:
+    """Generic fallback: route unhandled actions through the orchestrator."""
+    orchestrator = getattr(app.state, "orchestrator", None)
+    if not orchestrator:
+        return {"status": "error", "error": "Orchestrator not available"}
+
+    context = payload.get("context", "")
+    surface_id = payload.get("surface_id", "")
+    message = f"[Action: {action}]"
+    if surface_id:
+        message += f" [Surface: {surface_id}]"
+    if context:
+        message += f" {context}"
+
+    try:
+        from src.api.deps import resolve_workspace_id
+        from src.models.database import get_session_factory
+
+        async with get_session_factory()() as db:
+            workspace_id = await resolve_workspace_id(db, user_id)
+
+        result = await orchestrator.process_message(
+            user_id=user_id,
+            workspace_id=workspace_id,
+            message=message,
+        )
+        return {"status": "success", "result": result}
+    except Exception as e:
+        logger.warning("orchestrator_action_failed: %s", e, exc_info=True)
+        return {"status": "error", "error": str(e)}
+
+
+async def _handle_edit_before_approve(user_id: str, payload: dict, app) -> dict:
+    """Handle edit-before-approve action via the REST edit endpoint."""
+    return await _process_edit_approval_ws(user_id, payload, app)
+
+
+async def _process_edit_approval_ws(user_id: str, payload: dict, app) -> dict:
+    """Bridge WS edit action to the REST edit_approval endpoint.
+
+    Resolves workspace_id and DB session manually (no FastAPI DI available
+    in the WebSocket action path), then delegates to the same edit_approval
+    function that powers the REST API.
+    """
+    from fastapi import HTTPException
+
+    from src.api.deps import resolve_workspace_id
+    from src.models.database import get_session_factory
+
+    approval_id = payload.get("approval_id", "")
+
+    async with get_session_factory()() as db:
+        try:
+            workspace_id = await resolve_workspace_id(db, user_id)
+        except Exception as e:
+            logger.warning("ws_edit_approval_workspace_resolve_failed: %s", e)
+            return {"status": "error", "error": "Could not resolve workspace"}
+
+        try:
+            from src.api.routes_approvals import ApprovalEditRequest, edit_approval
+
+            req = ApprovalEditRequest(
+                title=payload.get("title"),
+                summary=payload.get("summary"),
+                risk_level=payload.get("risk_level"),
+            )
+            result = await edit_approval(
+                approval_id=approval_id,
+                req=req,
+                user_id=user_id,
+                workspace_id=workspace_id,
+                db=db,
+            )
+            return {
+                "status": "success",
+                "approval_id": result.approval_id,
+                "title": result.title,
+                "summary": result.summary,
+            }
+        except HTTPException as e:
+            return {"status": "error", "error": e.detail}
+        except Exception as e:
+            logger.error("ws_edit_approval_failed: %s", e, exc_info=True)
+            return {"status": "error", "error": str(e)}
+
+
+async def _handle_execute_insight(user_id: str, payload: dict, app) -> dict:
+    """Handle insight action execution — transitions insight to execution surface.
+
+    When a user clicks a suggested action on an insight surface, this handler:
+    1. Fetches the insight surface and the selected action
+    2. Records engagement
+    3. Executes via the orchestrator
+    """
+    from src.api.deps import resolve_workspace_id
+    from src.models.database import get_session_factory
+
+    surface_id = payload.get("surface_id", "")
+    action_index = payload.get("action_index", 0)
+
+    if not surface_id:
+        return {"status": "error", "error": "surface_id required"}
+
+    async with get_session_factory()() as db:
+        try:
+            workspace_id = await resolve_workspace_id(db, user_id)
+        except Exception as e:
+            logger.warning("ws_insight_workspace_resolve_failed: %s", e)
+            return {"status": "error", "error": "Could not resolve workspace"}
+
+        # Fetch the insight surface
+        from sqlalchemy import select
+
+        from src.models.ui_state import UISurface
+
+        result = await db.execute(
+            select(UISurface).where(
+                UISurface.surface_id == surface_id,
+                UISurface.user_id == user_id,
+                UISurface.surface_type == "proactive_insight",
+            )
+        )
+        surface = result.scalar_one_or_none()
+        if not surface:
+            return {"status": "error", "error": "Insight surface not found"}
+
+        payload_data = surface.payload or {}
+        insight_data = payload_data.get("insight_data", {})
+        actions = insight_data.get("suggested_actions", [])
+
+        if action_index >= len(actions):
+            return {"status": "error", "error": "Invalid action index"}
+
+        selected = actions[action_index]
+
+        # Record engagement
+        from src.services.engagement_service import EngagementService
+
+        eng_svc = EngagementService(db, workspace_id)
+        await eng_svc.record_engagement(
+            insight_data.get("signal_source", "unknown"),
+            insight_data.get("signal_category", "unknown"),
+            "engaged",
+        )
+        await db.commit()
+
+    # Execute via orchestrator
+    orchestrator = getattr(app.state, "orchestrator", None)
+    if not orchestrator:
+        return {"status": "error", "error": "Orchestrator not available"}
+
+    try:
+        result = await orchestrator.process_message(
+            user_id=user_id,
+            workspace_id=workspace_id,
+            message=f"[Execute insight action] {selected.get('description', '')}",
+        )
+        return {
+            "status": "success",
+            "surface_id": surface_id,
+            "action": selected.get("description", ""),
+        }
+    except Exception as e:
+        logger.warning("ws_execute_insight_failed: %s", e, exc_info=True)
+        return {"status": "error", "error": str(e)}
+
+
+# Registry of named action handlers
+ACTION_HANDLERS: dict[str, object] = {
+    "approve": _handle_approve,
+    "reject": _handle_reject,
+    "edit_before_approve": _handle_edit_before_approve,
+    "execute_insight": _handle_execute_insight,
+}
+
+
+async def _dispatch_action(user_id: str, action: str, payload: dict, app) -> dict:
+    """Dispatch an action to the appropriate handler, always returning a result."""
+    handler = ACTION_HANDLERS.get(action)
+    if handler:
+        return await handler(user_id, payload, app)
+    return await _handle_orchestrator_action(user_id, action, payload, app)
+
+
 async def _handle_client_message(user_id: str, raw: str, app) -> None:
-    """Handle incoming WebSocket messages (A2UI actions)."""
+    """Handle incoming WebSocket messages (A2UI actions).
+
+    Every action gets an action_result response — the frontend always
+    knows whether the action succeeded or failed.
+    """
     try:
         message = json.loads(raw)
     except json.JSONDecodeError:
@@ -187,55 +470,45 @@ async def _handle_client_message(user_id: str, raw: str, app) -> None:
     msg_type = message.get("type")
 
     if msg_type == "action":
-        # A2UI action from a button click or form submission
         payload = message.get("payload", {})
-        action = payload.get("action")
+        action = payload.get("action", "")
 
-        if action == "approve" and "id" in payload:
-            from src.tools.intelligence_server import approve_action
-
-            result = await approve_action(
-                user_id=user_id,
-                approval_id=payload["id"],
-                decision="approved",
-                reason="Approved via web dashboard",
-            )
+        if not action:
             await _broadcast(
                 user_id,
                 {
                     "type": "action_result",
-                    "action": "approve",
-                    "result": result,
+                    "action": "",
+                    "status": "error",
+                    "error": "No action specified",
                 },
             )
+            return
 
-        elif action == "reject" and "id" in payload:
-            from src.tools.intelligence_server import approve_action
-
-            result = await approve_action(
-                user_id=user_id,
-                approval_id=payload["id"],
-                decision="rejected",
-                reason="Rejected via web dashboard",
-            )
+        try:
+            result = await _dispatch_action(user_id, action, payload, app)
             await _broadcast(
                 user_id,
                 {
                     "type": "action_result",
-                    "action": "reject",
+                    "action": action,
+                    "status": result.get("status", "success"),
                     "result": result,
                 },
             )
-
-        elif action == "meeting_prep" and "event_id" in payload:
-            # Trigger meeting prep generation
-            logger.info(
-                "ws_meeting_prep_requested",
-                extra={"user_id": user_id, "event_id": payload["event_id"]},
+        except Exception as e:
+            logger.warning("action_dispatch_error: %s", e, exc_info=True)
+            await _broadcast(
+                user_id,
+                {
+                    "type": "action_result",
+                    "action": action,
+                    "status": "error",
+                    "error": str(e),
+                },
             )
 
     elif msg_type == "heartbeat":
-        # Client heartbeat — just acknowledge
         pass
 
 

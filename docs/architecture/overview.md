@@ -20,7 +20,7 @@ graph TB
     end
 
     subgraph "API Layer"
-        API[FastAPI + SSE Streaming<br/>30 routers, /v1/ prefix]
+        API[FastAPI + SSE Streaming<br/>31 routers, /v1/ prefix]
     end
 
     subgraph "Orchestrator"
@@ -30,13 +30,12 @@ graph TB
     end
 
     subgraph "Sub-Agents (Claude API)"
-        OBS[Observer]
+        PCV[Perceiver]
         LIB[Librarian]
         PLN[Planner]
         GOV[Governor]
         OPR[Operator]
         PRS[Presenter]
-        RES[Researcher]
         PER[Persona]
     end
 
@@ -54,8 +53,8 @@ graph TB
         GV[Governor Service]
         GE[GraphExecutor]
         NT[Notifier]
-        IS[InitiativeScorer]
-        RR[RouteResolver]
+        CR[CapabilityResolver]
+        TE[TrustEngine]
     end
 
     subgraph "Persistence"
@@ -69,32 +68,31 @@ graph TB
     TG --> API
     WEB --> API
     API --> ORCH
-    ORCH --> OBS & LIB & PLN & GOV & OPR & PRS & RES & PER
+    ORCH --> PCV & LIB & PLN & GOV & OPR & PRS & PER
     ORCH --> TRACE & BUDGET
-    OBS & LIB & PLN & GOV & OPR & PRS & RES & PER --> INT
-    OBS & LIB & PLN & GOV & OPR & PRS & RES & PER --> MCP
+    PCV & LIB & PLN & GOV & OPR & PRS & PER --> INT
+    PCV & LIB & PLN & GOV & OPR & PRS & PER --> MCP
     INT --> EP & WM & MS & PL & GV & GE & NT
     ORCH --> CAT
-    EP & WM & MS & PL & GV & GE & NT & IS & RR --> PG
-    EP & NT & IS --> RD
+    EP & WM & MS & PL & GV & GE & NT & CR & TE --> PG
+    EP & NT --> RD
     WM --> N4J
     MS --> QD
     EP --> QD
 ```
 
-## The 8 Sub-Agents
+## The 7 Sub-Agents
 
-The orchestrator routes to 8 specialized sub-agents via Claude API. Each agent has a defined role, model tier, write scope, and tool scope. Agents never call each other directly — all coordination flows through the orchestrator.
+The orchestrator routes to 7 specialized sub-agents via Claude API. Each agent has a defined role, model tier, write scope, and tool scope. Agents never call each other directly — all coordination flows through the orchestrator. The former Observer and Researcher agents were merged into the Perceiver.
 
 | Agent | Model Tier | Role | Write Scope | Tool Scope |
 |-------|-----------|------|-------------|------------|
-| **Observer** | Sonnet | Read external sources, detect changes, ingest events | `normalized_events` | Gmail/Calendar/Drive/Slack/GitHub read + cursors |
+| **Perceiver** | Sonnet | Read external sources, detect changes, ingest events, deep context gathering | `normalized_events` | Gmail/Calendar/Drive/Slack/GitHub read + cursors, web_search, Playwright browser |
 | **Librarian** | Sonnet | Extract entities, update world model | `entities`, `relationships`, `memories` | update_entity, search |
-| **Planner** | Opus | Determine intent, produce structured task graphs | `plans`, `plan_tasks` | plan_command, get_active_plans, search |
-| **Governor** | Sonnet | Evaluate policies, gate approvals | `policy decisions`, `approvals` | evaluate_policy, approve_action |
+| **Planner** | Opus | Determine intent, produce capability-based plans (PlanOutput) | `plans`, `plan_tasks` | plan_command, get_active_plans, search, discover_capabilities |
+| **Governor** | Sonnet | Audit-only edge-case evaluation (edge_case_only=True) | `policy decisions`, `approvals` | evaluate_policy |
 | **Operator** | Sonnet | Execute approved plans via MCP tools | `executions`, `task_runs` | Gmail/Calendar/Slack/GitHub sends + execution tracking |
 | **Presenter** | Sonnet | Generate user-facing output | `briefings`, `UI payloads` | get_briefing, search, send_telegram, push_ui_update |
-| **Researcher** | Sonnet | Deep context gathering (read-only) | None | All read tools + web_search + Playwright browser |
 | **Persona** | Haiku | Learn user preferences from interactions | `memories` (preference type) | search, extract_preferences |
 
 ### Agent Boundaries
@@ -104,14 +102,14 @@ These boundaries are strict and must not be violated:
 - **Only Planner** decides intent (what to do)
 - **Only Operator** executes external actions (sends emails, posts messages)
 - **Only Presenter** talks to the user (formats output)
-- **Governor** sits before every external write (approval gate)
+- **TrustEngine** in GraphExecutor is the single approval gate (Governor is audit-only for edge cases)
 
 ### Model Tier Rationale
 
 | Tier | Model | Used By | Rationale |
 |------|-------|---------|-----------|
 | Opus | claude-opus-4 | Planner | Deepest reasoning for intent classification and task graph generation |
-| Sonnet | claude-sonnet-4 | Observer, Librarian, Governor, Operator, Presenter, Researcher | Best balance of capability and cost for most agent work |
+| Sonnet | claude-sonnet-4 | Perceiver, Librarian, Governor, Operator, Presenter | Best balance of capability and cost for most agent work |
 | Haiku | claude-haiku-4 | Persona | Lightweight preference extraction, called frequently |
 
 ## Infrastructure Services
@@ -122,7 +120,7 @@ Jarvis uses 5 infrastructure services. Postgres and Redis are required; the rest
 |---------|---------|------|-----------|----------|
 | **PostgreSQL** | 17 | System of record: all models, tsvector FTS with GIN indexes | Yes | None |
 | **Redis** | 7 | Event streams, task queue, caching, distributed locks, surface tracking, pubsub | Yes | In-memory (limited) |
-| **Qdrant** | 1.12 | Semantic vector search (4 collections: memories, entities, events, artifacts) | No | Postgres FTS only |
+| **Qdrant** | 1.12 | Semantic vector search (6 collections: memories, entities, events, artifacts, conversations, approvals) | No | Postgres FTS only |
 | **Neo4j** | 5 Community | Knowledge graph projection: multi-hop traversal, shortest-path, community detection | No | Postgres entity tables only |
 | **MinIO / S3** | - | Artifact document/media storage (Postgres holds metadata + S3 key ref) | No | No artifact storage |
 
@@ -164,10 +162,10 @@ Redis serves 6 distinct purposes:
 
 ```mermaid
 graph LR
-    A[Observer] --> B[EventProcessor<br/>normalize, score, dedup]
+    A[Perceiver] --> B[EventProcessor<br/>normalize, score, dedup]
     B --> C[Librarian<br/>entities, memories]
     C --> D[Planner<br/>task graphs]
-    D --> E[Governor<br/>policy/approval gate]
+    D --> E[TrustEngine<br/>approval gate]
     E --> F[Operator<br/>execute]
     F --> G[Presenter<br/>deliver via Telegram/A2UI]
 ```
@@ -189,5 +187,5 @@ All 51 data tables have a `workspace_id` column (`String(64)`, NOT NULL FK to `w
 - **API routes** resolve the workspace via the `get_current_workspace_id()` dependency.
 - **Background services** resolve the workspace via `resolve_workspace_id(db, user_id)`.
 - **User-level tables** (not workspace-scoped): `users`, `workspaces`, `workspace_members`, `sessions`, `magic_links`.
-- **System-global tables** (shared across workspaces): `agents`, `agent_routes`.
+- **System-global tables** (shared across workspaces): `agents`.
 - All functions require explicit `user_id` from the auth context; there is no default user fallback.

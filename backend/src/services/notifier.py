@@ -48,6 +48,14 @@ def compute_priority_score(
     )
 
 
+SURFACE_RATE_LIMITS: dict[str, int] = {
+    "telegram": 5,  # per hour
+    "web": 15,
+    "slack": 8,
+    "email": 3,
+}
+
+
 class Notifier:
     """Coordinates notification delivery across surfaces with persistence."""
 
@@ -66,6 +74,42 @@ class Notifier:
         self._db = db
         # Track delivered notifications for dedup
         self._delivered: dict[str, set[str]] = {}
+
+    async def _hold_for_briefing(self, notification: Notification, priority: float) -> None:
+        """Store a notification as a briefing item instead of delivering it."""
+        if self._redis:
+            try:
+                key = f"notifier:briefing_hold:{notification.user_id}"
+                entry = json.dumps(
+                    {
+                        "notification_id": notification.notification_id,
+                        "title": notification.title,
+                        "body": notification.body,
+                        "type": notification.type,
+                        "priority": priority,
+                        "created_at": notification.created_at,
+                    }
+                )
+                await self._redis.lpush(key, entry)
+                await self._redis.expire(key, 86400)  # 24h TTL
+            except Exception:
+                logger.debug("Failed to hold notification for briefing", exc_info=True)
+
+    async def _check_rate_limit(self, user_id: str, surface: str) -> bool:
+        """Check if a notification can be sent to this surface within rate limits.
+
+        Uses a Redis pipeline to atomically INCR the counter and always refresh
+        the TTL, ensuring the window expires correctly even under concurrent writes.
+        """
+        if not self._redis:
+            return True
+        key = f"notifier:rate:{user_id}:{surface}"
+        pipe = self._redis.pipeline()
+        pipe.incr(key)
+        pipe.expire(key, 3600)
+        results = await pipe.execute()
+        count = results[0]
+        return count <= SURFACE_RATE_LIMITS.get(surface, 10)
 
     async def notify(
         self,
@@ -88,6 +132,15 @@ class Notifier:
             interruptibility=data.get("interruptibility", 0.5) if data else 0.5,
         )
 
+        # Resolve workspace_id from user_id if not provided
+        if not workspace_id and self._db and user_id:
+            try:
+                from src.api.deps import resolve_workspace_id
+
+                workspace_id = await resolve_workspace_id(self._db, user_id)
+            except Exception:
+                logger.debug("Could not resolve workspace_id for user %s", user_id)
+
         payload = dict(data or {})
         if workspace_id and "workspace_id" not in payload:
             payload["workspace_id"] = workspace_id
@@ -101,6 +154,29 @@ class Notifier:
             data=payload,
             created_at=datetime.now(timezone.utc).isoformat(),
         )
+
+        # Validate workspace membership
+        if workspace_id and self._db:
+            try:
+                from sqlalchemy import select
+
+                from src.models.users import WorkspaceMember
+
+                result = await self._db.execute(
+                    select(WorkspaceMember).where(
+                        WorkspaceMember.user_id == user_id,
+                        WorkspaceMember.workspace_id == workspace_id,
+                    )
+                )
+                if not result.scalar_one_or_none():
+                    logger.warning(
+                        "Notification blocked: user %s not in workspace %s",
+                        user_id,
+                        workspace_id,
+                    )
+                    return {"status": "blocked", "reason": "workspace_membership"}
+            except Exception:
+                logger.debug("Workspace validation skipped", exc_info=True)
 
         # Persist to DB if available
         if self._db:
@@ -123,6 +199,24 @@ class Notifier:
             except Exception:
                 logger.warning("Failed to persist notification", exc_info=True)
 
+        # Types that bypass priority/rate-limit filters
+        _bypass_filter = ("approval_request", "critical_alert", "auto_execute_notify")
+        # Types that deliver to ALL surfaces (not just preferred)
+        _broadcast_types = ("approval_request", "critical_alert")
+        if notification_type not in _bypass_filter:
+            if priority < 0.3:
+                logger.info(
+                    "notification_silent",
+                    extra={
+                        "notification_id": notification.notification_id,
+                        "priority": priority,
+                    },
+                )
+                return {"status": "silent", "priority": priority}
+            if priority < 0.6:
+                await self._hold_for_briefing(notification, priority)
+                return {"status": "held_for_briefing", "priority": priority}
+
         surfaces = await self._registry.get_active_surfaces(user_id)
         if not surfaces:
             # No active surfaces — queue for later delivery
@@ -132,9 +226,20 @@ class Notifier:
             )
             return {"status": "queued", "surfaces": []}
 
+        # Rate-limit filtering: remove surfaces that are over their hourly cap
+        if notification_type not in _bypass_filter:
+            allowed_surfaces = []
+            for surface in surfaces:
+                if await self._check_rate_limit(user_id, surface):
+                    allowed_surfaces.append(surface)
+            if not allowed_surfaces:
+                await self._hold_for_briefing(notification, priority)
+                return {"status": "rate_limited", "priority": priority}
+            surfaces = allowed_surfaces
+
         results = {}
 
-        if notification_type in ("approval_request", "critical_alert"):
+        if notification_type in _broadcast_types:
             # Send to ALL active surfaces
             for surface in surfaces:
                 result = await self._deliver(surface, notification)
@@ -175,6 +280,25 @@ class Notifier:
                 )
             except Exception:
                 logger.debug("Failed to emit notification.sent event", exc_info=True)
+
+        # Store sync event for polling fallback (reconnection safety)
+        if self._redis and workspace_id:
+            try:
+                import json as _json
+
+                sync_key = f"jarvis:pending_sync:{user_id}"
+                await self._redis.lpush(
+                    sync_key,
+                    _json.dumps(
+                        {
+                            "action": notification_type,
+                            "notification_id": notification.notification_id,
+                        }
+                    ),
+                )
+                await self._redis.expire(sync_key, 300)
+            except Exception:
+                logger.debug("Surface sync fallback failed", exc_info=True)
 
         return {"status": "sent", "surfaces": results}
 
@@ -374,61 +498,46 @@ class Notifier:
                 # they appear on the workspace dashboard in real time.
                 if notification.type == "approval_request":
                     try:
-                        from src.orchestrator.contracts import (
-                            WorkspaceSurfaceMetadata,
-                            WorkspaceSurfacePush,
-                        )
-                        from src.ui import renderer as r
+                        from datetime import datetime, timezone
 
-                        approval_id = (notification.data or {}).get("approval_id", "")
+                        from src.orchestrator.contracts import WorkspaceSurfacePush
+                        from src.ui.contracts import SurfaceMetric, SurfacePreview
+                        from src.ui.renderer import build_detail_config
+
                         risk_level = (notification.data or {}).get("risk_level", "medium")
                         risk_variant = (
                             "warning" if risk_level in ("high", "critical") else "default"
                         )
 
-                        children = [
-                            r.card(
-                                "apr_card",
-                                [
-                                    r.heading("apr_title", notification.title),
-                                    r.badge("apr_risk", risk_level, variant=risk_variant),
-                                    r.text("apr_body", notification.body or ""),
-                                    r.row(
-                                        "apr_actions",
-                                        [
-                                            r.button(
-                                                f"approve_{approval_id}",
-                                                "Approve",
-                                                variant="primary",
-                                                action_payload={
-                                                    "action": "approve",
-                                                    "id": approval_id,
-                                                },
-                                            ),
-                                            r.button(
-                                                f"reject_{approval_id}",
-                                                "Reject",
-                                                variant="danger",
-                                                action_payload={
-                                                    "action": "reject",
-                                                    "id": approval_id,
-                                                },
-                                            ),
-                                        ],
-                                    ),
-                                ],
-                            ),
-                        ]
+                        # Use approval_{approval_id} format so the surface
+                        # detail endpoint can resolve the tab builders via
+                        # the "approval_" prefix in _PREFIX_MAP.  This also
+                        # deduplicates with the REST-polled surfaces built by
+                        # SurfaceService._build_approval_surfaces().
+                        approval_id = (notification.data or {}).get("approval_id", "")
+                        surface_id = (
+                            f"approval_{approval_id}" if approval_id else f"notif_surf_{ULID()}"
+                        )
+                        preview = SurfacePreview(
+                            title=notification.title,
+                            subtitle=(notification.body or "")[:120] or None,
+                            status="awaiting_approval",
+                            priority="high" if risk_level in ("high", "critical") else "medium",
+                            metrics=[
+                                SurfaceMetric(label="Risk", value=risk_level, variant=risk_variant),
+                            ],
+                        )
+                        detail_config = build_detail_config("approval", surface_id)
 
                         surface = WorkspaceSurfacePush(
-                            id=f"notif_surf_{ULID()}",
-                            children=[c.model_dump(mode="json") for c in children],
-                            metadata=WorkspaceSurfaceMetadata(
-                                kind="approval",
-                                title=notification.title,
-                                decision="approval_requested",
-                                reasoning=notification.body or "",
+                            id=surface_id,
+                            kind="approval",
+                            preview=preview.model_dump(mode="json"),
+                            detail_config=(
+                                detail_config.model_dump(mode="json") if detail_config else None
                             ),
+                            decision="approval_requested",
+                            created_at=datetime.now(timezone.utc).isoformat(),
                         )
                         ws_msg = json.dumps(
                             {"type": "surface", "surface": surface.model_dump(mode="json")}
@@ -451,6 +560,11 @@ class Notifier:
         if self._redis:
             key = f"jarvis:notif_delivered:{notification_id}"
             await self._redis.set(key, surface, ex=86400)  # 24h TTL
+        # Evict oldest entries when in-memory cache exceeds limit
+        if len(self._delivered) >= 10_000:
+            keys_to_remove = list(self._delivered.keys())[:1000]
+            for k in keys_to_remove:
+                del self._delivered[k]
         self._delivered.setdefault(notification_id, set()).add(surface)
 
     async def is_delivered(self, notification_id: str) -> bool:

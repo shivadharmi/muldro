@@ -156,17 +156,38 @@ class TestEvictApprovals:
     """Test approval eviction."""
 
     @pytest.mark.asyncio
-    async def test_evicts_old_decided_approvals(self):
+    async def test_evicts_old_decided_approvals_with_qdrant_cascade(self):
         db = AsyncMock()
-        mock_result = MagicMock()
-        mock_result.rowcount = 4
-        db.execute.return_value = mock_result
+        vector_store = AsyncMock()
 
-        svc = _make_eviction_service(db)
+        # First call: SELECT returns IDs; Second call: DELETE
+        mock_select = MagicMock()
+        mock_select.all.return_value = [("apr_1",), ("apr_2",), ("apr_3",), ("apr_4",)]
+        mock_delete = MagicMock()
+        db.execute = AsyncMock(side_effect=[mock_select, mock_delete])
+
+        svc = _make_eviction_service(db, vector_store=vector_store)
         count = await svc._evict_approvals()
 
         assert count == 4
+        assert vector_store.delete.call_count == 4
+        vector_store.delete.assert_any_call("approvals", "apr_1")
         db.flush.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_evicts_approvals_returns_zero_when_none(self):
+        db = AsyncMock()
+        vector_store = AsyncMock()
+
+        mock_result = MagicMock()
+        mock_result.all.return_value = []
+        db.execute.return_value = mock_result
+
+        svc = _make_eviction_service(db, vector_store=vector_store)
+        count = await svc._evict_approvals()
+
+        assert count == 0
+        vector_store.delete.assert_not_called()
 
 
 class TestEvictOldEvents:

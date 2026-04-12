@@ -7,20 +7,19 @@ class TestSeedInstallations:
     def _get_seed(self, server_name: str) -> dict:
         return next(s for s in _DEFAULT_INSTALLATIONS if s["server_name"] == server_name)
 
-    def test_google_workspace_executable(self):
-        """Google Workspace seed must use workspace-mcp with correct tool tier."""
+    def test_google_workspace_http_transport(self):
+        """Google Workspace seed must use streamable-http with remote_url."""
         seed = self._get_seed("google-workspace")
-        expected = [
-            "workspace-mcp",
-            "--tool-tier",
-            "complete",
-            "--tools",
-            "gmail",
-            "calendar",
-        ]
-        assert seed["args"] == expected, (
-            f"Wrong executable: {seed['args']} — expected workspace-mcp with complete tier"
+        assert seed["transport"] == "streamable-http", (
+            f"Expected streamable-http transport, got '{seed['transport']}'"
         )
+        assert seed.get("remote_url"), "Google Workspace must have a remote_url for HTTP transport"
+        assert seed.get("command") is None, "HTTP transport should not have a command"
+        assert seed.get("args") is None, "HTTP transport should not have args"
+        assert seed["auth_provider"] == "google", (
+            f"auth_provider must be 'google' for OAuth, got '{seed['auth_provider']}'"
+        )
+        assert seed["env_template"] == {}, "HTTP service env vars live on Docker, not in seed"
 
     def test_slack_env_vars(self):
         """Slack seed must use SLACK_MCP_XOXP_TOKEN, not SLACK_BOT_TOKEN."""
@@ -98,3 +97,31 @@ class TestLinearToolNames:
         names = {s.name for s in EXTERNAL_TOOL_SEEDS}
         assert "linear_comment" not in names
         assert "linear_list_issues" not in names
+
+
+class TestAuthProviderLabels:
+    """Servers with OAuth callback routes must have OAuth-aware auth_provider."""
+
+    def _get_seed(self, server_name: str) -> dict:
+        return next(s for s in _DEFAULT_INSTALLATIONS if s["server_name"] == server_name)
+
+    def test_github_auth_provider_is_oauth(self):
+        seed = self._get_seed("github")
+        actual = seed["auth_provider"]
+        assert actual == "github", (
+            f"GitHub uses OAuth flow — auth_provider must be 'github', got '{actual}'"
+        )
+
+    def test_linear_auth_provider_is_oauth(self):
+        seed = self._get_seed("linear")
+        actual = seed["auth_provider"]
+        assert actual == "linear", (
+            f"Linear uses OAuth flow — auth_provider must be 'linear', got '{actual}'"
+        )
+
+    def test_notion_auth_provider_is_oauth(self):
+        seed = self._get_seed("notion")
+        actual = seed["auth_provider"]
+        assert actual == "notion", (
+            f"Notion uses OAuth flow — auth_provider must be 'notion', got '{actual}'"
+        )

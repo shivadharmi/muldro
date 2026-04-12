@@ -163,16 +163,15 @@ class TestAgentRegistryIntegrity:
         assert resp.status_code == 200
         agents = resp.json()
         initial_count = len(agents)
-        assert initial_count >= 8
+        assert initial_count >= 7
         agent_names = {a["name"] for a in agents}
         expected = {
-            "observer",
+            "perceiver",
             "librarian",
             "planner",
             "governor",
             "operator",
             "presenter",
-            "researcher",
             "persona",
         }
         assert expected.issubset(agent_names)
@@ -206,7 +205,7 @@ class TestRouteResolution:
         pipeline1 = resp1.json()["pipeline"]
         assert len(pipeline1) > 0
 
-        # Known: research -> researcher pipeline
+        # Known: research -> perceiver pipeline
         resp2 = await client.post(
             "/v1/routes/resolve",
             json={"decision": {"decision_type": "research"}},

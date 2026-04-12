@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
     debug: bool = False
+    environment: str = "development"  # Environment discriminator (development, staging, production)
     log_json: bool = False  # Use JSON structured logging
 
     telegram_chat_id: str = ""  # Telegram chat ID for proactive message delivery
@@ -59,9 +60,6 @@ class Settings(BaseSettings):
     observation_stale_github_minutes: int = 60
     observation_stale_linear_minutes: int = 30
     observation_stale_notion_minutes: int = 60
-    observation_stale_jira_minutes: int = 30
-    observation_stale_linkedin_minutes: int = 120
-    observation_stale_twitter_minutes: int = 15
 
     # Hardening
     plan_ttl_hours: int = 72  # Plans older than this are invalidated
@@ -80,7 +78,6 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""  # Telegram Bot API token
 
     # Auth
-    session_secret_key: str = ""  # Secret for signing session tokens
     magic_link_ttl_minutes: int = 15
     session_ttl_hours: int = 720  # 30 days
 
@@ -99,6 +96,7 @@ class Settings(BaseSettings):
     google_oauth_client_id: str = ""
     google_oauth_client_secret: str = ""
     google_oauth_redirect_uri: str = "http://localhost:8000/v1/auth/google/callback"
+    google_workspace_mcp_url: str = "http://localhost:8001/mcp"
     github_oauth_client_id: str = ""
     github_oauth_client_secret: str = ""
     github_oauth_redirect_uri: str = "http://localhost:8000/v1/auth/github/callback"
@@ -134,17 +132,6 @@ class Settings(BaseSettings):
     twitter_oauth_client_id: str = ""
     twitter_oauth_client_secret: str = ""
     twitter_oauth_redirect_uri: str = "http://localhost:8000/v1/auth/twitter/callback"
-
-    # WhatsApp (Meta Business API — no OAuth)
-    whatsapp_phone_number_id: str = ""
-    whatsapp_access_token: str = ""
-    whatsapp_verify_token: str = ""
-    whatsapp_app_secret: str = ""
-
-    # Twilio SMS
-    twilio_account_sid: str = ""
-    twilio_auth_token: str = ""
-    twilio_from_number: str = ""
 
     # S3 / artifact storage
     s3_bucket: str = ""

@@ -143,6 +143,7 @@ class WorldModel:
         event_bus=None,
         embedding_service=None,
         vector_store=None,
+        dead_letter=None,
     ):
         self._settings = settings
         self._db = db
@@ -150,6 +151,32 @@ class WorldModel:
         self._event_bus = event_bus
         self._embedding_service = embedding_service
         self._vector_store = vector_store
+        self._dead_letter = dead_letter
+
+    async def _enqueue_failed_embedding(
+        self, record_id: str, user_id: str, collection: str = "entities"
+    ) -> None:
+        """Enqueue a failed embedding for retry via DLQ."""
+        if not self._dead_letter:
+            return
+        try:
+            await self._dead_letter.enqueue(
+                user_id=user_id,
+                operation_type="failed_embedding",
+                error_type="EmbeddingFailure",
+                error_message=f"Embedding/upsert failed for {collection}:{record_id}",
+                payload={
+                    "record_id": record_id,
+                    "collection": collection,
+                    "record_type": "entity",
+                },
+            )
+        except Exception:
+            logger.warning(
+                "Failed to enqueue embedding retry for %s",
+                record_id,
+                exc_info=True,
+            )
 
     async def extract_from_event(
         self, event_id: str, user_id: str, workspace_id: str = ""
@@ -231,7 +258,7 @@ class WorldModel:
         embedding = None
         if self._embedding_service:
             try:
-                embedding = await self._embedding_service.embed(canonical_name)
+                embedding = await self._embedding_service.embed_text(canonical_name)
             except Exception:
                 logger.debug("Failed to generate entity embedding", exc_info=True)
         entity = Entity(
@@ -275,12 +302,16 @@ class WorldModel:
             raise
 
         # Upsert entity vector to Qdrant
-        if self._vector_store:
+        emb = embedding
+        if emb is None and self._embedding_service:
             try:
-                emb = embedding
-                if emb is None and self._embedding_service:
-                    emb = await self._embedding_service.embed(canonical_name)
-                if emb:
+                emb = await self._embedding_service.embed_text(canonical_name)
+            except Exception:
+                logger.debug("Failed to generate entity embedding", exc_info=True)
+
+        if emb:
+            if self._vector_store:
+                try:
                     await self._vector_store.upsert(
                         "entities",
                         entity_id,
@@ -292,8 +323,13 @@ class WorldModel:
                         },
                         user_id,
                     )
-            except Exception:
-                logger.debug("Qdrant entity upsert failed", exc_info=True)
+                except Exception:
+                    logger.debug("Qdrant entity upsert failed for %s", entity_id, exc_info=True)
+                    await self._enqueue_failed_embedding(entity_id, user_id)
+            else:
+                await self._enqueue_failed_embedding(entity_id, user_id)
+        else:
+            await self._enqueue_failed_embedding(entity_id, user_id)
 
         logger.info(
             "Entity created: %s type=%s name=%s",
@@ -336,6 +372,11 @@ class WorldModel:
         )
         self._db.add(rel)
         await self._db.commit()
+        await self._emit_event(
+            "relationship.created",
+            user_id,
+            {"relation_id": relation_id, "relationship_id": relation_id},
+        )
         return relation_id
 
     async def find_entity(self, user_id: str, query: str, workspace_id: str = "") -> list[dict]:
@@ -406,7 +447,7 @@ class WorldModel:
         # Fuzzy match via Qdrant vector similarity
         if self._vector_store and self._embedding_service:
             try:
-                embedding = await self._embedding_service.embed(canonical_name)
+                embedding = await self._embedding_service.embed_text(canonical_name)
                 if embedding:
                     similar = await self._vector_store.find_similar(
                         "entities",
@@ -414,11 +455,15 @@ class WorldModel:
                         user_id,
                         threshold=0.92,
                         limit=1,
+                        filters={"workspace_id": workspace_id} if workspace_id else None,
                     )
                     if similar:
                         eid = similar[0].get("payload", {}).get("_original_id") or similar[0]["id"]
                         result = await self._db.execute(
-                            select(Entity).where(Entity.entity_id == eid)
+                            select(Entity).where(
+                                Entity.entity_id == eid,
+                                Entity.workspace_id == workspace_id,
+                            )
                         )
                         return result.scalar_one_or_none()
             except Exception:
@@ -466,6 +511,55 @@ class WorldModel:
                 workspace_id=workspace_id,
             )
 
+    async def extract_from_text(self, text: str, user_id: str, workspace_id: str = "") -> list[str]:
+        """Extract entities from free text (e.g. user messages). Returns entity_ids."""
+        try:
+            response = await self._client.messages.create(
+                model=self._settings.resolved_model,
+                max_tokens=1024,
+                system=ENTITY_EXTRACTION_PROMPT,
+                messages=[{"role": "user", "content": f"Source: user_message\nSummary: {text}"}],
+            )
+            from src.llm_utils import parse_llm_json
+
+            extracted = parse_llm_json(
+                response.content[0].text,
+                default={"entities": [], "relationships": []},
+            )
+        except Exception:
+            logger.warning("Text entity extraction failed", exc_info=True)
+            return []
+
+        entity_ids = []
+        for ent_data in extracted.get("entities", []):
+            raw_type = ent_data.get("entity_type", "person")
+            entity_type = raw_type if raw_type in ENTITY_TYPES else "person"
+            importance = min(max(float(ent_data.get("importance", 0.5)), 0.0), 1.0)
+            entity_id = await self.upsert_entity(
+                user_id=user_id,
+                entity_type=entity_type,
+                canonical_name=ent_data.get("canonical_name", "Unknown"),
+                attributes=ent_data.get("attributes"),
+                aliases=ent_data.get("aliases"),
+                importance=importance,
+                workspace_id=workspace_id,
+            )
+            if entity_id:
+                entity_ids.append(entity_id)
+
+        for rel_data in extracted.get("relationships", []):
+            raw_rel = rel_data.get("relation_type", "related_to")
+            relation_type = raw_rel if raw_rel in RELATION_TYPES else "related_to"
+            await self._create_relationship_by_name(
+                user_id=user_id,
+                from_name=rel_data.get("from_name", ""),
+                relation_type=relation_type,
+                to_name=rel_data.get("to_name", ""),
+                workspace_id=workspace_id,
+            )
+
+        return entity_ids
+
     async def _call_extraction(self, event: NormalizedEvent) -> dict:
         """Call Claude to extract entities from an event."""
         parts = [f"Event type: {event.event_type}", f"Source: {event.source}"]
@@ -484,10 +578,12 @@ class WorldModel:
                 system=ENTITY_EXTRACTION_PROMPT,
                 messages=[{"role": "user", "content": user_message}],
             )
-            text = response.content[0].text
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1].rsplit("```", 1)[0]
-            return json.loads(text)
+            from src.llm_utils import parse_llm_json
+
+            return parse_llm_json(
+                response.content[0].text,
+                default={"entities": [], "relationships": []},
+            )
         except Exception:
             logger.warning("Entity extraction failed", exc_info=True)
             return {"entities": [], "relationships": []}

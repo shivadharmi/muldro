@@ -7,131 +7,10 @@ from src.orchestrator.contracts import (
     AgentEnvelope,
     AgentResult,
     DomainEvent,
-    PlannerOutput,
-    PlannerTask,
     StepResult,
     ToolCallRequest,
     ToolCallResult,
 )
-
-# ── PlannerTask ──────────────────────────────────────────────────────
-
-
-class TestPlannerTask:
-    def test_valid(self):
-        t = PlannerTask(task_type="draft_email", input_data={"to": "a@b.com"})
-        assert t.task_type == "draft_email"
-        assert t.input_data["to"] == "a@b.com"
-
-    def test_defaults(self):
-        t = PlannerTask(task_type="fetch")
-        assert t.input_data == {}
-
-    def test_extra_ignored(self):
-        t = PlannerTask(task_type="x", input_data={}, unknown_field="boom")
-        assert not hasattr(t, "unknown_field")
-
-
-# ── PlannerOutput ────────────────────────────────────────────────────
-
-
-class TestPlannerOutput:
-    def test_valid_acknowledge(self):
-        p = PlannerOutput(decision="acknowledge", goal="ok")
-        assert p.decision == "acknowledge"
-        assert p.tasks == []
-
-    def test_valid_create_task(self):
-        p = PlannerOutput(
-            decision="create_task",
-            goal="Draft an email",
-            reasoning="User asked to draft",
-            priority="high",
-            risk_level="medium",
-            execution_mode="approval_required",
-            tasks=[{"task_type": "draft_email", "input_data": {"to": "a@b.com"}}],
-        )
-        assert p.decision == "create_task"
-        assert len(p.tasks) == 1
-        assert isinstance(p.tasks[0], PlannerTask)
-
-    def test_watcher_create_decision(self):
-        p = PlannerOutput(decision="watcher_create", goal="Watch for emails from CEO")
-        assert p.decision == "watcher_create"
-
-    def test_goal_update_decision(self):
-        p = PlannerOutput(decision="goal_update", goal="Update Q2 revenue target")
-        assert p.decision == "goal_update"
-
-    def test_invalid_decision_rejected(self):
-        with pytest.raises(ValidationError):
-            PlannerOutput(decision="fly_to_moon")
-
-    def test_missing_decision_defaults_to_acknowledge(self):
-        p = PlannerOutput(goal="no decision")
-        assert p.decision == "acknowledge"
-
-    def test_defaults(self):
-        p = PlannerOutput(decision="ignore")
-        assert p.priority == "medium"
-        assert p.risk_level == "low"
-        assert p.execution_mode == "approval_required"
-        assert p.goal == ""
-
-    def test_extra_fields_ignored(self):
-        p = PlannerOutput(
-            decision="acknowledge",
-            goal="ok",
-            some_random_field="value",
-        )
-        assert not hasattr(p, "some_random_field")
-
-    def test_model_dump_roundtrip(self):
-        raw = {
-            "decision": "create_task",
-            "goal": "Send report",
-            "reasoning": "User wants a report",
-            "priority": "high",
-            "risk_level": "medium",
-            "execution_mode": "auto_execute",
-            "tasks": [{"task_type": "summarize", "input_data": {"text": "..."}}],
-        }
-        p = PlannerOutput.model_validate(raw)
-        dumped = p.model_dump()
-        assert dumped["decision"] == "create_task"
-        assert len(dumped["tasks"]) == 1
-
-    def test_invalid_priority_rejected(self):
-        with pytest.raises(ValidationError):
-            PlannerOutput(decision="acknowledge", priority="ultra")
-
-    def test_invalid_risk_level_rejected(self):
-        with pytest.raises(ValidationError):
-            PlannerOutput(decision="acknowledge", risk_level="extreme")
-
-    def test_all_decisions(self):
-        decisions = [
-            "acknowledge",
-            "answer_directly",
-            "create_task",
-            "draft_reply",
-            "search_memory",
-            "add_to_brief",
-            "ignore",
-            "watcher_create",
-            "goal_update",
-            "research",
-            "observe",
-            "remember",
-            "ask_user",
-            "recommend",
-            "summarize",
-            "schedule_reminder",
-        ]
-        for d in decisions:
-            p = PlannerOutput(decision=d)
-            assert p.decision == d
-
 
 # ── AgentEnvelope ────────────────────────────────────────────────────
 
@@ -147,7 +26,7 @@ class TestAgentEnvelope:
         assert len(e.tools_available) == 1
 
     def test_defaults(self):
-        e = AgentEnvelope(agent_name="observer", message="hi")
+        e = AgentEnvelope(agent_name="perceiver", message="hi")
         assert e.context == ""
         assert e.tools_available == []
 
@@ -158,17 +37,17 @@ class TestAgentEnvelope:
 class TestAgentResult:
     def test_valid(self):
         r = AgentResult(
-            agent_name="researcher",
+            agent_name="perceiver",
             response_text="Found 3 results",
             tools_called=["search_memory"],
             tokens_used=150,
         )
-        assert r.agent_name == "researcher"
+        assert r.agent_name == "perceiver"
         assert r.tokens_used == 150
 
     def test_defaults(self):
         r = AgentResult(agent_name="persona")
-        assert r.response_text == ""
+        assert r.response_text is None
         assert r.tools_called == []
         assert r.tokens_used == 0
 

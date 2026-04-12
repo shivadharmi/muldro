@@ -12,8 +12,6 @@ import { TopBar } from "@/components/shell/top-bar";
 import { ContextSidebar } from "@/components/shell/context-sidebar";
 import { ActivityStrip } from "@/components/shell/activity-strip";
 import { CommandLauncher } from "@/components/shell/command-launcher";
-import { CenterPaneSurface } from "@/components/shell/center-pane-surface";
-import { SurfaceDock } from "@/components/shell/surface-dock";
 import { useShellStore } from "@/stores/shell-store";
 
 const PUBLIC_ROUTES = ["/login", "/auth/callback"];
@@ -114,7 +112,6 @@ function AuthGate({ children }: { children: ReactNode }) {
 
         {/* Global overlays */}
         <CommandLauncher />
-        <CenterPaneSurface />
 
         <div className="flex-1 flex flex-col min-w-0">
           <ErrorBoundary><TopBar /></ErrorBoundary>
@@ -123,7 +120,6 @@ function AuthGate({ children }: { children: ReactNode }) {
             <main className="flex-1 overflow-y-auto">
               <ErrorBoundary>{children}</ErrorBoundary>
             </main>
-            <ErrorBoundary><SurfaceDock /></ErrorBoundary>
             <ErrorBoundary><ContextSidebar /></ErrorBoundary>
           </div>
         </div>

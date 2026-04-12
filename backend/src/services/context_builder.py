@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -60,6 +60,8 @@ def _rank_memories(memories: list[dict]) -> list[dict]:
 
 class ContextPack(BaseModel):
     """Structured context assembled for an agent prompt."""
+
+    model_config = ConfigDict(extra="ignore")
 
     task_summary: str | None = None
     goals: list[dict] = []
@@ -145,7 +147,7 @@ class ContextBuilder:
 
         # Entities
         entity_ids: list[str] = []
-        if self._world_model and query:
+        if not pack.entities and self._world_model and query:
             try:
                 entities = await self._world_model.find_entity(
                     user_id,
@@ -162,10 +164,24 @@ class ContextBuilder:
         # B5: Neo4j graph relationships for discovered entities
         if self._graph_engine and entity_ids:
             try:
-                for eid in entity_ids[:3]:  # limit to top 3 to control cost
-                    related = await self._graph_engine.get_related_people(user_id, eid)
-                    for r in related[:5]:
-                        pack.graph_relationships.append(r)
+                for eid in entity_ids[:5]:
+                    related = await self._graph_engine.traverse_weighted(
+                        entity_id=eid,
+                        user_id=user_id,
+                        depth=2,
+                        min_strength=0.3,
+                    )
+                    for r in related[:8]:
+                        pack.graph_relationships.append(
+                            {
+                                "entity_id": r["entity_id"],
+                                "name": r["name"],
+                                "entity_type": r.get("entity_type"),
+                                "strength": r.get("avg_strength", 0.5),
+                                "distance": r.get("distance", 1),
+                                "attributes": r.get("attributes"),
+                            }
+                        )
             except Exception:
                 logger.debug("Graph relationship lookup failed", exc_info=True)
 
@@ -349,8 +365,18 @@ class ContextBuilder:
             rel_lines = []
             for r in pack.graph_relationships[:10]:
                 name = r.get("name") or r.get("canonical_name", "?")
-                rtype = r.get("relation_type", "related_to")
-                rel_lines.append(f"- {name} ({rtype})")
+                etype = r.get("entity_type", "?")
+                strength = r.get("strength")
+                distance = r.get("distance")
+                rtype = r.get("relation_type", "")
+                parts = [f"- {name} ({etype})"]
+                if rtype:
+                    parts.append(f"via {rtype}")
+                if strength is not None:
+                    parts.append(f"strength={strength:.1f}")
+                if distance is not None:
+                    parts.append(f"distance={distance}")
+                rel_lines.append(" ".join(parts))
             sections.append("## Entity Relationships\n" + "\n".join(rel_lines))
 
         if pack.preferences:

@@ -7,6 +7,7 @@ sequenceDiagram
     participant S as Source (Gmail/Slack/GitHub)
     participant EP as EventProcessor
     participant C as Claude (Scoring)
+    participant DLQ as DeadLetterService
     participant WM as WorldModel
     participant MS as MemoryService
     participant IS as InitiativeScorer
@@ -14,6 +15,7 @@ sequenceDiagram
     participant PL as Planner
     participant NT as Notifier
     participant EB as EventBus
+    participant QD as Qdrant
 
     S->>EP: RawEvent (source, type, payload)
 
@@ -25,6 +27,17 @@ sequenceDiagram
     EP->>C: "Rate importance, urgency, confidence"
     C-->>EP: {importance: 0-1, urgency: 0-1, confidence: 0-1}
     EP->>EP: Store NormalizedEvent
+
+    Note over EP,QD: Selective Embedding (importance >= 0.3)
+    alt importance >= 0.3
+        EP->>QD: Embed into events collection (enriched payload)
+    else importance < 0.3
+        EP->>EP: Skip embedding (low-value event)
+    end
+
+    alt Processing failure
+        EP->>DLQ: Enqueue to Dead Letter Queue
+    end
 
     Note over EP,TE: Evaluate Triggers
     EP->>TE: Match against user-defined triggers
@@ -52,6 +65,16 @@ sequenceDiagram
     EB->>TE: trigger_evaluator consumer
 ```
 
+## Dead Letter Queue
+
+Failed event processing attempts are sent to `DeadLetterService` (`src/services/dead_letter.py`). The DLQ tracks:
+- `user_id`, `workspace_id`
+- `operation_type` (e.g., `metrics_recording`, `event_processing`)
+- Error message and original payload
+- Retry count
+
+The scheduler retries DLQ items every 5th tick (~150s).
+
 ## Event Scoring
 
 Events are scored via Claude with three dimensions:
@@ -65,6 +88,44 @@ Events are scored via Claude with three dimensions:
 Default scores (on Claude error): `{importance: 0.3, urgency: 0.2, confidence: 0.5}`
 
 Events with importance < 0.4 are skipped for planning.
+
+### Selective Embedding
+
+Only events with `importance >= 0.3` are embedded into Qdrant's `events` collection. This prevents low-value signals from polluting the vector search space while still storing all events in Postgres for audit.
+
+## Qdrant Collections
+
+6 collections with enriched payloads and payload indexing (`ensure_indexes()`):
+
+| Collection | Content | Key Payload Fields |
+|------------|---------|-------------------|
+| `memories` | All memory embeddings | `memory_type`, `confidence`, `scope`, `stability_score`, `preference_strength` |
+| `entities` | Entity embeddings | `entity_type`, `importance_score` |
+| `events` | Event embeddings (importance >= 0.3) | `event_type`, `source`, `importance_score` |
+| `artifacts` | Artifact embeddings | `artifact_type`, `mime_type` |
+| `conversations` | Conversation embeddings | `user_id`, `workspace_id` |
+| `approvals` | Approval embeddings | `status`, `decision_type` |
+
+## Memory Stability Decay
+
+Memory stability decays over time and refreshes on access:
+
+```
+new_stability = min(1.0, max(0.0, current_stability - 0.02 * days_since_access) + 0.1)
+```
+
+- **Decay rate**: 0.02 per day since last access
+- **Access boost**: +0.1 on each access (via `refresh_stability()`)
+- **Range**: Clamped to [0.0, 1.0]
+
+7 memory types: `episodic`, `semantic`, `procedural`, `preference`, `goal`, `task_context`, `briefing_item`.
+
+## Engagement History
+
+`EngagementHistory` (`src/models/engagement_history.py`) tracks user interaction with insights and notifications. Used by `EngagementService` (`src/services/engagement_service.py`) to:
+- Record dismissed insights per signal source and category
+- Track engagement patterns to improve future relevance scoring
+- Feed dismissal data back to the RelevanceAssessor for personalization
 
 ## Initiative Scoring
 
@@ -105,6 +166,12 @@ Final score is capped at 1.0.
 |-----------|-------|--------|
 | `auto_plan_threshold` | 0.70 | Auto-create plan via Planner |
 | `notify_threshold` | 0.50 | Send proactive notification to user |
+
+## Search: Graph Boost & Preference Strength
+
+TriSearch (`src/services/tri_search.py`) supports graph-boosted search via `search_with_graph_boost()`:
+- Fetches 2x results, then boosts scores by **10% per entity overlap** with context entities
+- Preference strength boost: `strong` preference +0.05, `weak` preference -0.03
 
 ## Trigger System
 

@@ -7,11 +7,30 @@ Registers with SurfaceRegistry for multi-surface coordination.
 
 import json
 import logging
+import time
 
 from src.api.deps import resolve_workspace_id
 from src.models.database import get_session_factory
 
 logger = logging.getLogger(__name__)
+
+
+class TelegramRateLimiter:
+    """Simple per-user sliding window rate limiter."""
+
+    def __init__(self, max_per_minute: int = 10):
+        self._max = max_per_minute
+        self._windows: dict[str, tuple[int, float]] = {}
+
+    def allow(self, user_id: str) -> bool:
+        """Check if user is within rate limit. Returns True if allowed."""
+        now = time.monotonic()
+        count, window_start = self._windows.get(user_id, (0, now))
+        if now - window_start > 60:
+            count, window_start = 0, now
+        count += 1
+        self._windows[user_id] = (count, window_start)
+        return count <= self._max
 
 
 class TelegramInterface:
@@ -23,6 +42,7 @@ class TelegramInterface:
         self._surface_registry = surface_registry
         self._notifier = notifier
         self._app = None
+        self._rate_limiter = TelegramRateLimiter()
 
     def _resolve_user_id(self) -> str:
         """Derive a stable user_id from the configured telegram_chat_id."""
@@ -145,11 +165,7 @@ class TelegramInterface:
     async def _handle_status(self, update, context) -> None:
         """Handle /status command — show system status."""
         try:
-            db = self._orchestrator._db_factory()
-            try:
-                budget = await self._orchestrator._budget.get_budget_status(db)
-            finally:
-                await db.close()
+            budget = await self._orchestrator.get_budget_status()
 
             surfaces = []
             if self._surface_registry:
@@ -172,6 +188,12 @@ class TelegramInterface:
         """Handle regular text messages — route through orchestrator."""
         text = update.message.text
         chat_id = str(update.message.chat_id)
+        user_id = self._resolve_user_id()
+
+        # Rate limiting check
+        if not self._rate_limiter.allow(user_id):
+            await update.message.reply_text("Slow down — I can handle 10 messages per minute.")
+            return
 
         logger.info(
             "telegram_message_received",
@@ -182,7 +204,7 @@ class TelegramInterface:
             workspace_id = await self._resolve_workspace()
             result = await self._orchestrator.process_message(
                 message=text,
-                user_id=self._resolve_user_id(),
+                user_id=user_id,
                 workspace_id=workspace_id,
                 surface="telegram",
                 context={"chat_id": chat_id},

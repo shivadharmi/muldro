@@ -21,7 +21,6 @@ Policy Modes:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from sqlalchemy import select
@@ -40,39 +39,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Default action classification (used when no per-user settings override)
-APPROVAL_REQUIRED_ACTIONS = {
-    "draft_reply",
-    "draft_email",
-    "send_email",
-    "create_event",
-    "update_task",
-    "post_message",
-}
-
-AUTO_EXECUTE_DECISIONS = {
-    "fetch_info",
-    "summarize",
-    "search",
-    "add_to_brief",
-    "acknowledge",
-    "answer_directly",
-}
-
-CRITICAL_ACTIONS = {
-    "payment",
-    "deploy",
-    "delete_data",
-    "modify_permissions",
-    "security_change",
-}
-
-BLOCKED_ACTIONS = {
-    "delete_data",
-    "modify_permissions",
-}
-
 VALID_POLICY_MODES = {"lockdown", "approval_required", "suggest_only", "full_auto"}
+
+_DECISION_TO_RUN_STATUS = {
+    "auto_execute": "pending",
+    "auto_execute_notify": "pending",
+    "auto_execute_silent": "pending",
+    "approval_required": "awaiting_approval",
+    "blocked": "cancelled",
+}
 
 
 class Governor:
@@ -113,7 +88,7 @@ class Governor:
                 decision="blocked", justification="Plan not found", risk_level="high"
             )
 
-        policy_decision = await self._apply_policy(plan, user_id)
+        policy_decision = await self._apply_policy(plan, user_id, workspace_id)
 
         run_id = f"run_{ULID()}"
         run = TaskRun(
@@ -127,7 +102,7 @@ class Governor:
                 "decision": policy_decision,
                 "risk_level": plan.risk_level or "low",
             },
-            status="pending" if policy_decision == "auto_execute" else policy_decision,
+            status=_DECISION_TO_RUN_STATUS.get(policy_decision, "pending"),
         )
         self._db.add(run)
 
@@ -147,7 +122,6 @@ class Governor:
         approval_id = None
         if policy_decision == "approval_required":
             approval_id = await self._create_approval(plan, run_id, user_id, workspace_id)
-            run.status = "awaiting_approval"
             logger.info(
                 "Approval created: %s for plan %s",
                 approval_id,
@@ -172,7 +146,6 @@ class Governor:
                     logger.warning("Failed to notify for approval", exc_info=True)
 
         if policy_decision == "blocked":
-            run.status = "cancelled"
             plan.status = "blocked"
 
         await self._db.commit()
@@ -215,21 +188,23 @@ class Governor:
         """Create an approval record for a plan requiring user consent."""
         from src.services.approval_service import create_approval
 
-        task_types = []
+        first_task_cap = "plan_execution"
         if plan.tasks:
-            task_types = [t.task_type for t in plan.tasks]
+            first_task_cap = plan.tasks[0].task_type or (plan.tasks[0].input_data or {}).get(
+                "capability", "plan_execution"
+            )
 
         approval = await create_approval(
             self._db,
             user_id=user_id,
             workspace_id=workspace_id,
-            approval_type=task_types[0] if task_types else plan.decision,
+            approval_type=first_task_cap,
             title=f"Approve: {plan.goal}",
             summary=plan.reasoning_summary,
             risk_level=plan.risk_level or "medium",
             execution_id=execution_id,
             requested_by=user_id,
-            artifact_refs={"plan_id": plan.plan_id, "task_types": task_types},
+            artifact_refs={"plan_id": plan.plan_id},
         )
 
         await self._audit.log(
@@ -244,77 +219,8 @@ class Governor:
 
         return approval.approval_id
 
-    async def _get_time_based_policy_override(self, user_id: str) -> str | None:
-        """Check if a time-based policy override applies for the current time.
-
-        Time policies are stored in user settings as:
-        {
-            "time_policies": [
-                {"start_hour": 9, "end_hour": 17, "mode": "full_auto", "days": [0,1,2,3,4]},
-                {"start_hour": 22, "end_hour": 6, "mode": "lockdown"}
-            ]
-        }
-        Returns the policy mode if a time-based rule matches, or None.
-        """
-        if not self._settings_service:
-            return None
-
-        try:
-            time_policies = await self._settings_service.get(user_id, "policy", "time_policies")
-            if not time_policies or not isinstance(time_policies, list):
-                return None
-
-            now = datetime.now(timezone.utc)
-            current_hour = now.hour
-            current_day = now.weekday()  # 0=Monday, 6=Sunday
-
-            for policy in time_policies:
-                if not isinstance(policy, dict):
-                    continue
-
-                start_hour = policy.get("start_hour")
-                end_hour = policy.get("end_hour")
-                mode = policy.get("mode")
-                days = policy.get("days")  # Optional day-of-week filter
-
-                if start_hour is None or end_hour is None or not mode:
-                    continue
-
-                # Check day-of-week filter if present
-                if days is not None:
-                    if not isinstance(days, list) or current_day not in days:
-                        continue
-
-                # Check if current hour falls within the time range
-                if start_hour <= end_hour:
-                    # Normal range (e.g., 9:00 to 17:00)
-                    in_range = start_hour <= current_hour < end_hour
-                else:
-                    # Overnight range (e.g., 22:00 to 06:00)
-                    in_range = current_hour >= start_hour or current_hour < end_hour
-
-                if in_range and mode in VALID_POLICY_MODES:
-                    logger.info(
-                        "Time-based policy override: user=%s mode=%s (hour=%d)",
-                        user_id,
-                        mode,
-                        current_hour,
-                    )
-                    return mode
-
-        except Exception:
-            logger.warning("Failed to read time-based policies for %s", user_id, exc_info=True)
-
-        return None
-
     async def _get_policy_mode(self, user_id: str) -> str:
         """Get policy mode from user settings, with fallback."""
-        # First check time-based override
-        time_override = await self._get_time_based_policy_override(user_id)
-        if time_override:
-            return time_override
-
-        # Then fall back to user's default policy mode
         if self._settings_service:
             try:
                 mode = await self._settings_service.get_policy_mode(user_id)
@@ -324,19 +230,27 @@ class Governor:
                 logger.warning("Failed to read policy mode for %s", user_id, exc_info=True)
         return "approval_required"
 
-    async def _check_trust(self, user_id: str, action_type: str, risk_level: str) -> bool:
-        """Check if the trust engine recommends auto-approval."""
+    async def _check_trust(self, workspace_id: str, capability: str, risk_level: str) -> bool:
+        """Check if TrustEngine recommends auto-execution for a plan."""
         if not self._trust_engine:
             return False
         try:
-            return await self._trust_engine.should_auto_approve(user_id, action_type, risk_level)
+            decision = await self._trust_engine.evaluate_plan_risk(
+                capability=capability,
+                risk_level=risk_level,
+                workspace_id=workspace_id,
+            )
+            return decision.decision in (
+                "auto_execute",
+                "auto_execute_notify",
+                "auto_execute_silent",
+            )
         except Exception:
             logger.warning("Trust engine check failed", exc_info=True)
             return False
 
-    async def _apply_policy(self, plan: Plan, user_id: str) -> str:
-        """Apply policy rules considering user settings and trust scores."""
-        decision = plan.decision or ""
+    async def _apply_policy(self, plan: Plan, user_id: str, workspace_id: str = "") -> str:
+        """Apply policy rules based on plan risk level and user settings."""
         risk = plan.risk_level or "low"
         policy_mode = await self._get_policy_mode(user_id)
 
@@ -344,45 +258,40 @@ class Governor:
         if policy_mode == "lockdown":
             return "blocked"
 
-        # Suggest-only: never execute, always just suggest
+        # Suggest-only: never execute
         if policy_mode == "suggest_only":
             return "blocked"
 
-        # Always block dangerous actions regardless of mode
-        if decision in BLOCKED_ACTIONS:
-            return "blocked"
-
-        # Critical actions always require approval, even in full_auto
-        if decision in CRITICAL_ACTIONS or risk == "critical":
+        # Critical risk always requires approval, even in full_auto
+        if risk == "critical":
             return "approval_required"
 
-        # Full auto mode: auto-execute unless high-risk or blocked
+        # Full auto mode: auto-execute unless high-risk
         if policy_mode == "full_auto":
             if risk == "high":
                 return "approval_required"
             return "auto_execute"
 
-        # Default: approval_required mode with trust-based graduation
+        # Default: approval_required mode
         if risk == "high":
             return "approval_required"
 
-        if decision in APPROVAL_REQUIRED_ACTIONS:
-            # Check trust engine for graduated autonomy
-            if await self._check_trust(user_id, decision, risk):
-                logger.info("Trust-based auto-approve: user=%s action=%s", user_id, decision)
+        # Extract capability from first task for trust checks
+        first_cap = "plan_execution"
+        if plan.tasks:
+            first_cap = plan.tasks[0].task_type or (plan.tasks[0].input_data or {}).get(
+                "capability", "plan_execution"
+            )
+
+        # Trust-based graduation for medium-risk
+        if risk == "medium":
+            if await self._check_trust(workspace_id, first_cap, risk):
                 return "auto_execute"
             return "approval_required"
 
-        if decision in AUTO_EXECUTE_DECISIONS:
+        # Low/none risk in approval_required mode — check trust
+        if await self._check_trust(workspace_id, first_cap, risk):
             return "auto_execute"
-
-        # Check task types for external actions
-        if plan.tasks:
-            for task in plan.tasks:
-                if task.task_type in APPROVAL_REQUIRED_ACTIONS:
-                    if await self._check_trust(user_id, task.task_type, risk):
-                        continue
-                    return "approval_required"
 
         # Default: require approval for safety
         return "approval_required"

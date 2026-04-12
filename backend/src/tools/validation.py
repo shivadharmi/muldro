@@ -83,13 +83,13 @@ def validate_registry(
         if tool.name not in tool_input_models:
             errors.append(f"Internal tool '{tool.name}' missing from TOOL_INPUT_MODELS")
 
-    # Check 6: Read-only internal tools are low-risk
+    # Check 6: Read-only internal tools are safe-risk (none or low)
     for tool in internal_tools:
         if tool.read_only:
-            if tool.risk_level != "low":
+            if tool.risk_level not in ("none", "low"):
                 errors.append(
                     f"Read-only tool '{tool.name}' has risk_level='{tool.risk_level}' "
-                    "(expected 'low')"
+                    "(expected 'none' or 'low')"
                 )
             if tool.requires_approval:
                 errors.append(f"Read-only tool '{tool.name}' requires approval")

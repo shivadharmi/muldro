@@ -27,21 +27,9 @@ class TestContextAssembly:
             settings=settings, db_factory=db_factory, services=ServiceContainer()
         )
 
-        # Observer is not in CONTEXT_ENRICHED_AGENTS
+        # Persona is not in CONTEXT_ENRICHED_AGENTS
         context = await orchestrator._assemble_context(
-            "observer", "test message", user_id=TEST_USER_ID
-        )
-        assert context == ""
-
-        # Governor is not enriched
-        context = await orchestrator._assemble_context(
-            "governor", "test message", user_id=TEST_USER_ID
-        )
-        assert context == ""
-
-        # Operator is not enriched
-        context = await orchestrator._assemble_context(
-            "operator", "test message", user_id=TEST_USER_ID
+            "persona", "test message", user_id=TEST_USER_ID
         )
         assert context == ""
 
@@ -150,7 +138,7 @@ class TestContextAssembly:
 
         # ContextBuilder always includes task_summary, so context may not be empty
         # even when services return no results — but it won't have entity/memory sections
-        context = await orchestrator._assemble_context("researcher", "test", user_id=TEST_USER_ID)
+        context = await orchestrator._assemble_context("perceiver", "test", user_id=TEST_USER_ID)
         if context:
             assert "Relevant Entities" not in context
             assert "User Preferences" not in context
@@ -217,7 +205,9 @@ class TestSystemPromptBuilding:
         assert "cache_control" in blocks[0]
         assert blocks[0]["cache_control"]["type"] == "ephemeral"
         assert "Jarvis" in blocks[0]["text"]
-        assert agent.prompt in blocks[0]["text"]
+        # Planner prompt has {capability_summary} replaced at build time
+        expected_prompt = agent.prompt.format(capability_summary="No capabilities connected yet.")
+        assert expected_prompt in blocks[0]["text"]
 
     @patch("src.orchestrator.jarvis.get_anthropic_client")
     def test_build_system_prompt_includes_context_block(self, mock_get_client):
