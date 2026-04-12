@@ -66,7 +66,7 @@ class TestHandleGraphSyncEntityPresent:
                 return_value=TEST_WORKSPACE_ID,
             ),
             patch(
-                "src.services.worker.GraphSyncService",
+                "src.services.graph_sync.GraphSyncService",
                 return_value=mock_graph_sync,
             ),
         ):
@@ -99,7 +99,10 @@ class TestHandleGraphSyncEntityPresent:
                 new_callable=AsyncMock,
                 return_value=TEST_WORKSPACE_ID,
             ),
-            patch("src.services.worker.GraphSyncService", return_value=mock_graph_sync),
+            patch(
+                "src.services.graph_sync.GraphSyncService",
+                return_value=mock_graph_sync,
+            ),
         ):
             # Should not raise — errors are swallowed with a warning log
             await mgr._handle_graph_sync(event)

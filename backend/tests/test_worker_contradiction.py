@@ -63,7 +63,7 @@ class TestHandleContradictionCheck:
                 return_value=TEST_WORKSPACE_ID,
             ),
             patch(
-                "src.services.worker.MemoryService",
+                "src.services.memory_service.MemoryService",
                 return_value=mock_memory_service,
             ),
         ):
@@ -102,7 +102,10 @@ class TestHandleContradictionCheck:
                 new_callable=AsyncMock,
                 return_value=TEST_WORKSPACE_ID,
             ),
-            patch("src.services.worker.MemoryService", return_value=mock_memory_service),
+            patch(
+                "src.services.memory_service.MemoryService",
+                return_value=mock_memory_service,
+            ),
         ):
             # Should complete without raising
             await mgr._handle_contradiction_check(event)
