@@ -203,14 +203,22 @@ async def jarvis_ws(websocket: WebSocket, user_id: str):
         logger.info("ws_disconnected", extra={"user_id": user_id})
 
 
+def _extract_approval_id(payload: dict) -> str:
+    """Extract approval ID from payload — accepts both 'approval_id' and 'id' keys.
+
+    InlineApprovalCard sends 'approval_id'; surface-detail-modal sends 'id'.
+    """
+    return payload.get("approval_id") or payload.get("id", "")
+
+
 async def _handle_approve(user_id: str, payload: dict, app) -> dict:
     """Handle approval action via the REST handler (full execution resume)."""
-    return await _process_approval_ws(user_id, payload.get("approval_id", ""), "approve", app)
+    return await _process_approval_ws(user_id, _extract_approval_id(payload), "approve", app)
 
 
 async def _handle_reject(user_id: str, payload: dict, app) -> dict:
     """Handle rejection action via the REST handler (full execution resume)."""
-    return await _process_approval_ws(user_id, payload.get("approval_id", ""), "reject", app)
+    return await _process_approval_ws(user_id, _extract_approval_id(payload), "reject", app)
 
 
 async def _process_approval_ws(user_id: str, approval_id: str, action: str, app) -> dict:

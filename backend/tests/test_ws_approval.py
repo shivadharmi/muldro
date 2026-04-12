@@ -25,6 +25,38 @@ class TestHandleApprove:
             )
 
     @pytest.mark.asyncio
+    async def test_approve_accepts_id_key_from_surface_modal(self):
+        """surface-detail-modal sends 'id' instead of 'approval_id'."""
+        from src.api.routes_ws import _handle_approve
+
+        mock_app = MagicMock()
+        payload = {"id": "apr_01TEST000000000000000000"}
+
+        with patch(
+            "src.api.routes_ws._process_approval_ws", new_callable=AsyncMock
+        ) as mock_process:
+            mock_process.return_value = {"status": "success"}
+            await _handle_approve("usr_01TEST", payload, mock_app)
+            mock_process.assert_called_once_with(
+                "usr_01TEST", "apr_01TEST000000000000000000", "approve", mock_app
+            )
+
+    @pytest.mark.asyncio
+    async def test_approve_prefers_approval_id_over_id(self):
+        """When both keys present, approval_id takes precedence."""
+        from src.api.routes_ws import _handle_approve
+
+        mock_app = MagicMock()
+        payload = {"approval_id": "apr_CORRECT", "id": "apr_FALLBACK"}
+
+        with patch(
+            "src.api.routes_ws._process_approval_ws", new_callable=AsyncMock
+        ) as mock_process:
+            mock_process.return_value = {"status": "success"}
+            await _handle_approve("usr_01TEST", payload, mock_app)
+            mock_process.assert_called_once_with("usr_01TEST", "apr_CORRECT", "approve", mock_app)
+
+    @pytest.mark.asyncio
     async def test_approve_empty_payload_passes_empty_string(self):
         from src.api.routes_ws import _handle_approve
 
