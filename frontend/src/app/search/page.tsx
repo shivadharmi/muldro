@@ -103,6 +103,31 @@ export default function SearchPage() {
       <div className="w-96 shrink-0 border-l border-b-primary hidden lg:block">
         <ResultDetailPane result={selectedResult} />
       </div>
+
+      {/* Mobile detail overlay */}
+      {selectedResult && (
+        <div className="lg:hidden fixed inset-0 z-40">
+          <div
+            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+            onClick={() => setSelectedResult(null)}
+          />
+          <div className="absolute inset-x-0 bottom-0 max-h-[80vh] rounded-t-[var(--radius-xl)] bg-surface-1 border-t border-b-secondary shadow-[var(--shadow-lg)] overflow-y-auto animate-slide-in-up">
+            <div className="sticky top-0 flex items-center justify-between px-4 py-3 border-b border-b-secondary bg-surface-1 z-10">
+              <span className="text-[13px] font-semibold text-t-primary">Result Details</span>
+              <button
+                onClick={() => setSelectedResult(null)}
+                className="p-1 rounded-[var(--radius-sm)] text-t-muted hover:text-t-primary hover:bg-surface-2 transition-colors cursor-pointer"
+                aria-label="Close"
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                </svg>
+              </button>
+            </div>
+            <ResultDetailPane result={selectedResult} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
