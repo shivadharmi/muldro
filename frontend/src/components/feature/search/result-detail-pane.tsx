@@ -1,6 +1,7 @@
 "use client";
 
 import type { SearchResult } from "@/lib/types";
+import { EmptyState } from "@/components/ui/empty-state";
 
 const SOURCE_DB_LABELS: Record<string, string> = {
   qdrant: "Vector (Qdrant)",
@@ -15,9 +16,7 @@ interface Props {
 export function ResultDetailPane({ result }: Props) {
   if (!result) {
     return (
-      <div className="flex items-center justify-center h-full text-sm text-t-tertiary">
-        Select a result to view details
-      </div>
+      <EmptyState title="Select a result" description="Choose an item from the list to view details" />
     );
   }
 

@@ -1,12 +1,8 @@
 "use client";
 
 import type { SearchResult } from "@/lib/types";
-
-const SOURCE_DB_COLORS: Record<string, string> = {
-  qdrant: "bg-blue-500/15 text-blue-400",
-  postgres_fts: "bg-green-500/15 text-green-400",
-  neo4j: "bg-purple-500/15 text-purple-400",
-};
+import { sourceDbStyle } from "@/lib/design-tokens";
+import { EmptyState } from "@/components/ui/empty-state";
 
 interface Props {
   groups: Record<string, SearchResult[]>;
@@ -18,16 +14,14 @@ export function ResultGroupList({ groups, onSelect }: Props) {
 
   if (entries.length === 0) {
     return (
-      <div className="py-8 text-center text-sm text-t-tertiary">
-        No results found.
-      </div>
+      <EmptyState title="No results found" description="Try adjusting your search query" />
     );
   }
 
   return (
     <div className="space-y-4">
       {entries.map(([type, results]) => (
-        <section key={type}>
+        <section key={type} aria-label={`${type} results`}>
           <h3 className="text-xs font-medium text-t-secondary uppercase tracking-wider mb-2">
             {type}s ({results.length})
           </h3>
@@ -36,7 +30,7 @@ export function ResultGroupList({ groups, onSelect }: Props) {
               <li key={`${r.id}-${r.source_db ?? "unknown"}`}>
                 <button
                   onClick={() => onSelect(r)}
-                  className="w-full text-left p-2 rounded-[var(--radius-sm)] hover:bg-surface-1 transition-colors cursor-pointer"
+                  className="w-full text-left p-2 rounded-[var(--radius-sm)] hover:bg-surface-2 transition-colors duration-150 cursor-pointer"
                 >
                   <div className="flex items-center gap-1.5">
                     <p className="text-sm text-t-primary truncate flex-1">
@@ -44,7 +38,7 @@ export function ResultGroupList({ groups, onSelect }: Props) {
                     </p>
                     {r.source_db && (
                       <span
-                        className={`shrink-0 px-1.5 py-0.5 text-[10px] font-medium rounded ${SOURCE_DB_COLORS[r.source_db] ?? "bg-surface-2 text-t-tertiary"}`}
+                        className={`shrink-0 px-1.5 py-0.5 text-[10px] font-medium rounded-[var(--radius-sm)] ${sourceDbStyle(r.source_db)}`}
                       >
                         {r.source_db}
                       </span>

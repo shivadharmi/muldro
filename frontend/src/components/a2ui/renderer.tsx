@@ -47,7 +47,7 @@ function renderComponent(
     <ErrorBoundary
       key={`eb-${component.id}`}
       fallback={
-        <div className="p-2 text-xs text-t-tertiary border border-yellow-500/30 rounded">
+        <div className="p-2 text-xs text-t-tertiary border border-j-warning/30 rounded-[var(--radius-sm)]">
           Failed to render {component.type ?? "unknown"} component
         </div>
       }

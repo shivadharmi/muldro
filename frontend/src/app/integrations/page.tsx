@@ -16,6 +16,7 @@ import {
   type Installation,
 } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
+import { SkeletonGrid } from "@/components/ui/skeleton";
 
 /** Icons for each provider (simple emoji fallback). */
 const PROVIDER_ICONS: Record<string, string> = {
@@ -298,11 +299,7 @@ function IntegrationsContent() {
         </div>
       )}
 
-      {providers.length === 0 && (
-        <div className="text-center py-12 text-t-secondary">
-          <p>Loading providers...</p>
-        </div>
-      )}
+      {providers.length === 0 && <SkeletonGrid count={6} />}
 
       {/* Advanced: MCP server installations */}
       <AdvancedMCPSection />
@@ -323,6 +320,7 @@ function AdvancedMCPSection() {
     <div className="border-t border-b-primary pt-4">
       <button
         onClick={() => setExpanded(!expanded)}
+        aria-expanded={expanded}
         className="flex items-center gap-2 text-xs text-t-tertiary hover:text-t-secondary transition-colors cursor-pointer"
       >
         <svg
@@ -360,10 +358,10 @@ function AdvancedMCPSection() {
                   <span
                     className={`w-1.5 h-1.5 rounded-full ${
                       inst.health_status === "healthy"
-                        ? "bg-green-400"
+                        ? "bg-j-success"
                         : inst.health_status === "degraded"
-                          ? "bg-yellow-400"
-                          : "bg-red-400"
+                          ? "bg-j-warning"
+                          : "bg-j-error"
                     }`}
                   />
                   <span className="text-xs text-t-primary font-medium">
@@ -376,7 +374,7 @@ function AdvancedMCPSection() {
                 <span
                   className={`text-[10px] ${
                     inst.status === "active"
-                      ? "text-green-400"
+                      ? "text-j-success"
                       : "text-t-tertiary"
                   }`}
                 >

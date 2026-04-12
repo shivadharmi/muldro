@@ -23,7 +23,7 @@ export function SearchBar({
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         placeholder="Search memories, entities, events..."
-        className="flex-1 bg-surface-2 border border-b-primary rounded-lg px-4 py-2 text-sm text-t-primary placeholder:text-t-muted"
+        className="flex-1 bg-surface-2 border border-b-primary rounded-[var(--radius-lg)] px-4 py-2 text-sm text-t-primary placeholder:text-t-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-j-ring focus-visible:ring-offset-1 focus-visible:ring-offset-surface-0"
       />
       <select
         value={scope}
