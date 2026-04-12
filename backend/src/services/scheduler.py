@@ -531,7 +531,7 @@ class SchedulerLoop:
                             )
                     await db.commit()
         except Exception:
-            logger.debug("DLQ retry tick failed", exc_info=True)
+            logger.warning("DLQ retry tick failed", exc_info=True)
 
     # ------------------------------------------------------------------
     # Memory expiration

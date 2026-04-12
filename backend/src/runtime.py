@@ -113,7 +113,10 @@ def build(settings: Settings, db: AsyncSession) -> ServiceContainer:
 
         svc.vector_store = VectorStore(settings)
     except Exception:
-        logger.debug("Tier 3: VectorStore unavailable", exc_info=True)
+        logger.warning(
+            "Tier 3: VectorStore unavailable — semantic search and embedding disabled",
+            exc_info=True,
+        )
 
     try:
         from src.services.graph_engine import GraphEngine
@@ -268,6 +271,32 @@ def build(settings: Settings, db: AsyncSession) -> ServiceContainer:
 
     _log_summary(svc)
     return svc
+
+
+def validate_tier3_health(settings: Settings, svc: ServiceContainer) -> list[str]:
+    """Check configured-but-missing Tier 3 services. Returns degraded names."""
+    degraded: list[str] = []
+
+    if settings.neo4j_url and not svc.graph_engine:
+        logger.warning(
+            "DEGRADED: Neo4j configured (JARVIS_NEO4J_URL set) but GraphEngine "
+            "failed to initialize. Entity graph traversal and sync are disabled."
+        )
+        degraded.append("neo4j")
+
+    if settings.qdrant_url and not svc.vector_store:
+        logger.warning(
+            "DEGRADED: Qdrant configured (JARVIS_QDRANT_URL set) but VectorStore "
+            "failed to initialize. Semantic search and embedding are disabled."
+        )
+        degraded.append("qdrant")
+
+    if getattr(settings, "reranker_enabled", False) and not svc.reranker:
+        logger.warning("DEGRADED: Reranker enabled but RerankerService failed to initialize.")
+        degraded.append("reranker")
+
+    svc.extras["degraded_services"] = degraded
+    return degraded
 
 
 def _log_summary(svc: ServiceContainer) -> None:
