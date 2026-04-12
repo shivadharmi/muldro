@@ -10,6 +10,7 @@ import socket
 
 from src.api.deps import resolve_workspace_id
 from src.config.settings import Settings
+from src.models.database import get_session_factory
 
 logger = logging.getLogger(__name__)
 
@@ -26,20 +27,23 @@ class StreamConsumerManager:
     """Manages event bus consumer groups for downstream processing.
 
     Subscribes to per-user event streams and dispatches to handlers:
-    - entity_extractor: Extract entities from processed events
-    - memory_extractor: Extract memories from event summaries
-    - trigger_evaluator: Evaluate user-defined triggers
+    - entity_extractor: Extract entities from processed events (main stream)
+    - memory_extractor: Extract memories from event summaries (main stream)
+    - trigger_evaluator: Evaluate user-defined triggers (main stream)
+    - contradiction_checker: Check memory contradictions on new memory events (main stream)
+    - graph_syncer: Sync entity changes to Neo4j (agent events stream)
 
     Each consumer group runs in its own asyncio task for parallel
-    processing — slow handlers (e.g., entity_extractor with Neo4j sync)
-    don't block other groups.
+    processing — slow handlers don't block other groups.
     """
 
-    CONSUMER_GROUPS = (
+    MAIN_STREAM_GROUPS = (
         "entity_extractor",
         "memory_extractor",
         "trigger_evaluator",
+        "contradiction_checker",
     )
+    AGENT_STREAM_GROUPS = ("graph_syncer",)
     HANDLER_CONCURRENCY = 3  # max concurrent handler invocations per group
 
     def __init__(self, settings: Settings):
@@ -83,15 +87,27 @@ class StreamConsumerManager:
             "entity_extractor": self._handle_entity_extraction,
             "memory_extractor": self._handle_memory_extraction,
             "trigger_evaluator": self._handle_trigger_evaluation,
+            "contradiction_checker": self._handle_contradiction_check,
+            "graph_syncer": self._handle_graph_sync,
         }
 
         # Create consumer groups and launch parallel tasks
         for uid in user_ids:
-            stream = bus.event_stream(uid)
-            for group in self.CONSUMER_GROUPS:
-                await bus.create_consumer_group(stream, group)
+            main_stream = bus.event_stream(uid)
+            agent_stream = f"jarvis:agent_events:{uid}"
+
+            for group in self.MAIN_STREAM_GROUPS:
+                await bus.create_consumer_group(main_stream, group)
                 task = asyncio.create_task(
-                    self._consumer_loop(bus, stream, group, handler_map[group]),
+                    self._consumer_loop(bus, main_stream, group, handler_map[group]),
+                    name=f"consumer-{uid}-{group}",
+                )
+                self._tasks.append(task)
+
+            for group in self.AGENT_STREAM_GROUPS:
+                await bus.create_consumer_group(agent_stream, group)
+                task = asyncio.create_task(
+                    self._consumer_loop(bus, agent_stream, group, handler_map[group]),
                     name=f"consumer-{uid}-{group}",
                 )
                 self._tasks.append(task)
@@ -191,7 +207,6 @@ class StreamConsumerManager:
         if not event_id:
             return
 
-        from src.models.database import get_session_factory
         from src.services.world_model import WorldModel
 
         factory = get_session_factory()
@@ -241,7 +256,6 @@ class StreamConsumerManager:
 
         from sqlalchemy import select
 
-        from src.models.database import get_session_factory
         from src.models.events import NormalizedEvent
         from src.services.memory_service import MemoryService
         from src.services.world_model import WorldModel
@@ -288,7 +302,6 @@ class StreamConsumerManager:
 
     async def _handle_trigger_evaluation(self, event) -> None:
         """Evaluate event against user-defined triggers."""
-        from src.models.database import get_session_factory
         from src.services.trigger_engine import TriggerEngine
 
         factory = get_session_factory()
@@ -300,3 +313,74 @@ class StreamConsumerManager:
             await db.commit()
             if fired:
                 logger.info("Triggers fired for event: %d", len(fired))
+
+    async def _handle_graph_sync(self, event) -> None:
+        """Sync entity change to Neo4j.
+
+        Triggered by entity.created / entity.updated events on the agent
+        events stream (jarvis:agent_events:{user_id}).  Skips silently when:
+        - entity_id is absent/empty in the payload
+        - neo4j_url is not configured
+        """
+        entity_id = event.payload.get("entity_id", "")
+        if not entity_id:
+            return
+
+        if not self._settings.neo4j_url:
+            return
+
+        from src.services.graph_sync import GraphSyncService
+
+        factory = get_session_factory()
+        async with factory() as db:
+            workspace_id = await resolve_workspace_id(db, event.user_id)  # noqa: F841
+            graph_sync = GraphSyncService(self._settings, db)
+            try:
+                await graph_sync.on_entity_change(event)
+                logger.debug("Graph sync completed for entity %s", entity_id)
+            except Exception:
+                logger.warning(
+                    "Neo4j graph sync failed for entity %s",
+                    entity_id,
+                    exc_info=True,
+                )
+            finally:
+                await graph_sync.close()
+
+    async def _handle_contradiction_check(self, event) -> None:
+        """Check if a newly stored memory contradicts existing ones.
+
+        Triggered by memory.stored events on the main events stream
+        (jarvis:events:{user_id}).  Skips silently when:
+        - memory_id is absent/empty in the payload
+        - fact_text is absent/empty in the payload
+        """
+        memory_id = event.payload.get("memory_id", "")
+        fact_text = event.payload.get("fact_text", "")
+        if not memory_id or not fact_text:
+            return
+
+        from src.services.memory_service import MemoryService
+
+        factory = get_session_factory()
+        async with factory() as db:
+            user_id = event.user_id
+            workspace_id = await resolve_workspace_id(db, user_id)
+            memory_service = MemoryService(
+                settings=self._settings,
+                db=db,
+                vector_store=self._vector_store,
+            )
+            superseded = await memory_service.check_contradictions(
+                user_id=user_id,
+                new_fact=fact_text,
+                new_memory_id=memory_id,
+                workspace_id=workspace_id,
+            )
+            if superseded:
+                await db.commit()
+                logger.info(
+                    "Contradiction check for memory %s: %d superseded",
+                    memory_id,
+                    len(superseded),
+                )

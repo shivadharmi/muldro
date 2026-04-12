@@ -3,7 +3,15 @@
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID, make_mock_settings
+
+# GraphSyncService is imported lazily inside update_entity via:
+#   from src.services.graph_sync import GraphSyncService
+# We must patch it at the source so the lazy import picks up the mock.
+_GSS_PATH = "src.services.graph_sync.GraphSyncService"
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -40,6 +48,7 @@ async def _db_ctx(db):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 class TestUpdateEntityNeo4jSync:
     async def test_sync_called_when_neo4j_url_set(self):
         """When neo4j_url is configured, GraphSyncService.sync_entity_by_id is called."""
@@ -61,20 +70,15 @@ class TestUpdateEntityNeo4jSync:
             srv._settings = settings
             srv._db_factory = lambda: _db_ctx(db)
 
-            with patch(
-                "src.tools.intelligence_server.GraphSyncService",
-                return_value=mock_gs,
-            ) as mock_gss_cls:
-                # Patch the import inside the function
-                with patch.dict("sys.modules", {}):
-                    ctx = MagicMock()
-                    result = await srv.update_entity(
-                        entity_id="ent_123",
-                        ctx=ctx,
-                        user_id=TEST_USER_ID,
-                        attributes='{"foo": "bar"}',
-                        workspace_id=TEST_WORKSPACE_ID,
-                    )
+            with patch(_GSS_PATH, return_value=mock_gs) as mock_gss_cls:
+                ctx = MagicMock()
+                result = await srv.update_entity(
+                    entity_id="ent_123",
+                    ctx=ctx,
+                    user_id=TEST_USER_ID,
+                    attributes='{"foo": "bar"}',
+                    workspace_id=TEST_WORKSPACE_ID,
+                )
 
             assert result["status"] == "updated"
             assert result["entity_id"] == "ent_123"
@@ -101,7 +105,7 @@ class TestUpdateEntityNeo4jSync:
             srv._settings = settings
             srv._db_factory = lambda: _db_ctx(db)
 
-            with patch("src.tools.intelligence_server.GraphSyncService") as mock_gss_cls:
+            with patch(_GSS_PATH) as mock_gss_cls:
                 ctx = MagicMock()
                 result = await srv.update_entity(
                     entity_id="ent_456",
@@ -137,7 +141,7 @@ class TestUpdateEntityNeo4jSync:
             srv._settings = settings
             srv._db_factory = lambda: _db_ctx(db)
 
-            with patch("src.tools.intelligence_server.GraphSyncService", return_value=mock_gs):
+            with patch(_GSS_PATH, return_value=mock_gs):
                 ctx = MagicMock()
                 result = await srv.update_entity(
                     entity_id="ent_789",
@@ -169,7 +173,7 @@ class TestUpdateEntityNeo4jSync:
             srv._settings = settings
             srv._db_factory = lambda: _db_ctx(db)
 
-            with patch("src.tools.intelligence_server.GraphSyncService") as mock_gss_cls:
+            with patch(_GSS_PATH) as mock_gss_cls:
                 ctx = MagicMock()
                 result = await srv.update_entity(
                     entity_id="ent_missing",
@@ -197,7 +201,7 @@ class TestUpdateEntityNeo4jSync:
             srv._settings = None
             srv._db_factory = lambda: _db_ctx(db)
 
-            with patch("src.tools.intelligence_server.GraphSyncService") as mock_gss_cls:
+            with patch(_GSS_PATH) as mock_gss_cls:
                 ctx = MagicMock()
                 result = await srv.update_entity(
                     entity_id="ent_999",
