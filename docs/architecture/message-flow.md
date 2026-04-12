@@ -159,7 +159,7 @@ Four agents receive pre-loaded context (Planner, Presenter, Perceiver, Librarian
 graph TD
     CB[ContextBuilder] --> M[MemoryService<br/>Episodic + Preference memories]
     CB --> WM[WorldModel<br/>Relevant entities with importance]
-    CB --> GM[MemoryService<br/>Goal memories (memory_type=goal)]
+    CB --> GM["MemoryService<br/>Goal memories (memory_type=goal)"]
     CB --> P[ProcedureLibrary<br/>Task-type procedures]
 
     M --> CP[ContextPack]
