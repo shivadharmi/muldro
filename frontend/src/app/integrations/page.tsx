@@ -36,8 +36,8 @@ function IntegrationsContent() {
   const searchParams = useSearchParams();
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<Record<string, string>>({});
-  const [flash, setFlash] = useState<string | null>(null);
   const [connecting, setConnecting] = useState<string | null>(null);
+  const { addToast } = useToast();
 
   // Refetch when returning from OAuth callback
   useEffect(() => {
@@ -47,13 +47,13 @@ function IntegrationsContent() {
     if (status === "connected" && provider) {
       queryClient.invalidateQueries({ queryKey: ["installations"] });
       queryClient.invalidateQueries({ queryKey: ["auth-providers"] });
-      setFlash(`${provider} connected successfully`);
+      addToast(`${provider} connected successfully`, "success");
       window.history.replaceState({}, "", "/integrations");
     } else if (error) {
-      setFlash(`Error: ${error}`);
+      addToast(`Error: ${error}`, "error");
       window.history.replaceState({}, "", "/integrations");
     }
-  }, [searchParams, queryClient]);
+  }, [searchParams, queryClient, addToast]);
 
   // Fetch available providers from backend
   const { data: providersData } = useQuery({
@@ -66,8 +66,6 @@ function IntegrationsContent() {
     queryKey: ["installations"],
     queryFn: fetchInstallations,
   });
-
-  const { addToast } = useToast();
 
   const activeInstallations = installations.filter((i: Installation) => i.enabled).map((i: Installation) => ({
     install_id: i.install_id,
@@ -132,6 +130,13 @@ function IntegrationsContent() {
         ...prev,
         [installId]: result.health_status,
       }));
+      setTimeout(() => {
+        setTestResult((prev) => {
+          const next = { ...prev };
+          delete next[installId];
+          return next;
+        });
+      }, 5000);
     } catch {
       setTestResult((prev) => ({ ...prev, [installId]: "error" }));
     } finally {
@@ -168,17 +173,20 @@ function IntegrationsContent() {
 
           {provider.scopes.length > 0 && (
             <div className="flex flex-wrap gap-1 mb-3">
-              {provider.scopes.slice(0, 3).map((scope) => (
+              {provider.scopes.slice(0, 2).map((scope) => (
                 <span
                   key={scope}
-                  className="text-[10px] px-1.5 py-0.5 rounded bg-surface-2 text-t-secondary"
+                  className="text-[11px] px-1.5 py-0.5 rounded bg-surface-2 text-t-secondary"
                 >
                   {scope.split("/").pop()?.split(":").pop() || scope}
                 </span>
               ))}
-              {provider.scopes.length > 3 && (
-                <span className="text-[10px] px-1.5 py-0.5 text-t-secondary">
-                  +{provider.scopes.length - 3} more
+              {provider.scopes.length > 2 && (
+                <span
+                  className="text-[11px] px-1.5 py-0.5 text-t-secondary"
+                  title={provider.scopes.join(", ")}
+                >
+                  +{provider.scopes.length - 2} more
                 </span>
               )}
             </div>
@@ -190,7 +198,7 @@ function IntegrationsContent() {
                 <button
                   onClick={() => handleTest(installation.install_id)}
                   disabled={testingId === installation.install_id}
-                  className="text-xs px-3 py-1.5 rounded-md border border-b-primary text-t-primary hover:bg-surface-2 disabled:opacity-50"
+                  className="text-xs px-2.5 py-1 rounded-[var(--radius-md)] border border-b-primary text-t-primary hover:bg-surface-2 disabled:opacity-50"
                 >
                   {testingId === installation.install_id
                     ? "Testing..."
@@ -198,7 +206,7 @@ function IntegrationsContent() {
                 </button>
                 <button
                   onClick={() => handleConnect(provider.name)}
-                  className="text-xs px-3 py-1.5 rounded-md border border-b-primary text-t-primary hover:bg-surface-2"
+                  className="text-xs px-2.5 py-1 rounded-[var(--radius-md)] border border-b-primary text-t-primary hover:bg-surface-2"
                 >
                   Reauthorize
                 </button>
@@ -206,26 +214,22 @@ function IntegrationsContent() {
                   onClick={() =>
                     disconnectMutation.mutate(installation.install_id)
                   }
-                  className="text-xs px-3 py-1.5 rounded-md border border-j-error/30 text-j-error hover:bg-j-error-soft"
+                  className="text-xs px-2.5 py-1 rounded-[var(--radius-md)] border border-j-error/30 text-j-error hover:bg-j-error-soft"
                 >
                   Disconnect
                 </button>
                 {testResult[installation.install_id] && (
-                  <span
-                    className={`text-xs py-1.5 ${
-                      testResult[installation.install_id] === "healthy"
-                        ? "text-j-success"
-                        : "text-j-error"
-                    }`}
+                  <Badge
+                    variant={testResult[installation.install_id] === "healthy" ? "success" : "error"}
                   >
                     {testResult[installation.install_id]}
-                  </span>
+                  </Badge>
                 )}
               </>
             ) : isConnected ? (
               <button
                 onClick={() => handleConnect(provider.name)}
-                className="text-xs px-3 py-1.5 rounded-md border border-b-primary text-t-primary hover:bg-surface-2"
+                className="text-xs px-2.5 py-1 rounded-[var(--radius-md)] border border-b-primary text-t-primary hover:bg-surface-2"
               >
                 Reauthorize
               </button>
@@ -233,7 +237,7 @@ function IntegrationsContent() {
               <button
                 onClick={() => handleConnect(provider.name)}
                 disabled={connecting === provider.name || !provider.configured}
-                className="text-xs px-3 py-1.5 rounded-md bg-j-primary text-j-primary-fg hover:bg-j-primary-hover disabled:opacity-50"
+                className="text-xs px-2.5 py-1 rounded-[var(--radius-md)] bg-j-primary text-j-primary-fg hover:bg-j-primary-hover disabled:opacity-50"
               >
                 {connecting === provider.name
                   ? "Redirecting..."
@@ -255,24 +259,6 @@ function IntegrationsContent() {
         subtitle="Manage OAuth provider connections and data sources"
         variant="config"
       />
-
-      {flash && (
-        <div
-          className={`rounded-lg p-3 text-sm ${
-            flash.startsWith("Error")
-              ? "bg-j-error-soft border border-j-error/30 text-j-error"
-              : "bg-j-success-soft border border-j-success/30 text-j-success"
-          }`}
-        >
-          {flash}
-          <button
-            onClick={() => setFlash(null)}
-            className="ml-3 text-xs opacity-70 hover:opacity-100"
-          >
-            dismiss
-          </button>
-        </div>
-      )}
 
       {configuredProviders.length > 0 && (
         <div>
