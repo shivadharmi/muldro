@@ -212,6 +212,21 @@ async def _fetch_thread_contexts(
     return contexts
 
 
+def _build_step_to_task_map(steps: list) -> dict[str, str]:
+    """First pass: create step_id -> task_id mapping for ALL steps.
+
+    Pre-builds the full mapping so that forward dependencies (e.g. step s1
+    depends on s3, which appears later in the list) resolve correctly.
+    Includes both jarvis and user actor steps since user steps can be
+    dependency targets.
+    """
+    step_to_task: dict[str, str] = {}
+    for step in steps:
+        if step.step_id:
+            step_to_task[step.step_id] = f"ptask_{ULID()}"
+    return step_to_task
+
+
 class JarvisOrchestrator:
     """The Jarvis brain — orchestrates sub-agents via Claude API.
 
@@ -324,8 +339,13 @@ class JarvisOrchestrator:
         can evaluate_policy(plan_id) and the Operator can execute via
         GraphExecutor — both require a DB-backed Plan.
 
-        Only ``jarvis`` actor steps become PlanTasks; ``user`` actor steps are
-        skipped.  Risk level and execution mode are derived from step risks.
+        Both ``jarvis`` and ``user`` actor steps become PlanTasks. User-actor
+        steps are persisted with ``task_type="user_action"`` and
+        ``status="awaiting_input"`` so they appear as dependency targets and
+        in execution surfaces.
+
+        A two-pass approach pre-builds step_id→task_id mappings so forward
+        dependencies (e.g. s1 depends on s3) resolve correctly.
 
         Args:
             trigger_type: Origin — "user_message" (interactive) or "perception"
@@ -359,38 +379,53 @@ class JarvisOrchestrator:
                         )
                         return plan_output
 
-                # Build PlanTasks from jarvis-actor steps only, mapping
-                # step_id -> task_id so depends_on references resolve.
-                step_to_task: dict[str, str] = {}
+                # Pass 1: Pre-build step_id → task_id map for ALL steps
+                # so forward dependencies resolve correctly.
+                step_to_task = _build_step_to_task_map(plan_output.steps)
+
+                # Pass 2: Create PlanTask records for every step.
                 tasks: list[PlanTask] = []
                 max_risk_ord = 0
 
                 for step in plan_output.steps:
                     max_risk_ord = max(max_risk_ord, risk_ord.get(step.risk, 0))
 
-                    if step.actor != "jarvis":
-                        continue
-
-                    task_id = f"ptask_{ULID()}"
-                    if step.step_id:
-                        step_to_task[step.step_id] = task_id
+                    # Reuse the pre-assigned task_id (or generate one for
+                    # steps without a step_id).
+                    task_id = step_to_task.get(step.step_id, f"ptask_{ULID()}")
 
                     # Map step depends_on step_ids to task_ids
                     dep_task_ids = [
                         step_to_task[dep] for dep in step.depends_on if dep in step_to_task
                     ]
 
-                    tasks.append(
-                        PlanTask(
-                            task_id=task_id,
-                            plan_id=plan_id,
-                            workspace_id=workspace_id,
-                            task_type=step.capability,
-                            input_data=step.input,
-                            depends_on=dep_task_ids or None,
-                            status="pending",
+                    if step.actor == "user":
+                        tasks.append(
+                            PlanTask(
+                                task_id=task_id,
+                                plan_id=plan_id,
+                                workspace_id=workspace_id,
+                                task_type="user_action",
+                                input_data={
+                                    "description": step.description,
+                                    "capability": step.capability,
+                                },
+                                depends_on=dep_task_ids or None,
+                                status="awaiting_input",
+                            )
                         )
-                    )
+                    else:
+                        tasks.append(
+                            PlanTask(
+                                task_id=task_id,
+                                plan_id=plan_id,
+                                workspace_id=workspace_id,
+                                task_type=step.capability,
+                                input_data=step.input,
+                                depends_on=dep_task_ids or None,
+                                status="pending",
+                            )
+                        )
 
                 # Derive risk_level and execution_mode from max step risk
                 risk_level = ord_risk.get(max_risk_ord, "low")
@@ -415,6 +450,7 @@ class JarvisOrchestrator:
                         if plan_output.success_criteria
                         else None
                     ),
+                    plan_output_json=plan_output.model_dump(mode="json"),
                 )
                 plan_record.tasks = tasks
                 db.add(plan_record)

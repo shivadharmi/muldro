@@ -25,6 +25,7 @@ class Plan(Base, TimestampMixin):
     success_conditions: Mapped[dict | None] = mapped_column(JSONB)
     status: Mapped[str] = mapped_column(String(32), default="created")
     idempotency_key: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    plan_output_json: Mapped[dict | None] = mapped_column(JSONB)
 
     tasks: Mapped[list["PlanTask"]] = relationship(
         back_populates="plan", cascade="all, delete-orphan"

@@ -1,4 +1,5 @@
-"""Tests for PlanOutput creation, extract_plan fallback, and step_id validation."""
+"""Tests for PlanOutput creation, extract_plan fallback, step_id validation,
+forward dependency resolution, user-actor step mapping, and plan_output_json column."""
 
 from __future__ import annotations
 
@@ -8,6 +9,7 @@ import pytest
 
 from src.orchestrator.contracts import PlanOutput, PlanStep
 from src.orchestrator.intent_classifier import extract_plan
+from src.orchestrator.jarvis import _build_step_to_task_map
 
 
 class TestExtractPlanFallback:
@@ -79,3 +81,55 @@ class TestPlanOutputValidation:
             ],
         )
         assert len(plan.steps) == 2
+
+
+class TestDependencyResolution:
+    def test_forward_reference_preserved(self):
+        """Step s1 depends on s2 (later in list). Both should resolve."""
+        steps = [
+            PlanStep(step_id="s1", description="A", capability="respond", depends_on=["s2"]),
+            PlanStep(step_id="s2", description="B", capability="reason"),
+        ]
+        mapping = _build_step_to_task_map(steps)
+        assert "s1" in mapping
+        assert "s2" in mapping
+        # s1's dependency on s2 can now resolve
+        dep_ids = [mapping[d] for d in steps[0].depends_on if d in mapping]
+        assert len(dep_ids) == 1
+
+    def test_user_steps_included_in_mapping(self):
+        """User-actor steps get mapped so they can be dependency targets."""
+        steps = [
+            PlanStep(step_id="s1", description="Draft", capability="email.draft", actor="jarvis"),
+            PlanStep(step_id="s2", description="Review", capability="respond", actor="user"),
+        ]
+        mapping = _build_step_to_task_map(steps)
+        assert "s1" in mapping
+        assert "s2" in mapping
+
+    def test_empty_step_ids_excluded_from_mapping(self):
+        """Steps without step_id are not mapped (but still get task_ids at persist time)."""
+        steps = [
+            PlanStep(step_id="", description="A", capability="respond"),
+            PlanStep(step_id="s2", description="B", capability="reason"),
+        ]
+        mapping = _build_step_to_task_map(steps)
+        assert "" not in mapping
+        assert "s2" in mapping
+
+    def test_all_task_ids_have_ptask_prefix(self):
+        """All generated task_ids follow the ptask_ prefix convention."""
+        steps = [
+            PlanStep(step_id="s1", description="A", capability="respond"),
+            PlanStep(step_id="s2", description="B", capability="reason"),
+        ]
+        mapping = _build_step_to_task_map(steps)
+        for task_id in mapping.values():
+            assert task_id.startswith("ptask_")
+
+
+class TestPlanModelHasPlanOutputJson:
+    def test_plan_model_has_column(self):
+        from src.models.plans import Plan
+
+        assert hasattr(Plan, "plan_output_json")
