@@ -117,6 +117,17 @@ class VectorStore:
                 ("event_type", PayloadSchemaType.KEYWORD),
                 ("importance_score", PayloadSchemaType.FLOAT),
             ],
+            COLLECTION_APPROVALS: [
+                ("capability", PayloadSchemaType.KEYWORD),
+                ("outcome", PayloadSchemaType.KEYWORD),
+            ],
+            COLLECTION_CONVERSATIONS: [
+                ("conversation_id", PayloadSchemaType.KEYWORD),
+            ],
+            COLLECTION_ARTIFACTS: [
+                ("artifact_type", PayloadSchemaType.KEYWORD),
+                ("mime_type", PayloadSchemaType.KEYWORD),
+            ],
         }
         for collection, fields in indexes.items():
             for field_name, schema_type in fields:
@@ -253,6 +264,21 @@ class VectorStore:
         await client.delete(
             collection_name=collection,
             points_selector=[qdrant_id],
+        )
+
+    async def set_payload(
+        self, collection: str, point_id: str, payload: dict
+    ) -> None:
+        """Update payload fields on an existing point without re-embedding."""
+        client = await self._get_client()
+        if not client:
+            return
+        from qdrant_client.models import PointIdsList
+
+        await client.set_payload(
+            collection_name=collection,
+            payload=payload,
+            points=PointIdsList(points=[_to_qdrant_id(point_id)]),
         )
 
     async def hybrid_search(

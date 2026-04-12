@@ -96,6 +96,14 @@ class SchedulerLoop:
         if self._tick_count % 120 == 0 and current_hour == 2:
             await self._tick_consolidation(factory)
 
+            # 4c-ii. Stability refresh — sync Qdrant payloads with Postgres scores
+            daily_vector_store = None
+            if self._settings.qdrant_url:
+                from src.services.vector_store import VectorStore
+
+                daily_vector_store = VectorStore(self._settings)
+            await self._tick_stability_refresh(factory, daily_vector_store)
+
         # 4d. Stuck run health check — every tick
         await self._tick_run_health_check(factory)
 
@@ -602,6 +610,49 @@ class SchedulerLoop:
                     logger.info("Nightly consolidation: %d memories merged", total_merged)
         except Exception:
             logger.warning("Memory consolidation tick failed", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Stability refresh — sync Qdrant payloads with Postgres stability_score
+    # ------------------------------------------------------------------
+
+    async def _tick_stability_refresh(self, factory, vector_store=None) -> None:
+        """Batch-update Qdrant stability_score for stale memories."""
+        if not vector_store:
+            return
+        try:
+            from datetime import datetime, timedelta, timezone
+
+            from sqlalchemy import select
+
+            from src.models.memory import Memory
+
+            async with factory() as db:
+                cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+                result = await db.execute(
+                    select(Memory.memory_id, Memory.stability_score)
+                    .where(
+                        Memory.status == "active",
+                        Memory.last_accessed_at < cutoff,
+                    )
+                    .limit(200)
+                )
+                updates = result.all()
+                if not updates:
+                    return
+
+                for memory_id, stability in updates:
+                    try:
+                        await vector_store.set_payload(
+                            "memories",
+                            memory_id,
+                            {"stability_score": stability or 0.0},
+                        )
+                    except Exception:
+                        pass  # best-effort per record
+
+                logger.info("Stability refresh: %d Qdrant payloads updated", len(updates))
+        except Exception:
+            logger.warning("Stability refresh tick failed", exc_info=True)
 
     # Persona batch
     # ------------------------------------------------------------------
