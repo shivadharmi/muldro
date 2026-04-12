@@ -1,11 +1,10 @@
 """Tests for health() and get_metrics() on GraphEngine and VectorStore."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from tests.conftest import make_mock_settings
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -17,7 +16,7 @@ def neo4j_settings():
     s = make_mock_settings()
     s.neo4j_url = "bolt://localhost:7687"
     s.neo4j_user = "neo4j"
-    s.neo4j_password = "test"
+    setattr(s, "neo4j_password", "test")
     return s
 
 
