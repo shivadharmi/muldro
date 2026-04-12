@@ -44,6 +44,7 @@ STEP_TRANSITIONS: dict[str, set[str]] = {
         "awaiting_input",
         "skipped",
         "timed_out",
+        "cancelled",
     },
     "waiting_approval": {"running", "skipped"},
     "awaiting_input": {"running", "skipped", "cancelled"},
@@ -51,6 +52,7 @@ STEP_TRANSITIONS: dict[str, set[str]] = {
     "completed": set(),
     "failed": {"pending"},  # Retry: failed → pending
     "skipped": set(),
+    "cancelled": set(),
     "timed_out": {"pending", "skipped"},
 }
 

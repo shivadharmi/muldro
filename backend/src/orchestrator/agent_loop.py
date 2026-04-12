@@ -90,6 +90,18 @@ LoopEvent = (
 )
 
 
+class CancellationRequested(Exception):  # noqa: N818
+    """Raised when a run cancellation token is set."""
+
+    pass
+
+
+def _check_cancellation(cancel_event: asyncio.Event | None) -> None:
+    """Check cancellation token between tool rounds. Raises if set."""
+    if cancel_event and cancel_event.is_set():
+        raise CancellationRequested("Run cancelled by user")
+
+
 _MAX_API_RETRIES = 3
 _RETRY_BASE_DELAY = 2.0  # seconds
 
@@ -165,6 +177,7 @@ async def agent_loop(
     stream: bool = False,
     circuit_breaker=None,  # AnthropicCircuitBreaker | None
     run_id: str | None = None,  # B1: link tool-level approvals to execution context
+    cancel_event: asyncio.Event | None = None,
 ) -> AsyncGenerator[LoopEvent, None]:
     """Core agent loop — yields LoopEvent instances.
 
@@ -207,6 +220,8 @@ async def agent_loop(
             return
 
         for _round in range(max_tool_rounds):
+            _check_cancellation(cancel_event)
+
             api_kwargs: dict[str, Any] = {
                 "model": model,
                 "max_tokens": agent.max_tokens,
@@ -532,6 +547,9 @@ async def agent_loop(
         else:
             text = f"[Agent {agent_name} hit max tool rounds ({max_tool_rounds})]"
 
+    except CancellationRequested:
+        logger.info("Agent %s cancelled via cancellation token", agent_name)
+        raise
     except anthropic.APIError as e:
         logger.error("Claude API error in %s: %s", agent_name, e)
         if circuit_breaker:

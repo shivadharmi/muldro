@@ -22,6 +22,7 @@ from src.config.settings import Settings, get_anthropic_client
 from src.llm_utils import parse_llm_json
 from src.models.plans import Plan, PlanTask
 from src.models.task_graph import TaskCheckpoint, TaskRun, TaskStep
+from src.orchestrator.agent_loop import CancellationRequested
 from src.orchestrator.contracts import PolicyDecision, ResultSummary, StepResult, StepState
 from src.services.audit import AuditService
 from src.services.execution_state import transition_run, transition_step
@@ -193,6 +194,7 @@ class GraphExecutor:
         self._circuit_breaker = circuit_breaker
         self._trust_engine = trust_engine
         self._redis = redis
+        self._cancel_events: dict[str, asyncio.Event] = {}
 
     async def create_run(
         self,
@@ -360,15 +362,19 @@ class GraphExecutor:
                 steps=plan_ready_steps,
             )
 
+        cancel_event = asyncio.Event()
+        self._cancel_events[run.run_id] = cancel_event
+
         try:
             # Enforce timeout for background runs to prevent indefinite hangs
             timeout = run.timeout_seconds or (600 if run.source == "background" else None)
             if timeout:
                 await asyncio.wait_for(
-                    self._execute_dag(run, surface_id=surface_id), timeout=timeout
+                    self._execute_dag(run, surface_id=surface_id, cancel_event=cancel_event),
+                    timeout=timeout,
                 )
             else:
-                await self._execute_dag(run, surface_id=surface_id)
+                await self._execute_dag(run, surface_id=surface_id, cancel_event=cancel_event)
         except asyncio.TimeoutError:
             transition_run(run, "timed_out")
             run.completed_at = datetime.now(timezone.utc)
@@ -397,6 +403,8 @@ class GraphExecutor:
                 },
                 workspace_id=run.workspace_id,
             )
+        finally:
+            self._cancel_events.pop(run.run_id, None)
 
         # Record Prometheus metrics
         try:
@@ -448,13 +456,18 @@ class GraphExecutor:
         transition_run(run, "running")
         await self._db.flush()
 
+        cancel_event = asyncio.Event()
+        self._cancel_events[run.run_id] = cancel_event
+
         surface_id = (run.checkpoint or {}).get("surface_id")
         try:
-            await self._execute_dag(run, surface_id=surface_id)
+            await self._execute_dag(run, surface_id=surface_id, cancel_event=cancel_event)
         except Exception as exc:
             transition_run(run, "failed")
             run.completed_at = datetime.now(timezone.utc)
             run.error = {"type": type(exc).__name__, "message": str(exc)[:500]}
+        finally:
+            self._cancel_events.pop(run.run_id, None)
 
         await self._db.commit()
         return run
@@ -472,24 +485,36 @@ class GraphExecutor:
         return run
 
     async def cancel_run(self, run_id: str) -> TaskRun:
-        """Cancel a run and all pending steps."""
+        """Cancel a run and all pending/running steps.
+
+        Signals the cancellation event so that in-progress agent loops
+        exit gracefully between tool rounds.
+        """
         result = await self._db.execute(select(TaskRun).where(TaskRun.run_id == run_id))
         run = result.scalar_one_or_none()
         if not run:
             raise ValueError(f"Run not found: {run_id}")
 
+        # Signal cancellation to running agent loops
+        cancel_event = self._cancel_events.get(run_id)
+        if cancel_event:
+            cancel_event.set()
+
         transition_run(run, "cancelled")
         run.completed_at = datetime.now(timezone.utc)
 
-        # Mark all non-completed steps as skipped
+        # Mark all non-completed steps as skipped or cancelled
         steps_result = await self._db.execute(
             select(TaskStep).where(
                 TaskStep.run_id == run_id,
-                TaskStep.status.in_(["pending", "ready"]),
+                TaskStep.status.in_(["pending", "ready", "running"]),
             )
         )
         for step in steps_result.scalars().all():
-            transition_step(step, "skipped")
+            if step.status == "running":
+                transition_step(step, "cancelled")
+            else:
+                transition_step(step, "skipped")
             await self._emit_event(
                 "step.skipped",
                 run.user_id,
@@ -506,7 +531,12 @@ class GraphExecutor:
         )
         return run
 
-    async def _execute_dag(self, run: TaskRun, surface_id: str | None = None) -> None:
+    async def _execute_dag(
+        self,
+        run: TaskRun,
+        surface_id: str | None = None,
+        cancel_event: asyncio.Event | None = None,
+    ) -> None:
         """Main DAG execution loop."""
         while True:
             ready_steps = await self._get_ready_steps(run.run_id)
@@ -627,7 +657,12 @@ class GraphExecutor:
 
             for step in ready_steps:
                 try:
-                    await self._execute_step(run, step, surface_id=surface_id)
+                    await self._execute_step(
+                        run, step, surface_id=surface_id, cancel_event=cancel_event
+                    )
+                except CancellationRequested:
+                    # Run was cancelled — cancel_run() already set the run status
+                    return
                 except Exception:
                     logger.error("Step %s raised unexpectedly", step.step_id, exc_info=True)
 
@@ -637,7 +672,11 @@ class GraphExecutor:
                 break
 
     async def _execute_step(
-        self, run: TaskRun, step: TaskStep, surface_id: str | None = None
+        self,
+        run: TaskRun,
+        step: TaskStep,
+        surface_id: str | None = None,
+        cancel_event: asyncio.Event | None = None,
     ) -> None:
         """Execute a single step, with single TrustEngine approval gate."""
         already_approved = step.status == "running"
@@ -678,8 +717,13 @@ class GraphExecutor:
 
                 t0 = time.monotonic()
                 try:
-                    output = await self._run_step_action(step, run)
+                    output = await self._run_step_action(step, run, cancel_event=cancel_event)
                     elapsed_ms = int((time.monotonic() - t0) * 1000)
+                except CancellationRequested:
+                    transition_step(step, "cancelled")
+                    step.completed_at = datetime.now(timezone.utc)
+                    await self._db.flush()
+                    raise
                 except Exception as exc:
                     elapsed_ms = int((time.monotonic() - t0) * 1000)
                     await self._handle_step_failure(
@@ -791,8 +835,13 @@ class GraphExecutor:
 
         t0 = time.monotonic()
         try:
-            output = await self._run_step_action(step, run)
+            output = await self._run_step_action(step, run, cancel_event=cancel_event)
             elapsed_ms = int((time.monotonic() - t0) * 1000)
+        except CancellationRequested:
+            transition_step(step, "cancelled")
+            step.completed_at = datetime.now(timezone.utc)
+            await self._db.flush()
+            raise
         except Exception as exc:
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             await self._handle_step_failure(run, step, exc, elapsed_ms, surface_id=surface_id)
@@ -1064,7 +1113,12 @@ class GraphExecutor:
                 workspace_id=run.workspace_id,
             )
 
-    async def _run_step_action(self, step: TaskStep, run: TaskRun) -> dict:
+    async def _run_step_action(
+        self,
+        step: TaskStep,
+        run: TaskRun,
+        cancel_event: asyncio.Event | None = None,
+    ) -> dict:
         """Execute the actual action for a step.
 
         Routes to agent loop if dependencies are available, otherwise uses
@@ -1082,7 +1136,7 @@ class GraphExecutor:
 
         # Check if agent loop dependencies are available
         if self._db_factory and self._execute_tool_fn and self._budget:
-            return await self._run_step_via_agent_loop(step, run)
+            return await self._run_step_via_agent_loop(step, run, cancel_event=cancel_event)
 
         # Fallback: minimal single-turn Claude call
         return await self._minimal_claude_action(step, run)
@@ -1178,7 +1232,12 @@ class GraphExecutor:
 
         return tools
 
-    async def _run_step_via_agent_loop(self, step: TaskStep, run: TaskRun) -> dict:
+    async def _run_step_via_agent_loop(
+        self,
+        step: TaskStep,
+        run: TaskRun,
+        cancel_event: asyncio.Event | None = None,
+    ) -> dict:
         """Execute a step via the Operator agent loop with full tool discovery."""
         from src.orchestrator.agent_loop import (
             LoopDone,
@@ -1245,6 +1304,7 @@ class GraphExecutor:
             stream=False,
             circuit_breaker=self._circuit_breaker,
             run_id=run.run_id,
+            cancel_event=cancel_event,
         ):
             if isinstance(event, LoopDone):
                 text = event.text
