@@ -7,9 +7,7 @@ from pydantic import BaseModel, Field
 
 # ── Shared Type Literals ─────────────────────────────────────────
 
-MemoryType = Literal[
-    "episodic", "semantic", "preference", "relationship", "task_context", "procedural"
-]
+MemoryType = Literal["episodic", "semantic", "preference", "relationship", "task_context"]
 MemoryScope = Literal["presentation", "planning", "general"]
 BriefingStyle = Literal["founder", "personal", "academic", "general"]
 
