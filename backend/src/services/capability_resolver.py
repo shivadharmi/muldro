@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.tool_definitions import ToolDefinition
@@ -24,8 +24,19 @@ class CapabilityResolver:
         self._workspace_id = workspace_id
 
     async def _list_enabled_tools(self) -> list[ToolDefinition]:
-        """Return all enabled tool definitions."""
-        stmt = select(ToolDefinition).where(ToolDefinition.enabled.is_(True))
+        """Return enabled tool definitions visible to the current workspace.
+
+        Includes global tools (``workspace_id IS NULL``) and tools scoped
+        explicitly to ``self._workspace_id``.  This prevents cross-tenant
+        tool leakage when multiple workspaces have workspace-specific tools.
+        """
+        stmt = select(ToolDefinition).where(
+            ToolDefinition.enabled.is_(True),
+            or_(
+                ToolDefinition.workspace_id.is_(None),
+                ToolDefinition.workspace_id == self._workspace_id,
+            ),
+        )
         result = await self._db.execute(stmt)
         return list(result.scalars().all())
 

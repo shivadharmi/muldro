@@ -369,6 +369,7 @@ class JarvisOrchestrator:
                     existing = await db.execute(
                         select(Plan.plan_id).where(
                             Plan.idempotency_key == idempotency_key,
+                            Plan.workspace_id == workspace_id,
                             Plan.status.notin_(["completed", "failed", "cancelled"]),
                         )
                     )
