@@ -2939,9 +2939,10 @@ class JarvisOrchestrator:
         elif cap == "system.add_to_brief":
             result = await self._handle_add_to_brief(goal_text, user_id, workspace_id)
 
-        # Audit: record as completed PlanTask
+        # Audit: record as completed PlanTask + InteractionLog
         if plan.plan_id:
             try:
+                from src.models.interaction_log import InteractionLog
                 from src.models.plans import PlanTask
 
                 async with self._db_factory() as db:
@@ -2953,6 +2954,17 @@ class JarvisOrchestrator:
                             task_type=cap,
                             input_data=step.input or {"description": step.description},
                             status="completed",
+                        )
+                    )
+                    db.add(
+                        InteractionLog(
+                            interaction_id=f"ilog_{ULID()}",
+                            user_id=user_id,
+                            workspace_id=workspace_id,
+                            interaction_type=cap,
+                            user_message=step.description[:500],
+                            assistant_response=str(result)[:500] if result else "completed",
+                            metadata_={"plan_step": step.step_id, "actor": "system"},
                         )
                     )
                     await db.commit()
