@@ -1445,11 +1445,39 @@ class GraphExecutor:
             if isinstance(value, str) and value.startswith("{") and "}.output." in value:
                 ref, _, field = value[1:].partition("}.output.")
                 source = outputs_by_task.get(ref)
-                if source and isinstance(source, dict):
-                    return source.get(field, value)
+                if source is None or not isinstance(source, dict):
+                    logger.warning(
+                        "Step reference unresolved: task '%s' not found in "
+                        "completed steps (run_id=%s, step=%s)",
+                        ref,
+                        run_id,
+                        step.step_id,
+                    )
+                    return value
+                if field not in source:
+                    logger.warning(
+                        "Step reference field missing: '%s' not in task '%s' "
+                        "output (run_id=%s, step=%s, available_keys=%s)",
+                        field,
+                        ref,
+                        run_id,
+                        step.step_id,
+                        list(source.keys()),
+                    )
+                    return value
+                return source[field]
             return value
 
-        return {k: resolve(v) for k, v in input_data.items()}
+        resolved = {k: resolve(v) for k, v in input_data.items()}
+        unresolved = [k for k, v in resolved.items() if isinstance(v, str) and "}.output." in v]
+        if unresolved:
+            logger.warning(
+                "Step %s has %d unresolved reference(s): %s",
+                step.step_id,
+                len(unresolved),
+                unresolved,
+            )
+        return resolved
 
     async def _checkpoint(self, run: TaskRun, step_id: str | None, reason: str) -> None:
         """Save a rich checkpoint with completed step outputs."""
