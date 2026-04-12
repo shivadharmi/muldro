@@ -9,12 +9,12 @@ export function Card({
   className?: string;
   variant?: "default" | "live" | "warning" | "error";
 }) {
-  const base = "rounded-[var(--radius-lg)] shadow-[var(--shadow-sm)]";
+  const base = "rounded-[var(--radius-lg)]";
   const variants: Record<string, string> = {
-    default: "bg-surface-2 border border-b-secondary",
-    live: "bg-surface-2 border border-j-primary/30 shadow-[var(--shadow-glow)]",
-    warning: "bg-j-warning-soft border border-j-warning/30",
-    error: "bg-j-error-soft border border-j-error/30",
+    default: "bg-surface-1 border border-b-secondary",
+    live: "bg-surface-1 border border-j-primary/30 shadow-[var(--shadow-glow)]",
+    warning: "bg-j-warning-soft border border-j-warning/20",
+    error: "bg-j-error-soft border border-j-error/20",
   };
 
   return (
@@ -32,7 +32,7 @@ export function CardHeader({
   className?: string;
 }) {
   return (
-    <div className={`px-4 py-3 border-b border-b-secondary ${className}`}>
+    <div className={`px-5 py-3.5 border-b border-b-secondary ${className}`}>
       {children}
     </div>
   );
@@ -45,5 +45,5 @@ export function CardBody({
   children: ReactNode;
   className?: string;
 }) {
-  return <div className={`px-4 py-3 ${className}`}>{children}</div>;
+  return <div className={`px-5 py-4 ${className}`}>{children}</div>;
 }

@@ -151,29 +151,29 @@ export default function ChatPage() {
           <div className="flex flex-col h-full">
             {/* Command header with mode + connection */}
             <div className="px-4 py-2.5 border-b border-b-secondary flex items-center justify-between shrink-0">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1">
                 {MODES.map((m) => (
                   <button
                     key={m.value}
                     type="button"
                     onClick={() => setMode(m.value)}
-                    className={`px-2.5 py-1 text-xs rounded-full transition-colors cursor-pointer ${
+                    className={`px-3 py-1.5 text-xs rounded-full transition-all duration-150 cursor-pointer ${
                       mode === m.value
-                        ? "bg-accent-primary text-white"
-                        : "text-t-tertiary hover:text-t-secondary hover:bg-surface-1"
+                        ? "bg-j-primary text-j-primary-fg font-medium"
+                        : "text-t-muted hover:text-t-secondary hover:bg-surface-2"
                     }`}
                   >
                     {m.label}
                   </button>
                 ))}
               </div>
-              <div className="flex items-center gap-1.5 text-xs">
+              <div className="flex items-center gap-1.5 text-[11px]">
                 <span
-                  className={`w-2 h-2 rounded-full ${
+                  className={`w-1.5 h-1.5 rounded-full ${
                     connected ? "bg-j-success" : "bg-j-error"
                   }`}
                 />
-                <span className="text-t-tertiary">
+                <span className="text-t-muted">
                   {connected ? "Connected" : "Offline"}
                 </span>
               </div>

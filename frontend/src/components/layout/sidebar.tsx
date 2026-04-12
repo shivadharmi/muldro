@@ -42,15 +42,15 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
   return (
     <aside
-      className={`flex-shrink-0 border-r border-b-secondary bg-surface-1 flex flex-col h-screen transition-[width] duration-200 ${
-        collapsed ? "w-16" : "w-60"
+      className={`flex-shrink-0 border-r border-b-secondary bg-surface-1 flex flex-col h-screen transition-[width] duration-200 ease-out ${
+        collapsed ? "w-[60px]" : "w-[232px]"
       }`}
     >
       {/* Header with brand */}
-      <div className="px-3 py-3 border-b border-b-secondary flex items-center gap-2">
+      <div className={`h-12 flex items-center gap-2.5 border-b border-b-secondary ${collapsed ? "justify-center px-2" : "px-3.5"}`}>
         <button
           onClick={onToggle}
-          className="p-1.5 rounded-[var(--radius-sm)] hover:bg-surface-2 text-t-tertiary hover:text-t-primary transition-colors cursor-pointer"
+          className="p-1.5 rounded-[var(--radius-md)] hover:bg-surface-2 text-t-muted hover:text-t-primary transition-colors cursor-pointer"
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
           <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
@@ -72,28 +72,28 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           </svg>
         </button>
         {!collapsed && (
-          <div className="animate-fade-in">
-            <h1 className="text-sm font-bold tracking-tight brand-gradient-text">
+          <div className="animate-fade-in flex items-baseline gap-1.5">
+            <h1 className="text-[15px] font-semibold tracking-tight brand-gradient-text leading-none">
               Jarvis
             </h1>
-            <p className="text-[9px] text-t-muted leading-none">AI Operating System</p>
+            <span className="text-[10px] text-t-muted font-medium">OS</span>
           </div>
         )}
       </div>
 
       {/* Navigation — flat list */}
-      <nav className="flex-1 overflow-y-auto px-2 py-3 space-y-1">
+      <nav className="flex-1 overflow-y-auto px-2 py-3 space-y-0.5">
         <NavItem
           href="/"
           label="Workspace"
           active={pathname === "/"}
           collapsed={collapsed}
           icon={
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-              <rect x="2" y="2" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.5" />
-              <rect x="9" y="2" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.5" />
-              <rect x="2" y="9" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.5" />
-              <rect x="9" y="9" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.5" />
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+              <rect x="2" y="2" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
+              <rect x="10" y="2" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
+              <rect x="2" y="10" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
+              <rect x="10" y="10" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
             </svg>
           }
         />
@@ -103,8 +103,8 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           active={pathname === "/chat"}
           collapsed={collapsed}
           icon={
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-              <path d="M3 3h10v7H6l-3 3V3z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+              <path d="M3.5 3.5h11v8H7l-3.5 3.5V3.5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
             </svg>
           }
         />
@@ -114,9 +114,9 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           active={pathname === "/search"}
           collapsed={collapsed}
           icon={
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-              <circle cx="7" cy="7" r="4" stroke="currentColor" strokeWidth="1.5" />
-              <path d="M10 10l3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+              <circle cx="8" cy="8" r="4.5" stroke="currentColor" strokeWidth="1.4" />
+              <path d="M11.5 11.5l3 3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
             </svg>
           }
         />
@@ -126,11 +126,11 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           active={pathname === "/knowledge"}
           collapsed={collapsed}
           icon={
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-              <circle cx="5" cy="5" r="2" stroke="currentColor" strokeWidth="1.3" />
-              <circle cx="11" cy="5" r="2" stroke="currentColor" strokeWidth="1.3" />
-              <circle cx="8" cy="11" r="2" stroke="currentColor" strokeWidth="1.3" />
-              <path d="M6.5 6.5L7.5 9.5M9.5 6.5L8.5 9.5M7 5h2" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+              <circle cx="5.5" cy="5.5" r="2.5" stroke="currentColor" strokeWidth="1.3" />
+              <circle cx="12.5" cy="5.5" r="2.5" stroke="currentColor" strokeWidth="1.3" />
+              <circle cx="9" cy="12.5" r="2.5" stroke="currentColor" strokeWidth="1.3" />
+              <path d="M7.2 7.5L8.2 10.5M10.8 7.5L9.8 10.5M7.5 5.5h3" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
             </svg>
           }
         />
@@ -140,42 +140,45 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           active={pathname === "/integrations"}
           collapsed={collapsed}
           icon={
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-              <path d="M4 4h3v3H4V4zM9 4h3v3H9V4zM4 9h3v3H4V9z" stroke="currentColor" strokeWidth="1.5" />
-              <path d="M11 10.5v-2h-2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+              <path d="M4 4h4v4H4V4zM10 4h4v4h-4V4zM4 10h4v4H4v-4z" stroke="currentColor" strokeWidth="1.4" rx="0.5" />
+              <path d="M12.5 12v-2.5H10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
             </svg>
           }
         />
-        <NavItem
-          href="/settings"
-          label="Settings"
-          active={pathname === "/settings"}
-          collapsed={collapsed}
-          icon={
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-              <circle cx="8" cy="8" r="2" stroke="currentColor" strokeWidth="1.5" />
-              <path
-                d="M8 2v2M8 12v2M2 8h2M12 8h2M3.8 3.8l1.4 1.4M10.8 10.8l1.4 1.4M3.8 12.2l1.4-1.4M10.8 5.2l1.4-1.4"
-                stroke="currentColor"
-                strokeWidth="1.2"
-                strokeLinecap="round"
-              />
-            </svg>
-          }
-        />
+
+        <div className="pt-2 mt-2 border-t border-b-secondary">
+          <NavItem
+            href="/settings"
+            label="Settings"
+            active={pathname === "/settings"}
+            collapsed={collapsed}
+            icon={
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                <circle cx="9" cy="9" r="2.5" stroke="currentColor" strokeWidth="1.4" />
+                <path
+                  d="M9 2.5v2M9 13.5v2M2.5 9h2M13.5 9h2M4.4 4.4l1.4 1.4M12.2 12.2l1.4 1.4M4.4 13.6l1.4-1.4M12.2 5.8l1.4-1.4"
+                  stroke="currentColor"
+                  strokeWidth="1.2"
+                  strokeLinecap="round"
+                />
+              </svg>
+            }
+          />
+        </div>
       </nav>
 
       {/* Footer: theme toggle */}
       <div className="border-t border-b-secondary px-2 py-2">
         <button
           onClick={cycleTheme}
-          className={`flex items-center gap-2 w-full rounded-[var(--radius-sm)] text-xs text-t-tertiary hover:text-t-primary hover:bg-surface-2 transition-colors cursor-pointer ${
-            collapsed ? "justify-center p-2" : "px-2.5 py-1.5"
+          className={`flex items-center gap-2 w-full rounded-[var(--radius-md)] text-xs text-t-muted hover:text-t-primary hover:bg-surface-2 transition-colors cursor-pointer ${
+            collapsed ? "justify-center p-2.5" : "px-3 py-2"
           }`}
           title={`Theme: ${theme}`}
         >
           {themeIcon}
-          {!collapsed && <span className="capitalize">{theme}</span>}
+          {!collapsed && <span className="capitalize text-[13px]">{theme}</span>}
         </button>
       </div>
     </aside>

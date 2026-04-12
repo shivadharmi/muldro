@@ -2,13 +2,15 @@ import type { ButtonHTMLAttributes, ReactNode } from "react";
 
 const VARIANTS: Record<string, string> = {
   primary:
-    "bg-j-primary hover:bg-j-primary-hover text-j-primary-fg shadow-[var(--shadow-sm)] focus:shadow-[var(--shadow-glow)]",
+    "bg-j-primary hover:bg-j-primary-hover text-j-primary-fg shadow-[var(--shadow-sm)]",
   secondary:
-    "bg-surface-3 hover:bg-surface-4 text-t-primary border border-b-primary",
+    "bg-surface-2 hover:bg-surface-3 text-t-primary border border-b-secondary",
   ghost:
-    "hover:bg-j-primary-soft text-t-secondary hover:text-t-primary",
+    "hover:bg-surface-2 text-t-secondary hover:text-t-primary",
   danger:
-    "bg-j-error hover:opacity-90 text-j-primary-fg",
+    "bg-j-error hover:opacity-90 text-white",
+  outline:
+    "border border-b-secondary text-t-secondary hover:text-t-primary hover:bg-surface-2",
 };
 
 export function Button({
@@ -25,14 +27,14 @@ export function Button({
 } & ButtonHTMLAttributes<HTMLButtonElement>) {
   const sizeClass =
     size === "sm"
-      ? "px-2.5 py-1 text-xs rounded-[var(--radius-sm)]"
+      ? "px-2.5 py-1 text-xs gap-1.5 rounded-[var(--radius-sm)]"
       : size === "lg"
-        ? "px-5 py-2.5 text-base rounded-[var(--radius-lg)]"
-        : "px-3.5 py-1.5 text-sm rounded-[var(--radius-md)]";
+        ? "px-5 py-2.5 text-[15px] gap-2 rounded-[var(--radius-lg)]"
+        : "px-3.5 py-2 text-[13px] gap-2 rounded-[var(--radius-md)]";
 
   return (
     <button
-      className={`inline-flex items-center justify-center font-medium transition-all disabled:opacity-50 disabled:pointer-events-none cursor-pointer focus:outline-none focus:ring-2 focus:ring-j-ring focus:ring-offset-1 focus:ring-offset-surface-0 ${VARIANTS[variant] || VARIANTS.primary} ${sizeClass} ${className}`}
+      className={`inline-flex items-center justify-center font-medium transition-all duration-150 disabled:opacity-50 disabled:pointer-events-none cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-j-ring focus-visible:ring-offset-1 focus-visible:ring-offset-surface-0 ${VARIANTS[variant] || VARIANTS.primary} ${sizeClass} ${className}`}
       {...props}
     >
       {children}

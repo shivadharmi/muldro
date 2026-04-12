@@ -120,7 +120,7 @@ export default function WorkspacePage() {
     : null;
 
   return (
-    <div className="p-4 sm:p-6 space-y-5">
+    <div className="p-4 sm:p-6 space-y-4 animate-fade-in">
       <GreetingHero
         headline={headline}
         approvalCount={approvalCount}
