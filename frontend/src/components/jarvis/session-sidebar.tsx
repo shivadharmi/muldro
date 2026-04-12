@@ -65,7 +65,7 @@ export function SessionSidebar({
               key={convo.conversation_id}
               role="button"
               tabIndex={0}
-              aria-selected={activeConversationId === convo.conversation_id}
+              aria-current={activeConversationId === convo.conversation_id ? "true" : undefined}
               onClick={() => onSelectConversation(convo.conversation_id)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" || e.key === " ") {
