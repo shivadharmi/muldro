@@ -101,7 +101,7 @@ async def test_logs_warning_on_failure(caplog):
     @asynccontextmanager
     async def _bad_factory():
         raise RuntimeError("DB connection refused")
-        yield  # noqa: unreachable — needed for asynccontextmanager protocol
+        yield  # pragma: no cover — needed for asynccontextmanager protocol
 
     with caplog.at_level(logging.WARNING, logger="src.services.scheduler"):
         # Must not propagate the exception

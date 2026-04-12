@@ -89,7 +89,14 @@ class SchedulerLoop:
         # 4b. Persona batch — every 10th tick (~5 min)
         await self._tick_persona_batch()
 
-        # 4c. Stuck run health check — every tick
+        # 4c. Memory consolidation — once daily at ~2 AM UTC
+        from datetime import datetime, timezone
+
+        current_hour = datetime.now(timezone.utc).hour
+        if self._tick_count % 120 == 0 and current_hour == 2:
+            await self._tick_consolidation(factory)
+
+        # 4d. Stuck run health check — every tick
         await self._tick_run_health_check(factory)
 
         # 5. Process due schedules
@@ -565,6 +572,36 @@ class SchedulerLoop:
                 logger.info("Memory expiration: %d memories expired", len(expired))
         except Exception:
             logger.warning("Memory expiration tick error", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Memory consolidation
+    # ------------------------------------------------------------------
+
+    async def _tick_consolidation(self, factory) -> None:
+        """Nightly memory consolidation — merge highly similar memories."""
+        try:
+            async with factory() as db:
+                from sqlalchemy import distinct, select
+
+                from src.models.memory import Memory
+                from src.services.memory_service import MemoryService
+
+                result = await db.execute(
+                    select(distinct(Memory.user_id)).where(Memory.status == "active")
+                )
+                user_ids = [r[0] for r in result.all()]
+
+                total_merged = 0
+                for uid in user_ids:
+                    ms = MemoryService(settings=self._settings, db=db)
+                    merged = await ms.consolidate_memories(uid)
+                    total_merged += merged
+
+                await db.commit()
+                if total_merged:
+                    logger.info("Nightly consolidation: %d memories merged", total_merged)
+        except Exception:
+            logger.warning("Memory consolidation tick failed", exc_info=True)
 
     # Persona batch
     # ------------------------------------------------------------------

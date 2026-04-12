@@ -654,6 +654,16 @@ class MemoryService:
                     cand_id,
                     new_memory_id,
                 )
+                # Cascade delete from Qdrant
+                if self._vector_store:
+                    try:
+                        await self._vector_store.delete("memories", cand_id)
+                    except Exception:
+                        logger.debug(
+                            "Qdrant cascade delete failed for superseded %s",
+                            cand_id,
+                            exc_info=True,
+                        )
 
         if superseded:
             await self._db.flush()
@@ -757,6 +767,16 @@ class MemoryService:
                 duplicate.status = "merged"
                 merged_ids.add(duplicate.memory_id)
                 merged_count += 1
+                # Cascade delete from Qdrant
+                if self._vector_store:
+                    try:
+                        await self._vector_store.delete("memories", duplicate.memory_id)
+                    except Exception:
+                        logger.debug(
+                            "Qdrant cascade delete failed for merged %s",
+                            duplicate.memory_id,
+                            exc_info=True,
+                        )
 
                 score = s.get("score", 0.0)
                 logger.info(
