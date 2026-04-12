@@ -6,6 +6,8 @@ import {
   deleteConversation,
   type ConversationSummary,
 } from "@/lib/api";
+import { EmptyState } from "@/components/ui/empty-state";
+import { FOCUS_RING } from "@/lib/focus-ring";
 
 interface SessionSidebarProps {
   activeConversationId: string | null;
@@ -56,15 +58,14 @@ export function SessionSidebar({
 
       <div className="flex-1 overflow-y-auto p-1.5 space-y-0.5">
         {conversations.length === 0 ? (
-          <p className="text-t-muted text-xs text-center mt-8 px-4">
-            No conversations yet. Start a new chat!
-          </p>
+          <EmptyState title="No conversations yet" description="Start a chat to see your history here" />
         ) : (
           conversations.map((convo) => (
             <div
               key={convo.conversation_id}
               role="button"
               tabIndex={0}
+              aria-selected={activeConversationId === convo.conversation_id}
               onClick={() => onSelectConversation(convo.conversation_id)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" || e.key === " ") {
@@ -72,7 +73,7 @@ export function SessionSidebar({
                   onSelectConversation(convo.conversation_id);
                 }
               }}
-              className={`rounded-[var(--radius-sm)] px-2.5 py-2 hover:bg-surface-2 transition-colors group cursor-pointer ${
+              className={`rounded-[var(--radius-sm)] px-2.5 py-2 hover:bg-surface-2 transition-colors duration-150 group cursor-pointer ${FOCUS_RING} ${
                 activeConversationId === convo.conversation_id
                   ? "bg-j-primary-soft border-l-2 border-l-j-primary"
                   : ""

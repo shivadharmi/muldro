@@ -151,7 +151,7 @@ export function CommandInput({ onSubmit, disabled }: Props) {
           cmdKOpen
             ? "fixed top-1/4 left-1/2 -translate-x-1/2 w-[480px] z-50"
             : "absolute bottom-full left-0 right-0 mb-1 z-10"
-        } rounded-lg bg-surface-2 border border-b-primary shadow-lg overflow-hidden`}>
+        } rounded-[var(--radius-lg)] bg-surface-2 border border-b-primary shadow-lg overflow-hidden`}>
           {cmdKOpen && (
             <div className="px-4 py-2 border-b border-b-primary flex items-center gap-2">
               <span className="text-t-tertiary text-xs">⌘K</span>
@@ -198,12 +198,12 @@ export function CommandInput({ onSubmit, disabled }: Props) {
           onKeyDown={cmdKOpen ? undefined : handleKeyDown}
           placeholder="Ask Jarvis anything... (⌘K for commands, / for slash)"
           disabled={disabled}
-          className="flex-1 rounded-lg bg-surface-2 border border-b-primary px-4 py-3 text-sm text-t-primary placeholder-t-tertiary focus:outline-none focus:ring-2 focus:ring-j-ring disabled:opacity-50"
+          className="flex-1 rounded-[var(--radius-lg)] bg-surface-2 border border-b-primary px-4 py-3 text-sm text-t-primary placeholder-t-tertiary focus:outline-none focus:ring-2 focus:ring-j-ring disabled:opacity-50"
         />
         <button
           type="submit"
           disabled={disabled || !value.trim() || cmdKOpen}
-          className="rounded-lg bg-j-primary px-4 py-3 text-sm font-medium text-j-primary-fg hover:bg-j-primary-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+          className="rounded-[var(--radius-lg)] bg-j-primary px-4 py-3 text-sm font-medium text-j-primary-fg hover:bg-j-primary-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
         >
           Send
         </button>
