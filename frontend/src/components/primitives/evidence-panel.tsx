@@ -71,7 +71,7 @@ export function EvidencePanel() {
     <div className="space-y-4">
       {/* Entities */}
       {evidence.entities.length > 0 && (
-        <section>
+        <section aria-label="Entities">
           <h4 className="text-xs font-medium text-t-secondary uppercase tracking-wider mb-2">
             Entities
           </h4>
@@ -96,7 +96,7 @@ export function EvidencePanel() {
 
       {/* Memories */}
       {evidence.memories.length > 0 && (
-        <section>
+        <section aria-label="Memories">
           <h4 className="text-xs font-medium text-t-secondary uppercase tracking-wider mb-2">
             Memories
           </h4>
@@ -113,7 +113,7 @@ export function EvidencePanel() {
 
       {/* Sources */}
       {evidence.sources.length > 0 && (
-        <section>
+        <section aria-label="Sources">
           <h4 className="text-xs font-medium text-t-secondary uppercase tracking-wider mb-2">
             Sources
           </h4>
@@ -135,7 +135,7 @@ export function EvidencePanel() {
 
       {/* Route info */}
       {evidence.route_info && (
-        <section>
+        <section aria-label="Route">
           <h4 className="text-xs font-medium text-t-secondary uppercase tracking-wider mb-2">
             Route
           </h4>
