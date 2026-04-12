@@ -85,21 +85,16 @@ export function SessionSidebar({
                 </p>
                 <button
                   onClick={(e) => handleDelete(e, convo.conversation_id)}
-                  className="opacity-0 group-hover:opacity-100 text-t-muted hover:text-j-error text-[10px] shrink-0 cursor-pointer"
-                  title="Archive"
+                  className="text-t-muted hover:text-j-error transition-colors shrink-0 cursor-pointer p-0.5 rounded-[var(--radius-sm)]"
+                  title={`Delete${convo.message_count ? ` (${convo.message_count} msgs` + (convo.total_cost_usd > 0 ? `, $${convo.total_cost_usd.toFixed(2)}` : "") + `)` : ""}`}
+                  aria-label="Delete conversation"
                 >
-                  {"\u2715"}
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                    <path d="M4 4h8M6 2h4M5 4v8.5a.5.5 0 00.5.5h5a.5.5 0 00.5-.5V4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+                  </svg>
                 </button>
               </div>
               <div className="flex items-center gap-2 mt-0.5">
-                <span className="text-[10px] text-t-muted">
-                  {convo.message_count} msgs
-                </span>
-                {convo.total_cost_usd > 0 && (
-                  <span className="text-[10px] text-t-muted">
-                    ${convo.total_cost_usd.toFixed(4)}
-                  </span>
-                )}
                 {convo.last_active_at && (
                   <span className="text-[10px] text-t-muted">
                     {formatRelativeTime(convo.last_active_at)}
