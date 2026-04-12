@@ -59,10 +59,10 @@ async def _embed_artifact(
 ) -> None:
     """Embed artifact metadata into Qdrant (best-effort)."""
     try:
+        if not (title or description):
+            return
         parts = [artifact_type, title or "", description or ""]
         text = " ".join(p for p in parts if p)
-        if not text.strip():
-            return
         embedding = await embedding_service.embed_text(text)
         if embedding:
             from datetime import datetime, timezone
