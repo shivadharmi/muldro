@@ -149,8 +149,8 @@ export function StatsView() {
               key={i}
               className="bg-surface-1 border border-b-secondary rounded-[var(--radius-md)] px-4 py-3 animate-pulse"
             >
-              <div className="h-3 w-16 bg-surface-3 rounded mb-2" />
-              <div className="h-7 w-12 bg-surface-3 rounded" />
+              <div className="h-3 w-16 bg-surface-3 rounded-[var(--radius-sm)] mb-2" />
+              <div className="h-7 w-12 bg-surface-3 rounded-[var(--radius-sm)]" />
             </div>
           ))}
         </div>

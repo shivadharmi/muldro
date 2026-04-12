@@ -17,10 +17,10 @@ interface Props {
 }
 
 const priorityBadge: Record<string, string> = {
-  low: "bg-gray-500/20 text-gray-400",
-  medium: "bg-blue-500/20 text-blue-400",
-  high: "bg-amber-500/20 text-amber-400",
-  critical: "bg-red-500/20 text-red-400",
+  low: "bg-t-muted/20 text-t-tertiary",
+  medium: "bg-j-info-soft text-j-info",
+  high: "bg-j-warning-soft text-j-warning",
+  critical: "bg-j-error-soft text-j-error",
 };
 
 export function SurfaceDetailModal({ surface, open, onClose }: Props) {
@@ -99,18 +99,18 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
     <div
       ref={backdropRef}
       onClick={handleBackdropClick}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-fade-in"
     >
-      <div className="bg-surface-0 border border-b-primary rounded-xl w-[95vw] max-w-[1200px] max-h-[90vh] flex flex-col overflow-hidden shadow-2xl">
+      <div className="bg-surface-1 border border-b-secondary rounded-[var(--radius-xl)] w-[95vw] max-w-[1200px] max-h-[90vh] flex flex-col overflow-hidden shadow-[var(--shadow-lg)] animate-scale-in">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-b-primary">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-b-secondary">
           <div className="flex items-center gap-3 min-w-0">
-            <h2 className="text-base font-semibold text-t-primary truncate">
+            <h2 className="text-[15px] font-semibold text-t-primary truncate">
               {surface.preview.title}
             </h2>
             {surface.preview.priority && (
               <span
-                className={`text-[10px] px-2 py-0.5 rounded font-medium shrink-0 ${priorityBadge[surface.preview.priority] ?? ""}`}
+                className={`text-[10px] px-2 py-0.5 rounded-[var(--radius-sm)] font-medium shrink-0 ${priorityBadge[surface.preview.priority] ?? ""}`}
               >
                 {surface.preview.priority}
               </span>
@@ -118,7 +118,7 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded hover:bg-surface-2 transition-colors text-t-tertiary"
+            className="p-1.5 rounded-[var(--radius-sm)] hover:bg-surface-2 transition-colors text-t-muted hover:text-t-primary cursor-pointer"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
               <path
@@ -133,20 +133,20 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
 
         {/* Tab bar */}
         {tabs.length > 0 && (
-          <div className="flex border-b border-b-primary px-6">
+          <div className="flex border-b border-b-secondary px-6">
             {tabs.map((tab: DetailTab) => (
               <button
                 key={tab.id}
                 onClick={() => { setActiveTabId(tab.id); if (error) setError(null); }}
-                className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+                className={`px-4 py-2.5 text-[13px] font-medium border-b-2 transition-colors cursor-pointer ${
                   activeTabId === tab.id
-                    ? "border-accent-primary text-accent-primary"
-                    : "border-transparent text-t-tertiary hover:text-t-secondary"
+                    ? "border-j-primary text-j-primary"
+                    : "border-transparent text-t-muted hover:text-t-secondary"
                 }`}
               >
                 {tab.label}
                 {tab.badge_count != null && tab.badge_count > 0 && (
-                  <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-accent-primary/20 text-accent-primary">
+                  <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-j-primary-soft text-j-primary">
                     {tab.badge_count}
                   </span>
                 )}
@@ -165,8 +165,8 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
           )}
 
           {error && !loading && (
-            <div className="rounded-lg bg-red-500/10 border border-red-500/20 p-4">
-              <p className="text-sm text-red-400">{error}</p>
+            <div className="rounded-[var(--radius-md)] bg-j-error-soft border border-j-error/20 p-4">
+              <p className="text-sm text-j-error">{error}</p>
             </div>
           )}
 
