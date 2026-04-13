@@ -263,6 +263,24 @@ Plus `web_search` as an internal composite tool (not an MCP installation).
 
 ---
 
+## Section 5: Final Verification — Playwright & Filesystem MCP
+
+After all cleanup and frontend work is complete, verify that the two auth-free MCPs actually work:
+
+1. **Check npm packages are installed / accessible:**
+   - `npx -y @playwright/mcp --help` (or equivalent) — confirm the package resolves
+   - `npx -y @modelcontextprotocol/server-filesystem --help` — confirm the package resolves
+
+2. **Check seed installations create DB rows:** Run the backend, confirm both appear in `GET /v1/integrations/unified` with `health_status` not `"unhealthy"`.
+
+3. **If packages are missing:** Add them to the project's npm dependencies or document the npx-on-demand requirement. Fix any PATH or Docker issues preventing subprocess launch.
+
+4. **If health checks fail:** Debug via `GET /v1/integrations/{id}/health` and fix the underlying transport/spawn issue.
+
+This step is a gate — do not mark the work complete until both local MCPs respond to a health check.
+
+---
+
 ## Risk Assessment
 
 - **Low risk:** Removing dead code (discord, linkedin, twitter have no MCP servers; linear/twilio are unused).
