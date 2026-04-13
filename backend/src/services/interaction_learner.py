@@ -56,11 +56,13 @@ class InteractionLearner:
         db_factory,
         vector_store: VectorStore | None = None,
         redis=None,
+        event_bus=None,
     ) -> None:
         self._settings = settings
         self._db_factory = db_factory
         self._vector_store = vector_store
         self._redis = redis
+        self._event_bus = event_bus
 
     async def learn(
         self,
@@ -115,6 +117,7 @@ class InteractionLearner:
                     settings=self._settings,
                     db=db,
                     vector_store=self._vector_store,
+                    event_bus=self._event_bus,
                 )
                 memory_ids = await mem_svc.extract_and_store(
                     user_id=user_id,

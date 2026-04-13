@@ -228,12 +228,18 @@ class JarvisOrchestrator:
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
 
-    async def _ensure_learner_redis(self) -> None:
-        """Ensure the interaction learner has a Redis connection."""
-        if self._interaction_learner and self._interaction_learner._redis is None:
+    async def _ensure_learner_deps(self) -> None:
+        """Lazily wire Redis + EventBus into the interaction learner."""
+        if not self._interaction_learner:
+            return
+        learner = self._interaction_learner
+        if learner._redis is None or learner._event_bus is None:
             event_bus = await self._ensure_event_bus()
-            if event_bus and hasattr(self, "_event_bus_redis"):
-                self._interaction_learner._redis = self._event_bus_redis
+            if hasattr(self, "_event_bus_redis"):
+                if learner._redis is None:
+                    learner._redis = self._event_bus_redis
+                if learner._event_bus is None and event_bus:
+                    learner._event_bus = event_bus
 
     async def shutdown(self) -> None:
         """Await all pending background tasks on orchestrator shutdown."""
@@ -894,7 +900,7 @@ class JarvisOrchestrator:
 
             # Interaction learning (async, non-blocking)
             if self._interaction_learner:
-                await self._ensure_learner_redis()
+                await self._ensure_learner_deps()
                 self._spawn_background(
                     self._interaction_learner.learn(
                         user_id=user_id,
@@ -1247,7 +1253,7 @@ class JarvisOrchestrator:
 
             # Interaction learning (async, non-blocking)
             if self._interaction_learner:
-                await self._ensure_learner_redis()
+                await self._ensure_learner_deps()
                 self._spawn_background(
                     self._interaction_learner.learn(
                         user_id=user_id,
