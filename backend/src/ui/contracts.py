@@ -105,6 +105,15 @@ class A2UIComponent(BaseModel):
             raise ValueError("Component id must not be empty")
         return v
 
+    @model_validator(mode="after")
+    def _validate_properties(self) -> "A2UIComponent":
+        from src.ui.component_properties import PROPERTY_MODELS
+
+        model = PROPERTY_MODELS.get(self.type)
+        if model is not None:
+            model(**self.properties)
+        return self
+
 
 class A2UISurface(BaseModel):
     model_config = ConfigDict(extra="ignore")

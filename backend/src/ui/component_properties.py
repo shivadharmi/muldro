@@ -1,11 +1,8 @@
-"""Typed Pydantic property models for all 22 A2UI component types.
+"""Typed property models for A2UI component types.
 
-Each model validates the `properties` dict on an A2UIComponent for a specific
-component type. The PROPERTY_MODELS registry maps component type strings to their
-model class, enabling model_validator-based validation in A2UIComponent.
-
-Layout containers (Card, Row, Column, List, Divider, Form) are intentionally
-absent from the registry — they carry no required properties of their own.
+Each component type that carries semantic properties has a corresponding Pydantic model.
+Layout containers (Card, Row, Column, List, Divider, Form) have no required properties
+and are intentionally absent from PROPERTY_MODELS.
 """
 
 from typing import Literal
@@ -57,7 +54,7 @@ class ButtonProperties(BaseModel):
 class TextFieldProperties(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    label: str = ""
+    label: str
     placeholder: str = ""
     value: str = ""
 
@@ -77,7 +74,7 @@ class ToggleProperties(BaseModel):
     checked: bool = False
 
 
-# ── Data family ──────────────────────────────────────────────────────────────
+# ── Data family ───────────────────────────────────────────────────────────────
 
 
 class TableProperties(BaseModel):
@@ -93,7 +90,7 @@ class DataGridProperties(BaseModel):
 
     columns: list[dict]
     rows: list[dict]
-    page_size: int = 20
+    page_size: int = 10
 
 
 class TimelineProperties(BaseModel):
@@ -115,7 +112,7 @@ class ProgressProperties(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     value: float
-    max: float = 100
+    max: float = 100.0
     label: str | None = None
 
 
@@ -127,7 +124,7 @@ class ChartProperties(BaseModel):
     title: str = ""
 
 
-# ── Display family ───────────────────────────────────────────────────────────
+# ── Display family ────────────────────────────────────────────────────────────
 
 
 class AvatarProperties(BaseModel):
@@ -142,7 +139,7 @@ class StatusIndicatorProperties(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     status: str
-    label: str = ""
+    label: str
 
 
 class EntityCardProperties(BaseModel):
@@ -150,7 +147,7 @@ class EntityCardProperties(BaseModel):
 
     name: str
     entity_type: str
-    entity_id: str = ""
+    entity_id: str
     attributes: dict | None = None
 
 
@@ -159,18 +156,18 @@ class MemoryCardProperties(BaseModel):
 
     fact_text: str
     memory_type: str
-    source: str = ""
+    source: str
     confidence: float = 1.0
 
 
-# ── Specialized family ───────────────────────────────────────────────────────
+# ── Specialized family ────────────────────────────────────────────────────────
 
 
 class ExecutionTraceProperties(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     steps: list[dict]
-    status: str = "running"
+    status: str
 
 
 class KanbanBoardProperties(BaseModel):
@@ -186,7 +183,7 @@ class CalendarProperties(BaseModel):
     view: Literal["day", "week", "month"] = "week"
 
 
-# ── Layout with properties ───────────────────────────────────────────────────
+# ── Layout family (with required properties) ──────────────────────────────────
 
 
 class TabsProperties(BaseModel):
@@ -200,35 +197,39 @@ class ModalProperties(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     title: str
-    open: bool = True
+    open: bool = False
 
 
-# ── Registry ─────────────────────────────────────────────────────────────────
-# Layout containers (Card, Row, Column, List, Divider, Form) are NOT included —
-# they have no required properties of their own.
+# ── Registry ──────────────────────────────────────────────────────────────────
 
 PROPERTY_MODELS: dict[str, type[BaseModel]] = {
+    # Text
     "Text": TextProperties,
     "CodeBlock": CodeBlockProperties,
     "Badge": BadgeProperties,
     "Alert": AlertProperties,
+    # Input
     "Button": ButtonProperties,
     "TextField": TextFieldProperties,
     "Select": SelectProperties,
     "Toggle": ToggleProperties,
+    # Data
     "Table": TableProperties,
     "DataGrid": DataGridProperties,
     "Timeline": TimelineProperties,
     "Metric": MetricProperties,
     "Progress": ProgressProperties,
     "Chart": ChartProperties,
+    # Display
     "Avatar": AvatarProperties,
     "StatusIndicator": StatusIndicatorProperties,
     "EntityCard": EntityCardProperties,
     "MemoryCard": MemoryCardProperties,
+    # Specialized
     "ExecutionTrace": ExecutionTraceProperties,
     "KanbanBoard": KanbanBoardProperties,
     "Calendar": CalendarProperties,
+    # Layout (with required properties)
     "Tabs": TabsProperties,
     "Modal": ModalProperties,
 }
