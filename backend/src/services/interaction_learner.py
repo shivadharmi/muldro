@@ -16,13 +16,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Intents that produce no meaningful knowledge — skip learning.
-SKIP_LEARNING_INTENTS = frozenset({
-    "greeting",
-    "chitchat",
-    "acknowledgment",
-    "simple_question",
-    "memory_operation",
-})
+SKIP_LEARNING_INTENTS = frozenset(
+    {
+        "greeting",
+        "chitchat",
+        "acknowledgment",
+        "simple_question",
+        "memory_operation",
+    }
+)
 
 # Appended to the extraction prompt for interaction-sourced text.
 _INTERACTION_ADDENDUM = """
