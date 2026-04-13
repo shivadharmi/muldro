@@ -72,7 +72,8 @@ export const useSurfaceStore = create<SurfaceState>((set) => ({
   closeDetailModal: () =>
     set({ detailModalOpen: false }),
 
-  setSurfaces: (surfaces) => set({ surfaces }),
+  setSurfaces: (surfaces) =>
+    set({ surfaces: surfaces.slice(0, 20) }),
 
   updateSurface: (surfaceId, update) =>
     set((s) => {

@@ -83,3 +83,52 @@ def build_surface_preview_from_plan(
         progress=None,
         tags=tags,
     )
+
+
+# ── Surface cap ──────────────────────────────────────────────────
+
+MAX_WORKSPACE_SURFACES = 20
+
+PRIORITY_TIERS: dict[str, int] = {
+    "approval": 0,
+    "plan": 1,
+    "alert": 2,
+    "briefing": 3,
+    "proactive_insight": 4,
+    "recommendation": 5,
+    "summary": 6,
+    "checklist": 6,
+    "comparison": 6,
+    "timeline": 6,
+    "table": 6,
+    "activity": 6,
+}
+
+
+def apply_surface_cap(surfaces: list) -> list:
+    """Apply priority-weighted cap to workspace surfaces.
+
+    Sorts by (priority_tier, -created_at) and truncates to MAX_WORKSPACE_SURFACES.
+    Higher-priority surfaces (lower tier number) survive eviction.
+    Within the same tier, newer surfaces (later created_at) survive.
+
+    Uses two-pass stable sort: first by created_at descending (newest first),
+    then by tier ascending. Python's stable sort preserves the newest-first
+    ordering within each tier.
+    """
+    if len(surfaces) <= MAX_WORKSPACE_SURFACES:
+        return surfaces
+
+    # Pass 1: sort by created_at descending (newest first)
+    by_recency = sorted(
+        surfaces,
+        key=lambda s: getattr(s, "created_at", "") or "",
+        reverse=True,
+    )
+    # Pass 2: stable sort by tier ascending (highest priority first)
+    by_priority = sorted(
+        by_recency,
+        key=lambda s: PRIORITY_TIERS.get(getattr(s, "kind", "summary"), 6),
+    )
+
+    return by_priority[:MAX_WORKSPACE_SURFACES]
