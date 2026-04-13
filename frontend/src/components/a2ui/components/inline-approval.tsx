@@ -5,6 +5,7 @@ import type { ApprovalContext } from "@/lib/a2ui-types";
 import { useWsActionStore } from "@/stores/ws-action-store";
 import { riskLevelColor, riskLevelTextColor, trustLevelColor } from "@/lib/design-tokens";
 import { Modal } from "@/components/ui/modal";
+import { Tooltip } from "@/components/ui/tooltip";
 
 function useCountdown(expiresAt: string | null): number {
   const [remainingMs, setRemainingMs] = useState(() => {
@@ -180,30 +181,36 @@ export function InlineApprovalCard({ approval }: InlineApprovalCardProps) {
 
         {/* Action buttons */}
         <div className="flex items-center gap-2.5 pt-1">
-          <button
-            type="button"
-            onClick={handleApprove}
-            disabled={isExpired}
-            className="px-4 py-2 text-xs font-medium rounded-[var(--radius-md)] bg-j-success text-white hover:bg-j-success/90 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Approve
-          </button>
-          <button
-            type="button"
-            onClick={handleEdit}
-            disabled={isExpired}
-            className="px-4 py-2 text-xs font-medium rounded-[var(--radius-md)] bg-surface-2 text-t-secondary border border-b-secondary hover:bg-surface-3 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Edit
-          </button>
-          <button
-            type="button"
-            onClick={handleRejectClick}
-            disabled={isExpired}
-            className="px-4 py-2 text-xs font-medium rounded-[var(--radius-md)] bg-j-error-soft text-j-error border border-j-error/20 hover:bg-j-error/15 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Reject
-          </button>
+          <Tooltip text="Jarvis will proceed with this action">
+            <button
+              type="button"
+              onClick={handleApprove}
+              disabled={isExpired}
+              className="px-4 py-2 text-xs font-medium rounded-[var(--radius-md)] bg-j-success text-white hover:bg-j-success/90 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Approve
+            </button>
+          </Tooltip>
+          <Tooltip text="Review and modify before executing">
+            <button
+              type="button"
+              onClick={handleEdit}
+              disabled={isExpired}
+              className="px-4 py-2 text-xs font-medium rounded-[var(--radius-md)] bg-surface-2 text-t-secondary border border-b-secondary hover:bg-surface-3 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Edit
+            </button>
+          </Tooltip>
+          <Tooltip text="Cancel this action (opens confirmation)">
+            <button
+              type="button"
+              onClick={handleRejectClick}
+              disabled={isExpired}
+              className="px-4 py-2 text-xs font-medium rounded-[var(--radius-md)] bg-j-error-soft text-j-error border border-j-error/20 hover:bg-j-error/15 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Reject
+            </button>
+          </Tooltip>
         </div>
       </div>
 
