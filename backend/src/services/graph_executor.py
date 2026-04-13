@@ -846,6 +846,12 @@ class GraphExecutor:
                             approval=ApprovalContext(
                                 approval_id=approval.approval_id,
                                 step_description=step.name or capability,
+                                risk_level=risk_level,
+                                trust_level="",
+                                expires_at=(
+                                    approval.expires_at.isoformat() if approval.expires_at else None
+                                ),
+                                triggering_step_id=step.step_id,
                                 risk_reasoning=f"Risk: {risk_level}",
                                 trust_context="Legacy approval gate",
                             ),
@@ -998,8 +1004,18 @@ class GraphExecutor:
                 approval=ApprovalContext(
                     approval_id=approval.approval_id,
                     step_description=step.name or capability,
+                    risk_level=risk.risk_level,
+                    trust_level=decision.trust_level,
+                    expires_at=(approval.expires_at.isoformat() if approval.expires_at else None),
+                    triggering_step_id=step.step_id,
+                    graduation_hint=decision.justification or "",
                     risk_reasoning=risk.reasoning,
                     trust_context=decision.justification or "",
+                    reversible=risk.reversible,
+                    blast_radius=risk.blast_radius,
+                    effective_trust_level=decision.effective_trust_level,
+                    approved_count=decision.approved_count,
+                    rejected_count=decision.rejected_count,
                 ),
                 workspace_id=run.workspace_id,
             )
