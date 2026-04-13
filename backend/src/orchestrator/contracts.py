@@ -11,6 +11,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from src.ui.contracts import SurfaceKind
+
 
 class AgentEnvelope(BaseModel):
     """Input envelope for a sub-agent call."""
@@ -233,20 +235,7 @@ class WorkspaceSurfacePush(BaseModel):
 
     type: Literal["surface"] = "surface"
     id: str
-    kind: Literal[
-        "summary",
-        "briefing",
-        "plan",
-        "checklist",
-        "approval",
-        "comparison",
-        "alert",
-        "timeline",
-        "table",
-        "recommendation",
-        "activity",
-        "proactive_insight",
-    ]
+    kind: SurfaceKind
     preview: Any  # SurfacePreview — imported at runtime to avoid circular deps
     detail_config: Any | None = None  # DetailConfig — same reason
     decision: str | None = None
