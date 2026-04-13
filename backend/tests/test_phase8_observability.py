@@ -384,32 +384,31 @@ class TestTraceToDict:
 
 
 class TestRunsModels:
-    def test_run_response_model(self):
-        from src.api.routes_runs import RunResponse
+    def test_run_action_response_model(self):
+        from src.api.schemas_history import RunActionResponse
 
-        r = RunResponse(
+        r = RunActionResponse(
             run_id="run_1",
-            plan_id="plan_1",
-            user_id="usr_1",
             status="completed",
+            message="done",
         )
         assert r.run_id == "run_1"
-        assert r.step_count == 0
+        assert r.status == "completed"
 
-    def test_step_response_model(self):
-        from src.api.routes_runs import StepResponse
+    def test_history_item_response_model(self):
+        from src.api.schemas_history import HistoryItemResponse
 
-        s = StepResponse(
-            step_id="step_1",
-            task_id="task_1",
+        item = HistoryItemResponse(
+            run_id="run_1",
             status="completed",
         )
-        assert s.step_id == "step_1"
+        assert item.run_id == "run_1"
+        assert item.step_count == 0
 
-    def test_artifact_response_model(self):
-        from src.api.routes_runs import ArtifactResponse
+    def test_history_artifact_ref_model(self):
+        from src.api.schemas_history import HistoryArtifactRef
 
-        a = ArtifactResponse(
+        a = HistoryArtifactRef(
             artifact_id="art_1",
             artifact_type="document",
         )
