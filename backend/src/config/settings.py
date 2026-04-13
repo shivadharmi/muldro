@@ -58,7 +58,6 @@ class Settings(BaseSettings):
     observation_stale_gmail_minutes: int = 30
     observation_stale_calendar_minutes: int = 180
     observation_stale_github_minutes: int = 60
-    observation_stale_linear_minutes: int = 30
     observation_stale_notion_minutes: int = 60
 
     # Hardening
@@ -101,12 +100,6 @@ class Settings(BaseSettings):
     github_oauth_client_secret: str = ""
     github_oauth_redirect_uri: str = "http://localhost:8000/v1/auth/github/callback"
 
-    # Linear OAuth
-    linear_oauth_client_id: str = ""
-    linear_oauth_client_secret: str = ""
-    linear_oauth_redirect_uri: str = "http://localhost:8000/v1/auth/linear/callback"
-    linear_access_token: str = ""  # For MCP server (mcp-server-linear)
-
     # Notion OAuth
     notion_oauth_client_id: str = ""
     notion_oauth_client_secret: str = ""
@@ -122,16 +115,6 @@ class Settings(BaseSettings):
     jira_email: str = ""
     jira_api_token: str = ""
     atlassian_mcp_enabled: bool = False  # Enable Atlassian Rovo MCP (requires interactive OAuth)
-
-    # LinkedIn OAuth
-    linkedin_oauth_client_id: str = ""
-    linkedin_oauth_client_secret: str = ""
-    linkedin_oauth_redirect_uri: str = "http://localhost:8000/v1/auth/linkedin/callback"
-
-    # Twitter/X OAuth (PKCE)
-    twitter_oauth_client_id: str = ""
-    twitter_oauth_client_secret: str = ""
-    twitter_oauth_redirect_uri: str = "http://localhost:8000/v1/auth/twitter/callback"
 
     # S3 / artifact storage
     s3_bucket: str = ""
