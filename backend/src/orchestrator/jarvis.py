@@ -43,6 +43,7 @@ from src.orchestrator.tracing import TraceManager
 from src.services.agent_registry import AgentRegistry
 from src.services.capability_resolver import CapabilityResolver, route_step
 from src.services.context_builder import ContextBuilder, ContextPack
+from src.services.surface_mapping import build_surface_preview_from_plan, derive_surface_kind
 from src.services.trace_store import TraceStore
 from src.tools.schemas import build_tool_definitions
 
@@ -85,78 +86,6 @@ CONTEXT_ENRICHED_AGENTS = {
 }
 
 # Intent classification constants imported from intent_classifier module
-
-
-def _derive_surface_kind(plan: "PlanOutput") -> tuple[str, str] | None:
-    """Derive workspace surface kind from PlanOutput step capabilities.
-
-    Returns (kind, default_title) or None if the plan is chat-only.
-    """
-    if not plan.steps:
-        return None
-
-    caps = {s.capability for s in plan.steps if s.actor == "jarvis"}
-
-    # Respond/reason only -> no surface (chat-only)
-    # "none" = planner indicated no external capability needed (pure reasoning)
-    if caps <= {"reason", "respond", "none"}:
-        return None
-
-    # System capabilities with visual value
-    if "system.add_to_brief" in caps:
-        return ("briefing", "Briefing Update")
-    if "system.schedule_reminder" in caps:
-        return ("alert", "Reminder Scheduled")
-
-    # Write actions -> plan surface
-    if any(s.risk in ("medium", "high") for s in plan.steps):
-        return ("plan", "New Plan")
-
-    # Multi-step -> plan surface
-    jarvis_steps = [s for s in plan.steps if s.actor == "jarvis"]
-    if len(jarvis_steps) > 2:
-        return ("plan", plan.goal[:80] or "Plan")
-
-    # Single/dual read -> summary
-    return ("summary", "Summary")
-
-
-def _build_surface_preview_from_plan(
-    plan: "PlanOutput",
-    kind: str,
-    default_title: str,
-    response_text: str,
-):
-    """Build a SurfacePreview from a PlanOutput for workspace grid cards."""
-    from src.ui.contracts import SurfaceMetric, SurfacePreview
-
-    title = plan.goal[:80] if plan.goal else default_title
-    subtitle = plan.reasoning[:120] if plan.reasoning else None
-    metrics: list[SurfaceMetric] = []
-    tags: list[str] = []
-
-    if kind == "plan":
-        step_count = len([s for s in plan.steps if s.actor == "jarvis"])
-        if step_count:
-            metrics.append(SurfaceMetric(label="Steps", value=str(step_count)))
-        metrics.append(SurfaceMetric(label="Priority", value=plan.priority))
-    elif kind == "summary":
-        tags.append("read")
-    elif kind == "briefing":
-        tags.append("briefing")
-    elif kind == "alert":
-        tags.append("reminder")
-
-    return SurfacePreview(
-        title=title,
-        subtitle=subtitle,
-        status=None,
-        priority=plan.priority if plan.priority != "medium" else None,
-        metrics=metrics,
-        entities=[],
-        progress=None,
-        tags=tags,
-    )
 
 
 async def _fetch_thread_contexts(
@@ -2120,7 +2049,7 @@ class JarvisOrchestrator:
         from src.orchestrator.contracts import WorkspaceSurfacePush
         from src.ui.renderer import build_detail_config
 
-        mapping = _derive_surface_kind(plan)
+        mapping = derive_surface_kind(plan)
         if not mapping:
             return None
 
@@ -2134,7 +2063,7 @@ class JarvisOrchestrator:
             from ulid import ULID
 
             surface_id = f"surf_{ULID()}"
-            preview = _build_surface_preview_from_plan(plan, kind, default_title, response_text)
+            preview = build_surface_preview_from_plan(plan, kind, default_title, response_text)
             detail_config = build_detail_config(kind, surface_id)
 
             surface = WorkspaceSurfacePush(
