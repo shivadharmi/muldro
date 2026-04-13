@@ -85,6 +85,8 @@ Move to new file `backend/src/services/surface_mapping.py`:
 
 **Why a new file:** `surface_builder.py` is the REST-path builder (DB → surfaces). These functions are the WS-path builder (PlanOutput → surface push). Different concerns, diverge further in Phase 3 when Presenter takes over.
 
+**Lifecycle note:** These functions are relocated here in Phase 1 and deleted in Phase 3 when the Presenter agent replaces them. `surface_mapping.py` then hosts only the `_extract_surface_spec()` parser and `PRIORITY_TIERS` constant.
+
 ### 1.4 Fix phantom `ExecutionSurface` type
 
 Remove `case "ExecutionSurface"` from `frontend/src/components/a2ui/renderer.tsx:146`. The backend `ComponentType` enum has no `EXECUTION_SURFACE` value — this case can never be hit through the standard A2UI dispatch. The `A2UIExecutionSurface` component is used directly by the execution surface card component, not through the renderer dispatch.
@@ -163,7 +165,26 @@ PROPERTY_MODELS: dict[str, type[BaseModel]] = {
     "Text": TextProperties,
     "CodeBlock": CodeBlockProperties,
     "Badge": BadgeProperties,
-    # ... all 22 models mapped
+    "Alert": AlertProperties,
+    "Button": ButtonProperties,
+    "TextField": TextFieldProperties,
+    "Select": SelectProperties,
+    "Toggle": ToggleProperties,
+    "Table": TableProperties,
+    "DataGrid": DataGridProperties,
+    "Timeline": TimelineProperties,
+    "Metric": MetricProperties,
+    "Progress": ProgressProperties,
+    "Chart": ChartProperties,
+    "Avatar": AvatarProperties,
+    "StatusIndicator": StatusIndicatorProperties,
+    "EntityCard": EntityCardProperties,
+    "MemoryCard": MemoryCardProperties,
+    "ExecutionTrace": ExecutionTraceProperties,
+    "KanbanBoard": KanbanBoardProperties,
+    "Calendar": CalendarProperties,
+    "Tabs": TabsProperties,
+    "Modal": ModalProperties,
 }
 ```
 
@@ -220,7 +241,7 @@ class WorkspaceSurfacePush(BaseModel):
     trust_context: dict[str, str] | None = None
     insight_data: dict | None = None
     phase: str | None = None
-    steps: list | None = None
+    steps: list[dict] | None = None
     current_step: str | None = None
     progress: str | None = None
     approval: dict | None = None
@@ -578,7 +599,7 @@ TAB_BUILDERS = {
     ("recommendation", "overview"): build_recommendation_overview,
     ("alert", "overview"): build_alert_overview,
 
-    # Modified 1
+    # Modified 1 (replaces old ("recommendation", "context"): build_recommendation_context)
     ("recommendation", "evidence"): build_recommendation_evidence,
 
     # New 14
