@@ -2047,6 +2047,29 @@ class JarvisOrchestrator:
         except Exception:
             logger.warning("Failed to emit runtime event %s", event_type, exc_info=True)
 
+    async def _check_surface_rate(self, user_id: str, surface_type: str) -> bool:
+        """Return True if push is allowed under rate limit.
+
+        Uses Redis INCR with TTL for a sliding window counter.
+        Workspace: 5 per minute. Insight: 3 per 30 minutes.
+        """
+        event_bus = await self._ensure_event_bus()
+        if not event_bus or not getattr(event_bus, "_redis", None):
+            return True
+
+        redis = event_bus._redis
+        if surface_type == "insight":
+            key = f"jarvis:surface_rate:insight:{user_id}"
+            limit, window = 3, 1800
+        else:
+            key = f"jarvis:surface_rate:workspace:{user_id}"
+            limit, window = 5, 60
+
+        count = await redis.incr(key)
+        if count == 1:
+            await redis.expire(key, window)
+        return count <= limit
+
     async def _push_workspace_surface(
         self,
         plan: "PlanOutput",
@@ -2068,6 +2091,10 @@ class JarvisOrchestrator:
 
         mapping = derive_surface_kind(plan)
         if not mapping:
+            return None
+
+        if not await self._check_surface_rate(user_id, "workspace"):
+            logger.debug("Surface push rate-limited for user %s", user_id)
             return None
 
         kind, default_title = mapping
@@ -2160,6 +2187,10 @@ class JarvisOrchestrator:
         try:
             event_bus = await self._ensure_event_bus()
             if not event_bus:
+                return
+
+            if not await self._check_surface_rate(user_id, "insight"):
+                logger.debug("Insight surface rate-limited for user %s", user_id)
                 return
 
             surface_id = f"surf_{ULID()}"
