@@ -396,8 +396,14 @@ _TABS_BY_KIND: dict[str, list[tuple[str, str]]] = {
     "summary": [("overview", "Overview"), ("sources", "Sources"), ("context", "Context")],
     "briefing": [("priorities", "Priorities"), ("events", "Events"), ("actions", "Actions")],
     "approval": [("request", "Request"), ("risk", "Risk"), ("history", "History")],
-    "recommendation": [("overview", "Overview"), ("context", "Context")],
-    "alert": [("overview", "Overview")],
+    "recommendation": [("overview", "Overview"), ("evidence", "Evidence"), ("context", "Context")],
+    "alert": [("overview", "Overview"), ("diagnostics", "Diagnostics")],
+    "checklist": [("items", "Items"), ("context", "Context")],
+    "comparison": [("options", "Options"), ("criteria", "Criteria")],
+    "timeline": [("events", "Events"), ("context", "Context")],
+    "table": [("data", "Data"), ("sources", "Sources")],
+    "activity": [("runs", "Recent Runs"), ("stats", "Stats")],
+    "proactive_insight": [("signal", "Signal"), ("actions", "Actions"), ("context", "Context")],
 }
 
 

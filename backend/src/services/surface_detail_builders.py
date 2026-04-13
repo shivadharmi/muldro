@@ -732,6 +732,573 @@ async def build_alert_overview(db: AsyncSession, surface: Any, **kwargs: Any) ->
     )
 
 
+# ── Checklist builders ─────────────────────────────────────────
+
+
+async def build_checklist_items(db: AsyncSession, surface: Any, **kwargs: Any) -> DetailTabResponse:
+    """Checklist items — structured items from payload or TaskSteps fallback."""
+    payload = _get_payload(surface)
+    surface_data = payload.get("surface_data", {})
+    items = surface_data.get("items", []) if isinstance(surface_data, dict) else []
+
+    if items:
+        children: list[A2UIComponent] = []
+        for i, item in enumerate(items):
+            status = item.get("status", "pending") if isinstance(item, dict) else "pending"
+            title = item.get("title", str(item)) if isinstance(item, dict) else str(item)
+            variant = "success" if status == "completed" else "default"
+            children.append(
+                r.row(
+                    f"cl_item_{i}",
+                    [
+                        r.badge(f"cl_item_{i}_st", status, variant=variant),
+                        r.text(f"cl_item_{i}_title", _truncate(title, 100)),
+                    ],
+                )
+            )
+        return DetailTabResponse(
+            tab_id="items",
+            sections=[_section("items", f"Items ({len(items)})", children, collapsed=False)],
+        )
+
+    # Fallback: use TaskSteps from linked run
+    from src.models.task_graph import TaskStep
+
+    run_id = _extract_run_id(surface)
+    if not run_id:
+        return _empty_tab("items", "No checklist items available.")
+
+    steps_result = await db.execute(
+        select(TaskStep).where(TaskStep.run_id == run_id).order_by(TaskStep.step_order)
+    )
+    steps = list(steps_result.scalars().all())
+    if not steps:
+        return _empty_tab("items", "No checklist items available.")
+
+    children = []
+    for i, step in enumerate(steps):
+        variant = "success" if step.status == "completed" else "default"
+        children.append(
+            r.row(
+                f"cl_step_{i}",
+                [
+                    r.badge(f"cl_step_{i}_st", step.status or "pending", variant=variant),
+                    r.text(f"cl_step_{i}_name", step.name or step.step_type or f"Step {i + 1}"),
+                ],
+            )
+        )
+    return DetailTabResponse(
+        tab_id="items",
+        sections=[_section("items", f"Items ({len(steps)})", children, collapsed=False)],
+    )
+
+
+async def build_checklist_context(
+    db: AsyncSession, surface: Any, **kwargs: Any
+) -> DetailTabResponse:
+    """Checklist context — delegates to plan context builder."""
+    result = await build_plan_context(db, surface, **kwargs)
+    return DetailTabResponse(tab_id="context", sections=result.sections)
+
+
+# ── Comparison builders ────────────────────────────────────────
+
+
+async def build_comparison_options(
+    db: AsyncSession, surface: Any, **kwargs: Any
+) -> DetailTabResponse:
+    """Comparison options — each option as a card with pros and cons."""
+    payload = _get_payload(surface)
+    surface_data = payload.get("surface_data", {})
+    options = surface_data.get("options", []) if isinstance(surface_data, dict) else []
+
+    if options:
+        children: list[A2UIComponent] = []
+        for i, opt in enumerate(options):
+            if not isinstance(opt, dict):
+                continue
+            name = opt.get("name", f"Option {i + 1}")
+            desc = opt.get("description", "")
+            pros = opt.get("pros", [])
+            cons = opt.get("cons", [])
+
+            card_children: list[A2UIComponent] = [
+                r.text(f"opt_{i}_name", name),
+            ]
+            if desc:
+                card_children.append(r.caption(f"opt_{i}_desc", desc))
+            for j, pro in enumerate(pros):
+                card_children.append(r.badge(f"opt_{i}_pro_{j}", str(pro), variant="success"))
+            for j, con in enumerate(cons):
+                card_children.append(r.badge(f"opt_{i}_con_{j}", str(con), variant="danger"))
+            children.append(r.card(f"opt_{i}", card_children))
+
+        return DetailTabResponse(
+            tab_id="options",
+            sections=[_section("options", f"Options ({len(options)})", children, collapsed=False)],
+        )
+
+    # Fallback to response_preview
+    preview = payload.get("response_preview", "")
+    return DetailTabResponse(
+        tab_id="options",
+        sections=[
+            _section(
+                "options",
+                "Options",
+                [r.text("opt_fallback", preview or "No comparison data available.")],
+                collapsed=False,
+            )
+        ],
+    )
+
+
+async def build_comparison_criteria(
+    db: AsyncSession, surface: Any, **kwargs: Any
+) -> DetailTabResponse:
+    """Comparison criteria — renders criteria as badge list."""
+    payload = _get_payload(surface)
+    surface_data = payload.get("surface_data", {})
+    criteria = surface_data.get("criteria", []) if isinstance(surface_data, dict) else []
+
+    if not criteria:
+        return _empty_tab("criteria", "No criteria defined.")
+
+    children: list[A2UIComponent] = [
+        r.badge(f"crit_{i}", str(c), variant="default") for i, c in enumerate(criteria)
+    ]
+    return DetailTabResponse(
+        tab_id="criteria",
+        sections=[_section("criteria", "Criteria", children, collapsed=False)],
+    )
+
+
+# ── Timeline builders ──────────────────────────────────────────
+
+
+async def build_timeline_events(db: AsyncSession, surface: Any, **kwargs: Any) -> DetailTabResponse:
+    """Timeline events — renders events via r.timeline() or falls back to briefing events."""
+    payload = _get_payload(surface)
+    surface_data = payload.get("surface_data", {})
+    events = surface_data.get("events", []) if isinstance(surface_data, dict) else []
+
+    if events:
+        return DetailTabResponse(
+            tab_id="events",
+            sections=[
+                _section(
+                    "timeline",
+                    f"Events ({len(events)})",
+                    [r.timeline("tl_events", events)],
+                    collapsed=False,
+                )
+            ],
+        )
+
+    # Fallback to briefing events builder
+    result = await build_briefing_events(db, surface, **kwargs)
+    return DetailTabResponse(tab_id="events", sections=result.sections)
+
+
+async def build_timeline_context(
+    db: AsyncSession, surface: Any, **kwargs: Any
+) -> DetailTabResponse:
+    """Timeline context — delegates to plan context builder."""
+    result = await build_plan_context(db, surface, **kwargs)
+    return DetailTabResponse(tab_id="context", sections=result.sections)
+
+
+# ── Table builders ─────────────────────────────────────────────
+
+
+async def build_table_data(db: AsyncSession, surface: Any, **kwargs: Any) -> DetailTabResponse:
+    """Table data — renders columns and rows via r.table()."""
+    payload = _get_payload(surface)
+    surface_data = payload.get("surface_data", {})
+
+    columns = surface_data.get("columns", []) if isinstance(surface_data, dict) else []
+    rows = surface_data.get("rows", []) if isinstance(surface_data, dict) else []
+
+    if columns and rows:
+        return DetailTabResponse(
+            tab_id="data",
+            sections=[
+                _section(
+                    "table",
+                    f"Data ({len(rows)} rows)",
+                    [r.table("tbl_data", columns, rows)],
+                    collapsed=False,
+                )
+            ],
+        )
+
+    # Fallback to response_preview
+    preview = payload.get("response_preview", "")
+    return DetailTabResponse(
+        tab_id="data",
+        sections=[
+            _section(
+                "table",
+                "Data",
+                [r.text("tbl_fallback", preview or "No table data available.")],
+                collapsed=False,
+            )
+        ],
+    )
+
+
+async def build_table_sources(db: AsyncSession, surface: Any, **kwargs: Any) -> DetailTabResponse:
+    """Table sources — TaskSteps for the linked run with step types and timing."""
+    from src.models.task_graph import TaskStep
+
+    run_id = _extract_run_id(surface)
+    if not run_id:
+        return _empty_tab("sources", "No linked run for source lookup.")
+
+    steps_result = await db.execute(
+        select(TaskStep).where(TaskStep.run_id == run_id).order_by(TaskStep.step_order)
+    )
+    steps = list(steps_result.scalars().all())
+    if not steps:
+        return _empty_tab("sources", "No source steps found.")
+
+    children: list[A2UIComponent] = []
+    for i, step in enumerate(steps):
+        step_children: list[A2UIComponent] = [
+            r.badge(f"ts_{i}_type", step.step_type or "unknown"),
+            r.text(f"ts_{i}_name", step.name or f"Step {i + 1}"),
+        ]
+        if step.started_at:
+            step_children.append(
+                r.caption(f"ts_{i}_start", f"Started: {_format_ts(step.started_at)}")
+            )
+        if step.completed_at:
+            step_children.append(
+                r.caption(f"ts_{i}_done", f"Completed: {_format_ts(step.completed_at)}")
+            )
+        children.append(r.row(f"ts_{i}", step_children))
+
+    return DetailTabResponse(
+        tab_id="sources",
+        sections=[_section("sources", f"Source Steps ({len(steps)})", children, collapsed=False)],
+    )
+
+
+# ── Activity builders ──────────────────────────────────────────
+
+
+async def build_activity_runs(db: AsyncSession, surface: Any, **kwargs: Any) -> DetailTabResponse:
+    """Activity runs — recent TaskRuns for the workspace (last 24h)."""
+    ws_id = getattr(surface, "workspace_id", None)
+    if not ws_id:
+        return _empty_tab("runs", "No workspace context for activity lookup.")
+
+    from src.models.task_graph import TaskRun
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    result = await db.execute(
+        select(TaskRun)
+        .where(TaskRun.workspace_id == ws_id, TaskRun.created_at >= cutoff)
+        .order_by(TaskRun.created_at.desc())
+        .limit(20)
+    )
+    runs = list(result.scalars().all())
+
+    if not runs:
+        return _empty_tab("runs", "No runs in the last 24 hours.")
+
+    children: list[A2UIComponent] = []
+    for i, run in enumerate(runs):
+        variant = "success" if run.status == "completed" else "default"
+        if run.status == "failed":
+            variant = "danger"
+        children.append(
+            r.row(
+                f"run_{i}",
+                [
+                    r.badge(f"run_{i}_st", run.status or "pending", variant=variant),
+                    r.text(f"run_{i}_src", run.source or "unknown"),
+                    r.caption(f"run_{i}_time", _format_ts(run.created_at)),
+                ],
+            )
+        )
+
+    return DetailTabResponse(
+        tab_id="runs",
+        sections=[_section("runs", f"Recent Runs ({len(runs)})", children, collapsed=False)],
+    )
+
+
+async def build_activity_stats(db: AsyncSession, surface: Any, **kwargs: Any) -> DetailTabResponse:
+    """Activity stats — aggregated run counts for the workspace."""
+    ws_id = getattr(surface, "workspace_id", None)
+    if not ws_id:
+        return _empty_tab("stats", "No workspace context for stats.")
+
+    from sqlalchemy import func
+
+    from src.models.task_graph import TaskRun
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    base_filter = [TaskRun.workspace_id == ws_id, TaskRun.created_at >= cutoff]
+
+    total_result = await db.execute(select(func.count(TaskRun.run_id)).where(*base_filter))
+    total = total_result.scalar() or 0
+
+    completed_result = await db.execute(
+        select(func.count(TaskRun.run_id)).where(*base_filter, TaskRun.status == "completed")
+    )
+    completed = completed_result.scalar() or 0
+
+    failed_result = await db.execute(
+        select(func.count(TaskRun.run_id)).where(*base_filter, TaskRun.status == "failed")
+    )
+    failed = failed_result.scalar() or 0
+
+    children: list[A2UIComponent] = [
+        r.metric("stat_total", "Total Runs (24h)", total),
+        r.metric("stat_completed", "Completed", completed),
+        r.metric("stat_failed", "Failed", failed),
+    ]
+    if total > 0:
+        pct = round((completed / total) * 100, 1)
+        children.append(r.progress("stat_success_rate", pct, label=f"Success Rate: {pct}%"))
+
+    return DetailTabResponse(
+        tab_id="stats",
+        sections=[_section("stats", "Run Statistics", children, collapsed=False)],
+    )
+
+
+# ── Proactive Insight builders ─────────────────────────────────
+
+
+async def build_insight_signal(db: AsyncSession, surface: Any, **kwargs: Any) -> DetailTabResponse:
+    """Insight signal — source, summary, relevance score and reasoning."""
+    payload = _get_payload(surface)
+    insight_data = payload.get("insight_data", {})
+
+    if not insight_data:
+        return _empty_tab("signal", "No insight data available.")
+
+    children: list[A2UIComponent] = []
+    signal_source = insight_data.get("signal_source", "")
+    if signal_source:
+        children.append(r.badge("ins_source", signal_source))
+
+    signal_summary = insight_data.get("signal_summary", "")
+    if signal_summary:
+        children.append(r.text("ins_summary", signal_summary))
+
+    relevance_score = insight_data.get("relevance_score")
+    if relevance_score is not None:
+        children.append(r.metric("ins_relevance", "Relevance", relevance_score))
+
+    relevance_reasoning = insight_data.get("relevance_reasoning", "")
+    if relevance_reasoning:
+        children.append(r.caption("ins_reasoning", relevance_reasoning))
+
+    if not children:
+        return _empty_tab("signal", "No signal details available.")
+
+    return DetailTabResponse(
+        tab_id="signal",
+        sections=[_section("signal", "Signal Details", children, collapsed=False)],
+    )
+
+
+async def build_insight_actions(db: AsyncSession, surface: Any, **kwargs: Any) -> DetailTabResponse:
+    """Insight actions — suggested actions with descriptions and execute buttons."""
+    payload = _get_payload(surface)
+    insight_data = payload.get("insight_data", {})
+    actions = insight_data.get("suggested_actions", [])
+
+    if not actions:
+        return _empty_tab("actions", "No suggested actions.")
+
+    children: list[A2UIComponent] = []
+    for i, action in enumerate(actions):
+        if not isinstance(action, dict):
+            continue
+        desc = action.get("description", "")
+        capability = action.get("capability", "")
+        card_children: list[A2UIComponent] = []
+        if desc:
+            card_children.append(r.text(f"act_{i}_desc", desc))
+        if capability:
+            card_children.append(r.badge(f"act_{i}_cap", capability))
+        card_children.append(
+            r.button(
+                f"act_{i}_exec",
+                "Execute",
+                variant="primary",
+                action_payload={
+                    "action": "execute_insight_action",
+                    "index": i,
+                    "capability": capability,
+                },
+            )
+        )
+        children.append(r.card(f"act_{i}", card_children))
+
+    if not children:
+        return _empty_tab("actions", "No suggested actions.")
+
+    title = f"Suggested Actions ({len(children)})"
+    return DetailTabResponse(
+        tab_id="actions",
+        sections=[_section("actions", title, children, collapsed=False)],
+    )
+
+
+async def build_insight_context(db: AsyncSession, surface: Any, **kwargs: Any) -> DetailTabResponse:
+    """Insight context — related goals from insight data."""
+    payload = _get_payload(surface)
+    insight_data = payload.get("insight_data", {})
+    goals = insight_data.get("related_goals", [])
+
+    if not goals:
+        return _empty_tab("context", "No related goals.")
+
+    children: list[A2UIComponent] = [r.text(f"goal_{i}", str(goal)) for i, goal in enumerate(goals)]
+    return DetailTabResponse(
+        tab_id="context",
+        sections=[_section("goals", "Related Goals", children, collapsed=False)],
+    )
+
+
+# ── Enhanced existing builders ─────────────────────────────────
+
+
+async def build_recommendation_evidence(
+    db: AsyncSession, surface: Any, **kwargs: Any
+) -> DetailTabResponse:
+    """Recommendation evidence — failed runs or open circuit breakers depending on title."""
+    payload = _get_payload(surface)
+    preview = payload.get("preview", {})
+    title = (preview.get("title", "") if isinstance(preview, dict) else "").lower()
+
+    sections: list[DetailSection] = []
+
+    if "failed" in title or "fail" in title:
+        from src.models.task_graph import TaskRun
+
+        ws_id = getattr(surface, "workspace_id", None)
+        if ws_id:
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+            result = await db.execute(
+                select(TaskRun)
+                .where(
+                    TaskRun.workspace_id == ws_id,
+                    TaskRun.status == "failed",
+                    TaskRun.created_at >= cutoff,
+                )
+                .order_by(TaskRun.created_at.desc())
+                .limit(10)
+            )
+            failed_runs = list(result.scalars().all())
+            if failed_runs:
+                children: list[A2UIComponent] = []
+                for i, run in enumerate(failed_runs):
+                    err_msg = ""
+                    if run.error and isinstance(run.error, dict):
+                        err_msg = run.error.get("message", str(run.error))
+                    run_children: list[A2UIComponent] = [
+                        r.badge(f"fr_{i}_st", "failed", variant="danger"),
+                        r.text(f"fr_{i}_src", f"Source: {run.source or 'unknown'}"),
+                    ]
+                    if err_msg:
+                        run_children.append(r.caption(f"fr_{i}_err", _truncate(str(err_msg), 150)))
+                    children.append(r.row(f"fr_{i}", run_children))
+                sections.append(_section("failures", f"Failed Runs ({len(failed_runs)})", children))
+
+    if "source" in title or "failing" in title:
+        from src.models.perception_state import PerceptionState
+
+        ws_id = getattr(surface, "workspace_id", None)
+        if ws_id:
+            result = await db.execute(
+                select(PerceptionState).where(
+                    PerceptionState.workspace_id == ws_id,
+                    PerceptionState.circuit_state == "open",
+                )
+            )
+            open_sources = list(result.scalars().all())
+            if open_sources:
+                children = []
+                for i, ps in enumerate(open_sources):
+                    children.append(
+                        r.row(
+                            f"ps_{i}",
+                            [
+                                r.badge(f"ps_{i}_src", ps.source, variant="danger"),
+                                r.text(
+                                    f"ps_{i}_err",
+                                    _truncate(ps.last_error or "No error details", 120),
+                                ),
+                                r.caption(
+                                    f"ps_{i}_fail",
+                                    f"Failures: {ps.consecutive_failures}",
+                                ),
+                            ],
+                        )
+                    )
+                sections.append(
+                    _section("circuits", f"Open Circuit Breakers ({len(open_sources)})", children)
+                )
+
+    if not sections:
+        return _empty_tab("evidence", "No evidence data available.")
+    return DetailTabResponse(tab_id="evidence", sections=sections)
+
+
+async def build_alert_diagnostics(
+    db: AsyncSession, surface: Any, **kwargs: Any
+) -> DetailTabResponse:
+    """Alert diagnostics — failed/blocked/timed_out steps with error details."""
+    from src.models.task_graph import TaskStep
+
+    run_id = _extract_run_id(surface)
+    if not run_id:
+        return _empty_tab("diagnostics", "No linked run for diagnostics.")
+
+    steps_result = await db.execute(
+        select(TaskStep)
+        .where(
+            TaskStep.run_id == run_id,
+            TaskStep.status.in_(["failed", "blocked", "timed_out"]),
+        )
+        .order_by(TaskStep.step_order)
+    )
+    steps = list(steps_result.scalars().all())
+
+    if not steps:
+        return _empty_tab("diagnostics", "No failed or blocked steps found.")
+
+    children: list[A2UIComponent] = []
+    for i, step in enumerate(steps):
+        variant = "danger" if step.status == "failed" else "warning"
+        step_children: list[A2UIComponent] = [
+            r.badge(f"diag_{i}_st", step.status or "unknown", variant=variant),
+            r.text(f"diag_{i}_name", step.name or step.step_type or f"Step {i + 1}"),
+        ]
+        if step.error and isinstance(step.error, dict):
+            err_msg = step.error.get("message", str(step.error))
+            step_children.append(
+                r.alert(f"diag_{i}_err", _truncate(str(err_msg), 200), severity="error")
+            )
+        if step.started_at:
+            step_children.append(
+                r.caption(f"diag_{i}_start", f"Started: {_format_ts(step.started_at)}")
+            )
+        children.append(r.row(f"diag_{i}", step_children))
+
+    return DetailTabResponse(
+        tab_id="diagnostics",
+        sections=[_section("diag", f"Problem Steps ({len(steps)})", children, collapsed=False)],
+    )
+
+
 # ── Registry ────────────────────────────────────────────────────
 
 TAB_BUILDERS: dict[tuple[str, str], Any] = {
@@ -748,6 +1315,21 @@ TAB_BUILDERS: dict[tuple[str, str], Any] = {
     ("approval", "risk"): build_approval_risk,
     ("approval", "history"): build_approval_history,
     ("recommendation", "overview"): build_recommendation_overview,
+    ("recommendation", "evidence"): build_recommendation_evidence,
     ("recommendation", "context"): build_recommendation_context,
     ("alert", "overview"): build_alert_overview,
+    ("alert", "diagnostics"): build_alert_diagnostics,
+    ("checklist", "items"): build_checklist_items,
+    ("checklist", "context"): build_checklist_context,
+    ("comparison", "options"): build_comparison_options,
+    ("comparison", "criteria"): build_comparison_criteria,
+    ("timeline", "events"): build_timeline_events,
+    ("timeline", "context"): build_timeline_context,
+    ("table", "data"): build_table_data,
+    ("table", "sources"): build_table_sources,
+    ("activity", "runs"): build_activity_runs,
+    ("activity", "stats"): build_activity_stats,
+    ("proactive_insight", "signal"): build_insight_signal,
+    ("proactive_insight", "actions"): build_insight_actions,
+    ("proactive_insight", "context"): build_insight_context,
 }
