@@ -8,6 +8,7 @@ from src.orchestrator.contracts import (
     AgentResult,
     DomainEvent,
     StepResult,
+    StepState,
     ToolCallRequest,
     ToolCallResult,
 )
@@ -124,3 +125,48 @@ class TestDomainEvent:
         d = e.model_dump()
         assert d["event_type"] == "memory.created"
         assert "timestamp" in d
+
+
+class TestStepState:
+    def test_new_fields_default_none(self):
+        s = StepState(step_id="step_001", description="Search KB", status="pending")
+        assert s.started_at is None
+        assert s.completed_at is None
+        assert s.timeout_seconds is None
+        assert s.error is None
+        assert s.retry_count is None
+
+    def test_new_fields_populated(self):
+        s = StepState(
+            step_id="step_001",
+            description="Search KB",
+            status="executing",
+            started_at="2026-04-13T10:00:00Z",
+            timeout_seconds=60,
+        )
+        assert s.started_at == "2026-04-13T10:00:00Z"
+        assert s.timeout_seconds == 60
+
+    def test_extra_fields_ignored(self):
+        s = StepState(
+            step_id="step_001",
+            description="x",
+            status="completed",
+            unknown_field="ignored",
+        )
+        assert not hasattr(s, "unknown_field")
+
+    def test_completed_with_all_fields(self):
+        s = StepState(
+            step_id="step_001",
+            description="Send email",
+            status="failed",
+            duration_ms=47000,
+            started_at="2026-04-13T10:00:00Z",
+            completed_at="2026-04-13T10:00:47Z",
+            timeout_seconds=60,
+            error={"message": "SMTP timeout", "code": "ETIMEDOUT"},
+            retry_count=3,
+        )
+        assert s.error["message"] == "SMTP timeout"
+        assert s.retry_count == 3

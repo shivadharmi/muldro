@@ -290,6 +290,13 @@ class StepState(BaseModel):
     status: Literal["pending", "executing", "completed", "failed", "approval_needed", "user_action"]
     output_summary: str | None = None
     duration_ms: int | None = None
+    started_at: str | None = None
+
+    # Evidence (available on demand)
+    completed_at: str | None = None
+    timeout_seconds: int | None = None
+    error: dict | None = None
+    retry_count: int | None = None
 
 
 class ApprovalContext(BaseModel):
