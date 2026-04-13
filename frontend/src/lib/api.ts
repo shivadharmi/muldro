@@ -834,3 +834,42 @@ export async function setTimePolicies(
     body: JSON.stringify({ policies }),
   });
 }
+
+// ── History ─────────────────────────────────────────────────────
+
+export async function fetchHistory(params: {
+  status?: string;
+  source?: string;
+  search?: string;
+  from?: string;
+  to?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<{
+  items: unknown[];
+  total: number;
+  limit: number;
+  offset: number;
+}> {
+  const qs = new URLSearchParams();
+  if (params.status && params.status !== "all") qs.set("status", params.status);
+  if (params.source && params.source !== "all") qs.set("source", params.source);
+  if (params.search) qs.set("search", params.search);
+  if (params.from) qs.set("from", params.from);
+  if (params.to) qs.set("to", params.to);
+  if (params.limit) qs.set("limit", String(params.limit));
+  if (params.offset) qs.set("offset", String(params.offset));
+  const query = qs.toString();
+  return api(`/history${query ? `?${query}` : ""}`);
+}
+
+export async function fetchHistoryDetail(runId: string) {
+  return api<Record<string, unknown>>(`/history/${runId}`);
+}
+
+export async function retryRun(runId: string) {
+  return post<{ run_id: string; status: string; message: string }>(
+    `/history/${runId}/retry`,
+    {}
+  );
+}
