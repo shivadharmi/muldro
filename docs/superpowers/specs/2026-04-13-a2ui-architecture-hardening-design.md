@@ -78,10 +78,10 @@ class WorkspaceSurfacePush(BaseModel):
 ### 1.3 Move UI functions out of `jarvis.py`
 
 Move to new file `backend/src/services/surface_mapping.py`:
-- `_derive_surface_kind()` (jarvis.py ~line 90)
-- `_build_surface_preview_from_plan()` (jarvis.py ~line 124)
+- `_derive_surface_kind()` → `derive_surface_kind()` (underscore removed — now a public module function)
+- `_build_surface_preview_from_plan()` → `build_surface_preview_from_plan()` (same)
 
-`jarvis.py` imports and calls them. No logic change — pure relocation.
+`jarvis.py` imports and calls them. No logic change — pure relocation with public API naming.
 
 **Why a new file:** `surface_builder.py` is the REST-path builder (DB → surfaces). These functions are the WS-path builder (PlanOutput → surface push). Different concerns, diverge further in Phase 3 when Presenter takes over.
 
@@ -449,11 +449,11 @@ if surface_spec and surface_spec.should_surface:
 New function in `surface_mapping.py`:
 
 ```python
-def _extract_surface_spec(response_text: str) -> SurfaceSpec | None:
+def extract_surface_spec(response_text: str) -> SurfaceSpec | None:
     """Extract SurfaceSpec from ```json:surface``` block in Presenter response.
     Returns None if not found or invalid. Best-effort — degrades to chat-only."""
 
-def _extract_surface_data(response_text: str) -> dict | None:
+def extract_surface_data(response_text: str) -> dict | None:
     """Extract structured data from ```json:surface_data``` block.
     Used by detail tab builders for comparison, table, timeline, checklist kinds."""
 ```
@@ -461,8 +461,8 @@ def _extract_surface_data(response_text: str) -> dict | None:
 ### 3.6 Delete hardcoded mapping functions
 
 After integration is complete, delete from `surface_mapping.py`:
-- `_derive_surface_kind()` — fully replaced by Presenter's kind selection
-- `_build_surface_preview_from_plan()` — fully replaced by Presenter's SurfaceSpec
+- `derive_surface_kind()` — fully replaced by Presenter's kind selection
+- `build_surface_preview_from_plan()` — fully replaced by Presenter's SurfaceSpec
 
 ### 3.7 Non-Presenter surface paths (unchanged)
 
