@@ -67,8 +67,38 @@ const statusIcon: Record<string, { icon: string; className: string }> = {
   user_action: { icon: "👤", className: statusTextColor("user_action") },
 };
 
+function CompletedGroupSummary({
+  count,
+  totalDurationMs,
+  onExpand,
+}: {
+  count: number;
+  totalDurationMs: number;
+  onExpand: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onExpand}
+      className="flex items-center gap-2 w-full px-3 py-2 rounded-[var(--radius-md)] bg-j-success-soft border border-j-success/12 cursor-pointer hover:bg-j-success/10 transition-colors"
+    >
+      <span className={`shrink-0 w-5 text-center ${statusTextColor("completed")}`}>✓</span>
+      <span className="flex-1 text-left text-xs">
+        <span className="text-t-secondary font-medium">{count} steps completed</span>
+        {totalDurationMs > 0 && (
+          <span className="ml-1.5 text-t-tertiary">{formatDuration(totalDurationMs)} total</span>
+        )}
+      </span>
+      <span className="text-[10px] text-t-tertiary px-1.5 py-0.5 bg-surface-2 rounded-[var(--radius-sm)]">
+        ▸ Expand
+      </span>
+    </button>
+  );
+}
+
 export function StepList({ steps, currentStep }: StepListProps) {
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
+  const [showCompletedSteps, setShowCompletedSteps] = useState(false);
 
   const toggleExpand = (stepId: string) => {
     setExpandedSteps((prev) => {
@@ -79,9 +109,44 @@ export function StepList({ steps, currentStep }: StepListProps) {
     });
   };
 
+  const completedSteps = steps.filter((s) => s.status === "completed");
+  const shouldGroup = completedSteps.length >= 5 && !showCompletedSteps;
+  const totalCompletedMs = completedSteps.reduce((sum, s) => sum + (s.duration_ms ?? 0), 0);
+  let groupRendered = false;
+
   return (
     <div className="space-y-1.5">
+      {showCompletedSteps && completedSteps.length >= 5 && (
+        <button
+          type="button"
+          onClick={() => setShowCompletedSteps(false)}
+          className="flex items-center gap-2 w-full px-3 py-2 rounded-[var(--radius-md)] bg-j-success-soft border border-j-success/12 cursor-pointer hover:bg-j-success/10 transition-colors"
+        >
+          <span className={`shrink-0 w-5 text-center ${statusTextColor("completed")}`}>✓</span>
+          <span className="flex-1 text-left text-xs text-t-secondary font-medium">
+            {completedSteps.length} steps completed
+          </span>
+          <span className="text-[10px] text-t-tertiary px-1.5 py-0.5 bg-surface-2 rounded-[var(--radius-sm)]">
+            ▾ Collapse
+          </span>
+        </button>
+      )}
       {steps.map((step) => {
+        if (step.status === "completed" && shouldGroup) {
+          if (!groupRendered) {
+            groupRendered = true;
+            return (
+              <CompletedGroupSummary
+                key="__completed_group"
+                count={completedSteps.length}
+                totalDurationMs={totalCompletedMs}
+                onExpand={() => setShowCompletedSteps(true)}
+              />
+            );
+          }
+          return null;
+        }
+
         const isCurrent = step.step_id === currentStep;
         const { icon, className } = statusIcon[step.status] ?? statusIcon.pending;
         const isExpanded = expandedSteps.has(step.step_id);
