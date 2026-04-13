@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.services.memory_service import MemoryService
-from tests.conftest import TEST_USER_ID, make_mock_settings
+from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID, make_mock_settings
 
 
 @pytest.fixture
@@ -105,6 +105,40 @@ async def test_extract_skips_duplicates(mock_get_client, mock_embed_cls, setting
     memory_ids = await service.extract_and_store(TEST_USER_ID, "Already known fact", ["evt_002"])
 
     assert len(memory_ids) == 0
+
+
+@patch("src.services.memory_service.EmbeddingService")
+@patch("src.services.memory_service.get_anthropic_client")
+@pytest.mark.asyncio
+async def test_extract_and_store_uses_prompt_addendum(
+    mock_get_client, mock_embed_cls, settings, mock_db
+):
+    """Should append prompt_addendum to system prompt when provided."""
+    extraction = {"memories": []}
+
+    mock_client = MagicMock()
+    response = MagicMock()
+    response.content = [MagicMock(text=json.dumps(extraction))]
+    mock_client.messages.create = AsyncMock(return_value=response)
+    mock_get_client.return_value = mock_client
+
+    mock_embedder = MagicMock()
+    mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 1024)
+    mock_embed_cls.return_value = mock_embedder
+
+    svc = MemoryService(settings=settings, db=mock_db)
+
+    await svc.extract_and_store(
+        user_id=TEST_USER_ID,
+        source_text="User: Check repos\nJarvis: You have 39 repos",
+        source_event_ids=["trace_123"],
+        workspace_id=TEST_WORKSPACE_ID,
+        prompt_addendum="\nExtra instruction for interaction learning.",
+    )
+
+    call_args = mock_client.messages.create.call_args
+    system_prompt = call_args.kwargs.get("system") or call_args[1].get("system")
+    assert "Extra instruction for interaction learning." in system_prompt
 
 
 @patch("src.services.memory_service.EmbeddingService")
