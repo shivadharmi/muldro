@@ -126,6 +126,9 @@ class A2UISurface(BaseModel):
 # ── Rich preview + detail modal contracts ───────────────────────
 
 
+_VALID_METRIC_VARIANTS = {"default", "success", "warning", "danger"}
+
+
 class SurfaceMetric(BaseModel):
     """Single metric displayed on a preview card (e.g. '3 tasks', 'high risk')."""
 
@@ -134,6 +137,12 @@ class SurfaceMetric(BaseModel):
     label: str
     value: str
     variant: Literal["default", "success", "warning", "danger"] = "default"
+
+    @field_validator("variant", mode="before")
+    @classmethod
+    def _coerce_variant(cls, v: str) -> str:
+        """Map unknown LLM-generated variants (e.g. 'neutral', 'info') to 'default'."""
+        return v if v in _VALID_METRIC_VARIANTS else "default"
 
 
 class SurfacePreview(BaseModel):
