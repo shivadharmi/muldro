@@ -48,12 +48,12 @@ export function A2UIExecutionSurface({ component }: Props) {
       {/* Header */}
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold text-t-primary">{goal}</h3>
-        <span className={`text-xs font-medium ${phaseClass}`}>{labelText}</span>
+        <span className={`text-xs font-medium transition-colors duration-200 ${phaseClass}`}>{labelText}</span>
       </div>
 
       {/* Planning spinner */}
       {phase === "planning" && (
-        <div className="flex flex-col items-center gap-2 py-6">
+        <div className="animate-fade-in flex flex-col items-center gap-2 py-6">
           <div className="w-4 h-4 border-2 border-j-info/30 border-t-j-info rounded-full animate-spin" />
           <span className="text-xs text-t-tertiary">Analyzing and building plan...</span>
           <span className="text-[11px] text-t-muted">This usually takes a few seconds</span>
@@ -62,17 +62,21 @@ export function A2UIExecutionSurface({ component }: Props) {
 
       {/* Step list (shown for all phases except planning) */}
       {phase !== "planning" && steps.length > 0 && (
-        <StepList steps={steps} currentStep={currentStep} />
+        <div key={`steps-${phase}`} className="animate-slide-in-up">
+          <StepList steps={steps} currentStep={currentStep} />
+        </div>
       )}
 
       {/* Inline approval card */}
       {phase === "approval_needed" && approval && (
-        <InlineApprovalCard approval={approval} />
+        <div className="animate-slide-in-up">
+          <InlineApprovalCard approval={approval} />
+        </div>
       )}
 
       {/* Results summary */}
       {phase === "completed" && results && (
-        <div className="rounded-[var(--radius-lg)] bg-j-success-soft border border-j-success/20 p-4">
+        <div className="animate-fade-in rounded-[var(--radius-lg)] bg-j-success-soft border border-j-success/20 p-4">
           {results.key_findings.length > 0 && (
             <div>
               <p className="text-[11px] font-semibold text-t-muted uppercase tracking-wider mb-2">Key Findings</p>
@@ -116,7 +120,7 @@ export function A2UIExecutionSurface({ component }: Props) {
 
       {/* Failure context — show full step list for context, then error box */}
       {phase === "failed" && (
-        <>
+        <div className="animate-fade-in">
           {steps.length > 0 && (
             <StepList steps={steps} currentStep={currentStep} />
           )}
@@ -129,7 +133,7 @@ export function A2UIExecutionSurface({ component }: Props) {
               </p>
             ))}
           </div>
-        </>
+        </div>
       )}
 
       {/* Progress bar */}
