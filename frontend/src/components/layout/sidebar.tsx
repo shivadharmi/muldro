@@ -109,6 +109,18 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           }
         />
         <NavItem
+          href="/history"
+          label="History"
+          active={pathname === "/history"}
+          collapsed={collapsed}
+          icon={
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+              <circle cx="9" cy="9" r="6.5" stroke="currentColor" strokeWidth="1.4" />
+              <path d="M9 5.5V9l2.5 2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          }
+        />
+        <NavItem
           href="/search"
           label="Search"
           active={pathname === "/search"}
