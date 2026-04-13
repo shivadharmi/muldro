@@ -3,19 +3,27 @@
 import logging
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
 from src.api.schemas_history import (
     HistoryApprovalContext,
+    HistoryApprovalRecord,
+    HistoryArtifactRef,
+    HistoryDetailResponse,
+    HistoryDetailStep,
+    HistoryEventEntry,
     HistoryItemResponse,
     HistoryListResponse,
+    HistoryPlanContext,
     HistoryStepSummary,
+    HistoryTraceInfo,
 )
 from src.models.approvals import Approval
 from src.models.plans import Plan
+from src.models.runtime_event import RuntimeEvent
 from src.models.task_graph import TaskRun, TaskStep
 
 logger = logging.getLogger(__name__)
@@ -201,6 +209,169 @@ async def list_history(
         total=total,
         limit=limit,
         offset=offset,
+    )
+
+
+@router.get("/v1/history/{run_id}", response_model=HistoryDetailResponse)
+async def get_history_detail(
+    run_id: str,
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+    db: AsyncSession = Depends(get_session),
+) -> HistoryDetailResponse:
+    """Return full context for a single task run (used by the detail modal)."""
+
+    # ------------------------------------------------------------------ #
+    # 1. Fetch TaskRun — 404 if not found or not owned by this user/workspace
+    # ------------------------------------------------------------------ #
+    run_result = await db.execute(
+        select(TaskRun).where(
+            TaskRun.run_id == run_id,
+            TaskRun.user_id == user_id,
+            TaskRun.workspace_id == workspace_id,
+        )
+    )
+    run: TaskRun | None = run_result.scalar_one_or_none()
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    # ------------------------------------------------------------------ #
+    # 2. Fetch all TaskSteps ordered by created_at
+    # ------------------------------------------------------------------ #
+    steps_result = await db.execute(
+        select(TaskStep).where(TaskStep.run_id == run_id).order_by(TaskStep.created_at)
+    )
+    raw_steps: list[TaskStep] = steps_result.scalars().all()
+
+    # ------------------------------------------------------------------ #
+    # 3. Build detail steps (with duration + artifacts)
+    # ------------------------------------------------------------------ #
+    detail_steps: list[HistoryDetailStep] = []
+    for s in raw_steps:
+        # Duration from started_at / completed_at
+        duration_ms: int | None = None
+        if s.started_at and s.completed_at:
+            delta = s.completed_at - s.started_at
+            duration_ms = int(delta.total_seconds() * 1000)
+
+        # Artifacts — try/except because model may not exist in all envs
+        artifacts: list[HistoryArtifactRef] = []
+        try:
+            from src.models.artifacts import Artifact
+
+            art_result = await db.execute(select(Artifact).where(Artifact.step_id == s.step_id))
+            for art in art_result.scalars().all():
+                artifacts.append(
+                    HistoryArtifactRef(
+                        artifact_id=art.artifact_id,
+                        title=art.title,
+                        artifact_type=art.artifact_type,
+                    )
+                )
+        except Exception:
+            pass
+
+        detail_steps.append(
+            HistoryDetailStep(
+                step_id=s.step_id,
+                name=s.name,
+                capability=_capability_from_step(s),
+                status=s.status,
+                input_data=s.input_data,
+                output_data=s.output_data,
+                started_at=s.started_at,
+                completed_at=s.completed_at,
+                duration_ms=duration_ms,
+                error=s.error,
+                artifacts=artifacts,
+            )
+        )
+
+    # ------------------------------------------------------------------ #
+    # 4. Plan context
+    # ------------------------------------------------------------------ #
+    plan_ctx: HistoryPlanContext | None = None
+    if run.plan_id:
+        plan_result = await db.execute(select(Plan).where(Plan.plan_id == run.plan_id))
+        plan: Plan | None = plan_result.scalar_one_or_none()
+        if plan:
+            plan_ctx = HistoryPlanContext(
+                plan_id=plan.plan_id,
+                goal=plan.goal,
+                reasoning_summary=plan.reasoning_summary,
+                success_conditions=(
+                    list(plan.success_conditions) if plan.success_conditions else None
+                ),
+                trigger_type=plan.trigger_type,
+                priority=plan.priority,
+            )
+
+    # ------------------------------------------------------------------ #
+    # 5. Approvals linked to this run (execution_id == run_id)
+    # ------------------------------------------------------------------ #
+    approvals_result = await db.execute(select(Approval).where(Approval.execution_id == run_id))
+    approval_records: list[HistoryApprovalRecord] = [
+        HistoryApprovalRecord(
+            approval_id=a.approval_id,
+            step_id=a.step_id,
+            status=a.status,
+            risk_level=a.risk_level or "low",
+            title=a.title,
+            decided_at=a.decided_at,
+            decision_reason=a.decision_reason,
+            approved_by=a.approved_by,
+        )
+        for a in approvals_result.scalars().all()
+    ]
+
+    # ------------------------------------------------------------------ #
+    # 6. RuntimeEvents ordered by occurred_at
+    # ------------------------------------------------------------------ #
+    events_result = await db.execute(
+        select(RuntimeEvent)
+        .where(
+            RuntimeEvent.workspace_id == workspace_id,
+            RuntimeEvent.run_id == run_id,
+        )
+        .order_by(RuntimeEvent.occurred_at)
+    )
+    event_entries: list[HistoryEventEntry] = [
+        HistoryEventEntry(
+            event_type=e.event_type,
+            occurred_at=e.occurred_at,
+            step_id=e.step_id,
+            payload=e.payload or {},
+        )
+        for e in events_result.scalars().all()
+    ]
+
+    # ------------------------------------------------------------------ #
+    # 7. Trace info from run metadata
+    # ------------------------------------------------------------------ #
+    trace: HistoryTraceInfo | None = None
+    run_duration_ms = 0
+    if run.started_at and run.completed_at:
+        delta = run.completed_at - run.started_at
+        run_duration_ms = int(delta.total_seconds() * 1000)
+
+    if run.trace_id or run_duration_ms:
+        trace = HistoryTraceInfo(
+            trace_id=run.trace_id,
+            duration_ms=run_duration_ms,
+        )
+
+    return HistoryDetailResponse(
+        run_id=run.run_id,
+        plan=plan_ctx,
+        status=run.status,
+        source=run.source,
+        started_at=run.started_at,
+        completed_at=run.completed_at,
+        error=run.error,
+        steps=detail_steps,
+        approvals=approval_records,
+        trace=trace,
+        events=event_entries,
     )
 
 

@@ -196,3 +196,108 @@ async def test_list_history_returns_items_with_correct_shape():
     assert item.step_count == 1
     assert item.status == "completed"
     assert item.approval is None
+
+
+# ---------------------------------------------------------------------------
+# GET /v1/history/{run_id} — detail endpoint tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_history_detail_returns_full_context():
+    """get_history_detail() returns full run context including plan and step output."""
+    from src.api.routes_history import get_history_detail
+
+    # Build mock TaskRun
+    run = MagicMock()
+    run.run_id = "run_detail"
+    run.plan_id = "plan_detail"
+    run.user_id = "usr_01JTEST00000000000000000000"
+    run.workspace_id = "ws_test"
+    run.status = "completed"
+    run.source = "plan"
+    run.retry_count = 0
+    run.trace_id = "trace_001"
+    run.started_at = datetime(2026, 4, 13, 10, 0, tzinfo=timezone.utc)
+    run.completed_at = datetime(2026, 4, 13, 10, 0, 30, tzinfo=timezone.utc)
+    run.error = None
+
+    # Build mock TaskStep with input/output data
+    step = MagicMock()
+    step.step_id = "step_detail_001"
+    step.name = "Search emails"
+    step.input_data = {"capability": "email.search", "query": "investor"}
+    step.output_data = {"result": "Found 3 threads"}
+    step.status = "completed"
+    step.error = None
+    step.started_at = datetime(2026, 4, 13, 10, 0, 1, tzinfo=timezone.utc)
+    step.completed_at = datetime(2026, 4, 13, 10, 0, 3, tzinfo=timezone.utc)
+
+    # Build mock Plan
+    plan = MagicMock()
+    plan.plan_id = "plan_detail"
+    plan.goal = "Find investor emails"
+    plan.reasoning_summary = "User requested email search"
+    plan.success_conditions = ["emails found"]
+    plan.trigger_type = "user_message"
+    plan.priority = "medium"
+
+    call_count = 0
+
+    async def fake_execute(stmt):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:  # TaskRun
+            return _FakeResult(scalar=run)
+        elif call_count == 2:  # TaskSteps
+            return _FakeResult(rows=[step])
+        elif call_count == 3:  # Artifact query (per-step, inside try/except)
+            return _FakeResult(rows=[])
+        elif call_count == 4:  # Plan
+            return _FakeResult(scalar=plan)
+        elif call_count == 5:  # Approvals
+            return _FakeResult(rows=[])
+        elif call_count == 6:  # RuntimeEvents
+            return _FakeResult(rows=[])
+        return _FakeResult()
+
+    mock_db = MagicMock()
+    mock_db.execute = fake_execute
+
+    resp = await get_history_detail(
+        run_id="run_detail",
+        user_id="usr_01JTEST00000000000000000000",
+        workspace_id="ws_test",
+        db=mock_db,
+    )
+
+    assert resp.run_id == "run_detail"
+    assert resp.plan is not None
+    assert resp.plan.goal == "Find investor emails"
+    assert len(resp.steps) == 1
+    assert resp.steps[0].output_data == {"result": "Found 3 threads"}
+    assert resp.steps[0].step_id == "step_detail_001"
+
+
+@pytest.mark.asyncio
+async def test_history_detail_returns_404_for_missing_run():
+    """get_history_detail() raises 404 HTTPException when run not found."""
+    from fastapi import HTTPException
+
+    from src.api.routes_history import get_history_detail
+
+    async def fake_execute(stmt):
+        return _FakeResult(scalar=None)
+
+    mock_db = MagicMock()
+    mock_db.execute = fake_execute
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_history_detail(
+            run_id="run_nonexistent",
+            user_id="usr_01JTEST00000000000000000000",
+            workspace_id="ws_test",
+            db=mock_db,
+        )
+
+    assert exc_info.value.status_code == 404
