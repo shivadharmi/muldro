@@ -875,17 +875,19 @@ class JarvisOrchestrator:
 
             # Push surface to workspace (Presenter-driven)
             response_text = result.get("presentation", result.get("presenter", ""))
-            surface_spec = extract_surface_spec(response_text)
-            if surface_spec and surface_spec.should_surface:
-                surface_id = await self._push_presenter_surface(
-                    spec=surface_spec,
-                    user_id=user_id,
-                    workspace_id=workspace_id,
-                    run_id=result.get("run_id"),
-                    response_text=response_text,
-                )
-            else:
-                surface_id = None
+            surface_id = None
+            try:
+                surface_spec = extract_surface_spec(response_text)
+                if surface_spec and surface_spec.should_surface:
+                    surface_id = await self._push_presenter_surface(
+                        spec=surface_spec,
+                        user_id=user_id,
+                        workspace_id=workspace_id,
+                        run_id=result.get("run_id"),
+                        response_text=response_text,
+                    )
+            except Exception:
+                logger.warning("Surface push failed", exc_info=True)
             if surface_id:
                 result["surface_id"] = surface_id
 
