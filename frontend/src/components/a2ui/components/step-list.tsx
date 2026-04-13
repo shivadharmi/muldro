@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import type { StepState } from "@/lib/a2ui-types";
 import { statusTextColor } from "@/lib/design-tokens";
 
@@ -11,13 +11,12 @@ interface StepListProps {
 }
 
 function useElapsedTimer(startedAt: string | null, active: boolean): number {
-  const [elapsedMs, setElapsedMs] = useState(0);
+  const [elapsedMs, setElapsedMs] = useState(() =>
+    active && startedAt ? Date.now() - new Date(startedAt).getTime() : 0,
+  );
 
   useEffect(() => {
-    if (!active || !startedAt) {
-      setElapsedMs(0);
-      return;
-    }
+    if (!active || !startedAt) return;
     const start = new Date(startedAt).getTime();
     const tick = () => setElapsedMs(Date.now() - start);
     tick();
@@ -25,7 +24,7 @@ function useElapsedTimer(startedAt: string | null, active: boolean): number {
     return () => clearInterval(id);
   }, [startedAt, active]);
 
-  return elapsedMs;
+  return active ? elapsedMs : 0;
 }
 
 function ElapsedBadge({ step }: { step: StepState }) {
@@ -110,10 +109,16 @@ export function StepList({ steps, currentStep, triggeringStepId }: StepListProps
     });
   };
 
-  const completedSteps = steps.filter((s) => s.status === "completed");
+  const completedSteps = useMemo(() => steps.filter((s) => s.status === "completed"), [steps]);
   const shouldGroup = completedSteps.length >= 5 && !showCompletedSteps;
-  const totalCompletedMs = completedSteps.reduce((sum, s) => sum + (s.duration_ms ?? 0), 0);
-  let groupRendered = false;
+  const totalCompletedMs = useMemo(
+    () => completedSteps.reduce((sum, s) => sum + (s.duration_ms ?? 0), 0),
+    [completedSteps],
+  );
+  const firstCompletedIdx = useMemo(
+    () => (shouldGroup ? steps.findIndex((s) => s.status === "completed") : -1),
+    [steps, shouldGroup],
+  );
 
   return (
     <div className="space-y-1.5">
@@ -132,10 +137,9 @@ export function StepList({ steps, currentStep, triggeringStepId }: StepListProps
           </span>
         </button>
       )}
-      {steps.map((step) => {
+      {steps.map((step, idx) => {
         if (step.status === "completed" && shouldGroup) {
-          if (!groupRendered) {
-            groupRendered = true;
+          if (idx === firstCompletedIdx) {
             return (
               <CompletedGroupSummary
                 key="__completed_group"
