@@ -227,6 +227,18 @@ def _build_step_to_task_map(steps: list) -> dict[str, str]:
     return step_to_task
 
 
+def _build_action_preview(capability: str, description: str) -> str:
+    """Generate tooltip preview text for an insight action based on capability type."""
+    cap = capability.lower()
+    if any(w in cap for w in ("send", "create", "update", "delete", "write")):
+        return f"Creates a task to {description.lower()}"
+    if any(w in cap for w in ("read", "search", "fetch", "list", "get")):
+        return f"Fetches {capability.split('.')[-1]} data without taking action"
+    if any(w in cap for w in ("respond", "reason", "summarize")):
+        return f"Generates a response about {description.lower()}"
+    return ""
+
+
 class JarvisOrchestrator:
     """The Jarvis brain — orchestrates sub-agents via Claude API.
 
@@ -2223,6 +2235,7 @@ class JarvisOrchestrator:
                     description=a.description,
                     capability=a.capability,
                     action_input=a.action_input,
+                    action_preview=_build_action_preview(a.capability, a.description),
                 )
                 for a in assessment.suggested_actions
             ]

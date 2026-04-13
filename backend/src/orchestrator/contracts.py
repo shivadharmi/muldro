@@ -264,6 +264,7 @@ class SuggestedActionRef(BaseModel):
     description: str
     capability: str
     action_input: dict[str, Any] = Field(default_factory=dict)
+    action_preview: str = ""
 
 
 class InsightSurfaceData(BaseModel):
