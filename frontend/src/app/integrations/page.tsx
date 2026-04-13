@@ -10,7 +10,6 @@ import {
   fetchAuthProviders,
   getAuthUrl,
   deleteInstallation,
-  checkInstallationHealth,
   fetchInstallations,
   type AuthProvider,
   type Installation,
@@ -34,8 +33,6 @@ const PROVIDER_ICONS: Record<string, string> = {
 function IntegrationsContent() {
   const queryClient = useQueryClient();
   const searchParams = useSearchParams();
-  const [testingId, setTestingId] = useState<string | null>(null);
-  const [testResult, setTestResult] = useState<Record<string, string>>({});
   const [connecting, setConnecting] = useState<string | null>(null);
   const { addToast } = useToast();
 
@@ -122,31 +119,9 @@ function IntegrationsContent() {
     },
   });
 
-  async function handleTest(installId: string) {
-    setTestingId(installId);
-    try {
-      const result = await checkInstallationHealth(installId);
-      setTestResult((prev) => ({
-        ...prev,
-        [installId]: result.health_status,
-      }));
-      setTimeout(() => {
-        setTestResult((prev) => {
-          const next = { ...prev };
-          delete next[installId];
-          return next;
-        });
-      }, 5000);
-    } catch {
-      setTestResult((prev) => ({ ...prev, [installId]: "error" }));
-    } finally {
-      setTestingId(null);
-    }
-  }
-
   function renderProviderCard(provider: AuthProvider) {
     const installation = activeInstallations.find((i) => i.server_name === provider.name);
-    const isConnected = provider.connected || !!installation;
+    const isConnected = provider.connected;
     const icon = PROVIDER_ICONS[provider.name] || "🔌";
 
     return (
@@ -196,15 +171,6 @@ function IntegrationsContent() {
             {isConnected && installation ? (
               <>
                 <button
-                  onClick={() => handleTest(installation.install_id)}
-                  disabled={testingId === installation.install_id}
-                  className="text-xs px-2.5 py-1 rounded-[var(--radius-md)] border border-b-primary text-t-primary hover:bg-surface-2 disabled:opacity-50"
-                >
-                  {testingId === installation.install_id
-                    ? "Testing..."
-                    : "Test"}
-                </button>
-                <button
                   onClick={() => handleConnect(provider.name)}
                   className="text-xs px-2.5 py-1 rounded-[var(--radius-md)] border border-b-primary text-t-primary hover:bg-surface-2"
                 >
@@ -218,13 +184,6 @@ function IntegrationsContent() {
                 >
                   Disconnect
                 </button>
-                {testResult[installation.install_id] && (
-                  <Badge
-                    variant={testResult[installation.install_id] === "healthy" ? "success" : "error"}
-                  >
-                    {testResult[installation.install_id]}
-                  </Badge>
-                )}
               </>
             ) : isConnected ? (
               <button

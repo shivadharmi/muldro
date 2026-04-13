@@ -128,7 +128,13 @@ class UserMCPSessionPool:
             else:
                 # stdio transport — inject auth as env var, then build config
                 if auth and isinstance(auth, BearerAuth):
-                    _inject_stdio_auth(config, server_name, auth.token)
+                    # BearerAuth wraps token in SecretStr; unwrap for env dict
+                    raw_token = (
+                        auth.token.get_secret_value()
+                        if hasattr(auth.token, "get_secret_value")
+                        else str(auth.token)
+                    )
+                    _inject_stdio_auth(config, server_name, raw_token)
                 server_cfg = {"mcpServers": {server_name: config}}
                 client_ctx = Client(server_cfg)
 

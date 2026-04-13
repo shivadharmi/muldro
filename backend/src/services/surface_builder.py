@@ -16,7 +16,6 @@ from src.models.task_graph import TaskRun, TaskStep
 from src.models.trust_state import TrustState
 from src.models.ui_state import UISurface
 from src.orchestrator.contracts import WorkspaceSurfacePush
-from src.services.surface_mapping import apply_surface_cap
 from src.ui.contracts import SurfaceMetric, SurfacePreview
 from src.ui.renderer import build_detail_config
 
@@ -50,7 +49,7 @@ class SurfaceService:
         surfaces.extend(await self._build_recommendation_surfaces())
         surfaces.extend(await self._load_persisted_surfaces(user_id))
 
-        return apply_surface_cap(surfaces)
+        return surfaces
 
     async def _build_approval_surfaces(self, user_id: str) -> list[WorkspaceSurfacePush]:
         result = await self._db.execute(
