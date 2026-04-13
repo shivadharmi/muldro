@@ -244,8 +244,7 @@ class WorkspaceMCPPool:
                         http_servers.append((inst.workspace_id, inst.server_name, config))
 
                 # Eagerly discover tools from HTTP MCP servers so schemas are
-                # available before the first tool call. Stdio servers are lazy
-                # (spawned per-user), but HTTP servers are shared services.
+                # available before the first tool call.
                 for ws_id, srv_name, cfg in http_servers:
                     try:
                         await self._session_pool.discover_tools(
@@ -259,11 +258,75 @@ class WorkspaceMCPPool:
                         )
 
                 logger.info("Loaded %d MCP servers from DB", count)
+
+                # Eagerly discover tool schemas from stdio servers that have
+                # OAuth tokens available. Creates a session per (user, server),
+                # which spawns the subprocess and calls list_tools().
+                await self._discover_stdio_schemas(installations)
+
                 return count
 
         except Exception as e:
             logger.debug("Failed to load MCP servers from DB: %s", e)
             return 0
+
+    async def _discover_stdio_schemas(self, installations: list) -> None:
+        """Eagerly discover tool schemas from stdio MCP servers.
+
+        Stdio servers require per-user auth (OAuth tokens injected as env vars),
+        so we find a user with a valid token for each server's auth_provider and
+        create a session. Session creation spawns the subprocess, connects,
+        calls list_tools(), and enriches DB records with schemas.
+        """
+        oauth_providers = {"github", "slack", "linear", "notion"}
+
+        stdio_servers: list[tuple[str, str, str]] = []
+        for inst in installations:
+            if inst.transport == "stdio" and inst.auth_provider in oauth_providers:
+                stdio_servers.append((inst.workspace_id, inst.server_name, inst.auth_provider))
+
+        if not stdio_servers:
+            return
+
+        oauth_mgr = self._session_pool._oauth_manager
+        if not oauth_mgr:
+            logger.debug("No OAuthManager — skipping stdio schema discovery")
+            return
+
+        for ws_id, srv_name, auth_provider in stdio_servers:
+            try:
+                from sqlalchemy import select
+
+                from src.models.oauth_token import OAuthToken
+
+                async with oauth_mgr._db_factory() as db:
+                    result = await db.execute(
+                        select(OAuthToken.user_id)
+                        .where(OAuthToken.provider == auth_provider)
+                        .limit(1)
+                    )
+                    row = result.first()
+
+                if not row:
+                    logger.debug(
+                        "No OAuth token for %s — skipping schema discovery for %s",
+                        auth_provider,
+                        srv_name,
+                    )
+                    continue
+
+                user_id = row[0]
+                session = await self._session_pool.get_or_create_session(
+                    srv_name, user_id=user_id, workspace_id=ws_id
+                )
+                logger.info(
+                    "Stdio schema discovery for %s: %d tools (user=%s)",
+                    srv_name,
+                    len(session.tools),
+                    user_id[:16],
+                )
+            except Exception:
+                logger.debug("Stdio schema discovery failed for %s", srv_name, exc_info=True)
 
     async def health_check_all(self) -> dict[str, str]:
         """Ping all registered servers and update health_status.

@@ -436,6 +436,10 @@ class UserMCPSessionPool:
         for canonical in removed_tools:
             self._tool_metadata.pop(canonical, None)
 
+    def has_server_config(self, server_name: str, workspace_id: str = "") -> bool:
+        """Check if a server config is registered."""
+        return (workspace_id, server_name) in self._server_configs
+
     def is_pool_tool(self, tool_name: str, workspace_id: str = "") -> bool:
         """Check if a tool is known to any server in the pool."""
         for key, server_tools in self._server_tools.items():

@@ -200,7 +200,7 @@ def create_app() -> FastAPI:
                 encryption_key=settings.oauth_encryption_key,
             )
         except Exception:
-            logger.debug("OAuthManager unavailable for MCP bridge", exc_info=True)
+            logger.warning("OAuthManager unavailable for MCP bridge", exc_info=True)
 
         # Initialize MCP bridge with session pool.
         # Auth is resolved per-user from OAuthManager at call time.
@@ -209,7 +209,16 @@ def create_app() -> FastAPI:
 
             await initialize_mcp_bridge(oauth_manager=oauth_manager)
         except Exception:
-            logger.debug("MCP bridge init skipped", exc_info=True)
+            logger.error("MCP bridge initialization failed", exc_info=True)
+
+        # Signal the worker thread that MCP bridge initialization is complete
+        # (whether successful or not) so it can start processing tasks.
+        try:
+            from run import mcp_bridge_ready
+
+            mcp_bridge_ready.set()
+        except ImportError:
+            pass  # Not running via run.py (e.g., direct uvicorn or tests)
 
         yield
 
