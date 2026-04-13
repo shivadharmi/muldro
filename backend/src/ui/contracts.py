@@ -9,7 +9,7 @@ Component Types (25+):
   Data: Table, DataGrid, Timeline, Metric, Progress, Chart
   Input: Button, TextField, Select, Toggle, Form
   Display: Avatar, StatusIndicator, EntityCard, MemoryCard
-  Specialized: ExecutionTrace, KanbanBoard, Calendar, CommandPalette
+  Specialized: ExecutionTrace, KanbanBoard, Calendar
 """
 
 import logging
@@ -70,12 +70,10 @@ class ComponentType(str, Enum):
     STATUS_INDICATOR = "StatusIndicator"
     ENTITY_CARD = "EntityCard"
     MEMORY_CARD = "MemoryCard"
-    IMAGE = "Image"
     # Specialized
     EXECUTION_TRACE = "ExecutionTrace"
     KANBAN_BOARD = "KanbanBoard"
     CALENDAR = "Calendar"
-    COMMAND_PALETTE = "CommandPalette"
 
 
 class A2UIAction(BaseModel):
