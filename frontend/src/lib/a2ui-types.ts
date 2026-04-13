@@ -131,6 +131,13 @@ export interface StepState {
   status: "pending" | "executing" | "completed" | "failed" | "approval_needed" | "user_action";
   output_summary: string | null;
   duration_ms: number | null;
+  started_at: string | null;
+
+  // Evidence
+  completed_at: string | null;
+  timeout_seconds: number | null;
+  error: Record<string, unknown> | null;
+  retry_count: number | null;
 }
 
 export interface ApprovalContext {
