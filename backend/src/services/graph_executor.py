@@ -42,6 +42,30 @@ def _compute_retry_delay(retry_count: int) -> int:
     return min(2**retry_count, 30)
 
 
+def _step_to_state(s: "TaskStep", status_override: str | None = None) -> "StepState":
+    """Build a StepState from a TaskStep model, forwarding all available fields."""
+    status = status_override or s.status
+    started_iso = s.started_at.isoformat() if s.started_at else None
+    completed_iso = s.completed_at.isoformat() if s.completed_at else None
+    duration = (
+        int((s.completed_at - s.started_at).total_seconds() * 1000)
+        if s.completed_at and s.started_at
+        else None
+    )
+    return StepState(
+        step_id=s.step_id,
+        description=s.name or (s.input_data or {}).get("capability", s.task_id),
+        status=status,
+        output_summary=(str(s.output_data.get("result", ""))[:200] if s.output_data else None),
+        duration_ms=duration,
+        started_at=started_iso,
+        completed_at=completed_iso,
+        timeout_seconds=s.timeout_seconds,
+        error=s.error,
+        retry_count=s.retry_count if s.retry_count > 0 else None,
+    )
+
+
 async def create_graph_executor(
     settings: Settings,
     db: AsyncSession,
@@ -352,14 +376,7 @@ class GraphExecutor:
         # Emit plan_ready so the frontend knows steps are populated and execution begins
         if surface_id:
             all_steps = await self._get_all_steps(run.run_id)
-            plan_ready_steps = [
-                StepState(
-                    step_id=s.step_id,
-                    description=s.name or (s.input_data or {}).get("capability", s.task_id),
-                    status="pending",
-                )
-                for s in all_steps
-            ]
+            plan_ready_steps = [_step_to_state(s, status_override="pending") for s in all_steps]
             await self._emit_surface_update(
                 surface_id=surface_id,
                 user_id=run.user_id,
@@ -584,26 +601,7 @@ class GraphExecutor:
                     await self._writeback_memories(run)
                     if surface_id:
                         _comp_steps = await self._get_all_steps(run.run_id)
-                        _final_states = [
-                            StepState(
-                                step_id=s.step_id,
-                                description=(
-                                    s.name or (s.input_data or {}).get("capability", s.task_id)
-                                ),
-                                status=s.status,
-                                output_summary=(
-                                    str(s.output_data.get("result", ""))[:200]
-                                    if s.output_data
-                                    else None
-                                ),
-                                duration_ms=(
-                                    int((s.completed_at - s.started_at).total_seconds() * 1000)
-                                    if s.completed_at and s.started_at
-                                    else None
-                                ),
-                            )
-                            for s in _comp_steps
-                        ]
+                        _final_states = [_step_to_state(s) for s in _comp_steps]
                         _findings = [
                             str(s.output_data.get("result", ""))[:100]
                             for s in _comp_steps
@@ -630,16 +628,7 @@ class GraphExecutor:
                     }
                     if surface_id:
                         _fail_steps = await self._get_all_steps(run.run_id)
-                        _fail_states = [
-                            StepState(
-                                step_id=s.step_id,
-                                description=(
-                                    s.name or (s.input_data or {}).get("capability", s.task_id)
-                                ),
-                                status=s.status,
-                            )
-                            for s in _fail_steps
-                        ]
+                        _fail_states = [_step_to_state(s) for s in _fail_steps]
                         await self._emit_surface_update(
                             surface_id=surface_id,
                             user_id=run.user_id,
@@ -662,12 +651,11 @@ class GraphExecutor:
             if surface_id:
                 _all_for_surface = await self._get_all_steps(run.run_id)
                 _step_states = [
-                    StepState(
-                        step_id=s.step_id,
-                        description=(s.name or (s.input_data or {}).get("capability", s.task_id)),
-                        status=(
-                            "executing" if s.step_id in (run.current_step_ids or []) else s.status
-                        ),
+                    _step_to_state(
+                        s,
+                        status_override="executing"
+                        if s.step_id in (run.current_step_ids or [])
+                        else None,
                     )
                     for s in _all_for_surface
                 ]
@@ -1101,10 +1089,9 @@ class GraphExecutor:
             if surface_id:
                 all_steps = await self._get_all_steps(run.run_id)
                 step_states = [
-                    StepState(
-                        step_id=s.step_id,
-                        description=(s.name or (s.input_data or {}).get("capability", s.task_id)),
-                        status="failed" if s.step_id == step.step_id else s.status,
+                    _step_to_state(
+                        s,
+                        status_override="failed" if s.step_id == step.step_id else None,
                     )
                     for s in all_steps
                 ]

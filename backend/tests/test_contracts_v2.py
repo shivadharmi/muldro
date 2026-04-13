@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.orchestrator.contracts import (
+    ApprovalContext,
     DomainEvent,
     PolicyDecision,
 )
@@ -101,3 +102,63 @@ class TestDomainEvent:
             payload={"trigger_id": "trig_001", "matched": False},
         )
         assert evt.payload["matched"] is False
+
+
+class TestPolicyDecisionTrustFields:
+    def test_trust_fields_default_empty(self):
+        pd = PolicyDecision(decision="approval_required", risk_level="medium")
+        assert pd.trust_level == ""
+        assert pd.effective_trust_level == ""
+        assert pd.approved_count == 0
+        assert pd.rejected_count == 0
+
+    def test_trust_fields_populated(self):
+        pd = PolicyDecision(
+            decision="approval_required",
+            risk_level="high",
+            trust_level="first_use",
+            effective_trust_level="first_use",
+            approved_count=3,
+            rejected_count=1,
+        )
+        assert pd.trust_level == "first_use"
+        assert pd.approved_count == 3
+
+
+class TestApprovalContext:
+    def test_new_fields_default(self):
+        ctx = ApprovalContext(
+            approval_id="apr_001",
+            step_description="Send email",
+            risk_reasoning="External write",
+            trust_context="First use",
+        )
+        assert ctx.risk_level == ""
+        assert ctx.trust_level == ""
+        assert ctx.expires_at is None
+        assert ctx.triggering_step_id is None
+        assert ctx.reversible is True
+        assert ctx.blast_radius == "self"
+        assert ctx.effective_trust_level == ""
+        assert ctx.approved_count == 0
+        assert ctx.rejected_count == 0
+
+    def test_new_fields_populated(self):
+        ctx = ApprovalContext(
+            approval_id="apr_001",
+            step_description="Send email",
+            risk_reasoning="External write",
+            trust_context="First use",
+            risk_level="medium",
+            trust_level="first_use",
+            expires_at="2026-04-13T10:30:00Z",
+            triggering_step_id="step_003",
+            reversible=False,
+            blast_radius="external_multiple",
+            effective_trust_level="first_use",
+            approved_count=0,
+            rejected_count=0,
+        )
+        assert ctx.risk_level == "medium"
+        assert ctx.triggering_step_id == "step_003"
+        assert ctx.reversible is False
