@@ -429,13 +429,18 @@ class JarvisOrchestrator:
                             )
                         )
                     else:
+                        step_input = dict(step.input) if step.input else {}
+                        if step.description:
+                            step_input["description"] = step.description
+                        if step.capability:
+                            step_input["capability"] = step.capability
                         tasks.append(
                             PlanTask(
                                 task_id=task_id,
                                 plan_id=plan_id,
                                 workspace_id=workspace_id,
                                 task_type=step.capability,
-                                input_data=step.input,
+                                input_data=step_input,
                                 depends_on=dep_task_ids or None,
                                 status="pending",
                             )

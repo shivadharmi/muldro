@@ -121,7 +121,7 @@ async def list_history(
         step_summaries = [
             HistoryStepSummary(
                 step_id=step.step_id,
-                name=step.name,
+                name=_name_from_step(step),
                 capability=_capability_from_step(step),
                 status=step.status,
                 started_at=step.started_at,
@@ -277,7 +277,7 @@ async def get_history_detail(
         detail_steps.append(
             HistoryDetailStep(
                 step_id=s.step_id,
-                name=s.name,
+                name=_name_from_step(s),
                 capability=_capability_from_step(s),
                 status=s.status,
                 input_data=s.input_data,
@@ -349,7 +349,7 @@ async def get_history_detail(
     ]
 
     # ------------------------------------------------------------------ #
-    # 7. Trace info from run metadata
+    # 7. Trace info — query Trace model if trace_id exists, else compute
     # ------------------------------------------------------------------ #
     trace: HistoryTraceInfo | None = None
     run_duration_ms = 0
@@ -357,9 +357,31 @@ async def get_history_detail(
         delta = run.completed_at - run.started_at
         run_duration_ms = int(delta.total_seconds() * 1000)
 
-    if run.trace_id or run_duration_ms:
+    if run.trace_id:
+        try:
+            from src.models.traces import Trace as TraceModel
+
+            trace_result = await db.execute(
+                select(TraceModel).where(TraceModel.trace_id == run.trace_id)
+            )
+            trace_row = trace_result.scalar_one_or_none()
+            if trace_row:
+                trace = HistoryTraceInfo(
+                    trace_id=trace_row.trace_id,
+                    input_tokens=trace_row.total_input_tokens or 0,
+                    output_tokens=trace_row.total_output_tokens or 0,
+                    cost_usd=trace_row.total_cost_usd or 0.0,
+                    duration_ms=trace_row.duration_ms or run_duration_ms,
+                    agents_invoked=trace_row.agents_invoked or [],
+                    tools_called=trace_row.tools_called or [],
+                )
+        except Exception:
+            logger.debug("Failed to fetch trace for run %s", run.run_id, exc_info=True)
+
+    # Fallback: compute basic trace from run duration even without trace_id
+    if not trace and run_duration_ms:
         trace = HistoryTraceInfo(
-            trace_id=run.trace_id,
+            trace_id=None,
             duration_ms=run_duration_ms,
         )
 
@@ -381,7 +403,21 @@ async def get_history_detail(
 def _capability_from_step(step: TaskStep) -> str | None:
     """Extract capability string from step input_data if present."""
     if step.input_data and isinstance(step.input_data, dict):
-        return step.input_data.get("capability")
+        return step.input_data.get("capability") or step.input_data.get("task_type")
+    return None
+
+
+def _name_from_step(step: TaskStep) -> str | None:
+    """Extract a human-readable name from a step, checking all available fields."""
+    if step.name:
+        return step.name
+    if step.input_data and isinstance(step.input_data, dict):
+        return (
+            step.input_data.get("description")
+            or step.input_data.get("goal")
+            or step.input_data.get("capability")
+            or step.input_data.get("task_type")
+        )
     return None
 
 

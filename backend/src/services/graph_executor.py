@@ -317,6 +317,11 @@ class GraphExecutor:
             if task.task_type and "task_type" not in step_input:
                 step_input["task_type"] = task.task_type
 
+            # Derive step name from available fields
+            step_name = (
+                step_input.get("description") or task.task_type or step_input.get("capability")
+            )
+
             step = TaskStep(
                 step_id=step_id,
                 run_id=run.run_id,
@@ -326,6 +331,7 @@ class GraphExecutor:
                 depends_on=depends_on_step_ids or None,
                 status="pending",
                 input_data=step_input or None,
+                name=step_name,
             )
             self._db.add(step)
 
@@ -1416,7 +1422,10 @@ class GraphExecutor:
         """Get steps whose dependencies are all completed.
 
         Also picks up steps already in 'ready' state (e.g. from a previous
-        iteration where execution failed before the step could start).
+        iteration where execution failed before the step could start) and
+        steps in 'running' state from approval resumption (the approval
+        handler transitions waiting_approval → running before the scheduler
+        resumes the DAG).
         """
         all_steps = await self._get_all_steps(run_id)
         completed_ids = {s.step_id for s in all_steps if s.status == "completed"}
@@ -1425,6 +1434,10 @@ class GraphExecutor:
         needs_flush = False
         for step in all_steps:
             if step.status == "ready":
+                ready.append(step)
+            elif step.status == "running":
+                # Resumed-from-approval: step was transitioned to 'running'
+                # by the approval handler but not yet executed.
                 ready.append(step)
             elif step.status == "pending":
                 deps = step.depends_on or []

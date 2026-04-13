@@ -344,11 +344,19 @@ class SchedulerLoop:
             from src.services.execution_state import transition_run
 
             async with factory() as db:
+                from sqlalchemy import or_
+
                 result = await db.execute(
                     select(TaskRun)
                     .where(
-                        TaskRun.status == "pending",
-                        TaskRun.source.in_(["background", "approval_resume"]),
+                        or_(
+                            # Fresh background runs
+                            (TaskRun.status == "pending")
+                            & TaskRun.source.in_(["background", "approval_resume"]),
+                            # Runs approved by user, awaiting scheduler resume
+                            (TaskRun.status == "awaiting_approval")
+                            & (TaskRun.source == "approval_resume"),
+                        ),
                     )
                     .order_by(TaskRun.created_at.asc())
                     .limit(3)
@@ -363,6 +371,7 @@ class SchedulerLoop:
                     # Capture IDs before execution — if the session enters
                     # PendingRollbackError state, lazy attribute access fails.
                     run_id = run.run_id
+                    run_status = run.status
                     plan_id = run.plan_id
                     user_id = run.user_id
                     ws_id = run.workspace_id or ""
@@ -382,20 +391,38 @@ class SchedulerLoop:
                             circuit_breaker=getattr(self._orchestrator, "_circuit_breaker", None),
                         )
 
-                        # Ensure steps exist before execution (defensive)
-                        step_check = await db.execute(
-                            select(TaskStep.step_id).where(TaskStep.run_id == run_id).limit(1)
-                        )
-                        if not step_check.scalar_one_or_none() and plan_id:
-                            await executor.populate_run_steps(run_id, plan_id)
+                        if run_status == "awaiting_approval":
+                            # Approval-resumed: use resume_run to recover
+                            # checkpoint, surface_id, and stale-context refresh.
+                            # Reset source so retries (failed → pending) go
+                            # through execute_run, not resume_run.
+                            run.source = "background"
                             await db.flush()
+                            completed = await executor.resume_run(run_id)
+                            logger.info(
+                                "Approval-resumed task %s completed: %s",
+                                run_id,
+                                completed.status,
+                            )
+                        else:
+                            # Fresh background run: ensure steps exist, then execute.
+                            step_check = await db.execute(
+                                select(TaskStep.step_id).where(TaskStep.run_id == run_id).limit(1)
+                            )
+                            if not step_check.scalar_one_or_none() and plan_id:
+                                await executor.populate_run_steps(run_id, plan_id)
+                                await db.flush()
 
-                        completed = await executor.execute_run(run_id)
-                        logger.info(
-                            "Background task %s completed: %s",
-                            run_id,
-                            completed.status,
-                        )
+                            # Generate trace_id so execution is observable
+                            from ulid import ULID
+
+                            bg_trace_id = f"trace_{ULID()}"
+                            completed = await executor.execute_run(run_id, trace_id=bg_trace_id)
+                            logger.info(
+                                "Background task %s completed: %s",
+                                run_id,
+                                completed.status,
+                            )
                     except Exception as e:
                         # Rollback poisoned session before any further DB access
                         await db.rollback()
@@ -924,9 +951,14 @@ class SchedulerLoop:
                     except Exception:
                         run.status = "timed_out"
 
-                # 2. Stuck "awaiting_approval" runs whose linked approval has expired
+                # 2. Stuck "awaiting_approval" runs whose linked approval has expired.
+                # Skip runs tagged "approval_resume" — those are approved and
+                # waiting for the scheduler to resume them.
                 result = await db.execute(
-                    select(TaskRun).where(TaskRun.status == "awaiting_approval")
+                    select(TaskRun).where(
+                        TaskRun.status == "awaiting_approval",
+                        TaskRun.source != "approval_resume",
+                    )
                 )
                 awaiting_runs = list(result.scalars().all())
                 expired_cancelled = 0
