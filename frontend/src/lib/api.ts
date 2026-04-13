@@ -411,6 +411,12 @@ interface WorkspaceSurfaceResponse {
   source_run_id?: string | null;
   response_preview?: string | null;
   created_at?: string | null;
+  phase?: import("@/lib/a2ui-types").ExecutionPhase;
+  steps?: import("@/lib/a2ui-types").StepState[];
+  current_step?: string | null;
+  progress?: string;
+  approval?: import("@/lib/a2ui-types").ApprovalContext | null;
+  results?: import("@/lib/a2ui-types").ResultSummary | null;
 }
 
 export function fetchWorkspaceSurfaces(): Promise<{ surfaces: WorkspaceSurfaceResponse[]; count: number }> {

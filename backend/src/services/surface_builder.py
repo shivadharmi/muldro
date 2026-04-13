@@ -450,20 +450,33 @@ class SurfaceService:
                 if not preview_data:
                     continue
 
-                surfaces.append(
-                    {
-                        "id": payload.get("id", db_row.surface_id),
-                        "kind": payload.get("kind", db_row.surface_type),
-                        "preview": preview_data,
-                        "detail_config": db_row.detail_config or payload.get("detail_config"),
-                        "capability": payload.get("capability"),
-                        "source_run_id": payload.get("source_run_id"),
-                        "response_preview": payload.get("response_preview"),
-                        "created_at": (
-                            db_row.created_at.isoformat() if db_row.created_at else None
-                        ),
-                    }
-                )
+                surface_dict: dict[str, Any] = {
+                    "id": payload.get("id", db_row.surface_id),
+                    "kind": payload.get("kind", db_row.surface_type),
+                    "preview": preview_data,
+                    "detail_config": db_row.detail_config or payload.get("detail_config"),
+                    "capability": payload.get("capability"),
+                    "source_run_id": payload.get("source_run_id"),
+                    "response_preview": payload.get("response_preview"),
+                    "created_at": (db_row.created_at.isoformat() if db_row.created_at else None),
+                }
+
+                # Forward persisted execution state so REST clients have
+                # phase/steps/approval data without waiting for a WS update.
+                last_update = payload.get("last_surface_update")
+                if last_update and isinstance(last_update, dict):
+                    for key in (
+                        "phase",
+                        "steps",
+                        "current_step",
+                        "progress",
+                        "approval",
+                        "results",
+                    ):
+                        if key in last_update:
+                            surface_dict[key] = last_update[key]
+
+                surfaces.append(surface_dict)
             except Exception:
                 logger.debug(
                     "Failed to parse persisted surface %s", db_row.surface_id, exc_info=True

@@ -52,6 +52,13 @@ export default function WorkspacePage() {
       source_run_id: s.source_run_id ?? null,
       response_preview: s.response_preview ?? null,
       created_at: s.created_at ?? new Date().toISOString(),
+      // Execution state from persisted last_surface_update
+      ...(s.phase && { phase: s.phase }),
+      ...(s.steps && { steps: s.steps }),
+      ...(s.current_step !== undefined && { current_step: s.current_step }),
+      ...(s.progress && { progress: s.progress }),
+      ...(s.approval && { approval: s.approval }),
+      ...(s.results && { results: s.results }),
     }));
   }, [workspaceData]);
 
