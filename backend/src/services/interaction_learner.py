@@ -131,5 +131,42 @@ class InteractionLearner:
                         len(memory_ids),
                         trace_id,
                     )
+
+                # Entity extraction → Neo4j sync (best-effort, same pattern
+                # as store_memory in intelligence_server.py)
+                entity_ids = await self._extract_entities(db, source_text, user_id, workspace_id)
+                if entity_ids:
+                    await self._sync_to_graph(db, entity_ids)
         except Exception:
             logger.warning("Interaction learning failed (trace=%s)", trace_id, exc_info=True)
+
+    async def _extract_entities(self, db, text: str, user_id: str, workspace_id: str) -> list[str]:
+        """Extract entities from text via WorldModel (best-effort)."""
+        try:
+            from src.services.world_model import WorldModel
+
+            wm = WorldModel(self._settings, db, vector_store=self._vector_store)
+            entity_ids = await wm.extract_from_text(
+                text, user_id=user_id, workspace_id=workspace_id
+            )
+            if entity_ids:
+                await db.commit()
+                logger.debug("Interaction learning extracted %d entities", len(entity_ids))
+            return entity_ids or []
+        except Exception:
+            logger.debug("Entity extraction from interaction failed", exc_info=True)
+            return []
+
+    async def _sync_to_graph(self, db, entity_ids: list[str]) -> None:
+        """Sync extracted entities to Neo4j (best-effort)."""
+        if not self._settings.neo4j_url:
+            return
+        try:
+            from src.services.graph_sync import GraphSyncService
+
+            gs = GraphSyncService(self._settings, db)
+            await gs.batch_sync_entities(entity_ids)
+            await gs.close()
+            logger.debug("Interaction learning synced %d entities to Neo4j", len(entity_ids))
+        except Exception:
+            logger.debug("Neo4j sync from interaction failed", exc_info=True)
