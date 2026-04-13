@@ -620,7 +620,9 @@ class JarvisOrchestrator:
                 # Live MCP schemas take priority for external tools — the
                 # MCP server is the source of truth (e.g., OAuth 2.1 mode
                 # strips user_google_email from schemas at runtime).
-                # Fallback to DB schema, then minimal.
+                # Fallback to DB schema. Skip tools with no schema from any
+                # real source — presenting tools with empty schemas causes
+                # agents to call them without required params.
                 schema = None
                 description = tool_def.description or tool_def.name
 
@@ -634,7 +636,11 @@ class JarvisOrchestrator:
                     schema = tool_def.input_schema
 
                 if not schema:
-                    schema = {"type": "object", "properties": {}}
+                    logger.debug(
+                        "Skipping tool %s — no schema from MCP or DB yet",
+                        tool_def.name,
+                    )
+                    continue
 
                 tools.append(
                     {
@@ -2527,6 +2533,13 @@ class JarvisOrchestrator:
         if agent_name not in CONTEXT_ENRICHED_AGENTS:
             return ""
 
+        sections: list[str] = []
+
+        # Load integration identity context (GitHub username, Google email, etc.)
+        integration_ctx = await self._load_integration_context(user_id, workspace_id)
+        if integration_ctx:
+            sections.append(integration_ctx)
+
         try:
             svc = self._services
             async with self._db_factory() as db:
@@ -2546,10 +2559,58 @@ class JarvisOrchestrator:
                 )
                 context_text = ContextBuilder.to_prompt(pack)
                 if context_text:
-                    return f"\n\n--- CONTEXT ---\n{context_text}"
+                    sections.append(context_text)
         except Exception:
             logger.debug("Context assembly via ContextBuilder failed", exc_info=True)
 
+        if sections:
+            return "\n\n--- CONTEXT ---\n" + "\n\n".join(sections)
+        return ""
+
+    async def _load_integration_context(self, user_id: str, workspace_id: str) -> str:
+        """Load connected integration identities for agent context.
+
+        Returns a compact text block with provider-specific identity info
+        (e.g., GitHub username/orgs, Google email) so agents can fill in
+        required tool parameters like 'owner'.
+        """
+        try:
+            from sqlalchemy import select
+
+            from src.models.integration_installation import IntegrationInstallation
+
+            async with self._db_factory() as db:
+                result = await db.execute(
+                    select(IntegrationInstallation).where(
+                        IntegrationInstallation.workspace_id == workspace_id,
+                        IntegrationInstallation.status == "active",
+                        IntegrationInstallation.enabled.is_(True),
+                        IntegrationInstallation.config.isnot(None),
+                    )
+                )
+                installations = result.scalars().all()
+
+            lines: list[str] = []
+            for inst in installations:
+                config = inst.config or {}
+                if not config:
+                    continue
+
+                if inst.server_name == "github" and config.get("username"):
+                    line = f"- GitHub: username={config['username']}"
+                    if config.get("organizations"):
+                        line += f", orgs=[{', '.join(config['organizations'])}]"
+                    lines.append(line)
+                elif config.get("account_email"):
+                    label = inst.display_name or inst.server_name
+                    lines.append(f"- {label}: {config['account_email']}")
+
+            if lines:
+                return "Connected integrations (use these for tool parameters):\n" + "\n".join(
+                    lines
+                )
+        except Exception:
+            logger.debug("Integration context load failed", exc_info=True)
         return ""
 
     async def _apply_perception_policy_from_planner(

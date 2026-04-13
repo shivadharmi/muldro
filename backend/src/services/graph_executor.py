@@ -24,6 +24,7 @@ from src.models.plans import Plan, PlanTask
 from src.models.task_graph import TaskCheckpoint, TaskRun, TaskStep
 from src.orchestrator.agent_loop import CancellationRequested
 from src.orchestrator.contracts import PolicyDecision, ResultSummary, StepResult, StepState
+from src.orchestrator.tracing import JarvisTrace
 from src.services.audit import AuditService
 from src.services.execution_state import transition_run, transition_step
 from src.services.risk_assessor import RiskAssessment, get_or_assess_risk
@@ -165,6 +166,14 @@ async def create_graph_executor(
     except Exception:
         logger.debug("Redis unavailable for GraphExecutor", exc_info=True)
 
+    trace_store = None
+    try:
+        from src.services.trace_store import TraceStore
+
+        trace_store = TraceStore(db_factory=db_factory)
+    except Exception:
+        logger.debug("TraceStore unavailable for GraphExecutor", exc_info=True)
+
     return GraphExecutor(
         settings=settings,
         db=db,
@@ -180,6 +189,7 @@ async def create_graph_executor(
         circuit_breaker=circuit_breaker,
         trust_engine=trust_engine,
         redis=redis_conn,
+        trace_store=trace_store,
     )
 
 
@@ -205,6 +215,8 @@ class GraphExecutor:
         # Trust infrastructure (Spec 2B-i)
         trust_engine=None,
         redis=None,
+        # Trace persistence for background runs
+        trace_store=None,
     ):
         self._settings = settings
         self._db = db
@@ -223,7 +235,9 @@ class GraphExecutor:
         self._circuit_breaker = circuit_breaker
         self._trust_engine = trust_engine
         self._redis = redis
+        self._trace_store = trace_store
         self._cancel_events: dict[str, asyncio.Event] = {}
+        self._active_traces: dict[str, JarvisTrace] = {}
 
     async def create_run(
         self,
@@ -355,6 +369,13 @@ class GraphExecutor:
         if trace_id:
             run.trace_id = trace_id
 
+        # Create a live JarvisTrace so agent_loop can accumulate spans
+        trace = JarvisTrace(
+            trace_id=trace_id or f"trace_{ULID()}",
+            trigger=f"execution:{run.source or 'background'}",
+        )
+        self._active_traces[run.run_id] = trace
+
         transition_run(run, "running")
         run.started_at = datetime.now(timezone.utc)
         if surface_id:
@@ -434,6 +455,8 @@ class GraphExecutor:
             )
         finally:
             self._cancel_events.pop(run.run_id, None)
+            # Finalize and persist the trace
+            await self._finalize_trace(run)
 
         # Record Prometheus metrics
         try:
@@ -498,6 +521,16 @@ class GraphExecutor:
         transition_run(run, "running")
         await self._db.flush()
 
+        # Create a trace for the resumed segment (reuse existing trace_id if set)
+        trace = JarvisTrace(
+            trace_id=run.trace_id or f"trace_{ULID()}",
+            trigger="execution:resume",
+        )
+        self._active_traces[run.run_id] = trace
+        if not run.trace_id:
+            run.trace_id = trace.trace_id
+            await self._db.flush()
+
         cancel_event = asyncio.Event()
         self._cancel_events[run.run_id] = cancel_event
 
@@ -510,6 +543,7 @@ class GraphExecutor:
             run.error = {"type": type(exc).__name__, "message": str(exc)[:500]}
         finally:
             self._cancel_events.pop(run.run_id, None)
+            await self._finalize_trace(run)
 
         await self._db.commit()
         return run
@@ -1375,7 +1409,7 @@ class GraphExecutor:
             db_factory=self._db_factory,
             services=None,
             budget=self._budget,
-            trace=None,
+            trace=self._active_traces.get(run.run_id),
             execute_tool_fn=self._execute_tool_fn,
             max_tool_rounds=10,
             stream=False,
@@ -1397,6 +1431,38 @@ class GraphExecutor:
             "tools_called": tools_called,
             "errors": errors,
         }
+
+    async def _finalize_trace(self, run: TaskRun) -> None:
+        """Finalize and persist the JarvisTrace for a completed/failed run."""
+        trace = self._active_traces.pop(run.run_id, None)
+        if not trace:
+            return
+        trace.finish()
+        input_t, output_t = trace.total_tokens()
+        logger.info(
+            "run_trace_finalized",
+            extra={
+                "run_id": run.run_id,
+                "trace_id": trace.trace_id,
+                "spans": len(trace.spans),
+                "input_tokens": input_t,
+                "output_tokens": output_t,
+            },
+        )
+        if self._trace_store:
+            try:
+                await self._trace_store.store_trace(
+                    trace.to_dict(),
+                    user_id=run.user_id,
+                    workspace_id=run.workspace_id or "",
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to persist trace %s for run %s",
+                    trace.trace_id,
+                    run.run_id,
+                    exc_info=True,
+                )
 
     async def _build_step_context(self, run: TaskRun, step: TaskStep) -> str:
         """Build context prompt for a step using ContextBuilder."""
