@@ -20,11 +20,14 @@ from src.api.schemas_history import (
     HistoryPlanContext,
     HistoryStepSummary,
     HistoryTraceInfo,
+    RunActionResponse,
 )
+from src.config.settings import Settings, get_settings
 from src.models.approvals import Approval
 from src.models.plans import Plan
 from src.models.runtime_event import RuntimeEvent
 from src.models.task_graph import TaskRun, TaskStep
+from src.services.execution_state import transition_run
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -380,3 +383,118 @@ def _capability_from_step(step: TaskStep) -> str | None:
     if step.input_data and isinstance(step.input_data, dict):
         return step.input_data.get("capability")
     return None
+
+
+# ---------------------------------------------------------------------------
+# Action endpoints: retry / cancel / resume
+# ---------------------------------------------------------------------------
+
+_TERMINAL_STATUSES = {"completed", "failed", "cancelled", "archived", "timed_out"}
+
+
+@router.post("/v1/history/{run_id}/retry", response_model=RunActionResponse)
+async def retry_run(
+    run_id: str,
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+    db: AsyncSession = Depends(get_session),
+) -> RunActionResponse:
+    """Retry a failed or timed-out run by resetting it to pending."""
+    result = await db.execute(
+        select(TaskRun).where(
+            TaskRun.run_id == run_id,
+            TaskRun.user_id == user_id,
+            TaskRun.workspace_id == workspace_id,
+        )
+    )
+    run: TaskRun | None = result.scalar_one_or_none()
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    if run.status not in ("failed", "timed_out"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Run cannot be retried (status={run.status}). "
+            "Only failed or timed_out runs can be retried.",
+        )
+
+    transition_run(run, "pending")
+    run.source = "approval_resume"
+    run.error = None
+    run.completed_at = None
+    await db.commit()
+
+    return RunActionResponse(run_id=run.run_id, status=run.status, message="Run queued for retry.")
+
+
+@router.post("/v1/runs/{run_id}/cancel", response_model=RunActionResponse)
+async def cancel_run(
+    run_id: str,
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+    settings: Settings = Depends(get_settings),
+    db: AsyncSession = Depends(get_session),
+) -> RunActionResponse:
+    """Cancel a running or paused run."""
+    result = await db.execute(
+        select(TaskRun).where(
+            TaskRun.run_id == run_id,
+            TaskRun.user_id == user_id,
+            TaskRun.workspace_id == workspace_id,
+        )
+    )
+    run: TaskRun | None = result.scalar_one_or_none()
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    if run.status in _TERMINAL_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Run is already in terminal state (status={run.status})",
+        )
+
+    try:
+        from src.services.graph_executor import create_graph_executor
+
+        executor = await create_graph_executor(settings=settings, db=db, workspace_id=workspace_id)
+        await executor.cancel_run(run_id)
+    except Exception:
+        logger.exception("GraphExecutor cancel failed for run %s — falling back", run_id)
+        transition_run(run, "cancelled")
+
+    await db.commit()
+
+    return RunActionResponse(run_id=run_id, status=run.status, message="Run cancelled.")
+
+
+@router.post("/v1/runs/{run_id}/resume", response_model=RunActionResponse)
+async def resume_run(
+    run_id: str,
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+    db: AsyncSession = Depends(get_session),
+) -> RunActionResponse:
+    """Queue a paused or awaiting run for resume on the next scheduler tick."""
+    result = await db.execute(
+        select(TaskRun).where(
+            TaskRun.run_id == run_id,
+            TaskRun.user_id == user_id,
+            TaskRun.workspace_id == workspace_id,
+        )
+    )
+    run: TaskRun | None = result.scalar_one_or_none()
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    resumable = {"paused", "awaiting_approval", "awaiting_input"}
+    if run.status not in resumable:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Run cannot be resumed (status={run.status}). "
+            "Only paused, awaiting_approval, or awaiting_input runs can be resumed.",
+        )
+
+    run.source = "approval_resume"
+    await db.commit()
+
+    return RunActionResponse(run_id=run.run_id, status=run.status, message="Run queued for resume.")

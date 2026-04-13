@@ -301,3 +301,93 @@ async def test_history_detail_returns_404_for_missing_run():
         )
 
     assert exc_info.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Helper to build a minimal TaskRun mock
+# ---------------------------------------------------------------------------
+
+
+def _make_task_run(
+    run_id: str = "run_001",
+    status: str = "failed",
+    user_id: str = "usr_01JTEST00000000000000000000",
+    workspace_id: str = "ws_test",
+) -> MagicMock:
+    run = MagicMock()
+    run.run_id = run_id
+    run.plan_id = "plan_001"
+    run.user_id = user_id
+    run.workspace_id = workspace_id
+    run.status = status
+    run.source = "background"
+    run.retry_count = 0
+    run.error = {"msg": "boom"}
+    run.completed_at = datetime(2026, 4, 13, 10, 0, tzinfo=timezone.utc)
+    run.started_at = datetime(2026, 4, 13, 9, 59, tzinfo=timezone.utc)
+    return run
+
+
+# ---------------------------------------------------------------------------
+# POST /v1/history/{run_id}/retry tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_retry_transitions_failed_run_to_pending():
+    """retry_run() calls transition_run with 'pending' for a failed run."""
+    from fastapi import HTTPException  # noqa: F401
+
+    from src.api.routes_history import retry_run
+
+    run = _make_task_run(status="failed")
+
+    async def fake_execute(_stmt, *args, **kwargs):
+        return _FakeResult(scalar=run)
+
+    mock_db = MagicMock()
+    mock_db.execute = fake_execute
+    mock_db.commit = MagicMock(return_value=None)
+
+    async def async_commit():
+        return None
+
+    mock_db.commit = async_commit
+
+    with patch("src.api.routes_history.transition_run") as mock_transition:
+        resp = await retry_run(
+            run_id="run_001",
+            user_id="usr_01JTEST00000000000000000000",
+            workspace_id="ws_test",
+            db=mock_db,
+        )
+
+    mock_transition.assert_called_once_with(run, "pending")
+    assert resp.run_id == "run_001"
+    assert resp.status == run.status  # status reflects whatever transition_run set
+
+
+@pytest.mark.asyncio
+async def test_retry_rejects_non_failed_run():
+    """retry_run() raises 400 HTTPException for a completed run."""
+    from fastapi import HTTPException
+
+    from src.api.routes_history import retry_run
+
+    run = _make_task_run(status="completed")
+
+    async def fake_execute(_stmt, *args, **kwargs):
+        return _FakeResult(scalar=run)
+
+    mock_db = MagicMock()
+    mock_db.execute = fake_execute
+
+    with pytest.raises(HTTPException) as exc_info:
+        await retry_run(
+            run_id="run_001",
+            user_id="usr_01JTEST00000000000000000000",
+            workspace_id="ws_test",
+            db=mock_db,
+        )
+
+    assert exc_info.value.status_code == 400
