@@ -43,6 +43,7 @@ from src.orchestrator.tracing import TraceManager
 from src.services.agent_registry import AgentRegistry
 from src.services.capability_resolver import CapabilityResolver, route_step
 from src.services.context_builder import ContextBuilder, ContextPack
+from src.services.interaction_learner import InteractionLearner
 from src.services.surface_mapping import (
     build_surface_preview_from_plan,
     derive_surface_kind,
@@ -206,6 +207,14 @@ class JarvisOrchestrator:
         from src.orchestrator.api_circuit_breaker import AnthropicCircuitBreaker
 
         self._circuit_breaker = AnthropicCircuitBreaker()
+        # Interaction learning — async memory extraction from user messages
+        self._interaction_learner: InteractionLearner | None = None
+        if self._services.memory_service:
+            self._interaction_learner = InteractionLearner(
+                settings=settings,
+                memory_service=self._services.memory_service,
+                redis=None,  # Populated lazily when event bus Redis is available
+            )
         # Precompute haiku model ID for intent classification
         if settings.use_bedrock:
             self._haiku_model = BEDROCK_MODEL_TIERS["haiku"]
@@ -217,6 +226,13 @@ class JarvisOrchestrator:
         task = asyncio.create_task(coro)
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
+
+    async def _ensure_learner_redis(self) -> None:
+        """Ensure the interaction learner has a Redis connection."""
+        if self._interaction_learner and self._interaction_learner._redis is None:
+            event_bus = await self._ensure_event_bus()
+            if event_bus and hasattr(self, "_event_bus_redis"):
+                self._interaction_learner._redis = self._event_bus_redis
 
     async def shutdown(self) -> None:
         """Await all pending background tasks on orchestrator shutdown."""
@@ -469,60 +485,6 @@ class JarvisOrchestrator:
             logger.warning("Failed to log interaction", exc_info=True)
             return None
         return interaction_id
-
-    async def _learn_from_outcome(
-        self,
-        run_id: str,
-        run,
-        result: dict,
-        success: bool,
-    ) -> None:
-        """Store preference/task_context memories from execution outcomes (D1).
-
-        After a run completes, checks for linked approval decisions and
-        failure context, then stores them as memories so future Planner
-        calls have execution history context.
-        """
-        if not self._services.memory_service:
-            return
-        try:
-            facts: list[str] = []
-
-            async with self._db_factory() as db:
-                # Check for linked approvals
-                from sqlalchemy import select
-
-                from src.models.approvals import Approval
-
-                apr_result = await db.execute(
-                    select(Approval).where(
-                        Approval.run_id == run_id,
-                        Approval.status.in_(["approved", "rejected"]),
-                    )
-                )
-                for apr in apr_result.scalars().all():
-                    fact = (
-                        f"User {apr.status} '{apr.title}'"
-                        f"{f' — reason: {apr.decision_reason}' if apr.decision_reason else ''}"
-                    )
-                    facts.append(fact)
-
-            # Store failure context for the Planner
-            if not success:
-                goal = run.policy_decision.get("decision", "") if run.policy_decision else ""
-                error_msg = result.get("summary", "unknown error")[:200]
-                if goal:
-                    facts.append(f"Plan '{goal}' failed: {error_msg}")
-
-            if facts:
-                await self._services.memory_service.extract_and_store(
-                    user_id=run.user_id,
-                    source_text="\n".join(facts),
-                    source_event_ids=[run_id],
-                    workspace_id=run.workspace_id,
-                )
-        except Exception:
-            logger.debug("Outcome learning failed for run %s", run_id, exc_info=True)
 
     def _build_tool_definitions(self) -> list[dict]:
         """Build workspace-independent tool definitions (internal + native connectors).
@@ -927,6 +889,20 @@ class JarvisOrchestrator:
             if surface_id:
                 result["surface_id"] = surface_id
 
+            # Interaction learning (async, non-blocking)
+            if self._interaction_learner:
+                await self._ensure_learner_redis()
+                self._spawn_background(
+                    self._interaction_learner.learn(
+                        user_id=user_id,
+                        workspace_id=workspace_id,
+                        user_message=message,
+                        agent_response=response_text,
+                        intent=intent,
+                        trace_id=trace.trace_id,
+                    )
+                )
+
             return result
 
         except Exception as e:
@@ -1265,6 +1241,20 @@ class JarvisOrchestrator:
                     )
             except Exception:
                 logger.warning("Surface push failed", exc_info=True)
+
+            # Interaction learning (async, non-blocking)
+            if self._interaction_learner:
+                await self._ensure_learner_redis()
+                self._spawn_background(
+                    self._interaction_learner.learn(
+                        user_id=user_id,
+                        workspace_id=workspace_id,
+                        user_message=message,
+                        agent_response=presenter_text,
+                        intent=intent,
+                        trace_id=trace.trace_id,
+                    )
+                )
 
             yield {
                 "event": "done",
