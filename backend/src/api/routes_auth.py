@@ -479,6 +479,36 @@ async def oauth_callback(
 
         scopes = token_data.get("scope", "").split(",") if token_data.get("scope") else None
 
+        # Fetch GitHub user profile and organizations
+        github_config: dict = {}
+        async with httpx.AsyncClient() as gh_client:
+            user_resp = await gh_client.get(
+                "https://api.github.com/user",
+                headers={
+                    "Authorization": f"Bearer {token_data['access_token']}",
+                    "Accept": "application/vnd.github+json",
+                },
+                timeout=10,
+            )
+            if user_resp.status_code == 200:
+                gh_user = user_resp.json()
+                github_config["username"] = gh_user.get("login", "")
+                github_config["name"] = gh_user.get("name", "")
+                github_config["avatar_url"] = gh_user.get("avatar_url", "")
+
+            orgs_resp = await gh_client.get(
+                "https://api.github.com/user/orgs",
+                headers={
+                    "Authorization": f"Bearer {token_data['access_token']}",
+                    "Accept": "application/vnd.github+json",
+                },
+                timeout=10,
+            )
+            if orgs_resp.status_code == 200:
+                github_config["organizations"] = [
+                    org.get("login", "") for org in orgs_resp.json()[:20]
+                ]
+
         db_factory = get_session_factory()
         from src.api.deps import resolve_workspace_id
 
@@ -498,9 +528,19 @@ async def oauth_callback(
             workspace_id=workspace_id,
         )
 
-        await _ensure_integration(db_factory, user_id, "github", workspace_id=workspace_id)
+        await _ensure_integration(
+            db_factory,
+            user_id,
+            "github",
+            workspace_id=workspace_id,
+            extra_config=github_config,
+        )
 
-        logger.info("GitHub integration linked for %s", user_id)
+        logger.info(
+            "GitHub integration linked for %s (%s)",
+            user_id,
+            github_config.get("username", "unknown"),
+        )
         background_tasks.add_task(_trigger_initial_observation, user_id, ["github"], workspace_id)
 
     elif provider == "linear":
@@ -860,7 +900,7 @@ async def oauth_callback(
 
 
 async def _trigger_initial_observation(user_id: str, sources: list[str], workspace_id: str) -> None:
-    """Run initial perception cycle for newly connected sources (background)."""
+    """Run initial perception cycle and MCP schema discovery for newly connected sources."""
     try:
         from src.config.settings import get_settings
         from src.models.database import get_session_factory
@@ -894,6 +934,32 @@ async def _trigger_initial_observation(user_id: str, sources: list[str], workspa
                         source,
                         exc_info=True,
                     )
+
+                # Eagerly create MCP session to discover tool schemas.
+                # Stdio servers are lazy (per-user), so schemas aren't
+                # available until the first session. Creating it here
+                # populates the DB so tools appear in agent tool lists
+                # immediately after OAuth connection.
+                try:
+                    from src.integrations.mcp_pool import get_workspace_pool
+
+                    pool = get_workspace_pool()
+                    if pool:
+                        # Ensure config is registered (may have been activated
+                        # after startup via this OAuth callback)
+                        if not pool.session_pool.has_server_config(source, workspace_id):
+                            await pool.reload_server(workspace_id, source)
+
+                        session = await pool.session_pool.get_or_create_session(
+                            source, user_id=user_id, workspace_id=workspace_id
+                        )
+                        logger.info(
+                            "MCP schema discovery for %s: %d tools",
+                            source,
+                            len(session.tools),
+                        )
+                except Exception:
+                    logger.debug("MCP schema discovery skipped for %s", source, exc_info=True)
         finally:
             await svc_db.close()
     except Exception:
@@ -906,12 +972,20 @@ async def _ensure_integration(
     provider: str,
     account_email: str | None = None,
     workspace_id: str = "",
+    extra_config: dict | None = None,
 ) -> None:
     """Create or reactivate an IntegrationInstallation after OAuth."""
     from sqlalchemy import select as sa_select
 
     from src.models.ids import generate_id
     from src.models.integration_installation import IntegrationInstallation
+
+    # Build config dict from account_email and any extra provider-specific data
+    config: dict = {}
+    if account_email:
+        config["account_email"] = account_email
+    if extra_config:
+        config.update(extra_config)
 
     try:
         async with db_factory() as db:
@@ -926,6 +1000,10 @@ async def _ensure_integration(
             if existing:
                 existing.status = "active"
                 existing.enabled = True
+                # Merge new config into existing (preserves other fields)
+                merged = dict(existing.config or {})
+                merged.update(config)
+                existing.config = merged
             else:
                 db.add(
                     IntegrationInstallation(
@@ -938,7 +1016,7 @@ async def _ensure_integration(
                         auth_provider="oauth",
                         status="active",
                         health_status="unknown",
-                        config={"account_email": account_email} if account_email else {},
+                        config=config,
                         enabled=True,
                     )
                 )
