@@ -77,7 +77,7 @@ export interface DetailTabResponse {
 export interface WorkspaceSurfacePush {
   type: "surface";
   id: string;
-  kind: string;
+  kind: import("@/lib/types/surfaces").SurfaceKind;
   preview: SurfacePreview;
   detail_config: DetailConfig | null;
   source_run_id: string | null;

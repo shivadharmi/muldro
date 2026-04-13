@@ -65,10 +65,10 @@ class TestBuildActiveExecutionSurfaces:
 
         assert len(surfaces) == 1
         s = surfaces[0]
-        assert s["kind"] == "plan"
-        assert s["id"] == "exec_run_01"
-        assert s["source_run_id"] == "run_01"
-        preview = s["preview"]
+        assert s.kind == "plan"
+        assert s.id == "exec_run_01"
+        assert s.source_run_id == "run_01"
+        preview = s.preview
         assert preview["status"] == "running"
         assert preview["progress"] is not None
 
@@ -112,8 +112,8 @@ class TestBuildActiveExecutionSurfaces:
 
         surfaces = await service._build_active_execution_surfaces()
         assert len(surfaces) == 1
-        assert surfaces[0]["kind"] == "plan"
-        assert surfaces[0]["source_run_id"] == "run_03"
+        assert surfaces[0].kind == "plan"
+        assert surfaces[0].source_run_id == "run_03"
 
     @pytest.mark.asyncio
     async def test_paused_run_included(self):
