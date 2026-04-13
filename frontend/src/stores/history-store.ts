@@ -23,22 +23,23 @@ export interface HistoryApprovalContext {
 
 export interface HistoryItem {
   run_id: string;
-  status: string;
+  plan_id: string | null;
+  goal: string | null;
   source: string | null;
-  intent: string | null;
-  capability_summary: string | null;
-  total_steps: number | null;
-  completed_steps: number | null;
-  failed_steps: number | null;
-  total_cost_usd: number | null;
-  total_tokens: number | null;
+  trigger_type: string | null;
+  status: string;
+  risk_level: string | null;
   started_at: string | null;
   completed_at: string | null;
-  elapsed_seconds: number | null;
-  surface_id: string | null;
-  phase: string | null;
+  error: Record<string, unknown> | null;
+  retry_count: number;
+  step_count: number;
+  completed_step_count: number;
+  cost_usd: number | null;
   steps: HistoryStepSummary[];
   approval: HistoryApprovalContext | null;
+  live_phase: string | null;
+  surface_id: string | null;
 }
 
 export interface HistoryFilters {
@@ -151,7 +152,7 @@ export const useHistoryStore = create<HistoryState>((set) => ({
       const nextItems = [...s.items];
       nextItems[idx] = {
         ...prev,
-        ...(update.phase !== undefined && { phase: update.phase }),
+        ...(update.phase !== undefined && { live_phase: update.phase }),
         ...(update.steps && update.steps.length > 0 && { steps: update.steps }),
         ...(update.approval !== undefined && { approval: update.approval }),
         status: deriveStatus(update.phase, prev.status),

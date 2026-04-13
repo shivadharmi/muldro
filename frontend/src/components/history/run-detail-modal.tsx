@@ -168,7 +168,7 @@ function StepsTab({ detail }: { detail: RunDetail }) {
                 {icon}
               </span>
               <span className="text-sm text-[#e6edf3] truncate flex-1 min-w-0">
-                {step.name ?? "Unnamed step"}
+                {step.name ?? step.capability ?? step.step_id}
               </span>
               {step.capability && (
                 <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#21262d] text-[#8b949e] shrink-0">

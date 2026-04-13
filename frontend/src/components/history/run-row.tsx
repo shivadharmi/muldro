@@ -38,7 +38,8 @@ function formatDuration(start: string | null, end: string | null): string {
 function getStatusLabel(status: string): string {
   if (status === "running" || status === "pending") return "executing";
   if (status === "awaiting_approval") return "approval needed";
-  return status;
+  if (status === "timed_out") return "timed out";
+  return status.replace("_", " ");
 }
 
 function getRunDotClass(status: string): string {
@@ -52,6 +53,8 @@ function getRunDotClass(status: string): string {
       return "bg-red-400";
     case "awaiting_approval":
       return "bg-yellow-400";
+    case "timed_out":
+      return "bg-orange-400";
     case "cancelled":
     default:
       return "bg-gray-500";
@@ -69,6 +72,8 @@ function getRunBadgeClass(status: string): string {
       return "bg-red-900/40 text-red-400";
     case "awaiting_approval":
       return "bg-yellow-900/40 text-yellow-400";
+    case "timed_out":
+      return "bg-orange-900/40 text-orange-400";
     case "cancelled":
     default:
       return "bg-gray-800 text-gray-400";
@@ -126,7 +131,7 @@ function StepRow({ step, isCurrentStep }: StepRowProps) {
         {icon}
       </span>
       <span className="text-xs text-[#e6edf3] truncate flex-1">
-        {step.name ?? "Unnamed step"}
+        {step.name ?? step.capability ?? step.step_id}
       </span>
       {step.capability && (
         <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#21262d] text-[#8b949e] shrink-0">
@@ -251,19 +256,19 @@ export function RunRow({ item, onRetry, onApprove, onReject }: RunRowProps) {
 
   // Build subtitle: trigger · time · steps · duration · cost
   const subtitleParts: string[] = [];
-  if (item.source) subtitleParts.push(item.source);
+  if (item.trigger_type) subtitleParts.push(item.trigger_type);
+  else if (item.source) subtitleParts.push(item.source);
   if (item.started_at) subtitleParts.push(formatRelativeTime(item.started_at));
-  if (item.total_steps != null) {
-    const completed = item.completed_steps ?? 0;
-    subtitleParts.push(`${completed}/${item.total_steps} steps`);
+  if (item.step_count > 0) {
+    subtitleParts.push(`${item.completed_step_count}/${item.step_count} steps`);
   }
   const dur = formatDuration(item.started_at, item.completed_at);
   if (dur) subtitleParts.push(dur);
-  if (item.total_cost_usd != null && item.total_cost_usd > 0) {
-    subtitleParts.push(`$${item.total_cost_usd.toFixed(4)}`);
+  if (item.cost_usd != null && item.cost_usd > 0) {
+    subtitleParts.push(`$${item.cost_usd.toFixed(3)}`);
   }
 
-  const goal = item.intent ?? item.capability_summary ?? "Untitled run";
+  const goal = item.goal ?? `Run ${item.run_id.slice(0, 16)}`;
   const statusLabel = getStatusLabel(item.status);
 
   return (

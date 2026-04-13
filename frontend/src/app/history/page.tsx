@@ -94,7 +94,7 @@ export default function HistoryPage() {
 
   const failedCount = items.filter((i) => i.status === "failed").length;
 
-  const dailyCost = items.reduce((sum, i) => sum + (i.total_cost_usd ?? 0), 0);
+  const dailyCost = items.reduce((sum, i) => sum + (i.cost_usd ?? 0), 0);
 
   return (
     <div className="flex-1 bg-[#0d1117] min-h-screen">
