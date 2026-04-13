@@ -3,7 +3,6 @@
 import { create } from "zustand";
 
 import type { DetailConfig, SurfacePreview } from "@/lib/a2ui-types";
-import type { A2UIComponent } from "@/lib/a2ui-types";
 import type { ExecutionPhase, StepState, ApprovalContext, ResultSummary, SurfaceUpdate } from "@/lib/a2ui-types";
 import type { SurfaceKind } from "@/lib/types/surfaces";
 
@@ -15,7 +14,6 @@ export interface WorkspaceSurface {
   source_run_id: string | null;
   response_preview: string | null;
   created_at: string;
-  children?: A2UIComponent[];
   // Execution surface fields (populated by surface_update messages)
   phase?: ExecutionPhase;
   steps?: StepState[];
