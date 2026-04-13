@@ -196,6 +196,10 @@ class PolicyDecision(BaseModel):
     risk_level: Literal["none", "low", "medium", "high", "critical"] = "low"
     approval_id: str | None = None
     execution_id: str | None = None
+    trust_level: str = ""
+    effective_trust_level: str = ""
+    approved_count: int = 0
+    rejected_count: int = 0
 
 
 # ── Realtime / A2UI contracts ────────────────────────────────────
@@ -304,11 +308,23 @@ class ApprovalContext(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    # Primary
     approval_id: str
     step_description: str
+    risk_level: str = ""
+    trust_level: str = ""
+    expires_at: str | None = None
+    triggering_step_id: str | None = None
+    graduation_hint: str = ""
+
+    # Evidence
     risk_reasoning: str
     trust_context: str
-    graduation_hint: str = ""
+    reversible: bool = True
+    blast_radius: str = "self"
+    effective_trust_level: str = ""
+    approved_count: int = 0
+    rejected_count: int = 0
 
 
 class ResultSummary(BaseModel):
