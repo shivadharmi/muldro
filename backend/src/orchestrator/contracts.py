@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from src.ui.contracts import SurfaceKind
 
@@ -278,6 +278,46 @@ class InsightSurfaceData(BaseModel):
     related_goals: list[str] = Field(default_factory=list)
     suggested_actions: list[SuggestedActionRef] = Field(default_factory=list)
     dismiss_available: bool = True
+
+
+class SurfaceSpec(BaseModel):
+    """Surface specification produced by the Presenter agent.
+
+    The Presenter decides IF a surface should be created, what KIND it is,
+    and what PREVIEW data to show. Parsed from the Presenter's JSON output.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    should_surface: bool = False
+    kind: SurfaceKind
+    title: str
+    subtitle: str | None = None
+    status: (
+        Literal[
+            "pending",
+            "running",
+            "completed",
+            "failed",
+            "awaiting_approval",
+            "cancelled",
+            "proposal",
+        ]
+        | None
+    ) = None
+    priority: Literal["low", "medium", "high", "critical"] | None = None
+    metrics: list[dict] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+
+    @field_validator("title")
+    @classmethod
+    def _cap_title(cls, v: str) -> str:
+        return v[:80]
+
+    @field_validator("subtitle")
+    @classmethod
+    def _cap_subtitle(cls, v: str | None) -> str | None:
+        return v[:120] if v else None
 
 
 # ── Execution surface update contracts ────────────────────────────

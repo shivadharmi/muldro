@@ -1,16 +1,21 @@
-"""Surface kind derivation and preview building for WS surface pushes.
+"""Surface kind derivation, preview building, and spec extraction.
 
-These functions map PlanOutput capabilities to surface kinds and build
-SurfacePreview data for workspace grid cards. Phase 1 relocates them
-from jarvis.py; Phase 3 replaces them with Presenter-driven SurfaceSpec.
+Functions for mapping PlanOutput capabilities to surface kinds, building
+SurfacePreview data, extracting structured surface specs from Presenter
+responses, and applying workspace surface caps.
 """
 
 from __future__ import annotations
 
+import json
+import logging
+import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from src.orchestrator.contracts import PlanOutput
+    from src.orchestrator.contracts import PlanOutput, SurfaceSpec
+
+logger = logging.getLogger(__name__)
 
 
 def derive_surface_kind(plan: "PlanOutput") -> tuple[str, str] | None:
@@ -23,27 +28,21 @@ def derive_surface_kind(plan: "PlanOutput") -> tuple[str, str] | None:
 
     caps = {s.capability for s in plan.steps if s.actor == "jarvis"}
 
-    # Respond/reason only -> no surface (chat-only)
-    # "none" = planner indicated no external capability needed (pure reasoning)
     if caps <= {"reason", "respond", "none"}:
         return None
 
-    # System capabilities with visual value
     if "system.add_to_brief" in caps:
         return ("briefing", "Briefing Update")
     if "system.schedule_reminder" in caps:
         return ("alert", "Reminder Scheduled")
 
-    # Write actions -> plan surface
     if any(s.risk in ("medium", "high") for s in plan.steps):
         return ("plan", "New Plan")
 
-    # Multi-step -> plan surface
     jarvis_steps = [s for s in plan.steps if s.actor == "jarvis"]
     if len(jarvis_steps) > 2:
         return ("plan", plan.goal[:80] or "Plan")
 
-    # Single/dual read -> summary
     return ("summary", "Summary")
 
 
@@ -119,16 +118,56 @@ def apply_surface_cap(surfaces: list) -> list:
     if len(surfaces) <= MAX_WORKSPACE_SURFACES:
         return surfaces
 
-    # Pass 1: sort by created_at descending (newest first)
     by_recency = sorted(
         surfaces,
         key=lambda s: getattr(s, "created_at", "") or "",
         reverse=True,
     )
-    # Pass 2: stable sort by tier ascending (highest priority first)
     by_priority = sorted(
         by_recency,
         key=lambda s: PRIORITY_TIERS.get(getattr(s, "kind", "summary"), 6),
     )
 
     return by_priority[:MAX_WORKSPACE_SURFACES]
+
+
+# ── Surface spec extraction ──────────────────────────────────────
+
+_SURFACE_SPEC_RE = re.compile(r"```json:surface\s*\n(.*?)\n```", re.DOTALL)
+_SURFACE_DATA_RE = re.compile(r"```json:surface_data\s*\n(.*?)\n```", re.DOTALL)
+
+
+def extract_surface_spec(response_text: str) -> "SurfaceSpec | None":
+    """Extract SurfaceSpec from ```json:surface``` block in Presenter response.
+
+    Returns SurfaceSpec on success, None if not found or invalid.
+    Best-effort — degrades to chat-only on failure.
+    """
+    from src.orchestrator.contracts import SurfaceSpec
+
+    match = _SURFACE_SPEC_RE.search(response_text)
+    if not match:
+        return None
+
+    try:
+        data = json.loads(match.group(1))
+        return SurfaceSpec(**data)
+    except (json.JSONDecodeError, Exception):
+        logger.debug("Failed to parse SurfaceSpec from response", exc_info=True)
+        return None
+
+
+def extract_surface_data(response_text: str) -> dict | None:
+    """Extract structured data from ```json:surface_data``` block.
+
+    Used by detail tab builders for comparison, table, timeline, checklist kinds.
+    """
+    match = _SURFACE_DATA_RE.search(response_text)
+    if not match:
+        return None
+
+    try:
+        return json.loads(match.group(1))
+    except json.JSONDecodeError:
+        logger.debug("Failed to parse surface_data from response", exc_info=True)
+        return None
