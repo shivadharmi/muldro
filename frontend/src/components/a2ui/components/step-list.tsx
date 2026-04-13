@@ -1,12 +1,61 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { StepState } from "@/lib/a2ui-types";
 import { statusTextColor } from "@/lib/design-tokens";
 
 interface StepListProps {
   steps: StepState[];
   currentStep: string | null;
+}
+
+function useElapsedTimer(startedAt: string | null, active: boolean): number {
+  const [elapsedMs, setElapsedMs] = useState(0);
+
+  useEffect(() => {
+    if (!active || !startedAt) {
+      setElapsedMs(0);
+      return;
+    }
+    const start = new Date(startedAt).getTime();
+    const tick = () => setElapsedMs(Date.now() - start);
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [startedAt, active]);
+
+  return elapsedMs;
+}
+
+function ElapsedBadge({ step }: { step: StepState }) {
+  const isExecuting = step.status === "executing";
+  const isFailed = step.status === "failed";
+  const elapsedMs = useElapsedTimer(step.started_at ?? null, isExecuting);
+
+  if (isExecuting && step.started_at) {
+    return (
+      <span
+        className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-j-primary/12 text-j-primary text-[11px] shrink-0"
+        style={{ fontVariantNumeric: "tabular-nums" }}
+      >
+        <span className="w-[5px] h-[5px] rounded-full bg-j-primary animate-pulse-live" />
+        {formatDuration(elapsedMs)}
+      </span>
+    );
+  }
+
+  if (isFailed && step.duration_ms != null) {
+    return (
+      <span
+        className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-j-error/12 text-j-error text-[11px] shrink-0"
+        style={{ fontVariantNumeric: "tabular-nums" }}
+      >
+        {formatDuration(step.duration_ms)}
+      </span>
+    );
+  }
+
+  return null;
 }
 
 const statusIcon: Record<string, { icon: string; className: string }> = {
@@ -85,10 +134,13 @@ export function StepList({ steps, currentStep }: StepListProps) {
                 </div>
               )}
             </div>
-            {step.duration_ms != null && step.status === "completed" && (
+            {step.status === "completed" && step.duration_ms != null && (
               <span className="text-[10px] text-t-tertiary shrink-0">
                 {formatDuration(step.duration_ms)}
               </span>
+            )}
+            {(step.status === "executing" || step.status === "failed") && (
+              <ElapsedBadge step={step} />
             )}
           </div>
         );
