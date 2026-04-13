@@ -43,7 +43,11 @@ from src.orchestrator.tracing import TraceManager
 from src.services.agent_registry import AgentRegistry
 from src.services.capability_resolver import CapabilityResolver, route_step
 from src.services.context_builder import ContextBuilder, ContextPack
-from src.services.surface_mapping import build_surface_preview_from_plan, derive_surface_kind
+from src.services.surface_mapping import (
+    build_surface_preview_from_plan,
+    derive_surface_kind,
+    extract_surface_spec,
+)
 from src.services.trace_store import TraceStore
 from src.tools.schemas import build_tool_definitions
 
@@ -901,14 +905,19 @@ class JarvisOrchestrator:
                 payload={"trace_id": trace.trace_id},
             )
 
-            # Push surface to workspace
-            surface_id = await self._push_workspace_surface(
-                plan,
-                user_id,
-                workspace_id,
-                run_id=result.get("run_id"),
-                response_text=result.get("presentation", result.get("presenter", "")),
-            )
+            # Push surface to workspace (Presenter-driven)
+            response_text = result.get("presentation", result.get("presenter", ""))
+            surface_spec = extract_surface_spec(response_text)
+            if surface_spec and surface_spec.should_surface:
+                surface_id = await self._push_presenter_surface(
+                    spec=surface_spec,
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    run_id=result.get("run_id"),
+                    response_text=response_text,
+                )
+            else:
+                surface_id = None
             if surface_id:
                 result["surface_id"] = surface_id
 
@@ -1236,16 +1245,18 @@ class JarvisOrchestrator:
                 payload={"trace_id": trace.trace_id},
             )
 
-            # Push workspace surface before done to avoid race with SSE
+            # Push workspace surface (Presenter-driven)
             surface_id = None
             try:
-                surface_id = await self._push_workspace_surface(
-                    plan,
-                    user_id,
-                    workspace_id,
-                    run_id=None,
-                    response_text=presenter_text,
-                )
+                surface_spec = extract_surface_spec(presenter_text)
+                if surface_spec and surface_spec.should_surface:
+                    surface_id = await self._push_presenter_surface(
+                        spec=surface_spec,
+                        user_id=user_id,
+                        workspace_id=workspace_id,
+                        run_id=None,
+                        response_text=presenter_text,
+                    )
             except Exception:
                 logger.warning("Surface push failed", exc_info=True)
 
@@ -2069,6 +2080,95 @@ class JarvisOrchestrator:
         if count == 1:
             await redis.expire(key, window)
         return count <= limit
+
+    async def _push_presenter_surface(
+        self,
+        spec,
+        user_id: str,
+        workspace_id: str,
+        run_id: str | None = None,
+        response_text: str = "",
+    ) -> str | None:
+        """Push a Presenter-specified surface to the workspace.
+
+        Builds WorkspaceSurfacePush from a SurfaceSpec produced by the Presenter agent.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        from ulid import ULID
+
+        from src.orchestrator.contracts import WorkspaceSurfacePush
+        from src.services.surface_mapping import extract_surface_data
+        from src.ui.contracts import SurfaceMetric, SurfacePreview
+        from src.ui.renderer import build_detail_config
+
+        if not await self._check_surface_rate(user_id, "workspace"):
+            logger.debug("Presenter surface rate-limited for user %s", user_id)
+            return None
+
+        try:
+            event_bus = await self._ensure_event_bus()
+            if not event_bus:
+                return None
+
+            surface_id = f"surf_{ULID()}"
+            preview = SurfacePreview(
+                title=spec.title,
+                subtitle=spec.subtitle,
+                status=spec.status,
+                priority=spec.priority,
+                metrics=[SurfaceMetric(**m) for m in spec.metrics] if spec.metrics else [],
+                tags=spec.tags or [],
+            )
+            detail_config = build_detail_config(spec.kind, surface_id)
+
+            surface = WorkspaceSurfacePush(
+                id=surface_id,
+                kind=spec.kind,
+                preview=preview.model_dump(mode="json"),
+                detail_config=(detail_config.model_dump(mode="json") if detail_config else None),
+                source_run_id=run_id,
+                response_preview=(response_text[:300] if response_text else None),
+                created_at=datetime.now(timezone.utc).isoformat(),
+            )
+
+            channel = f"jarvis:a2ui:{user_id}"
+            ws_msg = json.dumps({"type": "surface", "surface": surface.model_dump(mode="json")})
+            await event_bus.publish_to_channel(channel, ws_msg)
+
+            # Persist to DB
+            try:
+                from src.models.ui_state import UISurface
+
+                surface_data = extract_surface_data(response_text)
+
+                async with self._db_factory() as db:
+                    payload = surface.model_dump(mode="json")
+                    if surface_data:
+                        payload["surface_data"] = surface_data
+
+                    db.add(
+                        UISurface(
+                            surface_id=surface.id,
+                            user_id=user_id,
+                            workspace_id=workspace_id,
+                            surface_type=spec.kind,
+                            payload=payload,
+                            preview=preview.model_dump(mode="json"),
+                            detail_config=(
+                                detail_config.model_dump(mode="json") if detail_config else None
+                            ),
+                            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+                        )
+                    )
+                    await db.commit()
+            except Exception:
+                logger.debug("Failed to persist presenter surface", exc_info=True)
+
+            return surface_id
+        except Exception:
+            logger.warning("Failed to push presenter surface", exc_info=True)
+            return None
 
     async def _push_workspace_surface(
         self,
