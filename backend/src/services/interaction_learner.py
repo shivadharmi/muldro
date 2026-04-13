@@ -9,9 +9,11 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from src.services.memory_service import MemoryService
+
 if TYPE_CHECKING:
     from src.config.settings import Settings
-    from src.services.memory_service import MemoryService
+    from src.services.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
 
@@ -41,16 +43,23 @@ _COOLDOWN_SECONDS = 60
 
 
 class InteractionLearner:
-    """Extract and store memories from user-agent interactions."""
+    """Extract and store memories from user-agent interactions.
+
+    Creates a fresh MemoryService + DB session per learn() call so that
+    background tasks don't share the runtime session (which would cause
+    concurrency issues and missing commits).
+    """
 
     def __init__(
         self,
         settings: Settings,
-        memory_service: MemoryService,
-        redis,
+        db_factory,
+        vector_store: VectorStore | None = None,
+        redis=None,
     ) -> None:
         self._settings = settings
-        self._memory_service = memory_service
+        self._db_factory = db_factory
+        self._vector_store = vector_store
         self._redis = redis
 
     async def learn(
@@ -99,19 +108,28 @@ class InteractionLearner:
         }
 
         try:
-            memory_ids = await self._memory_service.extract_and_store(
-                user_id=user_id,
-                source_text=source_text,
-                source_event_ids=[trace_id],
-                workspace_id=workspace_id,
-                prompt_addendum=_INTERACTION_ADDENDUM,
-                provenance_extra=provenance_extra,
-            )
-            if memory_ids:
-                logger.debug(
-                    "Interaction learning stored %d memories (trace=%s)",
-                    len(memory_ids),
-                    trace_id,
+            # Fresh DB session + MemoryService per call — background tasks must
+            # not share the runtime session (no auto-commit, concurrency issues).
+            async with self._db_factory() as db:
+                mem_svc = MemoryService(
+                    settings=self._settings,
+                    db=db,
+                    vector_store=self._vector_store,
                 )
+                memory_ids = await mem_svc.extract_and_store(
+                    user_id=user_id,
+                    source_text=source_text,
+                    source_event_ids=[trace_id],
+                    workspace_id=workspace_id,
+                    prompt_addendum=_INTERACTION_ADDENDUM,
+                    provenance_extra=provenance_extra,
+                )
+                if memory_ids:
+                    await db.commit()
+                    logger.info(
+                        "Interaction learning stored %d memories (trace=%s)",
+                        len(memory_ids),
+                        trace_id,
+                    )
         except Exception:
-            logger.debug("Interaction learning failed (trace=%s)", trace_id, exc_info=True)
+            logger.warning("Interaction learning failed (trace=%s)", trace_id, exc_info=True)

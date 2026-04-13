@@ -212,7 +212,8 @@ class JarvisOrchestrator:
         if self._services.memory_service:
             self._interaction_learner = InteractionLearner(
                 settings=settings,
-                memory_service=self._services.memory_service,
+                db_factory=db_factory,
+                vector_store=self._services.vector_store,
                 redis=None,  # Populated lazily when event bus Redis is available
             )
         # Precompute haiku model ID for intent classification
