@@ -16,7 +16,6 @@ import { WorkspaceStatusBar } from "@/components/workspace/workspace-status-bar"
 import { WorkspaceCanvas } from "@/components/workspace/workspace-canvas";
 import { SurfaceDetailModal } from "@/components/workspace/surface-detail-modal";
 import type { WorkspaceSurfacePush, SurfaceUpdate } from "@/lib/a2ui-types";
-import type { SurfaceKind } from "@/lib/types/surfaces";
 
 export default function WorkspacePage() {
   const { user } = useAuth();
@@ -46,7 +45,7 @@ export default function WorkspacePage() {
     const raw = workspaceData?.surfaces ?? [];
     return raw.map((s) => ({
       id: s.id,
-      kind: (s.kind as SurfaceKind) || "summary",
+      kind: s.kind || "summary",
       preview: s.preview,
       detail_config: s.detail_config,
       source_run_id: s.source_run_id ?? null,
@@ -97,7 +96,7 @@ export default function WorkspacePage() {
     (push: WorkspaceSurfacePush) => {
       addSurface({
         id: push.id,
-        kind: (push.kind as SurfaceKind) || "summary",
+        kind: push.kind || "summary",
         preview: push.preview,
         detail_config: push.detail_config,
         source_run_id: push.source_run_id,

@@ -243,6 +243,15 @@ class WorkspaceSurfacePush(BaseModel):
     response_preview: str | None = None
     created_at: str = ""
     ttl_hours: int = 24
+    # Merged from REST-only path
+    trust_context: dict[str, str] | None = None
+    insight_data: dict | None = None
+    phase: str | None = None
+    steps: list[dict] | None = None
+    current_step: str | None = None
+    progress: str | None = None
+    approval: dict | None = None
+    results: dict | None = None
 
 
 class SuggestedActionRef(BaseModel):

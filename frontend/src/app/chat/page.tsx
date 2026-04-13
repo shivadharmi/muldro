@@ -35,7 +35,7 @@ export default function ChatPage() {
     (push: WorkspaceSurfacePush) => {
       addSurface({
         id: push.id,
-        kind: (push.kind as SurfaceKind) || "summary",
+        kind: push.kind || "summary",
         preview: push.preview,
         detail_config: push.detail_config,
         source_run_id: push.source_run_id,
