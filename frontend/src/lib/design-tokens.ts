@@ -141,6 +141,42 @@ export function trustLevelColor(level: string): string {
   }
 }
 
+/** Maps risk level to a Tailwind bg class */
+export function riskLevelColor(level: string): string {
+  switch (level) {
+    case "none":
+      return "bg-t-muted";
+    case "low":
+      return "bg-j-info";
+    case "medium":
+      return "bg-j-warning";
+    case "high":
+      return "bg-j-error";
+    case "critical":
+      return "bg-j-error";
+    default:
+      return "bg-t-muted";
+  }
+}
+
+/** Maps risk level to a Tailwind text class */
+export function riskLevelTextColor(level: string): string {
+  switch (level) {
+    case "none":
+      return "text-t-muted";
+    case "low":
+      return "text-j-info";
+    case "medium":
+      return "text-j-warning";
+    case "high":
+      return "text-j-error";
+    case "critical":
+      return "text-j-error";
+    default:
+      return "text-t-muted";
+  }
+}
+
 /** Maps surface kind to badge styling (bg + text classes) */
 export function kindStyle(kind: string): { bg: string; text: string } {
   switch (kind) {
