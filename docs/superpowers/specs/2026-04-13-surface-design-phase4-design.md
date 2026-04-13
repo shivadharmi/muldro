@@ -422,9 +422,172 @@ Approval buttons:
 
 ---
 
+## Section 5: Actions & API Integration
+
+### 5A: Rejection Reason in Confirmation Modal
+
+**Discovery:** The backend already supports rejection reasons end-to-end:
+- `ApprovalDecisionRequest.reason: str | None` schema exists (`routes_approvals.py`)
+- `decision_reason` column on `Approval` model is populated on reject
+- Reason is included in `RuntimeEvent` payload and audit logs
+- WebSocket `_handle_reject()` bridges to REST `reject_action()` which accepts `reason`
+
+**The frontend just never sends one.** The confirmation modal needs an optional text field.
+
+**File:** `frontend/src/components/a2ui/components/inline-approval.tsx`
+
+**Change to reject confirmation modal:**
+- Add optional `<textarea>` below the confirmation text: "Optionally explain why:"
+- Placeholder: "e.g., wrong recipients, needs review first"
+- 2 lines tall, `text-xs`, `bg-surface-1 border border-b-secondary rounded-[var(--radius-md)]`
+- State: `rejectReason: string` (default empty)
+- On "Yes, Reject": `sendAction("reject", { id: approval.approval_id, reason: rejectReason || undefined })`
+- Reason is optional — user can reject without explanation
+
+**No backend changes needed** — the schema and storage already handle it.
+
+### 5B: Insight Action Preview Field
+
+**Discovery:** `SuggestedActionRef` has `description`, `capability`, `action_input` but no tooltip/preview field. Tooltip text is currently hardcoded on the frontend.
+
+**Backend contract change:**
+
+**File:** `backend/src/orchestrator/contracts.py` (SuggestedActionRef class, line 255)
+
+```python
+class SuggestedActionRef(BaseModel):
+    description: str
+    capability: str
+    action_input: dict[str, Any] = Field(default_factory=dict)
+    action_preview: str = ""    # NEW — tooltip text explaining what will happen
+```
+
+**Frontend type change:**
+
+**File:** `frontend/src/lib/a2ui-types.ts` (SuggestedActionRef interface, line 91)
+
+```typescript
+interface SuggestedActionRef {
+  description: string;
+  capability: string;
+  action_input: Record<string, unknown>;
+  action_preview: string;    // NEW
+}
+```
+
+**Backend population:** Where insight surfaces are built (in `_push_insight_surface()` in `jarvis.py`, or wherever `SuggestedActionRef` objects are constructed), populate `action_preview` based on capability type:
+- Write capabilities: "Creates a task to {description}"
+- Read capabilities: "Fetches {capability} data without taking action"
+- Respond capabilities: "Generates a response about {description}"
+- Fallback: "" (empty — frontend falls back to generic text)
+
+**Frontend tooltip wiring:**
+- If `action.action_preview` is non-empty → use it as tooltip text
+- If empty → fallback to "Execute: {action.description}"
+- Approval button tooltips remain static (approve/edit/reject have fixed meanings)
+
+### 5C: Approval Expiration Frontend Handling
+
+**Discovery:** Backend expiration is on-demand, not proactive:
+- `DEFAULT_EXPIRY_HOURS = 24` in `approval_service.py`
+- When user tries to act on expired approval → HTTP 410 Gone, status set to "expired"
+- Scheduler `_tick_stuck_runs()` cancels runs with expired approvals
+- No dedicated auto-expiration background job
+
+**Frontend behavior when countdown reaches 0:**
+
+**File:** `frontend/src/components/a2ui/components/inline-approval.tsx`
+
+1. **Disable all action buttons** — set `disabled` on Approve, Edit, Reject when `remainingMs <= 0`
+2. **Show "Expired" badge** — replace countdown with `text-j-error font-medium` "Expired" text
+3. **Do NOT send an "expired" action** — the backend handles this on-demand (410 on next action attempt)
+4. **Handle 410 response gracefully** — if user somehow clicks before UI updates:
+   - The WebSocket action handler receives the 410 from the REST bridge
+   - Frontend should show a toast/notification: "This approval has expired"
+   - Update the surface to reflect expired state
+
+**Error handling in ws-action-store:**
+
+**File:** `frontend/src/stores/ws-action-store.ts` (or wherever action results are handled)
+
+The `action_result` WebSocket message already has `status: "error"` + `error: string`. When the backend returns 410, the WebSocket bridge should send back:
+```json
+{"type": "action_result", "action": "approve", "status": "error", "error": "Approval has expired"}
+```
+The frontend can detect "expired" in the error message and update the surface phase accordingly.
+
+### 5D: REST Surface Reconnect Compatibility
+
+**Discovery:** `GET /v1/workspace/surfaces` returns persisted surfaces from the `ui_surfaces` table. Execution surfaces store `last_surface_update` as JSONB — the raw `SurfaceUpdate` payload.
+
+**Impact:** When contracts widen (new fields on StepState/ApprovalContext), the persisted JSONB will include new fields automatically on new emissions. Old persisted surfaces (pre-widening) will have `null`/missing values for new fields.
+
+**Frontend compatibility:** All new fields have defaults (`null`, `0`, `""`, `true`). The frontend must handle missing fields gracefully:
+- `started_at: null` → no elapsed timer (already specified)
+- `expires_at: null` → no countdown (already specified)
+- `risk_level: ""` → no risk badge
+- `trust_level: ""` → no trust badge
+- `triggering_step_id: null` → no step highlight
+- `action_preview: ""` → fallback to generic tooltip text
+
+**No migration needed** — Pydantic `extra="ignore"` + default values handle backward compatibility. Old surfaces work with new frontend. New surfaces include enriched data.
+
+---
+
+## Updated Files Changed Summary
+
+### Backend (5 files, was 4)
+
+| File | Change |
+|---|---|
+| `backend/src/orchestrator/contracts.py` | Widen StepState (5 fields), ApprovalContext (8 fields), PolicyDecision (4 fields), SuggestedActionRef (+action_preview) |
+| `backend/src/services/trust_engine.py` | Populate trust_level, effective_trust_level, approved_count, rejected_count on PolicyDecision |
+| `backend/src/services/graph_executor.py` | Forward new fields at 5 StepState + 2 ApprovalContext construction sites |
+| `backend/src/services/surface_detail_builders.py` | Update graduation hint builder to use enriched context (if applicable) |
+| `backend/src/orchestrator/jarvis.py` | Populate action_preview on SuggestedActionRef in `_push_insight_surface()` |
+
+### Frontend (8 files, was 7)
+
+| File | Change |
+|---|---|
+| `frontend/src/lib/a2ui-types.ts` | Widen StepState, ApprovalContext, SuggestedActionRef interfaces |
+| `frontend/src/components/a2ui/components/step-list.tsx` | Step grouping, elapsed timer, triggering step highlight |
+| `frontend/src/components/a2ui/components/inline-approval.tsx` | Timeout countdown + expiration handling, risk/trust badges, evidence section, reject confirmation with reason field, visual connector |
+| `frontend/src/components/a2ui/components/execution-surface.tsx` | Phase transition animations, pass triggeringStepId to StepList |
+| `frontend/src/components/a2ui/components/insight-surface.tsx` | Action tooltips (dynamic from action_preview), dismiss confirmation |
+| `frontend/src/components/ui/tooltip.tsx` | New CSS-only tooltip component (~40 lines) |
+| `frontend/src/lib/design-tokens.ts` | Add `riskLevelColor()` helper if needed |
+| `frontend/src/stores/ws-action-store.ts` | Handle 410 expired approval error gracefully (if not already) |
+
+### Tests (updated)
+
+| File | Coverage |
+|---|---|
+| `backend/tests/test_contracts.py` | Validate widened StepState/ApprovalContext/SuggestedActionRef serialization, defaults |
+| `backend/tests/test_trust_engine.py` | Verify trust_level/effective_trust_level on PolicyDecision |
+| `backend/tests/test_graph_executor.py` | Verify enriched SurfaceUpdate emissions at all 5+2 sites |
+
+---
+
+## Updated Vertical Slices
+
+### Slice 1: Timing (Features 1 + 2)
+**Backend:** Widen StepState contract + forward `started_at`, `completed_at`, `timeout_seconds`, `error`, `retry_count` at 5 emission sites
+**Frontend:** Widen StepState type, step grouping in step-list.tsx, elapsed timer hook + pill badge
+
+### Slice 2: Approval (Features 3 + 5 + 6 + 5A + 5C)
+**Backend:** Widen ApprovalContext + PolicyDecision contracts, enrich TrustEngine.evaluate(), forward all approval fields at 2 emission sites
+**Frontend:** Widen ApprovalContext type, timeout countdown + expiration disable, risk/trust badges, evidence expand, reject confirmation with reason field, dismiss confirmation, triggering step highlight + connector, 410 error handling
+
+### Slice 3: Interaction (Features 4 + 7 + 5B)
+**Backend:** Add action_preview to SuggestedActionRef, populate in insight surface builder
+**Frontend:** New tooltip component, wire dynamic tooltips into insight actions + static tooltips on approval buttons, phase transition animation wrappers in execution-surface.tsx
+
+---
+
 ## Non-Goals
 
-- Approval expiration enforcement (backend auto-expiring approvals) — separate concern
+- Backend auto-expiration background job (currently on-demand + scheduler health check — sufficient)
 - Step retry UI (manual retry button) — future feature
 - Approval editing flow (what happens after "Edit" click) — existing behavior unchanged
 - Backend approval timeout configuration API — future feature
