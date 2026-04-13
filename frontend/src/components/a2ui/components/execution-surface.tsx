@@ -63,15 +63,20 @@ export function A2UIExecutionSurface({ component }: Props) {
       {/* Step list (shown for all phases except planning) */}
       {phase !== "planning" && steps.length > 0 && (
         <div key={`steps-${phase}`} className="animate-slide-in-up">
-          <StepList steps={steps} currentStep={currentStep} />
+          <StepList steps={steps} currentStep={currentStep} triggeringStepId={approval?.triggering_step_id ?? null} />
         </div>
       )}
 
       {/* Inline approval card */}
       {phase === "approval_needed" && approval && (
-        <div className="animate-slide-in-up">
-          <InlineApprovalCard approval={approval} />
-        </div>
+        <>
+          {approval.triggering_step_id && (
+            <div className="ml-5 w-px h-2 bg-j-warning/30" />
+          )}
+          <div className="animate-slide-in-up">
+            <InlineApprovalCard approval={approval} />
+          </div>
+        </>
       )}
 
       {/* Results summary */}
@@ -122,7 +127,7 @@ export function A2UIExecutionSurface({ component }: Props) {
       {phase === "failed" && (
         <div className="animate-fade-in">
           {steps.length > 0 && (
-            <StepList steps={steps} currentStep={currentStep} />
+            <StepList steps={steps} currentStep={currentStep} triggeringStepId={approval?.triggering_step_id ?? null} />
           )}
           <div className="rounded-[var(--radius-lg)] bg-j-error-soft border border-j-error/20 p-4">
             <p className="text-sm font-semibold text-j-error mb-2">Execution Failed</p>

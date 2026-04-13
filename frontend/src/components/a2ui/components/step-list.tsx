@@ -7,6 +7,7 @@ import { statusTextColor } from "@/lib/design-tokens";
 interface StepListProps {
   steps: StepState[];
   currentStep: string | null;
+  triggeringStepId?: string | null;
 }
 
 function useElapsedTimer(startedAt: string | null, active: boolean): number {
@@ -96,7 +97,7 @@ function CompletedGroupSummary({
   );
 }
 
-export function StepList({ steps, currentStep }: StepListProps) {
+export function StepList({ steps, currentStep, triggeringStepId }: StepListProps) {
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
   const [showCompletedSteps, setShowCompletedSteps] = useState(false);
 
@@ -148,6 +149,7 @@ export function StepList({ steps, currentStep }: StepListProps) {
         }
 
         const isCurrent = step.step_id === currentStep;
+        const isTriggering = step.step_id === triggeringStepId;
         const { icon, className } = statusIcon[step.status] ?? statusIcon.pending;
         const isExpanded = expandedSteps.has(step.step_id);
         const hasLongOutput = (step.output_summary?.length ?? 0) > 120;
@@ -156,9 +158,11 @@ export function StepList({ steps, currentStep }: StepListProps) {
           <div
             key={step.step_id}
             className={`flex items-start gap-2 text-sm ${
-              isCurrent
-                ? "bg-j-primary-soft border-l-2 border-l-j-primary py-2 px-3 rounded-[var(--radius-sm)]"
-                : "py-1.5 px-2"
+              isTriggering
+                ? "bg-j-warning-soft border-l-2 border-l-j-warning py-2 px-3 rounded-[var(--radius-sm)]"
+                : isCurrent
+                  ? "bg-j-primary-soft border-l-2 border-l-j-primary py-2 px-3 rounded-[var(--radius-sm)]"
+                  : "py-1.5 px-2"
             }`}
           >
             <span className={`shrink-0 w-5 text-center ${className}`}>{icon}</span>
@@ -166,6 +170,11 @@ export function StepList({ steps, currentStep }: StepListProps) {
               <span className={isCurrent ? "text-t-primary font-medium" : "text-t-secondary"}>
                 {step.description}
               </span>
+              {isTriggering && (
+                <span className="text-[9px] px-1.5 py-0.5 rounded bg-j-warning/12 text-j-warning uppercase font-medium shrink-0 inline-block mt-0.5">
+                  awaiting
+                </span>
+              )}
               {step.output_summary && step.status === "completed" && (
                 <div className="mt-0.5">
                   <p className={`text-xs text-t-tertiary ${!isExpanded && hasLongOutput ? "line-clamp-2" : ""}`}>
