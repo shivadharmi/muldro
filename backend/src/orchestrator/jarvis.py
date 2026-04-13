@@ -1627,7 +1627,7 @@ class JarvisOrchestrator:
                 user_prefs = []
                 try:
                     async with self._db_factory() as db:
-                        mem_svc = MemoryService(db, self._settings)
+                        mem_svc = MemoryService(self._settings, db)
                         # get_user_preferences(user_id, category, max_results, workspace_id)
                         prefs = await mem_svc.get_user_preferences(
                             user_id, workspace_id=workspace_id
@@ -1674,7 +1674,7 @@ class JarvisOrchestrator:
                 if assessment.notification_tier == "briefing":
                     try:
                         async with self._db_factory() as db:
-                            mem_svc = MemoryService(db, self._settings)
+                            mem_svc = MemoryService(self._settings, db)
                             await mem_svc.store_briefing_memory(
                                 user_id=user_id,
                                 workspace_id=workspace_id,
