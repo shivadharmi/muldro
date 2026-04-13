@@ -7,7 +7,6 @@ Used by the Presenter agent to generate dynamic UI payloads.
 from src.ui.contracts import (
     A2UIAction,
     A2UIComponent,
-    A2UISurface,
     DetailConfig,
     DetailTab,
 )
@@ -377,17 +376,6 @@ def calendar_view(
     )
 
 
-# --- Surface builder ---
-
-
-def surface(
-    id: str,
-    children: list[A2UIComponent],
-    metadata: dict | None = None,
-) -> A2UISurface:
-    return A2UISurface(id=id, children=children, metadata=metadata or {})
-
-
 # --- Detail config factory ---
 
 
@@ -412,132 +400,3 @@ def build_detail_config(kind: str, surface_id: str) -> DetailConfig | None:
     base = f"/v1/surfaces/{surface_id}/detail"
     tabs = [DetailTab(id=tid, label=label, endpoint=f"{base}/{tid}") for tid, label in tab_defs]
     return DetailConfig(tabs=tabs)
-
-
-# --- Composite surfaces ---
-
-
-def briefing_surface(
-    briefing_id: str,
-    headline: str,
-    priorities: list[dict],
-    approvals: list[dict],
-    schedule: list[dict],
-) -> A2UISurface:
-    """Generate a complete briefing A2UI surface."""
-    children = [
-        card("headline_card", [heading("headline", headline)]),
-    ]
-
-    if priorities:
-        priority_cards = []
-        for i, p in enumerate(priorities):
-            card_children = [
-                text(f"p{i}_title", p.get("title", "")),
-                caption(f"p{i}_why", p.get("why", "")),
-            ]
-            if p.get("approval_id"):
-                card_children.append(
-                    row(
-                        f"p{i}_actions",
-                        [
-                            button(
-                                f"approve_{p['approval_id']}",
-                                "Approve",
-                                "primary",
-                                {"action": "approve", "id": p["approval_id"]},
-                            ),
-                            button(
-                                f"reject_{p['approval_id']}",
-                                "Reject",
-                                "secondary",
-                                {"action": "reject", "id": p["approval_id"]},
-                            ),
-                        ],
-                    )
-                )
-            priority_cards.append(card(f"priority_{i}", card_children))
-        children.append(
-            card(
-                "priorities_section",
-                [heading("priorities_title", "Top Priorities")]
-                + [list_component("priorities_list", priority_cards)],
-            )
-        )
-
-    if approvals:
-        approval_cards = []
-        for i, a in enumerate(approvals):
-            approval_cards.append(
-                card(
-                    f"approval_{i}",
-                    [
-                        text(f"a{i}_title", a.get("title", "")),
-                        caption(
-                            f"a{i}_risk",
-                            f"Risk: {a.get('risk_level', 'medium')}",
-                        ),
-                        row(
-                            f"a{i}_actions",
-                            [
-                                button(
-                                    f"approve_{a['approval_id']}",
-                                    "Approve",
-                                    "primary",
-                                    {
-                                        "action": "approve",
-                                        "id": a["approval_id"],
-                                    },
-                                ),
-                                button(
-                                    f"reject_{a['approval_id']}",
-                                    "Reject",
-                                    "secondary",
-                                    {
-                                        "action": "reject",
-                                        "id": a["approval_id"],
-                                    },
-                                ),
-                            ],
-                        ),
-                    ],
-                )
-            )
-        children.append(
-            card(
-                "approvals_section",
-                [heading("approvals_title", "Pending Approvals")]
-                + [list_component("approvals_list", approval_cards)],
-            )
-        )
-
-    if schedule:
-        event_rows = []
-        for i, evt in enumerate(schedule):
-            event_rows.append(
-                row(
-                    f"event_{i}",
-                    [
-                        text(f"e{i}_time", evt.get("time", "")),
-                        text(f"e{i}_title", evt.get("title", "")),
-                        button(
-                            f"e{i}_prep",
-                            "Prep Card",
-                            "secondary",
-                            {
-                                "action": "meeting_prep",
-                                "event_id": evt.get("event_id", ""),
-                            },
-                        ),
-                    ],
-                )
-            )
-        children.append(
-            card(
-                "schedule_section",
-                [heading("schedule_title", "Today's Schedule")]
-                + [list_component("schedule_list", event_rows)],
-            )
-        )
-
-    return surface(briefing_id, children)
