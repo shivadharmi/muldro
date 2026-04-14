@@ -80,25 +80,6 @@ class TestNotionToolNames:
             )
 
 
-class TestLinearToolNames:
-    def test_linear_no_wrong_aliases_in_catalog(self):
-        from src.tools.catalog import EXTERNAL_TOOL_SEEDS
-
-        names = {s.name for s in EXTERNAL_TOOL_SEEDS}
-        assert "linear_comment" not in names, "linear_comment is wrong — use linear_create_comment"
-        assert "linear_list_issues" not in names, (
-            "linear_list_issues is wrong — use linear_search_issues"
-        )
-
-    def test_linear_no_wrong_aliases_in_capabilities(self):
-        """Linear wrong aliases should not exist in any catalog entry."""
-        from src.tools.catalog import EXTERNAL_TOOL_SEEDS
-
-        names = {s.name for s in EXTERNAL_TOOL_SEEDS}
-        assert "linear_comment" not in names
-        assert "linear_list_issues" not in names
-
-
 class TestAuthProviderLabels:
     """Servers with OAuth callback routes must have OAuth-aware auth_provider."""
 
@@ -110,13 +91,6 @@ class TestAuthProviderLabels:
         actual = seed["auth_provider"]
         assert actual == "github", (
             f"GitHub uses OAuth flow — auth_provider must be 'github', got '{actual}'"
-        )
-
-    def test_linear_auth_provider_is_oauth(self):
-        seed = self._get_seed("linear")
-        actual = seed["auth_provider"]
-        assert actual == "linear", (
-            f"Linear uses OAuth flow — auth_provider must be 'linear', got '{actual}'"
         )
 
     def test_notion_auth_provider_is_oauth(self):

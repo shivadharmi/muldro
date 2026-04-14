@@ -290,7 +290,7 @@ class TestHooks:
         from src.orchestrator.hooks import governor_pre_tool_hook
 
         result = await governor_pre_tool_hook(
-            "linear_delete_issue", {}, "operator", user_id=TEST_USER_ID
+            "API-delete-block", {}, "operator", user_id=TEST_USER_ID
         )
         assert result["allowed"] is True
 
