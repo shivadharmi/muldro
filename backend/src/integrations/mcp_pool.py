@@ -298,14 +298,19 @@ class WorkspaceMCPPool:
                 if not user_id:
                     logger.debug("No user for workspace %s — skipping %s", ws_id[:16], srv_name)
                     continue
-                session = await self._session_pool.get_or_create_session(
-                    srv_name, user_id=user_id, workspace_id=ws_id
+                session = await asyncio.wait_for(
+                    self._session_pool.get_or_create_session(
+                        srv_name, user_id=user_id, workspace_id=ws_id
+                    ),
+                    timeout=30,
                 )
                 logger.info(
                     "Auth-free schema discovery for %s: %d tools",
                     srv_name,
                     len(session.tools),
                 )
+            except asyncio.TimeoutError:
+                logger.warning("Schema discovery timed out for %s (30s)", srv_name)
             except Exception:
                 logger.debug("Schema discovery failed for %s", srv_name, exc_info=True)
 

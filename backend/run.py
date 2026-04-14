@@ -101,9 +101,9 @@ def main():
             # Wait for the FastAPI lifespan to initialize the MCP bridge
             # so external MCP tool calls don't hit "bridge not initialized".
             logger.info("Worker thread waiting for MCP bridge initialization...")
-            if not mcp_bridge_ready.wait(timeout=60):
+            if not mcp_bridge_ready.wait(timeout=120):
                 logger.warning(
-                    "MCP bridge ready signal not received within 60s — "
+                    "MCP bridge ready signal not received within 120s — "
                     "worker starting anyway (external MCP tools may fail)"
                 )
             else:
