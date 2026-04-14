@@ -2369,7 +2369,7 @@ class JarvisOrchestrator:
         self,
         conversation_id: str | None,
         max_messages: int = 20,
-        max_chars: int = 8000,
+        max_chars: int = 20000,
         user_id: str = "",
     ) -> str:
         """Load recent conversation history from DB for multi-turn context.
@@ -2405,7 +2405,7 @@ class JarvisOrchestrator:
             total = 0
             for role, content, meta in history:
                 label = "User" if role == "user" else "Assistant"
-                snippet = content[:1000] if len(content) > 1000 else content
+                snippet = content
                 # B4: Annotate with decision type for execution context
                 decision_tag = ""
                 if meta and isinstance(meta, dict):
@@ -2459,7 +2459,7 @@ class JarvisOrchestrator:
             else:
                 model = MODEL_TIERS["haiku"]
 
-            text = "\n".join(lines)[:4000]
+            text = "\n".join(lines)
             response = await self._client.messages.create(
                 model=model,
                 max_tokens=300,
@@ -2499,7 +2499,7 @@ class JarvisOrchestrator:
                                     "conversation_id": conversation_id,
                                     "workspace_id": "",
                                     "message_count": len(lines),
-                                    "summary": summary[:500],
+                                    "summary": summary,
                                     "created_at": datetime.now(timezone.utc).isoformat(),
                                 },
                                 user_id=user_id,
@@ -2515,7 +2515,7 @@ class JarvisOrchestrator:
         except Exception:
             logger.debug("History summarization failed", exc_info=True)
             # Fallback: just truncate
-            return "\n".join(lines)[:500] + "..."
+            return "\n".join(lines)
 
     async def _assemble_context(
         self, agent_name: str, message: str, user_id: str, workspace_id: str = ""
