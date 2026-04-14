@@ -75,7 +75,7 @@ function LoginForm() {
     try {
       if (provider === "google") {
         const { url } = await getGoogleAuthUrl();
-        window.location.href = url;
+        window.location.assign(url);
       } else {
         setError(`OAuth for ${provider} not yet configured`);
       }

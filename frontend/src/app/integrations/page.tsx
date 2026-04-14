@@ -104,7 +104,7 @@ function IntegrationsContent() {
     setConnecting(integration.server_name);
     try {
       const { url } = await getAuthUrl(provider);
-      window.location.href = url;
+      window.location.assign(url);
     } catch (err) {
       addToast(
         `Failed to start OAuth: ${err instanceof Error ? err.message : "Unknown error"}`,

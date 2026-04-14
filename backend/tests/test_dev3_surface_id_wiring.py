@@ -81,8 +81,12 @@ class TestPushWorkspaceSurfaceReturnsSurfaceId:
         orch._settings = settings
         orch._db_factory = MagicMock()
 
-        # Mock event bus
+        # Mock event bus with Redis that returns integer from incr (rate limit check)
+        mock_redis = AsyncMock()
+        mock_redis.incr = AsyncMock(return_value=1)
+        mock_redis.expire = AsyncMock()
         mock_event_bus = AsyncMock()
+        mock_event_bus._redis = mock_redis
         orch._ensure_event_bus = AsyncMock(return_value=mock_event_bus)
 
         # Mock DB persistence (inner context manager)
@@ -121,7 +125,7 @@ class TestPushWorkspaceSurfaceReturnsSurfaceId:
             steps=[PlanStep(description="Greet", capability="respond")],
         )
 
-        with patch("src.orchestrator.jarvis._derive_surface_kind", return_value=None):
+        with patch("src.orchestrator.jarvis.derive_surface_kind", return_value=None):
             result = await orch._push_workspace_surface(
                 plan=plan,
                 user_id="usr_01",

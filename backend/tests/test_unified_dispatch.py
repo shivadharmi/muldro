@@ -449,6 +449,9 @@ class TestSessionPoolDeNormalization:
     async def test_unified_call_tool_skips_translation(self):
         """call_tool uses tool_name directly (no canonical→raw translation)."""
         pool = self._make_pool()
+        # Register server config so get_or_create_session resolves the key correctly.
+        # auth_provider="none" makes effective_user="__shared__".
+        pool.register_server_config("notion", {"command": "npx", "args": ["notion-mcp"]})
 
         mock_client = AsyncMock()
         mock_result = MagicMock()
@@ -461,10 +464,10 @@ class TestSessionPoolDeNormalization:
             client=mock_client,
             client_ctx=MagicMock(),
             server_name="notion",
-            user_id="usr_1",
+            user_id="__shared__",
             tools={"API-post-page": "API-post-page"},
         )
-        pool._sessions[("", "notion", "usr_1")] = session
+        pool._sessions[("", "notion", "__shared__")] = session
 
         result = await pool.call_tool(
             "API-post-page",
