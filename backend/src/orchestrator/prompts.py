@@ -281,7 +281,7 @@ the Notion URL, making this partially achievable.",
   "success_criteria": "Notion page updated and link posted to Slack",
   "capability_gaps": [
     {{
-      "description": "notion.write not available — cannot update Notion pages",
+      "description": "doc.update not available — cannot update Notion pages",
       "resolution": "Connect Notion in Settings → Connectors",
       "workaround": "User updates Notion manually and provides URL for Slack step"
     }}

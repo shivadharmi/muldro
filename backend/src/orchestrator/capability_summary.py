@@ -17,18 +17,18 @@ from src.tools.catalog import EXTERNAL_TOOL_SEEDS
 # ── Display names for capability families ─────────────────────────────
 
 _FAMILY_DISPLAY: dict[str, str] = {
-    "email": "Email (Gmail)",
-    "calendar": "Calendar (Google)",
-    "repo": "Code (GitHub)",
-    "issue": "Issues",
-    "doc": "Documents (Notion)",
-    "workflow": "Projects (Linear)",
-    "messaging": "Messaging (Slack)",
-    "browser": "Browser",
-    "search": "Search",
-    "filesystem": "Files",
-    "internal": "Internal",
-    "system": "System",
+    "email": "email — Gmail",
+    "calendar": "calendar — Google Calendar",
+    "repo": "repo — GitHub",
+    "issue": "issue — GitHub/Jira",
+    "doc": "doc — Notion",
+    "workflow": "workflow — Jira",
+    "messaging": "messaging — Slack",
+    "browser": "browser — Playwright",
+    "search": "search — Web",
+    "filesystem": "filesystem — Local Files",
+    "internal": "internal",
+    "system": "system",
 }
 
 
@@ -110,11 +110,15 @@ async def generate_capability_summary(db: AsyncSession, workspace_id: str) -> st
     families = {k: v for k, v in all_families.items() if k != "internal"}
 
     # Build <connected_services> section
+    # Format: "prefix — Description: prefix.action1, prefix.action2"
+    # Using fully-qualified capability names prevents the Planner from
+    # inventing wrong prefixes (e.g. "notion.search" instead of "doc.search").
     lines: list[str] = ["<connected_services>"]
     for family, actions in sorted(families.items()):
         display = _family_display_name(family)
         sorted_actions = sorted(actions)
-        lines.append(f"  {display}: {', '.join(sorted_actions)}")
+        qualified = ", ".join(f"{family}.{a}" for a in sorted_actions)
+        lines.append(f"  {display}: {qualified}")
     lines.append("</connected_services>")
 
     # Determine disconnected services
