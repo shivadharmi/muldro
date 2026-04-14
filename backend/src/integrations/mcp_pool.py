@@ -278,7 +278,7 @@ class WorkspaceMCPPool:
         create a session. Session creation spawns the subprocess, connects,
         calls list_tools(), and enriches DB records with schemas.
         """
-        oauth_providers = {"github", "slack", "linear", "notion"}
+        oauth_providers = {"github", "slack", "notion"}
 
         stdio_servers: list[tuple[str, str, str]] = []
         for inst in installations:
