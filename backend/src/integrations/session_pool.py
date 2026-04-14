@@ -94,8 +94,15 @@ class UserMCPSessionPool:
         user_id: str,
         workspace_id: str = "",
     ) -> SessionEntry:
-        """Get an existing session or create a new one with auth."""
-        key = (workspace_id, server_name, user_id)
+        """Get an existing session or create a new one with auth.
+
+        Auth-free servers share a single session per workspace (no per-user
+        subprocess needed), keyed with a ``__shared__`` sentinel user_id.
+        """
+        config = self._server_configs.get((workspace_id, server_name))
+        auth_provider = (config or {}).get("auth_provider", "none")
+        effective_user = "__shared__" if auth_provider == "none" else user_id
+        key = (workspace_id, server_name, effective_user)
 
         async with self._lock:
             entry = self._sessions.get(key)
