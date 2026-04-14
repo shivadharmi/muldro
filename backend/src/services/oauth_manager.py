@@ -172,11 +172,8 @@ class OAuthManager:
         settings_map: dict[str, tuple[str, str]] = {
             "google": ("google_oauth_client_id", "google_oauth_client_secret"),
             "github": ("github_oauth_client_id", "github_oauth_client_secret"),
-            "linear": ("linear_oauth_client_id", "linear_oauth_client_secret"),
             "notion": ("notion_oauth_client_id", "notion_oauth_client_secret"),
             "jira": ("jira_oauth_client_id", "jira_oauth_client_secret"),
-            "linkedin": ("linkedin_oauth_client_id", "linkedin_oauth_client_secret"),
-            "twitter": ("twitter_oauth_client_id", "twitter_oauth_client_secret"),
         }
 
         if self._settings and provider in settings_map:
@@ -199,10 +196,7 @@ class OAuthManager:
             "google": "https://oauth2.googleapis.com/token",
             "github": "https://github.com/login/oauth/access_token",
             "slack": "https://slack.com/api/oauth.v2.access",
-            "linear": "https://api.linear.app/oauth/token",
             "jira": "https://auth.atlassian.com/oauth/token",
-            "linkedin": "https://www.linkedin.com/oauth/v2/accessToken",
-            "twitter": "https://api.twitter.com/2/oauth2/token",
         }
         endpoint = endpoints.get(provider)
         if not endpoint:
