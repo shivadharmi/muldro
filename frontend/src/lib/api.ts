@@ -661,8 +661,24 @@ export interface Installation {
   created_at: string | null;
 }
 
+export interface UnifiedIntegration {
+  server_name: string;
+  display_name: string;
+  category: "oauth" | "token" | "local";
+  provider: string | null;
+  configured: boolean;
+  connected: boolean;
+  health_status: string;
+  scopes: string[];
+  install_id: string | null;
+}
+
 export function fetchInstallations(): Promise<Installation[]> {
   return api("/integrations");
+}
+
+export function fetchUnifiedIntegrations(): Promise<UnifiedIntegration[]> {
+  return api("/integrations/unified");
 }
 
 export function deleteInstallation(installId: string): Promise<void> {
@@ -673,23 +689,6 @@ export function checkInstallationHealth(
   installId: string
 ): Promise<{ install_id?: string; server_name?: string; health_status: string }> {
   return api(`/integrations/${installId}/health`);
-}
-
-export interface UnifiedIntegration {
-  server_name: string;
-  display_name: string;
-  provider: string | null;
-  category: "oauth" | "token" | "local";
-  configured: boolean;
-  connected: boolean;
-  health_status: string;
-  enabled: boolean;
-  install_id: string | null;
-  scopes: string[];
-}
-
-export function fetchUnifiedIntegrations(): Promise<UnifiedIntegration[]> {
-  return api("/integrations/unified");
 }
 
 // ── Knowledge Page ──────────────────────────────────────────────
