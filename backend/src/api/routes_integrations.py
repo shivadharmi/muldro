@@ -74,6 +74,19 @@ class HealthCheckResponse(BaseModel):
     health_status: str
 
 
+class UnifiedIntegrationResponse(BaseModel):
+    server_name: str
+    display_name: str
+    provider: str | None = None
+    category: str  # "oauth", "token", "local"
+    configured: bool
+    connected: bool
+    health_status: str
+    enabled: bool
+    install_id: str | None = None
+    scopes: list[str] = []
+
+
 # ── Endpoints ────────────────────────────────────────────────────────
 
 
@@ -103,6 +116,102 @@ async def list_installations(
         )
         for i in installations
     ]
+
+
+@router.get("/unified", response_model=list[UnifiedIntegrationResponse])
+async def list_unified_integrations(
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Unified view: joins MCP installations with OAuth provider status."""
+    from src.config.settings import Settings, get_settings
+    from src.integrations.control_plane import IntegrationControlPlane
+    from src.models.database import get_session_factory
+    from src.services.oauth_manager import OAuthManager
+
+    settings: Settings = get_settings()
+    cp = IntegrationControlPlane(db, workspace_id)
+    installations = await cp.list_installations()
+
+    # Build OAuth manager for token checks
+    oauth_mgr: OAuthManager | None = None
+    if settings.oauth_encryption_key:
+        db_factory = get_session_factory()
+        oauth_mgr = OAuthManager(
+            db_factory,
+            encryption_key=settings.oauth_encryption_key,
+            settings=settings,
+        )
+
+    # Provider name -> settings attribute for client_id check
+    _provider_client_id_attr = {
+        "google": "google_oauth_client_id",
+        "github": "github_oauth_client_id",
+        "slack": "slack_oauth_client_id",
+        "notion": "notion_oauth_client_id",
+        "jira": "jira_oauth_client_id",
+    }
+
+    # Server auth_provider -> OAuth provider name for token lookup
+    _server_to_oauth_provider = {
+        "google": "google",
+        "github": "github",
+        "slack": "slack",
+        "notion": "notion",
+        "jira": "jira",
+        "oauth": "jira",  # atlassian uses generic "oauth"
+    }
+
+    results: list[UnifiedIntegrationResponse] = []
+    for inst in installations:
+        auth_provider = inst.auth_provider
+
+        # Determine category
+        if auth_provider is None:
+            category = "local"
+        elif auth_provider == "token":
+            category = "token"
+        else:
+            category = "oauth"
+
+        # Determine configured + connected
+        configured = True
+        connected = True
+
+        if category == "oauth":
+            oauth_name = _server_to_oauth_provider.get(auth_provider, auth_provider)
+            client_id_attr = _provider_client_id_attr.get(oauth_name, "")
+            configured = bool(getattr(settings, client_id_attr, "")) if client_id_attr else False
+            connected = False
+            if configured and oauth_mgr:
+                try:
+                    token = await oauth_mgr.get_valid_token(user_id, oauth_name)
+                    connected = token is not None
+                except Exception:
+                    connected = False
+
+        # Determine provider name for frontend
+        provider_name: str | None = None
+        if auth_provider and auth_provider not in ("token", "none"):
+            provider_name = _server_to_oauth_provider.get(auth_provider, auth_provider)
+
+        results.append(
+            UnifiedIntegrationResponse(
+                server_name=inst.server_name,
+                display_name=inst.display_name,
+                provider=provider_name,
+                category=category,
+                configured=configured,
+                connected=connected,
+                health_status=inst.health_status,
+                enabled=inst.enabled,
+                install_id=inst.install_id,
+                scopes=inst.scopes_granted or [],
+            )
+        )
+
+    return results
 
 
 @router.post("", response_model=InstallationResponse, status_code=201)
