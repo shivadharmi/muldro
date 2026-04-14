@@ -478,7 +478,7 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
 
   return (
     <div
-      className={`flex justify-start cursor-pointer transition-all ${isFocused ? "ring-1 ring-accent-primary/40 rounded-lg" : ""}`}
+      className={`flex justify-start cursor-pointer transition-all ${isFocused ? "ring-1 ring-accent-primary/40 rounded-[var(--radius-lg)]" : ""}`}
       onClick={handleFocus}
     >
       <div className="max-w-[95%] w-full space-y-2">

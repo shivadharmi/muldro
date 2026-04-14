@@ -18,7 +18,7 @@ export function A2UIDataGrid({ component }: Props) {
 
   return (
     <div className="space-y-2">
-      <div className="overflow-x-auto rounded-lg border border-b-primary">
+      <div className="overflow-x-auto rounded-[var(--radius-lg)] border border-b-primary">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-b-primary bg-surface-1">
@@ -49,14 +49,14 @@ export function A2UIDataGrid({ component }: Props) {
             <button
               onClick={() => setPage(Math.max(0, page - 1))}
               disabled={page === 0}
-              className="px-2 py-1 rounded bg-surface-2 hover:bg-surface-3 disabled:opacity-30"
+              className="px-2 py-1 rounded-[var(--radius-sm)] bg-surface-2 hover:bg-surface-3 disabled:opacity-30"
             >
               Prev
             </button>
             <button
               onClick={() => setPage(Math.min(totalPages - 1, page + 1))}
               disabled={page >= totalPages - 1}
-              className="px-2 py-1 rounded bg-surface-2 hover:bg-surface-3 disabled:opacity-30"
+              className="px-2 py-1 rounded-[var(--radius-sm)] bg-surface-2 hover:bg-surface-3 disabled:opacity-30"
             >
               Next
             </button>

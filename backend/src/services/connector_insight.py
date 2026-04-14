@@ -258,13 +258,9 @@ class ConnectorInsightService:
             ],
             "github": [
                 ("slack", "triggers", "Slack notifications for PR/issue updates"),
-                ("linear", "enriches", "Linear issues linked to GitHub PRs"),
             ],
             "slack": [
                 ("gmail", "enriches", "Email context for Slack discussions"),
-            ],
-            "linear": [
-                ("github", "enriches", "GitHub PRs linked to Linear issues"),
             ],
         }
 

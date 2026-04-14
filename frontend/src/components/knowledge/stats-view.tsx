@@ -5,33 +5,45 @@ import { useQuery } from "@tanstack/react-query";
 
 import { fetchKnowledgeStats } from "@/lib/api";
 import { useKnowledgeStore } from "@/stores/knowledge-store";
+import { SkeletonGrid, Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "./stat-card";
 import { BarChart } from "./bar-chart";
 import { DonutChart } from "./donut-chart";
 import { CommunityCard } from "./community-card";
 
+// ── CSS variable resolver (for chart libraries that need resolved colors) ──
+
+function resolveCssVar(varExpr: string): string {
+  if (typeof window === "undefined") return "#888";
+  return (
+    getComputedStyle(document.documentElement)
+      .getPropertyValue(varExpr.replace("var(", "").replace(")", ""))
+      .trim() || "#888"
+  );
+}
+
 // ── Entity type → chart color mapping ────────────────────────────
 
 const ENTITY_TYPE_CHART_COLORS: Record<string, string> = {
-  person: "hsl(193, 100%, 66%)",
-  organization: "hsl(247, 92%, 74%)",
-  project: "hsl(159, 78%, 54%)",
-  document: "hsl(36, 100%, 64%)",
-  repository: "hsl(351, 100%, 71%)",
+  person: "var(--jarvis-chart-1)",
+  organization: "var(--jarvis-chart-2)",
+  project: "var(--jarvis-chart-3)",
+  document: "var(--jarvis-chart-4)",
+  repository: "var(--jarvis-chart-5)",
 };
 
 const CHART_PALETTE = [
-  "hsl(193, 100%, 66%)",
-  "hsl(247, 92%, 74%)",
-  "hsl(159, 78%, 54%)",
-  "hsl(36, 100%, 64%)",
-  "hsl(351, 100%, 71%)",
+  "var(--jarvis-chart-1)",
+  "var(--jarvis-chart-2)",
+  "var(--jarvis-chart-3)",
+  "var(--jarvis-chart-4)",
+  "var(--jarvis-chart-5)",
 ];
 
-const DEFAULT_CHART_COLOR = "hsl(214, 16%, 58%)";
+const DEFAULT_CHART_COLOR = "var(--jarvis-text-muted)";
 
 function getEntityChartColor(type: string): string {
-  return ENTITY_TYPE_CHART_COLORS[type.toLowerCase()] ?? DEFAULT_CHART_COLOR;
+  return resolveCssVar(ENTITY_TYPE_CHART_COLORS[type.toLowerCase()] ?? DEFAULT_CHART_COLOR);
 }
 
 // ── Entity type badge helper ──────────────────────────────────────
@@ -90,7 +102,7 @@ function mapMemoryCountsToDonut(
   return items.map((item, i) => ({
     label: item.memory_type,
     value: item.count,
-    color: CHART_PALETTE[i % CHART_PALETTE.length],
+    color: resolveCssVar(CHART_PALETTE[i % CHART_PALETTE.length]),
   }));
 }
 
@@ -131,26 +143,10 @@ export function StatsView() {
 
   if (isLoading) {
     return (
-      <div className="h-full overflow-y-auto p-4 sm:p-6 space-y-4">
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <div
-              key={i}
-              className="bg-surface-1 border border-b-secondary rounded-[var(--radius-md)] px-4 py-3 animate-pulse"
-            >
-              <div className="h-3 w-16 bg-surface-3 rounded mb-2" />
-              <div className="h-7 w-12 bg-surface-3 rounded" />
-            </div>
-          ))}
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {Array.from({ length: 2 }).map((_, i) => (
-            <div
-              key={i}
-              className="bg-surface-1 border border-b-secondary rounded-[var(--radius-md)] h-48 animate-pulse"
-            />
-          ))}
-        </div>
+      <div className="p-4 sm:p-6 space-y-6">
+        <SkeletonGrid count={4} />
+        <Skeleton className="h-48 w-full" />
+        <Skeleton className="h-48 w-full" />
       </div>
     );
   }
@@ -189,7 +185,7 @@ export function StatsView() {
   const growthBarData = growthDays.map((day) => ({
     label: formatDayLabel(day.date),
     value: day.entities + day.memories,
-    color: "hsl(193, 100%, 66%)",
+    color: resolveCssVar("var(--jarvis-chart-1)"),
   }));
 
   const topCentralEntities = centralEntities.slice(0, 5);
@@ -205,24 +201,24 @@ export function StatsView() {
           label="Total Entities"
           value={data.total_entities}
           delta={weeklyDelta.entities}
-          color="text-[hsl(193,100%,66%)]"
+          color="text-j-primary"
         />
         <StatCard
           label="Total Relationships"
           value={data.total_relationships}
           delta={weeklyDelta.relationships}
-          color="text-[hsl(247,92%,74%)]"
+          color="text-j-secondary"
         />
         <StatCard
           label="Total Memories"
           value={data.total_memories}
           delta={weeklyDelta.memories}
-          color="text-[hsl(159,78%,54%)]"
+          color="text-j-accent"
         />
         <StatCard
           label="Avg Confidence"
           value={confidenceDisplay}
-          color="text-[hsl(36,100%,64%)]"
+          color="text-j-warning"
         />
       </div>
 

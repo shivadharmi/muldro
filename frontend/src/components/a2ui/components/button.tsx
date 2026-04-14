@@ -1,4 +1,5 @@
 import type { A2UIComponent } from "@/lib/a2ui-types";
+import { FOCUS_RING } from "@/lib/focus-ring";
 
 interface Props {
   component: A2UIComponent;
@@ -29,7 +30,7 @@ export function A2UIButton({ component, onAction }: Props) {
     <button
       onClick={handleClick}
       disabled={disabled || loading}
-      className={`px-3 py-1.5 rounded text-sm font-medium transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5 ${variantClasses[variant] || variantClasses.secondary}`}
+      className={`px-3 py-1.5 rounded-[var(--radius-sm)] text-sm font-medium transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5 ${FOCUS_RING} ${variantClasses[variant] || variantClasses.secondary}`}
     >
       {loading && (
         <span className="w-3.5 h-3.5 border-2 border-current/30 border-t-current rounded-full animate-spin" />

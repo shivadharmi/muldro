@@ -8,7 +8,6 @@ import { A2UIBadge } from "./components/badge";
 import { A2UIButton } from "./components/button";
 import { A2UICalendar } from "./components/calendar";
 import { A2UICard } from "./components/card";
-import { A2UIExecutionSurface } from "./components/execution-surface";
 import { A2UIChart } from "./components/chart";
 import { A2UICodeBlock } from "./components/code-block";
 import { A2UIColumn } from "./components/column";
@@ -47,7 +46,7 @@ function renderComponent(
     <ErrorBoundary
       key={`eb-${component.id}`}
       fallback={
-        <div className="p-2 text-xs text-t-tertiary border border-yellow-500/30 rounded">
+        <div className="p-2 text-xs text-t-tertiary border border-j-warning/30 rounded-[var(--radius-sm)]">
           Failed to render {component.type ?? "unknown"} component
         </div>
       }
@@ -142,9 +141,6 @@ function renderComponentInner(
       return <A2UIKanbanBoard key={component.id} component={component} />;
     case "Calendar":
       return <A2UICalendar key={component.id} component={component} />;
-    case "ExecutionSurface":
-      return <A2UIExecutionSurface key={component.id} component={component} />;
-
     default:
       return (
         <div key={component.id} className="p-2 text-sm text-t-tertiary">

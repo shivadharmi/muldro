@@ -24,6 +24,7 @@ from src.models.plans import Plan, PlanTask
 from src.models.task_graph import TaskCheckpoint, TaskRun, TaskStep
 from src.orchestrator.agent_loop import CancellationRequested
 from src.orchestrator.contracts import PolicyDecision, ResultSummary, StepResult, StepState
+from src.orchestrator.tracing import JarvisTrace
 from src.services.audit import AuditService
 from src.services.execution_state import transition_run, transition_step
 from src.services.risk_assessor import RiskAssessment, get_or_assess_risk
@@ -40,6 +41,30 @@ logger = logging.getLogger(__name__)
 def _compute_retry_delay(retry_count: int) -> int:
     """Compute exponential backoff delay in seconds, capped at 30."""
     return min(2**retry_count, 30)
+
+
+def _step_to_state(s: "TaskStep", status_override: str | None = None) -> "StepState":
+    """Build a StepState from a TaskStep model, forwarding all available fields."""
+    status = status_override or s.status
+    started_iso = s.started_at.isoformat() if s.started_at else None
+    completed_iso = s.completed_at.isoformat() if s.completed_at else None
+    duration = (
+        int((s.completed_at - s.started_at).total_seconds() * 1000)
+        if s.completed_at and s.started_at
+        else None
+    )
+    return StepState(
+        step_id=s.step_id,
+        description=s.name or (s.input_data or {}).get("capability", s.task_id),
+        status=status,
+        output_summary=(str(s.output_data.get("result", "")) if s.output_data else None),
+        duration_ms=duration,
+        started_at=started_iso,
+        completed_at=completed_iso,
+        timeout_seconds=s.timeout_seconds,
+        error=s.error,
+        retry_count=s.retry_count if s.retry_count > 0 else None,
+    )
 
 
 async def create_graph_executor(
@@ -141,6 +166,14 @@ async def create_graph_executor(
     except Exception:
         logger.debug("Redis unavailable for GraphExecutor", exc_info=True)
 
+    trace_store = None
+    try:
+        from src.services.trace_store import TraceStore
+
+        trace_store = TraceStore(db_factory=db_factory)
+    except Exception:
+        logger.debug("TraceStore unavailable for GraphExecutor", exc_info=True)
+
     return GraphExecutor(
         settings=settings,
         db=db,
@@ -156,6 +189,7 @@ async def create_graph_executor(
         circuit_breaker=circuit_breaker,
         trust_engine=trust_engine,
         redis=redis_conn,
+        trace_store=trace_store,
     )
 
 
@@ -181,6 +215,8 @@ class GraphExecutor:
         # Trust infrastructure (Spec 2B-i)
         trust_engine=None,
         redis=None,
+        # Trace persistence for background runs
+        trace_store=None,
     ):
         self._settings = settings
         self._db = db
@@ -199,7 +235,9 @@ class GraphExecutor:
         self._circuit_breaker = circuit_breaker
         self._trust_engine = trust_engine
         self._redis = redis
+        self._trace_store = trace_store
         self._cancel_events: dict[str, asyncio.Event] = {}
+        self._active_traces: dict[str, JarvisTrace] = {}
 
     async def create_run(
         self,
@@ -263,7 +301,7 @@ class GraphExecutor:
                 first_type = tasks[0].task_type if tasks[0].task_type else None
                 pack = await self._context_builder.build(
                     user_id=run.user_id,
-                    query=plan.goal[:500] if plan.goal else "",
+                    query=plan.goal or "",
                     task_type=first_type,
                 )
                 from src.services.context_builder import ContextBuilder
@@ -293,6 +331,11 @@ class GraphExecutor:
             if task.task_type and "task_type" not in step_input:
                 step_input["task_type"] = task.task_type
 
+            # Derive step name from available fields
+            step_name = (
+                step_input.get("description") or task.task_type or step_input.get("capability")
+            )
+
             step = TaskStep(
                 step_id=step_id,
                 run_id=run.run_id,
@@ -302,6 +345,7 @@ class GraphExecutor:
                 depends_on=depends_on_step_ids or None,
                 status="pending",
                 input_data=step_input or None,
+                name=step_name,
             )
             self._db.add(step)
 
@@ -324,6 +368,13 @@ class GraphExecutor:
 
         if trace_id:
             run.trace_id = trace_id
+
+        # Create a live JarvisTrace so agent_loop can accumulate spans
+        trace = JarvisTrace(
+            trace_id=trace_id or f"trace_{ULID()}",
+            trigger=f"execution:{run.source or 'background'}",
+        )
+        self._active_traces[run.run_id] = trace
 
         transition_run(run, "running")
         run.started_at = datetime.now(timezone.utc)
@@ -352,14 +403,7 @@ class GraphExecutor:
         # Emit plan_ready so the frontend knows steps are populated and execution begins
         if surface_id:
             all_steps = await self._get_all_steps(run.run_id)
-            plan_ready_steps = [
-                StepState(
-                    step_id=s.step_id,
-                    description=s.name or (s.input_data or {}).get("capability", s.task_id),
-                    status="pending",
-                )
-                for s in all_steps
-            ]
+            plan_ready_steps = [_step_to_state(s, status_override="pending") for s in all_steps]
             await self._emit_surface_update(
                 surface_id=surface_id,
                 user_id=run.user_id,
@@ -398,19 +442,21 @@ class GraphExecutor:
         except Exception as exc:
             transition_run(run, "failed")
             run.completed_at = datetime.now(timezone.utc)
-            run.error = {"type": type(exc).__name__, "message": str(exc)[:500]}
+            run.error = {"type": type(exc).__name__, "message": str(exc)}
             logger.error("Run %s failed: %s", run_id, exc)
             await self._emit_event(
                 "run.failed",
                 run.user_id,
                 {
                     "run_id": run_id,
-                    "error": str(exc)[:500],
+                    "error": str(exc),
                 },
                 workspace_id=run.workspace_id,
             )
         finally:
             self._cancel_events.pop(run.run_id, None)
+            # Finalize and persist the trace
+            await self._finalize_trace(run)
 
         # Record Prometheus metrics
         try:
@@ -475,6 +521,16 @@ class GraphExecutor:
         transition_run(run, "running")
         await self._db.flush()
 
+        # Create a trace for the resumed segment (reuse existing trace_id if set)
+        trace = JarvisTrace(
+            trace_id=run.trace_id or f"trace_{ULID()}",
+            trigger="execution:resume",
+        )
+        self._active_traces[run.run_id] = trace
+        if not run.trace_id:
+            run.trace_id = trace.trace_id
+            await self._db.flush()
+
         cancel_event = asyncio.Event()
         self._cancel_events[run.run_id] = cancel_event
 
@@ -484,9 +540,10 @@ class GraphExecutor:
         except Exception as exc:
             transition_run(run, "failed")
             run.completed_at = datetime.now(timezone.utc)
-            run.error = {"type": type(exc).__name__, "message": str(exc)[:500]}
+            run.error = {"type": type(exc).__name__, "message": str(exc)}
         finally:
             self._cancel_events.pop(run.run_id, None)
+            await self._finalize_trace(run)
 
         await self._db.commit()
         return run
@@ -557,6 +614,7 @@ class GraphExecutor:
         cancel_event: asyncio.Event | None = None,
     ) -> None:
         """Main DAG execution loop."""
+        _dag_start = time.monotonic()
         while True:
             ready_steps = await self._get_ready_steps(run.run_id)
             if not ready_steps:
@@ -583,28 +641,9 @@ class GraphExecutor:
                     await self._writeback_memories(run)
                     if surface_id:
                         _comp_steps = await self._get_all_steps(run.run_id)
-                        _final_states = [
-                            StepState(
-                                step_id=s.step_id,
-                                description=(
-                                    s.name or (s.input_data or {}).get("capability", s.task_id)
-                                ),
-                                status=s.status,
-                                output_summary=(
-                                    str(s.output_data.get("result", ""))[:200]
-                                    if s.output_data
-                                    else None
-                                ),
-                                duration_ms=(
-                                    int((s.completed_at - s.started_at).total_seconds() * 1000)
-                                    if s.completed_at and s.started_at
-                                    else None
-                                ),
-                            )
-                            for s in _comp_steps
-                        ]
+                        _final_states = [_step_to_state(s) for s in _comp_steps]
                         _findings = [
-                            str(s.output_data.get("result", ""))[:100]
+                            str(s.output_data.get("result", ""))
                             for s in _comp_steps
                             if s.output_data and s.output_data.get("result")
                         ]
@@ -629,16 +668,7 @@ class GraphExecutor:
                     }
                     if surface_id:
                         _fail_steps = await self._get_all_steps(run.run_id)
-                        _fail_states = [
-                            StepState(
-                                step_id=s.step_id,
-                                description=(
-                                    s.name or (s.input_data or {}).get("capability", s.task_id)
-                                ),
-                                status=s.status,
-                            )
-                            for s in _fail_steps
-                        ]
+                        _fail_states = [_step_to_state(s) for s in _fail_steps]
                         await self._emit_surface_update(
                             surface_id=surface_id,
                             user_id=run.user_id,
@@ -661,12 +691,11 @@ class GraphExecutor:
             if surface_id:
                 _all_for_surface = await self._get_all_steps(run.run_id)
                 _step_states = [
-                    StepState(
-                        step_id=s.step_id,
-                        description=(s.name or (s.input_data or {}).get("capability", s.task_id)),
-                        status=(
-                            "executing" if s.step_id in (run.current_step_ids or []) else s.status
-                        ),
+                    _step_to_state(
+                        s,
+                        status_override="executing"
+                        if s.step_id in (run.current_step_ids or [])
+                        else None,
                     )
                     for s in _all_for_surface
                 ]
@@ -696,6 +725,15 @@ class GraphExecutor:
             await self._db.refresh(run)
             if run.status in ("paused", "awaiting_approval"):
                 break
+
+        _dag_elapsed = time.monotonic() - _dag_start
+        if _dag_elapsed > 120:
+            logger.warning(
+                "Long DAG execution: run %s took %.1fs — "
+                "consider db_factory pattern for connection pool safety",
+                run.run_id,
+                _dag_elapsed,
+            )
 
     async def _execute_step(
         self,
@@ -848,6 +886,12 @@ class GraphExecutor:
                             approval=ApprovalContext(
                                 approval_id=approval.approval_id,
                                 step_description=step.name or capability,
+                                risk_level=risk_level,
+                                trust_level="",
+                                expires_at=(
+                                    approval.expires_at.isoformat() if approval.expires_at else None
+                                ),
+                                triggering_step_id=step.step_id,
                                 risk_reasoning=f"Risk: {risk_level}",
                                 trust_context="Legacy approval gate",
                             ),
@@ -1000,8 +1044,18 @@ class GraphExecutor:
                 approval=ApprovalContext(
                     approval_id=approval.approval_id,
                     step_description=step.name or capability,
+                    risk_level=risk.risk_level,
+                    trust_level=decision.trust_level,
+                    expires_at=(approval.expires_at.isoformat() if approval.expires_at else None),
+                    triggering_step_id=step.step_id,
+                    graduation_hint=decision.justification or "",
                     risk_reasoning=risk.reasoning,
                     trust_context=decision.justification or "",
+                    reversible=risk.reversible,
+                    blast_radius=risk.blast_radius,
+                    effective_trust_level=decision.effective_trust_level,
+                    approved_count=decision.approved_count,
+                    rejected_count=decision.rejected_count,
                 ),
                 workspace_id=run.workspace_id,
             )
@@ -1061,7 +1115,7 @@ class GraphExecutor:
             transition_step(step, "pending")  # Retry: failed → pending
             step.error = {
                 "attempt": step.retry_count,
-                "message": str(exc)[:500],
+                "message": str(exc),
                 "retry_after_seconds": delay,
             }
             await self._db.flush()
@@ -1074,16 +1128,16 @@ class GraphExecutor:
                 exc,
             )
             transition_step(step, "failed")
-            step.output_data = {"error": str(exc)[:500]}
+            step.output_data = {"error": str(exc)}
             step.completed_at = datetime.now(timezone.utc)
-            step.error = {"message": str(exc)[:500], "final": True}
+            step.error = {"message": str(exc), "final": True}
             await self._emit_event(
                 "step.failed",
                 run.user_id,
                 {
                     "run_id": run.run_id,
                     "step_id": step.step_id,
-                    "error": str(exc)[:500],
+                    "error": str(exc),
                     "duration_ms": elapsed_ms,
                 },
                 workspace_id=run.workspace_id,
@@ -1091,10 +1145,9 @@ class GraphExecutor:
             if surface_id:
                 all_steps = await self._get_all_steps(run.run_id)
                 step_states = [
-                    StepState(
-                        step_id=s.step_id,
-                        description=(s.name or (s.input_data or {}).get("capability", s.task_id)),
-                        status="failed" if s.step_id == step.step_id else s.status,
+                    _step_to_state(
+                        s,
+                        status_override="failed" if s.step_id == step.step_id else None,
                     )
                     for s in all_steps
                 ]
@@ -1319,6 +1372,28 @@ class GraphExecutor:
 
         message = "\n".join(message_parts)
 
+        # Inject completed predecessor step outputs so the operator sees
+        # what earlier agents (e.g. Perceiver) read or produced.
+        all_steps = await self._get_all_steps(run.run_id)
+        prior_parts: list[str] = []
+        for s in all_steps:
+            if s.step_id == step.step_id:
+                continue
+            if s.status != "completed" or not s.output_data:
+                continue
+            result_text = s.output_data.get("result", "")
+            if not result_text:
+                continue
+            cap = (s.input_data or {}).get("capability", "unknown")
+            desc = (s.input_data or {}).get("goal", cap)
+            prior_parts.append(f"[{desc}]:\n{str(result_text)}")
+        if prior_parts:
+            message += (
+                "\n\n--- Prior step results ---\n"
+                + "\n\n".join(prior_parts)
+                + "\n--- End of prior step results ---\n"
+            )
+
         # Get context
         context_prompt = await self._build_step_context(run, step)
 
@@ -1356,7 +1431,7 @@ class GraphExecutor:
             db_factory=self._db_factory,
             services=None,
             budget=self._budget,
-            trace=None,
+            trace=self._active_traces.get(run.run_id),
             execute_tool_fn=self._execute_tool_fn,
             max_tool_rounds=10,
             stream=False,
@@ -1379,6 +1454,38 @@ class GraphExecutor:
             "errors": errors,
         }
 
+    async def _finalize_trace(self, run: TaskRun) -> None:
+        """Finalize and persist the JarvisTrace for a completed/failed run."""
+        trace = self._active_traces.pop(run.run_id, None)
+        if not trace:
+            return
+        trace.finish()
+        input_t, output_t = trace.total_tokens()
+        logger.info(
+            "run_trace_finalized",
+            extra={
+                "run_id": run.run_id,
+                "trace_id": trace.trace_id,
+                "spans": len(trace.spans),
+                "input_tokens": input_t,
+                "output_tokens": output_t,
+            },
+        )
+        if self._trace_store:
+            try:
+                await self._trace_store.store_trace(
+                    trace.to_dict(),
+                    user_id=run.user_id,
+                    workspace_id=run.workspace_id or "",
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to persist trace %s for run %s",
+                    trace.trace_id,
+                    run.run_id,
+                    exc_info=True,
+                )
+
     async def _build_step_context(self, run: TaskRun, step: TaskStep) -> str:
         """Build context prompt for a step using ContextBuilder."""
         if not self._context_builder:
@@ -1389,7 +1496,7 @@ class GraphExecutor:
             task_type = input_data.get("task_type")
             pack = await self._context_builder.build(
                 user_id=run.user_id,
-                query=query[:500] if query else "",
+                query=query or "",
                 task_type=task_type,
             )
             from src.services.context_builder import ContextBuilder
@@ -1403,7 +1510,10 @@ class GraphExecutor:
         """Get steps whose dependencies are all completed.
 
         Also picks up steps already in 'ready' state (e.g. from a previous
-        iteration where execution failed before the step could start).
+        iteration where execution failed before the step could start) and
+        steps in 'running' state from approval resumption (the approval
+        handler transitions waiting_approval → running before the scheduler
+        resumes the DAG).
         """
         all_steps = await self._get_all_steps(run_id)
         completed_ids = {s.step_id for s in all_steps if s.status == "completed"}
@@ -1412,6 +1522,10 @@ class GraphExecutor:
         needs_flush = False
         for step in all_steps:
             if step.status == "ready":
+                ready.append(step)
+            elif step.status == "running":
+                # Resumed-from-approval: step was transitioned to 'running'
+                # by the approval handler but not yet executed.
                 ready.append(step)
             elif step.status == "pending":
                 deps = step.depends_on or []
@@ -1445,11 +1559,39 @@ class GraphExecutor:
             if isinstance(value, str) and value.startswith("{") and "}.output." in value:
                 ref, _, field = value[1:].partition("}.output.")
                 source = outputs_by_task.get(ref)
-                if source and isinstance(source, dict):
-                    return source.get(field, value)
+                if source is None or not isinstance(source, dict):
+                    logger.warning(
+                        "Step reference unresolved: task '%s' not found in "
+                        "completed steps (run_id=%s, step=%s)",
+                        ref,
+                        run_id,
+                        step.step_id,
+                    )
+                    return value
+                if field not in source:
+                    logger.warning(
+                        "Step reference field missing: '%s' not in task '%s' "
+                        "output (run_id=%s, step=%s, available_keys=%s)",
+                        field,
+                        ref,
+                        run_id,
+                        step.step_id,
+                        list(source.keys()),
+                    )
+                    return value
+                return source[field]
             return value
 
-        return {k: resolve(v) for k, v in input_data.items()}
+        resolved = {k: resolve(v) for k, v in input_data.items()}
+        unresolved = [k for k, v in resolved.items() if isinstance(v, str) and "}.output." in v]
+        if unresolved:
+            logger.warning(
+                "Step %s has %d unresolved reference(s): %s",
+                step.step_id,
+                len(unresolved),
+                unresolved,
+            )
+        return resolved
 
     async def _checkpoint(self, run: TaskRun, step_id: str | None, reason: str) -> None:
         """Save a rich checkpoint with completed step outputs."""
@@ -1461,7 +1603,7 @@ class GraphExecutor:
                 s.step_id: {
                     "task_id": s.task_id,
                     "status": s.status,
-                    "output_summary": str(s.output_data)[:500] if s.output_data else None,
+                    "output_summary": str(s.output_data) if s.output_data else None,
                 }
                 for s in all_steps
                 if s.status == "completed"
@@ -1498,7 +1640,7 @@ class GraphExecutor:
                 return
             parts = [f"Completed plan: {run.plan_id}"]
             for step in completed[:5]:
-                parts.append(f"- {step.task_id}: {json.dumps(step.output_data)[:200]}")
+                parts.append(f"- {step.task_id}: {json.dumps(step.output_data)}")
             await self._memory_service.extract_and_store(
                 user_id=run.user_id,
                 source_text="\n".join(parts),
@@ -1506,7 +1648,11 @@ class GraphExecutor:
                 workspace_id=run.workspace_id,
             )
         except Exception:
-            logger.debug("Memory writeback failed", exc_info=True)
+            logger.warning(
+                "Memory writeback failed for run %s — execution memories not stored",
+                run.run_id,
+                exc_info=True,
+            )
 
     async def _run_verification(self, run: TaskRun) -> None:
         """Run verification on a completed run."""

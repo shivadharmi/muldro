@@ -45,12 +45,12 @@ const components: Components = {
       return (
         <div className="my-2">
           {lang && (
-            <div className="text-[10px] uppercase tracking-wider text-t-tertiary bg-surface-0 rounded-t px-3 py-1 border border-b-0 border-b-primary">
+            <div className="text-[10px] uppercase tracking-wider text-t-tertiary bg-surface-0 rounded-t-[var(--radius-sm)] px-3 py-1 border border-b-0 border-b-primary">
               {lang}
             </div>
           )}
           <pre
-            className={`bg-surface-0 text-t-primary text-xs px-3 py-2 overflow-x-auto border border-b-primary ${lang ? "rounded-b" : "rounded"}`}
+            className={`bg-surface-0 text-t-primary text-xs px-3 py-2 overflow-x-auto border border-b-primary ${lang ? "rounded-b-[var(--radius-sm)]" : "rounded-[var(--radius-sm)]"}`}
           >
             <code>{children}</code>
           </pre>
@@ -58,7 +58,7 @@ const components: Components = {
       );
     }
     return (
-      <code className="bg-surface-3 text-t-primary px-1.5 py-0.5 rounded text-[0.85em] font-mono">
+      <code className="bg-surface-3 text-t-primary px-1.5 py-0.5 rounded-[var(--radius-sm)] text-[0.85em] font-mono">
         {children}
       </code>
     );
@@ -66,7 +66,7 @@ const components: Components = {
   pre: ({ children }) => <>{children}</>,
   table: ({ children }) => (
     <div className="my-2 overflow-x-auto">
-      <table className="min-w-full text-sm border border-b-primary rounded">
+      <table className="min-w-full text-sm border border-b-primary rounded-[var(--radius-sm)]">
         {children}
       </table>
     </div>

@@ -2,6 +2,7 @@
 
 import argparse
 import logging
+import threading
 
 import uvicorn
 
@@ -12,6 +13,10 @@ _component_health: dict[str, dict] = {
     "worker": {"status": "not_started"},
     "bot": {"status": "not_started"},
 }
+
+# Cross-thread gate: set by the FastAPI lifespan after MCP bridge init,
+# waited on by the worker thread before processing tasks.
+mcp_bridge_ready = threading.Event()
 
 
 def get_component_health() -> dict:
@@ -92,6 +97,18 @@ def main():
 
             stream_consumer = StreamConsumerManager(settings)
             scheduler = SchedulerLoop(settings, orchestrator=orchestrator, user_ids=user_ids)
+
+            # Wait for the FastAPI lifespan to initialize the MCP bridge
+            # so external MCP tool calls don't hit "bridge not initialized".
+            logger.info("Worker thread waiting for MCP bridge initialization...")
+            if not mcp_bridge_ready.wait(timeout=120):
+                logger.warning(
+                    "MCP bridge ready signal not received within 120s — "
+                    "worker starting anyway (external MCP tools may fail)"
+                )
+            else:
+                logger.info("MCP bridge ready, worker proceeding")
+
             logger.info("Worker thread starting (StreamConsumerManager + SchedulerLoop)")
             _component_health["worker"] = {"status": "running"}
             try:

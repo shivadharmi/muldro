@@ -59,6 +59,26 @@ class TestSettingsCleanup:
         assert not hasattr(Settings, "observation_stale_jira_minutes")
         assert not hasattr(Settings, "observation_stale_linkedin_minutes")
         assert not hasattr(Settings, "observation_stale_twitter_minutes")
+        assert not hasattr(Settings, "observation_stale_linear_minutes")
+
+    def test_unused_linear_fields_removed(self):
+        from src.config.settings import Settings
+
+        assert not hasattr(Settings, "linear_oauth_client_id")
+        assert not hasattr(Settings, "linear_oauth_client_secret")
+        assert not hasattr(Settings, "linear_access_token")
+
+    def test_unused_linkedin_fields_removed(self):
+        from src.config.settings import Settings
+
+        assert not hasattr(Settings, "linkedin_oauth_client_id")
+        assert not hasattr(Settings, "linkedin_oauth_client_secret")
+
+    def test_unused_twitter_fields_removed(self):
+        from src.config.settings import Settings
+
+        assert not hasattr(Settings, "twitter_oauth_client_id")
+        assert not hasattr(Settings, "twitter_oauth_client_secret")
 
 
 class TestOAuthStartupValidation:

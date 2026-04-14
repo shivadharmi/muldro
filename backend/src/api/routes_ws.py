@@ -205,12 +205,14 @@ async def jarvis_ws(websocket: WebSocket, user_id: str):
 
 async def _handle_approve(user_id: str, payload: dict, app) -> dict:
     """Handle approval action via the REST handler (full execution resume)."""
-    return await _process_approval_ws(user_id, payload.get("id", ""), "approve", app)
+    approval_id = payload.get("approval_id") or payload.get("id", "")
+    return await _process_approval_ws(user_id, approval_id, "approve", app)
 
 
 async def _handle_reject(user_id: str, payload: dict, app) -> dict:
     """Handle rejection action via the REST handler (full execution resume)."""
-    return await _process_approval_ws(user_id, payload.get("id", ""), "reject", app)
+    approval_id = payload.get("approval_id") or payload.get("id", "")
+    return await _process_approval_ws(user_id, approval_id, "reject", app)
 
 
 async def _process_approval_ws(user_id: str, approval_id: str, action: str, app) -> dict:

@@ -25,6 +25,7 @@ _PREFIX_MAP: dict[str, tuple[str, str]] = {
     "priority_": ("alert", "run_id"),
     "rec_": ("recommendation", "index"),
     "exec_": ("plan", "run_id"),
+    "surf_": ("_from_db", "surface_id"),
 }
 
 
@@ -32,6 +33,8 @@ def _resolve_ephemeral(surface_id: str) -> tuple[str, dict] | None:
     """Resolve kind and metadata from an ephemeral surface_id prefix."""
     for prefix, (kind, ref_key) in _PREFIX_MAP.items():
         if surface_id.startswith(prefix):
+            if kind == "_from_db":
+                return None  # force DB lookup path
             ref_value = surface_id[len(prefix) :]
             return kind, {ref_key: ref_value, "surface_id": surface_id}
     return None

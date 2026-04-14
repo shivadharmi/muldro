@@ -72,15 +72,17 @@ function ToastContainer({
       {toasts.map((toast) => (
         <div
           key={toast.id}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-[var(--radius-lg)] text-sm shadow-[var(--shadow-md)] border animate-slide-in-right ${variantStyles[toast.variant]}`}
+          className={`flex items-center gap-2.5 px-4 py-3 rounded-[var(--radius-lg)] text-[13px] shadow-[var(--shadow-lg)] border backdrop-blur-md animate-slide-in-right ${variantStyles[toast.variant]}`}
         >
           <span className="flex-1">{toast.message}</span>
           <button
             onClick={() => onDismiss(toast.id)}
-            className="opacity-60 hover:opacity-100 text-xs ml-2 cursor-pointer"
+            className="p-0.5 rounded-[var(--radius-sm)] opacity-60 hover:opacity-100 hover:bg-white/10 transition-opacity cursor-pointer"
             aria-label="Dismiss"
           >
-            &times;
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
           </button>
         </div>
       ))}
@@ -89,8 +91,8 @@ function ToastContainer({
 }
 
 const variantStyles: Record<Toast["variant"], string> = {
-  success: "bg-j-success-soft border-j-success/30 text-j-success",
-  error: "bg-j-error-soft border-j-error/30 text-j-error",
-  warning: "bg-j-warning-soft border-j-warning/30 text-j-warning",
-  info: "bg-surface-2 border-b-secondary text-t-secondary",
+  success: "bg-j-success-soft border-j-success/20 text-j-success",
+  error: "bg-j-error-soft border-j-error/20 text-j-error",
+  warning: "bg-j-warning-soft border-j-warning/20 text-j-warning",
+  info: "bg-surface-1 border-b-secondary text-t-secondary",
 };

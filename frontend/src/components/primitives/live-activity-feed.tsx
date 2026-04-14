@@ -28,7 +28,7 @@ export function LiveActivityFeed() {
   }
 
   return (
-    <ul className="space-y-2">
+    <ul className="space-y-2" role="log" aria-live="polite">
       {events.slice(0, 50).map((event) => (
         <li
           key={event.event_id}

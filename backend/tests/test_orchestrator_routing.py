@@ -227,7 +227,7 @@ class TestSurfacePushForPlanOutput:
 
     def test_respond_only_returns_none(self):
         from src.orchestrator.contracts import PlanOutput, PlanStep
-        from src.orchestrator.jarvis import _derive_surface_kind
+        from src.services.surface_mapping import derive_surface_kind
 
         plan = PlanOutput(
             goal="Hi",
@@ -235,11 +235,11 @@ class TestSurfacePushForPlanOutput:
                 PlanStep(step_id="s1", description="Respond", capability="respond"),
             ],
         )
-        assert _derive_surface_kind(plan) is None
+        assert derive_surface_kind(plan) is None
 
     def test_write_action_returns_plan(self):
         from src.orchestrator.contracts import PlanOutput, PlanStep
-        from src.orchestrator.jarvis import _derive_surface_kind
+        from src.services.surface_mapping import derive_surface_kind
 
         plan = PlanOutput(
             goal="Send email",
@@ -258,12 +258,12 @@ class TestSurfacePushForPlanOutput:
                 ),
             ],
         )
-        kind, title = _derive_surface_kind(plan)
+        kind, title = derive_surface_kind(plan)
         assert kind == "plan"
 
     def test_briefing_capability(self):
         from src.orchestrator.contracts import PlanOutput, PlanStep
-        from src.orchestrator.jarvis import _derive_surface_kind
+        from src.services.surface_mapping import derive_surface_kind
 
         plan = PlanOutput(
             goal="Add to brief",
@@ -275,12 +275,12 @@ class TestSurfacePushForPlanOutput:
                 ),
             ],
         )
-        kind, title = _derive_surface_kind(plan)
+        kind, title = derive_surface_kind(plan)
         assert kind == "briefing"
 
     def test_single_read_returns_summary(self):
         from src.orchestrator.contracts import PlanOutput, PlanStep
-        from src.orchestrator.jarvis import _derive_surface_kind
+        from src.services.surface_mapping import derive_surface_kind
 
         plan = PlanOutput(
             goal="Check email",
@@ -293,12 +293,12 @@ class TestSurfacePushForPlanOutput:
                 ),
             ],
         )
-        kind, title = _derive_surface_kind(plan)
+        kind, title = derive_surface_kind(plan)
         assert kind == "summary"
 
     def test_empty_steps_returns_none(self):
         from src.orchestrator.contracts import PlanOutput
-        from src.orchestrator.jarvis import _derive_surface_kind
+        from src.services.surface_mapping import derive_surface_kind
 
         plan = PlanOutput(goal="Nothing", steps=[])
-        assert _derive_surface_kind(plan) is None
+        assert derive_surface_kind(plan) is None

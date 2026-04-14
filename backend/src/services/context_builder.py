@@ -322,14 +322,8 @@ class ContextBuilder:
         ]
 
     @staticmethod
-    def to_prompt(pack: ContextPack, max_tokens: int = 3000) -> str:
-        """Convert a context pack into a prompt string for system context injection.
-
-        Applies priority-based truncation if the total exceeds max_tokens.
-        Priority order: goals > entities > events > preferences > artifacts.
-        Rough estimate: 1 token ≈ 4 characters.
-        """
-        max_chars = max_tokens * 4
+    def to_prompt(pack: ContextPack) -> str:
+        """Convert a context pack into a prompt string for system context injection."""
         sections = []
 
         if pack.task_summary:
@@ -410,10 +404,7 @@ class ContextBuilder:
         if pack.risks:
             sections.append("## Risks\n" + "\n".join(f"- {r}" for r in pack.risks))
 
-        result = "\n\n".join(sections) if sections else ""
-        if len(result) > max_chars:
-            result = result[:max_chars] + "\n\n[context truncated]"
-        return result
+        return "\n\n".join(sections) if sections else ""
 
     # ------------------------------------------------------------------
     # Haiku-summarized context compression (avoids lossy truncation)
@@ -439,7 +430,6 @@ class ContextBuilder:
         pack: ContextPack,
         client,
         model: str,
-        max_tokens: int = 3000,
     ) -> str:
         """Compress context via Haiku summarization instead of raw truncation.
 
@@ -452,10 +442,10 @@ class ContextBuilder:
         import asyncio
 
         if client is None:
-            return ContextBuilder.to_prompt(pack, max_tokens=max_tokens)
+            return ContextBuilder.to_prompt(pack)
 
         # First render all sections using the existing to_prompt logic
-        rendered = ContextBuilder.to_prompt(pack, max_tokens=max_tokens * 2)
+        rendered = ContextBuilder.to_prompt(pack)
         sections = rendered.split("\n\n")
 
         # Identify oversized sections that need summarization
@@ -478,11 +468,7 @@ class ContextBuilder:
                 if isinstance(summary, str):
                     sections[idx] = summary
 
-        result = "\n\n".join(sections)
-        max_chars = max_tokens * 4
-        if len(result) > max_chars:
-            result = result[:max_chars] + "\n\n[context truncated]"
-        return result
+        return "\n\n".join(sections)
 
 
 async def _summarize_section(
@@ -505,8 +491,7 @@ async def _summarize_section(
         return f"## {header}\n{response.content[0].text}"
     except Exception:
         logger.debug("Section summarization failed for %s", section_name, exc_info=True)
-        # Fallback: raw truncation
-        return text[:1200] + "..."
+        return text
 
 
 def _rerank_by_relevance(items: list[dict]) -> list[dict]:

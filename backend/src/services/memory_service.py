@@ -167,9 +167,11 @@ class MemoryService:
         source_event_ids: list[str],
         entity_ids: list[str] | None = None,
         workspace_id: str = "",
+        prompt_addendum: str | None = None,
+        provenance_extra: dict | None = None,
     ) -> list[str]:
         """Extract memories from text and store them. Returns memory_ids."""
-        extracted = await self._call_extraction(source_text)
+        extracted = await self._call_extraction(source_text, prompt_addendum=prompt_addendum)
         memory_ids = []
         new_facts: list[tuple[str, str]] = []  # (memory_id, fact_text)
 
@@ -195,7 +197,7 @@ class MemoryService:
                 confidence=mem_data.get("confidence", 0.5),
                 stability_score=0.0,
                 source_event_ids=source_event_ids,
-                provenance={"extraction_method": "claude_auto"},
+                provenance={"extraction_method": "claude_auto", **(provenance_extra or {})},
                 ttl_days=mem_data.get("ttl_days"),
                 status="active",
                 entity_ids=entity_ids,
@@ -1060,13 +1062,16 @@ class MemoryService:
             for m in memories
         ]
 
-    async def _call_extraction(self, source_text: str) -> dict:
+    async def _call_extraction(self, source_text: str, prompt_addendum: str | None = None) -> dict:
         """Call Claude to extract memories from text."""
         try:
+            system_prompt = MEMORY_EXTRACTION_PROMPT
+            if prompt_addendum:
+                system_prompt = system_prompt + prompt_addendum
             response = await self._client.messages.create(
                 model=self._settings.resolved_model,
                 max_tokens=1024,
-                system=MEMORY_EXTRACTION_PROMPT,
+                system=system_prompt,
                 messages=[{"role": "user", "content": source_text}],
             )
             from src.llm_utils import parse_llm_json

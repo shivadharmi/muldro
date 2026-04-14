@@ -405,12 +405,18 @@ export function fetchSurface(surfaceId: string) {
 
 interface WorkspaceSurfaceResponse {
   id: string;
-  kind: string;
+  kind: import("@/lib/types/surfaces").SurfaceKind;
   preview: import("@/lib/a2ui-types").SurfacePreview;
   detail_config: import("@/lib/a2ui-types").DetailConfig | null;
   source_run_id?: string | null;
   response_preview?: string | null;
   created_at?: string | null;
+  phase?: import("@/lib/a2ui-types").ExecutionPhase;
+  steps?: import("@/lib/a2ui-types").StepState[];
+  current_step?: string | null;
+  progress?: string;
+  approval?: import("@/lib/a2ui-types").ApprovalContext | null;
+  results?: import("@/lib/a2ui-types").ResultSummary | null;
 }
 
 export function fetchWorkspaceSurfaces(): Promise<{ surfaces: WorkspaceSurfaceResponse[]; count: number }> {
@@ -655,8 +661,24 @@ export interface Installation {
   created_at: string | null;
 }
 
+export interface UnifiedIntegration {
+  server_name: string;
+  display_name: string;
+  category: "oauth" | "token" | "local";
+  provider: string | null;
+  configured: boolean;
+  connected: boolean;
+  health_status: string;
+  scopes: string[];
+  install_id: string | null;
+}
+
 export function fetchInstallations(): Promise<Installation[]> {
   return api("/integrations");
+}
+
+export function fetchUnifiedIntegrations(): Promise<UnifiedIntegration[]> {
+  return api("/integrations/unified");
 }
 
 export function deleteInstallation(installId: string): Promise<void> {
@@ -827,4 +849,43 @@ export async function setTimePolicies(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ policies }),
   });
+}
+
+// ── History ─────────────────────────────────────────────────────
+
+export async function fetchHistory(params: {
+  status?: string;
+  source?: string;
+  search?: string;
+  from?: string;
+  to?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<{
+  items: unknown[];
+  total: number;
+  limit: number;
+  offset: number;
+}> {
+  const qs = new URLSearchParams();
+  if (params.status && params.status !== "all") qs.set("status", params.status);
+  if (params.source && params.source !== "all") qs.set("source", params.source);
+  if (params.search) qs.set("search", params.search);
+  if (params.from) qs.set("from", params.from);
+  if (params.to) qs.set("to", params.to);
+  if (params.limit) qs.set("limit", String(params.limit));
+  if (params.offset) qs.set("offset", String(params.offset));
+  const query = qs.toString();
+  return api(`/history${query ? `?${query}` : ""}`);
+}
+
+export async function fetchHistoryDetail(runId: string) {
+  return api<Record<string, unknown>>(`/history/${runId}`);
+}
+
+export async function retryRun(runId: string) {
+  return post<{ run_id: string; status: string; message: string }>(
+    `/history/${runId}/retry`,
+    {}
+  );
 }

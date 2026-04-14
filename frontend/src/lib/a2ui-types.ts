@@ -77,7 +77,7 @@ export interface DetailTabResponse {
 export interface WorkspaceSurfacePush {
   type: "surface";
   id: string;
-  kind: string;
+  kind: import("@/lib/types/surfaces").SurfaceKind;
   preview: SurfacePreview;
   detail_config: DetailConfig | null;
   source_run_id: string | null;
@@ -92,6 +92,7 @@ export interface SuggestedActionRef {
   description: string;
   capability: string;
   action_input: Record<string, unknown>;
+  action_preview: string;
 }
 
 export interface InsightData {
@@ -131,14 +132,32 @@ export interface StepState {
   status: "pending" | "executing" | "completed" | "failed" | "approval_needed" | "user_action";
   output_summary: string | null;
   duration_ms: number | null;
+  started_at: string | null;
+
+  // Evidence
+  completed_at: string | null;
+  timeout_seconds: number | null;
+  error: Record<string, unknown> | null;
+  retry_count: number | null;
 }
 
 export interface ApprovalContext {
   approval_id: string;
   step_description: string;
+  risk_level: string;
+  trust_level: string;
+  expires_at: string | null;
+  triggering_step_id: string | null;
+  graduation_hint: string;
+
+  // Evidence
   risk_reasoning: string;
   trust_context: string;
-  graduation_hint: string;
+  reversible: boolean;
+  blast_radius: string;
+  effective_trust_level: string;
+  approved_count: number;
+  rejected_count: number;
 }
 
 export interface ResultSummary {

@@ -126,10 +126,10 @@ class TestIntentToPlan:
         assert result.steps[0].capability == "respond"
         assert result.priority == "low"
 
-    def test_goal_truncated_to_200_chars(self):
+    def test_goal_preserves_full_message(self):
         long_msg = "x" * 500
         result = intent_to_plan("greeting", long_msg, self.CAPS)
-        assert len(result.goal) <= 200
+        assert result.goal == long_msg
 
     def test_all_fast_intents_handled(self):
         """Every intent in FAST_INTENTS produces a valid PlanOutput."""

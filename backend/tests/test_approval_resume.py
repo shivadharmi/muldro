@@ -1,5 +1,6 @@
-"""Tests for approval resume failure handling — verifies runs transition to failed
-when resume_run or execute_run raises after a successful approval decision."""
+"""Tests for approval resume flow — verifies that the approval handler queues
+runs for scheduler pickup instead of executing synchronously, and that the
+scheduler + GraphExecutor correctly resume approved runs."""
 
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -36,7 +37,7 @@ def _make_approval(**overrides):
     return approval
 
 
-def _make_run(run_id="run_001", status="running", plan_id=None, checkpoint=None):
+def _make_run(run_id="run_001", status="running", plan_id=None, checkpoint=None, source=None):
     """Factory for mock TaskRun objects."""
     run = MagicMock()
     run.run_id = run_id
@@ -45,6 +46,7 @@ def _make_run(run_id="run_001", status="running", plan_id=None, checkpoint=None)
     run.checkpoint = checkpoint or {}
     run.error = None
     run.completed_at = None
+    run.source = source or "background"
     return run
 
 
@@ -73,23 +75,21 @@ class _FakeResult:
         return [self._value] if self._value else []
 
 
+# ── Step-level approval: queues for scheduler ────────────────────────
+
+
 @pytest.mark.asyncio
-async def test_step_level_resume_failure_marks_run_failed():
-    """When resume_run raises after step-level approval, the run should be
-    transitioned to 'failed' with error details."""
+async def test_step_level_approval_queues_for_scheduler():
+    """After step-level approval, the handler should tag the run with
+    source='approval_resume' and transition step to 'running' — NOT
+    call resume_run synchronously."""
     from src.api.routes_approvals import approve_action
 
     approval = _make_approval(run_id="run_001", step_id="step_001")
     step = _make_step()
-    run_after_fail = _make_run(run_id="run_001", status="running")
-
-    # Track which queries return what.
-    # Since _get_approval is patched, db.execute calls are:
-    #   1. select(TaskRun) for effective_run_id -> run_obj
-    #   2. select(TaskStep) for step transition -> step
-    #   3. (after resume_run fails + rollback) select(TaskRun) for failure marking -> run_after_fail
-    call_count = 0
     run_obj = _make_run(run_id="run_001", status="awaiting_approval")
+
+    call_count = 0
 
     async def fake_execute(stmt):
         nonlocal call_count
@@ -98,11 +98,11 @@ async def test_step_level_resume_failure_marks_run_failed():
             # select(TaskRun) for effective_run_id
             return _FakeResult(run_obj)
         elif call_count == 2:
-            # select(TaskStep) for step
+            # select(TaskStep) for step transition
             return _FakeResult(step)
         elif call_count == 3:
-            # re-fetch run after resume failure
-            return _FakeResult(run_after_fail)
+            # re-fetch run for source update
+            return _FakeResult(run_obj)
         return _FakeResult(None)
 
     db = MagicMock()
@@ -114,9 +114,6 @@ async def test_step_level_resume_failure_marks_run_failed():
 
     settings = make_mock_settings(qdrant_url="", redis_url="redis://localhost:6379/0")
 
-    mock_executor = MagicMock()
-    mock_executor.resume_run = AsyncMock(side_effect=RuntimeError("connection reset"))
-
     with (
         patch(
             "src.api.routes_approvals._get_approval",
@@ -124,13 +121,7 @@ async def test_step_level_resume_failure_marks_run_failed():
             return_value=approval,
         ),
         patch("src.api.routes_approvals.AuditService") as mock_audit_cls,
-        patch(
-            "src.api.routes_approvals.create_graph_executor",
-            new_callable=AsyncMock,
-            return_value=mock_executor,
-        ),
-        patch("src.api.routes_approvals.transition_run") as mock_transition_run,
-        patch("src.api.routes_approvals.transition_step"),
+        patch("src.api.routes_approvals.transition_step") as mock_transition_step,
         patch(
             "src.services.risk_assessor.record_approval_decision",
             new_callable=AsyncMock,
@@ -147,30 +138,26 @@ async def test_step_level_resume_failure_marks_run_failed():
             settings=settings,
         )
 
-    # The endpoint still returns 200 (approval succeeded, resume failed)
     assert result.status == "approved"
-
-    # The run should have been marked as failed
-    assert run_after_fail.error == {"resume_failed": "connection reset"}
-    assert run_after_fail.completed_at is not None
-    mock_transition_run.assert_called_once_with(run_after_fail, "failed")
-    # DB should have been committed after marking failure
-    assert db.rollback.called
-    assert db.commit.called
+    # Step should have been transitioned to running
+    mock_transition_step.assert_called_once_with(step, "running")
+    # Run should be tagged for scheduler pickup
+    assert run_obj.source == "approval_resume"
+    # DB should have been committed (persisting the source change)
+    assert db.commit.call_count >= 2  # initial approval commit + scheduler queue commit
 
 
 @pytest.mark.asyncio
-async def test_step_level_resume_failure_from_awaiting_approval():
-    """After rollback, run is back in awaiting_approval — must still transition to failed."""
+async def test_step_level_approval_does_not_call_resume_run():
+    """The approval handler must NOT create a GraphExecutor or call resume_run
+    for step-level approvals — the scheduler handles execution."""
     from src.api.routes_approvals import approve_action
 
-    approval = _make_approval(run_id="run_001a", step_id="step_001a")
-    step = _make_step(step_id="step_001a", run_id="run_001a")
-    # Post-rollback the run reverts to awaiting_approval (the realistic state)
-    run_after_fail = _make_run(run_id="run_001a", status="awaiting_approval")
+    approval = _make_approval(run_id="run_001", step_id="step_001")
+    step = _make_step()
+    run_obj = _make_run(run_id="run_001", status="awaiting_approval")
 
     call_count = 0
-    run_obj = _make_run(run_id="run_001a", status="awaiting_approval")
 
     async def fake_execute(stmt):
         nonlocal call_count
@@ -180,7 +167,7 @@ async def test_step_level_resume_failure_from_awaiting_approval():
         elif call_count == 2:
             return _FakeResult(step)
         elif call_count == 3:
-            return _FakeResult(run_after_fail)
+            return _FakeResult(run_obj)
         return _FakeResult(None)
 
     db = MagicMock()
@@ -192,9 +179,6 @@ async def test_step_level_resume_failure_from_awaiting_approval():
 
     settings = make_mock_settings(qdrant_url="", redis_url="redis://localhost:6379/0")
 
-    mock_executor = MagicMock()
-    mock_executor.resume_run = AsyncMock(side_effect=RuntimeError("connection reset"))
-
     with (
         patch(
             "src.api.routes_approvals._get_approval",
@@ -205,9 +189,7 @@ async def test_step_level_resume_failure_from_awaiting_approval():
         patch(
             "src.api.routes_approvals.create_graph_executor",
             new_callable=AsyncMock,
-            return_value=mock_executor,
-        ),
-        patch("src.api.routes_approvals.transition_run") as mock_transition_run,
+        ) as mock_create_executor,
         patch("src.api.routes_approvals.transition_step"),
         patch(
             "src.services.risk_assessor.record_approval_decision",
@@ -216,8 +198,8 @@ async def test_step_level_resume_failure_from_awaiting_approval():
     ):
         mock_audit_cls.return_value.log = AsyncMock()
 
-        result = await approve_action(
-            approval_id="apr_001a",
+        await approve_action(
+            approval_id="apr_001",
             req=None,
             user_id=TEST_USER_ID,
             workspace_id=TEST_WORKSPACE_ID,
@@ -225,29 +207,21 @@ async def test_step_level_resume_failure_from_awaiting_approval():
             settings=settings,
         )
 
-    assert result.status == "approved"
-    assert run_after_fail.error == {"resume_failed": "connection reset"}
-    assert run_after_fail.completed_at is not None
-    mock_transition_run.assert_called_once_with(run_after_fail, "failed")
-    assert db.rollback.called
-    assert db.commit.called
+    # create_graph_executor should NOT be called for step-level approval
+    mock_create_executor.assert_not_called()
+
+
+# ── Plan-level approval: queues for scheduler ────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_plan_level_resume_failure_marks_run_failed():
-    """When execute_run raises after plan-level approval, the run should be
-    transitioned to 'failed' with error details."""
+async def test_plan_level_approval_queues_for_scheduler():
+    """Plan-level approval should tag the run with source='approval_resume'
+    without calling execute_run synchronously."""
     from src.api.routes_approvals import approve_action
 
-    run_obj = _make_run(run_id="run_002", status="running", plan_id="plan_001")
-    # No run_id on approval, but execution_id links to the run
-    approval = _make_approval(
-        run_id=None,
-        execution_id="run_002",
-        step_id=None,
-    )
-
-    run_after_fail = _make_run(run_id="run_002", status="running")
+    run_obj = _make_run(run_id="run_002", status="awaiting_approval", plan_id="plan_001")
+    approval = _make_approval(run_id=None, execution_id="run_002", step_id=None)
 
     call_count = 0
 
@@ -255,10 +229,11 @@ async def test_plan_level_resume_failure_marks_run_failed():
         nonlocal call_count
         call_count += 1
         if call_count == 1:
+            # select(TaskRun) for effective_run_id
             return _FakeResult(run_obj)
         elif call_count == 2:
-            # re-fetch run after execute_run failure
-            return _FakeResult(run_after_fail)
+            # re-fetch run for source update
+            return _FakeResult(run_obj)
         return _FakeResult(None)
 
     db = MagicMock()
@@ -270,9 +245,6 @@ async def test_plan_level_resume_failure_marks_run_failed():
 
     settings = make_mock_settings(qdrant_url="", redis_url="redis://localhost:6379/0")
 
-    mock_executor = MagicMock()
-    mock_executor.execute_run = AsyncMock(side_effect=RuntimeError("executor crashed"))
-
     with (
         patch(
             "src.api.routes_approvals._get_approval",
@@ -280,12 +252,6 @@ async def test_plan_level_resume_failure_marks_run_failed():
             return_value=approval,
         ),
         patch("src.api.routes_approvals.AuditService") as mock_audit_cls,
-        patch(
-            "src.api.routes_approvals.create_graph_executor",
-            new_callable=AsyncMock,
-            return_value=mock_executor,
-        ),
-        patch("src.api.routes_approvals.transition_run") as mock_transition_run,
         patch(
             "src.services.risk_assessor.record_approval_decision",
             new_callable=AsyncMock,
@@ -302,21 +268,17 @@ async def test_plan_level_resume_failure_marks_run_failed():
             settings=settings,
         )
 
-    # The endpoint still returns 200 (approval succeeded, resume failed)
     assert result.status == "approved"
+    assert run_obj.source == "approval_resume"
 
-    # The run should have been marked as failed
-    assert run_after_fail.error == {"resume_failed": "executor crashed"}
-    assert run_after_fail.completed_at is not None
-    mock_transition_run.assert_called_once_with(run_after_fail, "failed")
-    assert db.rollback.called
-    assert db.commit.called
+
+# ── Tool-level approval: creates bg_run without executing ────────────
 
 
 @pytest.mark.asyncio
-async def test_tool_level_execute_failure_marks_run_failed():
-    """When execute_run raises for a tool-level approval resume, the bg_run
-    should be transitioned to 'failed'."""
+async def test_tool_level_approval_creates_bg_run_without_executing():
+    """Tool-level approval should create a background TaskRun and populate
+    steps, but NOT call execute_run — the scheduler handles execution."""
     from src.api.routes_approvals import approve_action
 
     approval = _make_approval(
@@ -326,19 +288,14 @@ async def test_tool_level_execute_failure_marks_run_failed():
         artifact_refs={"tool_name": "email_send", "tool_params": {"to": "a@b.com"}},
     )
 
-    # The run returned when we re-fetch after failure
-    run_after_fail = _make_run(run_id="run_bg", status="running")
-
     call_count = 0
 
     async def fake_execute(stmt):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            # select(TaskRun) for effective_run_id (None → no run)
             return _FakeResult(None)
-        # Later calls during tool-level flow are for re-fetch after failure
-        return _FakeResult(run_after_fail)
+        return _FakeResult(None)
 
     db = MagicMock()
     db.execute = AsyncMock(side_effect=fake_execute)
@@ -351,7 +308,8 @@ async def test_tool_level_execute_failure_marks_run_failed():
 
     mock_executor = MagicMock()
     mock_executor.populate_run_steps = AsyncMock()
-    mock_executor.execute_run = AsyncMock(side_effect=RuntimeError("tool exec failed"))
+    # execute_run should NOT be called
+    mock_executor.execute_run = AsyncMock()
 
     with (
         patch(
@@ -365,7 +323,6 @@ async def test_tool_level_execute_failure_marks_run_failed():
             new_callable=AsyncMock,
             return_value=mock_executor,
         ),
-        patch("src.api.routes_approvals.transition_run") as mock_transition_run,
         patch(
             "src.services.risk_assessor.record_approval_decision",
             new_callable=AsyncMock,
@@ -382,30 +339,28 @@ async def test_tool_level_execute_failure_marks_run_failed():
             settings=settings,
         )
 
-    # The endpoint still returns 200
     assert result.status == "approved"
+    # populate_run_steps should be called (steps need to exist for scheduler)
+    mock_executor.populate_run_steps.assert_called_once()
+    # execute_run should NOT be called — scheduler handles it
+    mock_executor.execute_run.assert_not_called()
 
-    # The bg_run should have been marked as failed
-    assert run_after_fail.error == {"resume_failed": "tool exec failed"}
-    assert run_after_fail.completed_at is not None
-    mock_transition_run.assert_called_once_with(run_after_fail, "failed")
-    assert db.rollback.called
-    assert db.commit.called
+
+# ── Failure handling in scheduler-queue path ──────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_resume_failure_does_not_crash_when_run_already_terminal():
-    """When resume_run fails but the run is already in a terminal state,
-    the handler should NOT attempt to transition it — just log and continue."""
+async def test_step_level_queue_failure_marks_run_failed():
+    """When the scheduler-queueing itself fails (e.g., DB error during
+    source update), the run should be marked as failed."""
     from src.api.routes_approvals import approve_action
 
     approval = _make_approval(run_id="run_004", step_id="step_004")
     step = _make_step(step_id="step_004", run_id="run_004")
-    # Run already completed by the time we re-fetch
-    run_already_done = _make_run(run_id="run_004", status="completed")
+    run_obj = _make_run(run_id="run_004", status="awaiting_approval")
+    run_after_fail = _make_run(run_id="run_004", status="awaiting_approval")
 
     call_count = 0
-    run_obj = _make_run(run_id="run_004", status="awaiting_approval")
 
     async def fake_execute(stmt):
         nonlocal call_count
@@ -415,8 +370,11 @@ async def test_resume_failure_does_not_crash_when_run_already_terminal():
         elif call_count == 2:
             return _FakeResult(step)
         elif call_count == 3:
-            # re-fetch: run already completed
-            return _FakeResult(run_already_done)
+            # re-fetch run fails
+            raise RuntimeError("DB connection lost")
+        elif call_count == 4:
+            # _mark_run_failed_after_resume re-fetch
+            return _FakeResult(run_after_fail)
         return _FakeResult(None)
 
     db = MagicMock()
@@ -428,9 +386,6 @@ async def test_resume_failure_does_not_crash_when_run_already_terminal():
 
     settings = make_mock_settings(qdrant_url="", redis_url="redis://localhost:6379/0")
 
-    mock_executor = MagicMock()
-    mock_executor.resume_run = AsyncMock(side_effect=RuntimeError("boom"))
-
     with (
         patch(
             "src.api.routes_approvals._get_approval",
@@ -438,11 +393,6 @@ async def test_resume_failure_does_not_crash_when_run_already_terminal():
             return_value=approval,
         ),
         patch("src.api.routes_approvals.AuditService") as mock_audit_cls,
-        patch(
-            "src.api.routes_approvals.create_graph_executor",
-            new_callable=AsyncMock,
-            return_value=mock_executor,
-        ),
         patch("src.api.routes_approvals.transition_run") as mock_transition_run,
         patch("src.api.routes_approvals.transition_step"),
         patch(
@@ -461,79 +411,90 @@ async def test_resume_failure_does_not_crash_when_run_already_terminal():
             settings=settings,
         )
 
-    # Still returns 200
     assert result.status == "approved"
-    # transition_run should NOT have been called (run already terminal)
-    mock_transition_run.assert_not_called()
-    # Error and completed_at should NOT have been set on the already-completed run
-    assert run_already_done.error is None
-    assert run_already_done.completed_at is None
+    mock_transition_run.assert_called_once_with(run_after_fail, "failed")
+
+
+# ── GraphExecutor: _get_ready_steps includes running steps ───────────
 
 
 @pytest.mark.asyncio
-async def test_resume_failure_recovery_itself_fails_gracefully():
-    """When both resume_run AND the recovery (marking as failed) both fail,
-    the endpoint should still return 200 — no unhandled exception."""
-    from src.api.routes_approvals import approve_action
+async def test_get_ready_steps_includes_running_steps():
+    """_get_ready_steps should return steps with status='running' so that
+    resumed-from-approval steps actually get executed."""
+    from src.services.graph_executor import GraphExecutor
 
-    approval = _make_approval(run_id="run_005", step_id="step_005")
-    step = _make_step(step_id="step_005", run_id="run_005")
-    run_obj = _make_run(run_id="run_005", status="awaiting_approval")
+    with patch("src.services.graph_executor.get_anthropic_client"):
+        settings = make_mock_settings()
+        db = AsyncMock()
+        executor = GraphExecutor(settings, db)
 
-    call_count = 0
+    # Simulate three steps: one completed, one running (approved), one pending
+    step_completed = MagicMock()
+    step_completed.step_id = "s1"
+    step_completed.status = "completed"
+    step_completed.depends_on = []
+    step_completed.created_at = datetime(2026, 4, 13, 1, 0, tzinfo=timezone.utc)
 
-    async def fake_execute(stmt):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            return _FakeResult(run_obj)
-        elif call_count == 2:
-            return _FakeResult(step)
-        elif call_count == 3:
-            # Recovery re-fetch also fails
-            raise RuntimeError("DB connection lost")
-        return _FakeResult(None)
+    step_running = MagicMock()
+    step_running.step_id = "s2"
+    step_running.status = "running"
+    step_running.depends_on = []
+    step_running.created_at = datetime(2026, 4, 13, 1, 1, tzinfo=timezone.utc)
 
-    db = MagicMock()
-    db.execute = AsyncMock(side_effect=fake_execute)
-    db.commit = AsyncMock()
+    step_pending = MagicMock()
+    step_pending.step_id = "s3"
+    step_pending.status = "pending"
+    step_pending.depends_on = ["s2"]
+    step_pending.created_at = datetime(2026, 4, 13, 1, 2, tzinfo=timezone.utc)
+
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = [
+        step_completed,
+        step_running,
+        step_pending,
+    ]
+    db.execute = AsyncMock(return_value=mock_result)
+
+    ready = await executor._get_ready_steps("run_001")
+
+    # The running step should be returned (for execution after approval)
+    assert step_running in ready
+    # The pending step should NOT be returned (its dep s2 is not completed)
+    assert step_pending not in ready
+    # The completed step should NOT be returned
+    assert step_completed not in ready
+
+
+@pytest.mark.asyncio
+async def test_get_ready_steps_promotes_pending_after_running_completes():
+    """When a running step's dependent step is pending and the running step
+    is already completed, the pending step should be promoted to ready."""
+    from src.services.graph_executor import GraphExecutor
+
+    with patch("src.services.graph_executor.get_anthropic_client"):
+        settings = make_mock_settings()
+        db = AsyncMock()
+        executor = GraphExecutor(settings, db)
+
+    step_completed = MagicMock()
+    step_completed.step_id = "s1"
+    step_completed.status = "completed"
+    step_completed.depends_on = []
+    step_completed.created_at = datetime(2026, 4, 13, 1, 0, tzinfo=timezone.utc)
+
+    step_pending = MagicMock()
+    step_pending.step_id = "s2"
+    step_pending.status = "pending"
+    step_pending.depends_on = ["s1"]
+    step_pending.created_at = datetime(2026, 4, 13, 1, 1, tzinfo=timezone.utc)
+
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = [step_completed, step_pending]
+    db.execute = AsyncMock(return_value=mock_result)
     db.flush = AsyncMock()
-    db.rollback = AsyncMock()
-    db.add = MagicMock()
 
-    settings = make_mock_settings(qdrant_url="", redis_url="redis://localhost:6379/0")
+    ready = await executor._get_ready_steps("run_001")
 
-    mock_executor = MagicMock()
-    mock_executor.resume_run = AsyncMock(side_effect=RuntimeError("resume boom"))
-
-    with (
-        patch(
-            "src.api.routes_approvals._get_approval",
-            new_callable=AsyncMock,
-            return_value=approval,
-        ),
-        patch("src.api.routes_approvals.AuditService") as mock_audit_cls,
-        patch(
-            "src.api.routes_approvals.create_graph_executor",
-            new_callable=AsyncMock,
-            return_value=mock_executor,
-        ),
-        patch("src.api.routes_approvals.transition_step"),
-        patch(
-            "src.services.risk_assessor.record_approval_decision",
-            new_callable=AsyncMock,
-        ),
-    ):
-        mock_audit_cls.return_value.log = AsyncMock()
-
-        # Should not raise — inner exception handler catches the DB failure
-        result = await approve_action(
-            approval_id="apr_005",
-            req=None,
-            user_id=TEST_USER_ID,
-            workspace_id=TEST_WORKSPACE_ID,
-            db=db,
-            settings=settings,
-        )
-
-    assert result.status == "approved"
+    assert step_pending in ready
+    assert step_pending.status == "ready"

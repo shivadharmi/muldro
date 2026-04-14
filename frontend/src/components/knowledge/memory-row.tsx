@@ -1,6 +1,7 @@
 "use client";
 
 import type { KnowledgeMemoryItem } from "@/lib/api";
+import { FOCUS_RING } from "@/lib/focus-ring";
 
 // ── Memory type styling ──────────────────────────────────────────
 
@@ -46,10 +47,16 @@ interface MemoryRowProps {
 export function MemoryRow({ memory, selected, onSelect, onEntityClick }: MemoryRowProps) {
   const style = getTypeStyle(memory.memory_type);
 
+  const truncatedText =
+    memory.fact_text.length > 80
+      ? memory.fact_text.slice(0, 80) + "\u2026"
+      : memory.fact_text;
+
   return (
     <div
       role="button"
       tabIndex={0}
+      aria-label={truncatedText}
       onClick={onSelect}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
@@ -57,7 +64,7 @@ export function MemoryRow({ memory, selected, onSelect, onEntityClick }: MemoryR
           onSelect();
         }
       }}
-      className={`flex items-start gap-2 sm:gap-3 px-3 py-2 sm:px-4 sm:py-3 border-b border-b-secondary cursor-pointer transition-colors hover:bg-surface-2 ${
+      className={`flex items-start gap-2 sm:gap-3 px-3 py-2 sm:px-4 sm:py-3 border-b border-b-secondary cursor-pointer transition-colors duration-150 hover:bg-surface-2 rounded-[var(--radius-lg)] ${FOCUS_RING} ${
         selected ? "bg-j-primary-soft border-l-2 border-l-j-primary" : ""
       }`}
     >

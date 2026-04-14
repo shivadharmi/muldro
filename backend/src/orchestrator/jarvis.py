@@ -43,6 +43,12 @@ from src.orchestrator.tracing import TraceManager
 from src.services.agent_registry import AgentRegistry
 from src.services.capability_resolver import CapabilityResolver, route_step
 from src.services.context_builder import ContextBuilder, ContextPack
+from src.services.interaction_learner import InteractionLearner
+from src.services.surface_mapping import (
+    build_surface_preview_from_plan,
+    derive_surface_kind,
+    extract_surface_spec,
+)
 from src.services.trace_store import TraceStore
 from src.tools.schemas import build_tool_definitions
 
@@ -74,6 +80,7 @@ BEDROCK_MODEL_TIERS = {
     "haiku": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
 }
 
+
 # Agents that benefit from context enrichment (read-heavy agents)
 CONTEXT_ENRICHED_AGENTS = {
     "planner",
@@ -85,78 +92,6 @@ CONTEXT_ENRICHED_AGENTS = {
 }
 
 # Intent classification constants imported from intent_classifier module
-
-
-def _derive_surface_kind(plan: "PlanOutput") -> tuple[str, str] | None:
-    """Derive workspace surface kind from PlanOutput step capabilities.
-
-    Returns (kind, default_title) or None if the plan is chat-only.
-    """
-    if not plan.steps:
-        return None
-
-    caps = {s.capability for s in plan.steps if s.actor == "jarvis"}
-
-    # Respond/reason only -> no surface (chat-only)
-    # "none" = planner indicated no external capability needed (pure reasoning)
-    if caps <= {"reason", "respond", "none"}:
-        return None
-
-    # System capabilities with visual value
-    if "system.add_to_brief" in caps:
-        return ("briefing", "Briefing Update")
-    if "system.schedule_reminder" in caps:
-        return ("alert", "Reminder Scheduled")
-
-    # Write actions -> plan surface
-    if any(s.risk in ("medium", "high") for s in plan.steps):
-        return ("plan", "New Plan")
-
-    # Multi-step -> plan surface
-    jarvis_steps = [s for s in plan.steps if s.actor == "jarvis"]
-    if len(jarvis_steps) > 2:
-        return ("plan", plan.goal[:80] or "Plan")
-
-    # Single/dual read -> summary
-    return ("summary", "Summary")
-
-
-def _build_surface_preview_from_plan(
-    plan: "PlanOutput",
-    kind: str,
-    default_title: str,
-    response_text: str,
-):
-    """Build a SurfacePreview from a PlanOutput for workspace grid cards."""
-    from src.ui.contracts import SurfaceMetric, SurfacePreview
-
-    title = plan.goal[:80] if plan.goal else default_title
-    subtitle = plan.reasoning[:120] if plan.reasoning else None
-    metrics: list[SurfaceMetric] = []
-    tags: list[str] = []
-
-    if kind == "plan":
-        step_count = len([s for s in plan.steps if s.actor == "jarvis"])
-        if step_count:
-            metrics.append(SurfaceMetric(label="Steps", value=str(step_count)))
-        metrics.append(SurfaceMetric(label="Priority", value=plan.priority))
-    elif kind == "summary":
-        tags.append("read")
-    elif kind == "briefing":
-        tags.append("briefing")
-    elif kind == "alert":
-        tags.append("reminder")
-
-    return SurfacePreview(
-        title=title,
-        subtitle=subtitle,
-        status=None,
-        priority=plan.priority if plan.priority != "medium" else None,
-        metrics=metrics,
-        entities=[],
-        progress=None,
-        tags=tags,
-    )
 
 
 async def _fetch_thread_contexts(
@@ -227,6 +162,18 @@ def _build_step_to_task_map(steps: list) -> dict[str, str]:
     return step_to_task
 
 
+def _build_action_preview(capability: str, description: str) -> str:
+    """Generate tooltip preview text for an insight action based on capability type."""
+    cap = capability.lower()
+    if any(w in cap for w in ("send", "create", "update", "delete", "write")):
+        return f"Creates a task to {description.lower()}"
+    if any(w in cap for w in ("read", "search", "fetch", "list", "get")):
+        return f"Fetches {capability.split('.')[-1]} data without taking action"
+    if any(w in cap for w in ("respond", "reason", "summarize")):
+        return f"Generates a response about {description.lower()}"
+    return ""
+
+
 class JarvisOrchestrator:
     """The Jarvis brain — orchestrates sub-agents via Claude API.
 
@@ -261,6 +208,15 @@ class JarvisOrchestrator:
         from src.orchestrator.api_circuit_breaker import AnthropicCircuitBreaker
 
         self._circuit_breaker = AnthropicCircuitBreaker()
+        # Interaction learning — async memory extraction from user messages
+        self._interaction_learner: InteractionLearner | None = None
+        if self._services.memory_service:
+            self._interaction_learner = InteractionLearner(
+                settings=settings,
+                db_factory=db_factory,
+                vector_store=self._services.vector_store,
+                redis=None,  # Populated lazily when event bus Redis is available
+            )
         # Precompute haiku model ID for intent classification
         if settings.use_bedrock:
             self._haiku_model = BEDROCK_MODEL_TIERS["haiku"]
@@ -272,6 +228,19 @@ class JarvisOrchestrator:
         task = asyncio.create_task(coro)
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
+
+    async def _ensure_learner_deps(self) -> None:
+        """Lazily wire Redis + EventBus into the interaction learner."""
+        if not self._interaction_learner:
+            return
+        learner = self._interaction_learner
+        if learner._redis is None or learner._event_bus is None:
+            event_bus = await self._ensure_event_bus()
+            if hasattr(self, "_event_bus_redis"):
+                if learner._redis is None:
+                    learner._redis = self._event_bus_redis
+                if learner._event_bus is None and event_bus:
+                    learner._event_bus = event_bus
 
     async def shutdown(self) -> None:
         """Await all pending background tasks on orchestrator shutdown."""
@@ -417,13 +386,18 @@ class JarvisOrchestrator:
                             )
                         )
                     else:
+                        step_input = dict(step.input) if step.input else {}
+                        if step.description:
+                            step_input["description"] = step.description
+                        if step.capability:
+                            step_input["capability"] = step.capability
                         tasks.append(
                             PlanTask(
                                 task_id=task_id,
                                 plan_id=plan_id,
                                 workspace_id=workspace_id,
                                 task_type=step.capability,
-                                input_data=step.input,
+                                input_data=step_input,
                                 depends_on=dep_task_ids or None,
                                 status="pending",
                             )
@@ -519,60 +493,6 @@ class JarvisOrchestrator:
             logger.warning("Failed to log interaction", exc_info=True)
             return None
         return interaction_id
-
-    async def _learn_from_outcome(
-        self,
-        run_id: str,
-        run,
-        result: dict,
-        success: bool,
-    ) -> None:
-        """Store preference/task_context memories from execution outcomes (D1).
-
-        After a run completes, checks for linked approval decisions and
-        failure context, then stores them as memories so future Planner
-        calls have execution history context.
-        """
-        if not self._services.memory_service:
-            return
-        try:
-            facts: list[str] = []
-
-            async with self._db_factory() as db:
-                # Check for linked approvals
-                from sqlalchemy import select
-
-                from src.models.approvals import Approval
-
-                apr_result = await db.execute(
-                    select(Approval).where(
-                        Approval.run_id == run_id,
-                        Approval.status.in_(["approved", "rejected"]),
-                    )
-                )
-                for apr in apr_result.scalars().all():
-                    fact = (
-                        f"User {apr.status} '{apr.title}'"
-                        f"{f' — reason: {apr.decision_reason}' if apr.decision_reason else ''}"
-                    )
-                    facts.append(fact)
-
-            # Store failure context for the Planner
-            if not success:
-                goal = run.policy_decision.get("decision", "") if run.policy_decision else ""
-                error_msg = result.get("summary", "unknown error")[:200]
-                if goal:
-                    facts.append(f"Plan '{goal}' failed: {error_msg}")
-
-            if facts:
-                await self._services.memory_service.extract_and_store(
-                    user_id=run.user_id,
-                    source_text="\n".join(facts),
-                    source_event_ids=[run_id],
-                    workspace_id=run.workspace_id,
-                )
-        except Exception:
-            logger.debug("Outcome learning failed for run %s", run_id, exc_info=True)
 
     def _build_tool_definitions(self) -> list[dict]:
         """Build workspace-independent tool definitions (internal + native connectors).
@@ -670,7 +590,9 @@ class JarvisOrchestrator:
                 # Live MCP schemas take priority for external tools — the
                 # MCP server is the source of truth (e.g., OAuth 2.1 mode
                 # strips user_google_email from schemas at runtime).
-                # Fallback to DB schema, then minimal.
+                # Fallback to DB schema. Skip tools with no schema from any
+                # real source — presenting tools with empty schemas causes
+                # agents to call them without required params.
                 schema = None
                 description = tool_def.description or tool_def.name
 
@@ -684,7 +606,11 @@ class JarvisOrchestrator:
                     schema = tool_def.input_schema
 
                 if not schema:
-                    schema = {"type": "object", "properties": {}}
+                    logger.debug(
+                        "Skipping tool %s — no schema from MCP or DB yet",
+                        tool_def.name,
+                    )
+                    continue
 
                 tools.append(
                     {
@@ -844,7 +770,7 @@ class JarvisOrchestrator:
                         step_routing.append((step, agent_name, tools))
 
             # Step 3: Execute steps sequentially
-            for step, agent_name, tools in step_routing:
+            for step_idx, (step, agent_name, tools) in enumerate(step_routing):
                 if step.capability.startswith("system."):
                     sys_result = await self._handle_system_capability(
                         step, plan, user_id, workspace_id
@@ -872,7 +798,7 @@ class JarvisOrchestrator:
                 if prior_outputs:
                     parts = []
                     for key, output in prior_outputs.items():
-                        parts.append(f"[{key} output]:\n{str(output)[:3000]}")
+                        parts.append(f"[{key}]:\n{str(output)}")
                     agent_message += (
                         "\n\n--- Prior step results ---\n"
                         + "\n\n".join(parts)
@@ -889,7 +815,7 @@ class JarvisOrchestrator:
                     workspace_id=workspace_id,
                     tools_override=tools if tools else None,
                 )
-                result[agent_name] = agent_result
+                result[f"step_{step_idx}_{step.capability}"] = agent_result
 
             # Build user action block from user_steps
             user_action_block = ""
@@ -916,16 +842,20 @@ class JarvisOrchestrator:
                 if step_outputs:
                     parts = []
                     for agent_key, output in step_outputs.items():
-                        truncated = str(output)[:3000]
-                        parts.append(f"[{agent_key} output]:\n{truncated}")
+                        parts.append(f"[{agent_key}]:\n{str(output)}")
                     prior_results_block = (
                         "\n\n--- Prior step results (use these to answer the user) ---\n"
                         + "\n\n".join(parts)
                         + "\n--- End of prior step results ---\n"
                     )
 
+                telegram_hint = (
+                    " Keep under 3500 chars. Prioritize action items and key findings."
+                    if surface == "telegram"
+                    else ""
+                )
                 presenter_msg = (
-                    f"Format this for the user ({surface}). "
+                    f"Format this for the user ({surface}).{telegram_hint} "
                     f"Be conversational and helpful.\n\n"
                     f"User message: {message}\n"
                     f"Plan: {json.dumps(plan_dict)}"
@@ -933,7 +863,7 @@ class JarvisOrchestrator:
                 if prior_results_block:
                     presenter_msg += prior_results_block
                 if plan_text:
-                    presenter_msg += f"\nAnalysis: {plan_text[:2000]}"
+                    presenter_msg += f"\nAnalysis: {plan_text}"
                 if user_action_block:
                     presenter_msg += user_action_block
                 if history_block:
@@ -955,16 +885,37 @@ class JarvisOrchestrator:
                 payload={"trace_id": trace.trace_id},
             )
 
-            # Push surface to workspace
-            surface_id = await self._push_workspace_surface(
-                plan,
-                user_id,
-                workspace_id,
-                run_id=result.get("run_id"),
-                response_text=result.get("presentation", result.get("presenter", "")),
-            )
+            # Push surface to workspace (Presenter-driven)
+            response_text = result.get("presentation", result.get("presenter", ""))
+            surface_id = None
+            try:
+                surface_spec = extract_surface_spec(response_text)
+                if surface_spec and surface_spec.should_surface:
+                    surface_id = await self._push_presenter_surface(
+                        spec=surface_spec,
+                        user_id=user_id,
+                        workspace_id=workspace_id,
+                        run_id=result.get("run_id"),
+                        response_text=response_text,
+                    )
+            except Exception:
+                logger.warning("Surface push failed", exc_info=True)
             if surface_id:
                 result["surface_id"] = surface_id
+
+            # Interaction learning (async, non-blocking)
+            if self._interaction_learner:
+                await self._ensure_learner_deps()
+                self._spawn_background(
+                    self._interaction_learner.learn(
+                        user_id=user_id,
+                        workspace_id=workspace_id,
+                        user_message=message,
+                        agent_response=response_text,
+                        intent=intent,
+                        trace_id=trace.trace_id,
+                    )
+                )
 
             return result
 
@@ -1159,7 +1110,7 @@ class JarvisOrchestrator:
             # Step 3: Execute steps with streaming
             presenter_text = ""
             step_outputs: dict[str, str] = {}
-            for step, agent_name, tools in step_routing:
+            for step_idx, (step, agent_name, tools) in enumerate(step_routing):
                 if step.capability.startswith("system."):
                     await self._handle_system_capability(step, plan, user_id, workspace_id)
                     continue
@@ -1188,7 +1139,7 @@ class JarvisOrchestrator:
                 if step_outputs:
                     parts = []
                     for key, output in step_outputs.items():
-                        parts.append(f"[{key} output]:\n{str(output)[:3000]}")
+                        parts.append(f"[{key}]:\n{str(output)}")
                     agent_message += (
                         "\n\n--- Prior step results ---\n"
                         + "\n\n".join(parts)
@@ -1210,7 +1161,7 @@ class JarvisOrchestrator:
                         done_text = evt.get("text", "")
                         # Capture all step outputs for downstream agents
                         if done_text:
-                            step_outputs[agent_name] = done_text
+                            step_outputs[f"step_{step_idx}_{step.capability}"] = done_text
                         # Capture text from respond/reason steps for surface preview
                         if step.capability in ("reason", "respond"):
                             presenter_text = done_text
@@ -1242,16 +1193,20 @@ class JarvisOrchestrator:
                 if step_outputs:
                     parts = []
                     for agent_key, output in step_outputs.items():
-                        truncated = str(output)[:3000]
-                        parts.append(f"[{agent_key} output]:\n{truncated}")
+                        parts.append(f"[{agent_key}]:\n{str(output)}")
                     prior_results_block = (
                         "\n\n--- Prior step results (use these to answer the user) ---\n"
                         + "\n\n".join(parts)
                         + "\n--- End of prior step results ---\n"
                     )
 
+                telegram_hint = (
+                    " Keep under 3500 chars. Prioritize action items and key findings."
+                    if surface == "telegram"
+                    else ""
+                )
                 presenter_msg = (
-                    f"Respond to the user ({surface}). "
+                    f"Respond to the user ({surface}).{telegram_hint} "
                     f"Be conversational and helpful.\n\n"
                     f"User message: {message}\n"
                     f"Intent: {intent}\n"
@@ -1259,9 +1214,7 @@ class JarvisOrchestrator:
                 if prior_results_block:
                     presenter_msg += prior_results_block
                 if plan_text:
-                    presenter_msg += (
-                        f"Plan: {json.dumps(plan_dict)}\nAnalysis: {plan_text[:2000]}\n"
-                    )
+                    presenter_msg += f"Plan: {json.dumps(plan_dict)}\nAnalysis: {plan_text}\n"
                 if user_action_block:
                     presenter_msg += user_action_block
                 if history_block:
@@ -1290,18 +1243,34 @@ class JarvisOrchestrator:
                 payload={"trace_id": trace.trace_id},
             )
 
-            # Push workspace surface before done to avoid race with SSE
+            # Push workspace surface (Presenter-driven)
             surface_id = None
             try:
-                surface_id = await self._push_workspace_surface(
-                    plan,
-                    user_id,
-                    workspace_id,
-                    run_id=None,
-                    response_text=presenter_text,
-                )
+                surface_spec = extract_surface_spec(presenter_text)
+                if surface_spec and surface_spec.should_surface:
+                    surface_id = await self._push_presenter_surface(
+                        spec=surface_spec,
+                        user_id=user_id,
+                        workspace_id=workspace_id,
+                        run_id=None,
+                        response_text=presenter_text,
+                    )
             except Exception:
                 logger.warning("Surface push failed", exc_info=True)
+
+            # Interaction learning (async, non-blocking)
+            if self._interaction_learner:
+                await self._ensure_learner_deps()
+                self._spawn_background(
+                    self._interaction_learner.learn(
+                        user_id=user_id,
+                        workspace_id=workspace_id,
+                        user_message=message,
+                        agent_response=presenter_text,
+                        intent=intent,
+                        trace_id=trace.trace_id,
+                    )
+                )
 
             yield {
                 "event": "done",
@@ -1610,7 +1579,7 @@ class JarvisOrchestrator:
                 user_prefs = []
                 try:
                     async with self._db_factory() as db:
-                        mem_svc = MemoryService(db, self._settings)
+                        mem_svc = MemoryService(self._settings, db)
                         # get_user_preferences(user_id, category, max_results, workspace_id)
                         prefs = await mem_svc.get_user_preferences(
                             user_id, workspace_id=workspace_id
@@ -1657,7 +1626,7 @@ class JarvisOrchestrator:
                 if assessment.notification_tier == "briefing":
                     try:
                         async with self._db_factory() as db:
-                            mem_svc = MemoryService(db, self._settings)
+                            mem_svc = MemoryService(self._settings, db)
                             await mem_svc.store_briefing_memory(
                                 user_id=user_id,
                                 workspace_id=workspace_id,
@@ -2101,6 +2070,118 @@ class JarvisOrchestrator:
         except Exception:
             logger.warning("Failed to emit runtime event %s", event_type, exc_info=True)
 
+    async def _check_surface_rate(self, user_id: str, surface_type: str) -> bool:
+        """Return True if push is allowed under rate limit.
+
+        Uses Redis INCR with TTL for a sliding window counter.
+        Workspace: 5 per minute. Insight: 3 per 30 minutes.
+        """
+        event_bus = await self._ensure_event_bus()
+        if not event_bus or not getattr(event_bus, "_redis", None):
+            return True
+
+        redis = event_bus._redis
+        if surface_type == "insight":
+            key = f"jarvis:surface_rate:insight:{user_id}"
+            limit, window = 3, 1800
+        else:
+            key = f"jarvis:surface_rate:workspace:{user_id}"
+            limit, window = 5, 60
+
+        count = await redis.incr(key)
+        if count == 1:
+            await redis.expire(key, window)
+        return count <= limit
+
+    async def _push_presenter_surface(
+        self,
+        spec,
+        user_id: str,
+        workspace_id: str,
+        run_id: str | None = None,
+        response_text: str = "",
+    ) -> str | None:
+        """Push a Presenter-specified surface to the workspace.
+
+        Builds WorkspaceSurfacePush from a SurfaceSpec produced by the Presenter agent.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        from ulid import ULID
+
+        from src.orchestrator.contracts import WorkspaceSurfacePush
+        from src.services.surface_mapping import extract_surface_data
+        from src.ui.contracts import SurfaceMetric, SurfacePreview
+        from src.ui.renderer import build_detail_config
+
+        if not await self._check_surface_rate(user_id, "workspace"):
+            logger.debug("Presenter surface rate-limited for user %s", user_id)
+            return None
+
+        try:
+            event_bus = await self._ensure_event_bus()
+            if not event_bus:
+                return None
+
+            surface_id = f"surf_{ULID()}"
+            preview = SurfacePreview(
+                title=spec.title,
+                subtitle=spec.subtitle,
+                status=spec.status,
+                priority=spec.priority,
+                metrics=[SurfaceMetric(**m) for m in spec.metrics] if spec.metrics else [],
+                tags=spec.tags or [],
+            )
+            detail_config = build_detail_config(spec.kind, surface_id)
+
+            surface = WorkspaceSurfacePush(
+                id=surface_id,
+                kind=spec.kind,
+                preview=preview.model_dump(mode="json"),
+                detail_config=(detail_config.model_dump(mode="json") if detail_config else None),
+                source_run_id=run_id,
+                response_preview=(response_text[:300] if response_text else None),
+                created_at=datetime.now(timezone.utc).isoformat(),
+            )
+
+            channel = f"jarvis:a2ui:{user_id}"
+            ws_msg = json.dumps({"type": "surface", "surface": surface.model_dump(mode="json")})
+            await event_bus.publish_to_channel(channel, ws_msg)
+
+            # Persist to DB
+            try:
+                from src.models.ui_state import UISurface
+
+                surface_data = extract_surface_data(response_text)
+
+                async with self._db_factory() as db:
+                    payload = surface.model_dump(mode="json")
+                    if surface_data:
+                        payload["surface_data"] = surface_data
+
+                    db.add(
+                        UISurface(
+                            surface_id=surface.id,
+                            user_id=user_id,
+                            workspace_id=workspace_id,
+                            surface_type=spec.kind,
+                            payload=payload,
+                            preview=preview.model_dump(mode="json"),
+                            detail_config=(
+                                detail_config.model_dump(mode="json") if detail_config else None
+                            ),
+                            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+                        )
+                    )
+                    await db.commit()
+            except Exception:
+                logger.debug("Failed to persist presenter surface", exc_info=True)
+
+            return surface_id
+        except Exception:
+            logger.warning("Failed to push presenter surface", exc_info=True)
+            return None
+
     async def _push_workspace_surface(
         self,
         plan: "PlanOutput",
@@ -2120,8 +2201,12 @@ class JarvisOrchestrator:
         from src.orchestrator.contracts import WorkspaceSurfacePush
         from src.ui.renderer import build_detail_config
 
-        mapping = _derive_surface_kind(plan)
+        mapping = derive_surface_kind(plan)
         if not mapping:
+            return None
+
+        if not await self._check_surface_rate(user_id, "workspace"):
+            logger.debug("Surface push rate-limited for user %s", user_id)
             return None
 
         kind, default_title = mapping
@@ -2134,7 +2219,7 @@ class JarvisOrchestrator:
             from ulid import ULID
 
             surface_id = f"surf_{ULID()}"
-            preview = _build_surface_preview_from_plan(plan, kind, default_title, response_text)
+            preview = build_surface_preview_from_plan(plan, kind, default_title, response_text)
             detail_config = build_detail_config(kind, surface_id)
 
             surface = WorkspaceSurfacePush(
@@ -2216,6 +2301,10 @@ class JarvisOrchestrator:
             if not event_bus:
                 return
 
+            if not await self._check_surface_rate(user_id, "insight"):
+                logger.debug("Insight surface rate-limited for user %s", user_id)
+                return
+
             surface_id = f"surf_{ULID()}"
 
             suggested_actions = [
@@ -2223,6 +2312,7 @@ class JarvisOrchestrator:
                     description=a.description,
                     capability=a.capability,
                     action_input=a.action_input,
+                    action_preview=_build_action_preview(a.capability, a.description),
                 )
                 for a in assessment.suggested_actions
             ]
@@ -2289,7 +2379,7 @@ class JarvisOrchestrator:
         self,
         conversation_id: str | None,
         max_messages: int = 20,
-        max_chars: int = 8000,
+        max_chars: int = 20000,
         user_id: str = "",
     ) -> str:
         """Load recent conversation history from DB for multi-turn context.
@@ -2325,7 +2415,7 @@ class JarvisOrchestrator:
             total = 0
             for role, content, meta in history:
                 label = "User" if role == "user" else "Assistant"
-                snippet = content[:1000] if len(content) > 1000 else content
+                snippet = content
                 # B4: Annotate with decision type for execution context
                 decision_tag = ""
                 if meta and isinstance(meta, dict):
@@ -2379,7 +2469,7 @@ class JarvisOrchestrator:
             else:
                 model = MODEL_TIERS["haiku"]
 
-            text = "\n".join(lines)[:4000]
+            text = "\n".join(lines)
             response = await self._client.messages.create(
                 model=model,
                 max_tokens=300,
@@ -2419,7 +2509,7 @@ class JarvisOrchestrator:
                                     "conversation_id": conversation_id,
                                     "workspace_id": "",
                                     "message_count": len(lines),
-                                    "summary": summary[:500],
+                                    "summary": summary,
                                     "created_at": datetime.now(timezone.utc).isoformat(),
                                 },
                                 user_id=user_id,
@@ -2435,7 +2525,7 @@ class JarvisOrchestrator:
         except Exception:
             logger.debug("History summarization failed", exc_info=True)
             # Fallback: just truncate
-            return "\n".join(lines)[:500] + "..."
+            return "\n".join(lines)
 
     async def _assemble_context(
         self, agent_name: str, message: str, user_id: str, workspace_id: str = ""
@@ -2448,6 +2538,13 @@ class JarvisOrchestrator:
         """
         if agent_name not in CONTEXT_ENRICHED_AGENTS:
             return ""
+
+        sections: list[str] = []
+
+        # Load integration identity context (GitHub username, Google email, etc.)
+        integration_ctx = await self._load_integration_context(user_id, workspace_id)
+        if integration_ctx:
+            sections.append(integration_ctx)
 
         try:
             svc = self._services
@@ -2463,15 +2560,63 @@ class JarvisOrchestrator:
                 )
                 pack: ContextPack = await builder.build(
                     user_id=user_id,
-                    query=message[:500],
+                    query=message,
                     workspace_id=workspace_id,
                 )
                 context_text = ContextBuilder.to_prompt(pack)
                 if context_text:
-                    return f"\n\n--- CONTEXT ---\n{context_text}"
+                    sections.append(context_text)
         except Exception:
             logger.debug("Context assembly via ContextBuilder failed", exc_info=True)
 
+        if sections:
+            return "\n\n--- CONTEXT ---\n" + "\n\n".join(sections)
+        return ""
+
+    async def _load_integration_context(self, user_id: str, workspace_id: str) -> str:
+        """Load connected integration identities for agent context.
+
+        Returns a compact text block with provider-specific identity info
+        (e.g., GitHub username/orgs, Google email) so agents can fill in
+        required tool parameters like 'owner'.
+        """
+        try:
+            from sqlalchemy import select
+
+            from src.models.integration_installation import IntegrationInstallation
+
+            async with self._db_factory() as db:
+                result = await db.execute(
+                    select(IntegrationInstallation).where(
+                        IntegrationInstallation.workspace_id == workspace_id,
+                        IntegrationInstallation.status == "active",
+                        IntegrationInstallation.enabled.is_(True),
+                        IntegrationInstallation.config.isnot(None),
+                    )
+                )
+                installations = result.scalars().all()
+
+            lines: list[str] = []
+            for inst in installations:
+                config = inst.config or {}
+                if not config:
+                    continue
+
+                if inst.server_name == "github" and config.get("username"):
+                    line = f"- GitHub: username={config['username']}"
+                    if config.get("organizations"):
+                        line += f", orgs=[{', '.join(config['organizations'])}]"
+                    lines.append(line)
+                elif config.get("account_email"):
+                    label = inst.display_name or inst.server_name
+                    lines.append(f"- {label}: {config['account_email']}")
+
+            if lines:
+                return "Connected integrations (use these for tool parameters):\n" + "\n".join(
+                    lines
+                )
+        except Exception:
+            logger.debug("Integration context load failed", exc_info=True)
         return ""
 
     async def _apply_perception_policy_from_planner(
@@ -2939,9 +3084,10 @@ class JarvisOrchestrator:
         elif cap == "system.add_to_brief":
             result = await self._handle_add_to_brief(goal_text, user_id, workspace_id)
 
-        # Audit: record as completed PlanTask
+        # Audit: record as completed PlanTask + InteractionLog
         if plan.plan_id:
             try:
+                from src.models.interaction_log import InteractionLog
                 from src.models.plans import PlanTask
 
                 async with self._db_factory() as db:
@@ -2953,6 +3099,17 @@ class JarvisOrchestrator:
                             task_type=cap,
                             input_data=step.input or {"description": step.description},
                             status="completed",
+                        )
+                    )
+                    db.add(
+                        InteractionLog(
+                            interaction_id=f"ilog_{ULID()}",
+                            user_id=user_id,
+                            workspace_id=workspace_id,
+                            interaction_type=cap,
+                            user_message=step.description[:500],
+                            assistant_response=str(result)[:500] if result else "completed",
+                            metadata_={"plan_step": step.step_id, "actor": "system"},
                         )
                     )
                     await db.commit()

@@ -13,7 +13,7 @@ export function A2UIMetric({ component }: Props) {
   const trendColor = trend === "up" ? "text-j-success" : trend === "down" ? "text-j-error" : "text-t-tertiary";
 
   return (
-    <div className="rounded-lg border border-b-primary bg-surface-1 p-3 min-w-[120px]">
+    <div className="rounded-[var(--radius-lg)] border border-b-primary bg-surface-1 p-3 min-w-[120px]">
       <p className="text-xs text-t-tertiary mb-1">{label}</p>
       <p className="text-xl font-semibold text-t-primary">{String(value)}</p>
       {change && (

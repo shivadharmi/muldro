@@ -234,9 +234,12 @@ async def approve_action(
     except Exception:
         logger.debug("Failed to publish approval.approved event", exc_info=True)
 
-    # Resume the run (either step-level approval gate or plan-level)
+    # Queue the run for scheduler pickup instead of executing synchronously.
+    # The scheduler has full agent loop dependencies (db_factory, execute_tool_fn,
+    # budget) that are not available in the API route context. Tagging the run
+    # with source="approval_resume" signals the scheduler to resume it via
+    # resume_run() on the next tick (≤30s).
     if approval.run_id:
-        executor = await create_graph_executor(settings=settings, db=db, workspace_id=workspace_id)
         try:
             step_result = await db.execute(
                 select(TaskStep)
@@ -249,24 +252,43 @@ async def approve_action(
             step = step_result.scalar_one_or_none()
             if step and step.status == "waiting_approval":
                 transition_step(step, "running")
-                await db.flush()
-            await executor.resume_run(approval.run_id)
+
+            # Re-fetch run after the earlier commit may have expired it
+            run_result2 = await db.execute(
+                select(TaskRun).where(TaskRun.run_id == approval.run_id).with_for_update()
+            )
+            run_for_resume = run_result2.scalar_one_or_none()
+            if run_for_resume:
+                run_for_resume.source = "approval_resume"
+            await db.commit()
+            logger.info(
+                "Step-level approval queued for scheduler: run=%s step=%s",
+                approval.run_id,
+                approval.step_id,
+            )
         except Exception as exc:
-            logger.exception("Resume failed after approval: %s", approval.run_id)
+            logger.exception("Failed to queue run for resume: %s", approval.run_id)
             await _mark_run_failed_after_resume(db, approval.run_id, exc)
     elif run and run.plan_id:
-        # Plan-level approval: trigger execution via GraphExecutor directly
+        # Plan-level approval: tag for scheduler pickup
         try:
-            executor = await create_graph_executor(
-                settings=settings, db=db, workspace_id=workspace_id
+            run_result2 = await db.execute(
+                select(TaskRun).where(TaskRun.run_id == run.run_id).with_for_update()
             )
-            await executor.execute_run(run.run_id)
+            run_for_resume = run_result2.scalar_one_or_none()
+            if run_for_resume:
+                run_for_resume.source = "approval_resume"
+            await db.commit()
+            logger.info(
+                "Plan-level approval queued for scheduler: run=%s",
+                run.run_id,
+            )
         except Exception as exc:
-            logger.exception("Execution failed after approval: %s", run.run_id)
+            logger.exception("Failed to queue plan-level run: %s", run.run_id)
             await _mark_run_failed_after_resume(db, run.run_id, exc)
     elif approval.artifact_refs and approval.artifact_refs.get("tool_name"):
-        # B1: Tool-level approval resume — create a background TaskRun to
-        # re-execute the approved tool with the original parameters.
+        # Tool-level approval resume — create a background TaskRun.
+        # The scheduler picks up source="approval_resume" runs with full deps.
         try:
             from src.models.plans import PlanTask
 
@@ -307,21 +329,15 @@ async def approve_action(
             db.add(bg_run)
             await db.flush()
 
-            # Populate steps and execute immediately (user just approved)
+            # Populate steps so the scheduler can execute immediately
             executor = await create_graph_executor(
                 settings=settings, db=db, workspace_id=workspace_id
             )
             await executor.populate_run_steps(bg_run.run_id, plan_id)
             await db.commit()
 
-            try:
-                await executor.execute_run(bg_run.run_id)
-            except Exception as exc:
-                logger.exception("Execution failed for tool-level resume run: %s", bg_run.run_id)
-                await _mark_run_failed_after_resume(db, bg_run.run_id, exc)
-
             logger.info(
-                "Tool-level approval resumed: %s → run %s",
+                "Tool-level approval queued for scheduler: %s → run %s",
                 approval.approval_id,
                 bg_run.run_id,
             )
@@ -330,8 +346,6 @@ async def approve_action(
                 "Failed to create resume run for tool approval: %s",
                 approval.approval_id,
             )
-            # bg_run may not have been created/flushed yet — NameError
-            # or missing DB row is caught by _mark_run_failed_after_resume.
             try:
                 _bg_run_id = bg_run.run_id  # type: ignore[possibly-undefined]
             except NameError:

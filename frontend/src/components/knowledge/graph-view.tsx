@@ -11,6 +11,7 @@ import {
 
 import type { KnowledgeGraphNode, KnowledgeGraphEdge } from "@/lib/api";
 import { useKnowledgeStore } from "@/stores/knowledge-store";
+import { EmptyState } from "@/components/ui/empty-state";
 import { GraphContextMenu } from "./graph-context-menu";
 
 // ── Dynamic import (SSR-safe) ─────────────────────────────────
@@ -20,24 +21,35 @@ const ForceGraph2D = dynamic(() => import("react-force-graph-2d"), {
   ssr: false,
 });
 
+// ── CSS variable resolver (Canvas cannot use var()) ───────────
+
+function resolveCssVar(varExpr: string): string {
+  if (typeof window === "undefined") return "#888";
+  return (
+    getComputedStyle(document.documentElement)
+      .getPropertyValue(varExpr.replace("var(", "").replace(")", ""))
+      .trim() || "#888"
+  );
+}
+
 // ── Entity type colors ────────────────────────────────────────
 
 const ENTITY_TYPE_COLORS: Record<string, string> = {
-  person: "hsl(193, 100%, 66%)",
-  organization: "hsl(247, 92%, 74%)",
-  project: "hsl(159, 78%, 54%)",
-  document: "hsl(36, 100%, 64%)",
-  repository: "hsl(351, 100%, 71%)",
+  person: "var(--jarvis-primary)",
+  organization: "var(--jarvis-secondary)",
+  project: "var(--jarvis-accent)",
+  document: "var(--jarvis-warning)",
+  repository: "var(--jarvis-error)",
 };
 
-const DEFAULT_NODE_COLOR = "hsl(214, 16%, 58%)";
-const SELECTED_GLOW_COLOR = "hsla(193, 100%, 66%, 0.4)";
+const DEFAULT_NODE_COLOR = "var(--jarvis-text-muted)";
+const SELECTED_GLOW_COLOR_VAR = "var(--jarvis-primary)";
 const LINK_DEFAULT_COLOR = "rgba(120, 130, 150, 0.3)";
-const LINK_HIGHLIGHT_COLOR = "hsl(193, 100%, 66%)";
+const LINK_HIGHLIGHT_COLOR = "var(--jarvis-primary)";
 const LABEL_COLOR = "rgba(200, 210, 220, 0.9)";
 
 function getNodeColor(type: string): string {
-  return ENTITY_TYPE_COLORS[type.toLowerCase()] ?? DEFAULT_NODE_COLOR;
+  return resolveCssVar(ENTITY_TYPE_COLORS[type.toLowerCase()] ?? DEFAULT_NODE_COLOR);
 }
 
 function getNodeRadius(importanceScore: number): number {
@@ -163,7 +175,8 @@ export function GraphView() {
       if (isSelected) {
         ctx.beginPath();
         ctx.arc(x, y, radius + 3, 0, 2 * Math.PI);
-        ctx.fillStyle = SELECTED_GLOW_COLOR;
+        const glowColor = resolveCssVar(SELECTED_GLOW_COLOR_VAR);
+        ctx.fillStyle = glowColor + "66"; // ~40% alpha
         ctx.fill();
       }
 
@@ -262,7 +275,7 @@ export function GraphView() {
       const targetId =
         typeof link.target === "object" ? link.target.id : link.target;
       return sourceId === selectedEntityId || targetId === selectedEntityId
-        ? LINK_HIGHLIGHT_COLOR
+        ? resolveCssVar(LINK_HIGHLIGHT_COLOR)
         : LINK_DEFAULT_COLOR;
     },
     [selectedEntityId],
@@ -371,12 +384,10 @@ export function GraphView() {
       {/* Empty state */}
       {transformedData.nodes.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <div className="text-center">
-            <p className="text-sm text-t-tertiary">No entities to display</p>
-            <p className="text-xs text-t-muted mt-1">
-              Entities will appear as Jarvis processes your data
-            </p>
-          </div>
+          <EmptyState
+            title="No graph data"
+            description="Connect sources and interact with Jarvis to build the knowledge graph"
+          />
         </div>
       )}
     </div>

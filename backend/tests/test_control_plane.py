@@ -73,7 +73,7 @@ class TestSeedInstallations:
     def test_default_installations_count(self):
         from src.integrations.seed_installations import _DEFAULT_INSTALLATIONS
 
-        assert len(_DEFAULT_INSTALLATIONS) == 9
+        assert len(_DEFAULT_INSTALLATIONS) == 7
 
     def test_all_installations_have_required_fields(self):
         from src.integrations.seed_installations import _DEFAULT_INSTALLATIONS

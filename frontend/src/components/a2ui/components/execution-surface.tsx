@@ -2,6 +2,7 @@
 
 import type { A2UIComponent } from "@/lib/a2ui-types";
 import type { ExecutionPhase, StepState, ApprovalContext, ResultSummary } from "@/lib/a2ui-types";
+import { phaseTextColor } from "@/lib/design-tokens";
 import { StepList } from "./step-list";
 import { InlineApprovalCard } from "./inline-approval";
 
@@ -22,14 +23,14 @@ function getExecutionProps(properties: Record<string, unknown>) {
   };
 }
 
-const phaseLabel: Record<string, { text: string; className: string }> = {
-  planning: { text: "Planning", className: "text-blue-400" },
-  plan_ready: { text: "Plan Ready", className: "text-blue-400" },
-  executing: { text: "Executing", className: "text-blue-400" },
-  approval_needed: { text: "Approval Needed", className: "text-amber-400" },
-  completed: { text: "Completed", className: "text-green-400" },
-  failed: { text: "Failed", className: "text-red-400" },
-  partial: { text: "Partially Completed", className: "text-amber-400" },
+const phaseLabel: Record<string, string> = {
+  planning: "Planning",
+  plan_ready: "Plan Ready",
+  executing: "Executing",
+  approval_needed: "Approval Needed",
+  completed: "Completed",
+  failed: "Failed",
+  partial: "Partially Completed",
 };
 
 export function A2UIExecutionSurface({ component }: Props) {
@@ -39,44 +40,55 @@ export function A2UIExecutionSurface({ component }: Props) {
   const completedCount = steps.filter((s) => s.status === "completed").length;
   const totalCount = steps.length;
   const progressPct = totalCount > 0 ? completedCount / totalCount : 0;
-  const label = phaseLabel[phase] ?? phaseLabel.planning;
+  const labelText = phaseLabel[phase] ?? "Planning";
+  const { className: phaseClass } = phaseTextColor(phase);
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium text-t-primary">{goal}</h3>
-        <span className={`text-xs font-medium ${label.className}`}>{label.text}</span>
+        <h3 className="text-sm font-semibold text-t-primary">{goal}</h3>
+        <span className={`text-xs font-medium transition-colors duration-200 ${phaseClass}`}>{labelText}</span>
       </div>
 
       {/* Planning spinner */}
       {phase === "planning" && (
-        <div className="flex items-center gap-2 py-4 justify-center">
-          <div className="w-4 h-4 border-2 border-blue-400/30 border-t-blue-400 rounded-full animate-spin" />
+        <div className="animate-fade-in flex flex-col items-center gap-2 py-6">
+          <div className="w-4 h-4 border-2 border-j-info/30 border-t-j-info rounded-full animate-spin" />
           <span className="text-xs text-t-tertiary">Analyzing and building plan...</span>
+          <span className="text-[11px] text-t-muted">This usually takes a few seconds</span>
         </div>
       )}
 
       {/* Step list (shown for all phases except planning) */}
       {phase !== "planning" && steps.length > 0 && (
-        <StepList steps={steps} currentStep={currentStep} />
+        <div key={`steps-${phase}`} className="animate-slide-in-up">
+          <StepList steps={steps} currentStep={currentStep} triggeringStepId={approval?.triggering_step_id ?? null} />
+        </div>
       )}
 
       {/* Inline approval card */}
       {phase === "approval_needed" && approval && (
-        <InlineApprovalCard approval={approval} />
+        <>
+          {approval.triggering_step_id && (
+            <div className="ml-5 w-px h-2 bg-j-warning/30" />
+          )}
+          <div className="animate-slide-in-up">
+            <InlineApprovalCard approval={approval} />
+          </div>
+        </>
       )}
 
       {/* Results summary */}
       {phase === "completed" && results && (
-        <div className="space-y-2 rounded-lg bg-green-500/5 border border-green-500/20 p-3">
+        <div className="animate-fade-in rounded-[var(--radius-lg)] bg-j-success-soft border border-j-success/20 p-4">
           {results.key_findings.length > 0 && (
             <div>
-              <p className="text-xs font-medium text-t-secondary mb-1">Key Findings</p>
-              <ul className="space-y-0.5">
+              <p className="text-[11px] font-semibold text-t-muted uppercase tracking-wider mb-2">Key Findings</p>
+              <ul className="space-y-1">
                 {results.key_findings.map((f, i) => (
                   <li key={i} className="text-xs text-t-tertiary flex items-start gap-1.5">
-                    <span className="text-green-400 shrink-0">-</span>
+                    <span className="text-j-success shrink-0">-</span>
                     {f}
                   </li>
                 ))}
@@ -84,11 +96,11 @@ export function A2UIExecutionSurface({ component }: Props) {
             </div>
           )}
           {results.artifacts_created.length > 0 && (
-            <div>
-              <p className="text-xs font-medium text-t-secondary mb-1">Artifacts</p>
-              <div className="flex flex-wrap gap-1">
+            <div className={results.key_findings.length > 0 ? "border-t border-b-secondary pt-3 mt-3" : ""}>
+              <p className="text-[11px] font-semibold text-t-muted uppercase tracking-wider mb-2">Artifacts</p>
+              <div className="flex flex-wrap gap-1.5">
                 {results.artifacts_created.map((a, i) => (
-                  <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-surface-2 text-t-secondary">
+                  <span key={i} className="text-[11px] px-2 py-1 rounded-[var(--radius-md)] bg-surface-2 text-t-secondary">
                     {a}
                   </span>
                 ))}
@@ -96,12 +108,12 @@ export function A2UIExecutionSurface({ component }: Props) {
             </div>
           )}
           {results.suggested_next.length > 0 && (
-            <div>
-              <p className="text-xs font-medium text-t-secondary mb-1">Suggested Next</p>
-              <ul className="space-y-0.5">
+            <div className={results.key_findings.length > 0 || results.artifacts_created.length > 0 ? "border-t border-b-secondary pt-3 mt-3" : ""}>
+              <p className="text-[11px] font-semibold text-t-muted uppercase tracking-wider mb-2">Suggested Next</p>
+              <ul className="space-y-1">
                 {results.suggested_next.map((s, i) => (
                   <li key={i} className="text-xs text-t-tertiary flex items-start gap-1.5">
-                    <span className="text-blue-400 shrink-0">→</span>
+                    <span className="text-j-info shrink-0">&rarr;</span>
                     {s}
                   </li>
                 ))}
@@ -111,16 +123,21 @@ export function A2UIExecutionSurface({ component }: Props) {
         </div>
       )}
 
-      {/* Failure context */}
+      {/* Failure context — show full step list for context, then error box */}
       {phase === "failed" && (
-        <div className="rounded-lg bg-red-500/5 border border-red-500/20 p-3">
-          <p className="text-xs font-medium text-red-400 mb-1">Execution Failed</p>
-          {steps.filter((s) => s.status === "failed").map((s) => (
-            <p key={s.step_id} className="text-xs text-t-tertiary">
-              <span className="text-red-400">✗</span> {s.description}
-              {s.output_summary && `: ${s.output_summary}`}
-            </p>
-          ))}
+        <div className="animate-fade-in">
+          {steps.length > 0 && (
+            <StepList steps={steps} currentStep={currentStep} triggeringStepId={approval?.triggering_step_id ?? null} />
+          )}
+          <div className="rounded-[var(--radius-lg)] bg-j-error-soft border border-j-error/20 p-4">
+            <p className="text-sm font-semibold text-j-error mb-2">Execution Failed</p>
+            {steps.filter((s) => s.status === "failed").map((s) => (
+              <p key={s.step_id} className="text-xs text-t-secondary">
+                <span className="text-j-error">&#10007;</span> {s.description}
+                {s.output_summary && `: ${s.output_summary}`}
+              </p>
+            ))}
+          </div>
         </div>
       )}
 
@@ -130,13 +147,13 @@ export function A2UIExecutionSurface({ component }: Props) {
           <div className="w-full h-1.5 bg-surface-2 rounded-full">
             <div
               className={`h-full rounded-full transition-all ${
-                phase === "failed" ? "bg-red-500" : phase === "completed" ? "bg-green-500" : "bg-blue-500"
+                phase === "failed" ? "bg-j-error" : phase === "completed" ? "bg-j-success" : "bg-j-info"
               }`}
               style={{ width: `${Math.min(progressPct * 100, 100)}%` }}
             />
           </div>
           {progress && (
-            <p className="text-[10px] text-t-tertiary">{progress}</p>
+            <p className="text-[11px] text-t-tertiary">{progress}</p>
           )}
         </div>
       )}

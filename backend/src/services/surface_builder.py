@@ -1,12 +1,11 @@
 """Unified surface builder — converts DB state into workspace surfaces.
 
-Returns WorkspaceSurfaceData dicts with preview + detail_config for
+Returns WorkspaceSurfacePush models with preview + detail_config for
 the two-layer surface model. No legacy A2UISurface children.
 """
 
 import logging
 from datetime import date, datetime, timedelta, timezone
-from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +15,8 @@ from src.models.briefings import Briefing
 from src.models.task_graph import TaskRun, TaskStep
 from src.models.trust_state import TrustState
 from src.models.ui_state import UISurface
+from src.orchestrator.contracts import WorkspaceSurfacePush
+from src.services.surface_mapping import apply_surface_cap
 from src.ui.contracts import SurfaceMetric, SurfacePreview
 from src.ui.renderer import build_detail_config
 
@@ -29,13 +30,13 @@ class SurfaceService:
         self._db = db
         self._workspace_id = workspace_id
 
-    async def build_workspace_surfaces(self, user_id: str) -> list[dict[str, Any]]:
+    async def build_workspace_surfaces(self, user_id: str) -> list[WorkspaceSurfacePush]:
         """Build all workspace surfaces for the current user.
 
-        Returns a priority-ordered list of surface dicts, each with:
+        Returns a priority-ordered list of WorkspaceSurfacePush models, each with:
         id, kind, preview, detail_config, created_at, etc.
         """
-        surfaces: list[dict[str, Any]] = []
+        surfaces: list[WorkspaceSurfacePush] = []
 
         surfaces.extend(await self._build_approval_surfaces(user_id))
         surfaces.extend(await self._build_active_execution_surfaces())
@@ -49,9 +50,9 @@ class SurfaceService:
         surfaces.extend(await self._build_recommendation_surfaces())
         surfaces.extend(await self._load_persisted_surfaces(user_id))
 
-        return surfaces
+        return apply_surface_cap(surfaces)
 
-    async def _build_approval_surfaces(self, user_id: str) -> list[dict[str, Any]]:
+    async def _build_approval_surfaces(self, user_id: str) -> list[WorkspaceSurfacePush]:
         result = await self._db.execute(
             select(Approval)
             .where(
@@ -62,7 +63,7 @@ class SurfaceService:
             .limit(10)
         )
         approvals = result.scalars().all()
-        surfaces: list[dict[str, Any]] = []
+        surfaces: list[WorkspaceSurfacePush] = []
 
         for apr in approvals:
             surface_id = f"approval_{apr.approval_id}"
@@ -93,16 +94,16 @@ class SurfaceService:
             detail_config = build_detail_config("approval", surface_id)
 
             surfaces.append(
-                {
-                    "id": surface_id,
-                    "kind": "approval",
-                    "preview": preview.model_dump(mode="json"),
-                    "detail_config": (
+                WorkspaceSurfacePush(
+                    id=surface_id,
+                    kind="approval",
+                    preview=preview.model_dump(mode="json"),
+                    detail_config=(
                         detail_config.model_dump(mode="json") if detail_config else None
                     ),
-                    "created_at": apr.created_at.isoformat() if apr.created_at else None,
-                    "trust_context": trust_context,
-                }
+                    created_at=apr.created_at.isoformat() if apr.created_at else "",
+                    trust_context=trust_context,
+                )
             )
 
         return surfaces
@@ -159,7 +160,7 @@ class SurfaceService:
             "variant": "success" if level in ("trusted", "autonomous") else "default",
         }
 
-    async def _build_briefing_surface(self, user_id: str) -> dict[str, Any] | None:
+    async def _build_briefing_surface(self, user_id: str) -> WorkspaceSurfacePush | None:
         today = date.today()
         result = await self._db.execute(
             select(Briefing).where(
@@ -192,15 +193,15 @@ class SurfaceService:
         )
         detail_config = build_detail_config("briefing", surface_id)
 
-        return {
-            "id": surface_id,
-            "kind": "briefing",
-            "preview": preview.model_dump(mode="json"),
-            "detail_config": detail_config.model_dump(mode="json") if detail_config else None,
-            "created_at": briefing.created_at.isoformat() if briefing.created_at else None,
-        }
+        return WorkspaceSurfacePush(
+            id=surface_id,
+            kind="briefing",
+            preview=preview.model_dump(mode="json"),
+            detail_config=detail_config.model_dump(mode="json") if detail_config else None,
+            created_at=briefing.created_at.isoformat() if briefing.created_at else "",
+        )
 
-    async def _build_priority_surfaces(self) -> list[dict[str, Any]]:
+    async def _build_priority_surfaces(self) -> list[WorkspaceSurfacePush]:
         result = await self._db.execute(
             select(TaskRun)
             .where(
@@ -211,7 +212,7 @@ class SurfaceService:
             .limit(5)
         )
         runs = result.scalars().all()
-        surfaces: list[dict[str, Any]] = []
+        surfaces: list[WorkspaceSurfacePush] = []
 
         for run in runs:
             short_id = run.run_id[:16]
@@ -227,20 +228,20 @@ class SurfaceService:
             detail_config = build_detail_config("alert", surface_id)
 
             surfaces.append(
-                {
-                    "id": surface_id,
-                    "kind": "alert",
-                    "preview": preview.model_dump(mode="json"),
-                    "detail_config": (
+                WorkspaceSurfacePush(
+                    id=surface_id,
+                    kind="alert",
+                    preview=preview.model_dump(mode="json"),
+                    detail_config=(
                         detail_config.model_dump(mode="json") if detail_config else None
                     ),
-                    "created_at": run.created_at.isoformat() if run.created_at else None,
-                }
+                    created_at=run.created_at.isoformat() if run.created_at else "",
+                )
             )
 
         return surfaces
 
-    async def _build_active_execution_surfaces(self) -> list[dict[str, Any]]:
+    async def _build_active_execution_surfaces(self) -> list[WorkspaceSurfacePush]:
         """Build surfaces for actively executing TaskRuns.
 
         Includes runs with status in (running, paused). These appear
@@ -257,7 +258,7 @@ class SurfaceService:
             .limit(5)
         )
         runs = result.scalars().all()
-        surfaces: list[dict[str, Any]] = []
+        surfaces: list[WorkspaceSurfacePush] = []
 
         for run in runs:
             step_result = await self._db.execute(
@@ -293,23 +294,23 @@ class SurfaceService:
             detail_config = build_detail_config("plan", surface_id)
 
             surfaces.append(
-                {
-                    "id": surface_id,
-                    "kind": "plan",
-                    "preview": preview.model_dump(mode="json"),
-                    "detail_config": (
+                WorkspaceSurfacePush(
+                    id=surface_id,
+                    kind="plan",
+                    preview=preview.model_dump(mode="json"),
+                    detail_config=(
                         detail_config.model_dump(mode="json") if detail_config else None
                     ),
-                    "source_run_id": run.run_id,
-                    "created_at": (
+                    source_run_id=run.run_id,
+                    created_at=(
                         run.started_at.isoformat() if run.started_at else run.created_at.isoformat()
                     ),
-                }
+                )
             )
 
         return surfaces
 
-    async def _build_recommendation_surfaces(self) -> list[dict[str, Any]]:
+    async def _build_recommendation_surfaces(self) -> list[WorkspaceSurfacePush]:
         actions: list[dict] = []
         cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
 
@@ -355,7 +356,7 @@ class SurfaceService:
         except Exception:
             logger.debug("Failed to check observation status", exc_info=True)
 
-        surfaces: list[dict[str, Any]] = []
+        surfaces: list[WorkspaceSurfacePush] = []
         for i, action in enumerate(actions[:3]):
             surface_id = f"rec_{i}"
             priority = action.get("priority", "medium")
@@ -369,19 +370,19 @@ class SurfaceService:
             detail_config = build_detail_config("recommendation", surface_id)
 
             surfaces.append(
-                {
-                    "id": surface_id,
-                    "kind": "recommendation",
-                    "preview": preview.model_dump(mode="json"),
-                    "detail_config": (
+                WorkspaceSurfacePush(
+                    id=surface_id,
+                    kind="recommendation",
+                    preview=preview.model_dump(mode="json"),
+                    detail_config=(
                         detail_config.model_dump(mode="json") if detail_config else None
                     ),
-                }
+                )
             )
 
         return surfaces
 
-    async def _build_insight_surfaces(self, user_id: str) -> list[dict[str, Any]]:
+    async def _build_insight_surfaces(self, user_id: str) -> list[WorkspaceSurfacePush]:
         """Load persisted proactive insight surfaces that haven't expired."""
         now = datetime.now(timezone.utc)
         result = await self._db.execute(
@@ -396,7 +397,7 @@ class SurfaceService:
             .limit(10)
         )
         rows = result.scalars().all()
-        surfaces: list[dict[str, Any]] = []
+        surfaces: list[WorkspaceSurfacePush] = []
 
         for db_row in rows:
             try:
@@ -406,16 +407,14 @@ class SurfaceService:
                     continue
 
                 surfaces.append(
-                    {
-                        "id": payload.get("id", db_row.surface_id),
-                        "kind": "proactive_insight",
-                        "preview": preview_data,
-                        "detail_config": None,
-                        "insight_data": payload.get("insight_data"),
-                        "created_at": (
-                            db_row.created_at.isoformat() if db_row.created_at else None
-                        ),
-                    }
+                    WorkspaceSurfacePush(
+                        id=payload.get("id", db_row.surface_id),
+                        kind="proactive_insight",
+                        preview=preview_data,
+                        detail_config=None,
+                        insight_data=payload.get("insight_data"),
+                        created_at=(db_row.created_at.isoformat() if db_row.created_at else ""),
+                    )
                 )
             except Exception:
                 logger.debug(
@@ -426,7 +425,7 @@ class SurfaceService:
 
         return surfaces
 
-    async def _load_persisted_surfaces(self, user_id: str) -> list[dict[str, Any]]:
+    async def _load_persisted_surfaces(self, user_id: str) -> list[WorkspaceSurfacePush]:
         """Load non-expired persisted surfaces from ui_surfaces table."""
         now = datetime.now(timezone.utc)
         result = await self._db.execute(
@@ -441,7 +440,7 @@ class SurfaceService:
             .limit(20)
         )
         rows = result.scalars().all()
-        surfaces: list[dict[str, Any]] = []
+        surfaces: list[WorkspaceSurfacePush] = []
 
         for db_row in rows:
             try:
@@ -450,19 +449,33 @@ class SurfaceService:
                 if not preview_data:
                     continue
 
+                # Forward persisted execution state so REST clients have
+                # phase/steps/approval data without waiting for a WS update.
+                last_update = payload.get("last_surface_update")
+                exec_fields: dict = {}
+                if last_update and isinstance(last_update, dict):
+                    for key in (
+                        "phase",
+                        "steps",
+                        "current_step",
+                        "progress",
+                        "approval",
+                        "results",
+                    ):
+                        if key in last_update:
+                            exec_fields[key] = last_update[key]
+
                 surfaces.append(
-                    {
-                        "id": payload.get("id", db_row.surface_id),
-                        "kind": payload.get("kind", db_row.surface_type),
-                        "preview": preview_data,
-                        "detail_config": db_row.detail_config or payload.get("detail_config"),
-                        "capability": payload.get("capability"),
-                        "source_run_id": payload.get("source_run_id"),
-                        "response_preview": payload.get("response_preview"),
-                        "created_at": (
-                            db_row.created_at.isoformat() if db_row.created_at else None
-                        ),
-                    }
+                    WorkspaceSurfacePush(
+                        id=payload.get("id", db_row.surface_id),
+                        kind=payload.get("kind", db_row.surface_type),
+                        preview=preview_data,
+                        detail_config=db_row.detail_config or payload.get("detail_config"),
+                        source_run_id=payload.get("source_run_id"),
+                        response_preview=payload.get("response_preview"),
+                        created_at=(db_row.created_at.isoformat() if db_row.created_at else ""),
+                        **exec_fields,
+                    )
                 )
             except Exception:
                 logger.debug(

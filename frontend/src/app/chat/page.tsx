@@ -35,7 +35,7 @@ export default function ChatPage() {
     (push: WorkspaceSurfacePush) => {
       addSurface({
         id: push.id,
-        kind: (push.kind as SurfaceKind) || "summary",
+        kind: push.kind || "summary",
         preview: push.preview,
         detail_config: push.detail_config,
         source_run_id: push.source_run_id,
@@ -152,32 +152,42 @@ export default function ChatPage() {
             {/* Command header with mode + connection */}
             <div className="px-4 py-2.5 border-b border-b-secondary flex items-center justify-between shrink-0">
               <div className="flex items-center gap-2">
-                {MODES.map((m) => (
-                  <button
-                    key={m.value}
-                    type="button"
-                    onClick={() => setMode(m.value)}
-                    className={`px-2.5 py-1 text-xs rounded-full transition-colors cursor-pointer ${
-                      mode === m.value
-                        ? "bg-accent-primary text-white"
-                        : "text-t-tertiary hover:text-t-secondary hover:bg-surface-1"
-                    }`}
-                  >
-                    {m.label}
-                  </button>
-                ))}
+                <div className="bg-surface-2 rounded-[var(--radius-lg)] p-1 inline-flex gap-0.5">
+                  {MODES.map((m) => (
+                    <button
+                      key={m.value}
+                      type="button"
+                      onClick={() => setMode(m.value)}
+                      className={`px-3.5 py-1.5 text-[13px] rounded-[var(--radius-md)] transition-all duration-150 cursor-pointer ${
+                        mode === m.value
+                          ? "bg-j-primary text-j-primary-fg font-medium"
+                          : "text-t-muted hover:text-t-secondary"
+                      }`}
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
               </div>
               <div className="flex items-center gap-1.5 text-xs">
                 <span
-                  className={`w-2 h-2 rounded-full ${
+                  className={`w-1.5 h-1.5 rounded-full ${
                     connected ? "bg-j-success" : "bg-j-error"
                   }`}
                 />
-                <span className="text-t-tertiary">
+                <span className="text-t-muted">
                   {connected ? "Connected" : "Offline"}
                 </span>
               </div>
             </div>
+
+            {/* Connection warning */}
+            {!connected && (
+              <div className="px-4 py-2 bg-j-warning-soft border-b border-j-warning/20 flex items-center gap-2 text-xs text-j-warning animate-fade-in">
+                <span className="w-1.5 h-1.5 rounded-full bg-j-warning animate-pulse-live" />
+                Connection lost — reconnecting...
+              </div>
+            )}
 
             {/* Chat panel */}
             <ChatPanel
@@ -191,10 +201,13 @@ export default function ChatPage() {
         }
         surfaces={
           surfaces.length > 0 ? (
-            <div className="p-3 space-y-3">
-              <div className="flex items-center justify-between px-1">
-                <span className="text-xs font-medium text-t-secondary">
-                  Surfaces ({surfaces.length})
+            <div className="p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[13px] font-semibold text-t-secondary">
+                  Surfaces
+                </span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-surface-2 text-t-muted font-medium">
+                  {surfaces.length}
                 </span>
               </div>
 

@@ -2,10 +2,14 @@
 
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import Link from "next/link";
 
 import { fetchKnowledgeMemories } from "@/lib/api";
 import type { KnowledgeMemoryItem } from "@/lib/api";
 import { useKnowledgeStore } from "@/stores/knowledge-store";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Skeleton } from "@/components/ui/skeleton";
+import { FOCUS_RING } from "@/lib/focus-ring";
 import { MemoryRow } from "./memory-row";
 import { MemoryDetailPanel } from "./memory-detail-panel";
 
@@ -42,6 +46,8 @@ export function MemoriesView() {
   const searchQuery = useKnowledgeStore((s) => s.searchQuery);
   const setActiveTab = useKnowledgeStore((s) => s.setActiveTab);
   const selectEntity = useKnowledgeStore((s) => s.selectEntity);
+
+  const [sortOpen, setSortOpen] = useState(false);
 
   // Build a filter key to detect when filters change
   const filterKey = `${memoryTypeFilter}|${memorySortBy}|${searchQuery}`;
@@ -147,22 +153,35 @@ export function MemoriesView() {
           </div>
 
           {/* Sort options */}
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs text-t-muted mr-1">Sort:</span>
-            {SORT_OPTIONS.map((opt) => (
-              <button
-                key={opt.key}
-                type="button"
-                onClick={() => setMemorySortBy(opt.key)}
-                className={`px-3 py-1 rounded-full text-xs cursor-pointer transition-colors ${
-                  memorySortBy === opt.key
-                    ? "bg-j-primary-soft text-j-primary border border-j-primary"
-                    : "border border-b-secondary text-t-tertiary bg-surface-2 hover:text-t-secondary"
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
+          <div className="relative">
+            <button
+              onClick={() => setSortOpen(!sortOpen)}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-[var(--radius-md)] border border-b-secondary hover:bg-surface-2 transition-colors cursor-pointer ${FOCUS_RING}`}
+            >
+              <span className="text-t-muted">Sort:</span>
+              <span className="text-t-primary font-medium capitalize">{memorySortBy}</span>
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="text-t-muted">
+                <path d="M3 4.5l3 3 3-3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+            {sortOpen && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setSortOpen(false)} />
+                <div className="absolute top-full mt-1 right-0 z-20 bg-surface-1 border border-b-secondary rounded-[var(--radius-lg)] shadow-[var(--shadow-md)] py-1 min-w-[140px]">
+                  {SORT_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.key}
+                      onClick={() => { setMemorySortBy(opt.key); setSortOpen(false); }}
+                      className={`w-full text-left px-3 py-1.5 text-xs transition-colors cursor-pointer ${
+                        memorySortBy === opt.key ? "text-j-primary bg-j-primary-soft" : "text-t-secondary hover:bg-surface-2"
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         </div>
 
@@ -173,20 +192,34 @@ export function MemoriesView() {
           className="flex-1 overflow-y-auto"
         >
           {isLoading && allItems.length === 0 ? (
-            <div className="flex items-center justify-center h-32">
-              <p className="text-sm text-t-tertiary">Loading memories...</p>
+            <div className="space-y-2 p-4">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="flex gap-3 py-3">
+                  <Skeleton className="h-4 w-24" />
+                  <Skeleton className="h-4 flex-1" />
+                  <Skeleton className="h-4 w-16" />
+                </div>
+              ))}
             </div>
           ) : allItems.length === 0 ? (
-            <div className="flex items-center justify-center h-32">
-              <div className="text-center">
-                <p className="text-sm text-t-tertiary">No memories found</p>
-                <p className="text-xs text-t-muted mt-1">
-                  {searchQuery
-                    ? "Try a different search term"
-                    : "Memories will appear as Jarvis processes your data"}
-                </p>
-              </div>
-            </div>
+            <EmptyState
+              title="No memories found"
+              description={
+                searchQuery
+                  ? "Try a different search term"
+                  : "Memories will appear as Jarvis learns from interactions"
+              }
+              action={
+                !searchQuery ? (
+                  <Link
+                    href="/chat"
+                    className="inline-flex items-center px-3.5 py-2 text-[13px] font-medium rounded-[var(--radius-md)] bg-j-primary text-j-primary-fg hover:bg-j-primary-hover transition-colors"
+                  >
+                    Start a conversation
+                  </Link>
+                ) : undefined
+              }
+            />
           ) : (
             <>
               {allItems.map((memory) => (
@@ -251,7 +284,7 @@ function FilterChip({
       <button
         type="button"
         onClick={onClick}
-        className={`px-3 py-1 rounded-full text-xs cursor-pointer border transition-colors ${
+        className={`px-3 py-1 rounded-full text-xs cursor-pointer border transition-colors ${FOCUS_RING} ${
           activeBorderClass ?? "border-j-primary"
         } ${activeColorClass ?? "text-j-primary"} ${activeBgClass ?? "bg-j-primary-soft"}`}
       >
@@ -264,7 +297,7 @@ function FilterChip({
     <button
       type="button"
       onClick={onClick}
-      className="border border-b-secondary text-t-tertiary bg-surface-2 px-3 py-1 rounded-full text-xs cursor-pointer hover:text-t-secondary transition-colors"
+      className={`border border-b-secondary text-t-tertiary bg-surface-2 px-3 py-1 rounded-full text-xs cursor-pointer hover:text-t-secondary transition-colors ${FOCUS_RING}`}
     >
       {label}
     </button>

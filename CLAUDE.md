@@ -151,7 +151,7 @@ Multi-step plans trigger GraphExecutor for DAG management (dependencies, checkpo
 
 ## Unified Tool Registry
 
-Tool identity lives in 2 files: `src/tools/catalog.py` (definitions) + `src/tools/intelligence_server.py` (implementations). All tools are served through MCP — no native connectors. 23 internal tools + ~140 external tool seeds.
+Tool identity lives in 2 files: `src/tools/catalog.py` (definitions) + `src/tools/intelligence_server.py` (implementations). All tools are served through MCP — no native connectors. 23 internal tools + ~120 external tool seeds.
 
 **Adding tools:**
 - New internal tool: edit `catalog.py` (add `InternalToolDef`) + `schemas.py` (add Pydantic input model) + `intelligence_server.py` (add MCP function)

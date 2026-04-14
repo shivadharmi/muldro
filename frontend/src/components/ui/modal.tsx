@@ -43,17 +43,17 @@ export function Modal({
       aria-label={title}
     >
       <div
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
         onClick={onClose}
       />
       <div
-        className={`relative bg-surface-1 border border-b-secondary rounded-[var(--radius-xl)] shadow-[var(--shadow-lg)] w-full mx-4 animate-slide-in-up ${widthClass}`}
+        className={`relative bg-surface-1 border border-b-secondary rounded-[var(--radius-xl)] shadow-[var(--shadow-lg)] w-full mx-4 animate-scale-in ${widthClass}`}
       >
         <div className="flex items-center justify-between px-5 py-4 border-b border-b-secondary">
-          <h3 className="text-sm font-semibold text-t-primary">{title}</h3>
+          <h3 className="text-[15px] font-semibold text-t-primary">{title}</h3>
           <button
             onClick={onClose}
-            className="text-t-muted hover:text-t-primary transition-colors cursor-pointer"
+            className="p-1 rounded-[var(--radius-sm)] text-t-muted hover:text-t-primary hover:bg-surface-2 transition-colors cursor-pointer"
             aria-label="Close"
           >
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none">

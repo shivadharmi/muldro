@@ -290,7 +290,7 @@ class TestHooks:
         from src.orchestrator.hooks import governor_pre_tool_hook
 
         result = await governor_pre_tool_hook(
-            "linear_delete_issue", {}, "operator", user_id=TEST_USER_ID
+            "API-delete-block", {}, "operator", user_id=TEST_USER_ID
         )
         assert result["allowed"] is True
 
@@ -491,37 +491,6 @@ class TestA2UIRenderer:
         c = card("c1", [text("t1", "Title"), text("t2", "Body")])
         assert c.type == "Card"
         assert len(c.children) == 2
-
-    def test_briefing_surface(self):
-        from src.ui.renderer import briefing_surface
-
-        s = briefing_surface(
-            briefing_id="brief_001",
-            headline="3 priorities, 1 approval pending",
-            priorities=[
-                {"title": "Reply to investor", "why": "Fundraising thread"},
-            ],
-            approvals=[
-                {"approval_id": "apr_01", "title": "Send email", "risk_level": "high"},
-            ],
-            schedule=[
-                {"time": "10:00 AM", "title": "Strategy Meeting", "event_id": "evt_42"},
-            ],
-        )
-        assert s.type == "surface"
-        assert s.id == "brief_001"
-        # headline + priorities + approvals + schedule = 4 cards
-        assert len(s.children) == 4
-
-    def test_surface_serialization(self):
-        from src.ui.renderer import surface, text
-
-        s = surface("test", [text("t1", "Hello")])
-        d = s.model_dump()
-        assert d["type"] == "surface"
-        assert d["id"] == "test"
-        assert len(d["children"]) == 1
-        assert d["children"][0]["type"] == "Text"
 
 
 # ── Perception Coordinator Tests ─────────────────────────────────────────

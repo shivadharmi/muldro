@@ -8,7 +8,7 @@ interface Props {
 
 export function A2UICard({ children }: Props) {
   return (
-    <div className="rounded-lg border border-b-primary bg-surface-1 p-4 space-y-2">
+    <div className="rounded-[var(--radius-lg)] border border-b-primary bg-surface-1 p-4 space-y-2">
       {children}
     </div>
   );

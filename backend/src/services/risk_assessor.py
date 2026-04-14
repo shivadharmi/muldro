@@ -255,15 +255,21 @@ def apply_rejection(state) -> None:
 async def get_or_create_trust_state(
     db: AsyncSession, workspace_id: str, capability: str, risk_level: str
 ):
-    """Get existing TrustState or create a new one."""
+    """Get existing TrustState or create a new one.
+
+    Uses SELECT ... FOR UPDATE to serialize concurrent writes to the
+    same (workspace_id, capability, risk_level) tuple.
+    """
     from src.models.trust_state import TrustState
 
     result = await db.execute(
-        select(TrustState).where(
+        select(TrustState)
+        .where(
             TrustState.workspace_id == workspace_id,
             TrustState.capability == capability,
             TrustState.risk_level == risk_level,
         )
+        .with_for_update()
     )
     state = result.scalar_one_or_none()
     if state:

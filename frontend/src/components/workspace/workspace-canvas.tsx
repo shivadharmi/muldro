@@ -13,15 +13,15 @@ interface Props {
 export function WorkspaceCanvas({ surfaces, onSurfaceClick }: Props) {
   if (surfaces.length === 0) {
     return (
-      <div className="rounded-xl border border-b-primary bg-surface-0 p-6">
-        <div className="flex flex-col items-center text-center max-w-sm mx-auto py-4">
-          <div className="w-12 h-12 rounded-full bg-green-500/10 flex items-center justify-center mb-3">
+      <div className="rounded-[var(--radius-xl)] border border-b-secondary bg-surface-1 p-8 sm:p-12">
+        <div className="flex flex-col items-center text-center max-w-md mx-auto">
+          <div className="w-14 h-14 rounded-full bg-j-success-soft flex items-center justify-center mb-4">
             <svg
               width="24"
               height="24"
               viewBox="0 0 24 24"
               fill="none"
-              className="text-green-400"
+              className="text-j-success"
             >
               <path
                 d="M9 12l2 2 4-4"
@@ -30,25 +30,25 @@ export function WorkspaceCanvas({ surfaces, onSurfaceClick }: Props) {
                 strokeLinecap="round"
                 strokeLinejoin="round"
               />
-              <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" />
+              <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.5" />
             </svg>
           </div>
-          <p className="text-sm text-t-primary font-medium">
+          <p className="text-[15px] text-t-primary font-medium mb-1">
             Nothing needs your attention
           </p>
-          <p className="text-xs text-t-tertiary mt-1 mb-5">
-            Jarvis is watching your connected sources. Updates will appear here.
+          <p className="text-sm text-t-tertiary leading-relaxed mb-6">
+            Jarvis is watching your connected sources. Updates, insights, and action items will appear here.
           </p>
-          <div className="flex gap-2">
+          <div className="flex gap-3">
             <Link
               href="/chat"
-              className="px-4 py-2 rounded-lg bg-accent-primary text-white text-xs font-medium hover:opacity-90 transition-opacity"
+              className="px-4 py-2 rounded-[var(--radius-md)] bg-j-primary text-j-primary-fg text-[13px] font-medium hover:bg-j-primary-hover transition-colors shadow-[var(--shadow-sm)]"
             >
               Talk to Jarvis
             </Link>
             <Link
               href="/integrations"
-              className="px-4 py-2 rounded-lg border border-b-primary text-t-secondary text-xs hover:bg-surface-1 transition-colors"
+              className="px-4 py-2 rounded-[var(--radius-md)] border border-b-secondary text-t-secondary text-[13px] hover:bg-surface-2 transition-colors"
             >
               Connect Sources
             </Link>
@@ -60,9 +60,9 @@ export function WorkspaceCanvas({ surfaces, onSurfaceClick }: Props) {
 
   return (
     <div
-      className="grid gap-4"
+      className="grid gap-3"
       style={{
-        gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))",
+        gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))",
         gridAutoFlow: "dense",
       }}
     >
@@ -70,7 +70,7 @@ export function WorkspaceCanvas({ surfaces, onSurfaceClick }: Props) {
         <ErrorBoundary
           key={ws.id}
           fallback={
-            <div className="rounded-lg border border-red-500/30 bg-surface-1 p-4">
+            <div className="rounded-[var(--radius-lg)] border border-j-error/20 bg-j-error-soft p-4">
               <p className="text-sm text-t-secondary">Surface failed to load</p>
             </div>
           }

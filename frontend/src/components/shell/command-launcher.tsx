@@ -108,8 +108,8 @@ export function CommandLauncher() {
       />
 
       {/* Launcher — centered on desktop, bottom sheet on mobile */}
-      <div className="fixed z-50 inset-x-0 bottom-0 sm:bottom-auto sm:top-[20%] sm:left-1/2 sm:-translate-x-1/2 sm:w-full sm:max-w-[560px]">
-        <div className="sm:mx-4 rounded-t-xl sm:rounded-xl bg-surface-1 border border-b-primary shadow-lg overflow-hidden">
+      <div className="fixed z-50 inset-x-0 bottom-0 sm:bottom-auto sm:top-[18%] sm:left-1/2 sm:-translate-x-1/2 sm:w-full sm:max-w-[540px]">
+        <div className="sm:mx-4 rounded-t-[var(--radius-xl)] sm:rounded-[var(--radius-xl)] bg-surface-1 border border-b-secondary shadow-[var(--shadow-lg)] overflow-hidden animate-scale-in">
           {/* Mode bar */}
           <div className="flex items-center gap-1 px-4 pt-3 pb-1">
             {MODES.map((m) => (
@@ -117,10 +117,10 @@ export function CommandLauncher() {
                 key={m.value}
                 type="button"
                 onClick={() => setMode(m.value)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-colors cursor-pointer ${
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-150 cursor-pointer ${
                   mode === m.value
-                    ? "bg-accent-primary text-white"
-                    : "text-t-tertiary hover:text-t-secondary hover:bg-surface-2"
+                    ? "bg-j-primary text-j-primary-fg font-medium"
+                    : "text-t-muted hover:text-t-secondary hover:bg-surface-2"
                 }`}
               >
                 <span>{m.icon}</span>
@@ -128,11 +128,11 @@ export function CommandLauncher() {
               </button>
             ))}
             <div className="flex-1" />
-            <span className="text-[10px] text-t-tertiary px-2 py-1 rounded bg-surface-2">⌘K</span>
+            <kbd className="text-[10px] text-t-muted font-mono bg-surface-2 px-1.5 py-0.5 rounded-[var(--radius-sm)]">⌘K</kbd>
           </div>
 
           {/* Input — taller on mobile for touch targets */}
-          <div className="px-4 py-3 sm:py-3">
+          <div className="px-4 py-3">
             <input
               ref={inputRef}
               type="text"
@@ -149,44 +149,44 @@ export function CommandLauncher() {
                     ? "Describe what you want to plan..."
                     : "What should Jarvis execute?"
               }
-              className="w-full bg-transparent text-base sm:text-sm text-t-primary placeholder-t-tertiary focus:outline-none"
+              className="w-full bg-transparent text-base sm:text-[15px] text-t-primary placeholder-t-muted focus:outline-none"
               autoFocus
             />
           </div>
 
           {/* Slash command palette */}
           {isSlash && filtered.length > 0 && (
-            <div className="border-t border-b-primary max-h-64 overflow-y-auto">
+            <div className="border-t border-b-secondary max-h-64 overflow-y-auto">
               {filtered.map((cmd, i) => (
                 <button
                   key={cmd.name}
                   type="button"
                   onClick={() => executeSlashCommand(cmd)}
-                  className={`w-full text-left px-4 py-2.5 text-sm flex justify-between items-center cursor-pointer ${
+                  className={`w-full text-left px-4 py-2.5 text-sm flex justify-between items-center cursor-pointer transition-colors ${
                     i === selectedIndex
-                      ? "bg-accent-primary/10 text-t-primary"
+                      ? "bg-j-primary-soft text-t-primary"
                       : "text-t-primary hover:bg-surface-2"
                   }`}
                 >
-                  <span className="font-mono text-accent-primary">{cmd.name}</span>
-                  <span className="text-t-tertiary text-xs">{cmd.description}</span>
+                  <span className="font-mono text-j-primary text-[13px]">{cmd.name}</span>
+                  <span className="text-t-muted text-xs">{cmd.description}</span>
                 </button>
               ))}
             </div>
           )}
 
           {/* Footer — hints on desktop, send button on mobile */}
-          <div className="px-4 py-2 border-t border-b-primary flex items-center justify-between">
-            <div className="hidden sm:flex items-center gap-3 text-[10px] text-t-tertiary">
-              <span>↵ Send</span>
-              <span>/ Commands</span>
-              <span>Esc Close</span>
+          <div className="px-4 py-2.5 border-t border-b-secondary flex items-center justify-between">
+            <div className="hidden sm:flex items-center gap-4 text-[10px] text-t-muted">
+              <span className="flex items-center gap-1"><kbd className="font-mono bg-surface-2 px-1 rounded-[var(--radius-sm)]">↵</kbd> Send</span>
+              <span className="flex items-center gap-1"><kbd className="font-mono bg-surface-2 px-1 rounded-[var(--radius-sm)]">/</kbd> Commands</span>
+              <span className="flex items-center gap-1"><kbd className="font-mono bg-surface-2 px-1 rounded-[var(--radius-sm)]">esc</kbd> Close</span>
             </div>
             <button
               type="button"
               onClick={submitMessage}
               disabled={!value.trim()}
-              className="sm:hidden px-4 py-2 rounded-lg bg-accent-primary text-white text-sm font-medium disabled:opacity-40 cursor-pointer ml-auto"
+              className="sm:hidden px-4 py-2 rounded-[var(--radius-md)] bg-j-primary text-j-primary-fg text-sm font-medium disabled:opacity-40 cursor-pointer ml-auto transition-colors"
             >
               Send
             </button>

@@ -145,17 +145,17 @@ export function ContextSidebar() {
   if (!rightSidebarOpen) return null;
 
   return (
-    <aside className="w-80 border-l border-b-primary bg-surface-0 flex flex-col h-full overflow-hidden">
+    <aside className="w-80 border-l border-b-secondary bg-surface-0 flex flex-col h-full overflow-hidden animate-slide-in-right">
       {/* Tab bar */}
-      <div className="flex border-b border-b-primary">
+      <div className="flex border-b border-b-secondary">
         {TABS.map((tab) => (
           <button
             key={tab}
             onClick={() => setRightSidebarTab(tab)}
-            className={`flex-1 py-2 text-xs font-medium capitalize transition-colors cursor-pointer ${
+            className={`flex-1 py-2.5 text-[11px] font-medium capitalize transition-colors cursor-pointer ${
               rightSidebarTab === tab
-                ? "text-accent-primary border-b-2 border-accent-primary"
-                : "text-t-tertiary hover:text-t-secondary"
+                ? "text-j-primary border-b-2 border-j-primary"
+                : "text-t-muted hover:text-t-secondary"
             }`}
           >
             {tab}
@@ -164,7 +164,7 @@ export function ContextSidebar() {
       </div>
 
       {/* Tab content */}
-      <div className="flex-1 overflow-y-auto p-3">
+      <div className="flex-1 overflow-y-auto p-4">
         {rightSidebarTab === "context" && <ContextTab />}
         {rightSidebarTab === "evidence" && <EvidencePanel />}
         {rightSidebarTab === "activity" && <LiveActivityFeed />}

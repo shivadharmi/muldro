@@ -46,11 +46,11 @@ const POLICY_MODES = [
 ];
 
 const TRUST_LEVEL_COLORS: Record<string, string> = {
-  first_use: "bg-gray-500",
-  learning: "bg-blue-500",
-  trusted: "bg-green-500",
-  autonomous: "bg-purple-500",
-  blocked: "bg-red-500",
+  first_use: "bg-t-muted",
+  learning: "bg-j-info",
+  trusted: "bg-j-success",
+  autonomous: "bg-j-secondary",
+  blocked: "bg-j-error",
 };
 
 const TRUST_LEVEL_LABELS: Record<string, string> = {
@@ -194,10 +194,10 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="p-4 sm:p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-6 max-w-3xl animate-fade-in">
       <PageHeader
         title="Settings"
-        subtitle="Account, policy, trust, and budget"
+        subtitle="Manage your account, policies, trust levels, and budget"
       />
       <Tabs
         tabs={TABS}
@@ -208,86 +208,95 @@ export default function SettingsPage() {
       {activeTab === "account" && (
         <Card>
           <CardBody>
-            <div className="space-y-4">
-              <div>
-                <p className="text-xs text-t-muted uppercase mb-1">Email</p>
+            <div className="space-y-5">
+              <div className="grid grid-cols-[120px_1fr] gap-y-4 gap-x-4 items-baseline">
+                <p className="text-[11px] text-t-muted font-medium uppercase tracking-wider">Email</p>
                 <p className="text-sm text-t-primary">
                   {user?.email ?? "—"}
                 </p>
-              </div>
-              <div>
-                <p className="text-xs text-t-muted uppercase mb-1">
+                <p className="text-[11px] text-t-muted font-medium uppercase tracking-wider">
                   Display Name
                 </p>
                 <p className="text-sm text-t-primary">
                   {user?.display_name ?? "—"}
                 </p>
               </div>
-              <button
-                onClick={logout}
-                className="px-4 py-2 rounded-lg border border-j-error text-j-error text-sm hover:bg-j-error/10 transition-colors"
-              >
-                Sign Out
-              </button>
+              <div className="pt-4 border-t border-b-secondary">
+                <button
+                  onClick={logout}
+                  className="px-4 py-2 rounded-[var(--radius-md)] border border-j-error/30 text-j-error text-[13px] font-medium hover:bg-j-error-soft transition-colors cursor-pointer"
+                >
+                  Sign Out
+                </button>
+              </div>
             </div>
           </CardBody>
         </Card>
       )}
 
       {activeTab === "policy" && (
-        <div className="space-y-3">
-          {POLICY_MODES.map((pm) => (
-            <Card
-              key={pm.value}
-              className={
-                policyMode === pm.value ? "ring-1 ring-accent-primary" : ""
-              }
-            >
-              <CardBody>
-                <label className="flex items-start gap-3 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="policy"
-                    checked={policyMode === pm.value}
-                    onChange={() => handlePolicyChange(pm.value)}
-                    disabled={policyLoading}
-                    className="mt-0.5"
-                  />
+        <div className="space-y-2">
+          {POLICY_MODES.map((pm) => {
+            const isActive = policyMode === pm.value;
+            return (
+              <button
+                key={pm.value}
+                type="button"
+                onClick={() => handlePolicyChange(pm.value)}
+                disabled={policyLoading}
+                className={`w-full text-left rounded-[var(--radius-lg)] border p-4 transition-all duration-150 cursor-pointer ${
+                  isActive
+                    ? "border-j-primary/40 bg-j-primary-soft"
+                    : "border-b-secondary bg-surface-1 hover:bg-surface-2"
+                } disabled:opacity-50`}
+              >
+                <div className="flex items-center gap-3">
+                  <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 ${
+                    isActive ? "border-j-primary" : "border-b-strong"
+                  }`}>
+                    {isActive && <div className="w-2 h-2 rounded-full bg-j-primary" />}
+                  </div>
                   <div>
-                    <p className="text-sm font-medium text-t-primary">
+                    <p className="text-[13px] font-medium text-t-primary">
                       {pm.label}
                     </p>
-                    <p className="text-xs text-t-tertiary">
+                    <p className="text-xs text-t-tertiary mt-0.5">
                       {pm.description}
                     </p>
                   </div>
-                </label>
-              </CardBody>
-            </Card>
-          ))}
+                </div>
+              </button>
+            );
+          })}
         </div>
       )}
 
       {activeTab === "trust" && (
         <div className="space-y-6">
           {trustLoading && (
-            <p className="text-sm text-t-tertiary">Loading trust data...</p>
+            <div className="space-y-2">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="h-16 rounded-[var(--radius-lg)] skeleton" />
+              ))}
+            </div>
           )}
 
           {!trustLoading && trustEntries.length === 0 && (
             <Card>
               <CardBody>
-                <p className="text-sm text-t-tertiary">
-                  No trust data yet. Trust levels build as Jarvis performs
-                  actions and you approve or reject them.
-                </p>
+                <div className="text-center py-4">
+                  <p className="text-sm text-t-secondary font-medium mb-1">No trust data yet</p>
+                  <p className="text-xs text-t-muted">
+                    Trust levels build as Jarvis performs actions and you approve or reject them.
+                  </p>
+                </div>
               </CardBody>
             </Card>
           )}
 
           {Object.entries(trustByFamily).map(([family, entries]) => (
             <div key={family}>
-              <h3 className="text-xs uppercase text-t-muted mb-2 tracking-wider">
+              <h3 className="text-[11px] uppercase text-t-muted font-medium mb-2.5 tracking-wider">
                 {family}
               </h3>
               <div className="space-y-2">
@@ -312,40 +321,40 @@ export default function SettingsPage() {
           <CardBody>
             <div className="space-y-4">
               <div>
-                <p className="text-xs text-t-muted uppercase mb-1">
+                <p className="text-[11px] text-t-muted font-medium uppercase tracking-wider mb-3">
                   Daily Token Budget
                 </p>
                 {editingBudget ? (
                   <div className="flex items-center gap-2">
-                    <span className="text-t-secondary">$</span>
+                    <span className="text-t-secondary text-sm">$</span>
                     <input
                       type="number"
                       min="0.01"
                       step="0.01"
                       value={budgetInput}
                       onChange={(e) => setBudgetInput(e.target.value)}
-                      className="w-32 rounded bg-surface-2 border border-b-primary px-3 py-2 text-sm text-t-primary focus:outline-none focus:ring-1 focus:ring-j-ring"
+                      className="w-32 rounded-[var(--radius-md)] bg-surface-2 border border-b-secondary px-3 py-2 text-sm text-t-primary focus:outline-none focus:ring-1 focus:ring-j-ring transition-colors"
                       autoFocus
                     />
                     <button
                       onClick={handleBudgetSave}
                       disabled={budgetSaving}
-                      className="px-3 py-2 rounded-lg bg-j-primary text-j-primary-fg text-sm hover:bg-j-primary-hover disabled:opacity-50"
+                      className="px-3.5 py-2 rounded-[var(--radius-md)] bg-j-primary text-j-primary-fg text-[13px] font-medium hover:bg-j-primary-hover disabled:opacity-50 transition-colors cursor-pointer"
                     >
                       {budgetSaving ? "Saving..." : "Save"}
                     </button>
                     <button
                       onClick={() => setEditingBudget(false)}
-                      className="px-3 py-2 rounded-lg text-t-secondary text-sm hover:bg-surface-2"
+                      className="px-3.5 py-2 rounded-[var(--radius-md)] text-t-secondary text-[13px] hover:bg-surface-2 transition-colors cursor-pointer"
                     >
                       Cancel
                     </button>
                   </div>
                 ) : (
                   <div className="flex items-center gap-3">
-                    <p className="text-lg font-semibold text-t-primary">
+                    <p className="text-2xl font-semibold text-t-primary tracking-tight">
                       ${budgetLimit?.toFixed(2) ?? "—"}
-                      <span className="text-xs text-t-tertiary font-normal ml-1">
+                      <span className="text-sm text-t-muted font-normal ml-1">
                         / day
                       </span>
                     </p>
@@ -354,7 +363,7 @@ export default function SettingsPage() {
                         setBudgetInput(String(budgetLimit ?? 5));
                         setEditingBudget(true);
                       }}
-                      className="text-xs text-accent-primary hover:underline"
+                      className="text-xs text-j-primary hover:text-j-primary-hover font-medium cursor-pointer"
                     >
                       Edit
                     </button>
@@ -394,122 +403,120 @@ function TrustCapabilityCard({
   }, 0);
 
   return (
-    <Card>
-      <CardBody>
-        <div className="space-y-2">
-          {/* Header row */}
-          <button
-            type="button"
-            onClick={() => setExpanded(!expanded)}
-            className="w-full flex items-center justify-between text-left"
+    <div className="rounded-[var(--radius-lg)] border border-b-secondary bg-surface-1 overflow-hidden">
+      <div className="px-4 py-3 space-y-2">
+        {/* Header row */}
+        <button
+          type="button"
+          onClick={() => setExpanded(!expanded)}
+          className="w-full flex items-center justify-between text-left cursor-pointer group"
+        >
+          <div className="flex items-center gap-2.5">
+            <span
+              className={`w-2 h-2 rounded-full shrink-0 ${TRUST_LEVEL_COLORS[entry.trust_level] ?? "bg-t-muted"}`}
+            />
+            <span className="text-[13px] font-medium text-t-primary">
+              {entry.capability}
+            </span>
+            <span className="text-[11px] text-t-muted px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-surface-2">
+              {TRUST_LEVEL_LABELS[entry.trust_level] ?? entry.trust_level}
+            </span>
+          </div>
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            className={`text-t-muted group-hover:text-t-secondary transition-all duration-150 ${expanded ? "rotate-90" : ""}`}
           >
-            <div className="flex items-center gap-2">
-              <span
-                className={`w-2 h-2 rounded-full ${TRUST_LEVEL_COLORS[entry.trust_level] ?? "bg-gray-400"}`}
-              />
-              <span className="text-sm font-medium text-t-primary">
-                {entry.capability}
-              </span>
-              <span className="text-xs text-t-tertiary">
-                {TRUST_LEVEL_LABELS[entry.trust_level] ?? entry.trust_level}
-              </span>
-            </div>
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              className={`text-t-tertiary transition-transform ${expanded ? "rotate-90" : ""}`}
+            <path
+              d="M9 18l6-6-6-6"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+
+        {/* Graduation progress bar */}
+        {entry.trust_level !== "autonomous" && (
+          <div className="w-full h-1 bg-surface-3 rounded-full">
+            <div
+              className={`h-full rounded-full transition-all duration-300 ${TRUST_LEVEL_COLORS[entry.trust_level] ?? "bg-t-muted"}`}
+              style={{
+                width: `${Math.min(bestProgress * 100, 100)}%`,
+              }}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Expanded: per-risk breakdown + controls */}
+      {expanded && (
+        <div className="px-4 pb-4 pt-2 space-y-3 border-t border-b-secondary">
+          {entry.risk_levels.map((rl) => (
+            <div
+              key={rl.risk_level}
+              className="flex items-center justify-between text-xs"
             >
-              <path
-                d="M9 18l6-6-6-6"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </button>
-
-          {/* Graduation progress bar */}
-          {entry.trust_level !== "autonomous" && (
-            <div className="w-full h-1.5 bg-surface-2 rounded-full">
-              <div
-                className={`h-full rounded-full transition-all ${TRUST_LEVEL_COLORS[entry.trust_level] ?? "bg-gray-400"}`}
-                style={{
-                  width: `${Math.min(bestProgress * 100, 100)}%`,
-                }}
-              />
+              <span className="text-t-secondary w-16 capitalize">
+                {rl.risk_level}
+              </span>
+              <span
+                className={`px-1.5 py-0.5 rounded-[var(--radius-sm)] ${TRUST_LEVEL_COLORS[rl.trust_level] ?? "bg-t-muted"} text-white text-[10px] font-medium`}
+              >
+                {TRUST_LEVEL_LABELS[rl.trust_level] ?? rl.trust_level}
+              </span>
+              <span className="text-t-tertiary">
+                {rl.approved_count}
+                <span className="text-t-muted"> approved</span>
+                {rl.rejected_count > 0 && (
+                  <span className="text-j-error ml-1">
+                    {rl.rejected_count} rejected
+                  </span>
+                )}
+              </span>
+              {rl.graduation_progress?.next_level && (
+                <span className="text-t-muted text-[10px]">
+                  {rl.graduation_progress.current}/
+                  {rl.graduation_progress.target} to{" "}
+                  {TRUST_LEVEL_LABELS[
+                    rl.graduation_progress.next_level
+                  ] ?? rl.graduation_progress.next_level}
+                </span>
+              )}
             </div>
-          )}
+          ))}
 
-          {/* Expanded: per-risk breakdown + controls */}
-          {expanded && (
-            <div className="pt-2 space-y-3 border-t border-b-primary">
-              {entry.risk_levels.map((rl) => (
-                <div
-                  key={rl.risk_level}
-                  className="flex items-center justify-between text-xs"
-                >
-                  <span className="text-t-secondary w-16">
-                    {rl.risk_level}
-                  </span>
-                  <span
-                    className={`px-1.5 py-0.5 rounded ${TRUST_LEVEL_COLORS[rl.trust_level] ?? "bg-gray-400"} text-white`}
-                  >
-                    {TRUST_LEVEL_LABELS[rl.trust_level] ?? rl.trust_level}
-                  </span>
-                  <span className="text-t-tertiary">
-                    {rl.approved_count}
-                    <span className="text-t-muted"> approved</span>
-                    {rl.rejected_count > 0 && (
-                      <span className="text-red-400 ml-1">
-                        {rl.rejected_count} rejected
-                      </span>
-                    )}
-                  </span>
-                  {rl.graduation_progress?.next_level && (
-                    <span className="text-t-tertiary">
-                      {rl.graduation_progress.current}/
-                      {rl.graduation_progress.target} to{" "}
-                      {TRUST_LEVEL_LABELS[
-                        rl.graduation_progress.next_level
-                      ] ?? rl.graduation_progress.next_level}
-                    </span>
-                  )}
-                </div>
+          {/* Ceiling control */}
+          <div className="flex items-center gap-2 pt-2 border-t border-b-secondary">
+            <label className="text-[11px] text-t-muted font-medium">Ceiling</label>
+            <select
+              value={entry.ceiling}
+              onChange={(e) =>
+                onCeilingChange(entry.capability, e.target.value)
+              }
+              disabled={ceilingDisabled}
+              className="text-xs rounded-[var(--radius-md)] bg-surface-2 border border-b-secondary px-2.5 py-1.5 text-t-primary focus:outline-none focus:ring-1 focus:ring-j-ring disabled:opacity-50 cursor-pointer"
+            >
+              {CEILING_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
               ))}
+            </select>
 
-              {/* Ceiling control */}
-              <div className="flex items-center gap-2 pt-2">
-                <label className="text-xs text-t-muted">Ceiling:</label>
-                <select
-                  value={entry.ceiling}
-                  onChange={(e) =>
-                    onCeilingChange(entry.capability, e.target.value)
-                  }
-                  disabled={ceilingDisabled}
-                  className="text-xs rounded bg-surface-2 border border-b-primary px-2 py-1 text-t-primary focus:outline-none focus:ring-1 focus:ring-j-ring disabled:opacity-50"
-                >
-                  {CEILING_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-
-                <button
-                  onClick={() => onReset(entry.capability)}
-                  disabled={resetDisabled}
-                  className="ml-auto text-xs text-j-error hover:underline disabled:opacity-50"
-                >
-                  {resetDisabled ? "Resetting..." : "Reset Trust"}
-                </button>
-              </div>
-            </div>
-          )}
+            <button
+              onClick={() => onReset(entry.capability)}
+              disabled={resetDisabled}
+              className="ml-auto text-xs text-j-error hover:text-j-error/80 font-medium disabled:opacity-50 cursor-pointer"
+            >
+              {resetDisabled ? "Resetting..." : "Reset"}
+            </button>
+          </div>
         </div>
-      </CardBody>
-    </Card>
+      )}
+    </div>
   );
 }

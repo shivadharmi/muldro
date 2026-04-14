@@ -1,11 +1,13 @@
 "use client";
 
 import type { SearchResult } from "@/lib/types";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Badge } from "@/components/ui/badge";
 
 const SOURCE_DB_LABELS: Record<string, string> = {
-  qdrant: "Vector (Qdrant)",
-  postgres_fts: "Keyword (Postgres FTS)",
-  neo4j: "Graph (Neo4j)",
+  qdrant: "Vector",
+  postgres_fts: "Keyword",
+  neo4j: "Graph",
 };
 
 interface Props {
@@ -15,9 +17,7 @@ interface Props {
 export function ResultDetailPane({ result }: Props) {
   if (!result) {
     return (
-      <div className="flex items-center justify-center h-full text-sm text-t-tertiary">
-        Select a result to view details
-      </div>
+      <EmptyState title="Select a result" description="Choose an item from the list to view details" />
     );
   }
 
@@ -36,16 +36,16 @@ export function ResultDetailPane({ result }: Props) {
         <p className="text-sm text-t-secondary">{result.summary}</p>
       )}
 
-      <div className="flex flex-wrap gap-2 text-xs">
+      <div className="flex flex-wrap gap-2">
         {result.source_db && (
-          <span className="px-2 py-0.5 rounded bg-surface-2 text-t-secondary">
+          <Badge variant="info">
             {SOURCE_DB_LABELS[result.source_db] ?? result.source_db}
-          </span>
+          </Badge>
         )}
         {result.score != null && (
-          <span className="px-2 py-0.5 rounded bg-surface-2 text-t-secondary">
+          <Badge variant="default">
             Score: {result.score.toFixed(3)}
-          </span>
+          </Badge>
         )}
       </div>
 

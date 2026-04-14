@@ -219,6 +219,7 @@ class TestAgenticStepExecution:
             yield LoopDone(agent="operator", text="Task completed successfully")
 
         mock_agent_loop.side_effect = fake_agent_loop
+        executor_with_agent_deps._get_all_steps = AsyncMock(return_value=[])
 
         # Create mock step and run
         step = MagicMock()
@@ -247,6 +248,7 @@ class TestAgenticStepExecution:
             yield LoopDone(agent="operator", text="Done")
 
         mock_agent_loop.side_effect = fake_agent_loop
+        executor_with_agent_deps._get_all_steps = AsyncMock(return_value=[])
 
         step = MagicMock()
         step.input_data = {"task_type": "test_task"}
@@ -270,6 +272,7 @@ class TestAgenticStepExecution:
             yield LoopDone(agent="operator", text="Recovered and completed")
 
         mock_agent_loop.side_effect = fake_agent_loop
+        executor_with_agent_deps._get_all_steps = AsyncMock(return_value=[])
 
         step = MagicMock()
         step.input_data = {"task_type": "test_task"}
@@ -296,6 +299,7 @@ class TestAgenticStepExecution:
             yield LoopDone(agent="operator", text="Done via agent loop")
 
         mock_agent_loop.side_effect = fake_loop
+        executor_with_agent_deps._get_all_steps = AsyncMock(return_value=[])
 
         step = MagicMock()
         step.step_id = "step_dispatch"
@@ -309,6 +313,44 @@ class TestAgenticStepExecution:
         result = await executor_with_agent_deps._run_step_action(step, run)
 
         assert result["result"] == "Done via agent loop"
+
+    @patch("src.orchestrator.agent_loop.agent_loop")
+    async def test_prior_step_outputs_injected(self, mock_agent_loop, executor_with_agent_deps):
+        """Completed predecessor step outputs are injected into the operator message."""
+        from src.orchestrator.agent_loop import LoopDone
+
+        captured_kwargs = {}
+
+        async def fake_agent_loop(**kwargs):
+            captured_kwargs.update(kwargs)
+            yield LoopDone(agent="operator", text="Created page with content")
+
+        mock_agent_loop.side_effect = fake_agent_loop
+
+        # Simulate a completed perceiver step with output_data
+        prior_step = MagicMock()
+        prior_step.step_id = "step_perceiver"
+        prior_step.status = "completed"
+        prior_step.output_data = {"result": "# My Document\nFull markdown content here"}
+        prior_step.input_data = {"capability": "file.read", "goal": "Read the markdown file"}
+
+        current_step = MagicMock()
+        current_step.step_id = "step_operator"
+        current_step.input_data = {"capability": "notion.create_page", "goal": "Copy to Notion"}
+
+        executor_with_agent_deps._get_all_steps = AsyncMock(return_value=[prior_step, current_step])
+
+        run = MagicMock()
+        run.run_id = "run_copy"
+        run.user_id = TEST_USER_ID
+        run.workspace_id = "ws_test"
+
+        await executor_with_agent_deps._run_step_via_agent_loop(current_step, run)
+
+        # Verify prior step output was injected into the message
+        message = captured_kwargs["message"]
+        assert "Prior step results" in message
+        assert "Full markdown content here" in message
 
     async def test_run_step_action_falls_back_without_deps(self, settings, mock_db):
         """_run_step_action uses minimal fallback when agent loop deps are missing."""

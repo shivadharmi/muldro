@@ -75,7 +75,7 @@ function LoginForm() {
     try {
       if (provider === "google") {
         const { url } = await getGoogleAuthUrl();
-        window.location.href = url;
+        window.location.assign(url);
       } else {
         setError(`OAuth for ${provider} not yet configured`);
       }
@@ -87,14 +87,22 @@ function LoginForm() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center p-4">
-      <div className="w-full max-w-md space-y-8">
+    <div className="flex min-h-screen items-center justify-center p-4 relative overflow-hidden">
+      {/* Atmospheric background */}
+      <div
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          background:
+            "radial-gradient(ellipse 50% 60% at 20% 30%, hsl(193 100% 62% / 0.04), transparent 60%), radial-gradient(ellipse 40% 50% at 80% 70%, hsl(247 80% 72% / 0.03), transparent 50%)",
+        }}
+      />
+      <div className="w-full max-w-[400px] space-y-8 relative">
         <div className="text-center">
-          <h1 className="text-3xl font-bold">Jarvis</h1>
-          <p className="mt-2 text-t-secondary">Personal AI Operating System</p>
+          <h1 className="text-3xl font-semibold tracking-tight brand-gradient-text inline-block">Jarvis</h1>
+          <p className="mt-1.5 text-sm text-t-tertiary">Personal AI Operating System</p>
         </div>
 
-        <div className="rounded-xl border border-b-primary bg-surface-1 p-6 space-y-6">
+        <div className="rounded-[var(--radius-xl)] border border-b-secondary bg-surface-1 p-6 space-y-6 shadow-[var(--shadow-md)]">
           {step === "email" ? (
             <form onSubmit={handleSendLink} className="space-y-4">
               <div>
@@ -107,14 +115,14 @@ function LoginForm() {
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="w-full rounded-lg border border-b-primary bg-surface-2 px-3 py-2 text-t-primary placeholder-t-tertiary focus:border-j-primary focus:outline-none"
+                  className="w-full rounded-[var(--radius-md)] border border-b-secondary bg-surface-2 px-3.5 py-2.5 text-sm text-t-primary placeholder-t-muted focus:border-j-primary focus:outline-none focus:ring-1 focus:ring-j-primary/30 transition-colors"
                   placeholder="you@company.com"
                 />
               </div>
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full rounded-lg bg-j-primary px-4 py-2 font-medium text-j-primary-fg hover:bg-j-primary-hover disabled:opacity-50"
+                className="w-full rounded-[var(--radius-md)] bg-j-primary px-4 py-2.5 text-sm font-medium text-j-primary-fg hover:bg-j-primary-hover disabled:opacity-50 transition-colors shadow-[var(--shadow-sm)]"
               >
                 {loading ? "Sending..." : "Send Magic Link"}
               </button>
@@ -140,14 +148,14 @@ function LoginForm() {
                   required
                   value={token}
                   onChange={(e) => setToken(e.target.value)}
-                  className="w-full rounded-lg border border-b-primary bg-surface-2 px-3 py-2 text-t-primary placeholder-t-tertiary focus:border-j-primary focus:outline-none"
+                  className="w-full rounded-[var(--radius-md)] border border-b-secondary bg-surface-2 px-3.5 py-2.5 text-sm text-t-primary placeholder-t-muted focus:border-j-primary focus:outline-none focus:ring-1 focus:ring-j-primary/30 transition-colors"
                   placeholder="Paste your token here"
                 />
               </div>
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full rounded-lg bg-j-primary px-4 py-2 font-medium text-j-primary-fg hover:bg-j-primary-hover disabled:opacity-50"
+                className="w-full rounded-[var(--radius-md)] bg-j-primary px-4 py-2.5 text-sm font-medium text-j-primary-fg hover:bg-j-primary-hover disabled:opacity-50 transition-colors shadow-[var(--shadow-sm)]"
               >
                 {loading ? "Verifying..." : "Verify & Sign In"}
               </button>
@@ -170,23 +178,23 @@ function LoginForm() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 gap-3">
             <button
               onClick={() => handleOAuth("google")}
-              className="flex items-center justify-center gap-2 rounded-lg border border-b-primary px-4 py-2 text-sm font-medium text-t-primary hover:bg-surface-2"
+              className="flex items-center justify-center gap-2 rounded-[var(--radius-md)] border border-b-secondary px-4 py-2.5 text-sm font-medium text-t-primary hover:bg-surface-2 transition-colors"
             >
               Google
             </button>
             <button
               onClick={() => handleOAuth("github")}
-              className="flex items-center justify-center gap-2 rounded-lg border border-b-primary px-4 py-2 text-sm font-medium text-t-primary hover:bg-surface-2"
+              className="flex items-center justify-center gap-2 rounded-[var(--radius-md)] border border-b-secondary px-4 py-2.5 text-sm font-medium text-t-primary hover:bg-surface-2 transition-colors"
             >
               GitHub
             </button>
           </div>
 
           {error && (
-            <div className="rounded-lg bg-j-error-soft border border-j-error/30 p-3 text-sm text-j-error">
+            <div className="rounded-[var(--radius-md)] bg-j-error-soft border border-j-error/20 p-3 text-sm text-j-error animate-slide-in-up">
               {error}
             </div>
           )}
@@ -212,7 +220,7 @@ function LoginForm() {
                   });
                   router.push("/");
                 }}
-                className="w-full rounded-lg border border-j-primary/30 bg-j-primary-soft px-4 py-2 text-sm font-medium text-j-primary hover:bg-j-primary/20 transition-colors"
+                className="w-full rounded-[var(--radius-md)] border border-j-primary/20 bg-j-primary-soft px-4 py-2.5 text-sm font-medium text-j-primary hover:bg-j-primary/20 transition-colors"
               >
                 Demo Login (seeded data)
               </button>

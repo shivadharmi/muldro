@@ -225,6 +225,28 @@ async def call_mcp_tool(
         logger.warning("[mcp:bridge] no server found for tool %s", tool_name)
         return {"status": "error", "error": f"Unknown MCP tool: {tool_name}"}
 
+    # Ensure server config is registered. Installations activated after
+    # startup (e.g., via OAuth callback) won't be in the pool yet.
+    # Reload from DB on demand so the first tool call succeeds.
+    if not _session_pool.has_server_config(server_name, workspace_id):
+        from src.integrations.mcp_pool import get_workspace_pool
+
+        pool = get_workspace_pool()
+        if pool:
+            reloaded = await pool.reload_server(workspace_id, server_name)
+            if reloaded:
+                logger.info("[mcp:bridge] lazy-loaded config for %s", server_name)
+            else:
+                logger.warning(
+                    "[mcp:bridge] no active installation for %s/%s",
+                    workspace_id,
+                    server_name,
+                )
+                return {
+                    "status": "error",
+                    "error": f"MCP server '{server_name}' not configured or not active",
+                }
+
     logger.info(
         "[mcp:bridge] %s → server=%s user=%s",
         tool_name,

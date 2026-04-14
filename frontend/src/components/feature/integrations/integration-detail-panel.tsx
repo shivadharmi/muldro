@@ -1,6 +1,7 @@
 "use client";
 
 import { Badge } from "@/components/ui/badge";
+import { EmptyState } from "@/components/ui/empty-state";
 
 interface IntegrationDetail {
   install_id: string;
@@ -19,9 +20,7 @@ interface Props {
 export function IntegrationDetailPanel({ integration }: Props) {
   if (!integration) {
     return (
-      <div className="flex items-center justify-center h-full text-sm text-t-tertiary">
-        Select an integration to view details
-      </div>
+      <EmptyState title="Select an integration" description="Choose a provider to manage its settings" />
     );
   }
 

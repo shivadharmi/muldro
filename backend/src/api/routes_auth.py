@@ -251,21 +251,6 @@ async def oauth_authorize(
         url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
         return OAuthUrlResponse(url=url, provider="github")
 
-    elif provider == "linear":
-        client_id = settings.linear_oauth_client_id
-        if not client_id:
-            raise HTTPException(status_code=400, detail="Linear OAuth not configured")
-        params = {
-            "client_id": client_id,
-            "redirect_uri": settings.linear_oauth_redirect_uri,
-            "response_type": "code",
-            "scope": scopes or "read write issues:create comments:create",
-            "state": user_id,
-            "prompt": "consent",
-        }
-        url = f"https://linear.app/oauth/authorize?{urlencode(params)}"
-        return OAuthUrlResponse(url=url, provider="linear")
-
     elif provider == "notion":
         client_id = settings.notion_oauth_client_id
         if not client_id:
@@ -296,61 +281,6 @@ async def oauth_authorize(
         url = f"https://auth.atlassian.com/authorize?{urlencode(params)}"
         return OAuthUrlResponse(url=url, provider="jira")
 
-    elif provider == "linkedin":
-        client_id = settings.linkedin_oauth_client_id
-        if not client_id:
-            raise HTTPException(status_code=400, detail="LinkedIn OAuth not configured")
-        params = {
-            "response_type": "code",
-            "client_id": client_id,
-            "redirect_uri": settings.linkedin_oauth_redirect_uri,
-            "scope": scopes or "r_liteprofile r_emailaddress w_member_social",
-            "state": user_id,
-        }
-        url = f"https://www.linkedin.com/oauth/v2/authorization?{urlencode(params)}"
-        return OAuthUrlResponse(url=url, provider="linkedin")
-
-    elif provider == "twitter":
-        import hashlib
-        import secrets
-
-        client_id = settings.twitter_oauth_client_id
-        if not client_id:
-            raise HTTPException(status_code=400, detail="Twitter OAuth not configured")
-
-        # PKCE: generate code_verifier and challenge
-        code_verifier = secrets.token_urlsafe(64)
-        code_challenge = hashlib.sha256(code_verifier.encode()).digest()
-        import base64
-
-        code_challenge_b64 = base64.urlsafe_b64encode(code_challenge).rstrip(b"=").decode()
-
-        # Store code_verifier in Redis keyed by state
-        # (caller must have access to Redis from app state)
-        state_token = f"{user_id}:{secrets.token_urlsafe(16)}"
-
-        # Import lazily to avoid circular imports
-        import redis.asyncio as aioredis
-
-        try:
-            r = aioredis.from_url(settings.redis_url, decode_responses=True)
-            await r.setex(f"twitter_pkce:{state_token}", 600, code_verifier)
-            await r.aclose()
-        except Exception:
-            logger.warning("Failed to store Twitter PKCE verifier in Redis")
-
-        params = {
-            "response_type": "code",
-            "client_id": client_id,
-            "redirect_uri": settings.twitter_oauth_redirect_uri,
-            "scope": scopes or "tweet.read tweet.write users.read offline.access",
-            "state": state_token,
-            "code_challenge": code_challenge_b64,
-            "code_challenge_method": "S256",
-        }
-        url = f"https://twitter.com/i/oauth2/authorize?{urlencode(params)}"
-        return OAuthUrlResponse(url=url, provider="twitter")
-
     else:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
 
@@ -360,8 +290,9 @@ async def oauth_authorize(
 async def oauth_callback(
     provider: str,
     background_tasks: BackgroundTasks,
-    code: str = Query(...),
+    code: str = Query(""),
     state: str = Query(""),
+    error: str = Query(""),
     settings: Settings = Depends(get_settings),
 ):
     """Handle OAuth callback — exchange code for tokens, store as integration.
@@ -374,6 +305,13 @@ async def oauth_callback(
 
     from src.models.database import get_session_factory
     from src.services.oauth_manager import OAuthManager
+
+    # Handle user-denied or provider-error callbacks (no code param)
+    if error:
+        return _error_redirect(settings, f"OAuth {provider} error: {error}")
+
+    if not code:
+        return _error_redirect(settings, f"OAuth {provider}: no authorization code received")
 
     # user_id must be passed in state param from the authorize step
     if not state or not state.startswith("usr_"):
@@ -479,6 +417,36 @@ async def oauth_callback(
 
         scopes = token_data.get("scope", "").split(",") if token_data.get("scope") else None
 
+        # Fetch GitHub user profile and organizations
+        github_config: dict = {}
+        async with httpx.AsyncClient() as gh_client:
+            user_resp = await gh_client.get(
+                "https://api.github.com/user",
+                headers={
+                    "Authorization": f"Bearer {token_data['access_token']}",
+                    "Accept": "application/vnd.github+json",
+                },
+                timeout=10,
+            )
+            if user_resp.status_code == 200:
+                gh_user = user_resp.json()
+                github_config["username"] = gh_user.get("login", "")
+                github_config["name"] = gh_user.get("name", "")
+                github_config["avatar_url"] = gh_user.get("avatar_url", "")
+
+            orgs_resp = await gh_client.get(
+                "https://api.github.com/user/orgs",
+                headers={
+                    "Authorization": f"Bearer {token_data['access_token']}",
+                    "Accept": "application/vnd.github+json",
+                },
+                timeout=10,
+            )
+            if orgs_resp.status_code == 200:
+                github_config["organizations"] = [
+                    org.get("login", "") for org in orgs_resp.json()[:20]
+                ]
+
         db_factory = get_session_factory()
         from src.api.deps import resolve_workspace_id
 
@@ -498,62 +466,20 @@ async def oauth_callback(
             workspace_id=workspace_id,
         )
 
-        await _ensure_integration(db_factory, user_id, "github", workspace_id=workspace_id)
-
-        logger.info("GitHub integration linked for %s", user_id)
-        background_tasks.add_task(_trigger_initial_observation, user_id, ["github"], workspace_id)
-
-    elif provider == "linear":
-        client_id = settings.linear_oauth_client_id
-        client_secret = settings.linear_oauth_client_secret
-        if not client_id or not client_secret:
-            return _error_redirect(settings, "Linear OAuth not configured")
-
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                "https://api.linear.app/oauth/token",
-                data={
-                    "grant_type": "authorization_code",
-                    "code": code,
-                    "client_id": client_id,
-                    "client_secret": client_secret,
-                    "redirect_uri": settings.linear_oauth_redirect_uri,
-                },
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                timeout=10,
-            )
-            if resp.status_code != 200:
-                logger.error("Linear token exchange failed: %s", resp.text)
-                return _error_redirect(settings, "Failed to exchange Linear authorization code")
-            token_data = resp.json()
-
-        expires_at = None
-        if token_data.get("expires_in"):
-            expires_at = datetime.now(timezone.utc) + timedelta(seconds=token_data["expires_in"])
-
-        db_factory = get_session_factory()
-        from src.api.deps import resolve_workspace_id
-
-        async with db_factory() as _db:
-            workspace_id = await resolve_workspace_id(_db, user_id)
-
-        oauth_mgr = OAuthManager(
+        await _ensure_integration(
             db_factory,
-            encryption_key=settings.oauth_encryption_key,
-            settings=settings,
-        )
-        await oauth_mgr.store_token(
-            user_id=user_id,
-            provider="linear",
-            access_token=token_data["access_token"],
-            refresh_token=token_data.get("refresh_token"),
-            expires_at=expires_at,
-            scopes=token_data.get("scope", "").split() if token_data.get("scope") else None,
+            user_id,
+            "github",
             workspace_id=workspace_id,
+            extra_config=github_config,
         )
-        await _ensure_integration(db_factory, user_id, "linear", workspace_id=workspace_id)
-        logger.info("Linear integration linked for %s", user_id)
-        background_tasks.add_task(_trigger_initial_observation, user_id, ["linear"], workspace_id)
+
+        logger.info(
+            "GitHub integration linked for %s (%s)",
+            user_id,
+            github_config.get("username", "unknown"),
+        )
+        background_tasks.add_task(_trigger_initial_observation, user_id, ["github"], workspace_id)
 
     elif provider == "notion":
         client_id = settings.notion_oauth_client_id
@@ -574,14 +500,18 @@ async def oauth_callback(
                 },
                 headers={
                     "Authorization": f"Basic {basic_auth}",
-                    "Content-Type": "application/json",
-                    "Notion-Version": "2022-06-28",
                 },
-                timeout=10,
+                timeout=15,
             )
             if resp.status_code != 200:
-                logger.error("Notion token exchange failed: %s", resp.text)
-                return _error_redirect(settings, "Failed to exchange Notion authorization code")
+                logger.error(
+                    "Notion token exchange failed (status=%d): %s",
+                    resp.status_code,
+                    resp.text,
+                )
+                return _error_redirect(
+                    settings, f"Notion token exchange failed: {resp.json().get('error', resp.text)}"
+                )
             token_data = resp.json()
 
         # Notion tokens don't expire
@@ -698,133 +628,6 @@ async def oauth_callback(
         logger.info("Jira integration linked for %s (cloudId=%s)", user_id, cloud_id)
         background_tasks.add_task(_trigger_initial_observation, user_id, ["jira"], workspace_id)
 
-    elif provider == "linkedin":
-        client_id = settings.linkedin_oauth_client_id
-        client_secret = settings.linkedin_oauth_client_secret
-        if not client_id or not client_secret:
-            return _error_redirect(settings, "LinkedIn OAuth not configured")
-
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                "https://www.linkedin.com/oauth/v2/accessToken",
-                data={
-                    "grant_type": "authorization_code",
-                    "code": code,
-                    "client_id": client_id,
-                    "client_secret": client_secret,
-                    "redirect_uri": settings.linkedin_oauth_redirect_uri,
-                },
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                timeout=10,
-            )
-            if resp.status_code != 200:
-                logger.error("LinkedIn token exchange failed: %s", resp.text)
-                return _error_redirect(settings, "Failed to exchange LinkedIn authorization code")
-            token_data = resp.json()
-
-        expires_at = None
-        if token_data.get("expires_in"):
-            expires_at = datetime.now(timezone.utc) + timedelta(seconds=token_data["expires_in"])
-
-        db_factory = get_session_factory()
-        from src.api.deps import resolve_workspace_id
-
-        async with db_factory() as _db:
-            workspace_id = await resolve_workspace_id(_db, user_id)
-
-        oauth_mgr = OAuthManager(
-            db_factory,
-            encryption_key=settings.oauth_encryption_key,
-            settings=settings,
-        )
-        await oauth_mgr.store_token(
-            user_id=user_id,
-            provider="linkedin",
-            access_token=token_data["access_token"],
-            refresh_token=token_data.get("refresh_token"),
-            expires_at=expires_at,
-            workspace_id=workspace_id,
-        )
-        await _ensure_integration(db_factory, user_id, "linkedin", workspace_id=workspace_id)
-        logger.info("LinkedIn integration linked for %s", user_id)
-
-    elif provider == "twitter":
-        client_id = settings.twitter_oauth_client_id
-        client_secret = settings.twitter_oauth_client_secret
-        if not client_id or not client_secret:
-            return _error_redirect(settings, "Twitter OAuth not configured")
-
-        # Retrieve PKCE code_verifier from Redis
-        code_verifier = ""
-        try:
-            import redis.asyncio as aioredis
-
-            r = aioredis.from_url(settings.redis_url, decode_responses=True)
-            code_verifier = await r.get(f"twitter_pkce:{state}") or ""
-            if code_verifier:
-                await r.delete(f"twitter_pkce:{state}")
-            await r.aclose()
-        except Exception:
-            logger.warning("Failed to retrieve Twitter PKCE verifier from Redis")
-
-        # Extract user_id from composite state (user_id:random)
-        if ":" in state:
-            user_id = state.split(":")[0]
-
-        if not code_verifier:
-            return _error_redirect(settings, "Twitter PKCE verifier not found")
-
-        import base64
-
-        basic_auth = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                "https://api.twitter.com/2/oauth2/token",
-                data={
-                    "grant_type": "authorization_code",
-                    "code": code,
-                    "client_id": client_id,
-                    "redirect_uri": settings.twitter_oauth_redirect_uri,
-                    "code_verifier": code_verifier,
-                },
-                headers={
-                    "Authorization": f"Basic {basic_auth}",
-                    "Content-Type": "application/x-www-form-urlencoded",
-                },
-                timeout=10,
-            )
-            if resp.status_code != 200:
-                logger.error("Twitter token exchange failed: %s", resp.text)
-                return _error_redirect(settings, "Failed to exchange Twitter authorization code")
-            token_data = resp.json()
-
-        expires_at = None
-        if token_data.get("expires_in"):
-            expires_at = datetime.now(timezone.utc) + timedelta(seconds=token_data["expires_in"])
-
-        db_factory = get_session_factory()
-        from src.api.deps import resolve_workspace_id
-
-        async with db_factory() as _db:
-            workspace_id = await resolve_workspace_id(_db, user_id)
-
-        oauth_mgr = OAuthManager(
-            db_factory,
-            encryption_key=settings.oauth_encryption_key,
-            settings=settings,
-        )
-        await oauth_mgr.store_token(
-            user_id=user_id,
-            provider="twitter",
-            access_token=token_data["access_token"],
-            refresh_token=token_data.get("refresh_token"),
-            expires_at=expires_at,
-            scopes=token_data.get("scope", "").split() if token_data.get("scope") else None,
-            workspace_id=workspace_id,
-        )
-        await _ensure_integration(db_factory, user_id, "twitter", workspace_id=workspace_id)
-        logger.info("Twitter integration linked for %s", user_id)
-
     else:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
 
@@ -837,11 +640,8 @@ async def oauth_callback(
             "google": ["google-workspace"],
             "github": ["github"],
             "slack": ["slack"],
-            "linear": ["linear"],
             "notion": ["notion"],
             "jira": ["atlassian"],
-            "linkedin": [],
-            "twitter": [],
         }
         for server_name in _provider_servers.get(provider, []):
             background_tasks.add_task(
@@ -860,7 +660,7 @@ async def oauth_callback(
 
 
 async def _trigger_initial_observation(user_id: str, sources: list[str], workspace_id: str) -> None:
-    """Run initial perception cycle for newly connected sources (background)."""
+    """Run initial perception cycle and MCP schema discovery for newly connected sources."""
     try:
         from src.config.settings import get_settings
         from src.models.database import get_session_factory
@@ -894,6 +694,32 @@ async def _trigger_initial_observation(user_id: str, sources: list[str], workspa
                         source,
                         exc_info=True,
                     )
+
+                # Eagerly create MCP session to discover tool schemas.
+                # Stdio servers are lazy (per-user), so schemas aren't
+                # available until the first session. Creating it here
+                # populates the DB so tools appear in agent tool lists
+                # immediately after OAuth connection.
+                try:
+                    from src.integrations.mcp_pool import get_workspace_pool
+
+                    pool = get_workspace_pool()
+                    if pool:
+                        # Ensure config is registered (may have been activated
+                        # after startup via this OAuth callback)
+                        if not pool.session_pool.has_server_config(source, workspace_id):
+                            await pool.reload_server(workspace_id, source)
+
+                        session = await pool.session_pool.get_or_create_session(
+                            source, user_id=user_id, workspace_id=workspace_id
+                        )
+                        logger.info(
+                            "MCP schema discovery for %s: %d tools",
+                            source,
+                            len(session.tools),
+                        )
+                except Exception:
+                    logger.debug("MCP schema discovery skipped for %s", source, exc_info=True)
         finally:
             await svc_db.close()
     except Exception:
@@ -906,12 +732,20 @@ async def _ensure_integration(
     provider: str,
     account_email: str | None = None,
     workspace_id: str = "",
+    extra_config: dict | None = None,
 ) -> None:
     """Create or reactivate an IntegrationInstallation after OAuth."""
     from sqlalchemy import select as sa_select
 
     from src.models.ids import generate_id
     from src.models.integration_installation import IntegrationInstallation
+
+    # Build config dict from account_email and any extra provider-specific data
+    config: dict = {}
+    if account_email:
+        config["account_email"] = account_email
+    if extra_config:
+        config.update(extra_config)
 
     try:
         async with db_factory() as db:
@@ -926,6 +760,10 @@ async def _ensure_integration(
             if existing:
                 existing.status = "active"
                 existing.enabled = True
+                # Merge new config into existing (preserves other fields)
+                merged = dict(existing.config or {})
+                merged.update(config)
+                existing.config = merged
             else:
                 db.add(
                     IntegrationInstallation(
@@ -938,7 +776,7 @@ async def _ensure_integration(
                         auth_provider="oauth",
                         status="active",
                         health_status="unknown",
-                        config={"account_email": account_email} if account_email else {},
+                        config=config,
                         enabled=True,
                     )
                 )

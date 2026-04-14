@@ -112,30 +112,6 @@ class TestNewWorkflowCapabilities:
         for cap in new_caps:
             assert cap in CAPABILITY_CATALOG, f"Missing capability: {cap}"
 
-    def test_new_linear_tools_mapped(self):
-        expected = {
-            "linear_create_issues": "workflow.create_issues",
-            "linear_bulk_update_issues": "workflow.bulk_update",
-            "linear_search_issues_by_identifier": "workflow.search_by_id",
-            "linear_update_comment": "workflow.update_comment",
-            "linear_delete_comment": "workflow.delete_comment",
-            "linear_resolve_comment": "workflow.resolve_comment",
-            "linear_unresolve_comment": "workflow.unresolve_comment",
-            "linear_get_user": "workflow.get_user",
-            "linear_get_project": "workflow.get_project",
-            "linear_list_projects": "workflow.list_projects",
-            "linear_create_project_with_issues": "workflow.create_project",
-            "linear_create_project_milestone": "workflow.create_milestone",
-            "linear_get_project_milestones": "workflow.get_milestones",
-            "linear_update_project_milestone": "workflow.update_milestone",
-            "linear_delete_project_milestone": "workflow.delete_milestone",
-            "linear_create_customer_need_from_attachment": "workflow.create_customer_need",
-            "linear_auth_callback": "workflow.auth",
-        }
-        for tool, cap in expected.items():
-            actual = _get_cap(tool)
-            assert actual == cap, f"{tool} should map to {cap}, got {actual}"
-
 
 class TestNewDocCapabilities:
     def test_new_doc_capabilities_in_catalog(self):

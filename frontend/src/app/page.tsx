@@ -16,7 +16,6 @@ import { WorkspaceStatusBar } from "@/components/workspace/workspace-status-bar"
 import { WorkspaceCanvas } from "@/components/workspace/workspace-canvas";
 import { SurfaceDetailModal } from "@/components/workspace/surface-detail-modal";
 import type { WorkspaceSurfacePush, SurfaceUpdate } from "@/lib/a2ui-types";
-import type { SurfaceKind } from "@/lib/types/surfaces";
 
 export default function WorkspacePage() {
   const { user } = useAuth();
@@ -46,12 +45,19 @@ export default function WorkspacePage() {
     const raw = workspaceData?.surfaces ?? [];
     return raw.map((s) => ({
       id: s.id,
-      kind: (s.kind as SurfaceKind) || "summary",
+      kind: s.kind || "summary",
       preview: s.preview,
       detail_config: s.detail_config,
       source_run_id: s.source_run_id ?? null,
       response_preview: s.response_preview ?? null,
       created_at: s.created_at ?? new Date().toISOString(),
+      // Execution state from persisted last_surface_update
+      ...(s.phase && { phase: s.phase }),
+      ...(s.steps && { steps: s.steps }),
+      ...(s.current_step !== undefined && { current_step: s.current_step }),
+      ...(s.progress && { progress: s.progress }),
+      ...(s.approval && { approval: s.approval }),
+      ...(s.results && { results: s.results }),
     }));
   }, [workspaceData]);
 
@@ -90,7 +96,7 @@ export default function WorkspacePage() {
     (push: WorkspaceSurfacePush) => {
       addSurface({
         id: push.id,
-        kind: (push.kind as SurfaceKind) || "summary",
+        kind: push.kind || "summary",
         preview: push.preview,
         detail_config: push.detail_config,
         source_run_id: push.source_run_id,
@@ -120,7 +126,7 @@ export default function WorkspacePage() {
     : null;
 
   return (
-    <div className="p-4 sm:p-6 space-y-5">
+    <div className="p-4 sm:p-6 space-y-4 animate-fade-in">
       <GreetingHero
         headline={headline}
         approvalCount={approvalCount}

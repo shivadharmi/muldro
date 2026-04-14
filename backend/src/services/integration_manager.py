@@ -32,11 +32,8 @@ _PROVIDER_TO_OAUTH: dict[str, str] = {
     "drive": "google",
     "github": "github",
     "slack": "slack",
-    "linear": "linear",
     "notion": "notion",
     "jira": "jira",
-    "linkedin": "linkedin",
-    "twitter": "twitter",
 }
 
 

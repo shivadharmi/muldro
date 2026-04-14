@@ -20,7 +20,7 @@ export function A2UIEntityCard({ component }: Props) {
   const cls = typeColors[entityType] || "border-b-primary bg-surface-1";
 
   return (
-    <div className={`rounded-lg border p-3 ${cls}`}>
+    <div className={`rounded-[var(--radius-lg)] border p-3 ${cls}`}>
       <div className="flex items-start justify-between mb-1">
         <p className="text-sm font-medium text-t-primary">{name}</p>
         <span className="text-[10px] text-t-tertiary uppercase">{entityType}</span>

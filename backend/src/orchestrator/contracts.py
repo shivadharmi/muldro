@@ -9,7 +9,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from src.ui.contracts import SurfaceKind
 
 
 class AgentEnvelope(BaseModel):
@@ -196,6 +198,10 @@ class PolicyDecision(BaseModel):
     risk_level: Literal["none", "low", "medium", "high", "critical"] = "low"
     approval_id: str | None = None
     execution_id: str | None = None
+    trust_level: str = ""
+    effective_trust_level: str = ""
+    approved_count: int = 0
+    rejected_count: int = 0
 
 
 # ── Realtime / A2UI contracts ────────────────────────────────────
@@ -229,20 +235,7 @@ class WorkspaceSurfacePush(BaseModel):
 
     type: Literal["surface"] = "surface"
     id: str
-    kind: Literal[
-        "summary",
-        "briefing",
-        "plan",
-        "checklist",
-        "approval",
-        "comparison",
-        "alert",
-        "timeline",
-        "table",
-        "recommendation",
-        "activity",
-        "proactive_insight",
-    ]
+    kind: SurfaceKind
     preview: Any  # SurfacePreview — imported at runtime to avoid circular deps
     detail_config: Any | None = None  # DetailConfig — same reason
     decision: str | None = None
@@ -250,6 +243,15 @@ class WorkspaceSurfacePush(BaseModel):
     response_preview: str | None = None
     created_at: str = ""
     ttl_hours: int = 24
+    # Merged from REST-only path
+    trust_context: dict[str, str] | None = None
+    insight_data: dict | None = None
+    phase: str | None = None
+    steps: list[dict] | None = None
+    current_step: str | None = None
+    progress: str | None = None
+    approval: dict | None = None
+    results: dict | None = None
 
 
 class SuggestedActionRef(BaseModel):
@@ -260,6 +262,7 @@ class SuggestedActionRef(BaseModel):
     description: str
     capability: str
     action_input: dict[str, Any] = Field(default_factory=dict)
+    action_preview: str = ""
 
 
 class InsightSurfaceData(BaseModel):
@@ -277,6 +280,46 @@ class InsightSurfaceData(BaseModel):
     dismiss_available: bool = True
 
 
+class SurfaceSpec(BaseModel):
+    """Surface specification produced by the Presenter agent.
+
+    The Presenter decides IF a surface should be created, what KIND it is,
+    and what PREVIEW data to show. Parsed from the Presenter's JSON output.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    should_surface: bool = False
+    kind: SurfaceKind
+    title: str
+    subtitle: str | None = None
+    status: (
+        Literal[
+            "pending",
+            "running",
+            "completed",
+            "failed",
+            "awaiting_approval",
+            "cancelled",
+            "proposal",
+        ]
+        | None
+    ) = None
+    priority: Literal["low", "medium", "high", "critical"] | None = None
+    metrics: list[dict] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+
+    @field_validator("title")
+    @classmethod
+    def _cap_title(cls, v: str) -> str:
+        return v[:80]
+
+    @field_validator("subtitle")
+    @classmethod
+    def _cap_subtitle(cls, v: str | None) -> str | None:
+        return v[:120] if v else None
+
+
 # ── Execution surface update contracts ────────────────────────────
 
 
@@ -290,6 +333,13 @@ class StepState(BaseModel):
     status: Literal["pending", "executing", "completed", "failed", "approval_needed", "user_action"]
     output_summary: str | None = None
     duration_ms: int | None = None
+    started_at: str | None = None
+
+    # Evidence (available on demand)
+    completed_at: str | None = None
+    timeout_seconds: int | None = None
+    error: dict | None = None
+    retry_count: int | None = None
 
 
 class ApprovalContext(BaseModel):
@@ -297,11 +347,23 @@ class ApprovalContext(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    # Primary
     approval_id: str
     step_description: str
+    risk_level: str = ""
+    trust_level: str = ""
+    expires_at: str | None = None
+    triggering_step_id: str | None = None
+    graduation_hint: str = ""
+
+    # Evidence
     risk_reasoning: str
     trust_context: str
-    graduation_hint: str = ""
+    reversible: bool = True
+    blast_radius: str = "self"
+    effective_trust_level: str = ""
+    approved_count: int = 0
+    rejected_count: int = 0
 
 
 class ResultSummary(BaseModel):

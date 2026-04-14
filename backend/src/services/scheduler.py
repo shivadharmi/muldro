@@ -19,6 +19,9 @@ from src.api.deps import resolve_workspace_id
 from src.config.settings import Settings
 from src.models.database import get_session_factory
 from src.models.schedules import Schedule
+from src.models.task_graph import TaskRun
+from src.services.dead_letter import DeadLetterService
+from src.services.execution_state import transition_run
 from src.services.heartbeat import HeartbeatService
 
 logger = logging.getLogger(__name__)
@@ -341,14 +344,23 @@ class SchedulerLoop:
             from src.services.execution_state import transition_run
 
             async with factory() as db:
+                from sqlalchemy import or_
+
                 result = await db.execute(
                     select(TaskRun)
                     .where(
-                        TaskRun.status == "pending",
-                        TaskRun.source.in_(["background", "approval_resume"]),
+                        or_(
+                            # Fresh background runs
+                            (TaskRun.status == "pending")
+                            & TaskRun.source.in_(["background", "approval_resume"]),
+                            # Runs approved by user, awaiting scheduler resume
+                            (TaskRun.status == "awaiting_approval")
+                            & (TaskRun.source == "approval_resume"),
+                        ),
                     )
                     .order_by(TaskRun.created_at.asc())
                     .limit(3)
+                    .with_for_update(skip_locked=True)
                 )
                 pending = list(result.scalars().all())
 
@@ -359,6 +371,7 @@ class SchedulerLoop:
                     # Capture IDs before execution — if the session enters
                     # PendingRollbackError state, lazy attribute access fails.
                     run_id = run.run_id
+                    run_status = run.status
                     plan_id = run.plan_id
                     user_id = run.user_id
                     ws_id = run.workspace_id or ""
@@ -378,20 +391,38 @@ class SchedulerLoop:
                             circuit_breaker=getattr(self._orchestrator, "_circuit_breaker", None),
                         )
 
-                        # Ensure steps exist before execution (defensive)
-                        step_check = await db.execute(
-                            select(TaskStep.step_id).where(TaskStep.run_id == run_id).limit(1)
-                        )
-                        if not step_check.scalar_one_or_none() and plan_id:
-                            await executor.populate_run_steps(run_id, plan_id)
+                        if run_status == "awaiting_approval":
+                            # Approval-resumed: use resume_run to recover
+                            # checkpoint, surface_id, and stale-context refresh.
+                            # Reset source so retries (failed → pending) go
+                            # through execute_run, not resume_run.
+                            run.source = "background"
                             await db.flush()
+                            completed = await executor.resume_run(run_id)
+                            logger.info(
+                                "Approval-resumed task %s completed: %s",
+                                run_id,
+                                completed.status,
+                            )
+                        else:
+                            # Fresh background run: ensure steps exist, then execute.
+                            step_check = await db.execute(
+                                select(TaskStep.step_id).where(TaskStep.run_id == run_id).limit(1)
+                            )
+                            if not step_check.scalar_one_or_none() and plan_id:
+                                await executor.populate_run_steps(run_id, plan_id)
+                                await db.flush()
 
-                        completed = await executor.execute_run(run_id)
-                        logger.info(
-                            "Background task %s completed: %s",
-                            run_id,
-                            completed.status,
-                        )
+                            # Generate trace_id so execution is observable
+                            from ulid import ULID
+
+                            bg_trace_id = f"trace_{ULID()}"
+                            completed = await executor.execute_run(run_id, trace_id=bg_trace_id)
+                            logger.info(
+                                "Background task %s completed: %s",
+                                run_id,
+                                completed.status,
+                            )
                     except Exception as e:
                         # Rollback poisoned session before any further DB access
                         await db.rollback()
@@ -512,8 +543,6 @@ class SchedulerLoop:
         """Retry DLQ entries that haven't exceeded max attempts."""
         try:
             async with factory() as db:
-                from src.services.dead_letter import DeadLetterService
-
                 dlq = DeadLetterService(db)
                 for uid in self._user_ids:
                     pending = await dlq.list_pending(uid, limit=10)
@@ -529,9 +558,88 @@ class SchedulerLoop:
                                 entry.entry_id,
                                 entry.attempt_count,
                             )
+                            dispatched = await self._dispatch_dlq_entry(db, entry, factory)
+                            if dispatched:
+                                await dlq.mark_resolved(entry.entry_id)
+                            else:
+                                logger.warning(
+                                    "DLQ entry %s dispatch failed for op=%s",
+                                    entry.entry_id,
+                                    entry.operation_type,
+                                )
                     await db.commit()
         except Exception:
             logger.warning("DLQ retry tick failed", exc_info=True)
+
+    async def _dispatch_dlq_entry(self, db, entry, factory) -> bool:
+        """Dispatch a single DLQ entry based on its operation_type.
+
+        Returns True if the operation was successfully re-executed.
+        """
+        op = entry.operation_type
+        payload = entry.payload or {}
+
+        try:
+            if op == "background_task":
+                run_id = payload.get("run_id")
+                if not run_id:
+                    logger.warning("DLQ background_task missing run_id: %s", entry.entry_id)
+                    return False
+                run = await db.get(TaskRun, run_id)
+                if not run:
+                    logger.warning("DLQ TaskRun not found: %s", run_id)
+                    return False
+                if run.status == "failed":
+                    transition_run(run, "pending")
+                    await db.flush()
+                else:
+                    logger.debug(
+                        "DLQ background_task run %s already in status '%s' — skipping transition",
+                        run_id,
+                        run.status,
+                    )
+                return True
+
+            if op == "failed_embedding":
+                # Full re-embed requires looking up source record by record_id
+                # to retrieve text — deferred to a dedicated embedding retry service.
+                logger.info(
+                    "DLQ failed_embedding entry %s — skipping (requires dedicated retry service)",
+                    entry.entry_id,
+                )
+                return False
+
+            if op == "perception_cycle":
+                source = payload.get("source")
+                if not source:
+                    logger.warning("DLQ perception_cycle missing source: %s", entry.entry_id)
+                    return False
+                if not self._orchestrator:
+                    logger.warning(
+                        "DLQ perception_cycle requires orchestrator: %s",
+                        entry.entry_id,
+                    )
+                    return False
+                await self._orchestrator._bump_perception_for_sources(
+                    [source], entry.user_id, entry.workspace_id
+                )
+                return True
+
+            logger.warning(
+                "DLQ unknown operation_type %r for entry %s",
+                op,
+                entry.entry_id,
+            )
+            return False
+
+        except Exception:
+            logger.warning(
+                "DLQ dispatch failed for entry %s (op=%s)",
+                entry.entry_id,
+                op,
+                exc_info=True,
+            )
+            return False
 
     # ------------------------------------------------------------------
     # Memory expiration
@@ -843,9 +951,14 @@ class SchedulerLoop:
                     except Exception:
                         run.status = "timed_out"
 
-                # 2. Stuck "awaiting_approval" runs whose linked approval has expired
+                # 2. Stuck "awaiting_approval" runs whose linked approval has expired.
+                # Skip runs tagged "approval_resume" — those are approved and
+                # waiting for the scheduler to resume them.
                 result = await db.execute(
-                    select(TaskRun).where(TaskRun.status == "awaiting_approval")
+                    select(TaskRun).where(
+                        TaskRun.status == "awaiting_approval",
+                        TaskRun.source != "approval_resume",
+                    )
                 )
                 awaiting_runs = list(result.scalars().all())
                 expired_cancelled = 0

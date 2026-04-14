@@ -10,94 +10,116 @@ interface Props {
   onClick: () => void;
 }
 
-const kindBorderColor: Record<string, string> = {
-  plan: "border-l-blue-500",
-  approval: "border-l-amber-500",
-  briefing: "border-l-green-500",
-  alert: "border-l-red-500",
-  summary: "border-l-gray-400",
-  recommendation: "border-l-gray-400",
-  proactive_insight: "border-l-violet-500",
+const kindLabel: Record<string, string> = {
+  plan: "Plan",
+  approval: "Approval",
+  briefing: "Briefing",
+  alert: "Alert",
+  summary: "Summary",
+  recommendation: "Rec",
+  proactive_insight: "Insight",
+  execution: "Execution",
+  checklist: "Checklist",
+  comparison: "Compare",
+  timeline: "Timeline",
+  table: "Table",
+  activity: "Activity",
+};
+
+const kindColor: Record<string, string> = {
+  plan: "bg-j-info-soft text-j-info",
+  approval: "bg-j-warning-soft text-j-warning",
+  briefing: "bg-j-success-soft text-j-success",
+  alert: "bg-j-error-soft text-j-error",
+  summary: "bg-surface-3 text-t-secondary",
+  recommendation: "bg-j-secondary-soft text-j-secondary",
+  proactive_insight: "bg-j-secondary-soft text-j-secondary",
+  execution: "bg-j-info-soft text-j-info",
 };
 
 const statusDotColor: Record<string, string> = {
-  pending: "bg-gray-400",
-  running: "bg-blue-400 animate-pulse",
-  completed: "bg-green-400",
-  failed: "bg-red-400",
-  awaiting_approval: "bg-amber-400",
-  cancelled: "bg-gray-500",
-  proposal: "bg-violet-400 animate-pulse",
+  pending: "bg-t-muted",
+  running: "bg-j-info animate-pulse-live",
+  completed: "bg-j-success",
+  failed: "bg-j-error",
+  awaiting_approval: "bg-j-warning animate-pulse-live",
+  cancelled: "bg-t-muted",
+  proposal: "bg-j-secondary animate-pulse-live",
 };
 
 const phaseDotColor: Record<string, string> = {
-  planning: "bg-blue-400 animate-pulse",
-  plan_ready: "bg-blue-400",
-  executing: "bg-blue-400 animate-pulse",
-  approval_needed: "bg-amber-400 animate-pulse",
-  completed: "bg-green-400",
-  failed: "bg-red-400",
-  partial: "bg-amber-400",
-  proposal: "bg-violet-400 animate-pulse",
+  planning: "bg-j-info animate-pulse-live",
+  plan_ready: "bg-j-info",
+  executing: "bg-j-info animate-pulse-live",
+  approval_needed: "bg-j-warning animate-pulse-live",
+  completed: "bg-j-success",
+  failed: "bg-j-error",
+  partial: "bg-j-warning",
+  proposal: "bg-j-secondary animate-pulse-live",
 };
 
 const priorityBadge: Record<string, string> = {
-  low: "bg-gray-500/20 text-gray-400",
-  medium: "bg-blue-500/20 text-blue-400",
-  high: "bg-amber-500/20 text-amber-400",
-  critical: "bg-red-500/20 text-red-400",
+  low: "bg-surface-3 text-t-secondary",
+  medium: "bg-j-info-soft text-j-info",
+  high: "bg-j-warning-soft text-j-warning",
+  critical: "bg-j-error-soft text-j-error",
 };
 
 const metricVariantClass: Record<string, string> = {
   default: "text-t-secondary",
-  success: "text-green-400",
-  warning: "text-amber-400",
-  danger: "text-red-400",
+  success: "text-j-success",
+  warning: "text-j-warning",
+  danger: "text-j-error",
 };
 
 export function SurfaceCard({ surface, onClick }: Props) {
   const { preview, kind } = surface;
-  const border = kindBorderColor[kind] ?? "border-l-gray-400";
 
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`w-full text-left rounded-lg border border-b-primary border-l-4 ${border} bg-surface-0 p-4 hover:bg-surface-1 transition-colors cursor-pointer`}
+      className="w-full text-left rounded-[var(--radius-lg)] border border-b-secondary bg-surface-1 p-4 surface-card cursor-pointer group"
     >
-      {/* Header: status dot + title + priority */}
-      <div className="flex items-start gap-2 mb-1">
+      {/* Header: kind badge + priority */}
+      <div className="flex items-center gap-2 mb-2.5">
+        <span className={`text-[10px] font-medium px-2 py-0.5 rounded-[var(--radius-sm)] ${kindColor[kind] ?? "bg-surface-3 text-t-secondary"}`}>
+          {kindLabel[kind] ?? kind}
+        </span>
         {(surface.phase || preview.status) && (
           <span
-            className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${
+            className={`w-1.5 h-1.5 rounded-full shrink-0 ${
               surface.phase
-                ? phaseDotColor[surface.phase] ?? "bg-gray-400"
-                : statusDotColor[preview.status!] ?? "bg-gray-400"
+                ? phaseDotColor[surface.phase] ?? "bg-t-muted"
+                : statusDotColor[preview.status!] ?? "bg-t-muted"
             }`}
           />
         )}
-        <h3 className="text-sm font-medium text-t-primary flex-1 line-clamp-2">
-          {preview.title}
-        </h3>
+        <div className="flex-1" />
         {preview.priority && (
           <span
-            className={`text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 ${priorityBadge[preview.priority] ?? ""}`}
+            className={`text-[10px] px-1.5 py-0.5 rounded-[var(--radius-sm)] font-medium ${priorityBadge[preview.priority] ?? ""}`}
           >
             {preview.priority}
           </span>
         )}
       </div>
 
+      {/* Title */}
+      <h3 className="text-[13px] font-medium text-t-primary line-clamp-2 mb-1 leading-snug">
+        {preview.title}
+      </h3>
+
       {/* Subtitle */}
       {preview.subtitle && (
-        <p className="text-xs text-t-tertiary line-clamp-2 mb-2">
+        <p className="text-xs text-t-tertiary line-clamp-2 mb-2.5 leading-relaxed">
           {preview.subtitle}
         </p>
       )}
 
       {/* Insight surface content */}
       {kind === "proactive_insight" && surface.insight_data && (
-        <div className="mb-2" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-2.5" onClick={(e) => e.stopPropagation()}>
           <InsightSurface
             surfaceId={surface.id}
             insightData={surface.insight_data as unknown as InsightData}
@@ -107,16 +129,16 @@ export function SurfaceCard({ surface, onClick }: Props) {
 
       {/* Execution step count */}
       {surface.steps && surface.steps.length > 0 && (
-        <div className="mb-2">
+        <div className="mb-2.5">
           <StepListCompact steps={surface.steps} />
         </div>
       )}
 
       {/* Progress bar */}
       {preview.progress != null && (
-        <div className="w-full h-1.5 bg-surface-2 rounded-full mb-2">
+        <div className="w-full h-1 bg-surface-3 rounded-full mb-2.5">
           <div
-            className="h-full bg-blue-500 rounded-full transition-all"
+            className="h-full bg-j-primary rounded-full transition-all duration-300"
             style={{ width: `${Math.min(preview.progress * 100, 100)}%` }}
           />
         </div>
@@ -124,10 +146,10 @@ export function SurfaceCard({ surface, onClick }: Props) {
 
       {/* Metrics row */}
       {preview.metrics.length > 0 && (
-        <div className="flex flex-wrap gap-x-4 gap-y-1 mb-2">
+        <div className="flex flex-wrap gap-x-4 gap-y-1 mb-2.5">
           {preview.metrics.slice(0, 4).map((m, i) => (
-            <span key={i} className="text-xs">
-              <span className="text-t-tertiary">{m.label}: </span>
+            <span key={i} className="text-[11px]">
+              <span className="text-t-muted">{m.label} </span>
               <span className={metricVariantClass[m.variant] ?? "text-t-secondary"}>
                 {m.value}
               </span>
@@ -138,18 +160,18 @@ export function SurfaceCard({ surface, onClick }: Props) {
 
       {/* Entities row */}
       {preview.entities.length > 0 && (
-        <div className="flex flex-wrap gap-1 mb-2">
+        <div className="flex flex-wrap gap-1 mb-2.5">
           {preview.entities.slice(0, 3).map((e, i) => (
             <span
               key={i}
-              className="text-[10px] px-1.5 py-0.5 rounded-full bg-surface-2 text-t-secondary"
+              className="text-[10px] px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-surface-2 text-t-secondary"
             >
               {e}
             </span>
           ))}
           {preview.entities.length > 3 && (
-            <span className="text-[10px] text-t-tertiary">
-              +{preview.entities.length - 3} more
+            <span className="text-[10px] text-t-muted">
+              +{preview.entities.length - 3}
             </span>
           )}
         </div>
@@ -157,11 +179,11 @@ export function SurfaceCard({ surface, onClick }: Props) {
 
       {/* Tags */}
       {preview.tags.length > 0 && (
-        <div className="flex flex-wrap gap-1 mb-2">
+        <div className="flex flex-wrap gap-1 mb-2.5">
           {preview.tags.slice(0, 5).map((t, i) => (
             <span
               key={i}
-              className="text-[10px] px-1.5 py-0.5 rounded bg-accent-primary/10 text-accent-primary"
+              className="text-[10px] px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-j-primary-soft text-j-primary"
             >
               {t}
             </span>
@@ -169,19 +191,19 @@ export function SurfaceCard({ surface, onClick }: Props) {
         </div>
       )}
 
-      {/* Footer: timestamp + click affordance */}
-      <div className="flex items-center justify-between mt-1">
-        {preview.timestamp && (
-          <span className="text-[10px] text-t-tertiary">
+      {/* Footer: timestamp + arrow */}
+      <div className="flex items-center justify-between mt-1 pt-2 border-t border-b-secondary">
+        {preview.timestamp ? (
+          <span className="text-[10px] text-t-muted">
             {formatRelativeTime(preview.timestamp)}
           </span>
-        )}
+        ) : <span />}
         <svg
           width="14"
           height="14"
           viewBox="0 0 24 24"
           fill="none"
-          className="text-t-tertiary ml-auto"
+          className="text-t-muted group-hover:text-t-secondary group-hover:translate-x-0.5 transition-all duration-150"
         >
           <path
             d="M9 18l6-6-6-6"

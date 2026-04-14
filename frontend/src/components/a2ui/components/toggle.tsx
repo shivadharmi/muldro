@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { A2UIComponent } from "@/lib/a2ui-types";
+import { FOCUS_RING } from "@/lib/focus-ring";
 
 interface Props {
   component: A2UIComponent;
@@ -28,7 +29,7 @@ export function A2UIToggle({ component, onAction }: Props) {
         role="switch"
         aria-checked={checked}
         onClick={handleToggle}
-        className={`relative w-9 h-5 rounded-full transition-colors ${checked ? "bg-j-primary" : "bg-b-primary"}`}
+        className={`relative w-9 h-5 rounded-full transition-colors ${FOCUS_RING} ${checked ? "bg-j-primary" : "bg-b-primary"}`}
       >
         <span
           className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${checked ? "translate-x-4" : ""}`}

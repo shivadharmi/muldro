@@ -33,7 +33,7 @@ sequenceDiagram
         GE->>GE: Query ready_steps (deps satisfied)
         GE->>GE: _emit_surface_update(executing)
 
-        par Execute independent steps
+        loop Execute ready steps (sequential within batch)
             GE->>TE: evaluate(trust_level, risk_level) → 4×4 matrix
             alt auto_execute_silent / auto_execute_notify
                 GE->>MCP: Execute via MCP bridge
@@ -139,7 +139,7 @@ The GraphExecutor builds a directed acyclic graph from PlanTasks:
 1. **Parse dependencies** - Each PlanTask has a `depends_on` list of task_ids
 2. **Topological sort** - Determines execution order respecting dependencies
 3. **Ready step detection** - Steps whose dependencies are all `completed`
-4. **Parallel execution** - Independent steps run concurrently via `asyncio.gather()`
+4. **Sequential execution** - Ready steps are executed sequentially within each batch (SQLAlchemy AsyncSession is not safe for concurrent coroutines sharing one session). Future: per-step sessions for parallelism.
 
 ```
 Example DAG:
@@ -147,7 +147,7 @@ Example DAG:
     ├── B (analyze) ──── D (report)
     └── C (summarize) ──┘
 
-Execution order: [A] -> [B, C] (parallel) -> [D]
+Execution order: [A] -> [B, C] (sequential within batch) -> [D]
 ```
 
 ## Execution Contracts

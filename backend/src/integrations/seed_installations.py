@@ -144,24 +144,6 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
         "scopes_granted": [],
     },
     {
-        "server_name": "linear",
-        "display_name": "Linear",
-        "transport": "stdio",
-        "command": "npx",
-        "args": ["-y", "mcp-server-linear"],
-        "env_template": {
-            "LINEAR_ACCESS_TOKEN": "Linear API access token",
-        },
-        "auth_provider": "linear",
-        "scopes_granted": [
-            "workflow.create_issue",
-            "workflow.update_issue",
-            "workflow.comment",
-            "workflow.list",
-            "workflow.search",
-        ],
-    },
-    {
         "server_name": "notion",
         "display_name": "Notion",
         "transport": "stdio",
@@ -197,19 +179,6 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
             "issue.comment",
             "issue.transition",
         ],
-    },
-    {
-        "server_name": "twilio",
-        "display_name": "Twilio (SMS/Voice)",
-        "transport": "stdio",
-        "command": "npx",
-        "args": ["-y", "@twilio-alpha/mcp"],
-        "env_template": {
-            "TWILIO_ACCOUNT_SID": "Twilio account SID",
-            "TWILIO_AUTH_TOKEN": "Twilio auth token",
-        },
-        "auth_provider": "token",
-        "scopes_granted": ["messaging.send"],
     },
 ]
 
@@ -300,6 +269,14 @@ async def seed_installations(db: AsyncSession, workspace_id: str, user_id: str) 
 
         if needs_update:
             changed += 1
+
+    # Remove stale installations that are no longer in _DEFAULT_INSTALLATIONS
+    default_names = {i["server_name"] for i in _DEFAULT_INSTALLATIONS}
+    for server_name, inst in existing.items():
+        if server_name not in default_names:
+            await db.delete(inst)
+            changed += 1
+            logger.info("Removed stale installation: %s", server_name)
 
     if changed:
         await db.flush()

@@ -66,40 +66,40 @@ async def _generate_with_mocks(
 
 class TestFamilyDisplayName:
     def test_email(self):
-        assert _family_display_name("email") == "Email (Gmail)"
+        assert _family_display_name("email") == "email — Gmail"
 
     def test_calendar(self):
-        assert _family_display_name("calendar") == "Calendar (Google)"
+        assert _family_display_name("calendar") == "calendar — Google Calendar"
 
     def test_repo(self):
-        assert _family_display_name("repo") == "Code (GitHub)"
+        assert _family_display_name("repo") == "repo — GitHub"
 
     def test_issue(self):
-        assert _family_display_name("issue") == "Issues"
+        assert _family_display_name("issue") == "issue — GitHub/Jira"
 
     def test_doc(self):
-        assert _family_display_name("doc") == "Documents (Notion)"
+        assert _family_display_name("doc") == "doc — Notion"
 
     def test_workflow(self):
-        assert _family_display_name("workflow") == "Projects (Linear)"
+        assert _family_display_name("workflow") == "workflow — Jira"
 
     def test_messaging(self):
-        assert _family_display_name("messaging") == "Messaging (Slack)"
+        assert _family_display_name("messaging") == "messaging — Slack"
 
     def test_browser(self):
-        assert _family_display_name("browser") == "Browser"
+        assert _family_display_name("browser") == "browser — Playwright"
 
     def test_search(self):
-        assert _family_display_name("search") == "Search"
+        assert _family_display_name("search") == "search — Web"
 
     def test_filesystem(self):
-        assert _family_display_name("filesystem") == "Files"
+        assert _family_display_name("filesystem") == "filesystem — Local Files"
 
     def test_internal(self):
-        assert _family_display_name("internal") == "Internal"
+        assert _family_display_name("internal") == "internal"
 
     def test_system(self):
-        assert _family_display_name("system") == "System"
+        assert _family_display_name("system") == "system"
 
     def test_unknown_passes_through(self):
         assert _family_display_name("custom_thing") == "custom_thing"
@@ -155,8 +155,8 @@ class TestGenerateCapabilitySummary:
         installations = [_mock_installation("google-workspace")]
         result = await _generate_with_mocks(tools, installations, seed_servers=[])
         assert "<connected_services>" in result
-        assert "Email (Gmail)" in result
-        assert "Calendar (Google)" in result
+        assert "email — Gmail" in result
+        assert "calendar — Google Calendar" in result
 
     @pytest.mark.asyncio
     async def test_disconnected_services(self):
@@ -181,5 +181,5 @@ class TestGenerateCapabilitySummary:
         ]
         installations = [_mock_installation("google-workspace")]
         result = await _generate_with_mocks(tools, installations, seed_servers=[])
-        assert "Internal" not in result
-        assert "Email (Gmail)" in result
+        assert "internal" not in result
+        assert "email — Gmail" in result

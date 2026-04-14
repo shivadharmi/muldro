@@ -355,7 +355,6 @@ class TestIntentClassifierSources:
         assert "calendar" in VALID_PERCEPTION_SOURCES
         assert "slack" in VALID_PERCEPTION_SOURCES
         assert "github" in VALID_PERCEPTION_SOURCES
-        assert "twitter" not in VALID_PERCEPTION_SOURCES
 
 
 # ---------------------------------------------------------------------------

@@ -9,7 +9,7 @@ Component Types (25+):
   Data: Table, DataGrid, Timeline, Metric, Progress, Chart
   Input: Button, TextField, Select, Toggle, Form
   Display: Avatar, StatusIndicator, EntityCard, MemoryCard
-  Specialized: ExecutionTrace, KanbanBoard, Calendar, CommandPalette
+  Specialized: ExecutionTrace, KanbanBoard, Calendar
 """
 
 import logging
@@ -70,12 +70,10 @@ class ComponentType(str, Enum):
     STATUS_INDICATOR = "StatusIndicator"
     ENTITY_CARD = "EntityCard"
     MEMORY_CARD = "MemoryCard"
-    IMAGE = "Image"
     # Specialized
     EXECUTION_TRACE = "ExecutionTrace"
     KANBAN_BOARD = "KanbanBoard"
     CALENDAR = "Calendar"
-    COMMAND_PALETTE = "CommandPalette"
 
 
 class A2UIAction(BaseModel):
@@ -107,6 +105,15 @@ class A2UIComponent(BaseModel):
             raise ValueError("Component id must not be empty")
         return v
 
+    @model_validator(mode="after")
+    def _validate_properties(self) -> "A2UIComponent":
+        from src.ui.component_properties import PROPERTY_MODELS
+
+        model = PROPERTY_MODELS.get(self.type)
+        if model is not None:
+            model(**self.properties)
+        return self
+
 
 class A2UISurface(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -119,6 +126,9 @@ class A2UISurface(BaseModel):
 # ── Rich preview + detail modal contracts ───────────────────────
 
 
+_VALID_METRIC_VARIANTS = {"default", "success", "warning", "danger"}
+
+
 class SurfaceMetric(BaseModel):
     """Single metric displayed on a preview card (e.g. '3 tasks', 'high risk')."""
 
@@ -127,6 +137,12 @@ class SurfaceMetric(BaseModel):
     label: str
     value: str
     variant: Literal["default", "success", "warning", "danger"] = "default"
+
+    @field_validator("variant", mode="before")
+    @classmethod
+    def _coerce_variant(cls, v: str) -> str:
+        """Map unknown LLM-generated variants (e.g. 'neutral', 'info') to 'default'."""
+        return v if v in _VALID_METRIC_VARIANTS else "default"
 
 
 class SurfacePreview(BaseModel):

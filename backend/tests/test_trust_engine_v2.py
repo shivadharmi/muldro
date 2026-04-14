@@ -176,3 +176,35 @@ class TestCeilingRespected:
         engine._get_ceiling = AsyncMock(return_value=_make_ceiling("learning"))
         result = await engine.evaluate("email.send", _make_risk("low"))
         assert result.decision == "approval_required"
+
+
+class TestEvaluateReturnsTrustFields:
+    """evaluate() must populate trust_level, effective_trust_level, counters."""
+
+    async def test_first_use_returns_trust_fields(self, engine):
+        state = _make_trust_state("first_use")
+        state.approved_count = 2
+        state.rejected_count = 1
+        engine._get_trust_state = AsyncMock(return_value=state)
+        engine._get_ceiling = AsyncMock(return_value=_make_ceiling("autonomous"))
+
+        result = await engine.evaluate("email.send", _make_risk("low"))
+
+        assert result.trust_level == "first_use"
+        assert result.effective_trust_level == "first_use"
+        assert result.approved_count == 2
+        assert result.rejected_count == 1
+
+    async def test_ceiling_limits_effective_level(self, engine):
+        state = _make_trust_state("trusted")
+        state.approved_count = 15
+        state.rejected_count = 0
+        engine._get_trust_state = AsyncMock(return_value=state)
+        engine._get_ceiling = AsyncMock(return_value=_make_ceiling("learning"))
+
+        result = await engine.evaluate("email.send", _make_risk("low"))
+
+        assert result.trust_level == "trusted"
+        assert result.effective_trust_level == "learning"
+        assert result.approved_count == 15
+        assert result.rejected_count == 0

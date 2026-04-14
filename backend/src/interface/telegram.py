@@ -15,6 +15,33 @@ from src.models.database import get_session_factory
 logger = logging.getLogger(__name__)
 
 
+def _split_message(text: str, limit: int = 4000) -> list[str]:
+    """Split a long message into chunks that fit Telegram's limit.
+
+    Splits on paragraph boundaries first, then on line boundaries.
+    """
+    if len(text) <= limit:
+        return [text]
+
+    chunks: list[str] = []
+    remaining = text
+    while remaining:
+        if len(remaining) <= limit:
+            chunks.append(remaining)
+            break
+        # Try to split on double-newline (paragraph)
+        split_at = remaining.rfind("\n\n", 0, limit)
+        if split_at == -1:
+            # Fall back to single newline
+            split_at = remaining.rfind("\n", 0, limit)
+        if split_at == -1:
+            # Hard split
+            split_at = limit
+        chunks.append(remaining[:split_at])
+        remaining = remaining[split_at:].lstrip("\n")
+    return chunks
+
+
 class TelegramRateLimiter:
     """Simple per-user sliding window rate limiter."""
 
@@ -155,9 +182,8 @@ class TelegramInterface:
                 user_id=self._resolve_user_id(), workspace_id=workspace_id
             )
             briefing_text = result.get("briefing", "No briefing available.")
-            if len(briefing_text) > 4000:
-                briefing_text = briefing_text[:4000] + "\n\n_(truncated)_"
-            await update.message.reply_text(briefing_text, parse_mode="Markdown")
+            for chunk in _split_message(briefing_text):
+                await update.message.reply_text(chunk, parse_mode="Markdown")
         except Exception as e:
             logger.error("Brief command failed: %s", e)
             await update.message.reply_text(f"Error generating briefing: {e}")
@@ -214,10 +240,8 @@ class TelegramInterface:
             if not response:
                 response = json.dumps(result, indent=2, default=str)
 
-            if len(response) > 4000:
-                response = response[:4000] + "\n\n_(truncated)_"
-
-            await update.message.reply_text(response, parse_mode="Markdown")
+            for chunk in _split_message(response):
+                await update.message.reply_text(chunk, parse_mode="Markdown")
         except Exception as e:
             logger.error("Message handling failed: %s", e)
             await update.message.reply_text(f"Error: {e}")

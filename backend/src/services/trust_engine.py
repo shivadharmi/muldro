@@ -105,6 +105,10 @@ class TrustEngine:
             decision=decision,
             justification=risk_assessment.reasoning,
             risk_level=risk,
+            trust_level=state.trust_level,
+            effective_trust_level=effective_level,
+            approved_count=state.approved_count,
+            rejected_count=state.rejected_count,
         )
 
     async def evaluate_plan_risk(

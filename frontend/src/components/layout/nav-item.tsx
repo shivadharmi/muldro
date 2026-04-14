@@ -22,15 +22,15 @@ export function NavItem({
       title={collapsed ? label : undefined}
       aria-label={label}
       aria-current={active ? "page" : undefined}
-      className={`flex items-center gap-2.5 rounded-[var(--radius-md)] text-sm transition-all group relative ${
-        collapsed ? "justify-center px-2 py-2" : "px-2.5 py-1.5"
+      className={`flex items-center gap-2.5 rounded-[var(--radius-md)] text-[13px] transition-all duration-150 group relative ${
+        collapsed ? "justify-center p-2.5" : "px-3 py-2"
       } ${
         active
-          ? "bg-j-primary-soft text-j-primary font-medium border-l-2 border-l-j-primary"
-          : "text-t-secondary hover:text-t-primary hover:bg-surface-2 border-l-2 border-l-transparent"
+          ? "bg-j-primary-soft text-j-primary font-medium"
+          : "text-t-tertiary hover:text-t-primary hover:bg-surface-2"
       }`}
     >
-      <span className="flex-shrink-0 w-4 h-4">{icon}</span>
+      <span className="flex-shrink-0 w-[18px] h-[18px]">{icon}</span>
       {!collapsed && <span className="flex-1 truncate">{label}</span>}
       {badge !== undefined && badge > 0 && (
         <span

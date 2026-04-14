@@ -33,7 +33,6 @@ SESSION_TTL_SECONDS = 1800
 _STDIO_TOKEN_ENV_VARS: dict[str, str] = {
     "github": "GITHUB_PERSONAL_ACCESS_TOKEN",
     "slack": "SLACK_MCP_XOXB_TOKEN",
-    "linear": "LINEAR_ACCESS_TOKEN",
     "notion": "NOTION_TOKEN",
 }
 
@@ -95,8 +94,15 @@ class UserMCPSessionPool:
         user_id: str,
         workspace_id: str = "",
     ) -> SessionEntry:
-        """Get an existing session or create a new one with auth."""
-        key = (workspace_id, server_name, user_id)
+        """Get an existing session or create a new one with auth.
+
+        Auth-free servers share a single session per workspace (no per-user
+        subprocess needed), keyed with a ``__shared__`` sentinel user_id.
+        """
+        config = self._server_configs.get((workspace_id, server_name))
+        auth_provider = (config or {}).get("auth_provider", "none")
+        effective_user = "__shared__" if auth_provider == "none" else user_id
+        key = (workspace_id, server_name, effective_user)
 
         async with self._lock:
             entry = self._sessions.get(key)
@@ -128,7 +134,13 @@ class UserMCPSessionPool:
             else:
                 # stdio transport — inject auth as env var, then build config
                 if auth and isinstance(auth, BearerAuth):
-                    _inject_stdio_auth(config, server_name, auth.token)
+                    # BearerAuth wraps token in SecretStr; unwrap for env dict
+                    raw_token = (
+                        auth.token.get_secret_value()
+                        if hasattr(auth.token, "get_secret_value")
+                        else str(auth.token)
+                    )
+                    _inject_stdio_auth(config, server_name, raw_token)
                 server_cfg = {"mcpServers": {server_name: config}}
                 client_ctx = Client(server_cfg)
 
@@ -430,6 +442,10 @@ class UserMCPSessionPool:
         for canonical in removed_tools:
             self._tool_metadata.pop(canonical, None)
 
+    def has_server_config(self, server_name: str, workspace_id: str = "") -> bool:
+        """Check if a server config is registered."""
+        return (workspace_id, server_name) in self._server_configs
+
     def is_pool_tool(self, tool_name: str, workspace_id: str = "") -> bool:
         """Check if a tool is known to any server in the pool."""
         for key, server_tools in self._server_tools.items():
@@ -625,7 +641,7 @@ class UserMCPSessionPool:
             token = config.get("token", "")
             return BearerAuth(token=token) if token else None
 
-        if auth_provider in ("oauth", "google", "github", "slack", "linear", "notion", "jira"):
+        if auth_provider in ("oauth", "google", "github", "slack", "notion", "jira"):
             # Resolve OAuth token from OAuthManager
             if not self._oauth_manager:
                 logger.warning("OAuth requested but no OAuthManager configured")
@@ -655,8 +671,6 @@ def _infer_provider(server_name: str) -> str:
         return "github"
     if "slack" in name_lower:
         return "slack"
-    if "linear" in name_lower:
-        return "linear"
     if "notion" in name_lower:
         return "notion"
     if "jira" in name_lower or "atlassian" in name_lower:

@@ -16,6 +16,7 @@ from src.api.routes_events import router as events_router
 from src.api.routes_feedback import router as feedback_router
 from src.api.routes_graph import router as graph_router
 from src.api.routes_health import router as health_router
+from src.api.routes_history import router as history_router
 from src.api.routes_insights import router as insights_router
 from src.api.routes_integrations import router as integrations_router
 from src.api.routes_knowledge import router as knowledge_router
@@ -27,7 +28,6 @@ from src.api.routes_notifications import router as notifications_router
 from src.api.routes_observation import router as observation_router
 from src.api.routes_plans import router as plans_router
 from src.api.routes_realtime import router as realtime_router
-from src.api.routes_runs import router as runs_router
 from src.api.routes_runtime import router as runtime_router
 from src.api.routes_search import router as search_router
 from src.api.routes_settings import router as settings_router
@@ -200,7 +200,7 @@ def create_app() -> FastAPI:
                 encryption_key=settings.oauth_encryption_key,
             )
         except Exception:
-            logger.debug("OAuthManager unavailable for MCP bridge", exc_info=True)
+            logger.warning("OAuthManager unavailable for MCP bridge", exc_info=True)
 
         # Initialize MCP bridge with session pool.
         # Auth is resolved per-user from OAuthManager at call time.
@@ -209,7 +209,16 @@ def create_app() -> FastAPI:
 
             await initialize_mcp_bridge(oauth_manager=oauth_manager)
         except Exception:
-            logger.debug("MCP bridge init skipped", exc_info=True)
+            logger.error("MCP bridge initialization failed", exc_info=True)
+
+        # Signal the worker thread that MCP bridge initialization is complete
+        # (whether successful or not) so it can start processing tasks.
+        try:
+            from run import mcp_bridge_ready
+
+            mcp_bridge_ready.set()
+        except ImportError:
+            pass  # Not running via run.py (e.g., direct uvicorn or tests)
 
         yield
 
@@ -347,8 +356,8 @@ def create_app() -> FastAPI:
     # Plans (plan tracking)
     app.include_router(plans_router, tags=["plans"])
 
-    # Runs (task execution runs)
-    app.include_router(runs_router, tags=["runs"])
+    # History (unified run history with retry / cancel / resume)
+    app.include_router(history_router, tags=["history"])
 
     # Knowledge graph (Neo4j)
     app.include_router(graph_router, tags=["graph"])

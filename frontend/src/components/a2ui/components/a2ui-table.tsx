@@ -33,7 +33,7 @@ export function A2UITable({ component }: Props) {
   };
 
   return (
-    <div className="overflow-x-auto rounded-lg border border-b-primary">
+    <div className="overflow-x-auto rounded-[var(--radius-lg)] border border-b-primary">
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-b-primary bg-surface-1">

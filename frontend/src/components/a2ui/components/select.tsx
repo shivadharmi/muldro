@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { A2UIComponent } from "@/lib/a2ui-types";
+import { FOCUS_RING } from "@/lib/focus-ring";
 
 interface Props {
   component: A2UIComponent;
@@ -27,7 +28,7 @@ export function A2UISelect({ component, onAction }: Props) {
       <select
         value={value}
         onChange={(e) => handleChange(e.target.value)}
-        className="w-full rounded bg-surface-2 border border-b-primary px-3 py-2 text-sm text-t-primary focus:outline-none focus:ring-1 focus:ring-j-ring"
+        className={`w-full rounded-[var(--radius-sm)] bg-surface-2 border border-b-primary px-3 py-2 text-sm text-t-primary ${FOCUS_RING}`}
       >
         <option value="">Select...</option>
         {options.map((opt) => (

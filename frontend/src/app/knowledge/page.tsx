@@ -100,9 +100,8 @@ function KnowledgeContent() {
           <PageHeader title="Knowledge" />
           <KnowledgeSearch />
           {(entityCount > 0 || relationshipCount > 0) && (
-            <span className="text-xs text-t-muted whitespace-nowrap sm:ml-auto">
-              <span className="hidden sm:inline">{entityCount} entities &middot; {relationshipCount} relationships</span>
-              <span className="sm:hidden">{entityCount} ent &middot; {relationshipCount} rel</span>
+            <span className="text-xs text-t-muted whitespace-nowrap sm:ml-auto hidden sm:inline">
+              {entityCount} entities &middot; {relationshipCount} relationships
             </span>
           )}
         </div>

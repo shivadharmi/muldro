@@ -53,7 +53,7 @@ export function DonutChart({ data, total, size = 130 }: DonutChartProps) {
           cy="21"
           r={RADIUS}
           fill="none"
-          stroke="var(--color-surface-3, hsl(214 16% 18%))"
+          stroke="var(--color-surface-3)"
           strokeWidth="3"
         />
 
