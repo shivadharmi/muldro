@@ -290,8 +290,9 @@ async def oauth_authorize(
 async def oauth_callback(
     provider: str,
     background_tasks: BackgroundTasks,
-    code: str = Query(...),
+    code: str = Query(""),
     state: str = Query(""),
+    error: str = Query(""),
     settings: Settings = Depends(get_settings),
 ):
     """Handle OAuth callback — exchange code for tokens, store as integration.
@@ -304,6 +305,13 @@ async def oauth_callback(
 
     from src.models.database import get_session_factory
     from src.services.oauth_manager import OAuthManager
+
+    # Handle user-denied or provider-error callbacks (no code param)
+    if error:
+        return _error_redirect(settings, f"OAuth {provider} error: {error}")
+
+    if not code:
+        return _error_redirect(settings, f"OAuth {provider}: no authorization code received")
 
     # user_id must be passed in state param from the authorize step
     if not state or not state.startswith("usr_"):
@@ -492,14 +500,18 @@ async def oauth_callback(
                 },
                 headers={
                     "Authorization": f"Basic {basic_auth}",
-                    "Content-Type": "application/json",
-                    "Notion-Version": "2022-06-28",
                 },
-                timeout=10,
+                timeout=15,
             )
             if resp.status_code != 200:
-                logger.error("Notion token exchange failed: %s", resp.text)
-                return _error_redirect(settings, "Failed to exchange Notion authorization code")
+                logger.error(
+                    "Notion token exchange failed (status=%d): %s",
+                    resp.status_code,
+                    resp.text,
+                )
+                return _error_redirect(
+                    settings, f"Notion token exchange failed: {resp.json().get('error', resp.text)}"
+                )
             token_data = resp.json()
 
         # Notion tokens don't expire
