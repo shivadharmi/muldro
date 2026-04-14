@@ -849,8 +849,13 @@ class JarvisOrchestrator:
                         + "\n--- End of prior step results ---\n"
                     )
 
+                telegram_hint = (
+                    " Keep under 3500 chars. Prioritize action items and key findings."
+                    if surface == "telegram"
+                    else ""
+                )
                 presenter_msg = (
-                    f"Format this for the user ({surface}). "
+                    f"Format this for the user ({surface}).{telegram_hint} "
                     f"Be conversational and helpful.\n\n"
                     f"User message: {message}\n"
                     f"Plan: {json.dumps(plan_dict)}"
@@ -1195,8 +1200,13 @@ class JarvisOrchestrator:
                         + "\n--- End of prior step results ---\n"
                     )
 
+                telegram_hint = (
+                    " Keep under 3500 chars. Prioritize action items and key findings."
+                    if surface == "telegram"
+                    else ""
+                )
                 presenter_msg = (
-                    f"Respond to the user ({surface}). "
+                    f"Respond to the user ({surface}).{telegram_hint} "
                     f"Be conversational and helpful.\n\n"
                     f"User message: {message}\n"
                     f"Intent: {intent}\n"
