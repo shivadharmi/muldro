@@ -270,6 +270,14 @@ async def seed_installations(db: AsyncSession, workspace_id: str, user_id: str) 
         if needs_update:
             changed += 1
 
+    # Remove stale installations that are no longer in _DEFAULT_INSTALLATIONS
+    default_names = {i["server_name"] for i in _DEFAULT_INSTALLATIONS}
+    for server_name, inst in existing.items():
+        if server_name not in default_names:
+            await db.delete(inst)
+            changed += 1
+            logger.info("Removed stale installation: %s", server_name)
+
     if changed:
         await db.flush()
         logger.info("Seeded/updated %d integration installations", changed)

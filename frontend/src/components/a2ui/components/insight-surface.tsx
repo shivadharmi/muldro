@@ -13,7 +13,8 @@ const sourceIcons: Record<string, string> = {
   github: "\uD83D\uDC19",
   calendar: "\uD83D\uDCC5",
   slack: "\uD83D\uDCAC",
-  linear: "\uD83D\uDCCB",
+  notion: "\uD83D\uDCDD",
+  jira: "\uD83D\uDD37",
 };
 
 interface InsightSurfaceProps {
