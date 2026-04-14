@@ -44,12 +44,6 @@ _DEFAULT_TRUST_RECORDS: list[dict] = [
         "status": "active",
     },
     {
-        "server_name": "linear",
-        "trust_tier": "T1",
-        "verified_by": "linear",
-        "status": "active",
-    },
-    {
         "server_name": "notion",
         "trust_tier": "T1",
         "verified_by": "notion",
@@ -71,7 +65,6 @@ _SERVER_TO_CONNECTORS: dict[str, list[str]] = {
     "github": ["github"],
     "slack": ["slack"],
     "playwright": ["browser"],
-    "linear": ["linear"],
     "notion": ["notion"],
     "atlassian": ["jira"],
 }
