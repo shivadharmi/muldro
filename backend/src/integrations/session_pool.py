@@ -33,7 +33,6 @@ SESSION_TTL_SECONDS = 1800
 _STDIO_TOKEN_ENV_VARS: dict[str, str] = {
     "github": "GITHUB_PERSONAL_ACCESS_TOKEN",
     "slack": "SLACK_MCP_XOXB_TOKEN",
-    "linear": "LINEAR_ACCESS_TOKEN",
     "notion": "NOTION_TOKEN",
 }
 
@@ -635,7 +634,7 @@ class UserMCPSessionPool:
             token = config.get("token", "")
             return BearerAuth(token=token) if token else None
 
-        if auth_provider in ("oauth", "google", "github", "slack", "linear", "notion", "jira"):
+        if auth_provider in ("oauth", "google", "github", "slack", "notion", "jira"):
             # Resolve OAuth token from OAuthManager
             if not self._oauth_manager:
                 logger.warning("OAuth requested but no OAuthManager configured")
@@ -665,8 +664,6 @@ def _infer_provider(server_name: str) -> str:
         return "github"
     if "slack" in name_lower:
         return "slack"
-    if "linear" in name_lower:
-        return "linear"
     if "notion" in name_lower:
         return "notion"
     if "jira" in name_lower or "atlassian" in name_lower:
