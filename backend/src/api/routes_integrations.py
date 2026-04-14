@@ -2,6 +2,7 @@
 
 Endpoints:
   GET    /v1/integrations                — list installations
+  GET    /v1/integrations/unified        — unified view for frontend
   POST   /v1/integrations                — create installation
   GET    /v1/integrations/{id}           — get installation
   DELETE /v1/integrations/{id}           — delete installation
@@ -74,6 +75,18 @@ class HealthCheckResponse(BaseModel):
     health_status: str
 
 
+class UnifiedIntegrationResponse(BaseModel):
+    server_name: str
+    display_name: str
+    category: str  # "oauth" | "token" | "local"
+    provider: str | None = None
+    configured: bool
+    connected: bool
+    health_status: str
+    scopes: list[str]
+    install_id: str | None = None
+
+
 # ── Endpoints ────────────────────────────────────────────────────────
 
 
@@ -103,6 +116,118 @@ async def list_installations(
         )
         for i in installations
     ]
+
+
+@router.get("/unified", response_model=list[UnifiedIntegrationResponse])
+async def list_unified_integrations(
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Unified integration view merging installations with OAuth connection status.
+
+    Returns one entry per installation with:
+    - category: "oauth" | "token" | "local" (derived from auth_provider)
+    - provider: OAuth provider name for Connect button (maps atlassian -> jira)
+    - configured: whether OAuth credentials are set
+    - connected: whether a valid token exists
+    - health_status, scopes, install_id
+    """
+    from src.config.settings import get_settings
+    from src.integrations.control_plane import IntegrationControlPlane
+
+    settings = get_settings()
+    cp = IntegrationControlPlane(db, workspace_id)
+    installations = await cp.list_installations()
+
+    # Check OAuth connection status
+    connected_providers: set[str] = set()
+    try:
+        from src.models.database import get_session_factory
+        from src.services.oauth_manager import OAuthManager
+
+        db_factory = get_session_factory()
+        oauth_mgr = OAuthManager(db_factory, user_id, settings=settings)
+        for provider_name in ("google", "github", "slack", "linear", "notion", "jira"):
+            try:
+                token = await oauth_mgr.get_valid_token(user_id, provider_name)
+                if token:
+                    connected_providers.add(provider_name)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # Map auth_provider to category and provider name
+    auth_to_category = {
+        "google": "oauth",
+        "github": "oauth",
+        "slack": "token",
+        "linear": "oauth",
+        "notion": "oauth",
+        "oauth": "oauth",  # atlassian uses "oauth"
+        "token": "token",
+    }
+
+    # Map server_name to the OAuth provider for the Connect button
+    server_to_provider = {
+        "google-workspace": "google",
+        "github": "github",
+        "slack": "slack",
+        "linear": "linear",
+        "notion": "notion",
+        "atlassian": "jira",
+    }
+
+    results = []
+    for inst in installations:
+        auth = inst.auth_provider
+        category = auth_to_category.get(auth, "local") if auth else "local"
+        provider = server_to_provider.get(inst.server_name)
+
+        # Determine if OAuth is configured
+        configured = True
+        if provider:
+            oauth_name = provider if provider != "jira" else "jira"
+            client_id = getattr(settings, f"{oauth_name}_oauth_client_id", "")
+            configured = bool(client_id)
+
+        # Check if connected via OAuth
+        connected = False
+        if provider:
+            oauth_check = provider if provider != "jira" else "jira"
+            connected = oauth_check in connected_providers
+        elif category == "token":
+            # Token-based: check if env vars are set (via env_template)
+            env_template = inst.env_template or {}
+            connected = all(
+                bool(import_os_environ_get(k)) for k in env_template
+            ) if env_template else False
+        elif category == "local":
+            connected = inst.status == "active"
+
+        results.append(
+            UnifiedIntegrationResponse(
+                server_name=inst.server_name,
+                display_name=inst.display_name,
+                category=category,
+                provider=provider,
+                configured=configured,
+                connected=connected,
+                health_status=inst.health_status,
+                scopes=inst.scopes_granted or [],
+                install_id=inst.install_id,
+            )
+        )
+
+    return results
+
+
+def import_os_environ_get(key: str) -> str:
+    """Get an environment variable value."""
+    import os
+
+    return os.environ.get(key, "")
 
 
 @router.post("", response_model=InstallationResponse, status_code=201)
