@@ -112,6 +112,7 @@ class TestNewWorkflowCapabilities:
         for cap in new_caps:
             assert cap in CAPABILITY_CATALOG, f"Missing capability: {cap}"
 
+
 class TestNewDocCapabilities:
     def test_new_doc_capabilities_in_catalog(self):
         new_caps = [
