@@ -675,6 +675,23 @@ export function checkInstallationHealth(
   return api(`/integrations/${installId}/health`);
 }
 
+export interface UnifiedIntegration {
+  server_name: string;
+  display_name: string;
+  provider: string | null;
+  category: "oauth" | "token" | "local";
+  configured: boolean;
+  connected: boolean;
+  health_status: string;
+  enabled: boolean;
+  install_id: string | null;
+  scopes: string[];
+}
+
+export function fetchUnifiedIntegrations(): Promise<UnifiedIntegration[]> {
+  return api("/integrations/unified");
+}
+
 // ── Knowledge Page ──────────────────────────────────────────────
 
 export interface KnowledgeGraphNode {
