@@ -473,14 +473,7 @@ async def agent_loop(
                     }
                 )
 
-                # Truncate large results for persistence
                 persisted_output: Any = result
-                if isinstance(result, str) and len(result) > 2000:
-                    persisted_output = result[:2000] + "...[truncated]"
-                elif isinstance(result, dict):
-                    result_str = json.dumps(result, default=str)
-                    if len(result_str) > 2000:
-                        persisted_output = {"_truncated": result_str[:2000]}
 
                 tool_call_details.append(
                     SpanToolCall(
@@ -571,10 +564,7 @@ async def agent_loop(
     latency_ms = int((time.time() - start_time) * 1000)
 
     # Assemble thinking summary for persistence
-    thinking_summary = "".join(thinking_chunks)
-    if len(thinking_summary) > 5000:
-        thinking_summary = thinking_summary[:5000] + "...[truncated]"
-    thinking_summary = thinking_summary or None
+    thinking_summary = "".join(thinking_chunks) or None
 
     # Record token usage
     # NOTE: record_from_span() exists on BudgetTracker but cannot be used here

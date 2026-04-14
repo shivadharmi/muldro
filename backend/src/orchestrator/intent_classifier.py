@@ -149,7 +149,7 @@ def extract_plan(response_text: str) -> PlanOutput:
         response_text,
     )
     return PlanOutput(
-        goal=response_text[:200],
+        goal=response_text,
         steps=[PlanStep(step_id="s1", description="Respond to user", capability="respond")],
         achievable="partial",
     )
@@ -161,7 +161,7 @@ def intent_to_plan(intent: str, message: str, capabilities: list[str]) -> PlanOu
     Maps each fast intent to a minimal plan with the appropriate
     capability step.
     """
-    goal = message[:200]
+    goal = message
 
     if intent in ("greeting", "chitchat", "acknowledgment"):
         return PlanOutput(

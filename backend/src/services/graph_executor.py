@@ -29,9 +29,6 @@ from src.services.audit import AuditService
 from src.services.execution_state import transition_run, transition_step
 from src.services.risk_assessor import RiskAssessment, get_or_assess_risk
 
-# Max chars to carry forward from each prior step's output to downstream agents.
-_STEP_OUTPUT_CHAR_LIMIT = 30_000
-
 if TYPE_CHECKING:
     from src.services.context_builder import ContextBuilder
     from src.services.memory_service import MemoryService
@@ -60,7 +57,7 @@ def _step_to_state(s: "TaskStep", status_override: str | None = None) -> "StepSt
         step_id=s.step_id,
         description=s.name or (s.input_data or {}).get("capability", s.task_id),
         status=status,
-        output_summary=(str(s.output_data.get("result", ""))[:200] if s.output_data else None),
+        output_summary=(str(s.output_data.get("result", "")) if s.output_data else None),
         duration_ms=duration,
         started_at=started_iso,
         completed_at=completed_iso,
@@ -304,7 +301,7 @@ class GraphExecutor:
                 first_type = tasks[0].task_type if tasks[0].task_type else None
                 pack = await self._context_builder.build(
                     user_id=run.user_id,
-                    query=plan.goal[:500] if plan.goal else "",
+                    query=plan.goal or "",
                     task_type=first_type,
                 )
                 from src.services.context_builder import ContextBuilder
@@ -445,14 +442,14 @@ class GraphExecutor:
         except Exception as exc:
             transition_run(run, "failed")
             run.completed_at = datetime.now(timezone.utc)
-            run.error = {"type": type(exc).__name__, "message": str(exc)[:500]}
+            run.error = {"type": type(exc).__name__, "message": str(exc)}
             logger.error("Run %s failed: %s", run_id, exc)
             await self._emit_event(
                 "run.failed",
                 run.user_id,
                 {
                     "run_id": run_id,
-                    "error": str(exc)[:500],
+                    "error": str(exc),
                 },
                 workspace_id=run.workspace_id,
             )
@@ -543,7 +540,7 @@ class GraphExecutor:
         except Exception as exc:
             transition_run(run, "failed")
             run.completed_at = datetime.now(timezone.utc)
-            run.error = {"type": type(exc).__name__, "message": str(exc)[:500]}
+            run.error = {"type": type(exc).__name__, "message": str(exc)}
         finally:
             self._cancel_events.pop(run.run_id, None)
             await self._finalize_trace(run)
@@ -646,7 +643,7 @@ class GraphExecutor:
                         _comp_steps = await self._get_all_steps(run.run_id)
                         _final_states = [_step_to_state(s) for s in _comp_steps]
                         _findings = [
-                            str(s.output_data.get("result", ""))[:100]
+                            str(s.output_data.get("result", ""))
                             for s in _comp_steps
                             if s.output_data and s.output_data.get("result")
                         ]
@@ -1118,7 +1115,7 @@ class GraphExecutor:
             transition_step(step, "pending")  # Retry: failed → pending
             step.error = {
                 "attempt": step.retry_count,
-                "message": str(exc)[:500],
+                "message": str(exc),
                 "retry_after_seconds": delay,
             }
             await self._db.flush()
@@ -1131,16 +1128,16 @@ class GraphExecutor:
                 exc,
             )
             transition_step(step, "failed")
-            step.output_data = {"error": str(exc)[:500]}
+            step.output_data = {"error": str(exc)}
             step.completed_at = datetime.now(timezone.utc)
-            step.error = {"message": str(exc)[:500], "final": True}
+            step.error = {"message": str(exc), "final": True}
             await self._emit_event(
                 "step.failed",
                 run.user_id,
                 {
                     "run_id": run.run_id,
                     "step_id": step.step_id,
-                    "error": str(exc)[:500],
+                    "error": str(exc),
                     "duration_ms": elapsed_ms,
                 },
                 workspace_id=run.workspace_id,
@@ -1389,7 +1386,7 @@ class GraphExecutor:
                 continue
             cap = (s.input_data or {}).get("capability", "unknown")
             desc = (s.input_data or {}).get("goal", cap)
-            prior_parts.append(f"[{desc}]:\n{str(result_text)[:_STEP_OUTPUT_CHAR_LIMIT]}")
+            prior_parts.append(f"[{desc}]:\n{str(result_text)}")
         if prior_parts:
             message += (
                 "\n\n--- Prior step results ---\n"
@@ -1499,7 +1496,7 @@ class GraphExecutor:
             task_type = input_data.get("task_type")
             pack = await self._context_builder.build(
                 user_id=run.user_id,
-                query=query[:500] if query else "",
+                query=query or "",
                 task_type=task_type,
             )
             from src.services.context_builder import ContextBuilder
@@ -1606,7 +1603,7 @@ class GraphExecutor:
                 s.step_id: {
                     "task_id": s.task_id,
                     "status": s.status,
-                    "output_summary": str(s.output_data)[:500] if s.output_data else None,
+                    "output_summary": str(s.output_data) if s.output_data else None,
                 }
                 for s in all_steps
                 if s.status == "completed"
@@ -1643,7 +1640,7 @@ class GraphExecutor:
                 return
             parts = [f"Completed plan: {run.plan_id}"]
             for step in completed[:5]:
-                parts.append(f"- {step.task_id}: {json.dumps(step.output_data)[:200]}")
+                parts.append(f"- {step.task_id}: {json.dumps(step.output_data)}")
             await self._memory_service.extract_and_store(
                 user_id=run.user_id,
                 source_text="\n".join(parts),

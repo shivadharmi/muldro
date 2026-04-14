@@ -121,8 +121,8 @@ async def audit_post_tool_hook(
                 span_id=span_id,
                 agent_name=agent_name,
                 tool_name=tool_name,
-                input_summary=_truncate(_sanitize_secrets(str(tool_input)), 500),
-                output_summary=_truncate(_sanitize_secrets(str(tool_result)), 500),
+                input_summary=_sanitize_secrets(str(tool_input)),
+                output_summary=_sanitize_secrets(str(tool_result)),
                 tokens_used=tokens_used,
                 latency_ms=latency_ms,
             )
@@ -143,9 +143,3 @@ _SECRET_PATTERN = re.compile(
 def _sanitize_secrets(text: str) -> str:
     """Redact common secret patterns from text before audit persistence."""
     return _SECRET_PATTERN.sub(r"\1***REDACTED***", text)
-
-
-def _truncate(text: str, max_chars: int) -> str:
-    if len(text) <= max_chars:
-        return text
-    return text[: max_chars - 3] + "..."
