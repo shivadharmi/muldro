@@ -29,6 +29,9 @@ from src.services.audit import AuditService
 from src.services.execution_state import transition_run, transition_step
 from src.services.risk_assessor import RiskAssessment, get_or_assess_risk
 
+# Max chars to carry forward from each prior step's output to downstream agents.
+_STEP_OUTPUT_CHAR_LIMIT = 30_000
+
 if TYPE_CHECKING:
     from src.services.context_builder import ContextBuilder
     from src.services.memory_service import MemoryService
@@ -1371,6 +1374,28 @@ class GraphExecutor:
                 message_parts.append(f"{key}: {value}")
 
         message = "\n".join(message_parts)
+
+        # Inject completed predecessor step outputs so the operator sees
+        # what earlier agents (e.g. Perceiver) read or produced.
+        all_steps = await self._get_all_steps(run.run_id)
+        prior_parts: list[str] = []
+        for s in all_steps:
+            if s.step_id == step.step_id:
+                continue
+            if s.status != "completed" or not s.output_data:
+                continue
+            result_text = s.output_data.get("result", "")
+            if not result_text:
+                continue
+            cap = (s.input_data or {}).get("capability", "unknown")
+            desc = (s.input_data or {}).get("goal", cap)
+            prior_parts.append(f"[{desc}]:\n{str(result_text)[:_STEP_OUTPUT_CHAR_LIMIT]}")
+        if prior_parts:
+            message += (
+                "\n\n--- Prior step results ---\n"
+                + "\n\n".join(prior_parts)
+                + "\n--- End of prior step results ---\n"
+            )
 
         # Get context
         context_prompt = await self._build_step_context(run, step)

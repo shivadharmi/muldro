@@ -80,6 +80,7 @@ BEDROCK_MODEL_TIERS = {
     "haiku": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
 }
 
+
 # Agents that benefit from context enrichment (read-heavy agents)
 CONTEXT_ENRICHED_AGENTS = {
     "planner",
@@ -769,7 +770,7 @@ class JarvisOrchestrator:
                         step_routing.append((step, agent_name, tools))
 
             # Step 3: Execute steps sequentially
-            for step, agent_name, tools in step_routing:
+            for step_idx, (step, agent_name, tools) in enumerate(step_routing):
                 if step.capability.startswith("system."):
                     sys_result = await self._handle_system_capability(
                         step, plan, user_id, workspace_id
@@ -797,7 +798,7 @@ class JarvisOrchestrator:
                 if prior_outputs:
                     parts = []
                     for key, output in prior_outputs.items():
-                        parts.append(f"[{key} output]:\n{str(output)[:3000]}")
+                        parts.append(f"[{key}]:\n{str(output)}")
                     agent_message += (
                         "\n\n--- Prior step results ---\n"
                         + "\n\n".join(parts)
@@ -814,7 +815,7 @@ class JarvisOrchestrator:
                     workspace_id=workspace_id,
                     tools_override=tools if tools else None,
                 )
-                result[agent_name] = agent_result
+                result[f"step_{step_idx}_{step.capability}"] = agent_result
 
             # Build user action block from user_steps
             user_action_block = ""
@@ -841,8 +842,7 @@ class JarvisOrchestrator:
                 if step_outputs:
                     parts = []
                     for agent_key, output in step_outputs.items():
-                        truncated = str(output)[:3000]
-                        parts.append(f"[{agent_key} output]:\n{truncated}")
+                        parts.append(f"[{agent_key}]:\n{str(output)}")
                     prior_results_block = (
                         "\n\n--- Prior step results (use these to answer the user) ---\n"
                         + "\n\n".join(parts)
@@ -858,7 +858,7 @@ class JarvisOrchestrator:
                 if prior_results_block:
                     presenter_msg += prior_results_block
                 if plan_text:
-                    presenter_msg += f"\nAnalysis: {plan_text[:2000]}"
+                    presenter_msg += f"\nAnalysis: {plan_text}"
                 if user_action_block:
                     presenter_msg += user_action_block
                 if history_block:
@@ -1105,7 +1105,7 @@ class JarvisOrchestrator:
             # Step 3: Execute steps with streaming
             presenter_text = ""
             step_outputs: dict[str, str] = {}
-            for step, agent_name, tools in step_routing:
+            for step_idx, (step, agent_name, tools) in enumerate(step_routing):
                 if step.capability.startswith("system."):
                     await self._handle_system_capability(step, plan, user_id, workspace_id)
                     continue
@@ -1134,7 +1134,7 @@ class JarvisOrchestrator:
                 if step_outputs:
                     parts = []
                     for key, output in step_outputs.items():
-                        parts.append(f"[{key} output]:\n{str(output)[:3000]}")
+                        parts.append(f"[{key}]:\n{str(output)}")
                     agent_message += (
                         "\n\n--- Prior step results ---\n"
                         + "\n\n".join(parts)
@@ -1156,7 +1156,7 @@ class JarvisOrchestrator:
                         done_text = evt.get("text", "")
                         # Capture all step outputs for downstream agents
                         if done_text:
-                            step_outputs[agent_name] = done_text
+                            step_outputs[f"step_{step_idx}_{step.capability}"] = done_text
                         # Capture text from respond/reason steps for surface preview
                         if step.capability in ("reason", "respond"):
                             presenter_text = done_text
@@ -1188,8 +1188,7 @@ class JarvisOrchestrator:
                 if step_outputs:
                     parts = []
                     for agent_key, output in step_outputs.items():
-                        truncated = str(output)[:3000]
-                        parts.append(f"[{agent_key} output]:\n{truncated}")
+                        parts.append(f"[{agent_key}]:\n{str(output)}")
                     prior_results_block = (
                         "\n\n--- Prior step results (use these to answer the user) ---\n"
                         + "\n\n".join(parts)
@@ -1205,9 +1204,7 @@ class JarvisOrchestrator:
                 if prior_results_block:
                     presenter_msg += prior_results_block
                 if plan_text:
-                    presenter_msg += (
-                        f"Plan: {json.dumps(plan_dict)}\nAnalysis: {plan_text[:2000]}\n"
-                    )
+                    presenter_msg += f"Plan: {json.dumps(plan_dict)}\nAnalysis: {plan_text}\n"
                 if user_action_block:
                     presenter_msg += user_action_block
                 if history_block:
@@ -2553,7 +2550,7 @@ class JarvisOrchestrator:
                 )
                 pack: ContextPack = await builder.build(
                     user_id=user_id,
-                    query=message[:500],
+                    query=message,
                     workspace_id=workspace_id,
                 )
                 context_text = ContextBuilder.to_prompt(pack)
