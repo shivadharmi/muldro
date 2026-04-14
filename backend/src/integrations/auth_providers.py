@@ -1,7 +1,7 @@
 """FastMCP auth provider factory — maps provider names to FastMCP auth instances.
 
-Built-in providers: Google, GitHub, Discord (native FastMCP support).
-Custom OAuthProxy: Slack, Linear, Notion, Jira, LinkedIn, Twitter.
+Built-in providers: Google, GitHub (native FastMCP support).
+Custom OAuthProxy: Slack, Notion, Jira.
 BearerAuth: static token for simple MCP servers.
 """
 
@@ -51,12 +51,6 @@ SUPPORTED_PROVIDERS: dict[str, ProviderMeta] = {
         provider_type="builtin",
         default_scopes=["repo", "read:org", "read:user"],
     ),
-    "discord": ProviderMeta(
-        name="discord",
-        display_name="Discord",
-        provider_type="builtin",
-        default_scopes=["identify", "guilds"],
-    ),
     "slack": ProviderMeta(
         name="slack",
         display_name="Slack",
@@ -69,14 +63,6 @@ SUPPORTED_PROVIDERS: dict[str, ProviderMeta] = {
         ],
         authorize_url="https://slack.com/oauth/v2/authorize",
         token_url="https://slack.com/api/oauth.v2.access",
-    ),
-    "linear": ProviderMeta(
-        name="linear",
-        display_name="Linear",
-        provider_type="oauth_proxy",
-        default_scopes=["read", "write"],
-        authorize_url="https://linear.app/oauth/authorize",
-        token_url="https://api.linear.app/oauth/token",
     ),
     "notion": ProviderMeta(
         name="notion",
@@ -93,22 +79,6 @@ SUPPORTED_PROVIDERS: dict[str, ProviderMeta] = {
         default_scopes=["read:jira-work", "write:jira-work", "read:jira-user"],
         authorize_url="https://auth.atlassian.com/authorize",
         token_url="https://auth.atlassian.com/oauth/token",
-    ),
-    "linkedin": ProviderMeta(
-        name="linkedin",
-        display_name="LinkedIn",
-        provider_type="oauth_proxy",
-        default_scopes=["openid", "profile", "w_member_social"],
-        authorize_url="https://www.linkedin.com/oauth/v2/authorization",
-        token_url="https://www.linkedin.com/oauth/v2/accessToken",
-    ),
-    "twitter": ProviderMeta(
-        name="twitter",
-        display_name="Twitter / X",
-        provider_type="oauth_proxy",
-        default_scopes=["tweet.read", "tweet.write", "users.read"],
-        authorize_url="https://twitter.com/i/oauth2/authorize",
-        token_url="https://api.twitter.com/2/oauth2/token",
     ),
 }
 
@@ -150,7 +120,7 @@ def get_client_auth(
 
 
 def _build_builtin_provider(provider_name: str, settings: Settings) -> Any | None:
-    """Build a native FastMCP auth provider (Google, GitHub, Discord)."""
+    """Build a native FastMCP auth provider (Google, GitHub)."""
     base_url = _get_base_url(settings)
 
     if provider_name == "google":
@@ -181,21 +151,6 @@ def _build_builtin_provider(provider_name: str, settings: Settings) -> Any | Non
             client_secret=client_secret,
             base_url=base_url,
             required_scopes=SUPPORTED_PROVIDERS["github"].default_scopes,
-        )
-
-    if provider_name == "discord":
-        client_id = getattr(settings, "discord_oauth_client_id", "")
-        client_secret = getattr(settings, "discord_oauth_client_secret", "")
-        if not client_id or not client_secret:
-            return None
-
-        from fastmcp.server.auth.providers.discord import DiscordProvider
-
-        return DiscordProvider(
-            client_id=client_id,
-            client_secret=client_secret,
-            base_url=base_url,
-            required_scopes=SUPPORTED_PROVIDERS["discord"].default_scopes,
         )
 
     return None
