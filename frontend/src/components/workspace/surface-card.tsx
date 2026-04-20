@@ -12,13 +12,16 @@ interface Props {
 }
 
 const kindLabel: Record<string, string> = {
-  plan: "Plan",
-  approval: "Approval",
+  run: "Run",
+  summary: "Summary",
+  message: "Message",
   briefing: "Briefing",
   alert: "Alert",
-  summary: "Summary",
   recommendation: "Rec",
   proactive_insight: "Insight",
+  // Legacy
+  plan: "Plan",
+  approval: "Approval",
   execution: "Execution",
   checklist: "Checklist",
   comparison: "Compare",
@@ -28,13 +31,16 @@ const kindLabel: Record<string, string> = {
 };
 
 const kindColor: Record<string, string> = {
-  plan: "bg-j-info-soft text-j-info",
-  approval: "bg-j-warning-soft text-j-warning",
+  run: "bg-j-info-soft text-j-info",
+  summary: "bg-j-success-soft text-j-success",
+  message: "bg-j-secondary-soft text-j-secondary",
   briefing: "bg-j-success-soft text-j-success",
   alert: "bg-j-error-soft text-j-error",
-  summary: "bg-surface-3 text-t-secondary",
   recommendation: "bg-j-secondary-soft text-j-secondary",
   proactive_insight: "bg-j-secondary-soft text-j-secondary",
+  // Legacy
+  plan: "bg-j-info-soft text-j-info",
+  approval: "bg-j-warning-soft text-j-warning",
   execution: "bg-j-info-soft text-j-info",
 };
 

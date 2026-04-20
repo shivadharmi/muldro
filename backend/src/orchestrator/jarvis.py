@@ -47,7 +47,9 @@ from src.services.interaction_learner import InteractionLearner
 from src.services.surface_mapping import (
     build_surface_preview_from_plan,
     derive_surface_kind,
+    extract_surface_data,
     extract_surface_spec,
+    strip_surface_blocks,
 )
 from src.services.trace_store import TraceStore
 from src.tools.schemas import build_tool_definitions
@@ -885,7 +887,9 @@ class JarvisOrchestrator:
                 payload={"trace_id": trace.trace_id},
             )
 
-            # Push surface to workspace (Presenter-driven)
+            # Push surface to workspace (Presenter-driven).  Keep the raw
+            # response_text for extraction — it still contains the fenced
+            # json:surface / json:surface_data blocks.
             response_text = result.get("presentation", result.get("presenter", ""))
             surface_id = None
             try:
@@ -902,6 +906,11 @@ class JarvisOrchestrator:
                 logger.warning("Surface push failed", exc_info=True)
             if surface_id:
                 result["surface_id"] = surface_id
+
+            # Scrub fenced surface blocks out of the chat-visible text so the
+            # caller sees a clean conversational reply rather than raw JSON.
+            if "presentation" in result and isinstance(result["presentation"], str):
+                result["presentation"] = strip_surface_blocks(result["presentation"])
 
             # Interaction learning (async, non-blocking)
             if self._interaction_learner:
@@ -1230,9 +1239,11 @@ class JarvisOrchestrator:
                     yield evt
                     if evt.get("event") == "agent_done":
                         presenter_text = evt.get("text", "")
+                        # Strip fenced surface blocks for the chat-visible reply
+                        # while keeping presenter_text raw for surface extraction.
                         yield {
                             "event": "response",
-                            "text": presenter_text,
+                            "text": strip_surface_blocks(presenter_text),
                         }
 
             _fire_event(
@@ -1895,40 +1906,44 @@ class JarvisOrchestrator:
         new_cursor: str | None,
         cursor_type: str = "opaque",
     ) -> None:
-        """Update the observation cursor after a successful poll."""
+        """Update the observation cursor after a successful poll.
+
+        Uses a single ``INSERT ... ON CONFLICT DO UPDATE`` so concurrent
+        perception cycles for the same ``(user_id, source)`` cannot race on
+        the ``uq_cursor_user_source`` unique constraint.
+        """
         if not new_cursor:
             return
         async with self._db_factory() as db:
             from datetime import datetime, timezone
 
-            from sqlalchemy import select
+            from sqlalchemy.dialects.postgresql import insert as pg_insert
+            from ulid import ULID
 
             from src.models.observation_cursor import ObservationCursor
 
-            result = await db.execute(
-                select(ObservationCursor).where(
-                    ObservationCursor.user_id == user_id,
-                    ObservationCursor.source == source,
+            now = datetime.now(timezone.utc)
+            stmt = (
+                pg_insert(ObservationCursor)
+                .values(
+                    cursor_id=f"cur_{ULID()}",
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    source=source,
+                    cursor_type=cursor_type,
+                    cursor_value=new_cursor,
+                    last_observation_at=now,
+                )
+                .on_conflict_do_update(
+                    constraint="uq_cursor_user_source",
+                    set_={
+                        "cursor_value": new_cursor,
+                        "cursor_type": cursor_type,
+                        "last_observation_at": now,
+                    },
                 )
             )
-            existing = result.scalar_one_or_none()
-            if existing:
-                existing.cursor_value = new_cursor
-                existing.last_observation_at = datetime.now(timezone.utc)
-            else:
-                from ulid import ULID
-
-                db.add(
-                    ObservationCursor(
-                        cursor_id=f"cur_{ULID()}",
-                        user_id=user_id,
-                        workspace_id=workspace_id,
-                        source=source,
-                        cursor_type=cursor_type,
-                        cursor_value=new_cursor,
-                        last_observation_at=datetime.now(timezone.utc),
-                    )
-                )
+            await db.execute(stmt)
             await db.commit()
 
     async def generate_briefing(self, user_id: str, workspace_id: str = "") -> dict:
@@ -2110,7 +2125,6 @@ class JarvisOrchestrator:
         from ulid import ULID
 
         from src.orchestrator.contracts import WorkspaceSurfacePush
-        from src.services.surface_mapping import extract_surface_data
         from src.ui.contracts import SurfaceMetric, SurfacePreview
         from src.ui.renderer import build_detail_config
 
@@ -2134,14 +2148,46 @@ class JarvisOrchestrator:
             )
             detail_config = build_detail_config(spec.kind, surface_id)
 
+            # Extract typed surface_data before building the push so both the
+            # WebSocket broadcast and the DB row carry the same payload.
+            surface_data_payload = extract_surface_data(response_text)
+            surface_data_dict = (
+                surface_data_payload.model_dump(mode="json") if surface_data_payload else None
+            )
+
+            # Structural promotion gate — only push Presenter message
+            # surfaces (kind=message) to the workspace feed when the
+            # response carries at least one structural component or
+            # multiple distinct sections. Plain-text replies stay
+            # chat-only and return None here. Other kinds (briefing,
+            # alert, etc.) always push because they are system
+            # categorizations, not agent chat replies.
+            if spec.kind == "message":
+                from src.services.message_promotion import should_promote_to_workspace
+
+                children = (
+                    surface_data_payload.sections
+                    if surface_data_payload and surface_data_payload.sections
+                    else []
+                )
+                if not should_promote_to_workspace(children):
+                    logger.debug(
+                        "Presenter message surface not promoted — plain-text reply (user %s)",
+                        user_id,
+                    )
+                    return None
+
+            clean_preview = strip_surface_blocks(response_text) if response_text else ""
+
             surface = WorkspaceSurfacePush(
                 id=surface_id,
                 kind=spec.kind,
                 preview=preview.model_dump(mode="json"),
                 detail_config=(detail_config.model_dump(mode="json") if detail_config else None),
                 source_run_id=run_id,
-                response_preview=(response_text[:300] if response_text else None),
+                response_preview=(clean_preview[:300] if clean_preview else None),
                 created_at=datetime.now(timezone.utc).isoformat(),
+                surface_data=surface_data_dict,
             )
 
             channel = f"jarvis:a2ui:{user_id}"
@@ -2152,13 +2198,10 @@ class JarvisOrchestrator:
             try:
                 from src.models.ui_state import UISurface
 
-                surface_data = extract_surface_data(response_text)
-
                 async with self._db_factory() as db:
                     payload = surface.model_dump(mode="json")
-                    if surface_data:
-                        payload["surface_data"] = surface_data
-
+                    # Keep the persisted payload consistent with the WS shape;
+                    # surface_data is already serialized on the model.
                     db.add(
                         UISurface(
                             surface_id=surface.id,

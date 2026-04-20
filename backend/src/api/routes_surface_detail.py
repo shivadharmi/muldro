@@ -20,10 +20,15 @@ router = APIRouter()
 
 # Ephemeral surface ID prefixes → (kind, reference_key)
 _PREFIX_MAP: dict[str, tuple[str, str]] = {
+    # Unified run surface
+    "run_": ("run", "run_id"),
+    "summary_": ("summary", "run_id"),
+    # System surfaces
     "approval_": ("approval", "approval_id"),
     "briefing_": ("briefing", "briefing_id"),
     "priority_": ("alert", "run_id"),
     "rec_": ("recommendation", "index"),
+    # Legacy
     "exec_": ("plan", "run_id"),
     "surf_": ("_from_db", "surface_id"),
 }

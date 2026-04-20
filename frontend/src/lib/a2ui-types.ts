@@ -91,6 +91,22 @@ export interface WorkspaceSurfacePush {
   created_at: string;
   ttl_hours: number;
   surface_data: SurfaceDataPayload | null;
+  // Payload for proactive_insight surfaces — carries signal summary,
+  // relevance reasoning, goals, and suggested actions. When present the
+  // frontend dispatches to insight-surface.tsx rather than the generic
+  // card. Previously missing from the type: the backend sent this but
+  // the WS handler dropped it as an unknown field.
+  insight_data: InsightData | null;
+  // Live execution fields merged in so the run card can render its
+  // inline phase badge and step summary without a separate
+  // SurfaceUpdate message.
+  phase: ExecutionPhase | null;
+  steps: StepState[] | null;
+  current_step: string | null;
+  progress: string | null;
+  approval: ApprovalContext | null;
+  results: ResultSummary | null;
+  trust_context: Record<string, string> | null;
 }
 
 // ── Insight surface types ────────────────────────────────────

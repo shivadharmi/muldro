@@ -42,6 +42,21 @@ export default function ChatPage() {
         response_preview: push.response_preview,
         created_at: push.created_at || new Date().toISOString(),
         surface_data: push.surface_data ?? null,
+        // Forward the insight payload — previously dropped here because
+        // the WorkspaceSurfacePush type omitted the field, so insight
+        // surfaces rendered with empty details even though the backend
+        // sent the data.
+        insight_data: push.insight_data ?? null,
+        // Live execution fields: when the run surface is pushed (REST or
+        // WS), these let the run renderer show the current phase/steps
+        // without waiting for a separate surface_update message.
+        phase: push.phase ?? null,
+        steps: push.steps ?? null,
+        current_step: push.current_step ?? null,
+        progress: push.progress ?? null,
+        approval: push.approval ?? null,
+        results: push.results ?? null,
+        trust_context: push.trust_context ?? null,
       });
     },
     [addSurface]
