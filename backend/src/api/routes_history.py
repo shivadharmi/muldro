@@ -349,39 +349,89 @@ async def get_history_detail(
     ]
 
     # ------------------------------------------------------------------ #
-    # 7. Trace info — query Trace model if trace_id exists, else compute
+    # 7. Trace info — resolve Trace via run.trace_id, fall back to the
+    #    reverse index (traces.run_id) for legacy runs, finally fall back
+    #    to the run.cost_usd / run.input_tokens rollup cached on the
+    #    TaskRun row itself.
     # ------------------------------------------------------------------ #
+    from src.api.schemas_history import HistoryTraceStep
+    from src.models.traces import ModelCall
+    from src.models.traces import Trace as TraceModel
+
     trace: HistoryTraceInfo | None = None
     run_duration_ms = 0
     if run.started_at and run.completed_at:
         delta = run.completed_at - run.started_at
         run_duration_ms = int(delta.total_seconds() * 1000)
 
+    trace_row = None
     if run.trace_id:
-        try:
-            from src.models.traces import Trace as TraceModel
+        trace_row = (
+            await db.execute(select(TraceModel).where(TraceModel.trace_id == run.trace_id))
+        ).scalar_one_or_none()
+    if trace_row is None:
+        # Defensive fallback: resolve by the reverse index
+        trace_row = (
+            await db.execute(select(TraceModel).where(TraceModel.run_id == run.run_id))
+        ).scalar_one_or_none()
 
-            trace_result = await db.execute(
-                select(TraceModel).where(TraceModel.trace_id == run.trace_id)
-            )
-            trace_row = trace_result.scalar_one_or_none()
-            if trace_row:
-                trace = HistoryTraceInfo(
-                    trace_id=trace_row.trace_id,
-                    input_tokens=trace_row.total_input_tokens or 0,
-                    output_tokens=trace_row.total_output_tokens or 0,
-                    cost_usd=trace_row.total_cost_usd or 0.0,
-                    duration_ms=trace_row.duration_ms or run_duration_ms,
-                    agents_invoked=trace_row.agents_invoked or [],
-                    tools_called=trace_row.tools_called or [],
-                )
-        except Exception:
-            logger.debug("Failed to fetch trace for run %s", run.run_id, exc_info=True)
+    step_breakdown: list[HistoryTraceStep] = []
+    if trace_row is not None:
+        # Per-step breakdown: ModelCall entries grouped by the span's
+        # associated step_id (stored via decision field or in metadata).
+        # ModelCall rows don't natively carry step_id, so we group by
+        # agent_name as a reasonable proxy — this still gives the user
+        # visibility into which agents consumed the tokens.
+        calls = (
+            (await db.execute(select(ModelCall).where(ModelCall.trace_id == trace_row.trace_id)))
+            .scalars()
+            .all()
+        )
 
-    # Fallback: compute basic trace from run duration even without trace_id
-    if not trace and run_duration_ms:
+        by_agent: dict[str, HistoryTraceStep] = {}
+        for c in calls:
+            key = c.agent_name or "unknown"
+            entry = by_agent.get(key)
+            if entry is None:
+                entry = HistoryTraceStep(step_id=key, agent=key, model=c.model)
+                by_agent[key] = entry
+            entry.calls += 1
+            entry.input_tokens += c.input_tokens or 0
+            entry.output_tokens += c.output_tokens or 0
+            entry.cost_usd = round(entry.cost_usd + float(c.cost_usd or 0), 6)
+            entry.duration_ms += c.duration_ms or 0
+        step_breakdown = list(by_agent.values())
+
         trace = HistoryTraceInfo(
-            trace_id=None,
+            trace_id=trace_row.trace_id,
+            input_tokens=trace_row.total_input_tokens or 0,
+            output_tokens=trace_row.total_output_tokens or 0,
+            cost_usd=float(trace_row.total_cost_usd or 0.0),
+            duration_ms=trace_row.duration_ms or run_duration_ms,
+            agents_invoked=trace_row.agents_invoked or [],
+            tools_called=trace_row.tools_called or [],
+            step_breakdown=step_breakdown,
+        )
+
+    # Secondary fallback: rollup columns on the TaskRun. Populated by
+    # GraphExecutor._finalize_trace even when the Trace row persist step
+    # fails, so the UI always has a non-zero result for a completed run
+    # that made real API calls.
+    if trace is None and (
+        (run.input_tokens or 0) or (run.output_tokens or 0) or (run.cost_usd or 0)
+    ):
+        trace = HistoryTraceInfo(
+            trace_id=run.trace_id,
+            input_tokens=int(run.input_tokens or 0),
+            output_tokens=int(run.output_tokens or 0),
+            cost_usd=float(run.cost_usd or 0.0),
+            duration_ms=run_duration_ms,
+        )
+
+    # Final fallback: duration-only from run timestamps
+    if trace is None and run_duration_ms:
+        trace = HistoryTraceInfo(
+            trace_id=run.trace_id,
             duration_ms=run_duration_ms,
         )
 

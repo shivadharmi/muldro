@@ -32,14 +32,25 @@ class TraceStore:
         self._db_factory = db_factory
         self._fallback: deque[dict] = deque(maxlen=500)
 
-    async def store_trace(self, trace_dict: dict, user_id: str, workspace_id: str = "") -> str:
-        """Persist a completed trace. Returns trace_id."""
+    async def store_trace(
+        self,
+        trace_dict: dict,
+        user_id: str,
+        workspace_id: str = "",
+        run_id: str | None = None,
+    ) -> str:
+        """Persist a completed trace. Returns trace_id.
+
+        ``run_id`` ties the trace to a specific TaskRun so the detail
+        endpoint can resolve observability metrics either via
+        ``task_runs.trace_id`` or the reverse ``traces.run_id`` index.
+        """
         trace_id = trace_dict.get("trace_id", "")
 
         # Primary: persist to Postgres
         if self._db_factory:
             try:
-                await self._store_to_db(trace_dict, user_id, workspace_id)
+                await self._store_to_db(trace_dict, user_id, workspace_id, run_id=run_id)
             except Exception:
                 logger.warning("Failed to persist trace to DB", exc_info=True)
                 self._fallback.append(trace_dict)
@@ -50,7 +61,13 @@ class TraceStore:
 
         return trace_id
 
-    async def _store_to_db(self, trace_dict: dict, user_id: str, workspace_id: str = "") -> None:
+    async def _store_to_db(
+        self,
+        trace_dict: dict,
+        user_id: str,
+        workspace_id: str = "",
+        run_id: str | None = None,
+    ) -> None:
         """Write trace + model_calls to Postgres."""
         from src.models.traces import ModelCall, Trace
         from src.orchestrator.budget import BudgetTracker
@@ -116,6 +133,7 @@ class TraceStore:
             trace_id=trace_dict.get("trace_id", f"trace_{ULID()}"),
             user_id=user_id,
             workspace_id=workspace_id,
+            run_id=run_id,
             trigger=trace_dict.get("trigger", "unknown"),
             status="completed" if ended_at else "running",
             started_at=datetime.fromisoformat(trace_dict["started_at"]),

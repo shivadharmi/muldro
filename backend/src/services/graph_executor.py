@@ -1478,12 +1478,34 @@ class GraphExecutor:
         }
 
     async def _finalize_trace(self, run: TaskRun) -> None:
-        """Finalize and persist the JarvisTrace for a completed/failed run."""
+        """Finalize and persist the JarvisTrace for a completed/failed run.
+
+        Also writes the aggregate token/cost rollup onto the TaskRun row so
+        history views can render observability metrics without joining the
+        Trace table (and so that the detail endpoint has a deterministic
+        non-zero result even if the trace persistence fails).
+        """
         trace = self._active_traces.pop(run.run_id, None)
         if not trace:
             return
         trace.finish()
         input_t, output_t = trace.total_tokens()
+        total_cost = 0.0
+        try:
+            for span in trace.spans:
+                total_cost += float(getattr(span, "cost_usd", 0.0) or 0.0)
+        except Exception:
+            total_cost = 0.0
+
+        # Roll up onto the run row. Safe to set even when trace persistence
+        # fails — the numbers reflect what agent_loop actually recorded.
+        try:
+            run.input_tokens = int(input_t or 0)
+            run.output_tokens = int(output_t or 0)
+            run.cost_usd = round(float(total_cost), 6)
+        except Exception:
+            logger.debug("Failed to roll up token usage onto run %s", run.run_id, exc_info=True)
+
         logger.info(
             "run_trace_finalized",
             extra={
@@ -1492,6 +1514,7 @@ class GraphExecutor:
                 "spans": len(trace.spans),
                 "input_tokens": input_t,
                 "output_tokens": output_t,
+                "cost_usd": total_cost,
             },
         )
         if self._trace_store:
@@ -1500,6 +1523,7 @@ class GraphExecutor:
                     trace.to_dict(),
                     user_id=run.user_id,
                     workspace_id=run.workspace_id or "",
+                    run_id=run.run_id,
                 )
             except Exception:
                 logger.warning(

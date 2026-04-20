@@ -106,6 +106,20 @@ class HistoryPlanContext(BaseModel):
     priority: str | None = None
 
 
+class HistoryTraceStep(BaseModel):
+    """Per-step observability breakdown inside a Trace tab."""
+
+    step_id: str
+    step_name: str | None = None
+    agent: str | None = None
+    model: str | None = None
+    calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+    duration_ms: int = 0
+
+
 class HistoryTraceInfo(BaseModel):
     """Trace/cost info in detail view."""
 
@@ -116,6 +130,7 @@ class HistoryTraceInfo(BaseModel):
     duration_ms: int = 0
     agents_invoked: list[str] = []
     tools_called: list[str] = []
+    step_breakdown: list[HistoryTraceStep] = []
 
 
 class HistoryEventEntry(BaseModel):

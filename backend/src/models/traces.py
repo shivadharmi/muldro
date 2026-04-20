@@ -19,6 +19,11 @@ class Trace(Base):
     workspace_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
     )
+    # Nullable because not every trace is tied to a TaskRun (ad-hoc traces,
+    # perception traces, briefing traces). When present, enables the detail
+    # endpoint to resolve observability metrics by run_id when
+    # task_runs.trace_id was never stamped.
+    run_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     trigger: Mapped[str] = mapped_column(String(64), nullable=False)
     # user_message, perception_gmail, scheduled_briefing, trigger_fired, etc.
     status: Mapped[str] = mapped_column(String(32), default="running")

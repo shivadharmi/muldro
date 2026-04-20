@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, text
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -50,6 +50,14 @@ class TaskRun(Base, TimestampMixin):
     error: Mapped[dict | None] = mapped_column(JSONB)
     timeout_seconds: Mapped[int | None] = mapped_column(Integer)
     idempotency_key: Mapped[str | None] = mapped_column(String(256), nullable=True)
+
+    # Observability rollup (populated by GraphExecutor on completion from the
+    # linked Trace). Kept as denormalized columns so history views do not
+    # require a JOIN for the common case of listing runs with cost/token
+    # summaries.
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    cost_usd: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
 
     steps: Mapped[list["TaskStep"]] = relationship(
         back_populates="run", cascade="all, delete-orphan"
