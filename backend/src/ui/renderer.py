@@ -392,8 +392,23 @@ def calendar_view(
 
 
 _TABS_BY_KIND: dict[str, list[tuple[str, str]]] = {
+    # Unified run surface: the detail modal shows steps / plan / events / trace
+    # which is the shape the user's screenshots revealed.
+    "run": [
+        ("steps", "Steps"),
+        ("plan", "Plan"),
+        ("events", "Events"),
+        ("trace", "Trace"),
+    ],
+    # Summary (completion card) reuses run tabs so the user can drill back
+    # into the archived run's detail.
+    "summary": [
+        ("steps", "Steps"),
+        ("plan", "Plan"),
+        ("events", "Events"),
+        ("trace", "Trace"),
+    ],
     "plan": [("overview", "Overview"), ("context", "Context"), ("execution", "Execution")],
-    "summary": [("overview", "Overview"), ("sources", "Sources"), ("context", "Context")],
     "briefing": [("priorities", "Priorities"), ("events", "Events"), ("actions", "Actions")],
     "approval": [("request", "Request"), ("risk", "Risk"), ("history", "History")],
     "recommendation": [("overview", "Overview"), ("evidence", "Evidence"), ("context", "Context")],

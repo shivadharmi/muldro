@@ -61,12 +61,12 @@ class TestBuildActiveExecutionSurfaces:
 
         db.execute = mock_execute
 
-        surfaces = await service._build_active_execution_surfaces()
+        surfaces = await service._build_run_surfaces()
 
         assert len(surfaces) == 1
         s = surfaces[0]
-        assert s.kind == "plan"
-        assert s.id == "exec_run_01"
+        assert s.kind == "run"
+        assert s.id == "run_run_01"
         assert s.source_run_id == "run_01"
         preview = s.preview
         assert preview["status"] == "running"
@@ -81,7 +81,7 @@ class TestBuildActiveExecutionSurfaces:
         result.scalars.return_value.all.return_value = []
         db.execute = AsyncMock(return_value=result)
 
-        surfaces = await service._build_active_execution_surfaces()
+        surfaces = await service._build_run_surfaces()
         assert len(surfaces) == 0
 
     @pytest.mark.asyncio
@@ -110,10 +110,12 @@ class TestBuildActiveExecutionSurfaces:
 
         db.execute = mock_execute
 
-        surfaces = await service._build_active_execution_surfaces()
+        surfaces = await service._build_run_surfaces()
         assert len(surfaces) == 1
-        assert surfaces[0].kind == "plan"
+        assert surfaces[0].kind == "run"
         assert surfaces[0].source_run_id == "run_03"
+        # awaiting_approval runs should surface as awaiting_approval status
+        assert surfaces[0].preview["status"] == "awaiting_approval"
 
     @pytest.mark.asyncio
     async def test_paused_run_included(self):
@@ -137,5 +139,5 @@ class TestBuildActiveExecutionSurfaces:
 
         db.execute = mock_execute
 
-        surfaces = await service._build_active_execution_surfaces()
+        surfaces = await service._build_run_surfaces()
         assert len(surfaces) == 1

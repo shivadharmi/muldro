@@ -10,7 +10,6 @@ from datetime import date, datetime, timedelta, timezone
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models.approvals import Approval
 from src.models.briefings import Briefing
 from src.models.task_graph import TaskRun, TaskStep
 from src.models.trust_state import TrustState
@@ -33,14 +32,14 @@ class SurfaceService:
     async def build_workspace_surfaces(self, user_id: str) -> list[WorkspaceSurfacePush]:
         """Build all workspace surfaces for the current user.
 
-        Returns a priority-ordered list of WorkspaceSurfacePush models, each with:
-        id, kind, preview, detail_config, created_at, etc.
+        Returns a priority-ordered list of WorkspaceSurfacePush models. The
+        unified ``run`` surface replaces the former ``exec``/``plan``/
+        ``approval`` trio — approvals are now embedded inside the run
+        surface's inline approval card (see ui/units.approval_card).
         """
         surfaces: list[WorkspaceSurfacePush] = []
 
-        surfaces.extend(await self._build_approval_surfaces(user_id))
-        surfaces.extend(await self._build_active_execution_surfaces())
-        surfaces.extend(await self._build_priority_surfaces())
+        surfaces.extend(await self._build_run_surfaces())
 
         briefing = await self._build_briefing_surface(user_id)
         if briefing:
@@ -51,62 +50,6 @@ class SurfaceService:
         surfaces.extend(await self._load_persisted_surfaces(user_id))
 
         return apply_surface_cap(surfaces)
-
-    async def _build_approval_surfaces(self, user_id: str) -> list[WorkspaceSurfacePush]:
-        result = await self._db.execute(
-            select(Approval)
-            .where(
-                Approval.user_id == user_id,
-                Approval.status == "pending",
-            )
-            .order_by(Approval.created_at.desc())
-            .limit(10)
-        )
-        approvals = result.scalars().all()
-        surfaces: list[WorkspaceSurfacePush] = []
-
-        for apr in approvals:
-            surface_id = f"approval_{apr.approval_id}"
-            risk_level = apr.risk_level or "medium"
-            risk_variant = "warning" if risk_level in ("high", "critical") else "default"
-
-            trust_context = await self._get_trust_context(apr)
-
-            metrics = [
-                SurfaceMetric(label="Risk", value=risk_level, variant=risk_variant),
-            ]
-            if trust_context:
-                metrics.append(
-                    SurfaceMetric(
-                        label="Trust",
-                        value=trust_context["label"],
-                        variant=trust_context.get("variant", "default"),
-                    )
-                )
-
-            preview = SurfacePreview(
-                title=apr.title or "Pending Approval",
-                subtitle=apr.summary[:120] if apr.summary else None,
-                status="awaiting_approval",
-                priority="high" if risk_level in ("high", "critical") else "medium",
-                metrics=metrics,
-            )
-            detail_config = build_detail_config("approval", surface_id)
-
-            surfaces.append(
-                WorkspaceSurfacePush(
-                    id=surface_id,
-                    kind="approval",
-                    preview=preview.model_dump(mode="json"),
-                    detail_config=(
-                        detail_config.model_dump(mode="json") if detail_config else None
-                    ),
-                    created_at=apr.created_at.isoformat() if apr.created_at else "",
-                    trust_context=trust_context,
-                )
-            )
-
-        return surfaces
 
     async def _get_trust_context(self, approval) -> dict[str, str] | None:
         """Build trust context dict from approval artifact_refs."""
@@ -201,61 +144,28 @@ class SurfaceService:
             created_at=briefing.created_at.isoformat() if briefing.created_at else "",
         )
 
-    async def _build_priority_surfaces(self) -> list[WorkspaceSurfacePush]:
-        result = await self._db.execute(
-            select(TaskRun)
-            .where(
-                TaskRun.workspace_id == self._workspace_id,
-                TaskRun.status.in_(["awaiting_approval", "blocked"]),
-            )
-            .order_by(TaskRun.created_at.desc())
-            .limit(5)
-        )
-        runs = result.scalars().all()
-        surfaces: list[WorkspaceSurfacePush] = []
+    async def _build_run_surfaces(self) -> list[WorkspaceSurfacePush]:
+        """Build unified ``run`` surfaces for every active TaskRun.
 
-        for run in runs:
-            short_id = run.run_id[:16]
-            surface_id = f"priority_{run.run_id}"
+        Active = ``running | paused | awaiting_approval | blocked``. Each run
+        yields exactly one surface with id ``run_{run_id}`` — matching the
+        surface_id used by the live WebSocket push from ``GraphExecutor``, so
+        the frontend deduplicates REST and WS updates naturally.
 
-            preview = SurfacePreview(
-                title=f"Blocked: {short_id}...",
-                subtitle=f"Run is {run.status}",
-                status=run.status,
-                priority="high",
-                metrics=[SurfaceMetric(label="Status", value=run.status, variant="warning")],
-            )
-            detail_config = build_detail_config("alert", surface_id)
-
-            surfaces.append(
-                WorkspaceSurfacePush(
-                    id=surface_id,
-                    kind="alert",
-                    preview=preview.model_dump(mode="json"),
-                    detail_config=(
-                        detail_config.model_dump(mode="json") if detail_config else None
-                    ),
-                    created_at=run.created_at.isoformat() if run.created_at else "",
-                )
-            )
-
-        return surfaces
-
-    async def _build_active_execution_surfaces(self) -> list[WorkspaceSurfacePush]:
-        """Build surfaces for actively executing TaskRuns.
-
-        Includes runs with status in (running, paused). These appear
-        above completed surfaces in the workspace.
+        Approval state is reflected in the preview (status + priority); the
+        full approval card is rendered inline inside the surface's child
+        components (composed from ``ui/units.approval_card``) rather than as
+        a standalone surface.
         """
         result = await self._db.execute(
             select(TaskRun)
             .where(
                 TaskRun.workspace_id == self._workspace_id,
-                TaskRun.status.in_(["running", "paused", "awaiting_approval"]),
+                TaskRun.status.in_(["running", "paused", "awaiting_approval", "blocked"]),
                 TaskRun.source != "user_message",
             )
             .order_by(TaskRun.started_at.desc())
-            .limit(5)
+            .limit(10)
         )
         runs = result.scalars().all()
         surfaces: list[WorkspaceSurfacePush] = []
@@ -274,29 +184,51 @@ class SurfaceService:
                     current_step_name = s.name or (s.input_data or {}).get("capability", "")
                     break
 
-            surface_id = f"exec_{run.run_id}"
-            subtitle = f"Step {completed + 1}/{total}"
+            surface_id = f"run_{run.run_id}"
+            subtitle = f"Step {completed + 1}/{total}" if total else "No steps yet"
             if current_step_name:
                 subtitle += f": {current_step_name}"
 
+            awaiting = run.status in ("awaiting_approval", "blocked")
+            status_value = "awaiting_approval" if awaiting else "running"
+            priority = "high" if awaiting else "medium"
+
+            metrics = [
+                SurfaceMetric(
+                    label="Progress",
+                    value=f"{completed}/{total} steps" if total else "—",
+                ),
+            ]
+            if run.status == "awaiting_approval":
+                metrics.append(
+                    SurfaceMetric(label="Status", value="awaiting approval", variant="warning")
+                )
+            elif run.status == "blocked":
+                metrics.append(SurfaceMetric(label="Status", value="blocked", variant="danger"))
+
+            # Derive a readable title from the first step name if available,
+            # otherwise fall back to a generic "Run" label.
+            first_step_name = ""
+            for s in steps:
+                if s.name:
+                    first_step_name = s.name
+                    break
+            title = first_step_name or "Run"
+
             preview = SurfacePreview(
-                title="Executing plan",
+                title=title,
                 subtitle=subtitle,
-                status="running",
+                status=status_value,
+                priority=priority,
                 progress=completed / total if total > 0 else 0.0,
-                metrics=[
-                    SurfaceMetric(
-                        label="Progress",
-                        value=f"{completed}/{total} steps",
-                    ),
-                ],
+                metrics=metrics,
             )
-            detail_config = build_detail_config("plan", surface_id)
+            detail_config = build_detail_config("run", surface_id)
 
             surfaces.append(
                 WorkspaceSurfacePush(
                     id=surface_id,
-                    kind="plan",
+                    kind="run",
                     preview=preview.model_dump(mode="json"),
                     detail_config=(
                         detail_config.model_dump(mode="json") if detail_config else None
@@ -474,6 +406,7 @@ class SurfaceService:
                         source_run_id=payload.get("source_run_id"),
                         response_preview=payload.get("response_preview"),
                         created_at=(db_row.created_at.isoformat() if db_row.created_at else ""),
+                        surface_data=payload.get("surface_data"),
                         **exec_fields,
                     )
                 )

@@ -360,26 +360,40 @@ class GraphExecutor:
     async def execute_run(
         self, run_id: str, trace_id: str | None = None, surface_id: str | None = None
     ) -> TaskRun:
-        """Execute a run's DAG to completion (or pause at approval gate)."""
+        """Execute a run's DAG to completion (or pause at approval gate).
+
+        A unified ``run_{run_id}`` surface is always maintained for each run.
+        Callers may pass ``surface_id`` to override (e.g. for a chat-linked
+        surface that predates the run); otherwise the run-scoped default is
+        used so that every caller — live WebSocket push, REST poll, and detail
+        modal — targets the same surface.
+        """
         result = await self._db.execute(select(TaskRun).where(TaskRun.run_id == run_id))
         run = result.scalar_one_or_none()
         if not run:
             raise ValueError(f"Run not found: {run_id}")
 
-        if trace_id:
-            run.trace_id = trace_id
-
-        # Create a live JarvisTrace so agent_loop can accumulate spans
+        # Create a live JarvisTrace so agent_loop can accumulate spans.
+        effective_trace_id = trace_id or f"trace_{ULID()}"
+        # Always stamp run.trace_id BEFORE step execution so the detail
+        # endpoint can resolve token/cost totals on a running or completed
+        # run, not only on runs that happened to be passed a trace_id.
+        run.trace_id = effective_trace_id
         trace = JarvisTrace(
-            trace_id=trace_id or f"trace_{ULID()}",
+            trace_id=effective_trace_id,
             trigger=f"execution:{run.source or 'background'}",
         )
         self._active_traces[run.run_id] = trace
 
         transition_run(run, "running")
         run.started_at = datetime.now(timezone.utc)
-        if surface_id:
-            run.checkpoint = {**(run.checkpoint or {}), "surface_id": surface_id}
+
+        # Default surface_id to the canonical run-scoped id so all emitters
+        # (execute_run, _build_run_surfaces, detail modal) converge on the
+        # same id and the frontend naturally deduplicates.
+        if not surface_id:
+            surface_id = f"run_{run_id}"
+        run.checkpoint = {**(run.checkpoint or {}), "surface_id": surface_id}
         await self._db.flush()
 
         await self._audit.log(
@@ -521,9 +535,14 @@ class GraphExecutor:
         transition_run(run, "running")
         await self._db.flush()
 
-        # Create a trace for the resumed segment (reuse existing trace_id if set)
+        # Each resume is its own observability cycle with a fresh trace_id.
+        # TraceStore._store_to_db does INSERT (not upsert), so reusing the
+        # initial run's trace_id here would violate the traces PK. Segments
+        # stay correlatable via run_id. run.trace_id keeps pointing at the
+        # initial trace so routes_history / evidence_bundle consumers that
+        # expect a single canonical pointer still work.
         trace = JarvisTrace(
-            trace_id=run.trace_id or f"trace_{ULID()}",
+            trace_id=f"trace_{ULID()}",
             trigger="execution:resume",
         )
         self._active_traces[run.run_id] = trace
@@ -656,6 +675,9 @@ class GraphExecutor:
                             results=ResultSummary(key_findings=_findings[:5]),
                             workspace_id=run.workspace_id,
                         )
+                        # Emit a lightweight summary card for the workspace
+                        # feed and archive the run surface.
+                        await self._emit_summary_surface(run, surface_id)
                     break
                 # If there are pending steps but none ready, we're blocked
                 failed = [s for s in all_steps if s.status == "failed"]
@@ -677,6 +699,7 @@ class GraphExecutor:
                             progress=f"{len(failed)} step(s) failed",
                             workspace_id=run.workspace_id,
                         )
+                        await self._emit_summary_surface(run, surface_id)
                     break
                 # Must be waiting for approval or external event
                 break
@@ -1823,19 +1846,143 @@ class GraphExecutor:
                             **(existing.payload or {}),
                             "last_surface_update": surface_data,
                         }
+                        # Normalize legacy "execution" kinds to "run" so the
+                        # frontend dispatches to the unified run renderer.
+                        if existing.surface_type in ("execution", "plan"):
+                            existing.surface_type = "run"
                     else:
                         persist_db.add(
                             UISurface(
                                 surface_id=surface_id,
                                 user_id=user_id,
                                 workspace_id=workspace_id,
-                                surface_type="execution",
+                                surface_type="run",
                                 payload={"last_surface_update": surface_data},
                             )
                         )
                     await persist_db.commit()
         except Exception:
             logger.debug("Failed to persist surface update to DB", exc_info=True)
+
+    async def _emit_summary_surface(
+        self,
+        run: TaskRun,
+        run_surface_id: str,
+    ) -> None:
+        """Emit a lightweight ``summary`` card on run completion.
+
+        The full ``run`` surface is archived (expires sooner) and this compact
+        card takes its place in the active workspace feed. The summary links
+        back to the archived run via ``source_run_id`` so detail tabs can
+        still fetch the full trace/steps/plan from the same row.
+        """
+        if not self._db_factory:
+            return
+
+        try:
+            from datetime import datetime, timedelta, timezone
+
+            from src.models.ui_state import UISurface
+            from src.orchestrator.contracts import WorkspaceSurfacePush
+            from src.ui.contracts import SurfaceMetric, SurfacePreview
+            from src.ui.renderer import build_detail_config
+
+            summary_id = f"summary_{run.run_id}"
+
+            step_count = 0
+            completed_count = 0
+            try:
+                async with self._db_factory() as db:
+                    step_rows = await db.execute(
+                        select(TaskStep).where(TaskStep.run_id == run.run_id)
+                    )
+                    steps = list(step_rows.scalars().all())
+                    step_count = len(steps)
+                    completed_count = sum(1 for s in steps if s.status == "completed")
+            except Exception:
+                logger.debug("Failed to count steps for summary surface", exc_info=True)
+
+            input_tokens = int(getattr(run, "input_tokens", 0) or 0)
+            output_tokens = int(getattr(run, "output_tokens", 0) or 0)
+            cost_usd = float(getattr(run, "cost_usd", 0.0) or 0.0)
+
+            metrics: list[SurfaceMetric] = [
+                SurfaceMetric(
+                    label="Steps",
+                    value=f"{completed_count}/{step_count}" if step_count else "0",
+                    variant="success" if run.status == "completed" else "warning",
+                ),
+            ]
+            if input_tokens or output_tokens:
+                metrics.append(
+                    SurfaceMetric(label="Tokens", value=f"{input_tokens + output_tokens:,}")
+                )
+            if cost_usd:
+                metrics.append(SurfaceMetric(label="Cost", value=f"${cost_usd:.4f}"))
+
+            title = "Run completed" if run.status == "completed" else f"Run {run.status}"
+            preview = SurfacePreview(
+                title=title,
+                subtitle=(run.error or {}).get("message") if run.status != "completed" else None,
+                status=run.status if run.status in ("completed", "failed") else "completed",
+                metrics=metrics,
+            )
+
+            # Summary surfaces reuse the 'run' detail tabs so the user can
+            # drill into the archived run from the summary card.
+            detail_config = build_detail_config("run", run_surface_id)
+
+            surface = WorkspaceSurfacePush(
+                id=summary_id,
+                kind="summary",
+                preview=preview.model_dump(mode="json"),
+                detail_config=(detail_config.model_dump(mode="json") if detail_config else None),
+                source_run_id=run.run_id,
+                created_at=datetime.now(timezone.utc).isoformat(),
+            )
+
+            # Publish to WebSocket so the workspace feed updates live
+            if self._redis:
+                channel = f"jarvis:a2ui:{run.user_id}"
+                await self._redis.publish(
+                    channel,
+                    json.dumps({"type": "surface", "surface": surface.model_dump(mode="json")}),
+                )
+            elif self._event_bus:
+                channel = f"jarvis:a2ui:{run.user_id}"
+                await self._event_bus.publish_to_channel(
+                    channel,
+                    json.dumps({"type": "surface", "surface": surface.model_dump(mode="json")}),
+                )
+
+            # Persist the summary surface AND archive the run surface by
+            # shortening its TTL so it drops out of active-feed queries.
+            async with self._db_factory() as db:
+                db.add(
+                    UISurface(
+                        surface_id=summary_id,
+                        user_id=run.user_id,
+                        workspace_id=run.workspace_id,
+                        surface_type="summary",
+                        payload=surface.model_dump(mode="json"),
+                        preview=preview.model_dump(mode="json"),
+                        detail_config=(
+                            detail_config.model_dump(mode="json") if detail_config else None
+                        ),
+                        expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+                    )
+                )
+                # Archive the live run surface: hide from active feed but
+                # keep the record for detail drill-downs.
+                run_row = await db.execute(
+                    select(UISurface).where(UISurface.surface_id == run_surface_id)
+                )
+                existing_run = run_row.scalar_one_or_none()
+                if existing_run:
+                    existing_run.expires_at = datetime.now(timezone.utc) + timedelta(hours=2)
+                await db.commit()
+        except Exception:
+            logger.debug("Failed to emit summary surface", exc_info=True)
 
     @staticmethod
     def _build_graph_definition(tasks: list[PlanTask]) -> dict:

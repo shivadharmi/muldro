@@ -494,61 +494,10 @@ class Notifier:
                 )
                 await self._redis.publish(channel, message)
 
-                # Also push a typed surface for approval notifications so
-                # they appear on the workspace dashboard in real time.
-                if notification.type == "approval_request":
-                    try:
-                        from datetime import datetime, timezone
-
-                        from src.orchestrator.contracts import WorkspaceSurfacePush
-                        from src.ui.contracts import SurfaceMetric, SurfacePreview
-                        from src.ui.renderer import build_detail_config
-
-                        risk_level = (notification.data or {}).get("risk_level", "medium")
-                        risk_variant = (
-                            "warning" if risk_level in ("high", "critical") else "default"
-                        )
-
-                        # Use approval_{approval_id} format so the surface
-                        # detail endpoint can resolve the tab builders via
-                        # the "approval_" prefix in _PREFIX_MAP.  This also
-                        # deduplicates with the REST-polled surfaces built by
-                        # SurfaceService._build_approval_surfaces().
-                        approval_id = (notification.data or {}).get("approval_id", "")
-                        surface_id = (
-                            f"approval_{approval_id}" if approval_id else f"notif_surf_{ULID()}"
-                        )
-                        preview = SurfacePreview(
-                            title=notification.title,
-                            subtitle=(notification.body or "")[:120] or None,
-                            status="awaiting_approval",
-                            priority="high" if risk_level in ("high", "critical") else "medium",
-                            metrics=[
-                                SurfaceMetric(label="Risk", value=risk_level, variant=risk_variant),
-                            ],
-                        )
-                        detail_config = build_detail_config("approval", surface_id)
-
-                        surface = WorkspaceSurfacePush(
-                            id=surface_id,
-                            kind="approval",
-                            preview=preview.model_dump(mode="json"),
-                            detail_config=(
-                                detail_config.model_dump(mode="json") if detail_config else None
-                            ),
-                            decision="approval_requested",
-                            created_at=datetime.now(timezone.utc).isoformat(),
-                        )
-                        ws_msg = json.dumps(
-                            {"type": "surface", "surface": surface.model_dump(mode="json")}
-                        )
-                        await self._redis.publish(channel, ws_msg)
-                    except Exception:
-                        logger.debug(
-                            "Failed to push approval surface for %s",
-                            notification.notification_id,
-                            exc_info=True,
-                        )
+                # Note: approval notifications no longer emit a standalone
+                # workspace surface card. The run's unified surface (emitted
+                # by GraphExecutor with phase=approval_needed) already carries
+                # the inline approval block via units.approval_card.
 
                 return {"status": "published"}
             return {"status": "skipped", "reason": "no_ws_sender"}

@@ -189,8 +189,14 @@ class TestPlanReadyEmission:
             assert s.status == "pending"
 
     @pytest.mark.asyncio
-    async def test_plan_ready_not_emitted_without_surface_id(self):
-        """When no surface_id, plan_ready emission is skipped."""
+    async def test_plan_ready_defaults_to_run_surface_id_when_none_provided(self):
+        """When no surface_id is provided, execute_run defaults to run_{run_id}.
+
+        The unified surface architecture always maintains a surface per run so
+        the REST poll and WebSocket push target the same id; omitting the
+        argument should therefore default to the canonical run surface id,
+        not skip emission entirely.
+        """
         redis = AsyncMock()
         executor = _make_executor(redis_mock=redis)
 
@@ -207,8 +213,10 @@ class TestPlanReadyEmission:
 
         await executor.execute_run("run_01", trace_id="t1", surface_id=None)
 
-        # _emit_surface_update should NOT have been called for plan_ready
-        for call in executor._emit_surface_update.call_args_list:
-            kwargs = call.kwargs if call.kwargs else {}
-            # Also check positional if called positionally
-            assert kwargs.get("phase") != "plan_ready"
+        plan_ready_calls = [
+            call
+            for call in executor._emit_surface_update.call_args_list
+            if (call.kwargs or {}).get("phase") == "plan_ready"
+        ]
+        assert len(plan_ready_calls) == 1
+        assert plan_ready_calls[0].kwargs["surface_id"] == "run_run_01"
