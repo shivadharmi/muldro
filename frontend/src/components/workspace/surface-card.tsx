@@ -3,6 +3,7 @@
 import type { WorkspaceSurface } from "@/stores/surface-store";
 import { StepListCompact } from "@/components/a2ui/components/step-list";
 import { InsightSurface } from "@/components/a2ui/components/insight-surface";
+import { A2UIRenderer } from "@/components/a2ui/renderer";
 import type { InsightData } from "@/lib/a2ui-types";
 
 interface Props {
@@ -72,8 +73,20 @@ const metricVariantClass: Record<string, string> = {
   danger: "text-j-error",
 };
 
+// Cap how many sections are rendered inline on the card so oversized
+// Presenter payloads don't blow out the grid. Full content shows in the modal.
+const MAX_INLINE_SECTIONS = 3;
+
 export function SurfaceCard({ surface, onClick }: Props) {
   const { preview, kind } = surface;
+  const inlineSections = (surface.surface_data?.sections ?? []).slice(
+    0,
+    MAX_INLINE_SECTIONS,
+  );
+  const hiddenSectionCount = Math.max(
+    0,
+    (surface.surface_data?.sections?.length ?? 0) - MAX_INLINE_SECTIONS,
+  );
 
   return (
     <button
@@ -188,6 +201,29 @@ export function SurfaceCard({ surface, onClick }: Props) {
               {t}
             </span>
           ))}
+        </div>
+      )}
+
+      {/* Inline surface_data preview — first few typed A2UI sections.
+          Clicks bubble to the card's open-modal handler; any action fired
+          by a nested interactive component routes to the modal so the full
+          view is shown rather than executing the action from a preview. */}
+      {inlineSections.length > 0 && (
+        <div className="mb-2.5 max-h-[280px] overflow-hidden rounded-[var(--radius-md)] border border-b-secondary/60 bg-surface-2/40 p-2.5">
+          <A2UIRenderer
+            surface={{
+              type: "surface",
+              id: `card-${surface.id}`,
+              children: inlineSections,
+              metadata: {},
+            }}
+            onAction={() => onClick()}
+          />
+          {hiddenSectionCount > 0 && (
+            <p className="mt-1.5 text-[10px] text-t-muted">
+              +{hiddenSectionCount} more section{hiddenSectionCount === 1 ? "" : "s"} — click to expand
+            </p>
+          )}
         </div>
       )}
 

@@ -25,8 +25,16 @@ const priorityBadge: Record<string, string> = {
 
 export function SurfaceDetailModal({ surface, open, onClose }: Props) {
   const sendAction = useWsActionStore((s) => s.sendAction);
-  const tabs = surface.detail_config?.tabs ?? [];
-  const defaultTabId = surface.detail_config?.default_tab ?? tabs[0]?.id ?? null;
+  // Presenter-authored typed content takes precedence over on-demand tab fetches.
+  // When surface_data.sections exist, render them inline via A2UIRenderer and
+  // suppress the tab bar — those tabs only contain DB-derived detail for kinds
+  // like plan/approval that don't carry Presenter content.
+  const presenterSections = surface.surface_data?.sections ?? [];
+  const hasPresenterContent = presenterSections.length > 0;
+  const tabs = hasPresenterContent ? [] : (surface.detail_config?.tabs ?? []);
+  const defaultTabId = hasPresenterContent
+    ? null
+    : (surface.detail_config?.default_tab ?? tabs[0]?.id ?? null);
 
   const [activeTabId, setActiveTabId] = useState<string | null>(defaultTabId);
   const [tabCache, setTabCache] = useState<Record<string, DetailTabResponse>>({});
@@ -157,20 +165,37 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
 
         {/* Tab content */}
         <div className="flex-1 overflow-y-auto px-6 py-4">
-          {loading && (
+          {hasPresenterContent && (
+            <A2UIRenderer
+              surface={{
+                type: "surface",
+                id: `presenter-${surface.id}`,
+                children: presenterSections,
+                metadata: {},
+              }}
+              onAction={(action, payload) =>
+                handleA2UIAction(sendAction, action, {
+                  ...payload,
+                  surface_id: surface.id,
+                })
+              }
+            />
+          )}
+
+          {!hasPresenterContent && loading && (
             <div className="flex items-center justify-center py-8">
               <div className="w-5 h-5 border-2 border-accent-primary/30 border-t-accent-primary rounded-full animate-spin" />
               <span className="ml-2 text-sm text-t-tertiary">Loading {activeTab?.label}...</span>
             </div>
           )}
 
-          {error && !loading && (
+          {!hasPresenterContent && error && !loading && (
             <div className="rounded-[var(--radius-md)] bg-j-error-soft border border-j-error/20 p-4">
               <p className="text-sm text-j-error">{error}</p>
             </div>
           )}
 
-          {activeData && !loading && (
+          {!hasPresenterContent && activeData && !loading && (
             <div className="space-y-3">
               {activeData.sections.map((section) => (
                 <CollapsibleSection
@@ -218,7 +243,7 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
             />
           )}
 
-          {!loading && !error && !activeData && tabs.length === 0 && (
+          {!hasPresenterContent && !loading && !error && !activeData && tabs.length === 0 && (
             <p className="text-sm text-t-tertiary text-center py-8">
               No detail tabs available for this surface.
             </p>

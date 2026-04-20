@@ -2,7 +2,7 @@
 
 import { create } from "zustand";
 
-import type { DetailConfig, SurfacePreview } from "@/lib/a2ui-types";
+import type { DetailConfig, SurfaceDataPayload, SurfacePreview } from "@/lib/a2ui-types";
 import type { ExecutionPhase, StepState, ApprovalContext, ResultSummary, SurfaceUpdate } from "@/lib/a2ui-types";
 import type { SurfaceKind } from "@/lib/types/surfaces";
 
@@ -23,6 +23,8 @@ export interface WorkspaceSurface {
   results?: ResultSummary | null;
   // Insight surface fields
   insight_data?: Record<string, unknown> | null;
+  // Presenter-authored typed rich content (renders via A2UIRenderer).
+  surface_data?: SurfaceDataPayload | null;
 }
 
 interface SurfaceState {

@@ -41,6 +41,7 @@ export default function ChatPage() {
         source_run_id: push.source_run_id,
         response_preview: push.response_preview,
         created_at: push.created_at || new Date().toISOString(),
+        surface_data: push.surface_data ?? null,
       });
     },
     [addSurface]

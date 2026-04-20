@@ -82,7 +82,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       </div>
 
       {/* Navigation — flat list */}
-      <nav className="flex-1 overflow-y-auto px-2 py-3 space-y-0.5">
+      <nav className="flex-1 overflow-y-auto px-2 py-3 space-y-1">
         <NavItem
           href="/"
           label="Workspace"

@@ -73,7 +73,13 @@ export interface DetailTabResponse {
   sections: DetailSection[];
 }
 
-/** New two-layer surface push from backend (preview + detail_config). */
+/** Presenter-authored rich content for a surface's detail view.
+ *  Each section is a full A2UIComponent tree rendered by the A2UIRenderer. */
+export interface SurfaceDataPayload {
+  sections: A2UIComponent[];
+}
+
+/** New two-layer surface push from backend (preview + detail_config + optional surface_data). */
 export interface WorkspaceSurfacePush {
   type: "surface";
   id: string;
@@ -84,6 +90,7 @@ export interface WorkspaceSurfacePush {
   response_preview: string | null;
   created_at: string;
   ttl_hours: number;
+  surface_data: SurfaceDataPayload | null;
 }
 
 // ── Insight surface types ────────────────────────────────────

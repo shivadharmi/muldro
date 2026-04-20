@@ -21,7 +21,7 @@ export function WorkspaceStatusBar({ system }: Props) {
   }
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+    <div className="grid grid-cols-3 gap-3">
       {/* Health */}
       <div className="rounded-[var(--radius-lg)] border border-b-secondary bg-surface-1 px-4 py-3">
         <p className="text-[10px] text-t-muted font-medium uppercase tracking-wider mb-1.5">System</p>
