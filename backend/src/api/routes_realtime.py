@@ -6,10 +6,12 @@ import logging
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config.settings import Settings, get_settings
 from src.models.database import get_db
+from src.models.task_graph import TaskRun
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -187,12 +189,28 @@ async def stream_run_progress(
     run_id: str,
     request: Request,
     user_id: str = Depends(_resolve_user_id_for_sse),
+    db: AsyncSession = Depends(get_db),
 ):
     """SSE endpoint for run-specific progress streaming.
 
     Subscribes to a run-specific Redis pub/sub channel and streams
     execution progress events to the client.
     """
+    # Authorization gate (runs before any resource access): the requester may
+    # only stream progress for runs they own. Without this check, any
+    # authenticated user could subscribe to `jarvis:run:{run_id}` for an
+    # arbitrary run_id and observe another user's execution events (IDOR).
+    # A 404 (not 403) is returned so the response does not reveal whether the
+    # run exists — matching `get_history_detail`'s ownership convention.
+    owned = await db.execute(
+        select(TaskRun.run_id).where(
+            TaskRun.run_id == run_id,
+            TaskRun.user_id == user_id,
+        )
+    )
+    if owned.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
     redis = getattr(request.app.state, "redis", None)
     if not redis:
         raise HTTPException(status_code=503, detail="Redis unavailable for realtime streaming")
