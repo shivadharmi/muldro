@@ -265,12 +265,12 @@ class TestRecommendationEvidence:
 
 
 class TestRegistryComplete:
-    def test_tab_builders_has_30_entries(self):
+    def test_tab_builders_has_38_entries(self):
         from src.services.surface_detail_builders import TAB_BUILDERS
 
-        assert len(TAB_BUILDERS) == 30
+        assert len(TAB_BUILDERS) == 38
 
-    def test_all_12_kinds_covered(self):
+    def test_all_13_kinds_covered(self):
         from src.services.surface_detail_builders import TAB_BUILDERS
 
         kinds = {k for k, _ in TAB_BUILDERS.keys()}
@@ -287,6 +287,7 @@ class TestRegistryComplete:
             "table",
             "activity",
             "proactive_insight",
+            "run",
         }
         assert kinds == expected
 
