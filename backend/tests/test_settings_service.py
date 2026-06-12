@@ -66,26 +66,32 @@ class TestGet:
 
 
 class TestSet:
-    async def test_creates_new_setting(self, service, mock_db):
-        result_mock = MagicMock()
-        result_mock.scalar_one_or_none.return_value = None
-        mock_db.execute = AsyncMock(return_value=result_mock)
+    """``SettingsService.set`` is branch-free — a single atomic upsert
+    handles both create and update. Tests verify the statement carries the
+    correct key columns and value."""
+
+    async def test_upsert_carries_params_and_flushes(self, service, mock_db):
+        captured: dict = {}
+        mock_db.execute = AsyncMock(side_effect=lambda stmt: captured.setdefault("stmt", stmt))
 
         await service.set(TEST_USER_ID, "policy", "mode", "full_auto")
-        mock_db.add.assert_called_once()
-        mock_db.flush.assert_called_once()
 
-    async def test_updates_existing_setting(self, service, mock_db):
-        existing = MagicMock()
-        existing.value = "approval_required"
+        assert mock_db.execute.await_count == 1
+        params = captured["stmt"].compile().params
+        assert params["user_id"] == TEST_USER_ID
+        assert params["category"] == "policy"
+        assert params["key"] == "mode"
+        assert params["value"] == "full_auto"
+        mock_db.flush.assert_awaited_once()
 
-        result_mock = MagicMock()
-        result_mock.scalar_one_or_none.return_value = existing
-        mock_db.execute = AsyncMock(return_value=result_mock)
+    async def test_upsert_with_dict_value(self, service, mock_db):
+        captured: dict = {}
+        mock_db.execute = AsyncMock(side_effect=lambda stmt: captured.setdefault("stmt", stmt))
 
-        await service.set(TEST_USER_ID, "policy", "mode", "lockdown")
-        assert existing.value == "lockdown"
-        mock_db.flush.assert_called_once()
+        await service.set(TEST_USER_ID, "notification", "digest", {"frequency": "weekly"})
+
+        params = captured["stmt"].compile().params
+        assert params["value"] == {"frequency": "weekly"}
 
 
 class TestPolicyMode:

@@ -56,6 +56,14 @@ from src.tools.schemas import build_tool_definitions
 
 logger = logging.getLogger(__name__)
 
+# Per-message planner JSON contract suffix (mirrors PLANNER_PROMPT_V2's
+# <final_response_contract>; kept near the user message as a reminder so the
+# final response parser doesn't get tripped by stray prose).
+_PLANNER_JSON_CONTRACT_SUFFIX = (
+    "\n\nRespond with a single PlanOutput JSON object — no prose, "
+    "no preamble, no code fences. Start with { and end with }."
+)
+
 # Event types published to the agent events stream
 AGENT_EVENT_TYPES = {
     "plan_generated",
@@ -70,16 +78,16 @@ AGENT_EVENT_TYPES = {
 
 # Model IDs for each tier (direct API)
 MODEL_TIERS = {
-    "opus": "claude-opus-4-20250514",
-    "sonnet": "claude-sonnet-4-20250514",
-    "haiku": "claude-haiku-4-20250514",
+    "opus": "claude-opus-4-8",
+    "sonnet": "claude-sonnet-4-6",
+    "haiku": "claude-haiku-4-5-20251001",
 }
 
-# Bedrock inference profile IDs (cross-region, works in ap-south-1)
+# Bedrock inference profile IDs (us.* cross-region, us-east-1 / us-west-2)
 BEDROCK_MODEL_TIERS = {
-    "opus": "global.anthropic.claude-opus-4-5-20251101-v1:0",
-    "sonnet": "apac.anthropic.claude-sonnet-4-20250514-v1:0",
-    "haiku": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "opus": "us.anthropic.claude-opus-4-8",
+    "sonnet": "us.anthropic.claude-sonnet-4-6",
+    "haiku": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
 }
 
 
@@ -692,7 +700,10 @@ class JarvisOrchestrator:
             plan_text = ""
 
             if use_planner:
-                planner_message = f"User message: {message}\n\nContext: {json.dumps(context or {})}"
+                planner_message = (
+                    f"User message: {message}\n\nContext: {json.dumps(context or {})}"
+                    f"{_PLANNER_JSON_CONTRACT_SUFFIX}"
+                )
                 if history_block:
                     planner_message = f"{history_block}\n\n{planner_message}"
 
@@ -1027,7 +1038,10 @@ class JarvisOrchestrator:
             plan_text = ""
 
             if use_planner:
-                planner_message = f"User message: {message}\n\nContext: {json.dumps(context or {})}"
+                planner_message = (
+                    f"User message: {message}\n\nContext: {json.dumps(context or {})}"
+                    f"{_PLANNER_JSON_CONTRACT_SUFFIX}"
+                )
                 if history_block:
                     planner_message = f"{history_block}\n\n{planner_message}"
 
@@ -1474,6 +1488,20 @@ class JarvisOrchestrator:
         trace = self._trace_manager.start_trace(f"perception_{source}")
 
         try:
+            # MCP-only integrations (e.g., Atlassian, Slack MCP server) have no
+            # CONNECTOR_REGISTRY entry — their data flows entirely through
+            # external MCP servers. Perception polling via native connectors
+            # doesn't apply; short-circuit here so the scheduler doesn't log
+            # perception_poll_failed warnings every tick for these sources.
+            from src.connectors.base import CONNECTOR_REGISTRY
+
+            if source not in CONNECTOR_REGISTRY:
+                logger.debug(
+                    "perception_skipped_mcp_only",
+                    extra={"source": source},
+                )
+                return {"status": "skipped", "reason": "mcp_only_source", "source": source}
+
             # Check budget (only for Librarian + Planner calls, polling is cheap)
             async with self._db_factory() as db:
                 budget_status = await self._budget.get_budget_status(db)
@@ -3348,12 +3376,19 @@ class JarvisOrchestrator:
         try:
             match tool.backend:
                 case "internal_mcp":
-                    # Internal tools receive workspace_id in input
-                    if workspace_id and "workspace_id" not in tool_input:
-                        tool_input = {**tool_input, "workspace_id": workspace_id}
+                    # Intelligence server tools are workspace-scoped and need
+                    # user_id/workspace_id for DB queries. Communication server
+                    # tools are stateless delivery tools — injecting these fields
+                    # causes Pydantic validation errors on their strict schemas.
+                    if tool.server == "intelligence":
+                        if workspace_id and "workspace_id" not in tool_input:
+                            tool_input = {**tool_input, "workspace_id": workspace_id}
+                        enriched_input = {**tool_input, "user_id": user_id}
+                    else:
+                        enriched_input = tool_input
                     result = await self._call_internal_tool(
                         tool_name,
-                        {**tool_input, "user_id": user_id},
+                        enriched_input,
                         server_prefix=tool.server,
                     )
                 case "external_mcp":

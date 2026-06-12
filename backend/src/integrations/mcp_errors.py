@@ -64,6 +64,25 @@ def classify_error(error: Exception) -> str:
     if any(k in error_str for k in ("500", "502", "503", "504", "server error")):
         return MCPErrorCode.SERVER_ERROR
 
+    # Generic in-band wrappers used by hosted MCP proxies when the upstream
+    # service refuses a call (Atlassian Remote MCP, for example, returns
+    # {"error":true,"message":"We are having trouble completing this action.
+    # Please try again shortly."} for stale/unauthorized sessions instead of
+    # a clean 401/5xx). Without this branch the classifier falls through to
+    # UNKNOWN → non-transient → the retry loop breaks on the first attempt
+    # AND no session-refresh recovery fires.
+    if any(
+        k in error_str
+        for k in (
+            "having trouble",
+            "try again shortly",
+            "try again later",
+            "temporarily unavailable",
+            "service unavailable",
+        )
+    ):
+        return MCPErrorCode.SERVER_ERROR
+
     return MCPErrorCode.UNKNOWN
 
 

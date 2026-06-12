@@ -1,4 +1,5 @@
 import type { A2UIComponent } from "@/lib/a2ui-types";
+import { InlineMarkdown, MarkdownRenderer } from "@/components/jarvis/markdown-renderer";
 
 interface Props {
   component: A2UIComponent;
@@ -15,5 +16,17 @@ export function A2UIText({ component }: Props) {
   const text = (component.properties.text as string) || "";
   const className = variantClasses[variant] || variantClasses.body;
 
-  return <p className={className}>{text}</p>;
+  if (variant === "caption") {
+    return (
+      <span className={className}>
+        <InlineMarkdown content={text} />
+      </span>
+    );
+  }
+
+  return (
+    <div className={className}>
+      <MarkdownRenderer content={text} />
+    </div>
+  );
 }

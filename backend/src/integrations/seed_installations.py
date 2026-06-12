@@ -6,6 +6,7 @@ workspace-scoped DB rows managed by the IntegrationControlPlane.
 
 import logging
 import os
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +16,17 @@ from src.models.integration_installation import IntegrationInstallation
 from src.models.server_trust import ServerTrustRecord
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_FILESYSTEM_ROOT = str(Path.home() / "jarvis-workspace")
+
+
+def _filesystem_mcp_root() -> str:
+    """Root directory exposed to the filesystem MCP server.
+
+    Configurable via JARVIS_FILESYSTEM_MCP_ROOT; defaults to ~/jarvis-workspace
+    (persists across reboots, unlike /tmp on many systems).
+    """
+    return os.environ.get("JARVIS_FILESYSTEM_MCP_ROOT", "") or _DEFAULT_FILESYSTEM_ROOT
 
 
 async def _clear_stale_tool_schemas(db: AsyncSession, server_name: str, workspace_id: str) -> None:
@@ -138,7 +150,7 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
         "display_name": "Filesystem",
         "transport": "stdio",
         "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp/jarvis-workspace"],
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", _filesystem_mcp_root()],
         "env_template": {},
         "auth_provider": None,
         "scopes_granted": [],
@@ -165,19 +177,26 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
     {
         "server_name": "atlassian",
         "display_name": "Atlassian (Jira + Confluence)",
-        "transport": "stdio",
-        "command": "npx",
-        "args": ["-y", "mcp-remote@latest", "https://mcp.atlassian.com/v1/mcp"],
-        "env_template": {
-            "JARVIS_ATLASSIAN_MCP_ENABLED": "Set to 'true' to enable",
-        },
-        "auth_provider": "oauth",
+        "transport": "streamable-http",
+        "remote_url": "https://mcp.atlassian.com/v1/mcp",
+        "command": None,
+        "args": None,
+        "env_template": {},
+        "auth_provider": "atlassian",
         "scopes_granted": [
+            # Jira
             "issue.create",
             "issue.update",
             "issue.search",
             "issue.comment",
             "issue.transition",
+            # Confluence
+            "doc.create",
+            "doc.update",
+            "doc.get",
+            "doc.search",
+            "doc.comment",
+            "doc.list",
         ],
     },
 ]
@@ -266,6 +285,22 @@ async def seed_installations(db: AsyncSession, workspace_id: str, user_id: str) 
         if expected_trust and inst.trust_id != expected_trust:
             inst.trust_id = expected_trust
             needs_update = True
+
+        # Backfill tool_defaults for Atlassian installations connected before
+        # auto-injection existed. If the OAuth callback already stored
+        # cloud_id but no tool_defaults, we can derive the map now so every
+        # future MCP call gets it auto-injected without re-linking.
+        if server_name == "atlassian" and isinstance(inst.config, dict):
+            stored_cloud = inst.config.get("cloud_id")
+            existing_defaults = inst.config.get("tool_defaults") or {}
+            if stored_cloud and existing_defaults.get("cloudId") != stored_cloud:
+                new_cfg = dict(inst.config)
+                new_cfg["tool_defaults"] = {
+                    **existing_defaults,
+                    "cloudId": stored_cloud,
+                }
+                inst.config = new_cfg
+                needs_update = True
 
         if needs_update:
             changed += 1

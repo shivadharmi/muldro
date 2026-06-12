@@ -12,7 +12,6 @@ import { useSurfaceStore } from "@/stores/surface-store";
 import type { WorkspaceSurface } from "@/stores/surface-store";
 import { useWsActionStore } from "@/stores/ws-action-store";
 import { GreetingHero } from "@/components/dashboard/greeting-hero";
-import { WorkspaceStatusBar } from "@/components/workspace/workspace-status-bar";
 import { WorkspaceCanvas } from "@/components/workspace/workspace-canvas";
 import { SurfaceDetailModal } from "@/components/workspace/surface-detail-modal";
 import type { WorkspaceSurfacePush, SurfaceUpdate } from "@/lib/a2ui-types";
@@ -133,9 +132,8 @@ export default function WorkspacePage() {
         headline={headline}
         approvalCount={approvalCount}
         sourceCount={sourceCount}
+        system={system}
       />
-
-      <WorkspaceStatusBar system={system} />
 
       <WorkspaceCanvas
         surfaces={allSurfaces}

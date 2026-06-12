@@ -221,12 +221,27 @@ async def update_entity(
             if add_alias:
                 from src.models.entities import EntityAlias
 
-                alias = EntityAlias(
-                    alias_id=f"alias_{ULID()}",
-                    entity_id=entity_id,
-                    alias_value=add_alias,
+                dup = await db.execute(
+                    select(EntityAlias).where(
+                        EntityAlias.entity_id == entity_id,
+                        EntityAlias.alias == add_alias,
+                    )
                 )
-                db.add(alias)
+                if dup.scalar_one_or_none() is None:
+                    if add_alias.startswith("@"):
+                        alias_type = "handle"
+                    elif "@" in add_alias:
+                        alias_type = "email"
+                    else:
+                        alias_type = "name"
+                    db.add(
+                        EntityAlias(
+                            entity_id=entity_id,
+                            workspace_id=workspace_id,
+                            alias=add_alias,
+                            alias_type=alias_type,
+                        )
+                    )
 
             await db.flush()
             await db.commit()

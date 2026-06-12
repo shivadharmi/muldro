@@ -1,12 +1,14 @@
 """Embedding Service — generate and manage vector embeddings.
 
-Uses AWS Bedrock Titan Text Embeddings V2 for vector generation.
-Supports semantic search across memories, entities, and events.
+Primary: Voyage AI (httpx) when JARVIS_VOYAGE_API_KEY is set.
+Fallback: AWS Bedrock Titan Text Embeddings V2.
 """
 
 import asyncio
 import json
 import logging
+
+import httpx
 
 from src.config.settings import Settings
 
@@ -17,18 +19,15 @@ EMBEDDING_DIM = 1024
 
 
 class EmbeddingService:
-    """Generate embeddings via AWS Bedrock Titan Text Embeddings V2."""
+    """Generate embeddings via Voyage AI or AWS Bedrock Titan Text Embeddings V2."""
 
     def __init__(self, settings: Settings):
         self._settings = settings
         self._region = settings.bedrock_region
         self._model_id = settings.embedding_model
-
-    def _get_client(self):
-        """Create a boto3 Bedrock Runtime client (sync)."""
-        import boto3
-
-        return boto3.client("bedrock-runtime", region_name=self._region)
+        self._voyage_key = settings.voyage_api_key
+        self._voyage_url = settings.voyage_base_url.rstrip("/")
+        self._use_voyage = bool(self._voyage_key)
 
     async def embed_text(self, text: str) -> list[float] | None:
         """Generate an embedding vector for a single text string."""
@@ -43,17 +42,46 @@ class EmbeddingService:
         """Generate embedding vectors for multiple texts."""
         if not texts:
             return []
-        # Titan accepts one text at a time, so we batch sequentially
-        results = []
-        for text in texts:
-            vec = await self.embed_text(text)
-            if vec is None:
-                return None
-            results.append(vec)
+        results = await self._embed_batch(texts)
         return results
 
     async def _embed_batch(self, texts: list[str]) -> list[list[float]] | None:
-        """Call Bedrock Titan for each text, with retry."""
+        if self._use_voyage:
+            return await self._embed_voyage(texts)
+        return await self._embed_titan(texts)
+
+    # --- Voyage AI ---
+
+    async def _embed_voyage(self, texts: list[str]) -> list[list[float]] | None:
+        url = f"{self._voyage_url}/embeddings"
+        headers = {
+            "Authorization": f"Bearer {self._voyage_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {"input": texts, "model": self._model_id}
+        max_retries = 3
+        for attempt in range(max_retries + 1):
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.post(url, headers=headers, json=payload)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    return [item["embedding"] for item in data["data"]]
+            except Exception:
+                if attempt < max_retries:
+                    await asyncio.sleep(2 ** (attempt + 1))
+                    continue
+                logger.warning("Voyage embedding generation failed", exc_info=True)
+                return None
+
+    # --- Bedrock Titan (fallback) ---
+
+    def _get_bedrock_client(self):
+        import boto3
+
+        return boto3.client("bedrock-runtime", region_name=self._region)
+
+    async def _embed_titan(self, texts: list[str]) -> list[list[float]] | None:
         max_retries = 3
         results = []
         for text in texts:
@@ -71,8 +99,7 @@ class EmbeddingService:
         return results
 
     def _invoke_titan(self, text: str) -> list[float]:
-        """Synchronous call to Bedrock Titan Text Embeddings V2."""
-        client = self._get_client()
+        client = self._get_bedrock_client()
         body = json.dumps(
             {
                 "inputText": text,

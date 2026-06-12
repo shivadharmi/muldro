@@ -243,9 +243,10 @@ class WorkspaceMCPPool:
                     if config.get("transport") in ("sse", "streamable-http"):
                         http_servers.append((inst.workspace_id, inst.server_name, config))
 
-                # Eagerly discover tools from HTTP MCP servers so schemas are
-                # available before the first tool call.
-                for ws_id, srv_name, cfg in http_servers:
+                # Eagerly discover tools from HTTP MCP servers in parallel so
+                # schemas are available before the first tool call. Per-call
+                # timeouts live inside session_pool.discover_tools.
+                async def _http_discover(ws_id: str, srv_name: str, cfg: dict) -> None:
                     try:
                         await self._session_pool.discover_tools(
                             srv_name, workspace_id=ws_id, config=cfg
@@ -256,6 +257,12 @@ class WorkspaceMCPPool:
                             srv_name,
                             disc_err,
                         )
+
+                if http_servers:
+                    await asyncio.gather(
+                        *(_http_discover(w, s, c) for w, s, c in http_servers),
+                        return_exceptions=True,
+                    )
 
                 logger.info("Loaded %d MCP servers from DB", count)
 
@@ -276,6 +283,9 @@ class WorkspaceMCPPool:
         Two categories:
         - Auth-free servers (auth_provider is None): spawned immediately, no token needed.
         - OAuth servers: require a user with a valid token for the auth_provider.
+
+        Discovery runs in parallel; each per-server spawn is bounded by a 30s
+        timeout so one hanging subprocess cannot stall the whole pass.
         """
         oauth_providers = {"github", "slack", "notion"}
 
@@ -289,15 +299,14 @@ class WorkspaceMCPPool:
             elif inst.auth_provider in oauth_providers:
                 oauth_servers.append((inst.workspace_id, inst.server_name, inst.auth_provider))
 
-        # Discover auth-free servers first (playwright, filesystem) — no token needed
-        for ws_id, srv_name in auth_free_servers:
+        async def _discover_auth_free(ws_id: str, srv_name: str) -> None:
             try:
                 # Auth-free servers need a user_id for session keying but no real token.
                 # Use the workspace owner (first member) as the session key.
                 user_id = await self._resolve_workspace_user(ws_id)
                 if not user_id:
                     logger.debug("No user for workspace %s — skipping %s", ws_id[:16], srv_name)
-                    continue
+                    return
                 session = await asyncio.wait_for(
                     self._session_pool.get_or_create_session(
                         srv_name, user_id=user_id, workspace_id=ws_id
@@ -314,6 +323,12 @@ class WorkspaceMCPPool:
             except Exception:
                 logger.debug("Schema discovery failed for %s", srv_name, exc_info=True)
 
+        if auth_free_servers:
+            await asyncio.gather(
+                *(_discover_auth_free(w, s) for w, s in auth_free_servers),
+                return_exceptions=True,
+            )
+
         # Discover OAuth servers (need a user with a valid token)
         if not oauth_servers:
             return
@@ -323,7 +338,7 @@ class WorkspaceMCPPool:
             logger.debug("No OAuthManager — skipping OAuth stdio schema discovery")
             return
 
-        for ws_id, srv_name, auth_provider in oauth_servers:
+        async def _discover_oauth(ws_id: str, srv_name: str, auth_provider: str) -> None:
             try:
                 from sqlalchemy import select
 
@@ -343,11 +358,14 @@ class WorkspaceMCPPool:
                         auth_provider,
                         srv_name,
                     )
-                    continue
+                    return
 
                 user_id = row[0]
-                session = await self._session_pool.get_or_create_session(
-                    srv_name, user_id=user_id, workspace_id=ws_id
+                session = await asyncio.wait_for(
+                    self._session_pool.get_or_create_session(
+                        srv_name, user_id=user_id, workspace_id=ws_id
+                    ),
+                    timeout=30,
                 )
                 logger.info(
                     "Stdio schema discovery for %s: %d tools (user=%s)",
@@ -355,8 +373,15 @@ class WorkspaceMCPPool:
                     len(session.tools),
                     user_id[:16],
                 )
+            except asyncio.TimeoutError:
+                logger.warning("OAuth stdio schema discovery timed out for %s (30s)", srv_name)
             except Exception:
                 logger.debug("Stdio schema discovery failed for %s", srv_name, exc_info=True)
+
+        await asyncio.gather(
+            *(_discover_oauth(w, s, p) for w, s, p in oauth_servers),
+            return_exceptions=True,
+        )
 
     async def _resolve_workspace_user(self, workspace_id: str) -> str | None:
         """Find any user in a workspace for session keying (auth-free servers)."""
@@ -420,6 +445,17 @@ def _installation_to_config(inst: Any) -> dict:
 
     elif inst.transport in ("sse", "streamable-http") and inst.remote_url:
         config["url"] = inst.remote_url
+
+    # Carry tool_defaults from the installation's JSONB config into the
+    # session-pool config. UserMCPSessionPool.call_tool merges these into
+    # every MCP tool_input when the matching key is absent — this is how
+    # Atlassian's cloudId (and any other per-workspace constant) reaches
+    # the MCP server without the agent needing to know it.
+    inst_cfg = getattr(inst, "config", None) or {}
+    if isinstance(inst_cfg, dict):
+        defaults = inst_cfg.get("tool_defaults")
+        if isinstance(defaults, dict) and defaults:
+            config["tool_defaults"] = defaults
 
     return config
 

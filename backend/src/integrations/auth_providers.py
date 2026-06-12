@@ -1,7 +1,7 @@
 """FastMCP auth provider factory — maps provider names to FastMCP auth instances.
 
 Built-in providers: Google, GitHub (native FastMCP support).
-Custom OAuthProxy: Slack, Notion, Jira.
+Custom OAuthProxy: Slack, Notion, Atlassian (Jira + Confluence).
 BearerAuth: static token for simple MCP servers.
 """
 
@@ -72,11 +72,30 @@ SUPPORTED_PROVIDERS: dict[str, ProviderMeta] = {
         authorize_url="https://api.notion.com/v1/oauth/authorize",
         token_url="https://api.notion.com/v1/oauth/token",
     ),
-    "jira": ProviderMeta(
-        name="jira",
-        display_name="Jira (Atlassian)",
+    "atlassian": ProviderMeta(
+        name="atlassian",
+        display_name="Atlassian (Jira + Confluence)",
         provider_type="oauth_proxy",
-        default_scopes=["read:jira-work", "write:jira-work", "read:jira-user"],
+        default_scopes=[
+            # offline_access + read:me are mandatory for Atlassian's Remote
+            # MCP (mcp.atlassian.com); without them, every tool call fails
+            # with the opaque "having trouble" wrapper.
+            "offline_access",
+            "read:me",
+            "read:jira-work",
+            "write:jira-work",
+            "read:jira-user",
+            "manage:jira-project",
+            "read:confluence-content.all",
+            "read:confluence-content.summary",
+            "write:confluence-content",
+            "read:confluence-space.summary",
+            "read:confluence-props",
+            "write:confluence-props",
+            "read:confluence-user",
+            "read:confluence-groups",
+            "search:confluence",
+        ],
         authorize_url="https://auth.atlassian.com/authorize",
         token_url="https://auth.atlassian.com/oauth/token",
     ),

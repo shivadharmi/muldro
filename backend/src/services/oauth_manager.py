@@ -173,7 +173,7 @@ class OAuthManager:
             "google": ("google_oauth_client_id", "google_oauth_client_secret"),
             "github": ("github_oauth_client_id", "github_oauth_client_secret"),
             "notion": ("notion_oauth_client_id", "notion_oauth_client_secret"),
-            "jira": ("jira_oauth_client_id", "jira_oauth_client_secret"),
+            "atlassian": ("atlassian_oauth_client_id", "atlassian_oauth_client_secret"),
         }
 
         if self._settings and provider in settings_map:
@@ -196,7 +196,7 @@ class OAuthManager:
             "google": "https://oauth2.googleapis.com/token",
             "github": "https://github.com/login/oauth/access_token",
             "slack": "https://slack.com/api/oauth.v2.access",
-            "jira": "https://auth.atlassian.com/oauth/token",
+            "atlassian": "https://auth.atlassian.com/oauth/token",
         }
         endpoint = endpoints.get(provider)
         if not endpoint:

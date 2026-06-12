@@ -5,6 +5,7 @@ import { StepListCompact } from "@/components/a2ui/components/step-list";
 import { InsightSurface } from "@/components/a2ui/components/insight-surface";
 import { A2UIRenderer } from "@/components/a2ui/renderer";
 import type { InsightData } from "@/lib/a2ui-types";
+import { InlineMarkdown } from "@/components/jarvis/markdown-renderer";
 
 interface Props {
   surface: WorkspaceSurface;
@@ -126,13 +127,13 @@ export function SurfaceCard({ surface, onClick }: Props) {
 
       {/* Title */}
       <h3 className="text-[13px] font-medium text-t-primary line-clamp-2 mb-1 leading-snug">
-        {preview.title}
+        <InlineMarkdown content={preview.title} />
       </h3>
 
       {/* Subtitle */}
       {preview.subtitle && (
         <p className="text-xs text-t-tertiary line-clamp-2 mb-2.5 leading-relaxed">
-          {preview.subtitle}
+          <InlineMarkdown content={preview.subtitle} />
         </p>
       )}
 

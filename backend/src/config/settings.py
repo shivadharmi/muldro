@@ -18,9 +18,9 @@ class Settings(BaseSettings):
 
     # Anthropic
     anthropic_api_key: str = ""
-    anthropic_model: str = "claude-sonnet-4-20250514"
+    anthropic_model: str = "claude-sonnet-4-6"
     use_bedrock: bool = False
-    bedrock_region: str = "ap-south-1"
+    bedrock_region: str = "us-east-1"
 
     # Server
     host: str = "0.0.0.0"
@@ -31,8 +31,10 @@ class Settings(BaseSettings):
 
     telegram_chat_id: str = ""  # Telegram chat ID for proactive message delivery
 
-    # Embeddings (Bedrock Titan)
-    embedding_model: str = "amazon.titan-embed-text-v2:0"
+    # Embeddings — Voyage AI (primary) or Bedrock Titan (fallback when no voyage_api_key)
+    embedding_model: str = "voyage-3"
+    voyage_api_key: str = ""
+    voyage_base_url: str = "https://api.voyageai.com/v1"
 
     # Reranker (Bedrock) — available in: us-west-2, eu-central-1, ap-northeast-1, ca-central-1
     reranker_model: str = "amazon.rerank-v1:0"
@@ -106,15 +108,10 @@ class Settings(BaseSettings):
     notion_oauth_redirect_uri: str = "http://localhost:8000/v1/auth/notion/callback"
     notion_token: str = ""  # For MCP server (@notionhq/notion-mcp-server)
 
-    # Jira (Atlassian) OAuth
-    jira_oauth_client_id: str = ""
-    jira_oauth_client_secret: str = ""
-    jira_oauth_redirect_uri: str = "http://localhost:8000/v1/auth/jira/callback"
-    jira_cloud_id: str = ""
-    jira_url: str = ""
-    jira_email: str = ""
-    jira_api_token: str = ""
-    atlassian_mcp_enabled: bool = False  # Enable Atlassian Rovo MCP (requires interactive OAuth)
+    # Atlassian OAuth (Jira + Confluence via Rovo MCP)
+    atlassian_oauth_client_id: str = ""
+    atlassian_oauth_client_secret: str = ""
+    atlassian_oauth_redirect_uri: str = "http://localhost:8000/v1/auth/atlassian/callback"
 
     # S3 / artifact storage
     s3_bucket: str = ""
@@ -133,6 +130,10 @@ class Settings(BaseSettings):
     # Registry validation
     skip_registry_validation: bool = False  # JARVIS_SKIP_REGISTRY_VALIDATION
 
+    # Filesystem MCP server root directory (seeded into filesystem installation args).
+    # Created at app startup if missing. Defaults to ~/jarvis-workspace.
+    filesystem_mcp_root: str = ""
+
     @property
     def resolved_model(self) -> str:
         """Return the model ID appropriate for the configured backend (direct API or Bedrock)."""
@@ -144,17 +145,18 @@ class Settings(BaseSettings):
 # Mapping from direct API model IDs to Bedrock inference profile IDs
 # Uses cross-region profiles (apac/global) that work in ap-south-1
 _BEDROCK_MODEL_MAP = {
-    # Claude 4
-    "claude-opus-4-20250514": "global.anthropic.claude-opus-4-5-20251101-v1:0",
-    "claude-sonnet-4-20250514": "apac.anthropic.claude-sonnet-4-20250514-v1:0",
-    "claude-haiku-4-20250514": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
-    # Claude 4.5
-    "claude-sonnet-4-5-20250929": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
-    "claude-haiku-4-5-20251001": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
-    "claude-opus-4-5-20251101": "global.anthropic.claude-opus-4-5-20251101-v1:0",
-    # Claude 4.6
-    "claude-sonnet-4-6": "global.anthropic.claude-sonnet-4-6",
-    "claude-opus-4-6": "global.anthropic.claude-opus-4-6-v1",
+    # Claude 4 (legacy)
+    "claude-opus-4-20250514": "us.anthropic.claude-opus-4-5-20251101-v1:0",
+    "claude-sonnet-4-20250514": "us.anthropic.claude-sonnet-4-20250514-v1:0",
+    "claude-haiku-4-20250514": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    # Claude 4.5 (legacy)
+    "claude-sonnet-4-5-20250929": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "claude-haiku-4-5-20251001": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "claude-opus-4-5-20251101": "us.anthropic.claude-opus-4-5-20251101-v1:0",
+    # Claude 4.6 / 4.8 (latest)
+    "claude-sonnet-4-6": "us.anthropic.claude-sonnet-4-6",
+    "claude-opus-4-6": "us.anthropic.claude-opus-4-6-v1",
+    "claude-opus-4-8": "us.anthropic.claude-opus-4-8",
 }
 
 

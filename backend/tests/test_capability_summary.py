@@ -75,13 +75,13 @@ class TestFamilyDisplayName:
         assert _family_display_name("repo") == "repo — GitHub"
 
     def test_issue(self):
-        assert _family_display_name("issue") == "issue — GitHub/Jira"
+        assert _family_display_name("issue") == "issue — GitHub/Atlassian"
 
     def test_doc(self):
-        assert _family_display_name("doc") == "doc — Notion"
+        assert _family_display_name("doc") == "doc — Notion/Drive/Atlassian"
 
     def test_workflow(self):
-        assert _family_display_name("workflow") == "workflow — Jira"
+        assert _family_display_name("workflow") == "workflow — Atlassian"
 
     def test_messaging(self):
         assert _family_display_name("messaging") == "messaging — Slack"

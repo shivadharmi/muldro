@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import {
   fetchUnifiedIntegrations,
   getAuthUrl,
-  deleteInstallation,
+  disconnectInstallation,
   type UnifiedIntegration,
 } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
@@ -19,7 +19,7 @@ import {
   GitHubLogo,
   SlackLogo,
   NotionLogo,
-  JiraLogo,
+  AtlassianLogo,
   PlaywrightLogo,
   FolderIcon,
 } from "@/components/integrations/logos";
@@ -31,7 +31,7 @@ const LOGOS: Record<string, LogoComponent> = {
   github: GitHubLogo,
   slack: SlackLogo,
   notion: NotionLogo,
-  atlassian: JiraLogo,
+  atlassian: AtlassianLogo,
   playwright: PlaywrightLogo,
   filesystem: FolderIcon,
 };
@@ -77,16 +77,25 @@ function IntegrationsContent() {
   });
 
   const disconnectMutation = useMutation({
-    mutationFn: (id: string) => deleteInstallation(id),
+    mutationFn: (id: string) => disconnectInstallation(id),
     onMutate: async (id) => {
       await queryClient.cancelQueries({ queryKey: ["unified-integrations"] });
       const prev = queryClient.getQueryData(["unified-integrations"]);
+      // Flip the row to "Not connected" rather than removing it — the
+      // catalog entry stays so the user can reconnect via the same card.
       queryClient.setQueryData(
         ["unified-integrations"],
         (old: UnifiedIntegration[] | undefined) =>
-          old ? old.filter((i) => i.install_id !== id) : old,
+          old
+            ? old.map((i) =>
+                i.install_id === id ? { ...i, connected: false } : i,
+              )
+            : old,
       );
       return { prev };
+    },
+    onSuccess: (_data, _id) => {
+      addToast("Disconnected successfully", "success");
     },
     onError: (err, _id, context) => {
       if (context?.prev)

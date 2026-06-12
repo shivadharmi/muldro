@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
@@ -188,8 +189,16 @@ class EventProcessor:
             status="processed",
         )
 
-        self._db.add(event)
-        await self._db.commit()
+        try:
+            self._db.add(event)
+            await self._db.commit()
+        except IntegrityError:
+            # Concurrent ingestion lost the race on the idempotency_key unique
+            # constraint. Another cycle already stored this event — treat it
+            # as a duplicate and skip downstream work.
+            await self._db.rollback()
+            logger.debug("Concurrent duplicate event skipped: %s", idempotency_key)
+            return None
 
         logger.info(
             "Event processed: %s importance=%.2f urgency=%.2f",

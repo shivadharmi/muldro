@@ -9,6 +9,7 @@ Polling for event ingestion still uses the lightweight per-provider connectors
 But all *write actions* (send_email, create_draft, create_issue, etc.) go through MCP.
 """
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 _session_pool: UserMCPSessionPool | None = None
 _circuit_breaker = MCPCircuitBreaker()
 _discovery_failures: dict[str, dict] = {}
+_discovery_task: asyncio.Task | None = None
 
 
 def record_discovery_failure(server_name: str, error: str) -> None:
@@ -100,39 +102,78 @@ async def get_mcp_config() -> dict:
 
 async def initialize_mcp_bridge(
     oauth_manager: Any | None = None,
-    timeout_seconds: float = 30,
-) -> None:
-    """Initialize the MCP session pool and workspace pool.
+    *,
+    timeout_seconds: float = 90,
+    defer_discovery: bool = True,
+) -> asyncio.Task | None:
+    """Wire the session pool and (optionally) kick off background discovery.
 
-    Call once at app startup (e.g. in lifespan). The pool manages
-    per-user sessions lazily. Skipped in test environments.
+    The pool is usable for ``call_mcp_tool`` as soon as this function returns;
+    sessions are created lazily. Eager discovery (populating tool schemas for
+    all known servers) is bounded by ``timeout_seconds`` and, when
+    ``defer_discovery=True``, runs as a background task so it cannot block
+    lifespan startup or the worker-thread handshake. Skipped in test
+    environments. Returns the background task (or None) so the caller can
+    drain it on shutdown.
     """
-    global _session_pool
+    global _session_pool, _discovery_task
 
     # Skip in test environments to avoid spawning MCP subprocesses
     if os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("JARVIS_SKIP_MCP_BRIDGE"):
         logger.debug("MCP bridge skipped (test environment)")
-        return
+        return None
 
-    # Create session pool
+    # Create session pool and workspace pool — pool is usable immediately
     _session_pool = UserMCPSessionPool(
         oauth_manager=oauth_manager,
         circuit_breaker=_circuit_breaker,
     )
 
-    # Create and initialize workspace pool from DB
     from src.integrations.mcp_pool import WorkspaceMCPPool, set_workspace_pool
 
     workspace_pool = WorkspaceMCPPool(session_pool=_session_pool)
     set_workspace_pool(workspace_pool)
 
-    count = await workspace_pool.initialize_from_db()
-    logger.info("MCP bridge initialized: %d servers from DB", count)
+    async def _discover() -> None:
+        try:
+            count = await asyncio.wait_for(
+                workspace_pool.initialize_from_db(),
+                timeout=timeout_seconds,
+            )
+            logger.info("MCP bridge discovery complete: %d servers from DB", count)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "MCP bridge discovery exceeded %.0fs budget — "
+                "sessions will be created lazily on first use",
+                timeout_seconds,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("MCP bridge discovery failed")
+
+    if defer_discovery:
+        _discovery_task = asyncio.create_task(_discover())
+        return _discovery_task
+
+    await _discover()
+    return None
 
 
 async def shutdown_mcp_bridge() -> None:
     """Gracefully shut down the workspace pool and session pool."""
-    global _session_pool
+    global _session_pool, _discovery_task
+
+    # Drain background discovery first so it doesn't race shutdown
+    if _discovery_task is not None and not _discovery_task.done():
+        _discovery_task.cancel()
+        try:
+            await asyncio.wait_for(_discovery_task, timeout=5)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            pass
+        except Exception:
+            logger.debug("Discovery task raised during shutdown", exc_info=True)
+    _discovery_task = None
 
     from src.integrations.mcp_pool import get_workspace_pool, set_workspace_pool
 
@@ -212,7 +253,18 @@ async def call_mcp_tool(
         Dict with either the result or an error.
     """
     if not _session_pool:
-        logger.warning("[mcp:bridge] bridge not initialized for tool %s", tool_name)
+        if os.environ.get("PYTEST_CURRENT_TEST"):
+            skip_reason = "PYTEST_CURRENT_TEST set (test env)"
+        elif os.environ.get("JARVIS_SKIP_MCP_BRIDGE"):
+            skip_reason = "JARVIS_SKIP_MCP_BRIDGE set"
+        else:
+            skip_reason = "initialize_mcp_bridge() not called or raised"
+        logger.warning(
+            "[mcp:bridge] bridge not initialized for tool %s (reason=%s, discovery_failures=%d)",
+            tool_name,
+            skip_reason,
+            len(_discovery_failures),
+        )
         return {"status": "error", "error": "MCP bridge not initialized"}
 
     # Find which server provides this tool.

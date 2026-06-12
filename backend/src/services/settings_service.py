@@ -65,27 +65,28 @@ class SettingsService:
         return SETTING_DEFAULTS.get((category, key))
 
     async def set(self, user_id: str, category: str, key: str, value: object) -> None:
-        """Set a single setting value (upsert)."""
-        result = await self._db.execute(
-            select(UserSettings).where(
-                UserSettings.user_id == user_id,
-                UserSettings.category == category,
-                UserSettings.key == key,
+        """Set a single setting value (atomic upsert).
+
+        Uses ``INSERT ... ON CONFLICT DO UPDATE`` against the unique index
+        ``ix_user_settings_unique`` so two concurrent writes for the same
+        ``(user_id, category, key)`` cannot both INSERT.
+        """
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        stmt = (
+            pg_insert(UserSettings)
+            .values(
+                user_id=user_id,
+                category=category,
+                key=key,
+                value=value,
+            )
+            .on_conflict_do_update(
+                index_elements=["user_id", "category", "key"],
+                set_={"value": value},
             )
         )
-        existing = result.scalar_one_or_none()
-
-        if existing:
-            existing.value = value
-        else:
-            self._db.add(
-                UserSettings(
-                    user_id=user_id,
-                    category=category,
-                    key=key,
-                    value=value,
-                )
-            )
+        await self._db.execute(stmt)
         await self._db.flush()
 
     async def delete(self, user_id: str, category: str, key: str) -> None:

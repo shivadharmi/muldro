@@ -583,7 +583,7 @@ class TestTraceCostReconciliation:
 
 
 class TestStartupComponentHealth:
-    """Fix 2.6: Worker/bot thread health tracking."""
+    """Fix 2.6: Worker thread health tracking."""
 
     def test_component_health_dict_exists(self):
         from run import get_component_health
@@ -591,7 +591,6 @@ class TestStartupComponentHealth:
         health = get_component_health()
         assert isinstance(health, dict)
         assert "worker" in health
-        assert "bot" in health
 
     def test_initial_health_is_not_started(self):
         from run import _component_health
@@ -599,15 +598,14 @@ class TestStartupComponentHealth:
         # Reset to initial state for test
         original = dict(_component_health)
         _component_health["worker"] = {"status": "not_started"}
-        _component_health["bot"] = {"status": "not_started"}
 
         from run import get_component_health
 
         health = get_component_health()
         assert health["worker"]["status"] == "not_started"
-        assert health["bot"]["status"] == "not_started"
 
         # Restore
+        _component_health.clear()
         _component_health.update(original)
 
 

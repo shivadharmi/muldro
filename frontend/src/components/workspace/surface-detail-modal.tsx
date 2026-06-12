@@ -9,6 +9,7 @@ import { fetchSurfaceDetail } from "@/lib/api";
 import { useWsActionStore } from "@/stores/ws-action-store";
 import type { WorkspaceSurface } from "@/stores/surface-store";
 import type { DetailTabResponse, DetailTab } from "@/lib/a2ui-types";
+import { InlineMarkdown } from "@/components/jarvis/markdown-renderer";
 
 interface Props {
   surface: WorkspaceSurface;
@@ -114,7 +115,7 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
         <div className="flex items-center justify-between px-6 py-4 border-b border-b-secondary">
           <div className="flex items-center gap-3 min-w-0">
             <h2 className="text-[15px] font-semibold text-t-primary truncate">
-              {surface.preview.title}
+              <InlineMarkdown content={surface.preview.title} />
             </h2>
             {surface.preview.priority && (
               <span
@@ -272,7 +273,7 @@ function CollapsibleSection({ title, defaultCollapsed, children }: SectionProps)
         onClick={() => setCollapsed((c) => !c)}
         className="w-full flex items-center justify-between py-2 text-xs font-semibold text-t-secondary uppercase tracking-wide hover:text-t-primary transition-colors"
       >
-        {title}
+        <InlineMarkdown content={title} />
         <svg
           width="12"
           height="12"

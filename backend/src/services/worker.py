@@ -201,7 +201,16 @@ class StreamConsumerManager:
         self._tasks.clear()
 
     async def _handle_entity_extraction(self, event) -> None:
-        """Extract entities from an event, then sync to Neo4j and Qdrant."""
+        """Extract entities from an event, then sync to Neo4j and Qdrant.
+
+        Filters to ``event_processed`` only — the main stream carries other
+        event types (``trigger.fired``, ``initiative.high_priority``) that also
+        include ``event_id`` in their payload. Without this filter, extraction
+        runs redundantly per event and can also hit the "Event not found"
+        warning when a stale message arrives after retention eviction.
+        """
+        if getattr(event, "event_type", "") != "event_processed":
+            return
         event_id = event.payload.get("event_id", "")
         user_id = event.user_id
         if not event_id:
@@ -248,7 +257,13 @@ class StreamConsumerManager:
                     )
 
     async def _handle_memory_extraction(self, event) -> None:
-        """Extract memories from an event, linked to relevant entities."""
+        """Extract memories from an event, linked to relevant entities.
+
+        Filters to ``event_processed`` only. See ``_handle_entity_extraction``
+        for the rationale.
+        """
+        if getattr(event, "event_type", "") != "event_processed":
+            return
         event_id = event.payload.get("event_id", "")
         user_id = event.user_id
         if not event_id:

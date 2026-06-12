@@ -16,13 +16,22 @@ from src.models.token_usage import TokenUsage
 
 logger = logging.getLogger(__name__)
 
-# Pricing per million tokens (as of 2026-03)
+# Pricing per million tokens (as of 2026-06)
 # cache_write = 1.25x input, cache_read = 0.1x input, thinking = same as output
 MODEL_PRICING = {
+    # Latest
+    "claude-opus-4-8": {"input": 15.0, "output": 75.0},
+    "claude-sonnet-4-6": {"input": 3.0, "output": 15.0},
+    "claude-haiku-4-5-20251001": {"input": 0.80, "output": 4.0},
+    # Legacy direct API
     "claude-opus-4-20250514": {"input": 15.0, "output": 75.0},
     "claude-sonnet-4-20250514": {"input": 3.0, "output": 15.0},
     "claude-haiku-4-20250514": {"input": 0.80, "output": 4.0},
-    # Bedrock pricing (same models, via Bedrock)
+    # Bedrock us.* inference profiles
+    "us.anthropic.claude-opus-4-8": {"input": 15.0, "output": 75.0},
+    "us.anthropic.claude-sonnet-4-6": {"input": 3.0, "output": 15.0},
+    "us.anthropic.claude-haiku-4-5-20251001-v1:0": {"input": 0.80, "output": 4.0},
+    # Legacy Bedrock
     "anthropic.claude-opus-4-20250514-v1:0": {"input": 15.0, "output": 75.0},
     "anthropic.claude-sonnet-4-20250514-v1:0": {"input": 3.0, "output": 15.0},
 }
@@ -69,7 +78,7 @@ class BudgetTracker:
     ) -> float:
         pricing = MODEL_PRICING.get(model)
         if not pricing:
-            pricing = MODEL_PRICING["claude-sonnet-4-20250514"]
+            pricing = MODEL_PRICING["claude-sonnet-4-6"]
         per_m = 1_000_000
         input_cost = (input_tokens / per_m) * pricing["input"]
         output_cost = (output_tokens / per_m) * pricing["output"]

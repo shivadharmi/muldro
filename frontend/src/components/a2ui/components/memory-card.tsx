@@ -1,4 +1,5 @@
 import type { A2UIComponent } from "@/lib/a2ui-types";
+import { MarkdownRenderer } from "@/components/jarvis/markdown-renderer";
 
 interface Props {
   component: A2UIComponent;
@@ -26,7 +27,9 @@ export function A2UIMemoryCard({ component }: Props) {
         </span>
         <span className="text-[10px] text-t-tertiary">{pct}%</span>
       </div>
-      <p className="text-sm text-t-primary">{factText}</p>
+      <div className="text-sm text-t-primary">
+        <MarkdownRenderer content={factText} />
+      </div>
       {source && (
         <p className="text-[10px] text-t-muted mt-1 font-mono">{source}</p>
       )}

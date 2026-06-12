@@ -11,7 +11,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from src.ui.contracts import SurfaceKind
+from src.ui.contracts import A2UIComponent, SurfaceKind
 
 
 class AgentEnvelope(BaseModel):
@@ -252,6 +252,20 @@ class WorkspaceSurfacePush(BaseModel):
     progress: str | None = None
     approval: dict | None = None
     results: dict | None = None
+    surface_data: dict | None = None
+
+
+class SurfaceDataPayload(BaseModel):
+    """Presenter-authored rich content for a surface's detail view.
+
+    Each section is a full A2UIComponent tree — the frontend dispatches through
+    the existing A2UIRenderer. The A2UIComponent.type field is the discriminator
+    that routes to per-type property validation (see src/ui/component_properties.py).
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    sections: list[A2UIComponent] = Field(default_factory=list)
 
 
 class SuggestedActionRef(BaseModel):

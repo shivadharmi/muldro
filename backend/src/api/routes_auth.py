@@ -265,21 +265,39 @@ async def oauth_authorize(
         url = f"https://api.notion.com/v1/oauth/authorize?{urlencode(params)}"
         return OAuthUrlResponse(url=url, provider="notion")
 
-    elif provider == "jira":
-        client_id = settings.jira_oauth_client_id
+    elif provider == "atlassian":
+        client_id = settings.atlassian_oauth_client_id
         if not client_id:
-            raise HTTPException(status_code=400, detail="Jira OAuth not configured")
+            raise HTTPException(status_code=400, detail="Atlassian OAuth not configured")
+        # Scope list required by Atlassian's hosted Remote MCP
+        # (https://mcp.atlassian.com/v1/mcp). Missing `read:me` was the
+        # cause of every MCP tool call returning the opaque
+        # {"error":true,"message":"We are having trouble completing this action..."}
+        # wrapper even though direct REST calls with the same token worked.
+        # The RMCP server needs to resolve the calling identity on every
+        # tool invocation; without read:me / read:account-scoped claims it
+        # fails silently with the generic message instead of a 403.
+        default_scopes = (
+            "offline_access read:me "
+            "read:jira-work write:jira-work read:jira-user manage:jira-project "
+            "read:confluence-content.all read:confluence-content.summary "
+            "write:confluence-content "
+            "read:confluence-space.summary "
+            "read:confluence-props write:confluence-props "
+            "read:confluence-user read:confluence-groups "
+            "search:confluence"
+        )
         params = {
             "audience": "api.atlassian.com",
             "client_id": client_id,
-            "scope": scopes or "read:jira-work write:jira-work read:jira-user offline_access",
-            "redirect_uri": settings.jira_oauth_redirect_uri,
+            "scope": scopes or default_scopes,
+            "redirect_uri": settings.atlassian_oauth_redirect_uri,
             "state": user_id,
             "response_type": "code",
             "prompt": "consent",
         }
         url = f"https://auth.atlassian.com/authorize?{urlencode(params)}"
-        return OAuthUrlResponse(url=url, provider="jira")
+        return OAuthUrlResponse(url=url, provider="atlassian")
 
     else:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
@@ -538,11 +556,11 @@ async def oauth_callback(
         logger.info("Notion integration linked for %s", user_id)
         background_tasks.add_task(_trigger_initial_observation, user_id, ["notion"], workspace_id)
 
-    elif provider == "jira":
-        client_id = settings.jira_oauth_client_id
-        client_secret = settings.jira_oauth_client_secret
+    elif provider == "atlassian":
+        client_id = settings.atlassian_oauth_client_id
+        client_secret = settings.atlassian_oauth_client_secret
         if not client_id or not client_secret:
-            return _error_redirect(settings, "Jira OAuth not configured")
+            return _error_redirect(settings, "Atlassian OAuth not configured")
 
         async with httpx.AsyncClient() as client:
             resp = await client.post(
@@ -552,18 +570,23 @@ async def oauth_callback(
                     "code": code,
                     "client_id": client_id,
                     "client_secret": client_secret,
-                    "redirect_uri": settings.jira_oauth_redirect_uri,
+                    "redirect_uri": settings.atlassian_oauth_redirect_uri,
                 },
                 headers={"Content-Type": "application/json"},
                 timeout=10,
             )
             if resp.status_code != 200:
-                logger.error("Jira token exchange failed: %s", resp.text)
-                return _error_redirect(settings, "Failed to exchange Jira authorization code")
+                logger.error("Atlassian token exchange failed: %s", resp.text)
+                return _error_redirect(settings, "Failed to exchange Atlassian authorization code")
             token_data = resp.json()
 
-            # Fetch accessible resources to get cloudId
+            # Fetch accessible resources — Atlassian's MCP tools (and any REST
+            # API call we make ourselves) require the cloudId. Agents won't
+            # know this value on their own, so we persist it on the
+            # installation and later auto-inject it into every MCP tool call.
             cloud_id = ""
+            site_url = ""
+            sites: list[dict] = []
             res_resp = await client.get(
                 "https://api.atlassian.com/oauth/token/accessible-resources",
                 headers={"Authorization": f"Bearer {token_data['access_token']}"},
@@ -571,8 +594,78 @@ async def oauth_callback(
             )
             if res_resp.status_code == 200:
                 resources = res_resp.json()
+                sites = [
+                    {
+                        "id": r.get("id", ""),
+                        "name": r.get("name", ""),
+                        "url": r.get("url", ""),
+                        "scopes": r.get("scopes", []),
+                    }
+                    for r in resources
+                ]
                 if resources:
                     cloud_id = resources[0].get("id", "")
+                    site_url = resources[0].get("url", "")
+
+            # Fetch accessible projects up-front so the agent has context
+            # ("your projects are X, Y, Z") without needing a tool call on
+            # every user question. Bounded to 50 to keep the request small;
+            # full list is still available via MCP tools.
+            projects: list[dict] = []
+            if cloud_id:
+                try:
+                    proj_resp = await client.get(
+                        f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/project/search",
+                        params={"maxResults": 50},
+                        headers={
+                            "Authorization": f"Bearer {token_data['access_token']}",
+                            "Accept": "application/json",
+                        },
+                        timeout=10,
+                    )
+                    if proj_resp.status_code == 200:
+                        data = proj_resp.json()
+                        projects = [
+                            {
+                                "id": p.get("id", ""),
+                                "key": p.get("key", ""),
+                                "name": p.get("name", ""),
+                                "project_type": p.get("projectTypeKey", ""),
+                            }
+                            for p in data.get("values", [])
+                        ]
+                    else:
+                        logger.warning(
+                            "Atlassian project fetch returned %s: %s",
+                            proj_resp.status_code,
+                            proj_resp.text[:200],
+                        )
+                except Exception:
+                    logger.warning("Atlassian project fetch failed", exc_info=True)
+
+            # Fetch the current Atlassian user profile so the agent can
+            # personalize output without another roundtrip.
+            atlassian_user: dict = {}
+            if cloud_id:
+                try:
+                    me_resp = await client.get(
+                        f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/myself",
+                        headers={
+                            "Authorization": f"Bearer {token_data['access_token']}",
+                            "Accept": "application/json",
+                        },
+                        timeout=10,
+                    )
+                    if me_resp.status_code == 200:
+                        me = me_resp.json()
+                        atlassian_user = {
+                            "account_id": me.get("accountId", ""),
+                            "display_name": me.get("displayName", ""),
+                            "email": me.get("emailAddress", ""),
+                            "timezone": me.get("timeZone", ""),
+                        }
+                except Exception:
+                    logger.debug("Atlassian user profile fetch failed", exc_info=True)
 
         expires_at = None
         if token_data.get("expires_in"):
@@ -591,20 +684,25 @@ async def oauth_callback(
         )
         await oauth_mgr.store_token(
             user_id=user_id,
-            provider="jira",
+            provider="atlassian",
             access_token=token_data["access_token"],
             refresh_token=token_data.get("refresh_token"),
             expires_at=expires_at,
             scopes=token_data.get("scope", "").split() if token_data.get("scope") else None,
             workspace_id=workspace_id,
         )
+        # server_name matches seed_installations.py ("atlassian"), not provider name
         await _ensure_integration(
             db_factory,
             user_id,
-            "jira",
+            "atlassian",
             workspace_id=workspace_id,
         )
-        # Store cloudId in installation config for API calls
+        # Persist everything the agent will need on the installation record:
+        # - cloud_id / site_url / sites: so we don't re-fetch from Atlassian
+        # - projects / atlassian_user: give the Planner/Presenter real context
+        # - tool_defaults: auto-injected by session_pool.call_tool so the
+        #   agent never needs to ask "what's your cloudId?" for MCP calls.
         if cloud_id:
             from sqlalchemy import select as sa_select
 
@@ -614,7 +712,7 @@ async def oauth_callback(
                 result = await _db.execute(
                     sa_select(IntegrationInstallation).where(
                         IntegrationInstallation.user_id == user_id,
-                        IntegrationInstallation.server_name == "jira",
+                        IntegrationInstallation.server_name == "atlassian",
                         IntegrationInstallation.workspace_id == workspace_id,
                     )
                 )
@@ -622,11 +720,30 @@ async def oauth_callback(
                 if inst:
                     config = inst.config or {}
                     config["cloud_id"] = cloud_id
+                    if site_url:
+                        config["site_url"] = site_url
+                    if sites:
+                        config["sites"] = sites
+                    if projects:
+                        config["projects"] = projects
+                    if atlassian_user:
+                        config["atlassian_user"] = atlassian_user
+                    # Keys merged into every Atlassian MCP tool_input when
+                    # absent (agent doesn't need to learn cloudId).
+                    config["tool_defaults"] = {"cloudId": cloud_id}
                     inst.config = config
                     await _db.commit()
 
-        logger.info("Jira integration linked for %s (cloudId=%s)", user_id, cloud_id)
-        background_tasks.add_task(_trigger_initial_observation, user_id, ["jira"], workspace_id)
+        logger.info(
+            "Atlassian integration linked for %s (cloudId=%s site=%s projects=%d)",
+            user_id,
+            cloud_id,
+            site_url or "?",
+            len(projects),
+        )
+        background_tasks.add_task(
+            _trigger_initial_observation, user_id, ["atlassian"], workspace_id
+        )
 
     else:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
@@ -641,7 +758,7 @@ async def oauth_callback(
             "github": ["github"],
             "slack": ["slack"],
             "notion": ["notion"],
-            "jira": ["atlassian"],
+            "atlassian": ["atlassian"],
         }
         for server_name in _provider_servers.get(provider, []):
             background_tasks.add_task(
@@ -663,6 +780,7 @@ async def _trigger_initial_observation(user_id: str, sources: list[str], workspa
     """Run initial perception cycle and MCP schema discovery for newly connected sources."""
     try:
         from src.config.settings import get_settings
+        from src.connectors.base import CONNECTOR_REGISTRY
         from src.models.database import get_session_factory
         from src.orchestrator.jarvis import JarvisOrchestrator
         from src.runtime import build as build_runtime
@@ -682,18 +800,31 @@ async def _trigger_initial_observation(user_id: str, sources: list[str], workspa
                 services=svc,
             )
             for source in sources:
-                try:
-                    await orchestrator.run_perception_cycle(
-                        source, user_id=user_id, workspace_id=workspace_id
-                    )
-                    logger.info("Initial observation completed for %s/%s", user_id, source)
-                except Exception:
-                    logger.warning(
-                        "Initial observation failed for %s/%s",
+                # MCP-only integrations (e.g., Atlassian) don't have a native
+                # CONNECTOR_REGISTRY entry — their data flows entirely through
+                # external MCP servers. Running a perception cycle against such
+                # sources just emits "No connector registered" warnings and a
+                # misleading perception_poll_failed log. Skip perception for
+                # them; MCP schema discovery below still runs.
+                if source not in CONNECTOR_REGISTRY:
+                    logger.info(
+                        "Skipping perception cycle for MCP-only source %s/%s",
                         user_id,
                         source,
-                        exc_info=True,
                     )
+                else:
+                    try:
+                        await orchestrator.run_perception_cycle(
+                            source, user_id=user_id, workspace_id=workspace_id
+                        )
+                        logger.info("Initial observation completed for %s/%s", user_id, source)
+                    except Exception:
+                        logger.warning(
+                            "Initial observation failed for %s/%s",
+                            user_id,
+                            source,
+                            exc_info=True,
+                        )
 
                 # Eagerly create MCP session to discover tool schemas.
                 # Stdio servers are lazy (per-user), so schemas aren't

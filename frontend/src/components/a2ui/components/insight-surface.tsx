@@ -7,6 +7,7 @@ import { useSurfaceStore } from "@/stores/surface-store";
 import { useWsActionStore } from "@/stores/ws-action-store";
 import { Tooltip } from "@/components/ui/tooltip";
 import { Modal } from "@/components/ui/modal";
+import { InlineMarkdown } from "@/components/jarvis/markdown-renderer";
 
 const sourceIcons: Record<string, string> = {
   gmail: "\u2709\uFE0F",
@@ -14,7 +15,7 @@ const sourceIcons: Record<string, string> = {
   calendar: "\uD83D\uDCC5",
   slack: "\uD83D\uDCAC",
   notion: "\uD83D\uDCDD",
-  jira: "\uD83D\uDD37",
+  atlassian: "\uD83D\uDD37",
 };
 
 interface InsightSurfaceProps {
@@ -59,7 +60,7 @@ export function InsightSurface({ surfaceId, insightData }: InsightSurfaceProps) 
       <div className="space-y-3">
         {/* 1. Signal summary */}
         <p className="text-sm text-t-primary font-semibold">
-          {insightData.signal_summary}
+          <InlineMarkdown content={insightData.signal_summary} />
         </p>
 
         {/* 2. Source + relevance */}
@@ -77,7 +78,7 @@ export function InsightSurface({ surfaceId, insightData }: InsightSurfaceProps) 
         {/* 3. Relevance reasoning */}
         {insightData.relevance_reasoning && (
           <p className="text-xs text-t-tertiary">
-            {insightData.relevance_reasoning}
+            <InlineMarkdown content={insightData.relevance_reasoning} />
           </p>
         )}
 

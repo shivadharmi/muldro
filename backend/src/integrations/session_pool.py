@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 # Default idle timeout before a session is cleaned up (30 minutes)
 SESSION_TTL_SECONDS = 1800
 
+# Per-call timeout for HTTP MCP tool discovery (list_tools). Kept as a
+# module-level constant so tests can monkeypatch it to avoid real-time waits.
+HTTP_DISCOVERY_TIMEOUT_SECONDS = 15
+
 # Mapping: server_name → env var name for stdio token injection.
 # Google Workspace excluded — it uses file-based auth, not raw tokens.
 #
@@ -48,6 +52,12 @@ class SessionEntry:
     tools: dict[str, str]  # canonical_name → raw_mcp_name
     created_at: float = field(default_factory=time.monotonic)
     last_used: float = field(default_factory=time.monotonic)
+    # OAuth access token the Client was built with, if any. Recorded so
+    # cached sessions can be cycled when OAuthManager returns a newer token
+    # (e.g., after a background refresh) — preventing "stale bearer bound
+    # to a live Client" failures that manifest as Atlassian's generic
+    # "We are having trouble..." error.
+    bound_token: str | None = None
 
 
 class UserMCPSessionPool:
@@ -104,6 +114,32 @@ class UserMCPSessionPool:
         effective_user = "__shared__" if auth_provider == "none" else user_id
         key = (workspace_id, server_name, effective_user)
 
+        # If we already have a cached session for an OAuth-backed server,
+        # verify the bound bearer is still the current valid token. The
+        # OAuthManager refresh runs lazily, so a background refresh can
+        # leave the cached Client holding a stale token — Atlassian's
+        # hosted MCP answers those with a generic "having trouble" body
+        # (not a 401), which is hard to recover from after the fact.
+        # Checking up-front is a single DB read on the hot path, traded
+        # for reliable token rotation.
+        if self._is_oauth_server(server_name, workspace_id) and self._oauth_manager:
+            entry = self._sessions.get(key)
+            if entry and entry.bound_token:
+                provider_name = (
+                    auth_provider if auth_provider != "oauth" else _infer_provider(server_name)
+                )
+                try:
+                    current = await self._oauth_manager.get_valid_token(user_id, provider_name)
+                except Exception:
+                    current = None
+                if current and current != entry.bound_token:
+                    logger.info(
+                        "[mcp:session] token changed for %s/%s — rebuilding session",
+                        server_name,
+                        user_id,
+                    )
+                    await self.refresh_session(server_name, user_id, workspace_id=workspace_id)
+
         async with self._lock:
             entry = self._sessions.get(key)
             if entry:
@@ -125,6 +161,13 @@ class UserMCPSessionPool:
 
             # Resolve auth
             auth = await self._resolve_auth(server_name, user_id, config)
+            bound_token: str | None = None
+            if auth is not None and isinstance(auth, BearerAuth):
+                bound_token = (
+                    auth.token.get_secret_value()
+                    if hasattr(auth.token, "get_secret_value")
+                    else str(auth.token)
+                )
 
             # Create Client
             transport = config.get("transport", "stdio")
@@ -175,6 +218,7 @@ class UserMCPSessionPool:
                 server_name=server_name,
                 user_id=user_id,
                 tools=tool_mapping,
+                bound_token=bound_token,
             )
             self._sessions[key] = entry
 
@@ -274,6 +318,7 @@ class UserMCPSessionPool:
         import random
 
         from src.integrations.mcp_errors import (
+            MCPErrorCode,
             classify_error,
             is_transient,
             make_error_response,
@@ -311,10 +356,21 @@ class UserMCPSessionPool:
         # Resolve canonical → raw MCP tool name
         raw_name = tool_name
 
+        # Auto-inject per-server defaults (e.g., Atlassian's cloudId) into
+        # the tool input. The agent doesn't need to know these values —
+        # they're captured at OAuth time and persisted on the installation.
+        # Caller-supplied keys always win so agents can still override
+        # (e.g., targeting a different cloudId if the user has multiple).
+        server_cfg = self._server_configs.get((workspace_id, server_name)) or {}
+        tool_defaults = server_cfg.get("tool_defaults") or {}
+        if tool_defaults:
+            tool_input = {**tool_defaults, **tool_input}
+
         import time as _time
 
         call_start = _time.monotonic()
         last_error: Exception | None = None
+        attempt = 0
         for attempt in range(max_retries):
             try:
                 result = await session.client.call_tool(raw_name, tool_input)
@@ -355,6 +411,29 @@ class UserMCPSessionPool:
                 # Only retry transient errors
                 if not is_transient(error_code) or attempt >= max_retries - 1:
                     self._circuit_breaker.record_failure(server_name)
+                    # If the cached session was built with a stale OAuth
+                    # bearer (auth error) or the server is OAuth-backed and
+                    # we've exhausted retries, invalidate it so the next
+                    # call rebuilds with a freshly fetched token. Without
+                    # this, a revoked/expired token is resent repeatedly
+                    # until the 5-min circuit cooldown elapses — at which
+                    # point the same stale session is still cached.
+                    should_refresh = error_code == MCPErrorCode.AUTH_ERROR or self._is_oauth_server(
+                        server_name, workspace_id
+                    )
+                    if should_refresh:
+                        try:
+                            await self.refresh_session(
+                                server_name,
+                                user_id,
+                                workspace_id=workspace_id,
+                            )
+                        except Exception:
+                            logger.debug(
+                                "Auto-refresh of %s session failed",
+                                server_name,
+                                exc_info=True,
+                            )
                     break
 
                 # Exponential backoff with jitter: 1s, 2s, 4s
@@ -370,10 +449,10 @@ class UserMCPSessionPool:
                 await asyncio.sleep(delay)
 
         logger.warning(
-            "MCP tool '%s' on '%s' failed after %d attempts: %s",
+            "MCP tool '%s' on '%s' failed after %d attempt(s): %s",
             tool_name,
             server_name,
-            max_retries,
+            attempt + 1,
             last_error,
         )
         return make_error_response(
@@ -446,6 +525,26 @@ class UserMCPSessionPool:
         """Check if a server config is registered."""
         return (workspace_id, server_name) in self._server_configs
 
+    def _is_oauth_server(self, server_name: str, workspace_id: str = "") -> bool:
+        """Return True if the server's auth_provider resolves OAuth bearer tokens.
+
+        Used to decide whether a terminal tool-call failure should invalidate
+        the cached session — for OAuth servers, failures may be masking a
+        stale bearer, and cycling the session is the cheap recovery path.
+        """
+        config = self._server_configs.get((workspace_id, server_name))
+        if not config:
+            return False
+        auth_provider = config.get("auth_provider", "none")
+        return auth_provider in {
+            "oauth",
+            "google",
+            "github",
+            "slack",
+            "notion",
+            "atlassian",
+        }
+
     def is_pool_tool(self, tool_name: str, workspace_id: str = "") -> bool:
         """Check if a tool is known to any server in the pool."""
         for key, server_tools in self._server_tools.items():
@@ -500,11 +599,22 @@ class UserMCPSessionPool:
         if not url:
             return []
 
-        # Try unauthenticated, then with token if 401
+        # Try unauthenticated, then with token if 401.
+        # Each list_tools() call is bounded so a hanging server cannot block
+        # the whole startup discovery pass.
         raw_tools = None
         try:
             async with Client(url) as client:
-                raw_tools = await client.list_tools()
+                raw_tools = await asyncio.wait_for(
+                    client.list_tools(), timeout=HTTP_DISCOVERY_TIMEOUT_SECONDS
+                )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "[mcp:pool] Tool discovery timed out (%ss) for %s",
+                HTTP_DISCOVERY_TIMEOUT_SECONDS,
+                server_name,
+            )
+            return []
         except Exception as unauth_err:
             if "401" not in str(unauth_err):
                 logger.warning(
@@ -541,7 +651,16 @@ class UserMCPSessionPool:
 
             try:
                 async with Client(url, auth=BearerAuth(token=token)) as client:
-                    raw_tools = await client.list_tools()
+                    raw_tools = await asyncio.wait_for(
+                        client.list_tools(), timeout=HTTP_DISCOVERY_TIMEOUT_SECONDS
+                    )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "[mcp:pool] Authenticated tool discovery timed out (%ss) for %s",
+                    HTTP_DISCOVERY_TIMEOUT_SECONDS,
+                    server_name,
+                )
+                return []
             except Exception as auth_err:
                 logger.warning(
                     "[mcp:pool] Authenticated discovery also failed for %s: %s",
@@ -601,13 +720,33 @@ class UserMCPSessionPool:
         return None
 
     def get_all_tool_metadata(self, workspace_id: str = "") -> list[dict[str, Any]]:
-        """Return all tool metadata across servers."""
+        """Return all tool metadata across servers.
+
+        Parameters that ``call_tool`` auto-injects from the installation's
+        ``tool_defaults`` (e.g., Atlassian's cloudId) are stripped from the
+        schema shown to agents. Otherwise the agent sees cloudId as
+        ``required`` in the tool schema, reasons "I must get this from the
+        user", and asks — even though the value is already known server-side.
+        Stripping the key from ``required`` and ``properties`` removes that
+        pressure while still letting the user pass it explicitly if they
+        ever want to override (call_tool preserves caller-supplied keys).
+        """
         result: list[dict[str, Any]] = []
         for name, meta in self._tool_metadata.items():
             if workspace_id and meta.get("_workspace_id") and meta["_workspace_id"] != workspace_id:
                 continue
             item = dict(meta)
             item["name"] = name
+
+            server_name = meta.get("server")
+            server_cfg = self._server_configs.get((workspace_id, server_name)) or {}
+            tool_defaults = server_cfg.get("tool_defaults") or {}
+            if tool_defaults:
+                item["input_schema"] = _strip_injected_params(
+                    item.get("input_schema"),
+                    set(tool_defaults.keys()),
+                )
+
             result.append(item)
         return result
 
@@ -641,7 +780,7 @@ class UserMCPSessionPool:
             token = config.get("token", "")
             return BearerAuth(token=token) if token else None
 
-        if auth_provider in ("oauth", "google", "github", "slack", "notion", "jira"):
+        if auth_provider in ("oauth", "google", "github", "slack", "notion", "atlassian"):
             # Resolve OAuth token from OAuthManager
             if not self._oauth_manager:
                 logger.warning("OAuth requested but no OAuthManager configured")
@@ -662,6 +801,29 @@ class UserMCPSessionPool:
         return None
 
 
+def _strip_injected_params(schema: Any, keys: set[str]) -> dict:
+    """Return a copy of ``schema`` with auto-injected keys removed.
+
+    Only rewrites ``properties`` and ``required`` at the top level — those
+    are the fields the Claude API uses to decide what the agent must
+    provide. Nested definitions are left untouched.
+    """
+    if not isinstance(schema, dict) or not keys:
+        return schema if isinstance(schema, dict) else {}
+
+    new_schema = dict(schema)
+
+    props = new_schema.get("properties")
+    if isinstance(props, dict):
+        new_schema["properties"] = {k: v for k, v in props.items() if k not in keys}
+
+    required = new_schema.get("required")
+    if isinstance(required, list):
+        new_schema["required"] = [k for k in required if k not in keys]
+
+    return new_schema
+
+
 def _infer_provider(server_name: str) -> str:
     """Infer the OAuth provider from the MCP server name."""
     name_lower = server_name.lower().replace("-", "_")
@@ -673,8 +835,8 @@ def _infer_provider(server_name: str) -> str:
         return "slack"
     if "notion" in name_lower:
         return "notion"
-    if "jira" in name_lower or "atlassian" in name_lower:
-        return "jira"
+    if "jira" in name_lower or "atlassian" in name_lower or "confluence" in name_lower:
+        return "atlassian"
     return server_name
 
 

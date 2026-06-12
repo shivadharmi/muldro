@@ -266,26 +266,29 @@ class TrustEngine:
         }
 
     async def set_ceiling(self, capability: str, max_level: str) -> None:
-        """Set or update the trust ceiling for a capability."""
+        """Set or update the trust ceiling for a capability.
+
+        Uses an atomic ``INSERT ... ON CONFLICT DO UPDATE`` so concurrent
+        callers (e.g. two browser tabs saving simultaneously) cannot race on
+        the ``uq_trust_ceiling`` unique constraint.
+        """
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
         from src.models.trust_state import TrustCeiling
 
-        result = await self._db.execute(
-            select(TrustCeiling).where(
-                TrustCeiling.workspace_id == self._workspace_id,
-                TrustCeiling.capability == capability,
+        stmt = (
+            pg_insert(TrustCeiling)
+            .values(
+                workspace_id=self._workspace_id,
+                capability=capability,
+                max_level=max_level,
+            )
+            .on_conflict_do_update(
+                constraint="uq_trust_ceiling",
+                set_={"max_level": max_level},
             )
         )
-        existing = result.scalar_one_or_none()
-        if existing:
-            existing.max_level = max_level
-        else:
-            self._db.add(
-                TrustCeiling(
-                    workspace_id=self._workspace_id,
-                    capability=capability,
-                    max_level=max_level,
-                )
-            )
+        await self._db.execute(stmt)
         await self._db.flush()
 
     async def set_ceilings_batch(self, capabilities: list[str], max_level: str) -> int:

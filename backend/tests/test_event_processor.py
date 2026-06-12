@@ -90,6 +90,48 @@ async def test_process_deduplicates(mock_get_client, settings, mock_db):
 
 @patch("src.services.event_processor.get_anthropic_client")
 @pytest.mark.asyncio
+async def test_process_handles_concurrent_unique_violation(mock_get_client, settings, mock_db):
+    """Concurrent ingestion that loses the race on idempotency_key must be
+    treated as a duplicate, not raised to the caller.
+
+    Regression test for the ``normalized_events.idempotency_key`` unique
+    violation that surfaced as ``event_ingest_failed`` / DLQ entries when
+    two perception cycles raced for the same source. The pre-check
+    ``SELECT`` is non-atomic; the INSERT must catch ``IntegrityError``,
+    roll back the session, and return ``None`` so callers (and downstream
+    triggers/embedding/event bus publish) treat it as a no-op.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    scores = {
+        "importance_score": 0.5,
+        "urgency_score": 0.5,
+        "confidence_score": 0.5,
+        "importance_signals": {},
+        "summary": "duplicate from race",
+    }
+    mock_client = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=_make_claude_response(scores))
+    mock_get_client.return_value = mock_client
+
+    # Pre-check SELECT returns no existing row (race: both cycles miss).
+    # commit() then raises IntegrityError — the other cycle won the race.
+    mock_db.commit = AsyncMock(
+        side_effect=IntegrityError("INSERT", {}, Exception("uq idempotency_key"))
+    )
+    mock_db.rollback = AsyncMock()
+
+    processor = EventProcessor(settings=settings, db=mock_db)
+    raw = make_raw_event()
+    event_id = await processor.process(raw, TEST_USER_ID)
+
+    assert event_id is None, "race-loser must be treated as duplicate"
+    mock_db.rollback.assert_awaited_once()
+    mock_db.add.assert_called_once()  # attempted, not silently skipped
+
+
+@patch("src.services.event_processor.get_anthropic_client")
+@pytest.mark.asyncio
 async def test_score_fallback_on_error(mock_get_client, settings, mock_db):
     """If Claude scoring fails, default scores should be used."""
     mock_client = MagicMock()

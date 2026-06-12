@@ -1,4 +1,5 @@
 import type { A2UIComponent } from "@/lib/a2ui-types";
+import { InlineMarkdown, MarkdownRenderer } from "@/components/jarvis/markdown-renderer";
 
 interface Props {
   component: A2UIComponent;
@@ -19,8 +20,14 @@ export function A2UIAlert({ component }: Props) {
 
   return (
     <div className={`rounded-[var(--radius-lg)] border p-3 ${cls}`}>
-      {title && <p className="text-sm font-medium mb-1">{title}</p>}
-      <p className="text-sm">{message}</p>
+      {title && (
+        <div className="text-sm font-medium mb-1">
+          <InlineMarkdown content={title} />
+        </div>
+      )}
+      <div className="text-sm">
+        <MarkdownRenderer content={message} />
+      </div>
     </div>
   );
 }

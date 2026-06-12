@@ -64,7 +64,7 @@ export function NotionLogo({ className }: LogoProps) {
   );
 }
 
-export function JiraLogo({ className }: LogoProps) {
+export function AtlassianLogo({ className }: LogoProps) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none">
       <path
@@ -73,18 +73,18 @@ export function JiraLogo({ className }: LogoProps) {
       />
       <path
         d="M17.09 5.98H5.518a5.218 5.218 0 0 0 5.233 5.214h2.13v2.058A5.216 5.216 0 0 0 18.094 18.5V6.984A1.005 1.005 0 0 0 17.09 5.98z"
-        fill="url(#jira-grad-1)"
+        fill="url(#atlassian-grad-1)"
       />
       <path
         d="M22.6.448H11.028a5.218 5.218 0 0 0 5.233 5.214h2.13v2.058A5.215 5.215 0 0 0 23.604 12.97V1.453A1.005 1.005 0 0 0 22.6.449z"
-        fill="url(#jira-grad-2)"
+        fill="url(#atlassian-grad-2)"
       />
       <defs>
-        <linearGradient id="jira-grad-1" x1="12.12" y1="6.1" x2="7.34" y2="11.38" gradientUnits="userSpaceOnUse">
+        <linearGradient id="atlassian-grad-1" x1="12.12" y1="6.1" x2="7.34" y2="11.38" gradientUnits="userSpaceOnUse">
           <stop stopColor="#0052CC" />
           <stop offset="1" stopColor="#2684FF" />
         </linearGradient>
-        <linearGradient id="jira-grad-2" x1="17.84" y1="0.56" x2="12.87" y2="5.73" gradientUnits="userSpaceOnUse">
+        <linearGradient id="atlassian-grad-2" x1="17.84" y1="0.56" x2="12.87" y2="5.73" gradientUnits="userSpaceOnUse">
           <stop stopColor="#0052CC" />
           <stop offset="1" stopColor="#2684FF" />
         </linearGradient>

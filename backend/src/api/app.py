@@ -103,6 +103,18 @@ def create_app() -> FastAPI:
                 exc_info=True,
             )
 
+        # Ensure filesystem MCP root exists before the server is spawned per workspace.
+        try:
+            from pathlib import Path
+
+            from src.integrations.seed_installations import _filesystem_mcp_root
+
+            fs_root = Path(_filesystem_mcp_root())
+            fs_root.mkdir(parents=True, exist_ok=True)
+            logger.info("Filesystem MCP root ready: %s", fs_root)
+        except Exception:
+            logger.warning("Failed to prepare filesystem MCP root", exc_info=True)
+
         # Re-seed integration installations for all workspaces.
         # Installation configs (transport, auth_provider, remote_url) change with
         # code updates but the DB records persist from initial provisioning.
@@ -202,23 +214,44 @@ def create_app() -> FastAPI:
         except Exception:
             logger.warning("OAuthManager unavailable for MCP bridge", exc_info=True)
 
-        # Initialize MCP bridge with session pool.
-        # Auth is resolved per-user from OAuthManager at call time.
+        # Initialize MCP bridge: wire the session pool synchronously (fast)
+        # and kick off eager tool discovery in the background. ``call_mcp_tool``
+        # is safe to use as soon as this returns; discovery populates schemas
+        # so they're available before the first external tool call.
+        app.state.mcp_init_task = None
+        mcp_bridge_ok = False
         try:
-            from src.connectors.mcp_bridge import initialize_mcp_bridge
+            from src.connectors.mcp_bridge import (
+                get_session_pool,
+                initialize_mcp_bridge,
+            )
 
-            await initialize_mcp_bridge(oauth_manager=oauth_manager)
+            app.state.mcp_init_task = await initialize_mcp_bridge(
+                oauth_manager=oauth_manager,
+                timeout_seconds=90,
+                defer_discovery=True,
+            )
+            mcp_bridge_ok = get_session_pool() is not None
         except Exception:
             logger.error("MCP bridge initialization failed", exc_info=True)
 
-        # Signal the worker thread that MCP bridge initialization is complete
-        # (whether successful or not) so it can start processing tasks.
-        try:
-            from run import mcp_bridge_ready
+        # Signal worker/bot threads — only on success. Lying about readiness
+        # is worse than a 30s timeout in the consumers: a set event with a
+        # broken bridge makes workers proceed and hit silent "not initialized"
+        # failures on every tool call.
+        if mcp_bridge_ok:
+            try:
+                from run import mcp_bridge_ready
 
-            mcp_bridge_ready.set()
-        except ImportError:
-            pass  # Not running via run.py (e.g., direct uvicorn or tests)
+                mcp_bridge_ready.set()
+            except ImportError:
+                pass  # Not running via run.py (e.g., direct uvicorn or tests)
+        else:
+            logger.error(
+                "MCP bridge not ready — mcp_bridge_ready signal suppressed; "
+                "worker/bot will time out on handshake and every external "
+                "MCP tool call will fail until startup is retried"
+            )
 
         yield
 

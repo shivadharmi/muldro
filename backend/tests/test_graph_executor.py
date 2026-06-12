@@ -169,6 +169,58 @@ class TestResumeRun:
         with pytest.raises(ValueError, match="not resumable"):
             await executor.resume_run("run_001")
 
+    @patch("src.services.graph_executor.get_anthropic_client")
+    async def test_resume_uses_fresh_trace_id(self, mock_client, settings, mock_db):
+        """Regression: each resume segment must get a fresh trace_id.
+
+        TraceStore._store_to_db does INSERT (not upsert). If resume reused
+        run.trace_id, the second segment's INSERT would violate the
+        ``traces`` primary key constraint. The initial trace_id must stay
+        on run.trace_id so consumers that expect a single canonical
+        pointer (routes_history, evidence_bundle) keep working.
+        """
+        from datetime import datetime, timezone
+
+        from src.services.graph_executor import GraphExecutor
+
+        mock_client.return_value = MagicMock()
+
+        now = datetime.now(timezone.utc)
+        run = MagicMock()
+        run.run_id = "run_001"
+        run.status = "paused"
+        run.trace_id = "trace_original_segment"
+        run.started_at = now
+        run.created_at = now
+        run.checkpoint = {}  # falsy → skips _get_all_steps branch
+        run.error = None
+        run.user_id = TEST_USER_ID
+        run.workspace_id = "ws_test"
+        run.source = "background"
+        run.context_pack_json = {}
+
+        run_result = MagicMock()
+        run_result.scalar_one_or_none.return_value = run
+        mock_db.execute = AsyncMock(return_value=run_result)
+
+        executor = GraphExecutor(settings, mock_db)
+        executor._execute_dag = AsyncMock()
+        executor._finalize_trace = AsyncMock()
+        # transition_run state-machine is tested elsewhere; bypass it so
+        # the MagicMock run object doesn't need full state validation.
+        with patch("src.services.graph_executor.transition_run"):
+            await executor.resume_run("run_001")
+
+        trace = executor._active_traces["run_001"]
+        assert trace.trace_id != "trace_original_segment", (
+            "resume must create a fresh trace_id to avoid traces PK violation"
+        )
+        assert trace.trace_id.startswith("trace_")
+        assert trace.trigger == "execution:resume"
+        # run.trace_id must stay pointing at the initial trace for downstream
+        # consumers that expect a single canonical pointer.
+        assert run.trace_id == "trace_original_segment"
+
 
 @pytest.fixture
 def executor_with_agent_deps(settings, mock_db):

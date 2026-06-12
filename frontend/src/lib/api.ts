@@ -682,8 +682,13 @@ export function fetchUnifiedIntegrations(): Promise<UnifiedIntegration[]> {
   return api("/integrations/unified");
 }
 
-export function deleteInstallation(installId: string): Promise<void> {
-  return del(`/integrations/${installId}`);
+export function disconnectInstallation(
+  installId: string,
+): Promise<UnifiedIntegration> {
+  return api<UnifiedIntegration>(
+    `/integrations/${installId}/disconnect`,
+    { method: "POST" },
+  );
 }
 
 export function checkInstallationHealth(

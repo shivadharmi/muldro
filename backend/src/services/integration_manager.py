@@ -33,7 +33,6 @@ _PROVIDER_TO_OAUTH: dict[str, str] = {
     "github": "github",
     "slack": "slack",
     "notion": "notion",
-    "jira": "jira",
 }
 
 
@@ -236,27 +235,33 @@ class IntegrationManager:
     async def _update_cursor(
         self, user_id: str, provider: str, value: str, workspace_id: str = ""
     ) -> None:
-        """Update the observation cursor."""
+        """Update the observation cursor.
+
+        Uses a single ``INSERT ... ON CONFLICT DO UPDATE`` so this writer and
+        the perception-side writer (``JarvisOrchestrator._update_cursor``)
+        cannot race on the ``uq_cursor_user_source`` unique constraint.
+        """
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
         from ulid import ULID
 
-        result = await self._db.execute(
-            select(ObservationCursor).where(
-                ObservationCursor.user_id == user_id,
-                ObservationCursor.source == provider,
+        now = datetime.now(timezone.utc)
+        stmt = (
+            pg_insert(ObservationCursor)
+            .values(
+                cursor_id=f"cur_{ULID()}",
+                user_id=user_id,
+                workspace_id=workspace_id,
+                source=provider,
+                cursor_type="sync_token",
+                cursor_value=value,
+                last_observation_at=now,
+            )
+            .on_conflict_do_update(
+                constraint="uq_cursor_user_source",
+                set_={
+                    "cursor_value": value,
+                    "last_observation_at": now,
+                },
             )
         )
-        cursor = result.scalar_one_or_none()
-        if cursor:
-            cursor.cursor_value = value
-            cursor.updated_at = datetime.now(timezone.utc)
-        else:
-            self._db.add(
-                ObservationCursor(
-                    cursor_id=f"cur_{ULID()}",
-                    user_id=user_id,
-                    workspace_id=workspace_id,
-                    source=provider,
-                    cursor_type="sync_token",
-                    cursor_value=value,
-                )
-            )
+        await self._db.execute(stmt)
