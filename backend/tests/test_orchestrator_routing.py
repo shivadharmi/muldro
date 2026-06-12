@@ -77,6 +77,68 @@ class TestProcessMessageRouting:
 
     @pytest.mark.asyncio
     @patch("src.orchestrator.jarvis.classify_intent")
+    async def test_single_read_skips_presenter(self, mock_classify):
+        """A single read-only Perceiver step returns its synthesis directly;
+        the Presenter LLM call is skipped (latency fix)."""
+        mock_classify.return_value = ("data_fetch", 0.95, ["calendar"])
+        orch = _make_orchestrator()
+
+        agents_called = []
+
+        async def mock_call_agent(agent_name, **kwargs):
+            agents_called.append(agent_name)
+            if agent_name == "perceiver":
+                return (
+                    '{"query": "calendar", "findings": [], '
+                    '"synthesis": "You have 2 meetings today.", "gaps": []}'
+                )
+            return "should not be called"
+
+        orch._call_agent = mock_call_agent
+        orch._log_interaction = AsyncMock(return_value="ilog_01")
+        orch._push_workspace_surface = AsyncMock()
+        orch._emit_runtime_event = AsyncMock()
+        orch._load_conversation_history = AsyncMock(return_value="")
+        orch._get_available_capabilities = AsyncMock(return_value=[])
+
+        result = await orch.process_message(
+            message="what's on my calendar today", user_id="usr_1", workspace_id="ws_1"
+        )
+
+        assert "perceiver" in agents_called
+        assert "presenter" not in agents_called
+        assert result["presentation"] == "You have 2 meetings today."
+
+    @pytest.mark.asyncio
+    @patch("src.orchestrator.jarvis.classify_intent")
+    async def test_single_read_falls_back_to_presenter_when_no_synthesis(self, mock_classify):
+        """If the read output has no usable synthesis, the Presenter still runs."""
+        mock_classify.return_value = ("data_fetch", 0.95, ["calendar"])
+        orch = _make_orchestrator()
+
+        agents_called = []
+
+        async def mock_call_agent(agent_name, **kwargs):
+            agents_called.append(agent_name)
+            if agent_name == "perceiver":
+                return "plain prose, not the expected JSON object"
+            return "Here is your calendar."
+
+        orch._call_agent = mock_call_agent
+        orch._log_interaction = AsyncMock(return_value="ilog_01")
+        orch._push_workspace_surface = AsyncMock()
+        orch._emit_runtime_event = AsyncMock()
+        orch._load_conversation_history = AsyncMock(return_value="")
+        orch._get_available_capabilities = AsyncMock(return_value=[])
+
+        await orch.process_message(
+            message="what's on my calendar today", user_id="usr_1", workspace_id="ws_1"
+        )
+
+        assert "presenter" in agents_called  # fallback preserved
+
+    @pytest.mark.asyncio
+    @patch("src.orchestrator.jarvis.classify_intent")
     async def test_system_set_goal_calls_handler(self, mock_classify):
         """Planner returns a system.set_goal step -> direct handler called."""
         mock_classify.return_value = ("command", 0.9, [])
@@ -193,6 +255,46 @@ class TestProcessMessageStreamRouting:
         assert "done" in event_types
         # Should NOT have old "decision" event
         assert "decision" not in event_types
+
+    @pytest.mark.asyncio
+    @patch("src.orchestrator.jarvis.classify_intent")
+    async def test_stream_single_read_skips_presenter(self, mock_classify):
+        """Streaming twin: single read-only step emits its synthesis as the
+        response without a Presenter call."""
+        mock_classify.return_value = ("data_fetch", 0.95, ["calendar"])
+        orch = _make_orchestrator()
+
+        agents_called = []
+
+        async def mock_call_agent_stream(agent_name, **kwargs):
+            agents_called.append(agent_name)
+            text = (
+                '{"query": "calendar", "findings": [], '
+                '"synthesis": "You have 2 meetings today.", "gaps": []}'
+                if agent_name == "perceiver"
+                else "should not be called"
+            )
+            yield {"event": "agent_done", "agent": agent_name, "text": text}
+
+        orch._call_agent_stream = mock_call_agent_stream
+        orch._call_agent = AsyncMock(return_value="")
+        orch._log_interaction = AsyncMock(return_value="ilog_01")
+        orch._push_workspace_surface = AsyncMock()
+        orch._spawn_background = MagicMock()
+        orch._emit_runtime_event = AsyncMock()
+        orch._load_conversation_history = AsyncMock(return_value="")
+        orch._get_available_capabilities = AsyncMock(return_value=[])
+
+        events = []
+        async for evt in orch.process_message_stream(
+            message="what's on my calendar today", user_id="usr_1", workspace_id="ws_1"
+        ):
+            events.append(evt)
+
+        assert "perceiver" in agents_called
+        assert "presenter" not in agents_called
+        responses = [e["text"] for e in events if e.get("event") == "response"]
+        assert responses == ["You have 2 meetings today."]
 
     @pytest.mark.asyncio
     @patch("src.orchestrator.jarvis.classify_intent")

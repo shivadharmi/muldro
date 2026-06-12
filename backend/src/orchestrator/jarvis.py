@@ -37,6 +37,7 @@ from src.orchestrator.intent_classifier import (
     extract_plan,
     intent_to_plan,
 )
+from src.orchestrator.presenter_skip import extract_perceiver_synthesis, single_read_step
 from src.orchestrator.prompts import JARVIS_SOUL_CORE
 from src.orchestrator.services import ServiceContainer
 from src.orchestrator.tracing import TraceManager
@@ -844,16 +845,29 @@ class JarvisOrchestrator:
                     {"description": s.description, "context": s.user_context} for s in user_steps
                 ]
 
-            # Step 4: Presenter formats response — always call so user
-            # gets a conversational answer (see streaming path comment).
-            if True:
-                # Collect prior step results so Presenter can reference them
+            # Collect prior step results so they can answer the user.
+            step_outputs = {
+                k: v for k, v in result.items() if k not in ("presentation", "user_actions") and v
+            }
+
+            # Latency: when the whole plan is one read-only Perceiver step,
+            # return that read's own `synthesis` prose directly and skip the
+            # Presenter LLM call (presenter_skip.py / streaming path twin).
+            direct_answer = None
+            read_step = single_read_step(step_routing, user_steps)
+            if read_step is not None:
+                read_key = next(
+                    (k for k in step_outputs if k.endswith(f"_{read_step.capability}")), None
+                )
+                if read_key:
+                    direct_answer = extract_perceiver_synthesis(step_outputs[read_key])
+
+            # Step 4: Presenter formats response — unless we already have the
+            # read agent's own answer above (see streaming path comment).
+            if direct_answer is not None:
+                result["presentation"] = direct_answer
+            else:
                 prior_results_block = ""
-                step_outputs = {
-                    k: v
-                    for k, v in result.items()
-                    if k not in ("presentation", "user_actions") and v
-                }
                 if step_outputs:
                     parts = []
                     for agent_key, output in step_outputs.items():
@@ -1207,12 +1221,24 @@ class JarvisOrchestrator:
                     ],
                 }
 
-            # Step 4: Presenter formatting — always call the Presenter so
-            # the user receives a conversational response.  system.respond
-            # steps are no-ops in _handle_system_capability, and
-            # reason/respond steps execute with wrong context, so relying on
-            # them to produce the user-facing answer leaves the chat empty.
-            if True:
+            # Latency: when the whole plan is one read-only Perceiver step,
+            # return that read's own `synthesis` prose directly and skip the
+            # Presenter LLM call (presenter_skip.py). Falls back to the
+            # Presenter if the read produced no usable synthesis.
+            direct_answer = None
+            read_step = single_read_step(step_routing, user_steps)
+            if read_step is not None and step_outputs:
+                direct_answer = extract_perceiver_synthesis(next(iter(step_outputs.values())))
+
+            # Step 4: Presenter formatting — unless we already have the read
+            # agent's own answer above. system.respond steps are no-ops in
+            # _handle_system_capability and reason/respond steps execute with
+            # the wrong context, so for anything other than a single read we
+            # still call the Presenter or the chat is left empty.
+            if direct_answer is not None:
+                presenter_text = direct_answer
+                yield {"event": "response", "text": direct_answer}
+            else:
                 # Collect prior step results so Presenter can reference them
                 prior_results_block = ""
                 if step_outputs:
