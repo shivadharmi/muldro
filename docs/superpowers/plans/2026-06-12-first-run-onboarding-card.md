@@ -16,8 +16,8 @@
 
 ## File Structure
 
-- Create: `frontend/vitest.config.ts` — vitest config (jsdom, react, tsconfig paths)
-- Create: `frontend/vitest.setup.ts` — imports jest-dom matchers
+- Create: `frontend/vitest.config.mts` — vitest config (jsdom, react, tsconfig paths). `.mts` (not `.ts`) because the project has no `"type": "module"`; matches the existing `.mjs` config convention.
+- Create: `frontend/vitest.setup.mts` — imports jest-dom matchers
 - Create: `frontend/src/test-harness.test.tsx` — smoke test proving the harness works
 - Modify: `frontend/package.json` — add dev deps + `test` / `test:watch` scripts
 - Create: `frontend/src/lib/first-run-state.ts` — pure state helper
