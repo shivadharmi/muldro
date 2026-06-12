@@ -16,7 +16,7 @@ from src.api.deps import (
     get_session,
 )
 from src.config.settings import Settings, get_settings
-from src.middleware.security import per_endpoint_rate_limit
+from src.middleware.security import RATE_LIMIT_AUTH_VERIFY, per_endpoint_rate_limit
 from src.models.users import User
 from src.services.auth_service import AuthService
 
@@ -114,7 +114,11 @@ async def send_magic_link(
     )
 
 
-@router.post("/v1/auth/verify", response_model=AuthTokenResponse)
+@router.post(
+    "/v1/auth/verify",
+    response_model=AuthTokenResponse,
+    dependencies=[Depends(per_endpoint_rate_limit(RATE_LIMIT_AUTH_VERIFY))],
+)
 async def verify_magic_link(
     req: VerifyRequest,
     db: AsyncSession = Depends(get_session),

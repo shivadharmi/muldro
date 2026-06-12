@@ -23,6 +23,7 @@ from src.api.schemas_history import (
     RunActionResponse,
 )
 from src.config.settings import Settings, get_settings
+from src.middleware.security import RATE_LIMIT_RUN_ACTION, per_endpoint_rate_limit
 from src.models.approvals import Approval
 from src.models.plans import Plan
 from src.models.runtime_event import RuntimeEvent
@@ -478,7 +479,11 @@ def _name_from_step(step: TaskStep) -> str | None:
 _TERMINAL_STATUSES = {"completed", "failed", "cancelled", "archived", "timed_out"}
 
 
-@router.post("/v1/history/{run_id}/retry", response_model=RunActionResponse)
+@router.post(
+    "/v1/history/{run_id}/retry",
+    response_model=RunActionResponse,
+    dependencies=[Depends(per_endpoint_rate_limit(RATE_LIMIT_RUN_ACTION))],
+)
 async def retry_run(
     run_id: str,
     user_id: str = Depends(get_current_user_id),
@@ -513,7 +518,11 @@ async def retry_run(
     return RunActionResponse(run_id=run.run_id, status=run.status, message="Run queued for retry.")
 
 
-@router.post("/v1/runs/{run_id}/cancel", response_model=RunActionResponse)
+@router.post(
+    "/v1/runs/{run_id}/cancel",
+    response_model=RunActionResponse,
+    dependencies=[Depends(per_endpoint_rate_limit(RATE_LIMIT_RUN_ACTION))],
+)
 async def cancel_run(
     run_id: str,
     user_id: str = Depends(get_current_user_id),
@@ -553,7 +562,11 @@ async def cancel_run(
     return RunActionResponse(run_id=run_id, status=run.status, message="Run cancelled.")
 
 
-@router.post("/v1/runs/{run_id}/resume", response_model=RunActionResponse)
+@router.post(
+    "/v1/runs/{run_id}/resume",
+    response_model=RunActionResponse,
+    dependencies=[Depends(per_endpoint_rate_limit(RATE_LIMIT_RUN_ACTION))],
+)
 async def resume_run(
     run_id: str,
     user_id: str = Depends(get_current_user_id),

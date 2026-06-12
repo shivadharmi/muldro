@@ -12,6 +12,7 @@ from ulid import ULID
 from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
 from src.api.schemas import ApprovalDecisionRequest, ApprovalDetailResponse, ApprovalResponse
 from src.config.settings import Settings, get_settings
+from src.middleware.security import RATE_LIMIT_APPROVAL_DECISION, per_endpoint_rate_limit
 from src.models.approvals import Approval
 from src.models.plans import Plan
 from src.models.task_graph import TaskRun, TaskStep
@@ -109,6 +110,7 @@ async def list_approvals(
 @router.post(
     "/v1/approvals/{approval_id}/approve",
     response_model=ApprovalResponse,
+    dependencies=[Depends(per_endpoint_rate_limit(RATE_LIMIT_APPROVAL_DECISION))],
 )
 async def approve_action(
     approval_id: str,
@@ -366,6 +368,7 @@ async def approve_action(
 @router.post(
     "/v1/approvals/{approval_id}/reject",
     response_model=ApprovalResponse,
+    dependencies=[Depends(per_endpoint_rate_limit(RATE_LIMIT_APPROVAL_DECISION))],
 )
 async def reject_action(
     approval_id: str,
@@ -526,6 +529,7 @@ class ApprovalEditRequest(BaseModel):
 @router.post(
     "/v1/approvals/{approval_id}/edit",
     response_model=ApprovalResponse,
+    dependencies=[Depends(per_endpoint_rate_limit(RATE_LIMIT_APPROVAL_DECISION))],
 )
 async def edit_approval(
     approval_id: str,
