@@ -12,6 +12,7 @@ import { useSurfaceStore } from "@/stores/surface-store";
 import type { WorkspaceSurface } from "@/stores/surface-store";
 import { useWsActionStore } from "@/stores/ws-action-store";
 import { GreetingHero } from "@/components/dashboard/greeting-hero";
+import { BriefingGatheringCard } from "@/components/dashboard/briefing-gathering-card";
 import { WorkspaceCanvas } from "@/components/workspace/workspace-canvas";
 import { SurfaceDetailModal } from "@/components/workspace/surface-detail-modal";
 import type { WorkspaceSurfacePush, SurfaceUpdate } from "@/lib/a2ui-types";
@@ -90,6 +91,9 @@ export default function WorkspacePage() {
   const approvalCount = allSurfaces.filter((s) => s.kind === "approval").length;
   const briefing = allSurfaces.find((s) => s.kind === "briefing");
   const headline = briefing?.preview.title ?? null;
+  // The briefing schedule is enabled at workspace creation, so before the first
+  // briefing runs we show a "gathering data" card instead of a generic empty state.
+  const showBriefingGathering = !briefing;
 
   // WS push → store
   const handleSurfacePush = useCallback(
@@ -135,10 +139,14 @@ export default function WorkspacePage() {
         system={system}
       />
 
-      <WorkspaceCanvas
-        surfaces={allSurfaces}
-        onSurfaceClick={openDetailModal}
-      />
+      {showBriefingGathering && <BriefingGatheringCard />}
+
+      {allSurfaces.length > 0 && (
+        <WorkspaceCanvas
+          surfaces={allSurfaces}
+          onSurfaceClick={openDetailModal}
+        />
+      )}
 
       {activeSurface && (
         <SurfaceDetailModal
