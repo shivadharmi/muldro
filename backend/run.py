@@ -33,6 +33,10 @@ def main():
     settings = get_settings()
     configure_logging(json_output=settings.log_json, level=logging.INFO)
 
+    # Fail fast on misconfiguration (missing Anthropic key, missing OAuth
+    # encryption key in production) before spawning worker/bot threads.
+    settings.validate_startup()
+
     if args.worker:
         # Start worker in background thread alongside API
         import asyncio

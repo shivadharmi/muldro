@@ -308,9 +308,23 @@ class AuthService:
             self._db.add(conn)
 
     def _encrypt_token(self, plaintext: str) -> str:
-        """Encrypt a token using Fernet if an encryption key is configured."""
+        """Encrypt a token using Fernet if an encryption key is configured.
+
+        In production a missing or broken key is fatal — storing OAuth tokens as
+        plaintext is a security downgrade we never accept once live (B7). In
+        development we keep the warn-and-store-as-is fallback for local ergonomics.
+        """
+        # String compare (not the is_production property) so a MagicMock settings
+        # in tests defaults to dev behavior unless `environment` is set explicitly.
+        is_production = getattr(self._settings, "environment", "development") == "production"
+
         key = self._settings.oauth_encryption_key
         if not key:
+            if is_production:
+                raise RuntimeError(
+                    "JARVIS_OAUTH_ENCRYPTION_KEY is required in production — refusing to "
+                    "store an OAuth token as plaintext."
+                )
             logger.warning("No oauth_encryption_key set — storing token as-is")
             return plaintext
         try:
@@ -319,6 +333,8 @@ class AuthService:
             f = Fernet(key.encode() if isinstance(key, str) else key)
             return f.encrypt(plaintext.encode()).decode()
         except Exception:
+            if is_production:
+                raise
             logger.warning("Fernet encryption failed, storing token as-is", exc_info=True)
             return plaintext
 

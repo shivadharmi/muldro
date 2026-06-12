@@ -51,6 +51,10 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # Fail fast on misconfiguration (covers `uvicorn app:app` started outside
+        # run.py). Idempotent with run.py's check; raising here aborts startup.
+        settings.validate_startup()
+
         # Startup: connect to Redis
         try:
             import redis.asyncio as aioredis

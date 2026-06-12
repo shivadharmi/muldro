@@ -141,6 +141,33 @@ class Settings(BaseSettings):
             return _to_bedrock_model_id(self.anthropic_model)
         return self.anthropic_model
 
+    @property
+    def is_production(self) -> bool:
+        """True when running under the production environment discriminator."""
+        return self.environment == "production"
+
+    def validate_startup(self) -> None:
+        """Fail fast on misconfiguration that would otherwise surface as a cryptic
+        runtime error (empty API key → opaque first-chat failure) or a silent
+        security downgrade (no OAuth key → tokens stored as plaintext).
+
+        Raises RuntimeError with an actionable message. Called once at app startup.
+        """
+        if not self.use_bedrock and not self.anthropic_api_key:
+            raise RuntimeError(
+                "JARVIS_ANTHROPIC_API_KEY is not set. Jarvis cannot talk to any agent "
+                "without it. Set it in your .env (get a key at https://console.anthropic.com), "
+                "or set JARVIS_USE_BEDROCK=true to use AWS Bedrock credentials instead."
+            )
+
+        if self.is_production and not self.oauth_encryption_key:
+            raise RuntimeError(
+                "JARVIS_OAUTH_ENCRYPTION_KEY is required in production — without it, "
+                "OAuth tokens would be stored as plaintext. Generate one with: "
+                "python -c 'from cryptography.fernet import Fernet; "
+                "print(Fernet.generate_key().decode())'"
+            )
+
 
 # Mapping from direct API model IDs to Bedrock inference profile IDs
 # Uses cross-region profiles (apac/global) that work in ap-south-1
