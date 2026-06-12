@@ -40,6 +40,9 @@ interface AgentTraceProps {
  */
 export function AgentTrace({ agents, plan, streaming }: AgentTraceProps) {
   const [manualExpanded, setManualExpanded] = useState<Set<string>>(new Set());
+  // Theater is hidden by default (soul fix): the agent cards, thinking and
+  // token costs live behind this one-line summary and only render on request.
+  const [showDetails, setShowDetails] = useState(false);
 
   if (agents.length === 0) return null;
 
@@ -60,8 +63,32 @@ export function AgentTrace({ agents, plan, streaming }: AgentTraceProps) {
     });
   };
 
+  const runningAgent = streaming ? agents.find((a) => a.status === "running") : undefined;
+  const summaryLabel = runningAgent
+    ? `${runningAgent.agent} working…`
+    : `${agents.length} step${agents.length !== 1 ? "s" : ""}`;
+
+  if (!showDetails) {
+    return (
+      <button
+        onClick={() => setShowDetails(true)}
+        className="flex items-center gap-1.5 px-2 py-0.5 text-[11px] text-t-muted hover:text-t-secondary transition-colors cursor-pointer capitalize"
+      >
+        <span className={runningAgent ? "text-j-primary animate-pulse" : ""}>{summaryLabel}</span>
+        <span className="text-t-muted/70 normal-case">· details ▾</span>
+      </button>
+    );
+  }
+
   return (
     <>
+      <button
+        onClick={() => setShowDetails(false)}
+        className="flex items-center gap-1.5 px-2 py-0.5 text-[11px] text-t-muted hover:text-t-secondary transition-colors cursor-pointer"
+      >
+        <span>hide details ▴</span>
+      </button>
+
       {/* Agent pipeline visualization */}
       <div className="space-y-1">
         {agents.map((agent, i) => (
