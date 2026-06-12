@@ -16,6 +16,10 @@ import {
 import { useToast } from "@/components/ui/toast";
 import { useAuth } from "@/lib/auth";
 import type { TrustDashboardEntry } from "@/lib/types";
+import { TrustCapabilityCard } from "@/components/settings/trust-capability-card";
+import { TRUST_LEVEL_LABELS } from "@/components/settings/trust-constants";
+import { AccountTab } from "@/components/settings/account-tab";
+import { BudgetTab } from "@/components/settings/budget-tab";
 
 type SettingsTab = "account" | "policy" | "trust" | "budget";
 
@@ -43,30 +47,6 @@ const POLICY_MODES = [
     label: "Full Auto",
     description: "Jarvis acts autonomously",
   },
-];
-
-const TRUST_LEVEL_COLORS: Record<string, string> = {
-  first_use: "bg-t-muted",
-  learning: "bg-j-info",
-  trusted: "bg-j-success",
-  autonomous: "bg-j-secondary",
-  blocked: "bg-j-error",
-};
-
-const TRUST_LEVEL_LABELS: Record<string, string> = {
-  first_use: "First Use",
-  learning: "Learning",
-  trusted: "Trusted",
-  autonomous: "Autonomous",
-  blocked: "Blocked",
-};
-
-const CEILING_OPTIONS = [
-  { value: "blocked", label: "Blocked" },
-  { value: "first_use", label: "First Use" },
-  { value: "learning", label: "Learning" },
-  { value: "trusted", label: "Trusted" },
-  { value: "autonomous", label: "Autonomous (no limit)" },
 ];
 
 export default function SettingsPage() {
@@ -206,32 +186,11 @@ export default function SettingsPage() {
       />
 
       {activeTab === "account" && (
-        <Card>
-          <CardBody>
-            <div className="space-y-5">
-              <div className="grid grid-cols-[120px_1fr] gap-y-4 gap-x-4 items-baseline">
-                <p className="text-[11px] text-t-muted font-medium uppercase tracking-wider">Email</p>
-                <p className="text-sm text-t-primary">
-                  {user?.email ?? "—"}
-                </p>
-                <p className="text-[11px] text-t-muted font-medium uppercase tracking-wider">
-                  Display Name
-                </p>
-                <p className="text-sm text-t-primary">
-                  {user?.display_name ?? "—"}
-                </p>
-              </div>
-              <div className="pt-4 border-t border-b-secondary">
-                <button
-                  onClick={logout}
-                  className="px-4 py-2 rounded-[var(--radius-md)] border border-j-error/30 text-j-error text-[13px] font-medium hover:bg-j-error-soft transition-colors cursor-pointer"
-                >
-                  Sign Out
-                </button>
-              </div>
-            </div>
-          </CardBody>
-        </Card>
+        <AccountTab
+          email={user?.email ?? null}
+          displayName={user?.display_name ?? null}
+          onSignOut={logout}
+        />
       )}
 
       {activeTab === "policy" && (
@@ -317,205 +276,19 @@ export default function SettingsPage() {
       )}
 
       {activeTab === "budget" && (
-        <Card>
-          <CardBody>
-            <div className="space-y-4">
-              <div>
-                <p className="text-[11px] text-t-muted font-medium uppercase tracking-wider mb-3">
-                  Daily Token Budget
-                </p>
-                {editingBudget ? (
-                  <div className="flex items-center gap-2">
-                    <span className="text-t-secondary text-sm">$</span>
-                    <input
-                      type="number"
-                      min="0.01"
-                      step="0.01"
-                      value={budgetInput}
-                      onChange={(e) => setBudgetInput(e.target.value)}
-                      className="w-32 rounded-[var(--radius-md)] bg-surface-2 border border-b-secondary px-3 py-2 text-sm text-t-primary focus:outline-none focus:ring-1 focus:ring-j-ring transition-colors"
-                      autoFocus
-                    />
-                    <button
-                      onClick={handleBudgetSave}
-                      disabled={budgetSaving}
-                      className="px-3.5 py-2 rounded-[var(--radius-md)] bg-j-primary text-j-primary-fg text-[13px] font-medium hover:bg-j-primary-hover disabled:opacity-50 transition-colors cursor-pointer"
-                    >
-                      {budgetSaving ? "Saving..." : "Save"}
-                    </button>
-                    <button
-                      onClick={() => setEditingBudget(false)}
-                      className="px-3.5 py-2 rounded-[var(--radius-md)] text-t-secondary text-[13px] hover:bg-surface-2 transition-colors cursor-pointer"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-3">
-                    <p className="text-2xl font-semibold text-t-primary tracking-tight">
-                      ${budgetLimit?.toFixed(2) ?? "—"}
-                      <span className="text-sm text-t-muted font-normal ml-1">
-                        / day
-                      </span>
-                    </p>
-                    <button
-                      onClick={() => {
-                        setBudgetInput(String(budgetLimit ?? 5));
-                        setEditingBudget(true);
-                      }}
-                      className="text-xs text-j-primary hover:text-j-primary-hover font-medium cursor-pointer"
-                    >
-                      Edit
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-          </CardBody>
-        </Card>
-      )}
-    </div>
-  );
-}
-
-// ── Trust Capability Card ───────────────────────────────────────
-
-interface TrustCapabilityCardProps {
-  entry: TrustDashboardEntry;
-  onCeilingChange: (capability: string, maxLevel: string) => void;
-  onReset: (capability: string) => void;
-  ceilingDisabled?: boolean;
-  resetDisabled?: boolean;
-}
-
-function TrustCapabilityCard({
-  entry,
-  onCeilingChange,
-  onReset,
-  ceilingDisabled,
-  resetDisabled,
-}: TrustCapabilityCardProps) {
-  const [expanded, setExpanded] = useState(false);
-
-  const bestProgress = entry.risk_levels.reduce((best, rl) => {
-    const pct = rl.graduation_progress?.percentage ?? 0;
-    return pct > best ? pct : best;
-  }, 0);
-
-  return (
-    <div className="rounded-[var(--radius-lg)] border border-b-secondary bg-surface-1 overflow-hidden">
-      <div className="px-4 py-3 space-y-2">
-        {/* Header row */}
-        <button
-          type="button"
-          onClick={() => setExpanded(!expanded)}
-          className="w-full flex items-center justify-between text-left cursor-pointer group"
-        >
-          <div className="flex items-center gap-2.5">
-            <span
-              className={`w-2 h-2 rounded-full shrink-0 ${TRUST_LEVEL_COLORS[entry.trust_level] ?? "bg-t-muted"}`}
-            />
-            <span className="text-[13px] font-medium text-t-primary">
-              {entry.capability}
-            </span>
-            <span className="text-[11px] text-t-muted px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-surface-2">
-              {TRUST_LEVEL_LABELS[entry.trust_level] ?? entry.trust_level}
-            </span>
-          </div>
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            className={`text-t-muted group-hover:text-t-secondary transition-all duration-150 ${expanded ? "rotate-90" : ""}`}
-          >
-            <path
-              d="M9 18l6-6-6-6"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </button>
-
-        {/* Graduation progress bar */}
-        {entry.trust_level !== "autonomous" && (
-          <div className="w-full h-1 bg-surface-3 rounded-full">
-            <div
-              className={`h-full rounded-full transition-all duration-300 ${TRUST_LEVEL_COLORS[entry.trust_level] ?? "bg-t-muted"}`}
-              style={{
-                width: `${Math.min(bestProgress * 100, 100)}%`,
-              }}
-            />
-          </div>
-        )}
-      </div>
-
-      {/* Expanded: per-risk breakdown + controls */}
-      {expanded && (
-        <div className="px-4 pb-4 pt-2 space-y-3 border-t border-b-secondary">
-          {entry.risk_levels.map((rl) => (
-            <div
-              key={rl.risk_level}
-              className="flex items-center justify-between text-xs"
-            >
-              <span className="text-t-secondary w-16 capitalize">
-                {rl.risk_level}
-              </span>
-              <span
-                className={`px-1.5 py-0.5 rounded-[var(--radius-sm)] ${TRUST_LEVEL_COLORS[rl.trust_level] ?? "bg-t-muted"} text-white text-[10px] font-medium`}
-              >
-                {TRUST_LEVEL_LABELS[rl.trust_level] ?? rl.trust_level}
-              </span>
-              <span className="text-t-tertiary">
-                {rl.approved_count}
-                <span className="text-t-muted"> approved</span>
-                {rl.rejected_count > 0 && (
-                  <span className="text-j-error ml-1">
-                    {rl.rejected_count} rejected
-                  </span>
-                )}
-              </span>
-              {rl.graduation_progress?.next_level && (
-                <span className="text-t-muted text-[10px]">
-                  {rl.graduation_progress.current}/
-                  {rl.graduation_progress.target} to{" "}
-                  {TRUST_LEVEL_LABELS[
-                    rl.graduation_progress.next_level
-                  ] ?? rl.graduation_progress.next_level}
-                </span>
-              )}
-            </div>
-          ))}
-
-          {/* Ceiling control */}
-          <div className="flex items-center gap-2 pt-2 border-t border-b-secondary">
-            <label className="text-[11px] text-t-muted font-medium">Ceiling</label>
-            <select
-              value={entry.ceiling}
-              onChange={(e) =>
-                onCeilingChange(entry.capability, e.target.value)
-              }
-              disabled={ceilingDisabled}
-              className="text-xs rounded-[var(--radius-md)] bg-surface-2 border border-b-secondary px-2.5 py-1.5 text-t-primary focus:outline-none focus:ring-1 focus:ring-j-ring disabled:opacity-50 cursor-pointer"
-            >
-              {CEILING_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-
-            <button
-              onClick={() => onReset(entry.capability)}
-              disabled={resetDisabled}
-              className="ml-auto text-xs text-j-error hover:text-j-error/80 font-medium disabled:opacity-50 cursor-pointer"
-            >
-              {resetDisabled ? "Resetting..." : "Reset"}
-            </button>
-          </div>
-        </div>
+        <BudgetTab
+          budgetLimit={budgetLimit}
+          editing={editingBudget}
+          input={budgetInput}
+          saving={budgetSaving}
+          onEditStart={() => {
+            setBudgetInput(String(budgetLimit ?? 5));
+            setEditingBudget(true);
+          }}
+          onInputChange={setBudgetInput}
+          onSave={handleBudgetSave}
+          onCancel={() => setEditingBudget(false)}
+        />
       )}
     </div>
   );
