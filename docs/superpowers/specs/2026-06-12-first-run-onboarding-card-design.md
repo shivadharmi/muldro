@@ -78,11 +78,15 @@ button styling).
 
 - A local `PRIMARY_SOURCES` constant lists the three first-run sources with the
   provider slug used by `getAuthUrl`, the logo component, and a one-line hint:
-  - `google-workspace` — "Gmail + Calendar"
-  - `github` — "repos"
-  - `slack` — "messages"
+  - `google` — "Gmail + Calendar" — `GoogleLogo`
+  - `github` — "repos" — `GitHubLogo`
+  - `notion` — "docs" — `NotionLogo`
   Logos come from the existing `@/components/integrations/logos` set already
-  used by the integrations page.
+  used by the integrations page. **Slug note:** the backend `oauth_authorize`
+  route (`routes_auth.py`) only implements `google`, `github`, `notion`,
+  `atlassian` — Slack has no authorize branch and would 400, so it is not a
+  first-run source. The Google slug is `google` (not the `google-workspace`
+  UI logo-map key).
 - `handleConnect(provider)`: `const { url } = await getAuthUrl(provider);
   window.location.assign(url)` — identical to the integrations page handler.
   This runs in a click handler, not the render body, so it does not violate the
@@ -137,9 +141,9 @@ Dev dependencies (React 19 compatible):
 
 `src/components/dashboard/onboarding-card.test.tsx` (RTL, mocking `getAuthUrl`
 and `window.location.assign`):
-- renders the three primary sources (Google, GitHub, Slack)
-- clicking a source calls `getAuthUrl` with that provider slug and redirects to
-  the returned URL
+- renders the three primary sources (Google, GitHub, Notion)
+- clicking a source calls `getAuthUrl` with that provider slug (`google`,
+  `github`, `notion`) and redirects to the returned URL
 - `getAuthUrl` rejection surfaces a toast and does not redirect
 - "See all integrations" links to `/integrations`
 
