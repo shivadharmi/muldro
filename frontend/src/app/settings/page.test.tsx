@@ -33,12 +33,13 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-test("renders the four settings tabs", () => {
+test("renders the three settings tabs", () => {
   render(<SettingsPage />);
   expect(screen.getByRole("tab", { name: /account/i })).toBeInTheDocument();
-  expect(screen.getByRole("tab", { name: /policy/i })).toBeInTheDocument();
-  expect(screen.getByRole("tab", { name: /trust/i })).toBeInTheDocument();
-  expect(screen.getByRole("tab", { name: /budget/i })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: /how jarvis acts/i })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: /spending/i })).toBeInTheDocument();
+  expect(screen.queryByRole("tab", { name: /^trust$/i })).not.toBeInTheDocument();
+  expect(screen.queryByRole("tab", { name: /^policy$/i })).not.toBeInTheDocument();
 });
 
 test("account tab shows the user email by default", () => {
@@ -46,22 +47,41 @@ test("account tab shows the user email by default", () => {
   expect(screen.getByText("founder@example.com")).toBeInTheDocument();
 });
 
+test("how-jarvis-acts tab shows the connective copy and policy modes", async () => {
+  render(<SettingsPage />);
+  await userEvent.click(screen.getByRole("tab", { name: /how jarvis acts/i }));
+  expect(screen.getByText(/per-capability trust fine-tunes/i)).toBeInTheDocument();
+  expect(screen.getByText("Full Auto")).toBeInTheDocument();
+});
+
 test("selecting a policy mode calls setPolicyMode", async () => {
   render(<SettingsPage />);
-  await userEvent.click(screen.getByRole("tab", { name: /policy/i }));
+  await userEvent.click(screen.getByRole("tab", { name: /how jarvis acts/i }));
   await userEvent.click(screen.getByText("Full Auto"));
   await waitFor(() => expect(setPolicyMode).toHaveBeenCalledWith("full_auto"));
 });
 
-test("opening the trust tab loads the trust dashboard", async () => {
+test("trust loads only after the per-capability section is expanded", async () => {
   render(<SettingsPage />);
-  await userEvent.click(screen.getByRole("tab", { name: /trust/i }));
+  await userEvent.click(screen.getByRole("tab", { name: /how jarvis acts/i }));
+  expect(fetchTrustDashboard).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", { name: /per-capability trust/i }));
   await waitFor(() => expect(fetchTrustDashboard).toHaveBeenCalled());
 });
 
-test("editing the budget calls updateBudgetLimit", async () => {
+test("re-expanding the trust section does not re-fetch", async () => {
   render(<SettingsPage />);
-  await userEvent.click(screen.getByRole("tab", { name: /budget/i }));
+  await userEvent.click(screen.getByRole("tab", { name: /how jarvis acts/i }));
+  const expander = screen.getByRole("button", { name: /per-capability trust/i });
+  await userEvent.click(expander); // expand (fetches)
+  await userEvent.click(expander); // collapse
+  await userEvent.click(expander); // re-expand (must NOT fetch again)
+  await waitFor(() => expect(fetchTrustDashboard).toHaveBeenCalledTimes(1));
+});
+
+test("editing the budget on the spending tab calls updateBudgetLimit", async () => {
+  render(<SettingsPage />);
+  await userEvent.click(screen.getByRole("tab", { name: /spending/i }));
   await userEvent.click(screen.getByRole("button", { name: /edit/i }));
   const input = screen.getByRole("spinbutton");
   await userEvent.clear(input);

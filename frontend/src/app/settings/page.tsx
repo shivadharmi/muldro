@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { PageHeader } from "@/components/layout/page-header";
-import { Card, CardBody } from "@/components/ui/card";
 import { Tabs } from "@/components/ui/tabs";
 import {
   fetchPolicyMode,
@@ -16,18 +15,17 @@ import {
 import { useToast } from "@/components/ui/toast";
 import { useAuth } from "@/lib/auth";
 import type { TrustDashboardEntry } from "@/lib/types";
-import { TrustCapabilityCard } from "@/components/settings/trust-capability-card";
 import { TRUST_LEVEL_LABELS } from "@/components/settings/trust-constants";
 import { AccountTab } from "@/components/settings/account-tab";
-import { BudgetTab } from "@/components/settings/budget-tab";
+import { HowJarvisActsTab } from "@/components/settings/how-jarvis-acts-tab";
+import { SpendingTab } from "@/components/settings/spending-tab";
 
-type SettingsTab = "account" | "policy" | "trust" | "budget";
+type SettingsTab = "account" | "how_jarvis_acts" | "spending";
 
 const TABS = [
   { key: "account", label: "Account" },
-  { key: "policy", label: "Policy" },
-  { key: "trust", label: "Trust" },
-  { key: "budget", label: "Budget" },
+  { key: "how_jarvis_acts", label: "How Jarvis acts" },
+  { key: "spending", label: "Spending" },
 ];
 
 const POLICY_MODES = [
@@ -61,6 +59,7 @@ export default function SettingsPage() {
   const [budgetSaving, setBudgetSaving] = useState(false);
   const [ceilingLoading, setCeilingLoading] = useState<string | null>(null);
   const [resetLoading, setResetLoading] = useState<string | null>(null);
+  const [trustLoadedOnce, setTrustLoadedOnce] = useState(false);
   const { user, logout } = useAuth();
   const { addToast } = useToast();
 
@@ -85,11 +84,11 @@ export default function SettingsPage() {
     }
   }, [addToast]);
 
-  useEffect(() => {
-    if (activeTab === "trust") {
-      loadTrust();
-    }
-  }, [activeTab, loadTrust]);
+  const handleTrustExpand = useCallback(() => {
+    if (trustLoadedOnce) return;
+    setTrustLoadedOnce(true);
+    loadTrust();
+  }, [trustLoadedOnce, loadTrust]);
 
   async function handlePolicyChange(mode: string) {
     setPolicyLoading(true);
@@ -177,7 +176,7 @@ export default function SettingsPage() {
     <div className="p-4 sm:p-6 space-y-6 max-w-3xl animate-fade-in">
       <PageHeader
         title="Settings"
-        subtitle="Manage your account, policies, trust levels, and budget"
+        subtitle="Manage your account, autonomy, and spending"
       />
       <Tabs
         tabs={TABS}
@@ -193,90 +192,24 @@ export default function SettingsPage() {
         />
       )}
 
-      {activeTab === "policy" && (
-        <div className="space-y-2">
-          {POLICY_MODES.map((pm) => {
-            const isActive = policyMode === pm.value;
-            return (
-              <button
-                key={pm.value}
-                type="button"
-                onClick={() => handlePolicyChange(pm.value)}
-                disabled={policyLoading}
-                className={`w-full text-left rounded-[var(--radius-lg)] border p-4 transition-all duration-150 cursor-pointer ${
-                  isActive
-                    ? "border-j-primary/40 bg-j-primary-soft"
-                    : "border-b-secondary bg-surface-1 hover:bg-surface-2"
-                } disabled:opacity-50`}
-              >
-                <div className="flex items-center gap-3">
-                  <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 ${
-                    isActive ? "border-j-primary" : "border-b-strong"
-                  }`}>
-                    {isActive && <div className="w-2 h-2 rounded-full bg-j-primary" />}
-                  </div>
-                  <div>
-                    <p className="text-[13px] font-medium text-t-primary">
-                      {pm.label}
-                    </p>
-                    <p className="text-xs text-t-tertiary mt-0.5">
-                      {pm.description}
-                    </p>
-                  </div>
-                </div>
-              </button>
-            );
-          })}
-        </div>
+      {activeTab === "how_jarvis_acts" && (
+        <HowJarvisActsTab
+          policyMode={policyMode}
+          policyModes={POLICY_MODES}
+          policyLoading={policyLoading}
+          onPolicyChange={handlePolicyChange}
+          trustByFamily={trustByFamily}
+          trustLoading={trustLoading}
+          onTrustExpand={handleTrustExpand}
+          onCeilingChange={handleCeilingChange}
+          onReset={handleResetTrust}
+          ceilingLoading={ceilingLoading}
+          resetLoading={resetLoading}
+        />
       )}
 
-      {activeTab === "trust" && (
-        <div className="space-y-6">
-          {trustLoading && (
-            <div className="space-y-2">
-              {[1, 2, 3].map((i) => (
-                <div key={i} className="h-16 rounded-[var(--radius-lg)] skeleton" />
-              ))}
-            </div>
-          )}
-
-          {!trustLoading && trustEntries.length === 0 && (
-            <Card>
-              <CardBody>
-                <div className="text-center py-4">
-                  <p className="text-sm text-t-secondary font-medium mb-1">No trust data yet</p>
-                  <p className="text-xs text-t-muted">
-                    Trust levels build as Jarvis performs actions and you approve or reject them.
-                  </p>
-                </div>
-              </CardBody>
-            </Card>
-          )}
-
-          {Object.entries(trustByFamily).map(([family, entries]) => (
-            <div key={family}>
-              <h3 className="text-[11px] uppercase text-t-muted font-medium mb-2.5 tracking-wider">
-                {family}
-              </h3>
-              <div className="space-y-2">
-                {entries.map((entry) => (
-                  <TrustCapabilityCard
-                    key={entry.capability}
-                    entry={entry}
-                    onCeilingChange={handleCeilingChange}
-                    onReset={handleResetTrust}
-                    ceilingDisabled={ceilingLoading === entry.capability}
-                    resetDisabled={resetLoading === entry.capability}
-                  />
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {activeTab === "budget" && (
-        <BudgetTab
+      {activeTab === "spending" && (
+        <SpendingTab
           budgetLimit={budgetLimit}
           editing={editingBudget}
           input={budgetInput}

@@ -1,6 +1,6 @@
 import { Card, CardBody } from "@/components/ui/card";
 
-interface BudgetTabProps {
+interface SpendingTabProps {
   budgetLimit: number | null;
   editing: boolean;
   input: string;
@@ -11,7 +11,7 @@ interface BudgetTabProps {
   onCancel: () => void;
 }
 
-export function BudgetTab({
+export function SpendingTab({
   budgetLimit,
   editing,
   input,
@@ -20,7 +20,7 @@ export function BudgetTab({
   onInputChange,
   onSave,
   onCancel,
-}: BudgetTabProps) {
+}: SpendingTabProps) {
   return (
     <Card>
       <CardBody>
