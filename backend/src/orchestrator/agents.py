@@ -4,9 +4,13 @@ Defines 7 specialized agents with their prompts, model assignments,
 capability-based access scopes, and per-agent thinking configuration.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from src.orchestrator.prompts import AGENT_PROMPTS
+
+# Cheap mode: lowest thinking budget allowed after halving, so reasoning-heavy
+# agents keep a usable scratchpad.
+CHEAP_MODE_THINKING_FLOOR = 1024
 
 # Model tier assignments per agent
 AGENT_MODEL_TIERS = {
@@ -223,6 +227,35 @@ def create_sub_agents() -> dict[str, SubAgent]:
             edge_case_only=(name == "governor"),
         )
     return agents
+
+
+def apply_cheap_mode(agent: SubAgent) -> SubAgent:
+    """Return a cost-reduced copy of an agent for cheap mode.
+
+    Two levers (audit: ~65% cheaper, the "all-Sonnet" preset):
+    - Drop the Opus tier (opus→sonnet). Opus is ~5x Sonnet and only the Planner
+      uses it; Sonnet/Haiku tiers are left untouched (Haiku is already cheaper).
+    - Halve thinking budgets (thinking tokens bill as output), floored so
+      reasoning-heavy agents keep a usable scratchpad.
+
+    Returns a new SubAgent; the input is never mutated.
+    """
+    downgraded_tier = "sonnet" if agent.model_tier == "opus" else agent.model_tier
+    reduced_thinking = ThinkingConfig(
+        enabled=agent.thinking.enabled,
+        budget_tokens=max(CHEAP_MODE_THINKING_FLOOR, agent.thinking.budget_tokens // 2),
+    )
+    return replace(agent, model_tier=downgraded_tier, thinking=reduced_thinking)
+
+
+def build_agent_set(base: dict[str, SubAgent], cheap_mode: bool) -> dict[str, SubAgent]:
+    """Return the agent set to run with, applying cheap mode when enabled.
+
+    Always returns a fresh dict so callers never alias the shared singleton.
+    """
+    if not cheap_mode:
+        return dict(base)
+    return {name: apply_cheap_mode(agent) for name, agent in base.items()}
 
 
 # Pre-built agent registry

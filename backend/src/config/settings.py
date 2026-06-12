@@ -68,7 +68,8 @@ class Settings(BaseSettings):
     dlq_max_attempts: int = 3  # Dead-letter retry limit
 
     # Budget
-    daily_token_budget_usd: float = 5.0  # Daily spend limit before degradation
+    daily_token_budget_usd: float = 25.0  # Daily spend limit before degradation
+    cheap_mode: bool = False  # All-Sonnet preset (no Opus) + halved thinking budgets
 
     # Backpressure
     event_processor_concurrency: int = 5  # Max concurrent event scoring calls

@@ -27,7 +27,7 @@ from src.orchestrator.agent_loop import (
     LoopToolResult,
     agent_loop,
 )
-from src.orchestrator.agents import AGENTS, SubAgent
+from src.orchestrator.agents import AGENTS, SubAgent, build_agent_set
 from src.orchestrator.budget import BudgetTracker
 from src.orchestrator.contracts import PlanOutput, PlanStep
 from src.orchestrator.intent_classifier import (
@@ -209,7 +209,9 @@ class JarvisOrchestrator:
             daily_limit_usd=settings.daily_token_budget_usd,
             redis=getattr(services, "redis", None) if services else None,
         )
-        self._agents: dict[str, SubAgent] = dict(AGENTS)  # Start with hardcoded defaults
+        # Start with hardcoded defaults, applying cheap mode (opus→sonnet +
+        # halved thinking budgets) when JARVIS_CHEAP_MODE is set.
+        self._agents: dict[str, SubAgent] = build_agent_set(AGENTS, settings.cheap_mode)
         self._tools = self._build_tool_definitions()
         self._event_bus = None  # Lazy-init when Redis available
         self._event_bus_lock = asyncio.Lock()  # C5: guard lazy EventBus init
@@ -295,7 +297,7 @@ class JarvisOrchestrator:
                 await db.commit()
                 db_agents = await registry.load_as_sub_agents()
                 if db_agents:
-                    self._agents = db_agents
+                    self._agents = build_agent_set(db_agents, self._settings.cheap_mode)
                     logger.info(
                         "Loaded %d agents from DB: %s",
                         len(db_agents),
