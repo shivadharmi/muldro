@@ -1,10 +1,13 @@
 """Schedule seeder — creates default proactive schedules on first startup.
 
-All schedules are seeded as **disabled**. They are enabled when the
-corresponding connector is authorized via OAuth (see routes_auth.py).
+Connector-independent schedules (WORKSPACE_CREATION_SCHEDULES: morning_briefing,
+memory_consolidation, slo_health_check) are seeded **enabled** at workspace
+creation so the proactive/briefing loop is reachable before any OAuth.
+Connector-dependent observe_* schedules are seeded **disabled** and enabled when
+the matching connector is authorized via OAuth (see routes_auth.py), because each
+polls a specific source and provisions per-provider PerceptionState.
 
-Mapping (connector → schedules enabled):
-  Any connector  → morning_briefing, memory_consolidation, slo_health_check
+Mapping (connector → schedules enabled on authorization):
   gmail          → observe_gmail
   calendar       → observe_calendar
   slack          → observe_slack
@@ -99,6 +102,15 @@ DEFAULT_SCHEDULES: list[dict] = [
 # Schedules enabled when the *first* connector of any kind is authorized.
 GLOBAL_SCHEDULES = {"morning_briefing", "memory_consolidation", "slo_health_check"}
 
+# Schedules enabled immediately at workspace creation — the connector-independent
+# proactive/housekeeping ones. This makes the daily briefing and the proactive
+# loop reachable for a brand-new user *before* they connect any OAuth source
+# (the audit's "proactive loop that never fires" gap). The dashboard renders a
+# briefing surface with a "gathering data" empty state until the first run.
+# observe_* schedules are deliberately excluded: each polls a specific connector
+# and provisions per-provider PerceptionState, so they stay gated on OAuth.
+WORKSPACE_CREATION_SCHEDULES = GLOBAL_SCHEDULES
+
 # Per-connector schedule mapping.
 CONNECTOR_SCHEDULES: dict[str, list[str]] = {
     "google": ["observe_gmail", "observe_calendar"],
@@ -147,7 +159,7 @@ async def seed_default_schedules(db: AsyncSession, user_id: str, workspace_id: s
                 cron_expr=cron_expr,
                 action_type=sched_def["action_type"],
                 action_config=sched_def.get("action_config"),
-                enabled=False,
+                enabled=name in WORKSPACE_CREATION_SCHEDULES,
                 source=sched_def.get("source", "system"),
                 priority=sched_def.get("priority", "medium"),
                 next_run_at=next_run,

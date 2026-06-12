@@ -303,10 +303,15 @@ class TestScheduleSeeder:
         assert first_added.next_run_at is not None
 
     @pytest.mark.asyncio
-    async def test_all_seeded_schedules_disabled(self):
-        """All seeded schedules should be disabled by default."""
+    async def test_connector_independent_schedules_enabled_at_creation(self):
+        """Briefing + housekeeping schedules are enabled at workspace creation so
+        the proactive loop is reachable before any OAuth. Connector-dependent
+        observe_* schedules stay disabled until their connector is authorized."""
+        from src.services.schedule_seeder import WORKSPACE_CREATION_SCHEDULES
+
         db = MagicMock()
         result_mock = MagicMock()
+        result_mock.scalars.return_value = result_mock
         result_mock.all.return_value = []
         db.execute = AsyncMock(return_value=result_mock)
         db.add = MagicMock()
@@ -314,9 +319,15 @@ class TestScheduleSeeder:
 
         await seed_default_schedules(db, user_id=TEST_USER_ID)
 
-        for call in db.add.call_args_list:
-            schedule = call[0][0]
-            assert schedule.enabled is False, f"{schedule.name} should be disabled"
+        by_name = {call[0][0].name: call[0][0] for call in db.add.call_args_list}
+        assert by_name["morning_briefing"].enabled is True
+        for name in WORKSPACE_CREATION_SCHEDULES:
+            assert by_name[name].enabled is True, f"{name} should be enabled at creation"
+        # Connector-dependent observers must NOT poll an unconnected source.
+        assert by_name["observe_gmail"].enabled is False
+        assert by_name["observe_calendar"].enabled is False
+        assert by_name["observe_slack"].enabled is False
+        assert by_name["observe_github"].enabled is False
 
     @pytest.mark.asyncio
     async def test_seed_scopes_to_workspace(self):
