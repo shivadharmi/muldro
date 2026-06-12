@@ -319,8 +319,10 @@ def create_app() -> FastAPI:
         app.add_middleware(
             CORSMiddleware,
             allow_origins=origins,
-            allow_methods=["*"],
-            allow_headers=["*"],
+            # Explicit allow-lists (no `*`): browsers only get cross-origin access
+            # to the verbs and headers the frontend actually uses.
+            allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+            allow_headers=["Authorization", "Content-Type", "Accept"],
         )
 
     # Health check
