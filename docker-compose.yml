@@ -9,6 +9,11 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jarvis -d jarvis"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
 
   redis:
     image: redis:7-alpine
@@ -56,6 +61,46 @@ services:
       MCP_ENABLE_OAUTH21: "true"
       EXTERNAL_OAUTH21_PROVIDER: "true"
       WORKSPACE_MCP_STATELESS_MODE: "true"
+    restart: unless-stopped
+
+  # ── Application services (profile "app") ──────────────────────────────────
+  # Bare `docker compose up` starts infra only (preserving the native
+  # `python run.py` dev loop). `docker compose --profile app up` additionally
+  # builds and runs the API+worker and the frontend — the one-command stack.
+  api:
+    build:
+      context: ./backend
+    profiles: ["app"]
+    env_file:
+      - ./backend/.env
+    environment:
+      # Point the app at the compose service hostnames (override any localhost
+      # values in .env). The only value the user must supply is the Anthropic key.
+      JARVIS_DATABASE_URL: postgresql+asyncpg://jarvis:jarvis@postgres:5432/jarvis
+      JARVIS_REDIS_URL: redis://redis:6379/0
+      JARVIS_QDRANT_URL: http://qdrant:6333
+      JARVIS_NEO4J_URL: bolt://neo4j:7687
+      JARVIS_NEO4J_USER: neo4j
+      JARVIS_NEO4J_PASSWORD: jarvisdev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./frontend
+    profiles: ["app"]
+    environment:
+      BACKEND_URL: http://api:8000
+    depends_on:
+      - api
+    ports:
+      - "3000:3000"
     restart: unless-stopped
 
 volumes:

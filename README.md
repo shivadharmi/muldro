@@ -87,22 +87,44 @@ Only Planner decides intent. Only Operator executes external actions. Only Prese
 
 ## Quick Start
 
+The only thing you must provide is an Anthropic API key. Everything else —
+Postgres, Redis, Qdrant, Neo4j, the backend (API + background worker) and the
+Next.js frontend — comes up together in Docker.
+
 ```bash
-# 1. Start infrastructure (Postgres, Redis, MinIO, Qdrant, Neo4j)
+# 1. Prerequisites: Docker + Docker Compose, and an Anthropic API key
+#    (get one at https://console.anthropic.com)
+
+# 2. Provide your key
+cp .env.minimal backend/.env
+#    then edit backend/.env and set JARVIS_ANTHROPIC_API_KEY
+
+# 3. Build and start the whole stack (migrations run automatically on first boot)
+docker compose --profile app up
+
+# 4. Open the app
+#    Frontend → http://localhost:3000
+#    API      → http://localhost:8000/v1/health
+```
+
+> Bare `docker compose up` (without `--profile app`) starts **infrastructure
+> only** — use that for the native development loop below.
+
+### Develop natively (hot reload)
+
+```bash
+# Infrastructure only
 docker compose up -d
 
-# 2. Set up backend
+# Backend
 cd backend
 uv venv .venv --python 3.13 && source .venv/bin/activate
 uv pip install -e ".[dev]"
-cp .env.example .env  # edit with your API keys
+cp .env.example .env          # edit with your keys
 alembic upgrade head
-python run.py
+python run.py --worker        # add --bot for the Telegram bot
 
-# 3. Full system (API + background workers + Telegram bot)
-python run.py --worker --bot
-
-# 4. Frontend (optional)
+# Frontend
 cd frontend && npm install && npm run dev
 ```
 
