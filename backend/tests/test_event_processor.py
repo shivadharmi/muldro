@@ -290,3 +290,106 @@ def test_make_idempotency_key_empty_message_id():
         raw_payload={"message_id": ""},
     )
     assert make_idempotency_key(raw) == "slack:ch_001:message_posted"
+
+
+# ── FIX #4 — trigger evaluation must be workspace-scoped ────────────────────
+
+
+def _make_normalized_event(event_id: str = "evt_x", workspace_id: str = "ws_a"):
+    """Minimal NormalizedEvent-like stub for _evaluate_triggers."""
+    event = MagicMock()
+    event.event_id = event_id
+    event.workspace_id = workspace_id
+    event.title = "t"
+    event.event_type = "message"
+    event.urgency_score = 0.5
+    return event
+
+
+@pytest.mark.asyncio
+async def test_evaluate_triggers_filters_by_workspace(settings):
+    """_evaluate_triggers must include a workspace_id predicate in its query so a
+    trigger owned by another workspace under the same user cannot fire."""
+    db = MagicMock()
+    db.flush = AsyncMock()
+    result_mock = MagicMock()
+    result_mock.scalars.return_value.all.return_value = []
+    db.execute = AsyncMock(return_value=result_mock)
+
+    processor = EventProcessor(settings=settings, db=db)
+    event = _make_normalized_event(workspace_id="ws_a")
+
+    await processor._evaluate_triggers(event, TEST_USER_ID, workspace_id="ws_a")
+
+    db.execute.assert_awaited_once()
+    stmt = db.execute.await_args[0][0]
+    compiled = stmt.compile(compile_kwargs={"literal_binds": True})
+    sql = str(compiled)
+    # Both the user_id AND the workspace_id columns must appear in the WHERE clause.
+    assert "user_id" in sql
+    assert "workspace_id" in sql
+    assert "ws_a" in sql
+
+
+@pytest.mark.asyncio
+async def test_evaluate_triggers_cross_workspace_does_not_fire(settings):
+    """A trigger belonging to workspace B must NOT fire for an event in workspace A
+    under the same user. Because the query is workspace-scoped, the DB returns no
+    rows for ws_a (the ws_b trigger is filtered out at the query level), so no
+    action executes and no trigger.fired event is published."""
+    db = MagicMock()
+    db.flush = AsyncMock()
+
+    # Simulate the workspace-scoped query: querying ws_a returns NO triggers,
+    # because the only trigger belongs to ws_b. A non-scoped query would have
+    # returned it and fired it cross-tenant.
+    result_mock = MagicMock()
+    result_mock.scalars.return_value.all.return_value = []
+    db.execute = AsyncMock(return_value=result_mock)
+
+    processor = EventProcessor(settings=settings, db=db)
+    processor._execute_trigger_action = AsyncMock()
+    processor._event_bus = MagicMock()
+    processor._event_bus.publish = AsyncMock()
+
+    event = _make_normalized_event(workspace_id="ws_a")
+    await processor._evaluate_triggers(event, TEST_USER_ID, workspace_id="ws_a")
+
+    # Nothing fired across the tenant boundary.
+    processor._execute_trigger_action.assert_not_called()
+    processor._event_bus.publish.assert_not_called()
+
+    # And the query was genuinely scoped to ws_a.
+    stmt = db.execute.await_args[0][0]
+    sql = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+    assert "workspace_id" in sql and "ws_a" in sql
+
+
+@pytest.mark.asyncio
+async def test_evaluate_triggers_same_workspace_fires(settings):
+    """A matching trigger in the SAME workspace as the event DOES fire."""
+    db = MagicMock()
+    db.flush = AsyncMock()
+
+    trigger = MagicMock()
+    trigger.trigger_id = "trg_a"
+    trigger.name = "ws_a trigger"
+    trigger.cooldown_until = None
+    trigger.fire_count = 0
+    trigger.action_config = {}
+    trigger.action_type = "notify"
+
+    result_mock = MagicMock()
+    result_mock.scalars.return_value.all.return_value = [trigger]
+    db.execute = AsyncMock(return_value=result_mock)
+
+    processor = EventProcessor(settings=settings, db=db)
+    processor._trigger_matches = MagicMock(return_value=True)
+    processor._execute_trigger_action = AsyncMock()
+    processor._event_bus = None  # skip publish path
+
+    event = _make_normalized_event(workspace_id="ws_a")
+    await processor._evaluate_triggers(event, TEST_USER_ID, workspace_id="ws_a")
+
+    processor._execute_trigger_action.assert_awaited_once()
+    assert trigger.fire_count == 1

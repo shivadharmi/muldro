@@ -773,6 +773,48 @@ class GraphExecutor:
                 "capability", (step.input_data or {}).get("task_type", "")
             )
 
+            # ── Fail-closed contract guard ───────────────────────────────
+            # The Planner ALWAYS emits a capability per PlanStep (see CLAUDE.md),
+            # so an empty capability reaching the approval gate is contract drift,
+            # not a normal case. Previously control fell through past the gate and
+            # the step auto-executed with NO risk assessment and NO approval — a
+            # write step with a dropped/misnamed capability would run ungated.
+            # When a TrustEngine is present (i.e. the autonomous, gated path), we
+            # refuse to execute and fail the step as a contract violation instead
+            # of silently auto-executing. This mirrors how the executor terminates
+            # other unexecutable steps (timeout/failure) and surfaces the drift
+            # loudly rather than risking an ungated external write.
+            if self._trust_engine and not capability:
+                logger.error(
+                    "Step %s reached approval gate with empty capability "
+                    "(input_data keys=%s) — failing closed as contract violation",
+                    step.step_id,
+                    sorted((step.input_data or {}).keys()),
+                )
+                transition_step(step, "running")
+                transition_step(step, "failed")
+                step.completed_at = datetime.now(timezone.utc)
+                step.output_data = {"error": "contract_violation: empty capability"}
+                step.error = {
+                    "message": (
+                        "Step has no capability; refusing to execute ungated "
+                        "(TrustEngine contract violation)"
+                    ),
+                    "final": True,
+                }
+                await self._db.flush()
+                await self._emit_event(
+                    "step.failed",
+                    run.user_id,
+                    {
+                        "run_id": run.run_id,
+                        "step_id": step.step_id,
+                        "error": "contract_violation: empty capability",
+                    },
+                    workspace_id=run.workspace_id,
+                )
+                return
+
             if self._trust_engine and capability:
                 # ── Single TrustEngine gate ──────────────────────────
                 risk = await self._assess_step_risk(capability, step, run)

@@ -7,6 +7,7 @@ _call_agent_stream() into a single async generator that yields typed events.
 import asyncio
 import json
 import logging
+import re
 import time
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
@@ -15,9 +16,83 @@ from typing import Any
 import anthropic
 
 from src.orchestrator.contracts import SpanToolCall
-from src.orchestrator.hooks import audit_post_tool_hook, governor_pre_tool_hook
+from src.orchestrator.hooks import _sanitize_secrets, audit_post_tool_hook, governor_pre_tool_hook
+from src.services.tool_registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
+
+# Max chars persisted per span field after serialization. Live tool results are
+# unaffected — this only caps/redacts what gets written into trace spans.
+_MAX_SPAN_FIELD_CHARS = 20_000
+
+# Keys whose values are redacted wholesale during structure-preserving sanitization.
+_SECRET_KEY_RE = re.compile(
+    r"(api[_-]?key|token|password|secret|authorization|access_token"
+    r"|refresh_token|client_secret)",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_for_span(value: Any) -> Any:
+    """Redact secrets and truncate large values before persisting to a trace span.
+
+    Structure-preserving: dicts/lists keep their shape so trace replay stays
+    useful; secret-like keys are redacted wholesale and string values are
+    pattern-scrubbed. Does NOT alter the live result returned to the agent loop
+    — only the copy written into SpanToolCall.input_data / output_data.
+    """
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for k, v in value.items():
+            if isinstance(k, str) and _SECRET_KEY_RE.search(k):
+                out[k] = "***REDACTED***"
+            else:
+                out[k] = _sanitize_for_span(v)
+        return out
+    if isinstance(value, list):
+        return [_sanitize_for_span(v) for v in value]
+    if isinstance(value, str):
+        redacted = _sanitize_secrets(value)
+        if len(redacted) > _MAX_SPAN_FIELD_CHARS:
+            redacted = redacted[:_MAX_SPAN_FIELD_CHARS] + "...[truncated]"
+        return redacted
+    return value
+
+
+async def _capability_in_scope(
+    tool_name: str,
+    agent,  # SubAgent
+    db_factory,
+    workspace_id: str,
+) -> bool:
+    """Capability-scope enforcement for tool execution (fail-closed for known caps).
+
+    Mirrors JarvisOrchestrator._get_tools_for_agent: a tool is permitted only if
+    its registry capability is present in the agent's capability_scope.
+
+    Policy for capability=None / unresolved tools: these are NEVER offered to any
+    agent by _get_tools_for_agent (it requires tool_def.capability and membership
+    in scope), so if such a call reaches here it was not legitimately offered —
+    reject it. If the registry cannot be consulted at all (no db_factory), we
+    cannot classify the tool, so we fail closed. No reachable write path calls
+    this with db_factory=None (GraphExecutor only invokes agent_loop when its
+    db_factory is set; the chat path always passes one), so this is
+    defense-in-depth, not a functional gate.
+    """
+    scope = getattr(agent, "capability_scope", None)
+    # Agents with no scope get no tools offered; nothing legitimate to allow.
+    if not scope:
+        return False
+    if db_factory is None:
+        return False
+    async with db_factory() as db:
+        registry = ToolRegistry(db, workspace_id=workspace_id or None)
+        tool = await registry.get_tool(tool_name)
+    if tool is None or not getattr(tool, "capability", None):
+        return False
+    return tool.capability in scope
 
 
 # ── Loop Event Types (internal, never serialized to SSE directly) ──
@@ -431,6 +506,49 @@ async def agent_loop(
                     )
                     continue
 
+                # Capability-scope enforcement (fail-closed). An agent that calls
+                # a tool outside its capability_scope is rejected before execution.
+                # Orthogonal to TrustEngine approval — purely "is this agent
+                # permitted to call this tool per its capability scope".
+                if not await _capability_in_scope(tool_name, agent, db_factory, workspace_id):
+                    scope_msg = {
+                        "error": (
+                            f"Agent '{agent_name}' is not permitted to call "
+                            f"'{tool_name}' — capability is outside its scope."
+                        ),
+                    }
+                    logger.warning(
+                        "[tool] %s DENIED %s — out of capability scope",
+                        agent_name,
+                        tool_name,
+                    )
+                    tool_results.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tool_block.id,
+                            "content": json.dumps(scope_msg),
+                            "is_error": True,
+                        }
+                    )
+                    tool_call_details.append(
+                        SpanToolCall(
+                            tool_name=tool_name,
+                            input_data=_sanitize_for_span(tool_input)
+                            if isinstance(tool_input, dict)
+                            else {},
+                            output_data=_sanitize_for_span(scope_msg),
+                            status="blocked",
+                            error=scope_msg["error"][:200],
+                        )
+                    )
+                    yield LoopToolResult(
+                        agent=agent_name,
+                        tool_name=tool_name,
+                        result=scope_msg,
+                        blocked=True,
+                    )
+                    continue
+
                 tool_start = time.time()
                 try:
                     result = await asyncio.wait_for(
@@ -473,12 +591,17 @@ async def agent_loop(
                     }
                 )
 
-                persisted_output: Any = result
+                # Redact secrets + truncate before persisting to the trace span.
+                # Does NOT affect the live result returned to the loop (above).
+                persisted_output: Any = _sanitize_for_span(result)
+                persisted_input: Any = (
+                    _sanitize_for_span(tool_input) if isinstance(tool_input, dict) else {}
+                )
 
                 tool_call_details.append(
                     SpanToolCall(
                         tool_name=tool_name,
-                        input_data=tool_input if isinstance(tool_input, dict) else {},
+                        input_data=persisted_input,
                         output_data=persisted_output,
                         status="error" if is_error else "success",
                         error=result.get("error", "")[:200] if is_error else None,

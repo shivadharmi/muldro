@@ -286,6 +286,16 @@ class EventProcessor:
         self, event: NormalizedEvent, user_id: str, workspace_id: str = ""
     ) -> None:
         """Evaluate active triggers against a new event. Fire matching ones."""
+        # Fail-safe: never evaluate triggers without a concrete workspace —
+        # an empty workspace_id would scope the query to workspace "" and could
+        # match/fire triggers across tenant boundaries.
+        if not workspace_id:
+            logger.warning(
+                "Skipping trigger evaluation: empty workspace_id (user=%s, event=%s)",
+                user_id,
+                getattr(event, "event_id", "?"),
+            )
+            return
         try:
             from src.models.triggers import Trigger
 
@@ -293,6 +303,7 @@ class EventProcessor:
             result = await self._db.execute(
                 select(Trigger).where(
                     Trigger.user_id == user_id,
+                    Trigger.workspace_id == workspace_id,
                     Trigger.enabled.is_(True),
                 )
             )

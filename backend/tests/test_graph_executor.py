@@ -646,3 +646,138 @@ class TestCapabilityFieldReading:
         input_data = {}
         result = input_data.get("capability", input_data.get("task_type", "unknown"))
         assert result == "unknown"
+
+
+class TestExecuteStepEmptyCapabilityFailsClosed:
+    """FIX #2 — a step with empty/missing capability must NOT auto-execute ungated.
+
+    Per CLAUDE.md the Planner ALWAYS emits a capability per PlanStep, so an empty
+    capability reaching the TrustEngine gate is contract drift. The gate must
+    fail-closed: the step is failed as a contract violation and never reaches the
+    auto-execute path (no risk assessment, no tool action).
+    """
+
+    @patch("src.services.graph_executor.get_anthropic_client")
+    async def test_empty_capability_with_trust_engine_does_not_execute(
+        self, mock_client, settings, mock_db
+    ):
+        mock_client.return_value = MagicMock()
+        from src.services.graph_executor import GraphExecutor
+
+        executor = GraphExecutor(settings, mock_db)
+
+        # TrustEngine present — this is the dangerous case (fail-OPEN previously).
+        trust_engine = MagicMock()
+        trust_engine.evaluate = AsyncMock()
+        executor._trust_engine = trust_engine
+
+        # Spy on the execution-side helpers — none must be called.
+        executor._assess_step_risk = AsyncMock()
+        executor._run_step_action = AsyncMock(return_value={"status": "completed"})
+        executor._resolve_step_references = AsyncMock(return_value={})
+        executor._finalize_step = AsyncMock()
+        executor._emit_event = AsyncMock()
+
+        step = MagicMock()
+        step.step_id = "step_empty_cap"
+        step.status = "ready"
+        step.input_data = {"goal": "do something dangerous"}  # NO capability / task_type
+        step.started_at = None
+        step.name = "Dangerous write"
+        step.timeout_seconds = None
+        step.retry_count = 0
+        step.max_retries = 3
+
+        run = MagicMock()
+        run.run_id = "run_empty_cap"
+        run.user_id = "usr_test"
+        run.workspace_id = "ws_test"
+        run.status = "running"
+
+        await executor._execute_step(run, step)
+
+        # Fail-closed: never assessed risk, never evaluated trust, never ran the action.
+        trust_engine.evaluate.assert_not_called()
+        executor._assess_step_risk.assert_not_called()
+        executor._run_step_action.assert_not_called()
+        executor._finalize_step.assert_not_called()
+        # Step ended in a terminal non-execution state (failed contract violation).
+        assert step.status == "failed"
+
+    @patch("src.services.graph_executor.get_anthropic_client")
+    async def test_empty_capability_missing_input_data_does_not_execute(
+        self, mock_client, settings, mock_db
+    ):
+        """input_data is None entirely → still fail-closed, not ungated execution."""
+        mock_client.return_value = MagicMock()
+        from src.services.graph_executor import GraphExecutor
+
+        executor = GraphExecutor(settings, mock_db)
+        trust_engine = MagicMock()
+        trust_engine.evaluate = AsyncMock()
+        executor._trust_engine = trust_engine
+        executor._run_step_action = AsyncMock(return_value={"status": "completed"})
+        executor._finalize_step = AsyncMock()
+        executor._emit_event = AsyncMock()
+
+        step = MagicMock()
+        step.step_id = "step_no_input"
+        step.status = "ready"
+        step.input_data = None
+        step.started_at = None
+        step.name = "No input"
+        step.timeout_seconds = None
+        step.retry_count = 0
+        step.max_retries = 3
+
+        run = MagicMock()
+        run.run_id = "run_no_input"
+        run.user_id = "usr_test"
+        run.workspace_id = "ws_test"
+        run.status = "running"
+
+        await executor._execute_step(run, step)
+
+        trust_engine.evaluate.assert_not_called()
+        executor._run_step_action.assert_not_called()
+        executor._finalize_step.assert_not_called()
+        assert step.status == "failed"
+
+    @patch("src.services.graph_executor.get_anthropic_client")
+    async def test_resumed_step_skips_gate(self, mock_client, settings, mock_db):
+        """Already-approved (status == 'running') steps bypass the gate entirely and
+        execute via the common path — the fail-closed guard must not break resume."""
+        mock_client.return_value = MagicMock()
+        from src.services.graph_executor import GraphExecutor
+
+        executor = GraphExecutor(settings, mock_db)
+        trust_engine = MagicMock()
+        trust_engine.evaluate = AsyncMock()
+        executor._trust_engine = trust_engine
+        executor._run_step_action = AsyncMock(return_value={"status": "completed"})
+        executor._resolve_step_references = AsyncMock(return_value={})
+        executor._finalize_step = AsyncMock()
+        executor._emit_event = AsyncMock()
+
+        step = MagicMock()
+        step.step_id = "step_resumed"
+        step.status = "running"  # already approved → already_approved=True
+        step.input_data = {"goal": "resumed"}  # empty capability, but already approved
+        step.started_at = None
+        step.name = "Resumed"
+        step.timeout_seconds = None
+        step.retry_count = 0
+        step.max_retries = 3
+
+        run = MagicMock()
+        run.run_id = "run_resumed"
+        run.user_id = "usr_test"
+        run.workspace_id = "ws_test"
+        run.status = "running"
+
+        await executor._execute_step(run, step)
+
+        # Resumed path: gate skipped, action runs, finalized.
+        trust_engine.evaluate.assert_not_called()
+        executor._run_step_action.assert_called_once()
+        executor._finalize_step.assert_called_once()

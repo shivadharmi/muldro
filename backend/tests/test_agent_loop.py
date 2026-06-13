@@ -24,7 +24,10 @@ class FakeThinkingConfig:
 class FakeSubAgent:
     name: str = "test_agent"
     model_tier: str = "sonnet"
-    capability_scope: set = field(default_factory=set)
+    # Non-empty by default so capability-scope enforcement (FIX #1) does not
+    # block tools in tests that exercise other behaviors. Tests that assert
+    # scope rejection pass an explicit scope + patch ToolRegistry.
+    capability_scope: set = field(default_factory=lambda: {"test.cap"})
     max_tokens: int = 4096
     temperature: float = 0.3
     thinking: FakeThinkingConfig = field(default_factory=FakeThinkingConfig)
@@ -108,6 +111,21 @@ async def _collect_events(gen):
 
 
 class TestAgentLoop:
+    @pytest.fixture(autouse=True)
+    def _default_in_scope_registry(self):
+        """By default, resolve tools to the FakeSubAgent's default capability
+        ("test.cap") so capability-scope enforcement permits them. Tests that
+        exercise scope rejection wrap their own patch("...ToolRegistry"), which
+        takes precedence inside their context."""
+        from unittest.mock import patch as _patch
+
+        fake_tool = MagicMock()
+        fake_tool.capability = "test.cap"
+        registry = MagicMock()
+        registry.get_tool = AsyncMock(return_value=fake_tool)
+        with _patch("src.orchestrator.agent_loop.ToolRegistry", return_value=registry):
+            yield
+
     @pytest.fixture
     def client(self):
         c = AsyncMock()
@@ -590,6 +608,158 @@ class TestAgentLoop:
         assert record.cache_creation_input_tokens == 5
         assert record.cache_read_input_tokens == 10
         assert record.trigger == "tool:search_memory"
+
+    async def test_out_of_scope_tool_rejected(self, client, trace):
+        """Agent calling a tool whose capability is NOT in its scope is rejected
+        with is_error, and execute_tool_fn is NOT called (FIX #1, fail-closed)."""
+        from src.orchestrator.agent_loop import LoopToolResult, agent_loop
+
+        # Presenter-like agent: read/respond scope, no write capabilities.
+        presenter = FakeSubAgent(name="presenter", capability_scope={"internal.search"})
+
+        client.messages.create = AsyncMock(
+            side_effect=[
+                make_tool_response("gmail_send_email", {"to": "x@y.com"}),
+                make_text_response("Done"),
+            ]
+        )
+
+        tool_fn = AsyncMock(return_value={"ok": True})
+
+        # Registry resolves gmail_send_email → capability email.send (out of scope)
+        fake_tool = MagicMock()
+        fake_tool.capability = "email.send"
+        registry = MagicMock()
+        registry.get_tool = AsyncMock(return_value=fake_tool)
+
+        with patch("src.orchestrator.agent_loop.ToolRegistry", return_value=registry):
+            events = await _collect_events(
+                agent_loop(
+                    client=client,
+                    agent=presenter,
+                    model="claude-sonnet-4-20250514",
+                    system_blocks=[],
+                    tools=[{"name": "gmail_send_email", "description": "Send", "input_schema": {}}],
+                    message="Send email",
+                    user_id="usr_test",
+                    workspace_id="ws_test",
+                    db_factory=_make_db_factory(),
+                    services=MagicMock(),
+                    budget=_make_budget(),
+                    trace=trace,
+                    execute_tool_fn=tool_fn,
+                )
+            )
+
+        blocked_results = [e for e in events if isinstance(e, LoopToolResult) and e.blocked]
+        assert len(blocked_results) == 1
+        assert "scope" in str(blocked_results[0].result).lower()
+        tool_fn.assert_not_called()
+
+    async def test_in_scope_tool_proceeds(self, client, trace):
+        """Agent calling a tool whose capability IS in scope proceeds normally."""
+        from src.orchestrator.agent_loop import LoopToolResult, agent_loop
+
+        perceiver = FakeSubAgent(name="perceiver", capability_scope={"internal.search"})
+
+        client.messages.create = AsyncMock(
+            side_effect=[
+                make_tool_response("search_memory", {"query": "x"}),
+                make_text_response("Found"),
+            ]
+        )
+
+        tool_fn = AsyncMock(return_value={"results": []})
+
+        fake_tool = MagicMock()
+        fake_tool.capability = "internal.search"
+        registry = MagicMock()
+        registry.get_tool = AsyncMock(return_value=fake_tool)
+
+        with patch("src.orchestrator.agent_loop.ToolRegistry", return_value=registry):
+            events = await _collect_events(
+                agent_loop(
+                    client=client,
+                    agent=perceiver,
+                    model="claude-sonnet-4-20250514",
+                    system_blocks=[],
+                    tools=[{"name": "search_memory", "description": "Search", "input_schema": {}}],
+                    message="Search",
+                    user_id="usr_test",
+                    workspace_id="ws_test",
+                    db_factory=_make_db_factory(),
+                    services=MagicMock(),
+                    budget=_make_budget(),
+                    trace=trace,
+                    execute_tool_fn=tool_fn,
+                )
+            )
+
+        blocked = [e for e in events if isinstance(e, LoopToolResult) and e.blocked]
+        assert len(blocked) == 0
+        tool_fn.assert_called_once()
+
+    async def test_secret_redacted_in_persisted_span(self, client, trace):
+        """FIX #3: secrets in tool output are redacted in persisted SpanToolCall,
+        but the live result returned to the loop is unchanged."""
+        from src.orchestrator.agent_loop import LoopDone, LoopToolResult, agent_loop
+
+        agent = FakeSubAgent(name="perceiver", capability_scope={"internal.search"})
+
+        client.messages.create = AsyncMock(
+            side_effect=[
+                make_tool_response("oauth_tool", {}),
+                make_text_response("Done"),
+            ]
+        )
+
+        secret_result = {
+            "access_token": "abcdef1234567890SECRET",
+            "password": "hunter2hunter2",
+            "data": "safe",
+        }
+        tool_fn = AsyncMock(return_value=secret_result)
+
+        fake_tool = MagicMock()
+        fake_tool.capability = "internal.search"
+        registry = MagicMock()
+        registry.get_tool = AsyncMock(return_value=fake_tool)
+
+        with patch("src.orchestrator.agent_loop.ToolRegistry", return_value=registry):
+            events = await _collect_events(
+                agent_loop(
+                    client=client,
+                    agent=agent,
+                    model="claude-sonnet-4-20250514",
+                    system_blocks=[],
+                    tools=[{"name": "oauth_tool", "description": "OAuth", "input_schema": {}}],
+                    message="Auth",
+                    user_id="usr_test",
+                    workspace_id="ws_test",
+                    db_factory=_make_db_factory(),
+                    services=MagicMock(),
+                    budget=_make_budget(),
+                    trace=trace,
+                    execute_tool_fn=tool_fn,
+                )
+            )
+
+        # Live result returned to the loop is UNCHANGED
+        tool_results = [e for e in events if isinstance(e, LoopToolResult)]
+        assert len(tool_results) == 1
+        assert tool_results[0].result == secret_result
+
+        # Persisted span output_data is redacted
+        done = [e for e in events if isinstance(e, LoopDone)]
+        assert len(done) == 1
+        span_calls = done[0].tool_call_details
+        assert len(span_calls) == 1
+        persisted = span_calls[0].output_data
+        persisted_str = str(persisted)
+        assert "abcdef1234567890SECRET" not in persisted_str
+        assert "hunter2hunter2" not in persisted_str
+        assert "REDACTED" in persisted_str
+        assert "safe" in persisted_str
 
     async def test_tool_token_usage_divided_across_multiple_tools(self, client, agent, trace):
         """When multiple tools called in one response, tokens are divided equally."""
