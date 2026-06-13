@@ -41,6 +41,27 @@ Adversarial review of the P0s rejected one false-positive bypass (perception pat
 tool-less, not an open gate) and added two hardening tweaks (fail-closed `db_factory`
 fallback; empty-`workspace_id` guard). See branch history.
 
+### Error handling (completed — separate user-reported issue, not from the review)
+
+Internal exception detail (raw `str(e)`, DSNs) was reaching the frontend via SSE, WS,
+REST, and execution surfaces. Root cause: no error boundary (zero exception handlers, no
+internal-vs-safe message split). Fixed on this branch:
+
+- **Boundary**: `src/errors.py` (domain `JarvisError` hierarchy + `{error:{code,message,correlation_id}}`
+  envelope + `safe_error_event`) and `src/api/error_handlers.py` (four handlers; catch-all
+  guarantees no raw exception escapes REST). `correlation_id` reuses the `TracingMiddleware`
+  request id (minted per-connection for WS).
+- **Channels swept**: SSE/WS/orchestrator stream, REST routes (auth `str(e)` → domain
+  exceptions; envelope standardized), service-surfaced error fields, frontend consumers
+  (`lib/api-error.ts`).
+- **Review-found leaks fixed**: `run.error` written with `str(exc)` in `resume_run`
+  (`graph_executor.py`) and `_mark_run_failed_after_resume` (`routes_approvals.py`) — both
+  served verbatim by the history API — now store safe fields only; WS `HTTPException` frames
+  and tool-failure results no longer carry raw detail.
+- All catch sites route through `errorToMessage()` on the frontend (login/settings included).
+
+This subsumes any future "error handling" findings; it is not tracked as a P-item below.
+
 ---
 
 ## 3. Cross-cutting themes (execution view — batch these)
