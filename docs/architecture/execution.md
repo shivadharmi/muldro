@@ -157,7 +157,7 @@ All execution boundaries use typed contracts from `src/orchestrator/contracts.py
 - **StepResult** — Wraps the outcome of each TaskStep execution (status, output_data, error, duration)
 - **ToolCallRequest** — Typed request for tool invocation (tool_name, arguments, requires_approval)
 - **ToolCallResult** — Typed result from tool invocation (success, output, error, duration)
-- **SurfaceUpdate** — Live execution surface event (run_id, status, step_summary, progress). Emitted at 9 points in GraphExecutor: plan_ready, executing, step_started, step_completed, step_failed, approval_needed, approval_resolved, completed, failed.
+- **SurfaceUpdate** — Live execution surface event (run_id, status, step_summary, progress). Emitted in GraphExecutor at: plan_ready, executing, step_started, step_completed, step_failed, approval_needed, approval_resolved, completed, failed.
 - **InsightSurfaceData** — Structured data for insight-type surfaces pushed during execution.
 
 These contracts ensure structured data flows between GraphExecutor, tool dispatch, memory writeback, and live UI surfaces.
@@ -182,7 +182,7 @@ Step action request
     └── ToolRegistry.get_tool(name) → match backend:
         │
         ├── internal_mcp → In-process FastMCP (intelligence + communication servers)
-        │   19 tools: search, ingest_event, send_telegram, etc.
+        │   Tools: search, ingest_event, send_telegram, etc.
         │
         ├── external_mcp → MCP Bridge (external servers)
         │   Google Workspace, GitHub, Slack, Notion, Linear,
@@ -191,7 +191,7 @@ Step action request
         └── composite → Multi-MCP orchestration (e.g., web_search)
 ```
 
-Tool identity is defined in `catalog.py` (163 seeds). Unknown MCP tools auto-register on discovery.
+Tool identity is defined in `catalog.py`. Unknown MCP tools auto-register on discovery.
 
 ## Checkpoints
 

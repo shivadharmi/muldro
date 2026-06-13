@@ -38,7 +38,7 @@ sequenceDiagram
     APP->>APP: Initialize SurfaceRegistry
 
     Note over APP,DB: Seed Configuration
-    APP->>DB: ToolRegistry.seed_defaults() (163 tools from catalog.py)
+    APP->>DB: ToolRegistry.seed_defaults() (tools from catalog.py)
     APP->>DB: AgentRegistry.seed_defaults() (7 agents)
 
     Note over APP,DB: Validate Registry

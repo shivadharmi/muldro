@@ -29,14 +29,14 @@ User <-> Telegram Bot / Next.js Frontend (A2UI)
 
 **Key paths:**
 - Orchestrator + agents: `backend/src/orchestrator/` (jarvis.py, agents.py, agent_loop.py, hooks.py, prompts.py, tracing.py, budget.py, perception.py, recovery.py, intent_classifier.py, api_circuit_breaker.py, capability_summary.py, services.py)
-- Services (business logic): `backend/src/services/` (71 files — planner, governor, operator, presenter, memory_service, world_model, event_processor, capability_resolver, risk_assessor, trust_engine, relevance_assessor, engagement_service, eviction_service, briefing_read_model, surface_detail_builders, etc.)
+- Services (business logic): `backend/src/services/` — planner, governor, operator, presenter, memory_service, world_model, event_processor, capability_resolver, risk_assessor, trust_engine, etc.
 - Tool layer: `backend/src/tools/` (catalog.py, schemas.py, validation.py, intelligence_server.py, communication_server.py, server.py)
 - Runtime contracts: `backend/src/orchestrator/contracts.py` (PlanOutput, PlanStep, CapabilityGap, PolicyDecision, SurfaceUpdate, InsightSurfaceData, StepResult, ToolCallRequest, DomainEvent, WorkspaceSurfacePush)
 - A2UI component system: `backend/src/ui/` (contracts.py, renderer.py)
 - A2UI surface builder: `backend/src/services/surface_builder.py` (SurfaceService) + `surface_detail_builders.py`
-- API routes: `backend/src/api/` (31 routers, all `/v1/` prefixed)
-- SQLAlchemy models: `backend/src/models/` (41 files, all workspace-scoped)
-- Frontend: `frontend/src/` (Next.js + A2UI renderer + chat split-pane, 7 pages)
+- API routes: `backend/src/api/` — all `/v1/` prefixed
+- SQLAlchemy models: `backend/src/models/` — all workspace-scoped
+- Frontend: `frontend/src/` (Next.js + A2UI renderer + chat split-pane)
 - Infra: `infra/` (Terraform for AWS) + `docker-compose.yml` (local dev)
 
 ## Commands
@@ -157,7 +157,7 @@ Multi-step plans trigger GraphExecutor for DAG management (dependencies, checkpo
 
 ## Unified Tool Registry
 
-Tool identity lives in 2 files: `src/tools/catalog.py` (definitions) + `src/tools/intelligence_server.py` (implementations). All tools are served through MCP — no native connectors. 23 internal tools + ~120 external tool seeds.
+Tool identity lives in 2 files: `src/tools/catalog.py` (definitions) + `src/tools/intelligence_server.py` (implementations). All tools are served through MCP — no native connectors. Internal tools + external tool seeds.
 
 **Adding tools:**
 - New internal tool: edit `catalog.py` (add `InternalToolDef`) + `schemas.py` (add Pydantic input model) + `intelligence_server.py` (add MCP function)
@@ -168,13 +168,14 @@ Tool identity lives in 2 files: `src/tools/catalog.py` (definitions) + `src/tool
 - `internal_mcp` → `_call_internal_tool()` with `server_prefix` from registry
 - `external_mcp` → `call_mcp_tool()` with real MCP name (no normalization)
 - `composite` → `_call_composite_tool()` (e.g., `web_search`)
-- `_special` → return input as-is (e.g., `report_governor_verdict`)
+
+The `_special` value is a `server` (not a `backend`): tools with `backend="internal_mcp"` and `server="_special"` (e.g., `report_governor_verdict`) are intercepted before the backend match and returned as-is (input passed through, no MCP call).
 
 **Authorization:** `SubAgent.can_use_tool()` does one registry lookup for capability, checks against agent's `capability_scope`. No normalizer chain.
 
 **Approval policy:** Handled by TrustEngine (`src/services/trust_engine.py`) — a deterministic 4×4 matrix (trust_level × risk_level) in GraphExecutor, not Governor. Governor hooks are now audit-only.
 
-**Startup:** `seed_defaults()` reads from `INTERNAL_TOOLS` + `EXTERNAL_TOOL_SEEDS` in catalog.py → upserts into `tool_definitions` table. `validate_registry()` runs 6 cross-checks. `JARVIS_SKIP_REGISTRY_VALIDATION=true` disables validation in emergencies.
+**Startup:** `seed_defaults()` reads from `INTERNAL_TOOLS` + `EXTERNAL_TOOL_SEEDS` in catalog.py → upserts into `tool_definitions` table. `validate_registry()` runs startup cross-checks. `JARVIS_SKIP_REGISTRY_VALIDATION=true` disables validation in emergencies.
 
 **Key files:**
 - Catalog: `src/tools/catalog.py` (InternalToolDef, ExternalToolSeed, INTERNAL_TOOLS, EXTERNAL_TOOL_SEEDS)
@@ -185,7 +186,7 @@ Tool identity lives in 2 files: `src/tools/catalog.py` (definitions) + `src/tool
 
 ## Agent Prompt Architecture
 
-System prompts (`src/orchestrator/prompts.py`, 638 lines):
+System prompts (`src/orchestrator/prompts.py`):
 - `JARVIS_SOUL_CORE` — shared by all 7 agents (role, agent table, rules, TrustEngine gates writes)
 - `PLANNER_PROMPT_V2` — 7-step capability-based decomposition engine (replaces decision classification)
 - `PERCEIVER_PROMPT` — 7-step read-only methodology with JSON output (findings, synthesis, gaps, confidence)
@@ -203,7 +204,7 @@ Fast Haiku-based intent classification is extracted into `src/orchestrator/inten
 - `intent_to_plan()` — synthesizes lightweight PlanOutput from fast intents (replaces `intent_to_decision`)
 - `extract_plan()` — parses structured JSON from Planner response text (replaces `extract_decision`)
 - `_match_read_capability()` — keyword-to-capability mapping for fast-path single reads
-- Constants: `FAST_INTENTS` (10 intents), `INTENT_CONFIDENCE_THRESHOLD` (0.7), `VALID_PERCEPTION_SOURCES`
+- Constants: `FAST_INTENTS`, `INTENT_CONFIDENCE_THRESHOLD` (0.7), `VALID_PERCEPTION_SOURCES`
 
 Fast intents (`greeting`, `chitchat`, `simple_question`, `data_fetch`, `status_query`, `approval_response`, `direct_answer`, `single_read`, `memory_operation`, `acknowledgment`) skip the Planner entirely and produce lightweight PlanOutput via `intent_to_plan()`.
 
@@ -224,7 +225,7 @@ SurfaceService (surface_builder.py) or _push_workspace_surface (jarvis.py)
   → produces A2UISurface with populated children[]
   → delivered via: GET /v1/workspace/surfaces (REST) or jarvis:a2ui:{user_id} (Redis → WebSocket)
   → persisted to ui_surfaces table (24h TTL)
-  → live execution updates via SurfaceUpdate (9 emission points in graph_executor.py)
+  → live execution updates via SurfaceUpdate (emission points in graph_executor.py)
 ```
 
 **Frontend pipeline:**
@@ -238,8 +239,8 @@ fetchWorkspaceSurfaces() or useJarvisWs hook (surface_update message type)
 ```
 
 **Key files:**
-- Contracts: `src/ui/contracts.py` (A2UIComponent, A2UISurface, ComponentType enum — 25+ types)
-- Builders: `src/ui/renderer.py` (36 builder functions: card, text, button, table, metric, etc.)
+- Contracts: `src/ui/contracts.py` (A2UIComponent, A2UISurface, ComponentType enum)
+- Builders: `src/ui/renderer.py` (builder functions: card, text, button, table, metric, etc.)
 - Surface builder: `src/services/surface_builder.py` (SurfaceService — builds workspace surfaces from DB)
 - Surface details: `src/services/surface_detail_builders.py` (trust context, approval preview, graduation hints)
 - WS surface push: `src/orchestrator/jarvis.py` `_push_workspace_surface()` + `_push_insight_surface()`
@@ -256,7 +257,7 @@ fetchWorkspaceSurfaces() or useJarvisWs hook (surface_update message type)
 
 **Capability → Surface mapping** (in `_push_workspace_surface`): derives surface kind from plan capabilities.
 
-**Live execution surfaces:** `SurfaceUpdate` contract (`contracts.py`) with phases: plan_ready → executing → approval_needed → completed/failed. 9 emission points in `graph_executor.py`. Frontend `StepList` shows status icons (○ ◉ ✓ ✗ ⚠ 👤).
+**Live execution surfaces:** `SurfaceUpdate` contract (`contracts.py`) with phases: plan_ready → executing → approval_needed → completed/failed. Multiple emission points in `graph_executor.py`. Frontend `StepList` shows status icons (○ ◉ ✓ ✗ ⚠ 👤).
 
 **Proactive insight surfaces:** `InsightSurfaceData` contract with signal summary, relevance reasoning, goals, suggested actions. Delivered via `_push_insight_surface()`. Dismissal tracked by `EngagementService` (3+ dismissals: penalty, 5+: suppressed). API: `POST /v1/insights/{surface_id}/dismiss`.
 
@@ -273,7 +274,7 @@ Single deterministic approval gate via `TrustEngine` (`src/services/trust_engine
 - **Trust graduation**: 3 approved → learning, 10 approved (<10% reject) → trusted, 25 approved (<5% reject) → autonomous.
 - **Trust demotion**: Rejection applies cooldowns (72h/48h/24h) with demotion ladder.
 - **Per-tool cost attribution**: `TokenUsage` with `trigger=f"tool:{tool_name}"` in `agent_loop.py`.
-- **Trust API**: 6 endpoints in `routes_trust.py` (dashboard, detail, ceiling, reset, time-policies GET+PUT).
+- **Trust API**: endpoints in `routes_trust.py` (dashboard, detail, ceiling, reset, time-policies GET+PUT).
 - **Frontend Trust tab**: Settings page with grouped-by-family display, progress bars, ceiling dropdown, reset.
 
 **Key files:** `src/services/risk_assessor.py`, `src/services/trust_engine.py`, `src/models/trust_state.py` (TrustState + TrustCeiling), `src/api/routes_trust.py`
@@ -282,15 +283,15 @@ Single deterministic approval gate via `TrustEngine` (`src/services/trust_engine
 
 `detected → planned → policy_checked → approved → executing → completed/failed`
 
-TaskRun statuses (12): `pending, running, paused, awaiting_approval, awaiting_input, completed, failed, cancelled, blocked, partially_completed, archived, timed_out`
+TaskRun statuses: `pending, running, paused, awaiting_approval, awaiting_input, completed, failed, cancelled, blocked, partially_completed, archived, timed_out`
 
-TaskStep statuses (10): `pending, ready, running, completed, failed, skipped, waiting_approval, awaiting_input, blocked, timed_out`
+TaskStep statuses: `pending, ready, running, completed, failed, skipped, waiting_approval, awaiting_input, blocked, timed_out`
 
 State transitions are enforced by `src/services/execution_state.py` — never mutate status directly, use `transition_run()` / `transition_step()`. Retry: `failed → pending`.
 
-**Single approval gate in GraphExecutor** (`graph_executor.py:589-637`): TrustEngine.evaluate() per step → approval_required pauses run, auto_execute_notify executes + notifies, auto_execute_silent executes silently. Governor hooks are now audit-only (`hooks.py` always returns `allowed: True` except for blocked tools).
+**Single approval gate in GraphExecutor** (`graph_executor.py`): TrustEngine.evaluate() per step → approval_required pauses run, auto_execute_notify executes + notifies, auto_execute_silent executes silently. Governor hooks are now audit-only (`hooks.py` always returns `allowed: True` except for blocked tools).
 
-**InteractionLog** (`src/models/interaction_log.py`): Lightweight audit record for simple interactions (replaces TaskRun for non-execution flows). 14 fields.
+**InteractionLog** (`src/models/interaction_log.py`): Lightweight audit record for simple interactions (replaces TaskRun for non-execution flows).
 
 **Eviction**: `EvictionService` (`src/services/eviction_service.py`) — 90-day retention with cascade cleanup (vector store + graph engine).
 
@@ -332,7 +333,7 @@ The system learns from execution outcomes and synthesizes across perception sour
 
 ## Multi-Tenant Workspace Isolation
 
-All data tables are scoped by `workspace_id` (NOT NULL FK to `workspaces`). Only 5 tables are user-level: `users`, `workspaces`, `workspace_members`, `sessions`, `magic_links`. Global table: `agents`. 41 model files, 62 migrations.
+All data tables are scoped by `workspace_id` (NOT NULL FK to `workspaces`). Only 5 tables are user-level: `users`, `workspaces`, `workspace_members`, `sessions`, `magic_links`. Global table: `agents`.
 
 - API routes: resolve workspace via `get_current_workspace_id()` dependency (reads from session, zero queries)
 - Background services: resolve via `resolve_workspace_id(db, user_id)` helper (queries WorkspaceMember)
@@ -342,6 +343,16 @@ All data tables are scoped by `workspace_id` (NOT NULL FK to `workspaces`). Only
 
 - Do NOT add `Co-Authored-By` lines to commit messages
 - Follow conventional commits: `<type>: <description>`
+
+## Documentation Maintenance
+
+**Code is the source of truth.** Docs (including this file) capture durable architecture, design intent, and invariants — not an inventory of the codebase.
+
+- **Never record volatile counts** — file/router/model/migration/test/tool counts, line numbers as identity, or exhaustive file lists. They rot within days and mislead agents into false precision. Name the directory and let the reader inspect it.
+- **Document the durable, not the incidental** — layering and one-way deps, boundary contracts, invariants, state machines, agent roles, and the *why* behind decisions. Skip anything trivially re-derivable from the code.
+- **Update docs only when an architectural fact changes** — a component added/removed, a contract/invariant/dependency changed, a concept renamed. Routine edits (adding a file, tool, migration, or test) require **no** doc change. When in doubt, leave the docs: a smaller doc that is correct beats a larger one that drifts.
+
+See [docs/engineering-standards.md](docs/engineering-standards.md) for the full standard.
 
 ## Common Mistakes
 

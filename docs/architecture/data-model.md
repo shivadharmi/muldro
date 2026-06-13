@@ -42,7 +42,7 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 
 ## Tables by Category
 
-### Authentication & Users (4 tables)
+### Authentication & Users
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
@@ -51,13 +51,13 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 | `oauth_connections` | - | user_id, provider, access_token_encrypted, refresh_token_encrypted, scopes (JSONB) | Unique on user+provider |
 | `workspaces` / `workspace_members` | - | Multi-tenant support with role (owner, admin, member) | |
 
-### Events (1 table)
+### Events
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
 | `normalized_events` | `evt_` | source, event_type, entity_type, entity_id, occurred_at, importance_score, urgency_score, correlation_id, idempotency_key | Unique on idempotency_key |
 
-### Knowledge Graph (3 tables)
+### Knowledge Graph
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
@@ -65,13 +65,13 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 | `entity_aliases` | - | entity_id (FK), alias_type, alias_value | Cascade delete |
 | `entity_relationships` | `rel_` | from_entity_id, relation_type, to_entity_id, strength, active | 17 relation types |
 
-### Memory (1 table)
+### Memory
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
 | `memories` | `mem_` | memory_type, fact_text, search_tsv (tsvector), confidence, stability_score, refresh_count, last_accessed_at, superseded_by, entity_ids (ARRAY), status | GIN index on entity_ids + search_tsv |
 
-### Plans & Execution (5 tables)
+### Plans & Execution
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
@@ -81,13 +81,13 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 | `task_steps` | `step_` | run_id (FK), task_id, step_type, depends_on (ARRAY), status (9 states: pending, running, completed, failed, skipped, cancelled, awaiting_approval, blocked, timed_out), input_data (JSONB), output_data (JSONB) | Cascade on run |
 | `task_checkpoints` | - | run_id (FK), step_id, state_snapshot (JSONB), reason | |
 
-### Governance (1 table)
+### Governance
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
 | `approvals` | `apr_` | execution_id, approval_type, title, risk_level, status (4 states), decided_at, expires_at, step_id, run_id | |
 
-### Observability (3 tables)
+### Observability
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
@@ -95,20 +95,20 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 | `model_calls` | - | trace_id (FK), agent_name, model, input_tokens, output_tokens, cost_usd, duration_ms, tools_called (ARRAY), decision | Cascade on trace |
 | `token_usage` | - | agent_name, model, input_tokens, output_tokens, cost_usd, trigger, trace_id, conversation_id | |
 
-### Agent Configuration (1 table)
+### Agent Configuration
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
 | `agents` | `agt_` | name (unique), display_name, system_prompt, model_tier, tool_scope (JSONB), max_tokens, temperature, enabled | |
 
-### Notifications & Triggers (2 tables)
+### Notifications & Triggers
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
 | `notifications` | `notif_` | channel, title, body, priority_score, status (5 states), sent_at, read_at, follow_up_at, payload_json (JSONB) | |
 | `triggers` | `trg_` | name, conditions (JSONB), action_type, action_config (JSONB), status (4 states), fire_count, last_fired_at, cooldown_until | |
 
-### Scheduling & Observation (2 tables)
+### Scheduling & Observation
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
@@ -117,14 +117,14 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 
 > **Note:** `observation_statuses` was consolidated into `perception_state` (see Perception & Runtime section below).
 
-### Conversations (2 tables)
+### Conversations
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
 | `conversations` | `conv_` | status, surface, last_active_at | |
 | `messages` | `msg_` | conversation_id (FK), role, content, metadata_ (JSONB) | |
 
-### Assets (3 tables)
+### Assets
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
@@ -132,13 +132,13 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 | `browser_sessions` | - | status, url, page_title, run_id, last_action_at | |
 | `browser_actions` | - | session_id (FK), action_type, selector, value, result_status, output_json (JSONB) | |
 
-### Tools (1 table)
+### Tools
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
 | `tool_definitions` | `tool_` | name (unique), version, input_schema (JSONB), output_schema (JSONB), risk_level, requires_approval, connector_type, enabled | |
 
-### Governance & Audit (3 tables)
+### Governance & Audit
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
@@ -146,21 +146,21 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 | `dead_letter_queue` | - | source, event_data (JSONB), error_message, retry_count, status | Failed event retry queue |
 | `agent_decision_logs` | - | agent_name, decision_type, input_summary, output_summary, trace_id | Agent decision audit trail |
 
-### Briefings (2 tables)
+### Briefings
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
 | `briefings` | - | user_id, briefing_type, content (JSONB), generated_at | Generated briefing snapshots |
 | `briefing_feedback` | - | briefing_id (FK), rating, feedback_text | User feedback on briefings |
 
-### Procedures & Working Memory (2 tables)
+### Procedures & Working Memory
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
 | `procedures` | - | name, description, steps (JSONB), trigger_conditions (JSONB), enabled | Reusable workflow procedures |
 | `working_memory` | - | user_id, conversation_id, context (JSONB), expires_at | Short-term conversation context |
 
-### UI & OAuth (3 tables)
+### UI & OAuth
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
@@ -168,7 +168,7 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 | `oauth_tokens` | - | connection_id (FK), token_type, token_encrypted, expires_at | Individual OAuth token storage |
 | `magic_links` | - | user_id, token_hash, expires_at, used_at | Passwordless auth links |
 
-### MCP & Integration Trust (4 tables)
+### MCP & Integration Trust
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
@@ -177,7 +177,7 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 | `capability_bindings` | - | server_name, capability, agent_name, enabled | Agent-to-MCP capability mapping |
 | `org_allowlists` | - | domain, approved_by, reason | Approved external domains |
 
-### Integration & Webhooks (3 tables)
+### Integration & Webhooks
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
@@ -185,7 +185,7 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 | `integration_audit_events` | - | integration_id (FK), action, details (JSONB) | Integration activity audit |
 | `webhook_subscriptions` | - | url, event_types (ARRAY), secret_hash, enabled | Inbound webhook registrations |
 
-### Trust & Engagement (4 tables)
+### Trust & Engagement
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
@@ -194,7 +194,7 @@ All data tables include `workspace_id` (`String(64)`, NOT NULL FK to `workspaces
 | `interaction_logs` | `int_` | workspace_id, user_id, trace_id, conversation_id, message_preview, plan_summary, plan_id, run_id, intent, response_preview, input_tokens, output_tokens, cost_usd, latency_ms | Lightweight audit for simple interactions (no TaskRun overhead) |
 | `engagement_history` | `eng_` | workspace_id, signal_source, signal_category, engaged_count, dismissed_count, ignored_count, consecutive_dismissals, engagement_rate, suppressed | Tracks insight surface engagement for suppression rules |
 
-### Perception & Runtime (2 tables)
+### Perception & Runtime
 
 | Table | PK Prefix | Key Columns | Notes |
 |-------|-----------|-------------|-------|
@@ -241,8 +241,8 @@ All IDs use ULID (Universally Unique Lexicographically Sortable Identifier) with
 |--------------|-------|
 | Provider | AWS Bedrock Titan V2 |
 | Dimensions | 1024 |
-| Storage | Qdrant (6 collections) |
-| Full-text | Postgres tsvector + GIN indexes (7 tables) |
+| Storage | Qdrant |
+| Full-text | Postgres tsvector + GIN indexes |
 | Reranking | Bedrock amazon.rerank-v1:0 |
 
 > **Note:** pgvector embedding columns were removed from Postgres (migration 046). All vector storage is now in Qdrant only. Full-text search uses native Postgres tsvector columns with GIN indexes.
@@ -278,7 +278,7 @@ Data is distributed across 5 infrastructure services. Postgres is always the sou
 ```mermaid
 graph LR
     subgraph "Source of Truth"
-        PG[(Postgres 17<br/>51 tables + tsvector FTS)]
+        PG[(Postgres 17<br/>tsvector FTS)]
     end
 
     subgraph "Vector Search"
@@ -317,7 +317,7 @@ graph LR
 | Agent config | rows | - | - | - | - |
 | Sessions | rows | - | - | - | surface tracking |
 
-### Qdrant Collections (6)
+### Qdrant Collections
 
 | Collection | Dimensions | Payload Fields | Payload Indexes | Purpose |
 |-----------|------------|---------------|-----------------|---------|
@@ -373,7 +373,7 @@ graph LR
 
 ## Migrations
 
-The project uses Alembic for database migrations. As of the current state, there are 62 migrations covering all schema changes from initial setup through the 15-spec system redesign.
+The project uses Alembic for database migrations; the early history has been squashed into an initial schema with incremental migrations on top. Run `alembic history` for the current list.
 
 ```bash
 # From backend/

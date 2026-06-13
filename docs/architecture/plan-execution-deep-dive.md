@@ -356,7 +356,7 @@ flowchart TD
 
 ## 6. Plan Execution: GraphExecutor
 
-The `GraphExecutor` (`src/services/graph_executor.py`, ~1710 lines) is the durable DAG execution engine. It manages the full lifecycle from run creation to completion.
+The `GraphExecutor` (`src/services/graph_executor.py`) is the durable DAG execution engine. It manages the full lifecycle from run creation to completion.
 
 ```mermaid
 sequenceDiagram
@@ -459,7 +459,7 @@ This enables declarative data wiring between DAG steps without hardcoding.
 
 ## 7. Agent Loop: Step-Level Execution
 
-Each step within the DAG is executed by the `agent_loop()` function (`src/orchestrator/agent_loop.py`, ~633 lines). This is the core reasoning engine:
+Each step within the DAG is executed by the `agent_loop()` function (`src/orchestrator/agent_loop.py`). This is the core reasoning engine:
 
 ```mermaid
 flowchart TD
@@ -752,7 +752,7 @@ flowchart TD
     STORE --> APPROVAL
 ```
 
-### Surface Update Emission Points (9 in GraphExecutor)
+### Surface Update Emission Points (in GraphExecutor)
 
 | Point | Phase | Trigger |
 |-------|-------|---------|
@@ -1034,36 +1034,36 @@ SchedulerLoop (every 30s)
 
 ## 14. Key File Reference
 
-| Component | File | Lines | Purpose |
-|-----------|------|-------|---------|
-| **Orchestrator** | `src/orchestrator/jarvis.py` | ~2300 | Entry points, plan creation, surface push |
-| **Intent Classifier** | `src/orchestrator/intent_classifier.py` | ~250 | Fast intents, `classify_intent()`, `extract_plan()` |
-| **Planner Prompt** | `src/orchestrator/prompts.py` | ~640 | `PLANNER_PROMPT_V2`, all agent prompts |
-| **Agent Loop** | `src/orchestrator/agent_loop.py` | ~633 | Multi-turn reasoning, tool execution |
-| **Hooks** | `src/orchestrator/hooks.py` | ~152 | Pre/post tool hooks, Governor audit |
-| **Recovery** | `src/orchestrator/recovery.py` | ~111 | Startup reconciliation |
-| **Contracts** | `src/orchestrator/contracts.py` | ~418 | PlanOutput, PlanStep, SurfaceUpdate |
-| **GraphExecutor** | `src/services/graph_executor.py` | ~1710 | DAG execution, checkpoints, approval gates |
-| **Execution State** | `src/services/execution_state.py` | ~140 | State machine, transition validation |
-| **Capability Resolver** | `src/services/capability_resolver.py` | ~200 | Capability → agent + tools routing |
-| **Trust Engine** | `src/services/trust_engine.py` | ~200 | 4×4 matrix, trust graduation/demotion |
-| **Risk Assessor** | `src/services/risk_assessor.py` | ~150 | Haiku-based risk assessment, Redis cache |
-| **Approval Service** | `src/services/approval_service.py` | ~85 | Create/query approvals |
-| **Notifier** | `src/services/notifier.py` | ~400 | Priority scoring, rate limiting, delivery |
-| **Scheduler** | `src/services/scheduler.py` | ~600 | Background tasks, perception, DLQ |
-| **Dead Letter** | `src/services/dead_letter.py` | ~120 | DLQ enqueue/retry/stats |
-| **Memory Service** | `src/services/memory_service.py` | ~500 | Store/retrieve/expire memories |
-| **Surface Builder** | `src/services/surface_builder.py` | ~300 | Build workspace surfaces from DB |
-| **Plan Model** | `src/models/plans.py` | ~62 | Plan + PlanTask SQLAlchemy models |
-| **TaskGraph Model** | `src/models/task_graph.py` | ~126 | TaskRun + TaskStep + TaskCheckpoint |
-| **Approval Model** | `src/models/approvals.py` | ~50 | Approval SQLAlchemy model |
-| **Approval Routes** | `src/api/routes_approvals.py` | ~200 | Approve/reject/list endpoints |
-| **WebSocket Routes** | `src/api/routes_ws.py` | ~500 | WS auth, relay, action dispatch |
-| **UI Routes** | `src/api/routes_ui.py` | ~130 | GET /v1/workspace/surfaces |
-| **Frontend WS Hook** | `frontend/src/hooks/use-jarvis-ws.ts` | ~160 | WebSocket connection, message routing |
-| **Surface Store** | `frontend/src/stores/surface-store.ts` | ~110 | Zustand store for surfaces |
-| **Execution Surface** | `frontend/src/components/a2ui/components/execution-surface.tsx` | ~145 | Phase-aware rendering |
-| **Inline Approval** | `frontend/src/components/a2ui/components/inline-approval.tsx` | ~82 | Approval UI with risk context |
+| Component | File | Purpose |
+|-----------|------|---------|
+| **Orchestrator** | `src/orchestrator/jarvis.py` | Entry points, plan creation, surface push |
+| **Intent Classifier** | `src/orchestrator/intent_classifier.py` | Fast intents, `classify_intent()`, `extract_plan()` |
+| **Planner Prompt** | `src/orchestrator/prompts.py` | `PLANNER_PROMPT_V2`, all agent prompts |
+| **Agent Loop** | `src/orchestrator/agent_loop.py` | Multi-turn reasoning, tool execution |
+| **Hooks** | `src/orchestrator/hooks.py` | Pre/post tool hooks, Governor audit |
+| **Recovery** | `src/orchestrator/recovery.py` | Startup reconciliation |
+| **Contracts** | `src/orchestrator/contracts.py` | PlanOutput, PlanStep, SurfaceUpdate |
+| **GraphExecutor** | `src/services/graph_executor.py` | DAG execution, checkpoints, approval gates |
+| **Execution State** | `src/services/execution_state.py` | State machine, transition validation |
+| **Capability Resolver** | `src/services/capability_resolver.py` | Capability → agent + tools routing |
+| **Trust Engine** | `src/services/trust_engine.py` | 4×4 matrix, trust graduation/demotion |
+| **Risk Assessor** | `src/services/risk_assessor.py` | Haiku-based risk assessment, Redis cache |
+| **Approval Service** | `src/services/approval_service.py` | Create/query approvals |
+| **Notifier** | `src/services/notifier.py` | Priority scoring, rate limiting, delivery |
+| **Scheduler** | `src/services/scheduler.py` | Background tasks, perception, DLQ |
+| **Dead Letter** | `src/services/dead_letter.py` | DLQ enqueue/retry/stats |
+| **Memory Service** | `src/services/memory_service.py` | Store/retrieve/expire memories |
+| **Surface Builder** | `src/services/surface_builder.py` | Build workspace surfaces from DB |
+| **Plan Model** | `src/models/plans.py` | Plan + PlanTask SQLAlchemy models |
+| **TaskGraph Model** | `src/models/task_graph.py` | TaskRun + TaskStep + TaskCheckpoint |
+| **Approval Model** | `src/models/approvals.py` | Approval SQLAlchemy model |
+| **Approval Routes** | `src/api/routes_approvals.py` | Approve/reject/list endpoints |
+| **WebSocket Routes** | `src/api/routes_ws.py` | WS auth, relay, action dispatch |
+| **UI Routes** | `src/api/routes_ui.py` | GET /v1/workspace/surfaces |
+| **Frontend WS Hook** | `frontend/src/hooks/use-jarvis-ws.ts` | WebSocket connection, message routing |
+| **Surface Store** | `frontend/src/stores/surface-store.ts` | Zustand store for surfaces |
+| **Execution Surface** | `frontend/src/components/a2ui/components/execution-surface.tsx` | Phase-aware rendering |
+| **Inline Approval** | `frontend/src/components/a2ui/components/inline-approval.tsx` | Approval UI with risk context |
 
 ---
 

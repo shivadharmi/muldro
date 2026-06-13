@@ -95,7 +95,7 @@ Only events with `importance >= 0.3` are embedded into Qdrant's `events` collect
 
 ## Qdrant Collections
 
-6 collections with enriched payloads and payload indexing (`ensure_indexes()`):
+Collections with enriched payloads and payload indexing (`ensure_indexes()`):
 
 | Collection | Content | Key Payload Fields |
 |------------|---------|-------------------|
@@ -208,7 +208,7 @@ Triggers track `fire_count`, `last_fired_at`, and respect `cooldown_until`.
 
 ## Domain Events
 
-The system publishes 27 domain event types via Redis-backed EventBus. All events include a `workspace_id` for multi-tenant scoping.
+The system publishes domain event types via Redis-backed EventBus. All events include a `workspace_id` for multi-tenant scoping.
 
 | Category | Event Types |
 |----------|-------------|

@@ -96,7 +96,21 @@ wins until changed here first.
 - Once released, `/v1/` API routes are a public contract: breaking changes require versioning
   and a changelog entry.
 
-## 8. Enforcement
+## 8. Documentation Maintenance
+
+**Code is the source of truth.** Docs capture durable architecture, design intent, and invariants — not an inventory of the codebase. They exist to record what the code cannot make obvious on its own: the *why*, the layering, the contracts, the constraints.
+
+**Do not document volatile data.** Never write file counts, line counts, migration counts, router/model/test/tool counts, or any figure that changes with routine work. They rot within days and mislead agents into false precision. Name the directory or module and let the reader inspect it (`ls`, `grep`) for current specifics.
+
+**Document the durable, not the incidental:**
+- DO: layering and one-way deps, boundary contracts, invariants, state machines, the agent topology and roles, design decisions and their rationale, non-obvious constraints.
+- DON'T: counts/inventories, line numbers as identity, exhaustive file lists, anything trivially re-derivable from the code.
+
+**Update docs only when an architectural fact changes** — a component added/removed, a changed contract/invariant/dependency, a renamed concept. Routine edits (adding a file, tool, migration, or test) require **no** doc change. When in doubt, leave the docs: a smaller doc that is correct beats a larger one that drifts.
+
+**Design constants vs. inventory.** Behavioral/design constants (matrix dimensions, decay rates, TTLs, thresholds, timeouts, named rosters) are meaningful and rarely change — keep them. Inventory counts (how many files/migrations/tests exist) are churn — never record them.
+
+## 9. Enforcement
 
 - **Pre-commit**: ruff check, ruff format, gitleaks secret scan (`.pre-commit-config.yaml`).
 - **CI** (to be added with release packaging): pytest, ruff, frontend lint + build, secret scan.

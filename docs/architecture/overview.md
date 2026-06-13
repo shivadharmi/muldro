@@ -20,7 +20,7 @@ graph TB
     end
 
     subgraph "API Layer"
-        API[FastAPI + SSE Streaming<br/>31 routers, /v1/ prefix]
+        API[FastAPI + SSE Streaming<br/>/v1/ prefix]
     end
 
     subgraph "Orchestrator"
@@ -40,7 +40,7 @@ graph TB
     end
 
     subgraph "Tool Layer"
-        CAT[Tool Catalog<br/>163 tools, 2 files]
+        CAT[Tool Catalog<br/>2 files]
         INT[Internal FastMCP<br/>Intelligence + Communication]
         MCP[MCP Bridge<br/>External Servers]
     end
@@ -120,7 +120,7 @@ Jarvis uses 5 infrastructure services. Postgres and Redis are required; the rest
 |---------|---------|------|-----------|----------|
 | **PostgreSQL** | 17 | System of record: all models, tsvector FTS with GIN indexes | Yes | None |
 | **Redis** | 7 | Event streams, task queue, caching, distributed locks, surface tracking, pubsub | Yes | In-memory (limited) |
-| **Qdrant** | 1.12 | Semantic vector search (6 collections: memories, entities, events, artifacts, conversations, approvals) | No | Postgres FTS only |
+| **Qdrant** | 1.12 | Semantic vector search (collections: memories, entities, events, artifacts, conversations, approvals) | No | Postgres FTS only |
 | **Neo4j** | 5 Community | Knowledge graph projection: multi-hop traversal, shortest-path, community detection | No | Postgres entity tables only |
 | **MinIO / S3** | - | Artifact document/media storage (Postgres holds metadata + S3 key ref) | No | No artifact storage |
 
@@ -131,12 +131,12 @@ Jarvis uses **TriSearch** — a three-engine parallel search with reranking:
 ```
 User query
     ├── Qdrant: semantic vector search (Titan V2 1024-dim embeddings)
-    ├── Postgres FTS: tsvector + GIN keyword search (7 tables)
+    ├── Postgres FTS: tsvector + GIN keyword search
     ├── Neo4j: graph entity search (CONTAINS matching)
     └── Bedrock Reranker (amazon.rerank-v1:0) merges + reranks results
 ```
 
-The `TriSearchService` (`src/services/tri_search.py`) runs all three backends in parallel, deduplicates results, and reranks via Bedrock. Full-text search uses Postgres native `tsvector` columns with GIN indexes on 7 tables (memories, entities, events, conversations, briefings, approvals, artifacts). Elasticsearch has been fully removed.
+The `TriSearchService` (`src/services/tri_search.py`) runs all three backends in parallel, deduplicates results, and reranks via Bedrock. Full-text search uses Postgres native `tsvector` columns with GIN indexes on the FTS tables (memories, entities, events, conversations, briefings, approvals, artifacts). Elasticsearch has been fully removed.
 
 ### Knowledge Graph (Neo4j)
 
@@ -182,7 +182,7 @@ Every external write requires approval in v1. An audit log with correlation IDs 
 
 ## Multi-Tenant Workspace Isolation
 
-All 51 data tables have a `workspace_id` column (`String(64)`, NOT NULL FK to `workspaces` with CASCADE delete). This enforces strict multi-tenant isolation at the database level.
+All data tables have a `workspace_id` column (`String(64)`, NOT NULL FK to `workspaces` with CASCADE delete). This enforces strict multi-tenant isolation at the database level.
 
 - **API routes** resolve the workspace via the `get_current_workspace_id()` dependency.
 - **Background services** resolve the workspace via `resolve_workspace_id(db, user_id)`.

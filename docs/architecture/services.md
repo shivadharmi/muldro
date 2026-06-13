@@ -517,7 +517,7 @@ Invalid transitions raise `InvalidTransitionError`. All status changes in GraphE
 
 **File:** `src/services/vector_store.py`
 
-**Purpose:** Semantic vector search across 6 collections (memories, entities, events, artifacts, conversations, approvals).
+**Purpose:** Semantic vector search across the Qdrant collections (memories, entities, events, artifacts, conversations, approvals).
 
 **Constructor:**
 - `qdrant_url`, `qdrant_api_key`

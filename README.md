@@ -18,7 +18,7 @@ graph TB
     end
 
     subgraph API["API Layer"]
-        FA[FastAPI<br/>31 routers · /v1/ prefix]
+        FA[FastAPI<br/>/v1/ prefix]
     end
 
     subgraph ORCH["Orchestrator"]
@@ -35,8 +35,8 @@ graph TB
     end
 
     subgraph TOOLS["Tool Layer"]
-        CAT[Tool Catalog<br/>163 tools · catalog.py]
-        INT[Internal FastMCP<br/>19 tools · 2 servers]
+        CAT[Tool Catalog<br/>catalog.py]
+        INT[Internal FastMCP<br/>2 servers]
         MCP[MCP Bridge<br/>Google · GitHub · Slack<br/>Notion · Linear · Playwright · Filesystem]
     end
 
@@ -138,19 +138,19 @@ Infrastructure is managed with Terraform in `infra/`. A single EC2 instance runs
 jarvis/
 ├── backend/
 │   ├── src/
-│   │   ├── api/            # 31 REST/SSE routers (/v1/ prefix)
+│   │   ├── api/            # REST/SSE routers (/v1/ prefix)
 │   │   ├── config/         # Settings (pydantic-settings, JARVIS_ env prefix)
 │   │   ├── connectors/     # MCP bridge, perception connectors
 │   │   ├── interface/      # Telegram bot
-│   │   ├── models/         # 41 SQLAlchemy models (all workspace-scoped)
+│   │   ├── models/         # SQLAlchemy models (all workspace-scoped)
 │   │   ├── orchestrator/   # JarvisOrchestrator, agents, hooks, tracing, budget, contracts
 │   │   ├── services/       # Business logic (planner, governor, operator, tri_search, etc.)
 │   │   ├── tools/          # Tool catalog, schemas, validation, FastMCP servers
 │   │   ├── ui/             # A2UI renderer + contracts
 │   │   └── workflows/      # inbox_triage, meeting_prep, research
-│   ├── tests/              # 163 test files (pytest + pytest-asyncio)
-│   └── alembic/            # 62 database migrations
-├── frontend/               # Next.js + A2UI renderer + chat panel (7 pages)
+│   ├── tests/              # pytest + pytest-asyncio
+│   └── alembic/            # database migrations
+├── frontend/               # Next.js + A2UI renderer + chat panel
 ├── infra/                  # Terraform (AWS: EC2, VPC, Route53, IAM, SSM)
 ├── docs/architecture/      # Detailed architecture documentation
 └── docker-compose.yml      # Local dev infrastructure
@@ -163,7 +163,7 @@ jarvis/
 | Backend | Python 3.13+ / FastAPI |
 | Frontend | Next.js / React / A2UI |
 | Database | PostgreSQL 17 (tsvector FTS) — source of truth |
-| Vector Search | Qdrant 1.12 — semantic similarity (6 collections with enriched payloads) |
+| Vector Search | Qdrant 1.12 — semantic similarity (enriched payloads) |
 | Reranking | AWS Bedrock amazon.rerank-v1:0 |
 | Knowledge Graph | Neo4j 5 — multi-hop traversal, community detection |
 | Object Storage | MinIO / S3 — artifact documents and media |
@@ -191,4 +191,4 @@ jarvis/
 
 ## Status
 
-163 test files, 62 migrations, 41 models, 31 routers, 7 frontend pages, all lint clean. Unified tool registry with 163 cataloged tools.
+Unified tool registry; workspace-scoped models; Alembic migrations; lint clean.

@@ -164,7 +164,7 @@
 
 ## 13. Full Workspace Isolation
 
-**Decision:** All 51 data tables are scoped by `workspace_id` (NOT NULL FK). Two resolution paths: API (session-based, zero queries) vs background (DB lookup via WorkspaceMember). Enables future multi-workspace support.
+**Decision:** All data tables are scoped by `workspace_id` (NOT NULL FK). Two resolution paths: API (session-based, zero queries) vs background (DB lookup via WorkspaceMember). Enables future multi-workspace support.
 
 **Rationale:**
 - **Security** - Data isolation is enforced at the schema level, not application logic
@@ -220,7 +220,7 @@
 - **Thinking visibility** - Opus thinking tokens are a major cost driver that was previously invisible
 - **Per-agent attribution** - Know which agents consume the most budget (Planner/Opus vs Persona/Haiku)
 
-**Trade-off:** Slightly more complex cost calculation. Mitigated by centralizing all cost logic in `BudgetTracker.calculate_cost()` with comprehensive tests (13 budget tests).
+**Trade-off:** Slightly more complex cost calculation. Mitigated by centralizing all cost logic in `BudgetTracker.calculate_cost()` with comprehensive tests.
 
 ## 18. Capability-Based Routing
 

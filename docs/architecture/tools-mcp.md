@@ -52,7 +52,7 @@ Tool identity lives in 2 files:
 - **`src/tools/catalog.py`** — Definitions (`InternalToolDef` + `ExternalToolSeed`)
 - **`src/tools/intelligence_server.py`** — MCP function implementations
 
-### Internal Tools (23)
+### Internal Tools
 
 Defined as `InternalToolDef` entries in `catalog.py`. Served via in-process FastMCP.
 
@@ -86,7 +86,7 @@ Defined as `InternalToolDef` entries in `catalog.py`. Served via in-process Fast
 
 The Planner does not receive raw tool schemas. Instead, `generate_capability_summary()` in `src/orchestrator/capability_summary.py` produces a ~200-token XML summary of available capabilities, injected into the Planner system prompt via the `{capability_summary}` placeholder. This keeps the Planner context lean while giving it enough information to produce capability-based plans.
 
-### External Tool Seeds (~140)
+### External Tool Seeds
 
 Defined as `ExternalToolSeed` entries in `catalog.py`. Served via external MCP servers.
 
@@ -151,7 +151,7 @@ Connected via `src/connectors/mcp_bridge.py`. Session pool manages per-user auth
 ### Startup Flow
 
 ```
-App startup → seed_defaults() (~163 tools from catalog)
+App startup → seed_defaults() (tools from catalog)
             → validate_registry() (6 cross-checks)
             → initialize_mcp_bridge()
             → Connect to configured MCP servers

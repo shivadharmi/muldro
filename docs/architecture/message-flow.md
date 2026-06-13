@@ -208,4 +208,4 @@ All inter-agent communication is validated through Pydantic contracts:
 - **AgentEnvelope** / **AgentResult** wrap every `_call_agent()` invocation
 - **PolicyDecision** returned by TrustEngine for plan evaluation (includes `auto_execute_notify` and `auto_execute_silent` modes)
 - **StepResult** / **ToolCallRequest** / **ToolCallResult** used in GraphExecutor execution
-- **SurfaceUpdate** tracks execution phases (plan_ready, executing, approval_needed, completed, failed) with 9 emission points in GraphExecutor
+- **SurfaceUpdate** tracks execution phases (plan_ready, executing, approval_needed, completed, failed) with emission points in GraphExecutor
