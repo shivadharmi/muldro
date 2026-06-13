@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { streamChat, type ChatSSEEvent, type ConversationMessage, type PlanOutput } from "@/lib/api";
+import { ApiError, streamChat, type ChatSSEEvent, type ConversationMessage, type PlanOutput } from "@/lib/api";
+import { formatApiError, parseSseError } from "@/lib/api-error";
 import { useCommandStore } from "@/stores/command-store";
 import { useShellStore } from "@/stores/shell-store";
 import { CommandInput } from "./command-input";
@@ -292,13 +293,15 @@ export function ChatPanel({
               scrollToBottom();
               break;
 
-            case "error":
+            case "error": {
+              const parsed = parseSseError(event);
               updateAssistant((m) => ({
                 ...m,
-                content: m.content || `Error: ${event.message}`,
+                content: m.content || `Error: ${formatApiError(parsed)}`,
                 streaming: false,
               }));
               break;
+            }
 
             case "surface":
               if (onSurface && event.id && event.metadata) {
@@ -363,9 +366,13 @@ export function ChatPanel({
       );
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
+        const safe =
+          err instanceof ApiError
+            ? err.displayMessage
+            : "Something went wrong.";
         updateAssistant((m) => ({
           ...m,
-          content: `Error: ${err instanceof Error ? err.message : "Unknown error"}`,
+          content: `Error: ${safe}`,
           streaming: false,
         }));
       }

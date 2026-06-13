@@ -17,6 +17,14 @@ if TYPE_CHECKING:
 from ulid import ULID
 
 from src.config.settings import Settings, get_anthropic_client
+from src.errors import (
+    _GENERIC_CODE,
+    _GENERIC_MESSAGE,
+    classify,
+    new_correlation_id,
+    safe_error_event,
+)
+from src.middleware.observability import get_correlation_id
 from src.orchestrator.agent_loop import (
     LoopAgentStart,
     LoopDone,
@@ -957,17 +965,21 @@ class JarvisOrchestrator:
 
         except Exception as e:
             logger.error("process_message failed: %s", e, exc_info=True)
+            cid = get_correlation_id() or new_correlation_id()
+            code, safe_msg, _ = classify(e)
             error_result = {
                 "trace_id": trace.trace_id,
                 "decision": "error",
-                "summary": f"Error processing message: {e}",
+                "summary": safe_msg,
+                "code": code,
+                "correlation_id": cid,
             }
             await self._emit_runtime_event(
                 "run_failed",
                 workspace_id=workspace_id,
                 user_id=user_id,
                 run_id=None,
-                payload={"error": str(e)[:200]},
+                payload={"code": code, "message": safe_msg, "correlation_id": cid},
             )
             return error_result
         finally:
@@ -1334,14 +1346,16 @@ class JarvisOrchestrator:
 
         except Exception as e:
             logger.error("process_message_stream failed: %s", e, exc_info=True)
+            cid = get_correlation_id() or new_correlation_id()
+            code, safe_msg, _ = classify(e)
             _fire_event(
                 "run_failed",
                 workspace_id=workspace_id,
                 user_id=user_id,
                 run_id=None,
-                payload={"error": str(e)[:200]},
+                payload={"code": code, "message": safe_msg, "correlation_id": cid},
             )
-            yield {"event": "error", "message": str(e)}
+            yield safe_error_event(e, cid)
         finally:
             await self._trace_manager.finish_trace(
                 trace.trace_id,
@@ -1440,7 +1454,18 @@ class JarvisOrchestrator:
                     "latency_ms": evt.latency_ms,
                 }
             elif isinstance(evt, LoopError):
-                yield {"event": "error", "agent": evt.agent, "message": evt.message}
+                # evt.message may carry a raw upstream exception string (see
+                # agent_loop LoopError(message=str(e))). Log it, but only emit a
+                # client-safe generic frame — never the raw detail.
+                logger.error("agent_loop error agent=%s: %s", evt.agent, evt.message)
+                cid = get_correlation_id() or new_correlation_id()
+                yield {
+                    "event": "error",
+                    "agent": evt.agent,
+                    "code": _GENERIC_CODE,
+                    "message": _GENERIC_MESSAGE,
+                    "correlation_id": cid,
+                }
             elif isinstance(evt, LoopDone):
                 yield {
                     "event": "agent_done",
@@ -1498,7 +1523,13 @@ class JarvisOrchestrator:
             }
         except Exception as e:
             logger.warning("Cross-source synthesis failed: %s", e, exc_info=True)
-            return {"status": "error", "error": str(e)}
+            code, safe_msg, _ = classify(e)
+            return {
+                "status": "error",
+                "error": safe_msg,
+                "code": code,
+                "correlation_id": get_correlation_id() or new_correlation_id(),
+            }
         finally:
             await self._trace_manager.finish_trace(
                 trace.trace_id, user_id=user_id, workspace_id=workspace_id
@@ -1812,7 +1843,14 @@ class JarvisOrchestrator:
                     await db.commit()
             except Exception:
                 logger.debug("DLQ enqueue failed for perception %s", source, exc_info=True)
-            return {"status": "error", "source": source, "error": str(e)}
+            code, safe_msg, _ = classify(e)
+            return {
+                "status": "error",
+                "source": source,
+                "error": safe_msg,
+                "code": code,
+                "correlation_id": get_correlation_id() or new_correlation_id(),
+            }
         finally:
             await self._trace_manager.finish_trace(
                 trace.trace_id, user_id=user_id, workspace_id=workspace_id
@@ -2068,7 +2106,13 @@ class JarvisOrchestrator:
             return {"status": "completed", "trace_id": trace.trace_id, "briefing": result}
         except Exception as e:
             logger.error("generate_briefing failed: %s", e, exc_info=True)
-            return {"status": "error", "error": str(e)}
+            code, safe_msg, _ = classify(e)
+            return {
+                "status": "error",
+                "error": safe_msg,
+                "code": code,
+                "correlation_id": get_correlation_id() or new_correlation_id(),
+            }
         finally:
             await self._trace_manager.finish_trace(
                 trace.trace_id, user_id=user_id, workspace_id=workspace_id
@@ -3117,7 +3161,13 @@ class JarvisOrchestrator:
             return {"status": "created", "schedule_id": schedule_id, "title": title}
         except Exception as e:
             logger.warning("Failed to create reminder schedule: %s", e)
-            return {"status": "error", "error": str(e)}
+            code, safe_msg, _ = classify(e)
+            return {
+                "status": "error",
+                "error": safe_msg,
+                "code": code,
+                "correlation_id": get_correlation_id() or new_correlation_id(),
+            }
 
     async def _handle_add_to_brief(self, text: str, user_id: str, workspace_id: str) -> dict:
         """Store a briefing item as a memory so the next briefing includes it."""
@@ -3136,7 +3186,13 @@ class JarvisOrchestrator:
             return {"status": "stored", "memory_id": memory_id, "text": text}
         except Exception as e:
             logger.warning("Failed to store briefing item: %s", e)
-            return {"status": "error", "error": str(e)}
+            code, safe_msg, _ = classify(e)
+            return {
+                "status": "error",
+                "error": safe_msg,
+                "code": code,
+                "correlation_id": get_correlation_id() or new_correlation_id(),
+            }
 
     async def _handle_system_capability(
         self,
@@ -3452,4 +3508,7 @@ class JarvisOrchestrator:
                 user_id,
                 {"tool": tool_name, "error": str(e)[:200]},
             )
-            return {"error": f"Tool execution failed for {tool_name}: {e}"}
+            # Tool-result error is persisted to message metadata + streamed to the
+            # browser — keep it generic. Full detail is logged above and in the
+            # (secret-redacted) trace; the agent still learns the tool failed.
+            return {"error": f"Tool '{tool_name}' failed.", "error_code": "tool_error"}

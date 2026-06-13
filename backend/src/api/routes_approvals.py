@@ -12,6 +12,8 @@ from ulid import ULID
 from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
 from src.api.schemas import ApprovalDecisionRequest, ApprovalDetailResponse, ApprovalResponse
 from src.config.settings import Settings, get_settings
+from src.errors import classify, new_correlation_id
+from src.middleware.observability import get_correlation_id
 from src.middleware.security import RATE_LIMIT_APPROVAL_DECISION, per_endpoint_rate_limit
 from src.models.approvals import Approval
 from src.models.plans import Plan
@@ -615,7 +617,15 @@ async def _mark_run_failed_after_resume(db: AsyncSession, run_id: str, exc: Exce
         r = result.scalar_one_or_none()
         if r and r.status not in ("completed", "failed", "cancelled"):
             transition_run(r, "failed")
-            r.error = {"resume_failed": str(exc)[:500]}
+            # r.error is served verbatim by the history API — safe message + code
+            # only; raw str(exc) goes to logs.
+            code, message, _ = classify(exc)
+            r.error = {
+                "resume_failed": message,
+                "error_code": code,
+                "correlation_id": get_correlation_id() or new_correlation_id(),
+            }
+            logger.error("Approval resume failed for run %s: %s", run_id, exc, exc_info=True)
             r.completed_at = datetime.now(timezone.utc)
             await db.commit()
     except Exception:

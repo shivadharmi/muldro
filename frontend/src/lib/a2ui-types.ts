@@ -135,7 +135,10 @@ export interface ActionResult {
   action: string;
   status: "success" | "error";
   result?: Record<string, unknown>;
-  error?: string;
+  /** Client-safe error message (from the standardized envelope). */
+  message?: string;
+  code?: string;
+  correlationId?: string | null;
 }
 
 // ── Execution surface types ───────────────────────────────────
@@ -211,8 +214,10 @@ export type JarvisMessage =
       data: Record<string, unknown>;
     }
   | { type: "notification_resolved"; notification_id: string; resolved_on: string }
-  | { type: "action_result"; action: string; status: string; result?: Record<string, unknown>; error?: string }
+  | { type: "action_result"; action: string; status: string; result?: Record<string, unknown>; code?: string; message?: string; correlation_id?: string }
   | { type: "surface_update"; surface_id: string; phase: ExecutionPhase; steps: StepState[]; current_step: string | null; progress: string; approval: ApprovalContext | null; results: ResultSummary | null }
   | { type: "heartbeat" }
   | { type: "auth_ok" }
-  | { type: "auth_error"; message: string };
+  | { type: "auth_error"; message: string }
+  // Standardized WS error frame: { status: "error", code, message, correlation_id }
+  | { status: "error"; code?: string; message?: string; correlation_id?: string };

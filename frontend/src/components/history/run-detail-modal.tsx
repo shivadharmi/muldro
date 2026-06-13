@@ -193,7 +193,7 @@ function StepsTab({ detail }: { detail: RunDetail }) {
                 {/* Error */}
                 {step.error && (
                   <p className="text-xs text-red-400 break-words">
-                    {String(step.error.message ?? step.error.detail ?? JSON.stringify(step.error))}
+                    {String(step.error.message ?? "An error occurred.")}
                   </p>
                 )}
 

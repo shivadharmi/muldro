@@ -12,6 +12,8 @@ import { useJarvisWs } from "@/hooks/use-jarvis-ws";
 import { useSurfaceStore } from "@/stores/surface-store";
 import type { WorkspaceSurface } from "@/stores/surface-store";
 import { useWsActionStore } from "@/stores/ws-action-store";
+import { formatApiError, type ParsedApiError } from "@/lib/api-error";
+import { useToast } from "@/components/ui/toast";
 import { GreetingHero } from "@/components/dashboard/greeting-hero";
 import { BriefingGatheringCard } from "@/components/dashboard/briefing-gathering-card";
 import { OnboardingCard } from "@/components/dashboard/onboarding-card";
@@ -29,6 +31,12 @@ export default function WorkspacePage() {
   const openDetailModal = useSurfaceStore((s) => s.openDetailModal);
   const closeDetailModal = useSurfaceStore((s) => s.closeDetailModal);
   const setGlobalSendAction = useWsActionStore((s) => s.setSendAction);
+  const { addToast } = useToast();
+
+  const handleWsError = useCallback(
+    (err: ParsedApiError) => addToast(formatApiError(err), "error"),
+    [addToast]
+  );
 
   const { data: system } = useQuery({
     queryKey: ["system-dashboard"],
@@ -121,6 +129,7 @@ export default function WorkspacePage() {
       (update: SurfaceUpdate) => updateSurface(update.surface_id, update),
       [updateSurface]
     ),
+    onError: handleWsError,
     enabled: !!user,
   });
 

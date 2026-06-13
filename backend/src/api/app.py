@@ -308,6 +308,11 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # --- Error boundary: standard envelope, no raw exceptions to clients ---
+    from src.api.error_handlers import register_exception_handlers
+
+    register_exception_handlers(app)
+
     # --- Middleware (outermost first) ---
     app.add_middleware(RequestSizeLimitMiddleware, max_bytes=settings.max_request_body_bytes)
     app.add_middleware(RateLimitMiddleware, requests_per_minute=settings.rate_limit_rpm)

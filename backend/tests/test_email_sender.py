@@ -201,6 +201,6 @@ class TestAuthRoutesSES:
                 )
 
                 assert resp.status_code == 500
-                assert "Failed to send" in resp.json()["detail"]
+                assert "Failed to send" in resp.json()["error"]["message"]
 
         app.dependency_overrides.pop(get_settings, None)

@@ -12,6 +12,7 @@ import {
   disconnectInstallation,
   type UnifiedIntegration,
 } from "@/lib/api";
+import { errorToMessage } from "@/lib/api-error";
 import { useToast } from "@/components/ui/toast";
 import { SkeletonGrid } from "@/components/ui/skeleton";
 import {
@@ -100,7 +101,7 @@ function IntegrationsContent() {
     onError: (err, _id, context) => {
       if (context?.prev)
         queryClient.setQueryData(["unified-integrations"], context.prev);
-      addToast(`Failed to disconnect: ${err.message}`, "error");
+      addToast(`Failed to disconnect: ${errorToMessage(err)}`, "error");
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["unified-integrations"] });
@@ -116,7 +117,7 @@ function IntegrationsContent() {
       window.location.assign(url);
     } catch (err) {
       addToast(
-        `Failed to start OAuth: ${err instanceof Error ? err.message : "Unknown error"}`,
+        `Failed to start OAuth: ${errorToMessage(err)}`,
         "error",
       );
       setConnecting(null);

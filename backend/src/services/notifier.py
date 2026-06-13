@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 
 from ulid import ULID
 
+from src.errors import classify
 from src.services.surface_registry import SurfaceRegistry
 
 logger = logging.getLogger(__name__)
@@ -371,7 +372,10 @@ class Notifier:
                     "error": str(e),
                 },
             )
-            return {"status": "error", "error": str(e)}
+            # The returned dict may be relayed to a surface — expose only the
+            # safe message + code, never the raw exception. Logs keep str(e).
+            code, message, _ = classify(e)
+            return {"status": "error", "error": message, "error_code": code}
 
     async def _deliver_telegram(self, notification: Notification) -> dict:
         """Format and send notification via Telegram."""
@@ -432,7 +436,8 @@ class Notifier:
             return {"status": "sent", "slack_result": result}
         except Exception as e:
             logger.warning("Slack delivery failed: %s", e, exc_info=True)
-            return {"status": "error", "error": str(e)}
+            code, message, _ = classify(e)
+            return {"status": "error", "error": message, "error_code": code}
 
     async def _deliver_email(self, notification: Notification) -> dict:
         """Send notification via email using MCP bridge or SES fallback."""
@@ -472,7 +477,9 @@ class Notifier:
             )
             return {"status": "sent", "via": "ses"}
         except Exception as e:
-            return {"status": "error", "error": str(e)}
+            logger.warning("Email (SES) delivery failed: %s", e, exc_info=True)
+            code, message, _ = classify(e)
+            return {"status": "error", "error": message, "error_code": code}
 
     async def _deliver_web(self, notification: Notification) -> dict:
         """Push notification to web dashboard via WebSocket/Redis pub/sub."""

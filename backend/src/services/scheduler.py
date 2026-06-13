@@ -17,6 +17,8 @@ from sqlalchemy import select
 
 from src.api.deps import resolve_workspace_id
 from src.config.settings import Settings
+from src.errors import classify, new_correlation_id
+from src.middleware.observability import get_correlation_id
 from src.models.database import get_session_factory
 from src.models.schedules import Schedule
 from src.models.task_graph import TaskRun
@@ -441,9 +443,15 @@ class SchedulerLoop:
                                 transition_run(run, "failed")
                             except Exception:
                                 run.status = "failed"
+                            # run.error is surfaced in execution surfaces +
+                            # run history (client-facing) — store the safe
+                            # message + code + correlation id, never str(e).
+                            _code, _msg, _ = classify(e)
                             run.error = {
-                                "type": type(e).__name__,
-                                "message": str(e)[:500],
+                                "type": "execution_error",
+                                "message": _msg,
+                                "error_code": _code,
+                                "correlation_id": get_correlation_id() or new_correlation_id(),
                             }
                             run.completed_at = datetime.now(timezone.utc)
                             try:
@@ -456,6 +464,9 @@ class SchedulerLoop:
                                     user_id=user_id,
                                     operation_type="background_task",
                                     error_type=type(e).__name__,
+                                    # DLQ error_message is internal-only (DLQ
+                                    # stats expose counts, not text) — raw str(e)
+                                    # is fine here and aids debugging/retry.
                                     error_message=str(e),
                                     source_id=run_id,
                                     payload={

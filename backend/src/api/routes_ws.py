@@ -14,6 +14,9 @@ import json
 import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from ulid import ULID
+
+from src.errors import safe_error_event
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +34,11 @@ async def jarvis_ws(websocket: WebSocket, user_id: str):
     as the first message. No token in URL query params.
     """
     await websocket.accept()
+
+    # WebSocket scopes are skipped by TracingMiddleware, so they have no
+    # correlation id. Mint one per connection and reuse it for every error
+    # frame sent on this socket.
+    cid = f"ws_{ULID()}"
 
     # Wait for auth message (5 second timeout)
     try:
@@ -153,7 +161,7 @@ async def jarvis_ws(websocket: WebSocket, user_id: str):
             try:
                 while True:
                     data = await websocket.receive_text()
-                    await _handle_client_message(user_id, data, app)
+                    await _handle_client_message(user_id, data, app, cid)
             except WebSocketDisconnect:
                 pass
             except asyncio.CancelledError:
@@ -203,19 +211,21 @@ async def jarvis_ws(websocket: WebSocket, user_id: str):
         logger.info("ws_disconnected", extra={"user_id": user_id})
 
 
-async def _handle_approve(user_id: str, payload: dict, app) -> dict:
+async def _handle_approve(user_id: str, payload: dict, app, cid: str = "") -> dict:
     """Handle approval action via the REST handler (full execution resume)."""
     approval_id = payload.get("approval_id") or payload.get("id", "")
-    return await _process_approval_ws(user_id, approval_id, "approve", app)
+    return await _process_approval_ws(user_id, approval_id, "approve", app, cid)
 
 
-async def _handle_reject(user_id: str, payload: dict, app) -> dict:
+async def _handle_reject(user_id: str, payload: dict, app, cid: str = "") -> dict:
     """Handle rejection action via the REST handler (full execution resume)."""
     approval_id = payload.get("approval_id") or payload.get("id", "")
-    return await _process_approval_ws(user_id, approval_id, "reject", app)
+    return await _process_approval_ws(user_id, approval_id, "reject", app, cid)
 
 
-async def _process_approval_ws(user_id: str, approval_id: str, action: str, app) -> dict:
+async def _process_approval_ws(
+    user_id: str, approval_id: str, action: str, app, cid: str = ""
+) -> dict:
     """Bridge WS approval actions to the REST endpoint handlers.
 
     Resolves workspace_id and DB session manually (no FastAPI DI available
@@ -267,13 +277,17 @@ async def _process_approval_ws(user_id: str, approval_id: str, action: str, app)
                 "decision": result.status,
             }
         except HTTPException as e:
-            return {"status": "error", "error": e.detail}
+            # detail is controlled, developer-authored text — safe to surface;
+            # emit the standard error frame shape (code + correlation id).
+            return {"status": "error", "code": "error", "message": e.detail, "correlation_id": cid}
         except Exception as e:
             logger.error("ws_approval_failed: %s", e, exc_info=True)
-            return {"status": "error", "error": str(e)}
+            return safe_error_event(e, cid, channel="ws")
 
 
-async def _handle_orchestrator_action(user_id: str, action: str, payload: dict, app) -> dict:
+async def _handle_orchestrator_action(
+    user_id: str, action: str, payload: dict, app, cid: str = ""
+) -> dict:
     """Generic fallback: route unhandled actions through the orchestrator."""
     orchestrator = getattr(app.state, "orchestrator", None)
     if not orchestrator:
@@ -302,15 +316,15 @@ async def _handle_orchestrator_action(user_id: str, action: str, payload: dict, 
         return {"status": "success", "result": result}
     except Exception as e:
         logger.warning("orchestrator_action_failed: %s", e, exc_info=True)
-        return {"status": "error", "error": str(e)}
+        return safe_error_event(e, cid, channel="ws")
 
 
-async def _handle_edit_before_approve(user_id: str, payload: dict, app) -> dict:
+async def _handle_edit_before_approve(user_id: str, payload: dict, app, cid: str = "") -> dict:
     """Handle edit-before-approve action via the REST edit endpoint."""
-    return await _process_edit_approval_ws(user_id, payload, app)
+    return await _process_edit_approval_ws(user_id, payload, app, cid)
 
 
-async def _process_edit_approval_ws(user_id: str, payload: dict, app) -> dict:
+async def _process_edit_approval_ws(user_id: str, payload: dict, app, cid: str = "") -> dict:
     """Bridge WS edit action to the REST edit_approval endpoint.
 
     Resolves workspace_id and DB session manually (no FastAPI DI available
@@ -353,13 +367,15 @@ async def _process_edit_approval_ws(user_id: str, payload: dict, app) -> dict:
                 "summary": result.summary,
             }
         except HTTPException as e:
-            return {"status": "error", "error": e.detail}
+            # detail is controlled, developer-authored text — safe to surface;
+            # emit the standard error frame shape (code + correlation id).
+            return {"status": "error", "code": "error", "message": e.detail, "correlation_id": cid}
         except Exception as e:
             logger.error("ws_edit_approval_failed: %s", e, exc_info=True)
-            return {"status": "error", "error": str(e)}
+            return safe_error_event(e, cid, channel="ws")
 
 
-async def _handle_execute_insight(user_id: str, payload: dict, app) -> dict:
+async def _handle_execute_insight(user_id: str, payload: dict, app, cid: str = "") -> dict:
     """Handle insight action execution — transitions insight to execution surface.
 
     When a user clicks a suggested action on an insight surface, this handler:
@@ -437,7 +453,7 @@ async def _handle_execute_insight(user_id: str, payload: dict, app) -> dict:
         }
     except Exception as e:
         logger.warning("ws_execute_insight_failed: %s", e, exc_info=True)
-        return {"status": "error", "error": str(e)}
+        return safe_error_event(e, cid, channel="ws")
 
 
 # Registry of named action handlers
@@ -449,15 +465,15 @@ ACTION_HANDLERS: dict[str, object] = {
 }
 
 
-async def _dispatch_action(user_id: str, action: str, payload: dict, app) -> dict:
+async def _dispatch_action(user_id: str, action: str, payload: dict, app, cid: str = "") -> dict:
     """Dispatch an action to the appropriate handler, always returning a result."""
     handler = ACTION_HANDLERS.get(action)
     if handler:
-        return await handler(user_id, payload, app)
-    return await _handle_orchestrator_action(user_id, action, payload, app)
+        return await handler(user_id, payload, app, cid)
+    return await _handle_orchestrator_action(user_id, action, payload, app, cid)
 
 
-async def _handle_client_message(user_id: str, raw: str, app) -> None:
+async def _handle_client_message(user_id: str, raw: str, app, cid: str = "") -> None:
     """Handle incoming WebSocket messages (A2UI actions).
 
     Every action gets an action_result response — the frontend always
@@ -488,7 +504,7 @@ async def _handle_client_message(user_id: str, raw: str, app) -> None:
             return
 
         try:
-            result = await _dispatch_action(user_id, action, payload, app)
+            result = await _dispatch_action(user_id, action, payload, app, cid)
             await _broadcast(
                 user_id,
                 {
@@ -500,13 +516,16 @@ async def _handle_client_message(user_id: str, raw: str, app) -> None:
             )
         except Exception as e:
             logger.warning("action_dispatch_error: %s", e, exc_info=True)
+            safe = safe_error_event(e, cid, channel="ws")
             await _broadcast(
                 user_id,
                 {
                     "type": "action_result",
                     "action": action,
                     "status": "error",
-                    "error": str(e),
+                    "error": safe["message"],
+                    "code": safe["code"],
+                    "correlation_id": safe["correlation_id"],
                 },
             )
 

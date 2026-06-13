@@ -19,7 +19,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
 from src.config.settings import Settings, get_anthropic_client
+from src.errors import classify, new_correlation_id
 from src.llm_utils import parse_llm_json
+from src.middleware.observability import get_correlation_id
 from src.models.plans import Plan, PlanTask
 from src.models.task_graph import TaskCheckpoint, TaskRun, TaskStep
 from src.orchestrator.agent_loop import CancellationRequested
@@ -41,6 +43,22 @@ logger = logging.getLogger(__name__)
 def _compute_retry_delay(retry_count: int) -> int:
     """Compute exponential backoff delay in seconds, capped at 30."""
     return min(2**retry_count, 30)
+
+
+def _safe_error_fields(exc: BaseException) -> dict:
+    """Build the client-safe error fields for run.error / step.error /
+    step.output_data and any event payload that reaches a surface.
+
+    The raw ``str(exc)`` is for logs only (and the secret-redacted trace) — it
+    is NEVER placed in these fields. Returns the safe message, a stable error
+    code, and a correlation id so a user can quote it to support.
+    """
+    code, message, _ = classify(exc)
+    return {
+        "message": message,
+        "error_code": code,
+        "correlation_id": get_correlation_id() or new_correlation_id(),
+    }
 
 
 def _step_to_state(s: "TaskStep", status_override: str | None = None) -> "StepState":
@@ -456,14 +474,19 @@ class GraphExecutor:
         except Exception as exc:
             transition_run(run, "failed")
             run.completed_at = datetime.now(timezone.utc)
-            run.error = {"type": type(exc).__name__, "message": str(exc)}
-            logger.error("Run %s failed: %s", run_id, exc)
+            # run.error is rendered in execution surfaces + run history (client-facing).
+            # Store the safe message + code + correlation id; raw str(exc) → logs only.
+            safe = _safe_error_fields(exc)
+            run.error = {"type": "execution_error", **safe}
+            logger.error("Run %s failed: %s", run_id, exc, exc_info=True)
             await self._emit_event(
                 "run.failed",
                 run.user_id,
                 {
                     "run_id": run_id,
-                    "error": str(exc),
+                    "error": safe["message"],
+                    "error_code": safe["error_code"],
+                    "correlation_id": safe["correlation_id"],
                 },
                 workspace_id=run.workspace_id,
             )
@@ -559,7 +582,11 @@ class GraphExecutor:
         except Exception as exc:
             transition_run(run, "failed")
             run.completed_at = datetime.now(timezone.utc)
-            run.error = {"type": type(exc).__name__, "message": str(exc)}
+            # Client-facing (served by the history API) — safe message + code only;
+            # raw str(exc) goes to logs.
+            safe = _safe_error_fields(exc)
+            run.error = {"type": "resume_error", **safe}
+            logger.error("Resume run %s failed: %s", run.run_id, exc, exc_info=True)
         finally:
             self._cancel_events.pop(run.run_id, None)
             await self._finalize_trace(run)
@@ -1178,9 +1205,13 @@ class GraphExecutor:
             )
             transition_step(step, "failed")
             transition_step(step, "pending")  # Retry: failed → pending
+            # step.error is surfaced in execution surfaces — keep it sanitized.
+            safe = _safe_error_fields(exc)
             step.error = {
                 "attempt": step.retry_count,
-                "message": str(exc),
+                "message": safe["message"],
+                "error_code": safe["error_code"],
+                "correlation_id": safe["correlation_id"],
                 "retry_after_seconds": delay,
             }
             await self._db.flush()
@@ -1193,16 +1224,31 @@ class GraphExecutor:
                 exc,
             )
             transition_step(step, "failed")
-            step.output_data = {"error": str(exc)}
+            # step.output_data is rendered in execution surfaces + run history,
+            # and step.error feeds the surface error line — both client-facing.
+            # Store the safe message + code + correlation id; raw str(exc) → logs/trace only.
+            safe = _safe_error_fields(exc)
+            step.output_data = {
+                "error": safe["message"],
+                "error_code": safe["error_code"],
+                "correlation_id": safe["correlation_id"],
+            }
             step.completed_at = datetime.now(timezone.utc)
-            step.error = {"message": str(exc), "final": True}
+            step.error = {
+                "message": safe["message"],
+                "error_code": safe["error_code"],
+                "correlation_id": safe["correlation_id"],
+                "final": True,
+            }
             await self._emit_event(
                 "step.failed",
                 run.user_id,
                 {
                     "run_id": run.run_id,
                     "step_id": step.step_id,
-                    "error": str(exc),
+                    "error": safe["message"],
+                    "error_code": safe["error_code"],
+                    "correlation_id": safe["correlation_id"],
                     "duration_ms": elapsed_ms,
                 },
                 workspace_id=run.workspace_id,

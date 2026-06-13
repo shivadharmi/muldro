@@ -11,6 +11,7 @@ import time
 from datetime import datetime, timezone
 
 from src.config.settings import Settings
+from src.errors import classify
 from src.services.world_model import RELATION_TYPES
 
 logger = logging.getLogger(__name__)
@@ -94,7 +95,16 @@ class GraphEngine:
                 "circuit_state": self._circuit._state,
             }
         except Exception as exc:
-            return {"status": "unreachable", "configured": True, "error": str(exc)[:200]}
+            # /v1/health/stores is a PUBLIC endpoint — surface only the safe
+            # message + code, never the raw Neo4j exception (may carry the URL).
+            logger.warning("Neo4j health check failed: %s", exc, exc_info=True)
+            code, message, _ = classify(exc)
+            return {
+                "status": "unreachable",
+                "configured": True,
+                "error": message,
+                "error_code": code,
+            }
 
     def get_metrics(self) -> dict:
         return {**self._metrics, "circuit_state": self._circuit._state}

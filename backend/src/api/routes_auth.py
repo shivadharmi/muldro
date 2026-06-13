@@ -16,6 +16,7 @@ from src.api.deps import (
     get_session,
 )
 from src.config.settings import Settings, get_settings
+from src.errors import AuthError, ValidationError
 from src.middleware.security import RATE_LIMIT_AUTH_VERIFY, per_endpoint_rate_limit
 from src.models.users import User
 from src.services.auth_service import AuthService
@@ -129,7 +130,10 @@ async def verify_magic_link(
     try:
         session = await auth.verify_magic_link(req.token)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise ValidationError(
+            internal_message=str(e),
+            safe_message="This sign-in link is invalid or has expired.",
+        ) from e
 
     user = await auth.get_user(session.user_id)
     raw_token = session._raw_token  # type: ignore[attr-defined]
@@ -969,7 +973,10 @@ async def refresh_token(
     try:
         session = await auth.refresh_session(req.refresh_token)
     except ValueError as e:
-        raise HTTPException(status_code=401, detail=str(e)) from e
+        raise AuthError(
+            internal_message=str(e),
+            safe_message="Your session could not be refreshed. Please sign in again.",
+        ) from e
 
     user = await auth.get_user(session.user_id)
     raw_token = session._raw_token  # type: ignore[attr-defined]

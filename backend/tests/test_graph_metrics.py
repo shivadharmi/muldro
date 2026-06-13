@@ -98,7 +98,11 @@ class TestGraphEngineHealth:
 
         assert result["status"] == "unreachable"
         assert result["configured"] is True
-        assert "connection refused" in result["error"]
+        # /v1/health/stores is a PUBLIC endpoint: surface the safe message + code,
+        # NOT the raw Neo4j exception text.
+        assert result["error"] == "Something went wrong. Please try again."
+        assert result["error_code"] == "internal_error"
+        assert "connection refused" not in result["error"]
 
     async def test_health_unreachable_when_no_driver(self, neo4j_settings):
         from src.services.graph_engine import GraphEngine
@@ -281,7 +285,11 @@ class TestVectorStoreHealth:
 
         assert result["status"] == "unreachable"
         assert result["configured"] is True
-        assert "refused" in result["error"]
+        # /v1/health/stores is a PUBLIC endpoint: surface the safe message + code,
+        # NOT the raw exception text.
+        assert result["error"] == "Something went wrong. Please try again."
+        assert result["error_code"] == "internal_error"
+        assert "refused" not in result["error"]
 
     async def test_health_unreachable_when_no_client(self, qdrant_settings):
         from src.services.vector_store import VectorStore

@@ -15,6 +15,8 @@ from pydantic import BaseModel
 
 from src.api.deps import get_current_user_id, get_current_workspace_id
 from src.config.settings import Settings, get_settings
+from src.errors import safe_error_event
+from src.middleware.observability import get_correlation_id
 from src.orchestrator.contracts import (
     MessageAgentStep,
     MessageMetadata,
@@ -92,7 +94,7 @@ async def chat_stream(
       - decision: {decision}
       - agent_done: {agent, text, input_tokens, output_tokens, latency_ms}
       - response: {text}  — the final user-facing response
-      - error: {message}
+      - error: {code, message, correlation_id}  — client-safe (no raw exception)
       - done: {trace_id}
     """
     orchestrator = await _get_orchestrator(settings)
@@ -267,7 +269,7 @@ async def chat_stream(
                 yield f"event: {event_type}\ndata: {data}\n\n"
         except Exception as e:
             logger.error("Chat stream error: %s", e, exc_info=True)
-            error_data = json.dumps({"event": "error", "message": str(e)})
+            error_data = json.dumps(safe_error_event(e, get_correlation_id()))
             yield f"event: error\ndata: {error_data}\n\n"
         finally:
             # Save assistant response and update conversation aggregates

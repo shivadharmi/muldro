@@ -13,6 +13,8 @@ import type { WorkspaceSurface } from "@/stores/surface-store";
 import { useCommandStore } from "@/stores/command-store";
 import { useWsActionStore } from "@/stores/ws-action-store";
 import { fetchConversationMessages, type ConversationMessage } from "@/lib/api";
+import { formatApiError, type ParsedApiError } from "@/lib/api-error";
+import { useToast } from "@/components/ui/toast";
 import type { WorkspaceSurfacePush, SurfacePreview, SurfaceUpdate } from "@/lib/a2ui-types";
 import type { SurfaceKind } from "@/lib/types/surfaces";
 
@@ -30,6 +32,12 @@ export default function ChatPage() {
 
   const { mode, setMode } = useCommandStore();
   const setGlobalSendAction = useWsActionStore((s) => s.setSendAction);
+  const { addToast } = useToast();
+
+  const handleWsError = useCallback(
+    (err: ParsedApiError) => addToast(formatApiError(err), "error"),
+    [addToast]
+  );
 
   const handleSurfacePush = useCallback(
     (push: WorkspaceSurfacePush) => {
@@ -76,6 +84,7 @@ export default function ChatPage() {
       (update: SurfaceUpdate) => updateSurface(update.surface_id, update),
       [updateSurface]
     ),
+    onError: handleWsError,
     enabled: !!user,
   });
 

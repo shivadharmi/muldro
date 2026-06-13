@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ActionResult, JarvisMessage, SurfaceUpdate, WorkspaceSurfacePush } from "@/lib/a2ui-types";
+import { parseWsError, type ParsedApiError } from "@/lib/api-error";
 import { getStoredToken } from "@/lib/auth";
 
 function getWsUrl(userId: string): string {
@@ -21,6 +22,8 @@ interface UseJarvisWsOptions {
   onSurfaceUpdate?: (update: SurfaceUpdate) => void;
   onActionResult?: (result: ActionResult) => void;
   onNotification?: (msg: JarvisMessage) => void;
+  /** Top-level WS error frame: { status:"error", code, message, correlation_id }. */
+  onError?: (err: ParsedApiError) => void;
   enabled?: boolean;
 }
 
@@ -30,6 +33,7 @@ export function useJarvisWs({
   onSurfaceUpdate,
   onActionResult,
   onNotification,
+  onError,
   enabled = true,
 }: UseJarvisWsOptions) {
   const wsRef = useRef<WebSocket | null>(null);
@@ -40,6 +44,7 @@ export function useJarvisWs({
   const onActionResultRef = useRef(onActionResult);
   const onSurfaceUpdateRef = useRef(onSurfaceUpdate);
   const onNotificationRef = useRef(onNotification);
+  const onErrorRef = useRef(onError);
   useEffect(() => {
     onSurfacePushRef.current = onSurfacePush;
   }, [onSurfacePush]);
@@ -52,6 +57,9 @@ export function useJarvisWs({
   useEffect(() => {
     onNotificationRef.current = onNotification;
   }, [onNotification]);
+  useEffect(() => {
+    onErrorRef.current = onError;
+  }, [onError]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -88,7 +96,16 @@ export function useJarvisWs({
           return;
         }
 
-        if (!msg || typeof msg !== "object" || !("type" in msg)) return;
+        if (!msg || typeof msg !== "object") return;
+
+        // Standardized top-level error frame: { status:"error", code, message,
+        // correlation_id } — has no `type`. Surface the safe message only.
+        if (!("type" in msg) && "status" in msg && msg.status === "error") {
+          onErrorRef.current?.(parseWsError(msg));
+          return;
+        }
+
+        if (!("type" in msg)) return;
 
         if (msg.type === "auth_ok") {
           setConnected(true);
@@ -99,11 +116,15 @@ export function useJarvisWs({
             onSurfacePushRef.current(msg.surface);
           }
         } else if (msg.type === "action_result" && onActionResultRef.current) {
+          const status = (msg.status as "success" | "error") ?? "success";
+          const parsed = status === "error" ? parseWsError(msg) : null;
           onActionResultRef.current({
             action: msg.action,
-            status: (msg.status as "success" | "error") ?? "success",
+            status,
             result: msg.result,
-            error: msg.error,
+            message: parsed?.message,
+            code: parsed?.code,
+            correlationId: parsed?.correlationId,
           });
         } else if (msg.type === "surface_update" && onSurfaceUpdateRef.current) {
           onSurfaceUpdateRef.current({

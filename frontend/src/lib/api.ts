@@ -23,17 +23,49 @@ import type {
 
 
 import { getStoredToken } from "./auth";
+import {
+  formatApiError,
+  parseApiError,
+  SAFE_FALLBACK_MESSAGE,
+  type ParsedApiError,
+} from "./api-error";
 
 // ── Typed API Error ─────────────────────────────────────────────
 
+/**
+ * Typed REST error. `message` is ALWAYS client-safe (parsed from the backend
+ * error envelope `body.error.message`, or a generic fallback) — it NEVER
+ * contains the raw response body or a backend `detail`/stack.
+ *
+ * The status code is embedded in the message (e.g. "API 404: ...") so existing
+ * consumers that string-match on status (e.g. React Query's 401 handling) keep
+ * working, without leaking the raw body.
+ */
 export class ApiError extends Error {
+  readonly code: string;
+  readonly correlationId: string | null;
+  /** Client-safe message without the status prefix, e.g. "Not found.". */
+  readonly safeMessage: string;
+
   constructor(
     public readonly status: number,
     public readonly statusText: string,
-    public readonly body: string
+    parsed: ParsedApiError
   ) {
-    super(`API ${status}: ${body || statusText}`);
+    super(`API ${status}: ${parsed.message || statusText}`);
     this.name = "ApiError";
+    this.code = parsed.code;
+    this.correlationId = parsed.correlationId;
+    this.safeMessage = parsed.message || SAFE_FALLBACK_MESSAGE;
+  }
+
+  /** Client-safe message + correlation id, e.g. "Not found. — reference: req_abc". */
+  get displayMessage(): string {
+    return formatApiError({
+      code: this.code,
+      message: this.safeMessage,
+      correlationId: this.correlationId,
+    });
   }
 
   get isUnauthorized(): boolean {
@@ -45,6 +77,18 @@ export class ApiError extends Error {
   get isNotFound(): boolean {
     return this.status === 404;
   }
+}
+
+/**
+ * Build an ApiError from a non-ok Response, reading the standardized error
+ * envelope from the body and the correlation id from the X-Request-ID header.
+ * Never throws; falls back to a safe generic message on any parse failure.
+ */
+async function toApiError(res: Response): Promise<ApiError> {
+  const correlationHeader = res.headers.get("X-Request-ID");
+  const text = await res.text().catch(() => "");
+  const parsed = parseApiError(text, correlationHeader);
+  return new ApiError(res.status, res.statusText, parsed);
 }
 
 // ── Helpers ─────────────────────────────────────────────────────
@@ -62,8 +106,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { ...authHeaders(), ...init?.headers },
   });
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new ApiError(res.status, res.statusText, text);
+    throw await toApiError(res);
   }
   if (res.status === 204) return undefined as T;
   return res.json();
@@ -152,6 +195,9 @@ export interface ChatSSEEvent {
   blocked?: boolean;
   latency_ms?: number;
   message?: string;
+  // Standardized error-event envelope (event: "error")
+  code?: string;
+  correlation_id?: string;
   message_id?: string;
   plan?: PlanOutput;
   trace_id?: string;
@@ -191,8 +237,7 @@ export async function streamChat(
   });
 
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new ApiError(res.status, res.statusText, text);
+    throw await toApiError(res);
   }
 
   const reader = res.body?.getReader();

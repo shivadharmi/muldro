@@ -264,9 +264,14 @@ class TestNotifier:
             },
         )
 
-        # Should not raise, error is captured per surface
+        # Should not raise, error is captured per surface — but sanitized:
+        # the per-surface error carries the safe message + code, NOT str(exc).
         assert result["status"] == "sent"
-        assert "error" in result["surfaces"]["telegram"]["error"]
+        telegram_result = result["surfaces"]["telegram"]
+        assert telegram_result["status"] == "error"
+        assert telegram_result["error"] == "Something went wrong. Please try again."
+        assert telegram_result["error_code"] == "internal_error"
+        assert "Network error" not in telegram_result["error"]
 
 
 class TestPriorityScoreDelivery:
