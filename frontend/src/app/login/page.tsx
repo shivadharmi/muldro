@@ -4,6 +4,7 @@ import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { sendMagicLink, verifyMagicLink, getGoogleAuthUrl } from "@/lib/api";
+import { errorToMessage } from "@/lib/api-error";
 
 function LoginForm() {
   const [email, setEmail] = useState("");
@@ -29,7 +30,7 @@ function LoginForm() {
         });
         router.push("/chat");
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Invalid or expired token");
+        setError(errorToMessage(err));
       } finally {
         setLoading(false);
       }
@@ -58,7 +59,7 @@ function LoginForm() {
       }
       setStep("verify");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to send magic link");
+      setError(errorToMessage(err));
     } finally {
       setLoading(false);
     }
@@ -80,7 +81,7 @@ function LoginForm() {
         setError(`OAuth for ${provider} not yet configured`);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to start OAuth");
+      setError(errorToMessage(err));
     } finally {
       setLoading(false);
     }

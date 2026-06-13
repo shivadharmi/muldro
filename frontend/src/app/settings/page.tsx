@@ -15,6 +15,7 @@ import {
 import { useToast } from "@/components/ui/toast";
 import { useAuth } from "@/lib/auth";
 import type { TrustDashboardEntry } from "@/lib/types";
+import { errorToMessage } from "@/lib/api-error";
 import { TRUST_LEVEL_LABELS } from "@/components/settings/trust-constants";
 import { AccountTab } from "@/components/settings/account-tab";
 import { HowJarvisActsTab } from "@/components/settings/how-jarvis-acts-tab";
@@ -98,7 +99,7 @@ export default function SettingsPage() {
       addToast("Policy mode updated", "success");
     } catch (err) {
       addToast(
-        `Failed: ${err instanceof Error ? err.message : "Unknown"}`,
+        errorToMessage(err),
         "error"
       );
     } finally {
@@ -117,7 +118,7 @@ export default function SettingsPage() {
       addToast("Budget updated", "success");
     } catch (err) {
       addToast(
-        `Failed: ${err instanceof Error ? err.message : "Unknown"}`,
+        errorToMessage(err),
         "error"
       );
     } finally {
@@ -140,7 +141,7 @@ export default function SettingsPage() {
       );
     } catch (err) {
       addToast(
-        `Failed: ${err instanceof Error ? err.message : "Unknown"}`,
+        errorToMessage(err),
         "error"
       );
     } finally {
@@ -156,7 +157,7 @@ export default function SettingsPage() {
       addToast(`Trust reset for ${capability}`, "success");
     } catch (err) {
       addToast(
-        `Failed: ${err instanceof Error ? err.message : "Unknown"}`,
+        errorToMessage(err),
         "error"
       );
     } finally {
