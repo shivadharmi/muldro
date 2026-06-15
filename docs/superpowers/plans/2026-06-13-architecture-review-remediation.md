@@ -156,6 +156,18 @@ memory_service → scheduler) → SVC-P1-3 (graph_executor) → ORCH-P1-1 (jarvi
   module 410 lines. Added a registration-integrity test pinning the exact 19 tool + 2
   resource-template names; repointed three tests' internal-global patch targets to `_shared`.
   Reviewed (true no-op, no findings); suite green (2227 passed).
+- **SVC-P2-2b** (`memory_service.py`) — ✅ done. Decomposed the 1142-line single-class module
+  into a package of per-responsibility **base classes** that `MemoryService` inherits:
+  `_base` (collaborators + shared helpers), `extraction`, `storage`, `retrieval`,
+  `consolidation`, `contradictions`, `stability`; `service.py` composes them via multiple
+  inheritance; `__init__` is the facade. **Inheritance (not delegation) was chosen so method
+  bodies move byte-for-byte verbatim** — no `self`→`svc` rename, no forwarding stubs. This
+  deliberately overrides engineering-standards §2's "avoid mixins" for this case (one-level
+  composition of a single cohesive stateless class, user-directed). Largest module 284 lines.
+  Added a composition characterization test (all 20 methods resolve, single `__init__`, MRO);
+  moved five tests' `get_anthropic_client`/`EmbeddingService` patch targets to `_base`.
+  Reviewed (true no-op, no findings); suite green (2231 passed). This completes all three
+  SVC-P2-2 files except `scheduler.py` (tracked as the next target).
 
 ### Error handling (completed — separate user-reported issue, not from the review)
 
