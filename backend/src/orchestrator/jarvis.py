@@ -39,6 +39,13 @@ from src.orchestrator.agent_loop import (
 )
 from src.orchestrator.agents import AGENTS, SubAgent, build_agent_set
 from src.orchestrator.budget import BudgetTracker
+from src.orchestrator.chat_pipeline import (
+    build_telegram_hint,
+    build_user_action_block,
+    format_prior_results_for_presenter,
+    format_prior_step_results,
+    resolve_plan_routing,
+)
 from src.orchestrator.intent_classifier import (
     FAST_INTENTS,
     INTENT_CONFIDENCE_THRESHOLD,
@@ -52,7 +59,7 @@ from src.orchestrator.services import ServiceContainer
 from src.orchestrator.system_capability_handler import SystemCapabilityHandler
 from src.orchestrator.tracing import TraceManager
 from src.services.agent_registry import AgentRegistry
-from src.services.capability_resolver import CapabilityResolver, route_step
+from src.services.capability_resolver import CapabilityResolver
 from src.services.context_builder import ContextBuilder, ContextPack
 from src.services.interaction_learner import InteractionLearner
 from src.services.surface_mapping import (
@@ -778,27 +785,9 @@ class JarvisOrchestrator:
             )
 
             # Step 2: Pre-resolve routing and tools for all steps
-            step_routing: list[tuple[PlanStep, str, list[dict]]] = []
-            user_steps: list[PlanStep] = []
-
-            async with self._db_factory() as db:
-                resolver = CapabilityResolver(db, workspace_id)
-                for step in plan.steps:
-                    if step.actor == "user":
-                        user_steps.append(step)
-                        continue
-                    if step.capability.startswith("system."):
-                        step_routing.append((step, "", []))
-                    elif step.capability in ("reason", "respond"):
-                        step_routing.append((step, "presenter", []))
-                    elif step.capability == "perceive":
-                        # Broad read: Perceiver gets ALL its tools, decides
-                        # autonomously which sources to query.
-                        step_routing.append((step, "perceiver", []))
-                    else:
-                        agent_name = await route_step(step.capability, resolver)
-                        tools = await resolver.resolve_for_step(step.capability)
-                        step_routing.append((step, agent_name, tools))
+            step_routing, user_steps = await resolve_plan_routing(
+                self._db_factory, workspace_id, plan.steps
+            )
 
             # Step 3: Execute steps sequentially
             for step_idx, (step, agent_name, tools) in enumerate(step_routing):
@@ -826,15 +815,7 @@ class JarvisOrchestrator:
                     for k, v in result.items()
                     if k not in ("presentation", "user_actions") and v
                 }
-                if prior_outputs:
-                    parts = []
-                    for key, output in prior_outputs.items():
-                        parts.append(f"[{key}]:\n{str(output)}")
-                    agent_message += (
-                        "\n\n--- Prior step results ---\n"
-                        + "\n\n".join(parts)
-                        + "\n--- End of prior step results ---\n"
-                    )
+                agent_message += format_prior_step_results(prior_outputs)
                 if history_block:
                     agent_message = f"{history_block}\n\n{agent_message}"
 
@@ -851,11 +832,7 @@ class JarvisOrchestrator:
             # Build user action block from user_steps
             user_action_block = ""
             if user_steps:
-                actions = "\n".join(
-                    f"- {s.description}" + (f" ({s.user_context})" if s.user_context else "")
-                    for s in user_steps
-                )
-                user_action_block = f"\n\nUser actions required:\n{actions}"
+                user_action_block = build_user_action_block(user_steps)
                 result["user_actions"] = [
                     {"description": s.description, "context": s.user_context} for s in user_steps
                 ]
@@ -882,22 +859,8 @@ class JarvisOrchestrator:
             if direct_answer is not None:
                 result["presentation"] = direct_answer
             else:
-                prior_results_block = ""
-                if step_outputs:
-                    parts = []
-                    for agent_key, output in step_outputs.items():
-                        parts.append(f"[{agent_key}]:\n{str(output)}")
-                    prior_results_block = (
-                        "\n\n--- Prior step results (use these to answer the user) ---\n"
-                        + "\n\n".join(parts)
-                        + "\n--- End of prior step results ---\n"
-                    )
-
-                telegram_hint = (
-                    " Keep under 3500 chars. Prioritize action items and key findings."
-                    if surface == "telegram"
-                    else ""
-                )
+                prior_results_block = format_prior_results_for_presenter(step_outputs)
+                telegram_hint = build_telegram_hint(surface)
                 presenter_msg = (
                     f"Format this for the user ({surface}).{telegram_hint} "
                     f"Be conversational and helpful.\n\n"
@@ -1143,27 +1106,9 @@ class JarvisOrchestrator:
             )
 
             # Step 2: Pre-resolve routing and tools
-            step_routing: list[tuple[PlanStep, str, list[dict]]] = []
-            user_steps: list[PlanStep] = []
-
-            async with self._db_factory() as db:
-                resolver = CapabilityResolver(db, workspace_id)
-                for step in plan.steps:
-                    if step.actor == "user":
-                        user_steps.append(step)
-                        continue
-                    if step.capability.startswith("system."):
-                        step_routing.append((step, "", []))
-                    elif step.capability in ("reason", "respond"):
-                        step_routing.append((step, "presenter", []))
-                    elif step.capability == "perceive":
-                        # Broad read: Perceiver gets ALL its tools, decides
-                        # autonomously which sources to query.
-                        step_routing.append((step, "perceiver", []))
-                    else:
-                        agent_name = await route_step(step.capability, resolver)
-                        tools = await resolver.resolve_for_step(step.capability)
-                        step_routing.append((step, agent_name, tools))
+            step_routing, user_steps = await resolve_plan_routing(
+                self._db_factory, workspace_id, plan.steps
+            )
 
             # Step 3: Execute steps with streaming
             presenter_text = ""
@@ -1194,15 +1139,7 @@ class JarvisOrchestrator:
                     f"User message: {message}"
                 )
                 # Inject prior step results so downstream agents see earlier outputs
-                if step_outputs:
-                    parts = []
-                    for key, output in step_outputs.items():
-                        parts.append(f"[{key}]:\n{str(output)}")
-                    agent_message += (
-                        "\n\n--- Prior step results ---\n"
-                        + "\n\n".join(parts)
-                        + "\n--- End of prior step results ---\n"
-                    )
+                agent_message += format_prior_step_results(step_outputs)
                 if history_block:
                     agent_message = f"{history_block}\n\n{agent_message}"
 
@@ -1227,11 +1164,7 @@ class JarvisOrchestrator:
             # Build user action block from user_steps
             user_action_block = ""
             if user_steps:
-                actions = "\n".join(
-                    f"- {s.description}" + (f" ({s.user_context})" if s.user_context else "")
-                    for s in user_steps
-                )
-                user_action_block = f"\n\nUser actions required:\n{actions}"
+                user_action_block = build_user_action_block(user_steps)
                 yield {
                     "event": "user_actions",
                     "steps": [
@@ -1259,22 +1192,8 @@ class JarvisOrchestrator:
                 yield {"event": "response", "text": direct_answer}
             else:
                 # Collect prior step results so Presenter can reference them
-                prior_results_block = ""
-                if step_outputs:
-                    parts = []
-                    for agent_key, output in step_outputs.items():
-                        parts.append(f"[{agent_key}]:\n{str(output)}")
-                    prior_results_block = (
-                        "\n\n--- Prior step results (use these to answer the user) ---\n"
-                        + "\n\n".join(parts)
-                        + "\n--- End of prior step results ---\n"
-                    )
-
-                telegram_hint = (
-                    " Keep under 3500 chars. Prioritize action items and key findings."
-                    if surface == "telegram"
-                    else ""
-                )
+                prior_results_block = format_prior_results_for_presenter(step_outputs)
+                telegram_hint = build_telegram_hint(surface)
                 presenter_msg = (
                     f"Respond to the user ({surface}).{telegram_hint} "
                     f"Be conversational and helpful.\n\n"
