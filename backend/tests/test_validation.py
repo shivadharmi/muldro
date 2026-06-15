@@ -277,6 +277,45 @@ def test_readonly_high_risk():
     assert any("readonly_approval" in err and "requires approval" in err for err in errors)
 
 
+def test_duplicate_tool_name_flagged():
+    """Check 7: a name shared across internal + external catalogs is flagged (TOOL-P2-3)."""
+    from dataclasses import dataclass
+
+    @dataclass(frozen=True, slots=True)
+    class MockToolDef:
+        name: str
+        capability: str
+        risk_level: str = "low"
+        requires_approval: bool = False
+        read_only: bool = True
+
+    @dataclass(frozen=True, slots=True)
+    class MockExternalSeed:
+        name: str
+        capability: str
+        server: str
+        risk_level: str = "low"
+        requires_approval: bool = False
+        verified: bool = False
+
+    class MockInput(BaseModel):
+        test: str = Field(default="", description="t")
+
+    mock_catalog = {"test.capability": object()}
+
+    internal = [MockToolDef(name="shared_name", capability="test.capability")]
+    external = [MockExternalSeed(name="shared_name", capability="test.capability", server="x")]
+
+    errors = validate_registry(
+        internal_tools=internal,
+        external_seeds=external,
+        capability_catalog=mock_catalog,
+        tool_input_models={"shared_name": MockInput},
+    )
+
+    assert any("shared_name" in err and "Duplicate tool name" in err for err in errors)
+
+
 def test_skip_validation_setting():
     """Should have skip_registry_validation setting with False default."""
     from src.config.settings import Settings

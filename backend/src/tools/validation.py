@@ -24,6 +24,7 @@ def validate_registry(
     4. High-risk (and critical) tools require approval
     5. Internal tools have schemas
     6. Read-only internal tools are low-risk
+    7. Tool names are globally unique across internal + external catalogs
     """
     # Default to module-level constants if not provided
     if internal_tools is None:
@@ -103,5 +104,24 @@ def validate_registry(
                 )
             if tool.requires_approval:
                 errors.append(f"Read-only tool '{tool.name}' requires approval")
+
+    # Check 7: Tool names are globally unique across internal + external catalogs.
+    # seed_defaults skips duplicates via a `seen` set without complaint, so a
+    # collision would silently drop one tool's definition. Fail fast instead.
+    seen_names: dict[str, str] = {}
+    for tool in internal_tools:
+        if tool.name in seen_names:
+            errors.append(
+                f"Duplicate tool name '{tool.name}' (in {seen_names[tool.name]} and internal)"
+            )
+        else:
+            seen_names[tool.name] = "internal"
+    for seed in external_seeds:
+        if seed.name in seen_names:
+            errors.append(
+                f"Duplicate tool name '{seed.name}' (in {seen_names[seed.name]} and external)"
+            )
+        else:
+            seen_names[seed.name] = "external"
 
     return errors

@@ -74,6 +74,7 @@ class ToolRegistry:
             approval = tool.requires_approval
             verified = True  # Internal tools are always verified
             input_schema = _schema_for_claude(tool.input_model)
+            description = tool.description
 
             if name not in existing:
                 new_tool = ToolDefinition(
@@ -89,6 +90,7 @@ class ToolRegistry:
                     capability=capability,
                     verified=verified,
                     input_schema=input_schema,
+                    description=description,
                     enabled=True,
                 )
                 self._db.add(new_tool)
@@ -122,6 +124,9 @@ class ToolRegistry:
                 needs_update = True
             if tool_def.input_schema != input_schema:
                 tool_def.input_schema = input_schema
+                needs_update = True
+            if tool_def.description != description:
+                tool_def.description = description
                 needs_update = True
 
             if needs_update:

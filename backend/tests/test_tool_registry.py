@@ -85,6 +85,7 @@ class TestSeedDefaults:
             t.requires_approval = tool.requires_approval
             t.verified = True
             t.input_schema = _schema_for_claude(tool.input_model)
+            t.description = tool.description
             existing_tools.append(t)
 
         # Add external seeds
@@ -128,6 +129,53 @@ class TestSeedDefaults:
                 return
 
         pytest.fail("web_search tool was not seeded")
+
+    @pytest.mark.asyncio
+    async def test_seed_defaults_writes_internal_description(self, registry, mock_db):
+        """Internal tools are inserted with their catalog description (TOOL-P1-2)."""
+        result_mock = MagicMock()
+        result_mock.scalars.return_value = result_mock
+        result_mock.all.return_value = []
+        mock_db.execute = AsyncMock(return_value=result_mock)
+
+        await registry.seed_defaults()
+
+        catalog = {tool.name: tool for tool in INTERNAL_TOOLS}
+        seeded = {
+            call[0][0].name: call[0][0]
+            for call in mock_db.add.call_args_list
+            if call[0][0].name in catalog
+        }
+        # Every internal tool seeded carries its catalog description (not NULL).
+        for name, tool_def in seeded.items():
+            assert tool_def.description == catalog[name].description
+
+    @pytest.mark.asyncio
+    async def test_seed_defaults_syncs_diverged_description(self, registry, mock_db):
+        """A drifted description on an existing row is re-synced (TOOL-P1-2)."""
+        from src.services.tool_registry import _schema_for_claude
+
+        sample = INTERNAL_TOOLS[0]
+        existing = _make_tool_def(name=sample.name)
+        existing.backend = "internal_mcp"
+        existing.source = "internal"
+        existing.server = sample.server
+        existing.capability = sample.capability
+        existing.risk_level = sample.risk_level
+        existing.requires_approval = sample.requires_approval
+        existing.verified = True
+        existing.input_schema = _schema_for_claude(sample.input_model)
+        existing.description = "STALE DESCRIPTION"  # only this field diverges
+
+        result_mock = MagicMock()
+        result_mock.scalars.return_value = result_mock
+        result_mock.all.return_value = [existing]
+        mock_db.execute = AsyncMock(return_value=result_mock)
+
+        changed = await registry.seed_defaults()
+
+        assert changed >= 1
+        assert existing.description == sample.description
 
 
 class TestRegisterTool:
