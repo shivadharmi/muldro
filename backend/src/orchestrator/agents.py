@@ -153,8 +153,6 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
     "presenter": {
         "internal.get_briefing",
         "internal.search",
-        "internal.send_telegram",
-        "internal.send_approval",
         "internal.push_ui",
         "messaging.send",
     },

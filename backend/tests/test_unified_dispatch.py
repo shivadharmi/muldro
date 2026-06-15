@@ -100,9 +100,11 @@ class TestCallInternalToolServerPrefix:
         orchestrator._internal_client = mock_client
 
         await orchestrator._call_internal_tool(
-            "send_telegram", {"text": "hi"}, server_prefix="communication"
+            "push_ui_update", {"surface_id": "daily_brief"}, server_prefix="communication"
         )
-        mock_client.call_tool.assert_called_once_with("communication_send_telegram", {"text": "hi"})
+        mock_client.call_tool.assert_called_once_with(
+            "communication_push_ui_update", {"surface_id": "daily_brief"}
+        )
 
     @pytest.mark.asyncio
     async def test_server_prefix_intelligence(self, orchestrator):

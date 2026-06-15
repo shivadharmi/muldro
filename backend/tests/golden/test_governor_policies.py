@@ -20,7 +20,7 @@ POLICY_CASES = [
     {"tool": "manage_event", "agent": "operator", **_A},
     {"tool": "slack_post_message", "agent": "operator", **_A},
     {"tool": "add_issue_comment", "agent": "operator", **_A},
-    {"tool": "send_telegram", "agent": "presenter", **_A},
+    {"tool": "push_ui_update", "agent": "presenter", **_A},
     {"tool": "issue_write", "agent": "operator", **_A},
     {"tool": "create_pull_request", "agent": "operator", **_A},
     # Read-only tools -> allowed

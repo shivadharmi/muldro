@@ -36,39 +36,6 @@ class TestInternalToolServerMapping:
         )
         mock_client.call_tool.assert_called_once_with("intelligence_search", {"query": "test"})
 
-    async def test_communication_tool_uses_communication_prefix(self, orchestrator):
-        mock_client = AsyncMock()
-        mock_result = MagicMock()
-        mock_result.is_error = False
-        mock_result.structured_content = {"result": {"status": "sent"}}
-        mock_client.call_tool = AsyncMock(return_value=mock_result)
-        orchestrator._internal_client = mock_client
-
-        await orchestrator._call_internal_tool(
-            "send_telegram", {"text": "hello"}, server_prefix="communication"
-        )
-        mock_client.call_tool.assert_called_once_with(
-            "communication_send_telegram", {"text": "hello"}
-        )
-
-    async def test_send_approval_uses_communication_prefix(self, orchestrator):
-        mock_client = AsyncMock()
-        mock_result = MagicMock()
-        mock_result.is_error = False
-        mock_result.structured_content = {"result": {"status": "sent"}}
-        mock_client.call_tool = AsyncMock(return_value=mock_result)
-        orchestrator._internal_client = mock_client
-
-        await orchestrator._call_internal_tool(
-            "send_approval_prompt",
-            {"approval_id": "apr_001", "title": "Test", "summary": "test"},
-            server_prefix="communication",
-        )
-        mock_client.call_tool.assert_called_once_with(
-            "communication_send_approval_prompt",
-            {"approval_id": "apr_001", "title": "Test", "summary": "test"},
-        )
-
     async def test_push_ui_uses_communication_prefix(self, orchestrator):
         mock_client = AsyncMock()
         mock_result = MagicMock()

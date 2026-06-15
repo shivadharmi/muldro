@@ -6,7 +6,7 @@ the Unified Tool Registry migration (Phase 6).
 
 Tools are organized by server:
 - intelligence: 19 tools (search, ingest, policies, context, briefing, etc.)
-- communication: 3 tools (telegram, approval prompts, UI updates)
+- communication: 1 tool (UI updates)
 - _special: 1 tool (report_governor_verdict — inline-dispatched, not MCP)
 """
 
@@ -32,8 +32,6 @@ from src.tools.schemas import (
     ReportGovernorVerdictInput,
     ReportObservationInput,
     SearchInput,
-    SendApprovalPromptInput,
-    SendTelegramInput,
     StoreMemoryInput,
     StorePreferenceInput,
     UpdateEntityInput,
@@ -271,27 +269,7 @@ INTERNAL_TOOLS: list[InternalToolDef] = [
         description=_desc(ReportGovernorVerdictInput),
         read_only=False,
     ),
-    # Communication server tools (3 tools)
-    InternalToolDef(
-        name="send_telegram",
-        input_model=SendTelegramInput,
-        capability="internal.send_telegram",
-        risk_level="medium",
-        requires_approval=True,
-        server="communication",
-        description=_desc(SendTelegramInput),
-        read_only=False,
-    ),
-    InternalToolDef(
-        name="send_approval_prompt",
-        input_model=SendApprovalPromptInput,
-        capability="internal.send_approval",
-        risk_level="medium",
-        requires_approval=True,
-        server="communication",
-        description=_desc(SendApprovalPromptInput),
-        read_only=False,
-    ),
+    # Communication server tools (1 tool)
     InternalToolDef(
         name="push_ui_update",
         input_model=PushUiUpdateInput,
