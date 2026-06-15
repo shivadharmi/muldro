@@ -83,7 +83,6 @@ _PLANNER_JSON_CONTRACT_SUFFIX = (
 
 # Event types published to the agent events stream
 AGENT_EVENT_TYPES = {
-    "plan_generated",
     "approval_requested",
     "execution_started",
     "execution_completed",
@@ -776,11 +775,19 @@ class JarvisOrchestrator:
                 "summary": plan.reasoning or plan_text,
             }
 
-            await self._publish_event(
-                "plan_generated",
-                user_id,
-                {"plan": plan_dict, "trace_id": trace.trace_id},
-                trace_id=trace.trace_id,
+            # Fire the canonical durable runtime event in the background,
+            # matching the stream path's `plan_created` (chat-pipeline-fold
+            # spec drift #4). Replaces the legacy `plan_generated` agent-stream
+            # event, which no consumer read; batch now gains the durable record
+            # + metrics increment the stream path already had.
+            self._spawn_background(
+                self._emit_runtime_event(
+                    "plan_created",
+                    workspace_id=workspace_id,
+                    user_id=user_id,
+                    run_id=None,
+                    payload={"goal": plan.goal, "trace_id": trace.trace_id},
+                )
             )
 
             # Step 2: Pre-resolve routing and tools for all steps

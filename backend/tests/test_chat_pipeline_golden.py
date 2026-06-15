@@ -432,12 +432,12 @@ class TestErrorContract:
 
 
 class TestDriftFourPlanEvent:
-    """DRIFT #4 (spec §5): batch fires legacy ``plan_generated`` via
-    ``_publish_event`` (awaited, agent-stream bus, no durable record); stream
-    fires canonical ``plan_created`` via ``_emit_runtime_event`` (background,
-    durable runtime-events bus). Frozen so the reconciliation is visible."""
+    """DRIFT #4 (spec §5, reconciled 2026-06-16): both paths now fire the
+    canonical durable ``plan_created`` via ``_emit_runtime_event`` (background);
+    the legacy ``plan_generated`` ``_publish_event`` (agent-stream bus, no
+    consumer) is gone from the batch path."""
 
-    async def test_batch_fires_plan_generated_not_plan_created(self):
+    async def test_batch_fires_plan_created_not_plan_generated(self):
         plan, routing, users, canned = _scenario_multi_step()
         orch, _ = _make_orch(canned)
         ctx = _patches(plan, routing, users)
@@ -451,8 +451,8 @@ class TestDriftFourPlanEvent:
 
         publish_names = [c.args[0] for c in orch._publish_event.call_args_list]
         runtime_names = [c.args[0] for c in orch._emit_runtime_event.call_args_list]
-        assert "plan_generated" in publish_names
-        assert "plan_created" not in runtime_names
+        assert "plan_created" in runtime_names
+        assert "plan_generated" not in publish_names
 
     async def test_stream_fires_plan_created_not_plan_generated(self):
         plan, routing, users, canned = _scenario_multi_step()
