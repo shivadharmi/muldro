@@ -20,12 +20,13 @@ implemented (see "Completed" below) and live on this branch.
 | Priority | Count | State |
 |----------|-------|-------|
 | P0 | 4 | ✅ Implemented + reviewed on this branch |
-| P1 | 9 | 🟡 6 done (M1 + M2), 3 planned |
-| P2 | 12 | 🟡 7 done (M1 + M2), 5 planned |
-| P3 | 11 | 🟡 4 done (M1 + M2), 7 planned |
+| P1 | 9 | 🟡 8 done (M1–M3), 1 planned |
+| P2 | 12 | 🟡 8 done (M1–M3), 4 planned |
+| P3 | 11 | 🟡 4 done (M1–M3), 7 planned |
 
 **Milestone 1 (security-adjacent hardening) — ✅ complete + reviewed.** See §2.1.
 **Milestone 2 (correctness quick-wins) — ✅ complete + reviewed.** See §2.2.
+**Milestone 3 (dependency direction, Theme B) — ✅ complete + reviewed.** See §2.3.
 
 The P0 work closed the **write-authorization boundary** plus a trace-redaction leak and a
 cross-tenant trigger bug. The remaining findings are correctness hardening, architectural
@@ -95,6 +96,26 @@ Implemented, reviewed (no CRITICAL/HIGH findings), and committed as seven logica
   `GRADUATION_THRESHOLDS`/`LEARNING_MIN_APPROVED` as a single source of truth shared by the
   gate and the UI progress logic. Lazy propagation — no migration. Boundary + gate/UI
   consistency tests added.
+
+### 2.3 Milestone 3 — dependency direction / Theme B (completed on this branch)
+
+Mechanical relocations of shared symbols to neutral homes both layers import downward.
+Implemented, reviewed (no findings), committed as three logical commits; full non-e2e
+suite green (2221 passed).
+
+- **SVC-P1-4** — `MODEL_TIERS`/`BEDROCK_MODEL_TIERS` moved from `orchestrator.jarvis` to
+  `src/config/models.py`; the byte-identical `_get_haiku_model()` duplicated in
+  `risk_assessor` + `relevance_assessor` is now one shared `get_haiku_model()` in config.
+- **SVC-P1-2** — `resolve_workspace_id` → `src/services/workspace_resolver.py` (`api.deps`
+  re-exports it for route handlers); evidence models → `src/services/evidence_models.py`.
+  No service/orchestrator/integration/interface module imports from `src.api` anymore.
+- **SVC-P2-3** — `git mv src/orchestrator/contracts.py → src/contracts/__init__.py`; all 43
+  importers rewritten `from src.orchestrator.contracts` → `from src.contracts`, no shim.
+
+> **Out of scope (noted, not actioned):** pre-existing service→orchestrator imports of
+> *behavioral* symbols (`agent_registry`→`SubAgent`, `graph_executor`→`agent_loop`/`tracing`,
+> `trace_store`→`budget`). These are structural (the DAG executor wraps the agent loop), not
+> shared-symbol relocations, so they're a separate architectural question.
 
 ### Error handling (completed — separate user-reported issue, not from the review)
 
