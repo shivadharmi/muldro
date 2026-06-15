@@ -16,6 +16,8 @@ duplicated, behavior-identical pieces live here.
 
 from __future__ import annotations
 
+import json
+
 from src.contracts import PlanStep
 from src.services.capability_resolver import CapabilityResolver, route_step
 
@@ -83,6 +85,58 @@ def format_prior_step_results(outputs: dict) -> str:
         + "\n\n".join(parts)
         + "\n--- End of prior step results ---\n"
     )
+
+
+def build_presenter_message(
+    *,
+    prompt_style: str,
+    surface: str,
+    message: str,
+    intent: str,
+    plan_dict: dict,
+    plan_text: str,
+    prior_results_block: str,
+    user_action_block: str,
+    history_block: str,
+) -> str:
+    """Build the Presenter prompt, preserving the two intentional styles
+    (chat-pipeline-fold spec drift #1).
+
+    ``prompt_style="conversational"`` (stream / live chat): "Respond to the
+    user", leads with the intent. ``prompt_style="structured"`` (batch / WS
+    surface-action callbacks + background scheduler one-shots): "Format this
+    for the user", leads with the plan. Both share the prior-results,
+    user-action, and history affordances. Callers pass ``""`` for any block
+    they don't have (the empty-string builders above make ``+=`` a no-op).
+    """
+    if prompt_style == "structured":
+        presenter_msg = (
+            f"Format this for the user ({surface}). "
+            f"Be conversational and helpful.\n\n"
+            f"User message: {message}\n"
+            f"Plan: {json.dumps(plan_dict)}"
+        )
+        if prior_results_block:
+            presenter_msg += prior_results_block
+        if plan_text:
+            presenter_msg += f"\nAnalysis: {plan_text}"
+    else:
+        presenter_msg = (
+            f"Respond to the user ({surface}). "
+            f"Be conversational and helpful.\n\n"
+            f"User message: {message}\n"
+            f"Intent: {intent}\n"
+        )
+        if prior_results_block:
+            presenter_msg += prior_results_block
+        if plan_text:
+            presenter_msg += f"Plan: {json.dumps(plan_dict)}\nAnalysis: {plan_text}\n"
+
+    if user_action_block:
+        presenter_msg += user_action_block
+    if history_block:
+        presenter_msg = f"{history_block}\n\n{presenter_msg}"
+    return presenter_msg
 
 
 def format_prior_results_for_presenter(outputs: dict) -> str:

@@ -24,7 +24,6 @@ from src.errors import (
     _GENERIC_MESSAGE,
     classify,
     new_correlation_id,
-    safe_error_event,
 )
 from src.middleware.observability import get_correlation_id
 from src.orchestrator.agent_loop import (
@@ -40,10 +39,28 @@ from src.orchestrator.agent_loop import (
 from src.orchestrator.agents import AGENTS, SubAgent, build_agent_set
 from src.orchestrator.budget import BudgetTracker
 from src.orchestrator.chat_pipeline import (
+    build_presenter_message,
     build_user_action_block,
     format_prior_results_for_presenter,
     format_prior_step_results,
     resolve_plan_routing,
+)
+from src.orchestrator.core_events import (
+    AgentStreamEvent,
+    CoreEvent,
+    IntentClassified,
+    InteractionLogged,
+    PlanModeStepSkipped,
+    PlanReady,
+    Presentation,
+    RunCompleted,
+    RunFailed,
+    StepError,
+    StepResult,
+    SystemStepResult,
+    TraceStarted,
+    UserActionsReady,
+    core_event_to_sse,
 )
 from src.orchestrator.intent_classifier import (
     FAST_INTENTS,
@@ -970,9 +987,12 @@ class JarvisOrchestrator:
         context: dict | None = None,
         conversation_id: str | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
-        """Stream events while processing a user message.
+        """Stream SSE-compatible event dicts while processing a user message.
 
-        Yields SSE-compatible dicts. Uses capability-based plan step routing.
+        Thin pass-through adapter over :meth:`_process_core`: validate inputs
+        (the stream-shaped error frame), then translate each ``CoreEvent`` to
+        its SSE dict, dropping batch-only events. ``prompt_style="conversational"``
+        selects the live-chat Presenter prompt (chat-pipeline-fold drift #1).
         """
         if not user_id or not workspace_id:
             yield {
@@ -984,22 +1004,56 @@ class JarvisOrchestrator:
             yield {"event": "error", "message": "Empty message"}
             return
 
+        async for event in self._process_core(
+            message,
+            user_id,
+            workspace_id,
+            surface=surface,
+            mode=mode,
+            prompt_style="conversational",
+            context=context,
+            conversation_id=conversation_id,
+        ):
+            sse = core_event_to_sse(event)
+            if sse is not None:
+                yield sse
+
+    async def _process_core(
+        self,
+        message: str,
+        user_id: str,
+        workspace_id: str,
+        *,
+        surface: str,
+        mode: str,
+        prompt_style: str,
+        context: dict | None,
+        conversation_id: str | None,
+    ) -> AsyncGenerator[CoreEvent, None]:
+        """Unified chat-orchestration pipeline shared by both public entry points.
+
+        Drives the single intent → plan → route → execute → present → surface →
+        learn sequence and yields typed ``CoreEvent``s. ``process_message_stream``
+        translates them to SSE; ``process_message`` folds them into the batch
+        result dict. Assumes inputs are already validated by the calling adapter;
+        owns the trace lifecycle and the terminal ``RunFailed`` on exception.
+
+        Runtime events fire in the background (the stream path's discipline,
+        adopted for both per chat-pipeline-fold drift #4).
+        """
         trace = self._trace_manager.start_trace("user_message")
 
         def _fire_event(event_type: str, **kwargs: Any) -> None:
             self._spawn_background(self._emit_runtime_event(event_type, **kwargs))
 
         try:
-            yield {"event": "trace", "trace_id": trace.trace_id}
+            yield TraceStarted(trace_id=trace.trace_id)
 
             _fire_event(
                 "command_received",
                 workspace_id=workspace_id,
                 user_id=user_id,
-                payload={
-                    "surface": surface,
-                    "message_preview": message[:100],
-                },
+                payload={"surface": surface, "message_preview": message[:100]},
             )
 
             history_block = await self._load_conversation_history(conversation_id, user_id=user_id)
@@ -1008,11 +1062,7 @@ class JarvisOrchestrator:
             intent, confidence, sources = await classify_intent(
                 self._client, self._haiku_model, message, history_block
             )
-            yield {
-                "event": "intent",
-                "intent": intent,
-                "confidence": confidence,
-            }
+            yield IntentClassified(intent=intent, confidence=confidence)
 
             if sources:
                 await self._bump_perception_for_sources(sources, user_id, workspace_id)
@@ -1053,7 +1103,7 @@ class JarvisOrchestrator:
                     trace=trace,
                     workspace_id=workspace_id,
                 ):
-                    yield evt
+                    yield AgentStreamEvent(payload=evt)
                     if evt.get("event") == "agent_done":
                         plan_text = evt.get("text", "")
 
@@ -1066,7 +1116,7 @@ class JarvisOrchestrator:
             if mode == "plan":
                 plan = plan.model_copy(update={"requires_user_input": True})
 
-            # Persist Plan record if needed
+            # Persist Plan record if multi-step or has write risk
             if len(plan.steps) > 1 or any(s.risk not in ("none",) for s in plan.steps):
                 import hashlib
 
@@ -1080,7 +1130,7 @@ class JarvisOrchestrator:
 
             plan_dict = plan.model_dump(mode="json")
 
-            await self._log_interaction(
+            ilog_id = await self._log_interaction(
                 user_id=user_id,
                 workspace_id=workspace_id,
                 trace_id=trace.trace_id,
@@ -1089,51 +1139,49 @@ class JarvisOrchestrator:
                 plan=plan,
                 conversation_id=conversation_id,
             )
+            yield InteractionLogged(interaction_id=ilog_id)
 
-            # Emit plan event (replaces old "decision" event)
-            yield {
-                "event": "plan",
-                "plan": plan_dict,
-                "run_id": None,
-            }
+            yield PlanReady(plan=plan_dict, run_id=None, summary=plan.reasoning or plan_text)
 
             _fire_event(
                 "plan_created",
                 workspace_id=workspace_id,
                 user_id=user_id,
                 run_id=None,
-                payload={
-                    "goal": plan.goal,
-                    "trace_id": trace.trace_id,
-                },
+                payload={"goal": plan.goal, "trace_id": trace.trace_id},
             )
 
-            # Step 2: Pre-resolve routing and tools
+            # Step 2: Pre-resolve routing and tools for all steps
             step_routing, user_steps = await resolve_plan_routing(
                 self._db_factory, workspace_id, plan.steps
             )
 
-            # Step 3: Execute steps with streaming
+            # Step 3: Execute steps. `step_outputs` is the narrow prior-context
+            # accumulator (agent step text only) injected into downstream agents
+            # — kept separate from the batch result contract so plan/trace
+            # metadata never leaks into agent prompts (drift #2).
             presenter_text = ""
             step_outputs: dict[str, str] = {}
             for step_idx, (step, agent_name, tools) in enumerate(step_routing):
                 if step.capability.startswith("system."):
-                    await self._handle_system_capability(step, plan, user_id, workspace_id)
+                    sys_result = await self._handle_system_capability(
+                        step, plan, user_id, workspace_id
+                    )
+                    yield SystemStepResult(key=f"system_{step.capability}", output=sys_result)
                     continue
 
                 if not agent_name:
                     error_msg = f"No tools available for capability '{step.capability}'"
                     logger.warning(error_msg)
-                    yield {"event": "step_error", "step_id": step.step_id, "error": error_msg}
+                    yield StepError(step_id=step.step_id, error=error_msg)
                     continue
 
                 # Plan mode: skip risky execution, present the plan
                 if mode == "plan" and step.risk in ("medium", "high"):
-                    yield {
-                        "event": "plan_ready",
-                        "plan_id": plan.plan_id,
-                        "message": ("Plan created. Review and approve to execute."),
-                    }
+                    yield PlanModeStepSkipped(
+                        plan_id=plan.plan_id,
+                        message="Plan created. Review and approve to execute.",
+                    )
                     continue
 
                 agent_message = (
@@ -1141,11 +1189,12 @@ class JarvisOrchestrator:
                     f"Goal: {plan.goal}\n"
                     f"User message: {message}"
                 )
-                # Inject prior step results so downstream agents see earlier outputs
+                # Inject prior step results so downstream agents see earlier outputs.
                 agent_message += format_prior_step_results(step_outputs)
                 if history_block:
                     agent_message = f"{history_block}\n\n{agent_message}"
 
+                step_key = f"step_{step_idx}_{step.capability}"
                 async for evt in self._call_agent_stream(
                     agent_name,
                     message=agent_message,
@@ -1154,13 +1203,14 @@ class JarvisOrchestrator:
                     workspace_id=workspace_id,
                     tools_override=tools if tools else None,
                 ):
-                    yield evt
+                    yield AgentStreamEvent(payload=evt)
                     if evt.get("event") == "agent_done":
                         done_text = evt.get("text", "")
-                        # Capture all step outputs for downstream agents
+                        yield StepResult(key=step_key, output=done_text)
+                        # Capture step outputs for downstream agents (truthy only).
                         if done_text:
-                            step_outputs[f"step_{step_idx}_{step.capability}"] = done_text
-                        # Capture text from respond/reason steps for surface preview
+                            step_outputs[step_key] = done_text
+                        # Capture text from respond/reason steps for surface preview.
                         if step.capability in ("reason", "respond"):
                             presenter_text = done_text
 
@@ -1168,22 +1218,25 @@ class JarvisOrchestrator:
             user_action_block = ""
             if user_steps:
                 user_action_block = build_user_action_block(user_steps)
-                yield {
-                    "event": "user_actions",
-                    "steps": [
+                yield UserActionsReady(
+                    steps=[
                         {"description": s.description, "context": s.user_context}
                         for s in user_steps
-                    ],
-                }
+                    ]
+                )
 
             # Latency: when the whole plan is one read-only Perceiver step,
             # return that read's own `synthesis` prose directly and skip the
-            # Presenter LLM call (presenter_skip.py). Falls back to the
-            # Presenter if the read produced no usable synthesis.
+            # Presenter LLM call (presenter_skip.py). Use the explicit
+            # suffix-match (deterministic for multi-output; drift #3).
             direct_answer = None
             read_step = single_read_step(step_routing, user_steps)
             if read_step is not None and step_outputs:
-                direct_answer = extract_perceiver_synthesis(next(iter(step_outputs.values())))
+                read_key = next(
+                    (k for k in step_outputs if k.endswith(f"_{read_step.capability}")), None
+                )
+                if read_key:
+                    direct_answer = extract_perceiver_synthesis(step_outputs[read_key])
 
             # Step 4: Presenter formatting — unless we already have the read
             # agent's own answer above. system.respond steps are no-ops in
@@ -1192,25 +1245,21 @@ class JarvisOrchestrator:
             # still call the Presenter or the chat is left empty.
             if direct_answer is not None:
                 presenter_text = direct_answer
-                yield {"event": "response", "text": direct_answer}
+                yield Presentation(text=direct_answer)
             else:
-                # Collect prior step results so Presenter can reference them
+                # Collect prior step results so Presenter can reference them.
                 prior_results_block = format_prior_results_for_presenter(step_outputs)
-                presenter_msg = (
-                    f"Respond to the user ({surface}). "
-                    f"Be conversational and helpful.\n\n"
-                    f"User message: {message}\n"
-                    f"Intent: {intent}\n"
+                presenter_msg = build_presenter_message(
+                    prompt_style=prompt_style,
+                    surface=surface,
+                    message=message,
+                    intent=intent,
+                    plan_dict=plan_dict,
+                    plan_text=plan_text,
+                    prior_results_block=prior_results_block,
+                    user_action_block=user_action_block,
+                    history_block=history_block,
                 )
-                if prior_results_block:
-                    presenter_msg += prior_results_block
-                if plan_text:
-                    presenter_msg += f"Plan: {json.dumps(plan_dict)}\nAnalysis: {plan_text}\n"
-                if user_action_block:
-                    presenter_msg += user_action_block
-                if history_block:
-                    presenter_msg = f"{history_block}\n\n{presenter_msg}"
-
                 async for evt in self._call_agent_stream(
                     "presenter",
                     message=presenter_msg,
@@ -1218,15 +1267,12 @@ class JarvisOrchestrator:
                     trace=trace,
                     workspace_id=workspace_id,
                 ):
-                    yield evt
+                    yield AgentStreamEvent(payload=evt)
                     if evt.get("event") == "agent_done":
                         presenter_text = evt.get("text", "")
                         # Strip fenced surface blocks for the chat-visible reply
                         # while keeping presenter_text raw for surface extraction.
-                        yield {
-                            "event": "response",
-                            "text": strip_surface_blocks(presenter_text),
-                        }
+                        yield Presentation(text=strip_surface_blocks(presenter_text))
 
             _fire_event(
                 "run_completed",
@@ -1236,7 +1282,8 @@ class JarvisOrchestrator:
                 payload={"trace_id": trace.trace_id},
             )
 
-            # Push workspace surface (Presenter-driven)
+            # Push workspace surface (Presenter-driven). Keep presenter_text raw
+            # for extraction — it still carries the fenced surface blocks.
             surface_id = None
             try:
                 surface_spec = extract_surface_spec(presenter_text)
@@ -1265,15 +1312,10 @@ class JarvisOrchestrator:
                     )
                 )
 
-            yield {
-                "event": "done",
-                "trace_id": trace.trace_id,
-                "run_id": None,
-                **({"surface_id": surface_id} if surface_id else {}),
-            }
+            yield RunCompleted(trace_id=trace.trace_id, run_id=None, surface_id=surface_id)
 
         except Exception as e:
-            logger.error("process_message_stream failed: %s", e, exc_info=True)
+            logger.error("_process_core failed: %s", e, exc_info=True)
             cid = get_correlation_id() or new_correlation_id()
             code, safe_msg, _ = classify(e)
             _fire_event(
@@ -1283,7 +1325,9 @@ class JarvisOrchestrator:
                 run_id=None,
                 payload={"code": code, "message": safe_msg, "correlation_id": cid},
             )
-            yield safe_error_event(e, cid)
+            yield RunFailed(
+                trace_id=trace.trace_id, code=code, message=safe_msg, correlation_id=cid
+            )
         finally:
             await self._trace_manager.finish_trace(
                 trace.trace_id,
