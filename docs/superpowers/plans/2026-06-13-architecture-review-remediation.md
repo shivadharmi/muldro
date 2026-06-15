@@ -20,11 +20,12 @@ implemented (see "Completed" below) and live on this branch.
 | Priority | Count | State |
 |----------|-------|-------|
 | P0 | 4 | ✅ Implemented + reviewed on this branch |
-| P1 | 9 | 🟡 3 done (Milestone 1), 6 planned |
-| P2 | 12 | 🟡 2 done (Milestone 1), 10 planned |
-| P3 | 11 | 🟡 1 done (Milestone 1), 10 planned |
+| P1 | 9 | 🟡 6 done (M1 + M2), 3 planned |
+| P2 | 12 | 🟡 7 done (M1 + M2), 5 planned |
+| P3 | 11 | 🟡 4 done (M1 + M2), 7 planned |
 
 **Milestone 1 (security-adjacent hardening) — ✅ complete + reviewed.** See §2.1.
+**Milestone 2 (correctness quick-wins) — ✅ complete + reviewed.** See §2.2.
 
 The P0 work closed the **write-authorization boundary** plus a trace-redaction leak and a
 cross-tenant trigger bug. The remaining findings are correctness hardening, architectural
@@ -66,6 +67,34 @@ Implemented, reviewed (no CRITICAL/HIGH findings), and committed as six logical 
   user-level (every reader keys on `(user_id, provider)` with no `workspace_id`), so the
   plan's `(workspace_id, user_id, provider)` change would be inert without a multi-file
   feature; documented in `oauth_token.py` instead.
+
+### 2.2 Milestone 2 — correctness quick-wins (completed on this branch)
+
+Implemented, reviewed (no CRITICAL/HIGH findings), and committed as seven logical commits.
+
+- **ORCH-P1-2** — `_api_call_with_retry` raises `RuntimeError` after the loop instead of an
+  implicit `None` fall-through.
+- **ORCH-P3-4** — `audit_post_tool_hook` now receives the real per-tool token share, not `0`.
+- **ORCH-P2-3** — `classify_intent` parses via `parse_llm_json` (robust to prose/fences)
+  instead of naive `index`/`rindex` brace matching.
+- **ORCH-P3-1** — `budget.calculate_cost` warns before the Sonnet-pricing fallback for an
+  unknown model (was silent ~5× under-billing for Opus/Bedrock).
+- **ORCH-P3-2** — orchestrator `shutdown()` cancels + logs background-task stragglers instead
+  of abandoning them silently.
+- **TOOL-P1-2** — `seed_defaults` writes + re-syncs `InternalToolDef.description` (was
+  permanently NULL).
+- **TOOL-P2-3** — `validate_registry` Check 7 asserts global tool-name uniqueness.
+- **UI-P2-1** — `surface_mapping` exception handling narrowed from `(JSONDecodeError,
+  Exception)` to `(JSONDecodeError, ValidationError)` + non-dict guards (both extractors).
+- **UI-P2-2** — `surface-store.updateSurface` uses `!== undefined` so an empty `steps` array
+  can clear the list.
+- **UI-P2-4** — `normalizeSurfaceKind` warns on unknown (drifted) surface kinds while keeping
+  the `summary` visual fallback; wired into the REST + all WS/SSE ingest paths.
+- **SVC-P1-1** — Removed the undocumented lenient `25+@<15%→trusted` graduation branch
+  (it failed unsafe and fought demotion); reconciled to the documented 3-tier rule with
+  `GRADUATION_THRESHOLDS`/`LEARNING_MIN_APPROVED` as a single source of truth shared by the
+  gate and the UI progress logic. Lazy propagation — no migration. Boundary + gate/UI
+  consistency tests added.
 
 ### Error handling (completed — separate user-reported issue, not from the review)
 
