@@ -102,11 +102,11 @@ must sign off on** — they are not mechanical.
 | # | Divergence | Batch today | Stream today | Recommendation | Intentional? | Risk |
 |---|---|---|---|---|---|---|
 | 1 | **Presenter prompt** | `"Format this for the user ({surface})… Plan: {json}"` then `Analysis: {plan_text}` | `"Respond to the user ({surface})… Intent: {intent}"` then `Plan: {json}\nAnalysis:` | **PRESERVE both** — thread a `prompt_style` (conversational vs. structured-one-shot) into the core, selected by adapter | **INTENTIONAL (confirmed by owner 2026-06-16):** stream = conversational (live chat); batch = structured one-shot (WS surface-action callbacks + background scheduler runs) | Low — preserving current behavior, not changing it. The `surface == "telegram"` length-hint branch (`build_telegram_hint`) becomes **dead** once Telegram is removed (§11) and should be deleted then |
-| 2 | **Agent prior-context** | injects from the whole `result` dict (incl. `trace_id`, `interaction_id`, `plan`, `summary`, system outputs) | injects only `step_outputs` (prior agent text) | Adopt the stream's narrow `step_outputs` injection | **Drift / latent bug** — batch leaks plan/trace metadata into downstream agent prompts | Med — changes agent inputs; may shift tool choices |
+| 2 | **Agent prior-context** | injects from the whole `result` dict (incl. `trace_id`, `interaction_id`, `plan`, `summary`, system outputs) | injects only `step_outputs` (prior agent text) | **Adopt the stream's narrow `step_outputs`** — **CONFIRMED ACCIDENTAL DRIFT (owner 2026-06-16)**: archaeology (`5b2aa70`) shows batch reused `result` as both output contract *and* prior-step scratchpad, so metadata leaked as a side effect — never designed. The fold's separate accumulator removes the leak structurally | **Drift / latent bug** — batch leaks plan/trace metadata into downstream agent prompts | Med — changes agent inputs; may shift tool choices |
 | 3 | **`direct_answer` pick** | suffix-match `k.endswith(f"_{read_step.capability}")` | `next(iter(step_outputs.values()))` | Use the explicit suffix-match (deterministic for multi-output) | Drift | Low — converges for the single-read case both guard on |
-| 4 | **Runtime events** | `plan_generated` via `_publish_event`; `run_completed` **awaited** | `plan_created` via `_fire_event` (background) + SSE `plan` | Settle on one event name + one firing discipline (background) | **Drift** — `plan_generated` vs `plan_created` is almost certainly an accident | Med — telemetry/consumers keyed on event names |
+| 4 | **Runtime events** | `plan_generated` via `_publish_event`; `run_completed` **awaited** | `plan_created` via `_fire_event` (background) + SSE `plan` | **Batch converges onto canonical `plan_created` fired background via `_fire_event`; drop orphan `plan_generated` — CONFIRMED STALE-LEGACY DRIFT (owner 2026-06-16)**: archaeology shows `plan_generated` (origin `c0883e9`, agent-stream bus) predates the durable runtime-event vocabulary and is consumed by **nothing** (not whitelisted in `routes_realtime`, not metered, not durable); `plan_created` is the canonical event (`runtime_events.py`, `routes_realtime.py` whitelist, `metrics_service.record_plan_created`). Batch *gains* the durable record + metrics it currently lacks | **Drift** — `plan_generated` vs `plan_created` is almost certainly an accident | Med — telemetry/consumers keyed on event names |
 | 5 | **Output contract** | `result` dict (returned verbatim by `routes_ws`) | SSE stream | Core emits a superset; batch adapter rebuilds the **exact** current dict (golden-pinned); SSE adapter unchanged | N/A (structural) | High — `routes_ws`/Telegram break if a key changes |
-| 6 | **`mode` param** | none | `ask`/`execute`/`plan` (plan-mode skips, `requires_user_input`) | Core takes `mode`; batch adapter passes `mode="ask"` | Intentional (stream-only feature) | Low — additive for batch |
+| 6 | **`mode` param** | none | `ask`/`execute`/`plan` (plan-mode skips, `requires_user_input`) | **Core takes `mode`; batch adapter default is `mode="plan"` (CHANGED from `"ask"` by owner 2026-06-16)** — safe-by-default for the non-interactive batch path (risky writes surfaced for approval, never silently auto-run, closing the latent ungated-background gap). **Per-caller override map:** WS default-dispatch → `ask`, WS execute_insight → `ask` (interactive: the user's click authorizes), scheduler meeting_prep / wake_agent → inherit `plan` (read-heavy, unaffected), scheduler **custom_agent_task → `execute`** (pre-authorized automation must keep running; the clean long-term fix is routing scheduler writes through GraphExecutor+TrustEngine — out of scope) | Intentional (stream-only feature) | Low — additive for batch; **Med for the `plan` default** since it changes batch behavior for risky-step plans (golden-pinned, updated in the mode commit) |
 
 ## 6. Execution plan (phased; each phase independently revertable)
 
@@ -114,16 +114,18 @@ must sign off on** — they are not mechanical.
    `_call_agent_stream` across a plan matrix: single read-only step; multi-step read→reason; a
    write step with a user-action step; a `system.*` step; an error/raise; (stream-only) each `mode`.
    Snapshot the batch `result` dict (3a/3b) and the SSE event order (3c). Land green on current code.
-2. **Reconcile drift #1–#4, one behavior commit each**, *while the two methods still exist*, so the
+2. **Reconcile drift #2 and #4, one behavior commit each**, *while the two methods still exist*, so the
    golden diff shows exactly what each decision changed. Each commit references this spec's row and
-   carries the owner's sign-off. Some rows may resolve to "preserve current behavior" (e.g. keep #1
-   per-method) — that's a valid decision, recorded here.
+   carries the owner's sign-off. Rows #1 (prompt) and #6 (mode) resolve to **preserve** and are
+   threaded later as `prompt_style`/`mode` params (no Phase-2 commit); #3 converges structurally.
 3. **Introduce `CoreEvent`** (typed union) + `_process_core` as the streaming method's new internals;
    `process_message_stream` becomes the pass-through adapter. Golden SSE snapshot stays green.
-4. **Rewrite `process_message` as the accumulating adapter** over `_process_core`. Golden batch
-   snapshot stays green (this is where #5 is proven a no-op).
-5. **Migrate `routes_chat.py`** off bare-dict `evt.get("event")` onto the typed union (optional but
-   recommended — it's the payoff that removes type-sniffing).
+4. **Rewrite `process_message` as the accumulating adapter** over `_process_core`, threading
+   `prompt_style="structured"` and the new `mode="plan"` default (#1, #6). Golden batch snapshot stays
+   green for the structural parts (#5 proven a no-op); the #6 `mode` rows update in this commit. Apply
+   the per-caller `mode` override map (§5 #6) to the 5 batch callers in the same commit.
+5. **Migrate `routes_chat.py`** off bare-dict `evt.get("event")` onto the typed union — **in scope**
+   (owner 2026-06-16). It's the payoff that removes type-sniffing.
 
 ## 7. Test strategy
 
@@ -152,10 +154,16 @@ must sign off on** — they are not mechanical.
 - ~~**Q1 (#1):**~~ **ANSWERED (2026-06-16): intentional** — conversational (stream) vs.
   structured one-shot (batch). The core preserves both via a `prompt_style` parameter; do NOT
   reconcile to one prompt.
-- **Q2 (#2):** Confirm the batch path injecting plan/trace metadata into downstream agent prompts is
-  unintended before "fixing" it.
-- **Q3:** Is migrating `routes_chat` to the typed union in-scope (phase 5) or a follow-up?
-- **Timing:** Is this a now-milestone on this branch, or a backlog spec for after the OSS release push?
+- ~~**Q2 (#2):**~~ **ANSWERED (2026-06-16): accidental drift, reconcile.** Archaeology confirmed the
+  batch metadata injection is an unintended side effect of `result` doubling as the prior-step
+  scratchpad (see row #2). Adopt the narrow `step_outputs`.
+- ~~**Q3:**~~ **ANSWERED (2026-06-16): in-scope.** Migrating `routes_chat` to the typed union is part
+  of this work (now phase 4 in the revised §6 plan, after Telegram removal collapsed the old phase 2).
+- ~~**Timing:**~~ **ANSWERED (2026-06-16): now-milestone on `review/architecture-remediation`.**
+- **NEW (#6, 2026-06-16):** batch adapter default `mode` is `plan`, not `ask` (owner decision). See
+  row #6 for the per-caller override map. The latent ungated-background-write gap (scheduler callers
+  bypass GraphExecutor+TrustEngine via the inline batch path) is acknowledged but not closed here —
+  `custom_agent_task` overrides to `execute` to keep pre-authorized automation working.
 
 ## 10. Effort
 
