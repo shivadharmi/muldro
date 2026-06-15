@@ -135,11 +135,15 @@ class TestDurableSurfaceUpdates:
         assert "workspace_id" in sig.parameters
 
     def test_emit_surface_update_persists_to_db(self):
-        """_emit_surface_update source contains DB persistence logic."""
+        """SurfaceEmitter.emit_surface_update source contains DB persistence logic.
+
+        The emission cluster was extracted to the SurfaceEmitter collaborator
+        (SVC-P1-3); the persistence logic now lives there.
+        """
         import inspect
 
-        from src.services.graph_executor import GraphExecutor
+        from src.services.execution_surface_emitter import SurfaceEmitter
 
-        source = inspect.getsource(GraphExecutor._emit_surface_update)
+        source = inspect.getsource(SurfaceEmitter.emit_surface_update)
         assert "last_surface_update" in source
         assert "persist_db" in source

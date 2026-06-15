@@ -13,13 +13,15 @@ from src.contracts import (
 from src.services.graph_executor import GraphExecutor
 
 
-def _make_executor(redis_mock=None) -> GraphExecutor:
+def _make_executor(redis_mock=None, event_bus=None) -> GraphExecutor:
     settings = MagicMock()
     settings.redis_url = "redis://localhost"
     settings.resolved_model = "claude-sonnet-4-6-20250514"
     db = AsyncMock()
-    executor = GraphExecutor(settings=settings, db=db)
-    executor._redis = redis_mock
+    # Pass transport deps via the constructor so the SurfaceEmitter collaborator
+    # (SVC-P1-3) snapshots them; reassigning executor._redis post-construction
+    # would not reach the already-built collaborator.
+    executor = GraphExecutor(settings=settings, db=db, redis=redis_mock, event_bus=event_bus)
     return executor
 
 
@@ -143,8 +145,7 @@ class TestEmitSurfaceUpdate:
     async def test_falls_back_to_event_bus(self):
         """When no redis, should try event_bus.publish_to_channel."""
         event_bus = AsyncMock()
-        executor = _make_executor(redis_mock=None)
-        executor._event_bus = event_bus
+        executor = _make_executor(redis_mock=None, event_bus=event_bus)
         await executor._emit_surface_update(
             surface_id="surf_abc",
             user_id="usr_01",

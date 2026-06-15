@@ -29,6 +29,7 @@ from src.orchestrator.agent_loop import CancellationRequested
 from src.orchestrator.tracing import JarvisTrace
 from src.services.audit import AuditService
 from src.services.execution_state import transition_run, transition_step
+from src.services.execution_surface_emitter import SurfaceEmitter
 from src.services.risk_assessor import RiskAssessment, get_or_assess_risk
 
 if TYPE_CHECKING:
@@ -256,6 +257,16 @@ class GraphExecutor:
         self._trace_store = trace_store
         self._cancel_events: dict[str, asyncio.Event] = {}
         self._active_traces: dict[str, JarvisTrace] = {}
+        # Surface/event emission cluster lives in an injected collaborator
+        # (SVC-P1-3); the hub forwards to it. Built from the same deps so the
+        # public constructor signature is unchanged.
+        self._surface_emitter = SurfaceEmitter(
+            settings=settings,
+            db=db,
+            event_bus=event_bus,
+            redis=redis,
+            db_factory=db_factory,
+        )
 
     async def create_run(
         self,
@@ -1828,56 +1839,12 @@ class GraphExecutor:
         payload: dict,
         workspace_id: str | None = None,
     ) -> None:
-        """Publish a domain event (best-effort) + Redis progress + DB persistence."""
-        if self._event_bus:
-            try:
-                stream = self._event_bus.agent_stream(user_id)
-                await self._event_bus.publish(stream, event_type, payload, user_id)
-            except Exception:
-                logger.debug("Failed to emit %s event", event_type, exc_info=True)
-
-        # Persist to runtime_events table for home feed / runtime activity
-        run_id = payload.get("run_id")
-        step_id = payload.get("step_id")
-        if workspace_id:
-            try:
-                from src.models.runtime_event import RuntimeEvent
-
-                self._db.add(
-                    RuntimeEvent(
-                        workspace_id=workspace_id,
-                        run_id=run_id,
-                        step_id=step_id,
-                        event_type=event_type.replace(".", "_"),
-                        payload=payload,
-                    )
-                )
-                await self._db.flush()
-            except Exception:
-                logger.debug("Failed to persist runtime event %s", event_type, exc_info=True)
-
-        # Publish to Redis for WebSocket progress streaming
-        if run_id:
-            await self._publish_progress(run_id, {"event_type": event_type, **payload})
+        """Forward to the SurfaceEmitter collaborator (SVC-P1-3)."""
+        await self._surface_emitter.emit_event(event_type, user_id, payload, workspace_id)
 
     async def _publish_progress(self, run_id: str, data: dict) -> None:
-        """Publish step progress to Redis pubsub for WebSocket consumers."""
-        try:
-            channel = f"jarvis:run_progress:{run_id}"
-            payload = json.dumps(data)
-
-            if self._redis:
-                await self._redis.publish(channel, payload)
-            else:
-                import redis.asyncio as aioredis
-
-                redis = aioredis.from_url(self._settings.redis_url)
-                try:
-                    await redis.publish(channel, payload)
-                finally:
-                    await redis.aclose()
-        except Exception:
-            logger.debug("Failed to publish run progress", exc_info=True)
+        """Forward to the SurfaceEmitter collaborator (SVC-P1-3)."""
+        await self._surface_emitter.publish_progress(run_id, data)
 
     async def _emit_surface_update(
         self,
@@ -1891,212 +1858,26 @@ class GraphExecutor:
         results: object | None = None,
         workspace_id: str | None = None,
     ) -> None:
-        """Publish a SurfaceUpdate to Redis for live workspace streaming.
-
-        Also persists the latest surface state to the DB as a durable fallback
-        so reconnecting clients can recover missed updates.
-
-        Best-effort — failures are logged but never raised.
-        """
-        if not surface_id:
-            return
-
-        try:
-            from src.contracts import SurfaceUpdate
-
-            update = SurfaceUpdate(
-                surface_id=surface_id,
-                phase=phase,
-                steps=steps or [],
-                current_step=current_step,
-                progress=progress,
-                approval=approval,
-                results=results,
-            )
-
-            channel = f"jarvis:a2ui:{user_id}"
-            payload = json.dumps(
-                {
-                    "type": "surface_update",
-                    **update.model_dump(mode="json"),
-                }
-            )
-
-            if self._redis:
-                await self._redis.publish(channel, payload)
-            elif self._event_bus:
-                await self._event_bus.publish_to_channel(channel, payload)
-        except Exception:
-            logger.debug("Failed to emit surface update", exc_info=True)
-
-        # Durable fallback: persist latest surface state to DB so reconnecting
-        # clients can recover updates that were missed while disconnected.
-        try:
-            if self._db_factory and workspace_id:
-                from sqlalchemy import select
-
-                from src.models.ui_state import UISurface
-
-                async with self._db_factory() as persist_db:
-                    result = await persist_db.execute(
-                        select(UISurface).where(UISurface.surface_id == surface_id)
-                    )
-                    existing = result.scalar_one_or_none()
-
-                    from src.contracts import SurfaceUpdate
-
-                    surface_data = SurfaceUpdate(
-                        surface_id=surface_id,
-                        phase=phase,
-                        steps=steps or [],
-                        current_step=current_step,
-                        progress=progress,
-                        approval=approval,
-                        results=results,
-                    ).model_dump(mode="json")
-
-                    if existing:
-                        existing.payload = {
-                            **(existing.payload or {}),
-                            "last_surface_update": surface_data,
-                        }
-                        # Normalize legacy "execution" kinds to "run" so the
-                        # frontend dispatches to the unified run renderer.
-                        if existing.surface_type in ("execution", "plan"):
-                            existing.surface_type = "run"
-                    else:
-                        persist_db.add(
-                            UISurface(
-                                surface_id=surface_id,
-                                user_id=user_id,
-                                workspace_id=workspace_id,
-                                surface_type="run",
-                                payload={"last_surface_update": surface_data},
-                            )
-                        )
-                    await persist_db.commit()
-        except Exception:
-            logger.debug("Failed to persist surface update to DB", exc_info=True)
+        """Forward to the SurfaceEmitter collaborator (SVC-P1-3)."""
+        await self._surface_emitter.emit_surface_update(
+            surface_id,
+            user_id,
+            phase,
+            steps,
+            current_step,
+            progress,
+            approval,
+            results,
+            workspace_id,
+        )
 
     async def _emit_summary_surface(
         self,
         run: TaskRun,
         run_surface_id: str,
     ) -> None:
-        """Emit a lightweight ``summary`` card on run completion.
-
-        The full ``run`` surface is archived (expires sooner) and this compact
-        card takes its place in the active workspace feed. The summary links
-        back to the archived run via ``source_run_id`` so detail tabs can
-        still fetch the full trace/steps/plan from the same row.
-        """
-        if not self._db_factory:
-            return
-
-        try:
-            from datetime import datetime, timedelta, timezone
-
-            from src.contracts import WorkspaceSurfacePush
-            from src.models.ui_state import UISurface
-            from src.ui.contracts import SurfaceMetric, SurfacePreview
-            from src.ui.renderer import build_detail_config
-
-            summary_id = f"summary_{run.run_id}"
-
-            step_count = 0
-            completed_count = 0
-            try:
-                async with self._db_factory() as db:
-                    step_rows = await db.execute(
-                        select(TaskStep).where(TaskStep.run_id == run.run_id)
-                    )
-                    steps = list(step_rows.scalars().all())
-                    step_count = len(steps)
-                    completed_count = sum(1 for s in steps if s.status == "completed")
-            except Exception:
-                logger.debug("Failed to count steps for summary surface", exc_info=True)
-
-            input_tokens = int(getattr(run, "input_tokens", 0) or 0)
-            output_tokens = int(getattr(run, "output_tokens", 0) or 0)
-            cost_usd = float(getattr(run, "cost_usd", 0.0) or 0.0)
-
-            metrics: list[SurfaceMetric] = [
-                SurfaceMetric(
-                    label="Steps",
-                    value=f"{completed_count}/{step_count}" if step_count else "0",
-                    variant="success" if run.status == "completed" else "warning",
-                ),
-            ]
-            if input_tokens or output_tokens:
-                metrics.append(
-                    SurfaceMetric(label="Tokens", value=f"{input_tokens + output_tokens:,}")
-                )
-            if cost_usd:
-                metrics.append(SurfaceMetric(label="Cost", value=f"${cost_usd:.4f}"))
-
-            title = "Run completed" if run.status == "completed" else f"Run {run.status}"
-            preview = SurfacePreview(
-                title=title,
-                subtitle=(run.error or {}).get("message") if run.status != "completed" else None,
-                status=run.status if run.status in ("completed", "failed") else "completed",
-                metrics=metrics,
-            )
-
-            # Summary surfaces reuse the 'run' detail tabs so the user can
-            # drill into the archived run from the summary card.
-            detail_config = build_detail_config("run", run_surface_id)
-
-            surface = WorkspaceSurfacePush(
-                id=summary_id,
-                kind="summary",
-                preview=preview.model_dump(mode="json"),
-                detail_config=(detail_config.model_dump(mode="json") if detail_config else None),
-                source_run_id=run.run_id,
-                created_at=datetime.now(timezone.utc).isoformat(),
-            )
-
-            # Publish to WebSocket so the workspace feed updates live
-            if self._redis:
-                channel = f"jarvis:a2ui:{run.user_id}"
-                await self._redis.publish(
-                    channel,
-                    json.dumps({"type": "surface", "surface": surface.model_dump(mode="json")}),
-                )
-            elif self._event_bus:
-                channel = f"jarvis:a2ui:{run.user_id}"
-                await self._event_bus.publish_to_channel(
-                    channel,
-                    json.dumps({"type": "surface", "surface": surface.model_dump(mode="json")}),
-                )
-
-            # Persist the summary surface AND archive the run surface by
-            # shortening its TTL so it drops out of active-feed queries.
-            async with self._db_factory() as db:
-                db.add(
-                    UISurface(
-                        surface_id=summary_id,
-                        user_id=run.user_id,
-                        workspace_id=run.workspace_id,
-                        surface_type="summary",
-                        payload=surface.model_dump(mode="json"),
-                        preview=preview.model_dump(mode="json"),
-                        detail_config=(
-                            detail_config.model_dump(mode="json") if detail_config else None
-                        ),
-                        expires_at=datetime.now(timezone.utc) + timedelta(days=30),
-                    )
-                )
-                # Archive the live run surface: hide from active feed but
-                # keep the record for detail drill-downs.
-                run_row = await db.execute(
-                    select(UISurface).where(UISurface.surface_id == run_surface_id)
-                )
-                existing_run = run_row.scalar_one_or_none()
-                if existing_run:
-                    existing_run.expires_at = datetime.now(timezone.utc) + timedelta(hours=2)
-                await db.commit()
-        except Exception:
-            logger.debug("Failed to emit summary surface", exc_info=True)
+        """Forward to the SurfaceEmitter collaborator (SVC-P1-3)."""
+        await self._surface_emitter.emit_summary_surface(run, run_surface_id)
 
     @staticmethod
     def _build_graph_definition(tasks: list[PlanTask]) -> dict:
