@@ -14,7 +14,7 @@ from src.services.notifier import Notifier
 @pytest.fixture
 def mock_registry():
     registry = AsyncMock()
-    registry.get_active_surfaces = AsyncMock(return_value=["web", "telegram"])
+    registry.get_active_surfaces = AsyncMock(return_value=["web", "slack"])
     registry.get_preferred_surface = AsyncMock(return_value="web")
     return registry
 
@@ -50,7 +50,7 @@ class TestAutoExecuteNotify:
         assert call_args[0][0] == "web"
         assert result["status"] == "sent"
         assert "web" in result["surfaces"]
-        assert "telegram" not in result["surfaces"]
+        assert "slack" not in result["surfaces"]
 
     async def test_auto_notify_not_sent_to_all_surfaces(self, notifier, mock_registry):
         """Unlike approval_request, auto_notify does NOT go to all surfaces."""
@@ -84,10 +84,10 @@ class TestAutoExecuteNotify:
                 data={"approval_id": "apr_001"},
             )
 
-        # Should be 2 deliveries (web + telegram)
+        # Should be 2 deliveries (web + slack)
         assert deliver_mock.call_count == 2
         surfaces_called = {call[0][0] for call in deliver_mock.call_args_list}
-        assert surfaces_called == {"web", "telegram"}
+        assert surfaces_called == {"web", "slack"}
 
     async def test_critical_alert_goes_to_all_surfaces(self, notifier, mock_registry):
         """critical_alert should also go to ALL surfaces."""

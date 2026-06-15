@@ -8,12 +8,19 @@ from src.services.notifier import Notifier
 from src.services.surface_registry import SurfaceRegistry
 from tests.conftest import TEST_USER_ID
 
+_FULL_PRIORITY = {
+    "urgency": 0.9,
+    "goal_relevance": 0.9,
+    "novelty": 0.9,
+    "confidence": 0.9,
+    "interruptibility": 0.9,
+}
+
 
 class TestNotifier:
     async def _make_notifier(
         self,
         surfaces: list[str] | None = None,
-        telegram_sender=None,
         ws_sender=None,
         redis=None,
     ) -> Notifier:
@@ -24,7 +31,6 @@ class TestNotifier:
         return Notifier(
             surface_registry=registry,
             redis=redis,
-            telegram_sender=telegram_sender,
             websocket_sender=ws_sender,
         )
 
@@ -35,24 +41,16 @@ class TestNotifier:
             "info_update",
             "Test",
             "Body",
-            data={
-                "urgency": 0.9,
-                "goal_relevance": 0.9,
-                "novelty": 0.9,
-                "confidence": 0.9,
-                "interruptibility": 0.9,
-            },
+            data=_FULL_PRIORITY,
         )
         assert result["status"] == "queued"
         assert result["surfaces"] == []
 
-    async def test_approval_sent_to_all_surfaces(self):
-        tg_sender = AsyncMock(return_value={"status": "sent", "message_id": 1})
+    async def test_approval_broadcast_delivers_to_web(self):
         ws_sender = AsyncMock(return_value={"status": "sent"})
 
         notifier = await self._make_notifier(
-            surfaces=["telegram", "web"],
-            telegram_sender=tg_sender,
+            surfaces=["web"],
             ws_sender=ws_sender,
         )
 
@@ -65,17 +63,15 @@ class TestNotifier:
         )
 
         assert result["status"] == "sent"
-        assert "telegram" in result["surfaces"]
         assert "web" in result["surfaces"]
-        tg_sender.assert_called_once()
         ws_sender.assert_called_once()
 
     async def test_info_update_sent_to_preferred_only(self):
-        tg_sender = AsyncMock(return_value={"status": "sent", "message_id": 1})
+        ws_sender = AsyncMock(return_value={"status": "sent"})
 
         notifier = await self._make_notifier(
-            surfaces=["telegram", "web"],
-            telegram_sender=tg_sender,
+            surfaces=["web", "slack"],
+            ws_sender=ws_sender,
         )
 
         result = await notifier.notify(
@@ -83,28 +79,22 @@ class TestNotifier:
             "info_update",
             "Status update",
             "Things are fine",
-            data={
-                "urgency": 0.9,
-                "goal_relevance": 0.9,
-                "novelty": 0.9,
-                "confidence": 0.9,
-                "interruptibility": 0.9,
-            },
+            data=_FULL_PRIORITY,
         )
 
         assert result["status"] == "sent"
-        # Preferred is "web" (less intrusive), but no ws_sender so falls back
-        # to Redis publish in _deliver_web (which returns skipped without redis)
-        # The point: telegram is NOT called for info_update when web is preferred
+        # Preferred is "web"; info_update delivers to the preferred surface only,
+        # so "slack" is never contacted.
         assert "web" in result["surfaces"]
-        tg_sender.assert_not_called()
+        assert "slack" not in result["surfaces"]
+        ws_sender.assert_called_once()
 
-    async def test_info_update_telegram_only(self):
-        tg_sender = AsyncMock(return_value={"status": "sent", "message_id": 1})
+    async def test_info_update_web_only(self):
+        ws_sender = AsyncMock(return_value={"status": "sent"})
 
         notifier = await self._make_notifier(
-            surfaces=["telegram"],
-            telegram_sender=tg_sender,
+            surfaces=["web"],
+            ws_sender=ws_sender,
         )
 
         result = await notifier.notify(
@@ -112,25 +102,19 @@ class TestNotifier:
             "info_update",
             "Update",
             "Content",
-            data={
-                "urgency": 0.9,
-                "goal_relevance": 0.9,
-                "novelty": 0.9,
-                "confidence": 0.9,
-                "interruptibility": 0.9,
-            },
+            data=_FULL_PRIORITY,
         )
 
         assert result["status"] == "sent"
-        assert "telegram" in result["surfaces"]
-        tg_sender.assert_called_once()
+        assert "web" in result["surfaces"]
+        ws_sender.assert_called_once()
 
-    async def test_critical_alert_sent_to_all(self):
-        tg_sender = AsyncMock(return_value={"status": "sent", "message_id": 1})
+    async def test_critical_alert_delivers(self):
+        ws_sender = AsyncMock(return_value={"status": "sent"})
 
         notifier = await self._make_notifier(
-            surfaces=["telegram"],
-            telegram_sender=tg_sender,
+            surfaces=["web"],
+            ws_sender=ws_sender,
         )
 
         result = await notifier.notify(
@@ -141,38 +125,14 @@ class TestNotifier:
         )
 
         assert result["status"] == "sent"
-        tg_sender.assert_called_once()
-
-    async def test_telegram_approval_format(self):
-        """Verify approval notifications include inline keyboard markup."""
-        captured = {}
-
-        async def capture_send(**kwargs):
-            captured.update(kwargs)
-            return {"status": "sent", "message_id": 1}
-
-        notifier = await self._make_notifier(
-            surfaces=["telegram"],
-            telegram_sender=capture_send,
-        )
-
-        await notifier.notify(
-            TEST_USER_ID,
-            "approval_request",
-            "Send email",
-            "To investor@fund.com",
-            data={"approval_id": "apr_99", "risk_level": "high"},
-        )
-
-        assert "Approval Required" in captured["text"]
-        assert "apr_99" in captured.get("reply_markup", "")
+        ws_sender.assert_called_once()
 
     async def test_dedup_marks_delivered(self):
-        tg_sender = AsyncMock(return_value={"status": "sent", "message_id": 1})
+        ws_sender = AsyncMock(return_value={"status": "sent"})
 
         notifier = await self._make_notifier(
-            surfaces=["telegram"],
-            telegram_sender=tg_sender,
+            surfaces=["web"],
+            ws_sender=ws_sender,
         )
 
         await notifier.notify(
@@ -180,13 +140,7 @@ class TestNotifier:
             "info_update",
             "Test",
             "Body",
-            data={
-                "urgency": 0.9,
-                "goal_relevance": 0.9,
-                "novelty": 0.9,
-                "confidence": 0.9,
-                "interruptibility": 0.9,
-            },
+            data=_FULL_PRIORITY,
         )
 
         # Check that something was marked as delivered
@@ -195,14 +149,14 @@ class TestNotifier:
     async def test_on_action_taken_with_redis(self):
         redis = AsyncMock()
         registry = SurfaceRegistry(redis=None)
-        await registry.register(TEST_USER_ID, "telegram")
+        await registry.register(TEST_USER_ID, "web")
 
         notifier = Notifier(
             surface_registry=registry,
             redis=redis,
         )
 
-        await notifier.on_action_taken(TEST_USER_ID, "apr_01", "telegram")
+        await notifier.on_action_taken(TEST_USER_ID, "apr_01", "web")
 
         redis.publish.assert_called_once()
         call_args = redis.publish.call_args
@@ -210,44 +164,38 @@ class TestNotifier:
 
     async def test_on_action_taken_without_redis(self):
         """Should not raise even without Redis."""
-        notifier = await self._make_notifier(surfaces=["telegram"])
-        await notifier.on_action_taken(TEST_USER_ID, "apr_01", "telegram")
+        notifier = await self._make_notifier(surfaces=["web"])
+        await notifier.on_action_taken(TEST_USER_ID, "apr_01", "web")
 
     async def test_is_delivered_in_memory(self):
-        tg_sender = AsyncMock(return_value={"status": "sent", "message_id": 1})
+        ws_sender = AsyncMock(return_value={"status": "sent"})
 
         notifier = await self._make_notifier(
-            surfaces=["telegram"],
-            telegram_sender=tg_sender,
+            surfaces=["web"],
+            ws_sender=ws_sender,
         )
 
         # Before notification
         assert await notifier.is_delivered("notif_fake") is False
 
-        # After notification to preferred surface (telegram is the only one)
+        # After notification to preferred surface (web is the only one)
         await notifier.notify(
             TEST_USER_ID,
             "info_update",
             "Test",
             "Body",
-            data={
-                "urgency": 0.9,
-                "goal_relevance": 0.9,
-                "novelty": 0.9,
-                "confidence": 0.9,
-                "interruptibility": 0.9,
-            },
+            data=_FULL_PRIORITY,
         )
 
         # At least one notification was marked delivered
         assert len(notifier._delivered) > 0
 
     async def test_delivery_error_handled_gracefully(self):
-        tg_sender = AsyncMock(side_effect=Exception("Network error"))
+        ws_sender = AsyncMock(side_effect=Exception("Network error"))
 
         notifier = await self._make_notifier(
-            surfaces=["telegram"],
-            telegram_sender=tg_sender,
+            surfaces=["web"],
+            ws_sender=ws_sender,
         )
 
         result = await notifier.notify(
@@ -255,23 +203,17 @@ class TestNotifier:
             "info_update",
             "Test",
             "Body",
-            data={
-                "urgency": 0.9,
-                "goal_relevance": 0.9,
-                "novelty": 0.9,
-                "confidence": 0.9,
-                "interruptibility": 0.9,
-            },
+            data=_FULL_PRIORITY,
         )
 
         # Should not raise, error is captured per surface — but sanitized:
         # the per-surface error carries the safe message + code, NOT str(exc).
         assert result["status"] == "sent"
-        telegram_result = result["surfaces"]["telegram"]
-        assert telegram_result["status"] == "error"
-        assert telegram_result["error"] == "Something went wrong. Please try again."
-        assert telegram_result["error_code"] == "internal_error"
-        assert "Network error" not in telegram_result["error"]
+        web_result = result["surfaces"]["web"]
+        assert web_result["status"] == "error"
+        assert web_result["error"] == "Something went wrong. Please try again."
+        assert web_result["error_code"] == "internal_error"
+        assert "Network error" not in web_result["error"]
 
 
 class TestPriorityScoreDelivery:
@@ -366,12 +308,12 @@ class TestPriorityScoreDelivery:
 
         registry = AsyncMock()
         notifier = Notifier(surface_registry=registry, redis=redis)
-        result = await notifier._check_rate_limit("usr_test", "telegram")
+        result = await notifier._check_rate_limit("usr_test", "web")
 
         assert result is True
         redis.pipeline.assert_called_once()
-        pipe.incr.assert_called_once_with("notifier:rate:usr_test:telegram")
-        pipe.expire.assert_called_once_with("notifier:rate:usr_test:telegram", 3600)
+        pipe.incr.assert_called_once_with("notifier:rate:usr_test:web")
+        pipe.expire.assert_called_once_with("notifier:rate:usr_test:web", 3600)
 
     @pytest.mark.asyncio
     async def test_rate_limit_returns_false_over_limit(self):
@@ -380,12 +322,12 @@ class TestPriorityScoreDelivery:
 
         redis = MagicMock()
         pipe = AsyncMock()
-        pipe.execute = AsyncMock(return_value=[6, True])  # telegram limit is 5
+        pipe.execute = AsyncMock(return_value=[6, True])  # email limit is 3
         redis.pipeline = MagicMock(return_value=pipe)
 
         registry = AsyncMock()
         notifier = Notifier(surface_registry=registry, redis=redis)
-        result = await notifier._check_rate_limit("usr_test", "telegram")
+        result = await notifier._check_rate_limit("usr_test", "email")
 
         assert result is False
 
@@ -432,14 +374,14 @@ class TestPriorityScoreDelivery:
         from src.services.notifier import Notifier
 
         registry = AsyncMock()
-        registry.get_active_surfaces.return_value = ["telegram"]
-        telegram = AsyncMock(return_value={"status": "sent"})
+        registry.get_active_surfaces.return_value = ["web"]
+        ws_sender = AsyncMock(return_value={"status": "sent"})
         redis = MagicMock()
         pipe = AsyncMock()
         pipe.execute = AsyncMock(return_value=[1, True])
         redis.pipeline = MagicMock(return_value=pipe)
         redis.publish = AsyncMock()
-        notifier = Notifier(surface_registry=registry, redis=redis, telegram_sender=telegram)
+        notifier = Notifier(surface_registry=registry, redis=redis, websocket_sender=ws_sender)
         result = await notifier.notify(
             user_id="usr_test",
             notification_type="approval_request",

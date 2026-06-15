@@ -25,20 +25,10 @@ class TestRateLimiting:
         redis, pipe = _make_redis(1)
         registry = AsyncMock()
         notifier = Notifier(surface_registry=registry, redis=redis)
-        allowed = await notifier._check_rate_limit("user1", "telegram")
+        allowed = await notifier._check_rate_limit("user1", "web")
         assert allowed is True
-        pipe.incr.assert_called_once_with("notifier:rate:user1:telegram")
-        pipe.expire.assert_called_once_with("notifier:rate:user1:telegram", 3600)
-
-    @pytest.mark.asyncio
-    async def test_telegram_blocked_after_5(self):
-        from src.services.notifier import Notifier
-
-        redis, _ = _make_redis(6)
-        registry = AsyncMock()
-        notifier = Notifier(surface_registry=registry, redis=redis)
-        allowed = await notifier._check_rate_limit("user1", "telegram")
-        assert allowed is False
+        pipe.incr.assert_called_once_with("notifier:rate:user1:web")
+        pipe.expire.assert_called_once_with("notifier:rate:user1:web", 3600)
 
     @pytest.mark.asyncio
     async def test_web_allowed_at_15(self):
@@ -98,8 +88,8 @@ class TestRateLimiting:
         redis, pipe = _make_redis(3)
         registry = AsyncMock()
         notifier = Notifier(surface_registry=registry, redis=redis)
-        await notifier._check_rate_limit("user1", "telegram")
-        pipe.expire.assert_called_once_with("notifier:rate:user1:telegram", 3600)
+        await notifier._check_rate_limit("user1", "web")
+        pipe.expire.assert_called_once_with("notifier:rate:user1:web", 3600)
 
     @pytest.mark.asyncio
     async def test_rate_limit_no_redis_always_allows(self):
@@ -107,7 +97,7 @@ class TestRateLimiting:
 
         registry = AsyncMock()
         notifier = Notifier(surface_registry=registry, redis=None)
-        allowed = await notifier._check_rate_limit("user1", "telegram")
+        allowed = await notifier._check_rate_limit("user1", "web")
         assert allowed is True
 
 
@@ -119,11 +109,11 @@ class TestRateLimitInDelivery:
         from src.services.notifier import Notifier
 
         registry = AsyncMock()
-        registry.get_active_surfaces.return_value = ["telegram"]
-        registry.get_preferred_surface.return_value = "telegram"
-        redis, _ = _make_redis(6)  # over telegram limit of 5
-        telegram = AsyncMock(return_value={"status": "sent"})
-        notifier = Notifier(surface_registry=registry, redis=redis, telegram_sender=telegram)
+        registry.get_active_surfaces.return_value = ["web"]
+        registry.get_preferred_surface.return_value = "web"
+        redis, _ = _make_redis(16)  # over web limit of 15
+        ws_sender = AsyncMock(return_value={"status": "sent"})
+        notifier = Notifier(surface_registry=registry, redis=redis, websocket_sender=ws_sender)
         result = await notifier.notify(
             user_id="usr_test",
             notification_type="info_update",
@@ -138,4 +128,4 @@ class TestRateLimitInDelivery:
             },
         )
         assert result["status"] == "rate_limited"
-        telegram.assert_not_called()
+        ws_sender.assert_not_called()

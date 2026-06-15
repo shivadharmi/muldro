@@ -50,8 +50,7 @@ def compute_priority_score(
 
 
 SURFACE_RATE_LIMITS: dict[str, int] = {
-    "telegram": 5,  # per hour
-    "web": 15,
+    "web": 15,  # per hour
     "slack": 8,
     "email": 3,
 }
@@ -64,13 +63,11 @@ class Notifier:
         self,
         surface_registry: SurfaceRegistry,
         redis=None,
-        telegram_sender=None,
         websocket_sender=None,
         db=None,
     ):
         self._registry = surface_registry
         self._redis = redis
-        self._telegram_sender = telegram_sender
         self._ws_sender = websocket_sender
         self._db = db
         # Track delivered notifications for dedup
@@ -311,7 +308,7 @@ class Notifier:
     ) -> None:
         """When user acts on one surface, notify others to update.
 
-        E.g., user approves on Telegram -> web dashboard updates status.
+        E.g., user approves on Slack -> web dashboard updates status.
         """
         if self._redis:
             message = json.dumps(
@@ -335,9 +332,7 @@ class Notifier:
     async def _deliver(self, surface: str, notification: Notification) -> dict:
         """Deliver a notification to a specific surface."""
         try:
-            if surface == "telegram":
-                result = await self._deliver_telegram(notification)
-            elif surface == "web":
+            if surface == "web":
                 result = await self._deliver_web(notification)
             elif surface == "slack":
                 result = await self._deliver_slack(notification)
@@ -376,42 +371,6 @@ class Notifier:
             # safe message + code, never the raw exception. Logs keep str(e).
             code, message, _ = classify(e)
             return {"status": "error", "error": message, "error_code": code}
-
-    async def _deliver_telegram(self, notification: Notification) -> dict:
-        """Format and send notification via Telegram."""
-        if not self._telegram_sender:
-            return {"status": "skipped", "reason": "no_telegram_sender"}
-
-        # Format message based on notification type
-        if notification.type == "approval_request":
-            approval_id = notification.data.get("approval_id", "")
-            risk = notification.data.get("risk_level", "medium")
-            text = f"*Approval Required* ({risk})\n\n*{notification.title}*\n{notification.body}"
-            markup = json.dumps(
-                {
-                    "inline_keyboard": [
-                        [
-                            {
-                                "text": "Approve",
-                                "callback_data": f"approve:{approval_id}",
-                            },
-                            {
-                                "text": "Reject",
-                                "callback_data": f"reject:{approval_id}",
-                            },
-                        ]
-                    ]
-                }
-            )
-            return await self._telegram_sender(
-                text=text, parse_mode="Markdown", reply_markup=markup
-            )
-        elif notification.type == "critical_alert":
-            text = f"*ALERT*\n\n*{notification.title}*\n{notification.body}"
-            return await self._telegram_sender(text=text, parse_mode="Markdown")
-        else:
-            text = f"*{notification.title}*\n{notification.body}"
-            return await self._telegram_sender(text=text, parse_mode="Markdown")
 
     async def _deliver_slack(self, notification: Notification) -> dict:
         """Send notification via Slack using MCP bridge."""
