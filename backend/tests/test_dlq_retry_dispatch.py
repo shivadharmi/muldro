@@ -71,8 +71,8 @@ class TestDlqRetryDispatchBackgroundTask:
         scheduler = _make_scheduler()
 
         with (
-            patch("src.services.scheduler.DeadLetterService", return_value=mock_dlq),
-            patch("src.services.scheduler.transition_run") as mock_transition,
+            patch("src.services.scheduler.dlq_tick.DeadLetterService", return_value=mock_dlq),
+            patch("src.services.scheduler.dlq_tick.transition_run") as mock_transition,
         ):
             await scheduler._tick_dlq_retry(mock_factory)
 
@@ -109,8 +109,8 @@ class TestDlqRetryUnknownOperationType:
         scheduler = _make_scheduler()
 
         with (
-            patch("src.services.scheduler.DeadLetterService", return_value=mock_dlq),
-            caplog.at_level(logging.WARNING, logger="src.services.scheduler"),
+            patch("src.services.scheduler.dlq_tick.DeadLetterService", return_value=mock_dlq),
+            caplog.at_level(logging.WARNING, logger="src.services.scheduler.dlq_tick"),
         ):
             await scheduler._tick_dlq_retry(mock_factory)
 
@@ -149,7 +149,7 @@ class TestDlqRetryHandlerFailure:
 
         scheduler = _make_scheduler()
 
-        with patch("src.services.scheduler.DeadLetterService", return_value=mock_dlq):
+        with patch("src.services.scheduler.dlq_tick.DeadLetterService", return_value=mock_dlq):
             # Should not raise
             await scheduler._tick_dlq_retry(mock_factory)
 
@@ -184,7 +184,7 @@ class TestDlqRetryFailedEmbeddingDeferred:
 
         scheduler = _make_scheduler()
 
-        with patch("src.services.scheduler.DeadLetterService", return_value=mock_dlq):
+        with patch("src.services.scheduler.dlq_tick.DeadLetterService", return_value=mock_dlq):
             await scheduler._tick_dlq_retry(mock_factory)
 
             # mark_resolved should NOT be called — handler returns False
@@ -219,7 +219,7 @@ class TestDlqRetryDispatchPerception:
 
         scheduler = _make_scheduler(orchestrator=mock_orch)
 
-        with patch("src.services.scheduler.DeadLetterService", return_value=mock_dlq):
+        with patch("src.services.scheduler.dlq_tick.DeadLetterService", return_value=mock_dlq):
             await scheduler._tick_dlq_retry(mock_factory)
 
             mock_orch._bump_perception_for_sources.assert_awaited_once_with(
@@ -254,7 +254,7 @@ class TestDlqRetryExhausted:
 
         scheduler = _make_scheduler()
 
-        with patch("src.services.scheduler.DeadLetterService", return_value=mock_dlq):
+        with patch("src.services.scheduler.dlq_tick.DeadLetterService", return_value=mock_dlq):
             await scheduler._tick_dlq_retry(mock_factory)
 
             mock_db.get.assert_not_awaited()

@@ -95,7 +95,7 @@ class TestSchedulerTick:
         scheduler = SchedulerLoop(settings)
 
         with (
-            patch("src.services.scheduler.get_session_factory", return_value=mock_factory),
+            patch("src.services.scheduler._base.get_session_factory", return_value=mock_factory),
             patch.object(scheduler, "_fire", new_callable=AsyncMock) as mock_fire,
         ):
             await scheduler._tick()
@@ -121,7 +121,7 @@ class TestSchedulerTick:
 
         scheduler = SchedulerLoop(settings)
 
-        with patch("src.services.scheduler.get_session_factory", return_value=mock_factory):
+        with patch("src.services.scheduler._base.get_session_factory", return_value=mock_factory):
             await scheduler._tick()
             # Commit is called at least once (to persist state), but no fire
             assert mock_db.commit.await_count >= 1
@@ -145,7 +145,7 @@ class TestSchedulerTick:
         scheduler = SchedulerLoop(settings)
 
         with (
-            patch("src.services.scheduler.get_session_factory", return_value=mock_factory),
+            patch("src.services.scheduler._base.get_session_factory", return_value=mock_factory),
             patch.object(scheduler, "_fire", new_callable=AsyncMock),
         ):
             await scheduler._tick()
@@ -176,7 +176,7 @@ class TestSchedulerTick:
         scheduler = SchedulerLoop(settings)
 
         with (
-            patch("src.services.scheduler.get_session_factory", return_value=mock_factory),
+            patch("src.services.scheduler._base.get_session_factory", return_value=mock_factory),
             patch.object(scheduler, "_fire", new_callable=AsyncMock),
         ):
             await scheduler._tick()
@@ -203,7 +203,7 @@ class TestSchedulerTick:
         scheduler = SchedulerLoop(settings)
 
         with (
-            patch("src.services.scheduler.get_session_factory", return_value=mock_factory),
+            patch("src.services.scheduler._base.get_session_factory", return_value=mock_factory),
             patch.object(
                 scheduler, "_fire", new_callable=AsyncMock, side_effect=Exception("agent down")
             ),
@@ -337,8 +337,13 @@ class TestFireActions:
         scheduler = SchedulerLoop(settings)
 
         with (
-            patch("src.services.scheduler.get_session_factory", return_value=mock_factory),
-            patch("src.services.scheduler.HeartbeatService", return_value=mock_hb),
+            patch(
+                "src.services.scheduler.schedule_dispatch.get_session_factory",
+                return_value=mock_factory,
+            ),
+            patch(
+                "src.services.scheduler.schedule_dispatch.HeartbeatService", return_value=mock_hb
+            ),
         ):
             await scheduler._fire(sched)
 

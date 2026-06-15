@@ -260,7 +260,7 @@ class TestSchedulerPerceptionTick:
 
 class TestObserveSourceSkip:
     @pytest.mark.asyncio
-    @patch("src.services.scheduler.get_session_factory")
+    @patch("src.services.scheduler.schedule_dispatch.get_session_factory")
     async def test_observe_source_skips_when_managed(self, mock_factory):
         """observe_source should skip when perception_state row is active."""
         from src.services.scheduler import SchedulerLoop

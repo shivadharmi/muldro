@@ -866,7 +866,7 @@ class TestSchedulerDLQRetry:
         mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_db)
         mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("src.services.scheduler.get_session_factory", return_value=mock_factory):
+        with patch("src.services.scheduler._base.get_session_factory", return_value=mock_factory):
             for _ in range(5):
                 await scheduler._tick()
 
