@@ -108,6 +108,8 @@ class TestAssessRisk:
         mock_client.messages.create.assert_called_once()
 
     async def test_falls_back_on_api_error(self, mock_client):
+        # Fail closed (SVC-P2-1): an assessment outage must default to 'high', which
+        # maps to approval_required at every trust level — never auto-execute a write.
         mock_client.messages.create = AsyncMock(side_effect=Exception("API down"))
         result = await assess_risk(
             capability="email.send",
@@ -116,7 +118,7 @@ class TestAssessRisk:
             client=mock_client,
             model="claude-haiku-4-5-20251001",
         )
-        assert result.risk_level == "medium"
+        assert result.risk_level == "high"
         assert "fallback" in result.reasoning.lower() or "failed" in result.reasoning.lower()
 
     async def test_falls_back_on_invalid_json(self, mock_client):
@@ -132,7 +134,8 @@ class TestAssessRisk:
             client=mock_client,
             model="claude-haiku-4-5-20251001",
         )
-        assert result.risk_level == "medium"
+        # Fail closed (SVC-P2-1): unparseable LLM output → high, not medium.
+        assert result.risk_level == "high"
 
 
 class TestCacheKey:

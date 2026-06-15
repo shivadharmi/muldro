@@ -1053,13 +1053,15 @@ class GraphExecutor:
             )
         except Exception:
             logger.warning(
-                "Risk assessment failed for %s, defaulting to medium",
+                "Risk assessment failed for %s, failing closed to high (forces approval)",
                 capability,
                 exc_info=True,
             )
+            # Fail closed: unknown risk → high → approval_required at every trust level.
             return RiskAssessment(
-                risk_level="medium",
-                reasoning="Fallback — risk assessment unavailable",
+                risk_level="high",
+                reasoning="Fallback — risk assessment unavailable, failing closed to high",
+                reversible=False,
             )
 
     async def _create_approval_and_pause(

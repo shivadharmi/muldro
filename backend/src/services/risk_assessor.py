@@ -125,14 +125,16 @@ async def assess_risk(
         return RiskAssessment.model_validate(data)
     except Exception:
         logger.warning(
-            "Risk assessment failed for %s, falling back to medium",
+            "Risk assessment failed for %s, failing closed to high (forces approval)",
             capability,
             exc_info=True,
         )
+        # Fail closed: when risk cannot be assessed, treat as high so the trust
+        # matrix routes to approval_required at every trust level (incl. autonomous).
         return RiskAssessment(
-            risk_level="medium",
-            reasoning="Fallback — risk assessment failed, defaulting to medium",
-            reversible=True,
+            risk_level="high",
+            reasoning="Fallback — risk assessment failed, failing closed to high",
+            reversible=False,
             blast_radius="self",
         )
 
