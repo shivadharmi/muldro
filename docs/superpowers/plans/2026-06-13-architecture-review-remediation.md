@@ -184,6 +184,29 @@ memory_service → scheduler) → SVC-P1-3 (graph_executor) → ORCH-P1-1 (jarvi
   `compute_next_run`; re-pointed moved `mock.patch` targets to the submodule where each symbol is
   looked up (`_tick`→`_base`, `_fire`→`schedule_dispatch`, DLQ→`dlq_tick`). Reviewed (true no-op,
   no findings); suite green (2239 passed = 2231 baseline + 8 seam tests). Completes SVC-P2-2.
+- **SVC-P1-3** (`graph_executor.py`) — ✅ done. **First collaborator (delegation) extraction**,
+  not a package/inheritance split: `GraphExecutor` stays a frozen hub. Pulled the cohesive
+  Redis/event-bus emission cluster out into a new leaf module
+  `src/services/execution_surface_emitter.py` (`SurfaceEmitter`): `emit_event`,
+  `publish_progress`, `emit_surface_update`, `emit_summary_surface`. `__init__` builds
+  `self._surface_emitter` from already-injected deps (`settings`/`db`/`event_bus`/`redis`/
+  `db_factory`) so the **public constructor signature is byte-identical**; the 4 hub methods
+  become **thin forwarders** (chosen over removing them so the ~25 internal call sites and the
+  ~30 tests doing `executor._emit_X = AsyncMock()` stay valid — the frozen-hub collaborator-DI
+  pattern). Bodies moved verbatim (AST-verified); sole change `self._publish_progress` →
+  `self.publish_progress` inside `emit_event` (that method moved too). Hub 2116 → 1897 lines;
+  collaborator 325. **No `patch("…graph_executor.X")` target moved** — the moved bodies use
+  `select`/`TaskStep`, re-imported in the new module and patched nowhere. Added
+  `tests/test_execution_surface_emitter.py` (9 characterization tests, GREEN on pre-refactor
+  code); re-pointed 2 emit→progress wiring tests (`test_ws_progress.py`) + 1 `getsource`
+  assertion (`test_execution_durability.py`) to the collaborator, and switched
+  `test_graph_executor_surface_updates.py` to pass transport deps via the constructor (the
+  collaborator snapshots them in `__init__`; post-construction reassignment would not reach it —
+  confirmed no prod code does this). **SVC-P3-1 deferred**: the `elif not self._trust_engine:`
+  branch is reachable (`create_graph_executor` leaves `trust_engine=None` if `TrustEngine`
+  construction raises), so removing it is a separate behavior change, not part of this structural
+  move. Reviewed (true no-op, no findings); suite green (2248 passed = 2239 baseline + 9 seam
+  tests). Remaining M5 target: ORCH-P1-1 (`jarvis.py` stream/non-stream fold).
 
 ### Error handling (completed — separate user-reported issue, not from the review)
 
