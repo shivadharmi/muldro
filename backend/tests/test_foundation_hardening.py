@@ -628,46 +628,6 @@ class TestBriefingAsyncGeneration:
         assert result["briefing_id"] == "brf_001"
 
 
-class TestTelegramRateLimiting:
-    """Fix 3.3: Per-user rate limiting (10 msg/min)."""
-
-    def test_rate_limiter_allows_under_limit(self):
-        from src.interface.telegram import TelegramRateLimiter
-
-        limiter = TelegramRateLimiter(max_per_minute=10)
-        for _ in range(10):
-            assert limiter.allow("user_1") is True
-
-    def test_rate_limiter_blocks_over_limit(self):
-        from src.interface.telegram import TelegramRateLimiter
-
-        limiter = TelegramRateLimiter(max_per_minute=10)
-        for _ in range(10):
-            limiter.allow("user_1")
-        assert limiter.allow("user_1") is False
-
-    def test_rate_limiter_independent_per_user(self):
-        from src.interface.telegram import TelegramRateLimiter
-
-        limiter = TelegramRateLimiter(max_per_minute=10)
-        for _ in range(10):
-            limiter.allow("user_1")
-        # user_2 should still be allowed
-        assert limiter.allow("user_2") is True
-
-    def test_rate_limiter_resets_after_window(self):
-        import time
-
-        from src.interface.telegram import TelegramRateLimiter
-
-        limiter = TelegramRateLimiter(max_per_minute=10)
-        for _ in range(10):
-            limiter.allow("user_1")
-        # Manually expire the window
-        limiter._windows["user_1"] = (10, time.monotonic() - 61)
-        assert limiter.allow("user_1") is True
-
-
 class TestNotifierWorkspaceValidation:
     """Fix 1.2: Notifier rejects cross-workspace notifications."""
 

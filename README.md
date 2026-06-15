@@ -122,7 +122,7 @@ uv venv .venv --python 3.13 && source .venv/bin/activate
 uv pip install -e ".[dev]"
 cp .env.example .env          # edit with your keys
 alembic upgrade head
-python run.py --worker        # add --bot for the Telegram bot
+python run.py --worker        # API + background worker
 
 # Frontend
 cd frontend && npm install && npm run dev
@@ -141,7 +141,6 @@ jarvis/
 │   │   ├── api/            # REST/SSE routers (/v1/ prefix)
 │   │   ├── config/         # Settings (pydantic-settings, JARVIS_ env prefix)
 │   │   ├── connectors/     # MCP bridge, perception connectors
-│   │   ├── interface/      # Telegram bot
 │   │   ├── models/         # SQLAlchemy models (all workspace-scoped)
 │   │   ├── orchestrator/   # JarvisOrchestrator, agents, hooks, tracing, budget, contracts
 │   │   ├── services/       # Business logic (planner, governor, operator, tri_search, etc.)

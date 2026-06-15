@@ -54,9 +54,6 @@ python run.py
 # Run with background worker (StreamConsumer + Scheduler)
 python run.py --worker
 
-# Run with Telegram bot
-python run.py --worker --bot
-
 # Tests
 pytest tests/ -v                          # all tests
 pytest tests/test_planner.py -v           # single file

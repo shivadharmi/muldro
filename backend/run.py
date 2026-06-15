@@ -34,7 +34,7 @@ def main():
     configure_logging(json_output=settings.log_json, level=logging.INFO)
 
     # Fail fast on misconfiguration (missing Anthropic key, missing OAuth
-    # encryption key in production) before spawning worker/bot threads.
+    # encryption key in production) before spawning the worker thread.
     settings.validate_startup()
 
     if args.worker:

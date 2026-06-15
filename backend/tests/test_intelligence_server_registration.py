@@ -62,6 +62,6 @@ def test_public_exports_present():
     # configure() + the FastMCP instance (run.py, server.py, prompts.py)
     assert callable(srv.configure)
     assert srv.intelligence is intelligence
-    # approve_action (src/interface/telegram.py) + _get_plan_details_impl (tests)
+    # approve_action (impl in intelligence_server/planning.py) + _get_plan_details_impl (tests)
     assert callable(srv.approve_action)
     assert callable(srv._get_plan_details_impl)
