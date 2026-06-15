@@ -29,8 +29,6 @@ class Settings(BaseSettings):
     environment: str = "development"  # Environment discriminator (development, staging, production)
     log_json: bool = False  # Use JSON structured logging
 
-    telegram_chat_id: str = ""  # Telegram chat ID for proactive message delivery
-
     # Embeddings — Voyage AI (primary) or Bedrock Titan (fallback when no voyage_api_key)
     embedding_model: str = "voyage-3"
     voyage_api_key: str = ""
@@ -75,9 +73,6 @@ class Settings(BaseSettings):
     event_processor_concurrency: int = 5  # Max concurrent event scoring calls
     max_perception_per_tick: int = 5  # Max perception cycles per scheduler tick
     webhook_lag_threshold: int = 5000  # Reject webhooks when stream lag exceeds this
-
-    # Telegram bot
-    telegram_bot_token: str = ""  # Telegram Bot API token
 
     # Auth
     magic_link_ttl_minutes: int = 15

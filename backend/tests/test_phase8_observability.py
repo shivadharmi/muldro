@@ -266,7 +266,7 @@ class TestMetricsService:
     def test_record_notification_sent(self):
         from src.services.metrics_service import MetricsService
 
-        MetricsService.record_notification_sent("info_update", "telegram")
+        MetricsService.record_notification_sent("info_update", "web")
 
     def test_record_trigger_fired(self):
         from src.services.metrics_service import MetricsService

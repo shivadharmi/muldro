@@ -9,7 +9,7 @@ Steps:
 4. Planner produces top priorities
 5. Presenter generates text brief + structured payload
 6. Store briefing snapshot
-7. Notify user via Telegram / web dashboard
+7. Notify user via web dashboard
 """
 
 import logging

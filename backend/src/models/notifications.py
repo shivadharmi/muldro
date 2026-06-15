@@ -18,7 +18,7 @@ class Notification(Base, TimestampMixin):
         String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
     )
     channel: Mapped[str] = mapped_column(String(32), default="web")
-    # web, telegram, email, slack
+    # web, email, slack
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     body: Mapped[str | None] = mapped_column(Text)
     payload_json: Mapped[dict | None] = mapped_column(JSONB)

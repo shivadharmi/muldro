@@ -1,7 +1,7 @@
 """Workspace resolution for background (non-request) code paths.
 
 Canonical home for ``resolve_workspace_id`` so services (scheduler, worker,
-notifier, telegram interface) import it downward from the service layer instead
+notifier) import it downward from the service layer instead
 of upward from ``src.api``. ``api.deps`` re-exports it for route handlers.
 """
 

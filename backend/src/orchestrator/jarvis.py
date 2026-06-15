@@ -40,7 +40,6 @@ from src.orchestrator.agent_loop import (
 from src.orchestrator.agents import AGENTS, SubAgent, build_agent_set
 from src.orchestrator.budget import BudgetTracker
 from src.orchestrator.chat_pipeline import (
-    build_telegram_hint,
     build_user_action_block,
     format_prior_results_for_presenter,
     format_prior_step_results,
@@ -860,9 +859,8 @@ class JarvisOrchestrator:
                 result["presentation"] = direct_answer
             else:
                 prior_results_block = format_prior_results_for_presenter(step_outputs)
-                telegram_hint = build_telegram_hint(surface)
                 presenter_msg = (
-                    f"Format this for the user ({surface}).{telegram_hint} "
+                    f"Format this for the user ({surface}). "
                     f"Be conversational and helpful.\n\n"
                     f"User message: {message}\n"
                     f"Plan: {json.dumps(plan_dict)}"
@@ -1193,9 +1191,8 @@ class JarvisOrchestrator:
             else:
                 # Collect prior step results so Presenter can reference them
                 prior_results_block = format_prior_results_for_presenter(step_outputs)
-                telegram_hint = build_telegram_hint(surface)
                 presenter_msg = (
-                    f"Respond to the user ({surface}).{telegram_hint} "
+                    f"Respond to the user ({surface}). "
                     f"Be conversational and helpful.\n\n"
                     f"User message: {message}\n"
                     f"Intent: {intent}\n"
@@ -3059,8 +3056,8 @@ class JarvisOrchestrator:
         The composed server mounts tools under namespaced prefixes:
         - intelligence tools: "intelligence_" prefix
         - communication tools: "communication_" prefix
-        We map flat tool names (e.g. "search", "send_telegram") to namespaced names
-        (e.g. "intelligence_search", "communication_send_telegram").
+        We map flat tool names (e.g. "search", "push_ui_update") to namespaced names
+        (e.g. "intelligence_search", "communication_push_ui_update").
         """
         import json
 

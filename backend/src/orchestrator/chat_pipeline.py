@@ -56,15 +56,6 @@ async def resolve_plan_routing(
     return step_routing, user_steps
 
 
-def build_telegram_hint(surface: str) -> str:
-    """Length/priority hint appended to the presenter prompt for Telegram."""
-    return (
-        " Keep under 3500 chars. Prioritize action items and key findings."
-        if surface == "telegram"
-        else ""
-    )
-
-
 def build_user_action_block(user_steps: list[PlanStep]) -> str:
     """Render the 'User actions required' block from user-actor steps.
 

@@ -62,21 +62,6 @@ class TestFormatPriorResultsForPresenter:
         )
 
 
-class TestBuildTelegramHint:
-    def test_telegram_surface_gets_hint(self):
-        from src.orchestrator.chat_pipeline import build_telegram_hint
-
-        assert build_telegram_hint("telegram") == (
-            " Keep under 3500 chars. Prioritize action items and key findings."
-        )
-
-    @pytest.mark.parametrize("surface", ["web", "api", "scheduler", ""])
-    def test_non_telegram_surfaces_get_nothing(self, surface):
-        from src.orchestrator.chat_pipeline import build_telegram_hint
-
-        assert build_telegram_hint(surface) == ""
-
-
 class TestBuildUserActionBlock:
     def test_with_context(self):
         from src.orchestrator.chat_pipeline import build_user_action_block

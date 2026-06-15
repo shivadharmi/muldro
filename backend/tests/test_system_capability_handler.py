@@ -171,7 +171,7 @@ class TestSystemCapabilityHandlerStandalone:
 
 
 class TestPublicOrchestratorMethods:
-    """get_budget_status() and get_system_health() — public API for Telegram."""
+    """get_budget_status() and get_system_health() — public API for notifications."""
 
     @pytest.mark.asyncio
     async def test_get_budget_status(self):

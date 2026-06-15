@@ -85,7 +85,7 @@ class Session(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     workspace_id: Mapped[str | None] = mapped_column(String(64))
     surface: Mapped[str] = mapped_column(String(32), default="web")
-    # web, telegram, api
+    # web, api
     device_info: Mapped[dict | None] = mapped_column(JSONB)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(

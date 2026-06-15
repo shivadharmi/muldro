@@ -18,9 +18,7 @@ class TestContextAssembly:
         from src.orchestrator.jarvis import JarvisOrchestrator
 
         mock_get_client.return_value = AsyncMock()
-        settings = make_mock_settings(
-            daily_token_budget_usd=5.0, use_bedrock=False, telegram_bot_token=""
-        )
+        settings = make_mock_settings(daily_token_budget_usd=5.0, use_bedrock=False)
         db_factory = MagicMock()
 
         orchestrator = JarvisOrchestrator(
@@ -40,9 +38,7 @@ class TestContextAssembly:
         from src.orchestrator.jarvis import JarvisOrchestrator
 
         mock_get_client.return_value = AsyncMock()
-        settings = make_mock_settings(
-            daily_token_budget_usd=5.0, use_bedrock=False, telegram_bot_token=""
-        )
+        settings = make_mock_settings(daily_token_budget_usd=5.0, use_bedrock=False)
         db_factory = MagicMock()
 
         # Mock memory service
@@ -89,9 +85,7 @@ class TestContextAssembly:
         from src.orchestrator.jarvis import JarvisOrchestrator
 
         mock_get_client.return_value = AsyncMock()
-        settings = make_mock_settings(
-            daily_token_budget_usd=5.0, use_bedrock=False, telegram_bot_token=""
-        )
+        settings = make_mock_settings(daily_token_budget_usd=5.0, use_bedrock=False)
         db_factory = MagicMock()
 
         # Mock only world_model, no memory service
@@ -118,9 +112,7 @@ class TestContextAssembly:
         from src.orchestrator.jarvis import JarvisOrchestrator
 
         mock_get_client.return_value = AsyncMock()
-        settings = make_mock_settings(
-            daily_token_budget_usd=5.0, use_bedrock=False, telegram_bot_token=""
-        )
+        settings = make_mock_settings(daily_token_budget_usd=5.0, use_bedrock=False)
         db_factory = MagicMock()
 
         # Mock services that return empty results
@@ -150,9 +142,7 @@ class TestContextAssembly:
         from src.orchestrator.jarvis import JarvisOrchestrator
 
         mock_get_client.return_value = AsyncMock()
-        settings = make_mock_settings(
-            daily_token_budget_usd=5.0, use_bedrock=False, telegram_bot_token=""
-        )
+        settings = make_mock_settings(daily_token_budget_usd=5.0, use_bedrock=False)
         db_factory = MagicMock()
 
         # Mock memory service that raises exception
@@ -188,9 +178,7 @@ class TestSystemPromptBuilding:
         from src.orchestrator.jarvis import JarvisOrchestrator
 
         mock_get_client.return_value = AsyncMock()
-        settings = make_mock_settings(
-            daily_token_budget_usd=5.0, use_bedrock=False, telegram_bot_token=""
-        )
+        settings = make_mock_settings(daily_token_budget_usd=5.0, use_bedrock=False)
 
         orchestrator = JarvisOrchestrator(
             settings=settings, db_factory=MagicMock(), services=ServiceContainer()
@@ -216,9 +204,7 @@ class TestSystemPromptBuilding:
         from src.orchestrator.jarvis import JarvisOrchestrator
 
         mock_get_client.return_value = AsyncMock()
-        settings = make_mock_settings(
-            daily_token_budget_usd=5.0, use_bedrock=False, telegram_bot_token=""
-        )
+        settings = make_mock_settings(daily_token_budget_usd=5.0, use_bedrock=False)
 
         orchestrator = JarvisOrchestrator(
             settings=settings, db_factory=MagicMock(), services=ServiceContainer()
@@ -246,9 +232,7 @@ class TestToolCacheControl:
         from src.orchestrator.jarvis import JarvisOrchestrator
 
         mock_get_client.return_value = AsyncMock()
-        settings = make_mock_settings(
-            daily_token_budget_usd=5.0, use_bedrock=False, telegram_bot_token=""
-        )
+        settings = make_mock_settings(daily_token_budget_usd=5.0, use_bedrock=False)
 
         orchestrator = JarvisOrchestrator(
             settings=settings, db_factory=MagicMock(), services=ServiceContainer()
@@ -281,9 +265,7 @@ class TestToolCacheControl:
         from src.orchestrator.jarvis import JarvisOrchestrator
 
         mock_get_client.return_value = AsyncMock()
-        settings = make_mock_settings(
-            daily_token_budget_usd=5.0, use_bedrock=False, telegram_bot_token=""
-        )
+        settings = make_mock_settings(daily_token_budget_usd=5.0, use_bedrock=False)
 
         orchestrator = JarvisOrchestrator(
             settings=settings, db_factory=MagicMock(), services=ServiceContainer()
@@ -298,9 +280,7 @@ class TestToolCacheControl:
         from src.orchestrator.jarvis import JarvisOrchestrator
 
         mock_get_client.return_value = AsyncMock()
-        settings = make_mock_settings(
-            daily_token_budget_usd=5.0, use_bedrock=False, telegram_bot_token=""
-        )
+        settings = make_mock_settings(daily_token_budget_usd=5.0, use_bedrock=False)
 
         orchestrator = JarvisOrchestrator(
             settings=settings, db_factory=MagicMock(), services=ServiceContainer()

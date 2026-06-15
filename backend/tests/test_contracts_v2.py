@@ -91,7 +91,7 @@ class TestDomainEvent:
         evt = DomainEvent(
             event_type="notification.delivered",
             user_id="usr_1",
-            payload={"notification_id": "notif_001", "surface": "telegram"},
+            payload={"notification_id": "notif_001", "surface": "web"},
         )
         assert evt.event_type == "notification.delivered"
 
