@@ -200,6 +200,11 @@ async def _api_call_with_retry(client, api_kwargs: dict, agent_name: str):
             else:
                 raise
 
+    # Unreachable in practice (the loop either returns or re-raises), but make the
+    # contract explicit so callers never silently receive None on a misconfigured
+    # _MAX_API_RETRIES (e.g. 0).
+    raise RuntimeError(f"API retry loop exhausted for {agent_name} without a response")
+
 
 def _sanitize_content_blocks(content) -> list[dict]:
     """Convert SDK response content blocks to plain dicts for re-submission.
@@ -623,6 +628,7 @@ async def agent_loop(
                     agent_name,
                     trace_id=trace.trace_id if trace else None,
                     span_id=span.span_id if span else None,
+                    tokens_used=_resp_input + _resp_output,
                     latency_ms=tool_latency,
                     db_factory=db_factory,
                     workspace_id=workspace_id,
