@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -95,28 +95,6 @@ class Session(Base):
     user: Mapped["User"] = relationship(back_populates="sessions")
 
     __table_args__ = (Index("ix_sessions_user_created", "user_id", "created_at"),)
-
-
-class OAuthConnection(Base, TimestampMixin):
-    __tablename__ = "oauth_connections"
-
-    connection_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    user_id: Mapped[str] = mapped_column(String(64), ForeignKey("users.user_id"), nullable=False)
-    workspace_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
-    )
-    provider: Mapped[str] = mapped_column(String(32), nullable=False)
-    # google, github
-    provider_user_id: Mapped[str | None] = mapped_column(String(128))
-    email: Mapped[str | None] = mapped_column(String(256))
-    access_token_encrypted: Mapped[str | None] = mapped_column(Text)
-    refresh_token_encrypted: Mapped[str | None] = mapped_column(Text)
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    scopes: Mapped[dict | None] = mapped_column(JSONB)
-
-    __table_args__ = (
-        Index("ix_oauth_connections_user_provider", "user_id", "provider", unique=True),
-    )
 
 
 class UserSettings(Base, TimestampMixin):

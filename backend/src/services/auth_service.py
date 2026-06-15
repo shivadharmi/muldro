@@ -11,7 +11,7 @@ from ulid import ULID
 
 from src.config.settings import Settings
 from src.models.ids import generate_user_id
-from src.models.users import MagicLink, OAuthConnection, Session, User, Workspace, WorkspaceMember
+from src.models.users import MagicLink, Session, User, Workspace, WorkspaceMember
 
 logger = logging.getLogger(__name__)
 
@@ -76,38 +76,6 @@ class AuthService:
             state = f"{user_id}:{state}"
         # Store state in Redis for CSRF protection in a real implementation
         return state
-
-    async def complete_oauth(
-        self,
-        provider: str,
-        provider_user_id: str,
-        email: str,
-        access_token: str,
-        refresh_token: str | None,
-        expires_at: datetime | None,
-        scopes: list[str] | None,
-        user_id: str | None = None,
-    ) -> Session:
-        """Complete OAuth flow — create/link user, store tokens, return session."""
-        if not user_id:
-            user = await self._get_or_create_user(email)
-            user_id = user.user_id
-
-        await self._upsert_oauth_connection(
-            user_id=user_id,
-            provider=provider,
-            provider_user_id=provider_user_id,
-            email=email,
-            access_token=access_token,
-            refresh_token=refresh_token,
-            expires_at=expires_at,
-            scopes=scopes,
-        )
-
-        session = await self._create_session(user_id, surface="web")
-        await self._db.commit()
-        logger.info("OAuth %s completed for user %s", provider, user_id)
-        return session
 
     async def validate_session(self, token: str) -> User | None:
         """Validate a session token. Returns the User or None.
@@ -262,50 +230,6 @@ class AuthService:
         # Store raw token as transient attribute for the caller
         session._raw_token = raw_token  # type: ignore[attr-defined]
         return session
-
-    async def _upsert_oauth_connection(
-        self,
-        user_id: str,
-        provider: str,
-        provider_user_id: str,
-        email: str,
-        access_token: str,
-        refresh_token: str | None,
-        expires_at: datetime | None,
-        scopes: list[str] | None,
-    ) -> None:
-        """Create or update an OAuth connection."""
-        result = await self._db.execute(
-            select(OAuthConnection).where(
-                OAuthConnection.user_id == user_id,
-                OAuthConnection.provider == provider,
-            )
-        )
-        conn = result.scalar_one_or_none()
-
-        encrypted_access = self._encrypt_token(access_token)
-        encrypted_refresh = self._encrypt_token(refresh_token) if refresh_token else None
-
-        if conn:
-            conn.provider_user_id = provider_user_id
-            conn.email = email
-            conn.access_token_encrypted = encrypted_access
-            conn.refresh_token_encrypted = encrypted_refresh
-            conn.expires_at = expires_at
-            conn.scopes = scopes
-        else:
-            conn = OAuthConnection(
-                connection_id=f"oac_{ULID()}",
-                user_id=user_id,
-                provider=provider,
-                provider_user_id=provider_user_id,
-                email=email,
-                access_token_encrypted=encrypted_access,
-                refresh_token_encrypted=encrypted_refresh,
-                expires_at=expires_at,
-                scopes=scopes,
-            )
-            self._db.add(conn)
 
     def _encrypt_token(self, plaintext: str) -> str:
         """Encrypt a token using Fernet if an encryption key is configured.

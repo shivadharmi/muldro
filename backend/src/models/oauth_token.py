@@ -2,6 +2,16 @@
 
 Stores encrypted OAuth tokens (access + refresh) per provider per user.
 Supports automatic refresh detection via expires_at.
+
+Scoping note (TOOL-P2-2): OAuth tokens are intentionally **user-level**, not
+workspace-level. A user authorizes a provider (Google/GitHub/Slack/Atlassian)
+once; the unique index is `(user_id, provider)`. `workspace_id` records which
+workspace first connected the token but is not part of identity — every reader
+(`OAuthManager.get_valid_token`, `session_pool._resolve_any_token`, etc.) keys
+on `(user_id, provider)` and does not pass a `workspace_id`. Making tokens
+per-workspace would force re-authorization in each workspace and require
+threading `workspace_id` through all read paths; it is a deliberate feature
+decision, not a defect — do not "fix" the index in isolation.
 """
 
 from datetime import datetime
