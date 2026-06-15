@@ -167,7 +167,23 @@ memory_service → scheduler) → SVC-P1-3 (graph_executor) → ORCH-P1-1 (jarvi
   Added a composition characterization test (all 20 methods resolve, single `__init__`, MRO);
   moved five tests' `get_anthropic_client`/`EmbeddingService` patch targets to `_base`.
   Reviewed (true no-op, no findings); suite green (2231 passed). This completes all three
-  SVC-P2-2 files except `scheduler.py` (tracked as the next target).
+  SVC-P2-2 files except `scheduler.py` (SVC-P2-2c below).
+- **SVC-P2-2c** (`scheduler.py`) — ✅ done. Decomposed the 1226-line single-class module
+  (`SchedulerLoop`) into a package of per-responsibility **mixin base classes** the final
+  `SchedulerLoop` inherits: `_base` (`__init__`, run/stop, the `_tick` cadence dispatcher,
+  module-level `compute_next_run`, shared workspace/source helpers, and the mutable tick state
+  `_tick_count`/`_last_persona_batch_at`), plus one mixin per `_tick_*` group — `perception_tick`,
+  `background_tasks_tick`, `lifecycle_tick` (eviction/memory-expiration/consolidation/stability),
+  `dlq_tick`, `notification_tick`, `run_health_tick`, `persona_tick`, and `schedule_dispatch`
+  (`_fire`); `service.py` composes them; `__init__` is the facade (re-exports `SchedulerLoop`,
+  `compute_next_run`, `get_session_factory`). **Inheritance (not delegation)** so bodies move
+  byte-for-byte verbatim — same user-directed override of engineering-standards §2 as SVC-P2-2b.
+  Largest module 226 lines (was 1226). The sole body change: `ruff --fix` dropped a redundant
+  local `timezone` re-import in `_tick` (resolves to the module-level import; identical). Added
+  `tests/test_scheduler_seam.py` characterizing the tick-cadence gating, the method surface, and
+  `compute_next_run`; re-pointed moved `mock.patch` targets to the submodule where each symbol is
+  looked up (`_tick`→`_base`, `_fire`→`schedule_dispatch`, DLQ→`dlq_tick`). Reviewed (true no-op,
+  no findings); suite green (2239 passed = 2231 baseline + 8 seam tests). Completes SVC-P2-2.
 
 ### Error handling (completed — separate user-reported issue, not from the review)
 
