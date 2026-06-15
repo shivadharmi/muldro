@@ -64,11 +64,11 @@ class TestUpdateEntityNeo4jSync:
         mock_gs.sync_entity_by_id = AsyncMock()
         mock_gs.close = AsyncMock()
 
-        original_settings = srv._settings
-        original_db_factory = srv._db_factory
+        original_settings = srv._shared._settings
+        original_db_factory = srv._shared._db_factory
         try:
-            srv._settings = settings
-            srv._db_factory = lambda: _db_ctx(db)
+            srv._shared._settings = settings
+            srv._shared._db_factory = lambda: _db_ctx(db)
 
             with patch(_GSS_PATH, return_value=mock_gs) as mock_gss_cls:
                 ctx = MagicMock()
@@ -86,8 +86,8 @@ class TestUpdateEntityNeo4jSync:
             mock_gs.sync_entity_by_id.assert_awaited_once_with("ent_123")
             mock_gs.close.assert_awaited_once()
         finally:
-            srv._settings = original_settings
-            srv._db_factory = original_db_factory
+            srv._shared._settings = original_settings
+            srv._shared._db_factory = original_db_factory
 
     async def test_sync_not_called_when_neo4j_url_empty(self):
         """When neo4j_url is empty/unset, GraphSyncService is never instantiated."""
@@ -99,11 +99,11 @@ class TestUpdateEntityNeo4jSync:
         entity = _make_entity("ent_456")
         db = _make_db(entity)
 
-        original_settings = srv._settings
-        original_db_factory = srv._db_factory
+        original_settings = srv._shared._settings
+        original_db_factory = srv._shared._db_factory
         try:
-            srv._settings = settings
-            srv._db_factory = lambda: _db_ctx(db)
+            srv._shared._settings = settings
+            srv._shared._db_factory = lambda: _db_ctx(db)
 
             with patch(_GSS_PATH) as mock_gss_cls:
                 ctx = MagicMock()
@@ -118,8 +118,8 @@ class TestUpdateEntityNeo4jSync:
             assert result["status"] == "updated"
             mock_gss_cls.assert_not_called()
         finally:
-            srv._settings = original_settings
-            srv._db_factory = original_db_factory
+            srv._shared._settings = original_settings
+            srv._shared._db_factory = original_db_factory
 
     async def test_sync_failure_is_best_effort(self):
         """When Neo4j sync raises, update_entity still returns status=updated."""
@@ -135,11 +135,11 @@ class TestUpdateEntityNeo4jSync:
         mock_gs.sync_entity_by_id = AsyncMock(side_effect=RuntimeError("Neo4j connection refused"))
         mock_gs.close = AsyncMock()
 
-        original_settings = srv._settings
-        original_db_factory = srv._db_factory
+        original_settings = srv._shared._settings
+        original_db_factory = srv._shared._db_factory
         try:
-            srv._settings = settings
-            srv._db_factory = lambda: _db_ctx(db)
+            srv._shared._settings = settings
+            srv._shared._db_factory = lambda: _db_ctx(db)
 
             with patch(_GSS_PATH, return_value=mock_gs):
                 ctx = MagicMock()
@@ -155,8 +155,8 @@ class TestUpdateEntityNeo4jSync:
             assert result["entity_id"] == "ent_789"
             db.commit.assert_awaited()
         finally:
-            srv._settings = original_settings
-            srv._db_factory = original_db_factory
+            srv._shared._settings = original_settings
+            srv._shared._db_factory = original_db_factory
 
     async def test_entity_not_found_skips_sync(self):
         """When entity is not found, update_entity returns not_found without touching Neo4j."""
@@ -167,11 +167,11 @@ class TestUpdateEntityNeo4jSync:
 
         db = _make_db(entity=None)  # scalar_one_or_none returns None
 
-        original_settings = srv._settings
-        original_db_factory = srv._db_factory
+        original_settings = srv._shared._settings
+        original_db_factory = srv._shared._db_factory
         try:
-            srv._settings = settings
-            srv._db_factory = lambda: _db_ctx(db)
+            srv._shared._settings = settings
+            srv._shared._db_factory = lambda: _db_ctx(db)
 
             with patch(_GSS_PATH) as mock_gss_cls:
                 ctx = MagicMock()
@@ -185,8 +185,8 @@ class TestUpdateEntityNeo4jSync:
             assert result["status"] == "not_found"
             mock_gss_cls.assert_not_called()
         finally:
-            srv._settings = original_settings
-            srv._db_factory = original_db_factory
+            srv._shared._settings = original_settings
+            srv._shared._db_factory = original_db_factory
 
     async def test_sync_not_called_when_settings_none(self):
         """When _settings is None (unconfigured server), sync is safely skipped."""
@@ -195,11 +195,11 @@ class TestUpdateEntityNeo4jSync:
         entity = _make_entity("ent_999")
         db = _make_db(entity)
 
-        original_settings = srv._settings
-        original_db_factory = srv._db_factory
+        original_settings = srv._shared._settings
+        original_db_factory = srv._shared._db_factory
         try:
-            srv._settings = None
-            srv._db_factory = lambda: _db_ctx(db)
+            srv._shared._settings = None
+            srv._shared._db_factory = lambda: _db_ctx(db)
 
             with patch(_GSS_PATH) as mock_gss_cls:
                 ctx = MagicMock()
@@ -213,5 +213,5 @@ class TestUpdateEntityNeo4jSync:
             assert result["status"] == "updated"
             mock_gss_cls.assert_not_called()
         finally:
-            srv._settings = original_settings
-            srv._db_factory = original_db_factory
+            srv._shared._settings = original_settings
+            srv._shared._db_factory = original_db_factory

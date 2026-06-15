@@ -63,11 +63,11 @@ class TestUpdateEntityAddAlias:
         entity = _make_entity("ent_alpha")
         db = _make_db(entity, existing_alias=None)
 
-        original_settings = srv._settings
-        original_db_factory = srv._db_factory
+        original_settings = srv._shared._settings
+        original_db_factory = srv._shared._db_factory
         try:
-            srv._settings = settings
-            srv._db_factory = lambda: _db_ctx(db)
+            srv._shared._settings = settings
+            srv._shared._db_factory = lambda: _db_ctx(db)
 
             with patch(_GSS_PATH):
                 result = await srv.update_entity(
@@ -89,8 +89,8 @@ class TestUpdateEntityAddAlias:
             assert alias.alias_type == "email"
             assert alias.workspace_id == TEST_WORKSPACE_ID
         finally:
-            srv._settings = original_settings
-            srv._db_factory = original_db_factory
+            srv._shared._settings = original_settings
+            srv._shared._db_factory = original_db_factory
 
     async def test_alias_type_handle_for_at_prefix(self):
         import src.tools.intelligence_server as srv
@@ -101,11 +101,11 @@ class TestUpdateEntityAddAlias:
 
         db = _make_db(_make_entity("ent_x"), existing_alias=None)
 
-        original_settings = srv._settings
-        original_db_factory = srv._db_factory
+        original_settings = srv._shared._settings
+        original_db_factory = srv._shared._db_factory
         try:
-            srv._settings = settings
-            srv._db_factory = lambda: _db_ctx(db)
+            srv._shared._settings = settings
+            srv._shared._db_factory = lambda: _db_ctx(db)
 
             with patch(_GSS_PATH):
                 await srv.update_entity(
@@ -121,8 +121,8 @@ class TestUpdateEntityAddAlias:
             ]
             assert aliases[0].alias_type == "handle"
         finally:
-            srv._settings = original_settings
-            srv._db_factory = original_db_factory
+            srv._shared._settings = original_settings
+            srv._shared._db_factory = original_db_factory
 
     async def test_alias_type_name_for_plain_string(self):
         import src.tools.intelligence_server as srv
@@ -133,11 +133,11 @@ class TestUpdateEntityAddAlias:
 
         db = _make_db(_make_entity("ent_y"), existing_alias=None)
 
-        original_settings = srv._settings
-        original_db_factory = srv._db_factory
+        original_settings = srv._shared._settings
+        original_db_factory = srv._shared._db_factory
         try:
-            srv._settings = settings
-            srv._db_factory = lambda: _db_ctx(db)
+            srv._shared._settings = settings
+            srv._shared._db_factory = lambda: _db_ctx(db)
 
             with patch(_GSS_PATH):
                 await srv.update_entity(
@@ -153,8 +153,8 @@ class TestUpdateEntityAddAlias:
             ]
             assert aliases[0].alias_type == "name"
         finally:
-            srv._settings = original_settings
-            srv._db_factory = original_db_factory
+            srv._shared._settings = original_settings
+            srv._shared._db_factory = original_db_factory
 
     async def test_duplicate_alias_is_skipped(self):
         """If the alias already exists for this entity, we must not add it again."""
@@ -167,11 +167,11 @@ class TestUpdateEntityAddAlias:
         existing = MagicMock()  # truthy value simulates an existing alias row
         db = _make_db(_make_entity("ent_dup"), existing_alias=existing)
 
-        original_settings = srv._settings
-        original_db_factory = srv._db_factory
+        original_settings = srv._shared._settings
+        original_db_factory = srv._shared._db_factory
         try:
-            srv._settings = settings
-            srv._db_factory = lambda: _db_ctx(db)
+            srv._shared._settings = settings
+            srv._shared._db_factory = lambda: _db_ctx(db)
 
             with patch(_GSS_PATH):
                 result = await srv.update_entity(
@@ -188,5 +188,5 @@ class TestUpdateEntityAddAlias:
             ]
             assert aliases == []  # no new alias added
         finally:
-            srv._settings = original_settings
-            srv._db_factory = original_db_factory
+            srv._shared._settings = original_settings
+            srv._shared._db_factory = original_db_factory
