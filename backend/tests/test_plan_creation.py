@@ -156,12 +156,17 @@ class TestInteractionLogHasPlanId:
 
 class TestSystemCapabilityAudit:
     def test_handle_system_capability_creates_audit_record(self):
-        """_handle_system_capability should contain PlanTask audit logic."""
+        """handle_system_capability should contain PlanTask audit logic.
+
+        The audit logic lives on SystemCapabilityHandler (extracted from the
+        JarvisOrchestrator god object in ORCH-P3-3); the orchestrator now
+        delegates to it.
+        """
         import inspect
 
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.system_capability_handler import SystemCapabilityHandler
 
-        source = inspect.getsource(JarvisOrchestrator._handle_system_capability)
+        source = inspect.getsource(SystemCapabilityHandler.handle_system_capability)
         assert "PlanTask" in source
         assert "plan.plan_id" in source
         assert 'status="completed"' in source

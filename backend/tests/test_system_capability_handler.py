@@ -129,6 +129,47 @@ class TestHandleSystemCapability:
         assert result == {}
 
 
+class TestSystemCapabilityHandlerStandalone:
+    """SystemCapabilityHandler is usable on its own (constructor-injected collaborator)."""
+
+    def _make_handler(self):
+        from src.orchestrator.system_capability_handler import SystemCapabilityHandler
+
+        services = MagicMock()
+        services.memory_service = AsyncMock()
+        services.memory_service.store_goal_memory = AsyncMock(return_value="mem_standalone1")
+        db_factory = MagicMock()
+        return SystemCapabilityHandler(db_factory=db_factory, services=services)
+
+    @pytest.mark.asyncio
+    async def test_handle_set_goal_directly(self):
+        handler = self._make_handler()
+        step = PlanStep(
+            step_id="s1",
+            description="Set goal: ship v1",
+            capability="system.set_goal",
+            input={},
+        )
+        plan = PlanOutput(goal="Ship v1", priority="high", steps=[step])
+        result = await handler.handle_system_capability(step, plan, "usr_1", "ws_1")
+        assert result["status"] == "created"
+        assert result["memory_id"] == "mem_standalone1"
+        handler._services.memory_service.store_goal_memory.assert_called_once_with(
+            user_id="usr_1",
+            workspace_id="ws_1",
+            title="Set goal: ship v1",
+            priority="high",
+        )
+
+    @pytest.mark.asyncio
+    async def test_unknown_capability_returns_empty_directly(self):
+        handler = self._make_handler()
+        step = PlanStep(step_id="s1", description="?", capability="system.nope")
+        plan = PlanOutput(goal="?", steps=[step])
+        result = await handler.handle_system_capability(step, plan, "usr_1", "ws_1")
+        assert result == {}
+
+
 class TestPublicOrchestratorMethods:
     """get_budget_status() and get_system_health() — public API for Telegram."""
 
