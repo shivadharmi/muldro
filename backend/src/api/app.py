@@ -158,26 +158,30 @@ def create_app() -> FastAPI:
             )
             traceback.print_exc(file=sys.stderr)
 
-        # Validate tool registry consistency
-        try:
-            from src.tools.validation import validate_registry
+        # Validate tool registry consistency. Fail closed: a malformed (or
+        # un-validatable) registry must not serve traffic. Operators can bypass
+        # the whole check with JARVIS_SKIP_REGISTRY_VALIDATION=true in emergencies.
+        if settings.skip_registry_validation:
+            logger.warning("Registry validation SKIPPED (JARVIS_SKIP_REGISTRY_VALIDATION=true)")
+        else:
+            try:
+                from src.tools.validation import validate_registry
 
-            if settings.skip_registry_validation:
-                logger.warning("Registry validation SKIPPED (JARVIS_SKIP_REGISTRY_VALIDATION=true)")
-            else:
                 errors = validate_registry()
-                if errors:
-                    for err in errors:
-                        logger.error("Registry validation: %s", err)
-                    logger.error(
-                        "Registry validation found %d errors — fix or set "
-                        "JARVIS_SKIP_REGISTRY_VALIDATION=true",
-                        len(errors),
-                    )
-                else:
-                    logger.info("Registry validation passed")
-        except Exception:
-            logger.warning("Registry validation failed to run", exc_info=True)
+            except Exception as exc:
+                # The validation harness itself failed to run (import/IO error).
+                # A registry we couldn't validate is not trusted — abort startup.
+                logger.error("Registry validation failed to run", exc_info=True)
+                raise RuntimeError("Registry validation could not run") from exc
+
+            if errors:
+                for err in errors:
+                    logger.error("Registry validation: %s", err)
+                raise RuntimeError(
+                    f"Registry validation found {len(errors)} error(s) — fix them or set "
+                    "JARVIS_SKIP_REGISTRY_VALIDATION=true to bypass."
+                )
+            logger.info("Registry validation passed")
 
         # Ensure Qdrant collections exist
         try:
