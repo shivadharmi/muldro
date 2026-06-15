@@ -15,14 +15,14 @@ from pydantic import BaseModel
 
 from src.api.deps import get_current_user_id, get_current_workspace_id
 from src.config.settings import Settings, get_settings
-from src.errors import safe_error_event
-from src.middleware.observability import get_correlation_id
-from src.orchestrator.contracts import (
+from src.contracts import (
     MessageAgentStep,
     MessageMetadata,
     MessageToolCall,
     PlanOutput,
 )
+from src.errors import safe_error_event
+from src.middleware.observability import get_correlation_id
 
 logger = logging.getLogger(__name__)
 

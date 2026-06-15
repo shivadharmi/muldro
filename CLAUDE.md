@@ -31,7 +31,7 @@ User <-> Telegram Bot / Next.js Frontend (A2UI)
 - Orchestrator + agents: `backend/src/orchestrator/` (jarvis.py, agents.py, agent_loop.py, hooks.py, prompts.py, tracing.py, budget.py, perception.py, recovery.py, intent_classifier.py, api_circuit_breaker.py, capability_summary.py, services.py)
 - Services (business logic): `backend/src/services/` — planner, governor, operator, presenter, memory_service, world_model, event_processor, capability_resolver, risk_assessor, trust_engine, etc.
 - Tool layer: `backend/src/tools/` (catalog.py, schemas.py, validation.py, intelligence_server.py, communication_server.py, server.py)
-- Runtime contracts: `backend/src/orchestrator/contracts.py` (PlanOutput, PlanStep, CapabilityGap, PolicyDecision, SurfaceUpdate, InsightSurfaceData, StepResult, ToolCallRequest, DomainEvent, WorkspaceSurfacePush)
+- Runtime contracts: `backend/src/contracts/` (PlanOutput, PlanStep, CapabilityGap, PolicyDecision, SurfaceUpdate, InsightSurfaceData, StepResult, ToolCallRequest, DomainEvent, WorkspaceSurfacePush) — neutral layer both api and services import downward from
 - A2UI component system: `backend/src/ui/` (contracts.py, renderer.py)
 - A2UI surface builder: `backend/src/services/surface_builder.py` (SurfaceService) + `surface_detail_builders.py`
 - API routes: `backend/src/api/` — all `/v1/` prefixed

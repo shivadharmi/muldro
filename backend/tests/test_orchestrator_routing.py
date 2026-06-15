@@ -328,7 +328,7 @@ class TestSurfacePushForPlanOutput:
     """_derive_surface_kind works with PlanOutput."""
 
     def test_respond_only_returns_none(self):
-        from src.orchestrator.contracts import PlanOutput, PlanStep
+        from src.contracts import PlanOutput, PlanStep
         from src.services.surface_mapping import derive_surface_kind
 
         plan = PlanOutput(
@@ -340,7 +340,7 @@ class TestSurfacePushForPlanOutput:
         assert derive_surface_kind(plan) is None
 
     def test_write_action_returns_plan(self):
-        from src.orchestrator.contracts import PlanOutput, PlanStep
+        from src.contracts import PlanOutput, PlanStep
         from src.services.surface_mapping import derive_surface_kind
 
         plan = PlanOutput(
@@ -364,7 +364,7 @@ class TestSurfacePushForPlanOutput:
         assert kind == "plan"
 
     def test_briefing_capability(self):
-        from src.orchestrator.contracts import PlanOutput, PlanStep
+        from src.contracts import PlanOutput, PlanStep
         from src.services.surface_mapping import derive_surface_kind
 
         plan = PlanOutput(
@@ -381,7 +381,7 @@ class TestSurfacePushForPlanOutput:
         assert kind == "briefing"
 
     def test_single_read_returns_summary(self):
-        from src.orchestrator.contracts import PlanOutput, PlanStep
+        from src.contracts import PlanOutput, PlanStep
         from src.services.surface_mapping import derive_surface_kind
 
         plan = PlanOutput(
@@ -399,7 +399,7 @@ class TestSurfacePushForPlanOutput:
         assert kind == "summary"
 
     def test_empty_steps_returns_none(self):
-        from src.orchestrator.contracts import PlanOutput
+        from src.contracts import PlanOutput
         from src.services.surface_mapping import derive_surface_kind
 
         plan = PlanOutput(goal="Nothing", steps=[])

@@ -7,7 +7,7 @@ import logging
 
 import pytest
 
-from src.orchestrator.contracts import PlanOutput, PlanStep
+from src.contracts import PlanOutput, PlanStep
 from src.orchestrator.intent_classifier import extract_plan
 from src.orchestrator.jarvis import _build_step_to_task_map
 

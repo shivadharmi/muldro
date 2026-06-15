@@ -13,7 +13,7 @@ import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from src.orchestrator.contracts import PlanOutput, SurfaceDataPayload, SurfaceSpec
+    from src.contracts import PlanOutput, SurfaceDataPayload, SurfaceSpec
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +164,7 @@ def extract_surface_spec(response_text: str) -> "SurfaceSpec | None":
     """
     from pydantic import ValidationError
 
-    from src.orchestrator.contracts import SurfaceSpec
+    from src.contracts import SurfaceSpec
 
     match = _SURFACE_SPEC_RE.search(response_text)
     if not match:
@@ -194,7 +194,7 @@ def extract_surface_data(response_text: str) -> "SurfaceDataPayload | None":
     """
     from pydantic import ValidationError
 
-    from src.orchestrator.contracts import SurfaceDataPayload
+    from src.contracts import SurfaceDataPayload
 
     match = _SURFACE_DATA_RE.search(response_text)
     if not match:

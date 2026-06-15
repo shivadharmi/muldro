@@ -544,7 +544,7 @@ class TestExecuteStepCapabilityReading:
         # Attach a mock trust engine
         trust_engine = MagicMock()
         trust_engine._workspace_id = ""
-        from src.orchestrator.contracts import PolicyDecision
+        from src.contracts import PolicyDecision
 
         auto_decision = PolicyDecision(decision="auto_execute_silent", reason="ok")
         trust_engine.evaluate = AsyncMock(return_value=auto_decision)
@@ -592,7 +592,7 @@ class TestExecuteStepCapabilityReading:
 
         trust_engine = MagicMock()
         trust_engine._workspace_id = ""
-        from src.orchestrator.contracts import PolicyDecision
+        from src.contracts import PolicyDecision
 
         auto_decision = PolicyDecision(decision="auto_execute_silent", reason="ok")
         trust_engine.evaluate = AsyncMock(return_value=auto_decision)

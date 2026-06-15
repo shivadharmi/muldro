@@ -87,7 +87,7 @@ class TestSingleGateApprovalRequired:
     async def test_approval_required_pauses_step(
         self, mock_risk, settings, mock_db, mock_trust_engine
     ):
-        from src.orchestrator.contracts import PolicyDecision
+        from src.contracts import PolicyDecision
 
         risk = RiskAssessment(risk_level="low", reasoning="test")
         mock_risk.return_value = risk
@@ -120,7 +120,7 @@ class TestSingleGateAutoExecuteNotify:
     async def test_auto_notify_executes_and_notifies(
         self, mock_risk, settings, mock_db, mock_trust_engine
     ):
-        from src.orchestrator.contracts import PolicyDecision
+        from src.contracts import PolicyDecision
 
         risk = RiskAssessment(risk_level="low", reasoning="trusted capability")
         mock_risk.return_value = risk
@@ -155,7 +155,7 @@ class TestSingleGateAutoExecuteSilent:
     async def test_auto_silent_executes_without_notify(
         self, mock_risk, settings, mock_db, mock_trust_engine
     ):
-        from src.orchestrator.contracts import PolicyDecision
+        from src.contracts import PolicyDecision
 
         risk = RiskAssessment(risk_level="none", reasoning="no risk")
         mock_risk.return_value = risk
@@ -269,7 +269,7 @@ class TestGateIntegrationApprovalResume:
     async def test_approval_creates_record_and_pauses(
         self, mock_create_approval, mock_risk, settings, mock_db, mock_trust_engine
     ):
-        from src.orchestrator.contracts import PolicyDecision
+        from src.contracts import PolicyDecision
 
         mock_approval = MagicMock()
         mock_approval.approval_id = "apr_test_001"
@@ -309,7 +309,7 @@ class TestGateIntegrationAutoNotifyFlow:
 
     @patch("src.services.graph_executor.get_or_assess_risk")
     async def test_auto_notify_full_flow(self, mock_risk, settings, mock_db, mock_trust_engine):
-        from src.orchestrator.contracts import PolicyDecision
+        from src.contracts import PolicyDecision
 
         risk = RiskAssessment(risk_level="low", reasoning="trusted calendar op")
         mock_risk.return_value = risk

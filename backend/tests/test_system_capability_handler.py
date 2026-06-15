@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.orchestrator.contracts import PlanOutput, PlanStep
+from src.contracts import PlanOutput, PlanStep
 
 
 def _make_orchestrator():

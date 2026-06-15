@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.orchestrator.contracts import PolicyDecision
+from src.contracts import PolicyDecision
 from src.services.governor import _DECISION_TO_RUN_STATUS, Governor
 from src.services.risk_assessor import RiskAssessment, build_risk_cache_key
 

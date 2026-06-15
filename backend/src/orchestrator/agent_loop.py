@@ -15,7 +15,7 @@ from typing import Any
 
 import anthropic
 
-from src.orchestrator.contracts import SpanToolCall
+from src.contracts import SpanToolCall
 from src.orchestrator.hooks import _sanitize_secrets, audit_post_tool_hook, governor_pre_tool_hook
 from src.services.tool_registry import ToolRegistry
 

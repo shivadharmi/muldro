@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.orchestrator.contracts import PlanOutput
+from src.contracts import PlanOutput
 from src.orchestrator.intent_classifier import (
     _VALID_INTENTS,
     FAST_INTENTS,

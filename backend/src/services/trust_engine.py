@@ -17,7 +17,7 @@ from types import SimpleNamespace
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.orchestrator.contracts import PolicyDecision
+from src.contracts import PolicyDecision
 from src.services.risk_assessor import (
     GRADUATION_THRESHOLDS,
     LEARNING_MIN_APPROVED,

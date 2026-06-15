@@ -10,8 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
 from src.api.deps import get_current_user_id, get_current_workspace_id, get_db
+from src.contracts import MessageMetadata
 from src.models.conversations import Conversation, Message
-from src.orchestrator.contracts import MessageMetadata
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

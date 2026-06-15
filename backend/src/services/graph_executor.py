@@ -19,13 +19,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
 from src.config.settings import Settings, get_anthropic_client
+from src.contracts import PolicyDecision, ResultSummary, StepResult, StepState
 from src.errors import classify, new_correlation_id
 from src.llm_utils import parse_llm_json
 from src.middleware.observability import get_correlation_id
 from src.models.plans import Plan, PlanTask
 from src.models.task_graph import TaskCheckpoint, TaskRun, TaskStep
 from src.orchestrator.agent_loop import CancellationRequested
-from src.orchestrator.contracts import PolicyDecision, ResultSummary, StepResult, StepState
 from src.orchestrator.tracing import JarvisTrace
 from src.services.audit import AuditService
 from src.services.execution_state import transition_run, transition_step
@@ -969,7 +969,7 @@ class GraphExecutor:
                                 exc_info=True,
                             )
                     if surface_id:
-                        from src.orchestrator.contracts import ApprovalContext
+                        from src.contracts import ApprovalContext
 
                         await self._emit_surface_update(
                             surface_id=surface_id,
@@ -1129,7 +1129,7 @@ class GraphExecutor:
 
         # Surface update: approval needed
         if surface_id:
-            from src.orchestrator.contracts import ApprovalContext
+            from src.contracts import ApprovalContext
 
             await self._emit_surface_update(
                 surface_id=surface_id,
@@ -1902,7 +1902,7 @@ class GraphExecutor:
             return
 
         try:
-            from src.orchestrator.contracts import SurfaceUpdate
+            from src.contracts import SurfaceUpdate
 
             update = SurfaceUpdate(
                 surface_id=surface_id,
@@ -1943,7 +1943,7 @@ class GraphExecutor:
                     )
                     existing = result.scalar_one_or_none()
 
-                    from src.orchestrator.contracts import SurfaceUpdate
+                    from src.contracts import SurfaceUpdate
 
                     surface_data = SurfaceUpdate(
                         surface_id=surface_id,
@@ -1996,8 +1996,8 @@ class GraphExecutor:
         try:
             from datetime import datetime, timedelta, timezone
 
+            from src.contracts import WorkspaceSurfacePush
             from src.models.ui_state import UISurface
-            from src.orchestrator.contracts import WorkspaceSurfacePush
             from src.ui.contracts import SurfaceMetric, SurfacePreview
             from src.ui.renderer import build_detail_config
 

@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-from src.orchestrator.contracts import (
+from src.contracts import (
     AgentResult,
     PlanOutput,
     PlanStep,

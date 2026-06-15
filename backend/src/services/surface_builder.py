@@ -10,11 +10,11 @@ from datetime import date, datetime, timedelta, timezone
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.contracts import WorkspaceSurfacePush
 from src.models.briefings import Briefing
 from src.models.task_graph import TaskRun, TaskStep
 from src.models.trust_state import TrustState
 from src.models.ui_state import UISurface
-from src.orchestrator.contracts import WorkspaceSurfacePush
 from src.services.surface_mapping import apply_surface_cap
 from src.ui.contracts import SurfaceMetric, SurfacePreview
 from src.ui.renderer import build_detail_config

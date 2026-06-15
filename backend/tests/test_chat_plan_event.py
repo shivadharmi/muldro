@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.orchestrator.contracts import MessageMetadata, PlanOutput, PlanStep
+from src.contracts import MessageMetadata, PlanOutput, PlanStep
 
 
 class TestMessageMetadataUsePlanOutput:

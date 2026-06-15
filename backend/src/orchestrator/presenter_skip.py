@@ -14,7 +14,7 @@ drift apart in what counts as "a single read" or how the answer is extracted.
 
 import json
 
-from src.orchestrator.contracts import PlanStep
+from src.contracts import PlanStep
 
 # step_routing entries are (step, agent_name, tools). System steps carry an
 # empty agent_name; user steps are collected separately by the caller.

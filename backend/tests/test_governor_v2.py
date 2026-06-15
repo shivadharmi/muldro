@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.orchestrator.contracts import PolicyDecision
+from src.contracts import PolicyDecision
 from src.services.governor import Governor
 from tests.conftest import TEST_USER_ID
 

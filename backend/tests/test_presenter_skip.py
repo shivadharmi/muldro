@@ -4,7 +4,7 @@ For a plan that is one read-only Perceiver step, the Presenter LLM call is
 skipped and the Perceiver's own `synthesis` prose is returned directly.
 """
 
-from src.orchestrator.contracts import PlanStep
+from src.contracts import PlanStep
 from src.orchestrator.presenter_skip import (
     extract_perceiver_synthesis,
     single_read_step,

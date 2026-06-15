@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 from ulid import ULID
 
-from src.orchestrator.contracts import SpanRecord, SpanToolCall
+from src.contracts import SpanRecord, SpanToolCall
 
 logger = logging.getLogger(__name__)
 

@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.orchestrator.contracts import (
+from src.contracts import (
     ApprovalContext,
     ResultSummary,
     StepState,

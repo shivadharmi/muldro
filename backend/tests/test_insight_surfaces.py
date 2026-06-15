@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 def test_insight_surface_data_model():
     """InsightSurfaceData validates correctly."""
-    from src.orchestrator.contracts import InsightSurfaceData
+    from src.contracts import InsightSurfaceData
 
     data = InsightSurfaceData(
         signal_source="gmail",
@@ -22,7 +22,7 @@ def test_insight_surface_data_model():
 
 def test_insight_surface_data_with_actions():
     """InsightSurfaceData with suggested actions."""
-    from src.orchestrator.contracts import InsightSurfaceData, SuggestedActionRef
+    from src.contracts import InsightSurfaceData, SuggestedActionRef
 
     action = SuggestedActionRef(
         description="Draft reply to Sarah",
@@ -40,7 +40,7 @@ def test_insight_surface_data_with_actions():
 
 def test_workspace_surface_push_accepts_proactive_insight():
     """WorkspaceSurfacePush accepts kind='proactive_insight'."""
-    from src.orchestrator.contracts import WorkspaceSurfacePush
+    from src.contracts import WorkspaceSurfacePush
 
     surface = WorkspaceSurfacePush(
         id="surf_test123",

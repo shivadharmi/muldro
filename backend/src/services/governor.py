@@ -28,9 +28,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from ulid import ULID
 
+from src.contracts import PolicyDecision
 from src.models.plans import Plan
 from src.models.task_graph import TaskRun
-from src.orchestrator.contracts import PolicyDecision
 from src.services.audit import AuditService
 
 if TYPE_CHECKING:

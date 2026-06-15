@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
-from src.orchestrator.contracts import WorkspaceSurfacePush
+from src.contracts import WorkspaceSurfacePush
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

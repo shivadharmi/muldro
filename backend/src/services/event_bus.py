@@ -74,7 +74,7 @@ class EventBus:
 
         # Dual-publish to Pub/Sub for real-time SSE subscribers
         try:
-            from src.orchestrator.contracts import RealtimeEventPayload
+            from src.contracts import RealtimeEventPayload
 
             rt = RealtimeEventPayload(
                 event_id=event_id,

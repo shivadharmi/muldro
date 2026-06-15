@@ -67,7 +67,7 @@ class TestInteractionLogModel:
 class TestLogInteraction:
     @pytest.mark.asyncio
     async def test_creates_interaction_log(self):
-        from src.orchestrator.contracts import PlanOutput
+        from src.contracts import PlanOutput
         from src.orchestrator.jarvis import JarvisOrchestrator
 
         mock_db = AsyncMock()

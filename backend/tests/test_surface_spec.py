@@ -6,7 +6,7 @@ from pydantic import ValidationError
 
 class TestSurfaceSpec:
     def test_valid_spec(self):
-        from src.orchestrator.contracts import SurfaceSpec
+        from src.contracts import SurfaceSpec
 
         spec = SurfaceSpec(
             should_surface=True,
@@ -18,32 +18,32 @@ class TestSurfaceSpec:
         assert spec.kind == "summary"
 
     def test_title_capped_at_80(self):
-        from src.orchestrator.contracts import SurfaceSpec
+        from src.contracts import SurfaceSpec
 
         spec = SurfaceSpec(should_surface=True, kind="plan", title="A" * 200)
         assert len(spec.title) == 80
 
     def test_subtitle_capped_at_120(self):
-        from src.orchestrator.contracts import SurfaceSpec
+        from src.contracts import SurfaceSpec
 
         spec = SurfaceSpec(should_surface=True, kind="plan", title="Test", subtitle="B" * 200)
         assert len(spec.subtitle) == 120
 
     def test_invalid_kind_rejected(self):
-        from src.orchestrator.contracts import SurfaceSpec
+        from src.contracts import SurfaceSpec
 
         with pytest.raises(ValidationError):
             SurfaceSpec(should_surface=True, kind="invalid_kind", title="Test")
 
     def test_metrics_default_empty(self):
-        from src.orchestrator.contracts import SurfaceSpec
+        from src.contracts import SurfaceSpec
 
         spec = SurfaceSpec(should_surface=True, kind="table", title="Data")
         assert spec.metrics == []
         assert spec.tags == []
 
     def test_none_subtitle_unchanged(self):
-        from src.orchestrator.contracts import SurfaceSpec
+        from src.contracts import SurfaceSpec
 
         spec = SurfaceSpec(should_surface=True, kind="summary", title="Test")
         assert spec.subtitle is None
@@ -237,7 +237,7 @@ class TestSurfaceDataPayloadContract:
     """SurfaceDataPayload wraps validated A2UIComponent sections."""
 
     def test_accepts_valid_components(self):
-        from src.orchestrator.contracts import SurfaceDataPayload
+        from src.contracts import SurfaceDataPayload
 
         payload = SurfaceDataPayload(
             sections=[
@@ -260,7 +260,7 @@ class TestSurfaceDataPayloadContract:
 
     def test_rejects_component_with_invalid_properties(self):
         """A Table section missing required 'columns' / 'rows' is rejected."""
-        from src.orchestrator.contracts import SurfaceDataPayload
+        from src.contracts import SurfaceDataPayload
 
         with pytest.raises(ValidationError):
             SurfaceDataPayload(

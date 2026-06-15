@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.orchestrator.contracts import ApprovalContext, InsightSurfaceData, ResultSummary, StepState
+from src.contracts import ApprovalContext, InsightSurfaceData, ResultSummary, StepState
 from src.ui import renderer as r
 from src.ui.contracts import (
     AGENT_SURFACE_KINDS,

@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.orchestrator.contracts import StepState
+from src.contracts import StepState
 from src.services.graph_executor import GraphExecutor
 
 # ── Helpers ──────────────────────────────────────────────────────
@@ -68,7 +68,7 @@ class TestPushWorkspaceSurfaceReturnsSurfaceId:
     @pytest.mark.asyncio
     async def test_returns_surface_id_on_success(self):
         """When surface kind is derivable, method returns surf_xxx string."""
-        from src.orchestrator.contracts import PlanOutput, PlanStep
+        from src.contracts import PlanOutput, PlanStep
         from src.orchestrator.jarvis import JarvisOrchestrator
 
         settings = MagicMock()
@@ -113,7 +113,7 @@ class TestPushWorkspaceSurfaceReturnsSurfaceId:
     @pytest.mark.asyncio
     async def test_returns_none_when_no_mapping(self):
         """When plan has no visual surface kind, returns None."""
-        from src.orchestrator.contracts import PlanOutput, PlanStep
+        from src.contracts import PlanOutput, PlanStep
         from src.orchestrator.jarvis import JarvisOrchestrator
 
         orch = JarvisOrchestrator.__new__(JarvisOrchestrator)

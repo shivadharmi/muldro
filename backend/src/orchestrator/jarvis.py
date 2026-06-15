@@ -18,6 +18,7 @@ from ulid import ULID
 
 from src.config.models import BEDROCK_MODEL_TIERS, MODEL_TIERS
 from src.config.settings import Settings, get_anthropic_client
+from src.contracts import PlanOutput, PlanStep
 from src.errors import (
     _GENERIC_CODE,
     _GENERIC_MESSAGE,
@@ -38,7 +39,6 @@ from src.orchestrator.agent_loop import (
 )
 from src.orchestrator.agents import AGENTS, SubAgent, build_agent_set
 from src.orchestrator.budget import BudgetTracker
-from src.orchestrator.contracts import PlanOutput, PlanStep
 from src.orchestrator.intent_classifier import (
     FAST_INTENTS,
     INTENT_CONFIDENCE_THRESHOLD,
@@ -2229,7 +2229,7 @@ class JarvisOrchestrator:
 
         from ulid import ULID
 
-        from src.orchestrator.contracts import WorkspaceSurfacePush
+        from src.contracts import WorkspaceSurfacePush
         from src.ui.contracts import SurfaceMetric, SurfacePreview
         from src.ui.renderer import build_detail_config
 
@@ -2346,7 +2346,7 @@ class JarvisOrchestrator:
         """
         from datetime import datetime, timedelta, timezone
 
-        from src.orchestrator.contracts import WorkspaceSurfacePush
+        from src.contracts import WorkspaceSurfacePush
         from src.ui.renderer import build_detail_config
 
         mapping = derive_surface_kind(plan)
@@ -2437,7 +2437,7 @@ class JarvisOrchestrator:
 
         from ulid import ULID
 
-        from src.orchestrator.contracts import (
+        from src.contracts import (
             InsightSurfaceData,
             SuggestedActionRef,
             WorkspaceSurfacePush,
@@ -2780,7 +2780,7 @@ class JarvisOrchestrator:
         Falls back to deterministic defaults if the planner doesn't include
         a policy block or returns invalid JSON.
         """
-        from src.orchestrator.contracts import PerceptionDecision
+        from src.contracts import PerceptionDecision
         from src.services.perception_policy import PerceptionPolicyService
 
         policy = self._extract_perception_policy(planner_text)
@@ -2952,7 +2952,7 @@ class JarvisOrchestrator:
     @staticmethod
     def _extract_perception_policy(planner_text: str):
         """Parse a perception_policy JSON block from planner output, if present."""
-        from src.orchestrator.contracts import PerceptionDecision
+        from src.contracts import PerceptionDecision
 
         if not planner_text or "perception_policy" not in planner_text:
             return None

@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.orchestrator.contracts import ApprovalContext, InsightSurfaceData, ResultSummary, StepState
+from src.contracts import ApprovalContext, InsightSurfaceData, ResultSummary, StepState
 from src.ui import units
 from src.ui.contracts import (
     AGENT_SURFACE_KINDS,
