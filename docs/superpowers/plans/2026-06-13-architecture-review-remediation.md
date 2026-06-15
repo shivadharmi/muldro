@@ -138,6 +138,14 @@ memory_service → scheduler) → SVC-P1-3 (graph_executor) → ORCH-P1-1 (jarvi
   characterization test (`test_system_capability_handler.py`) passed **unmodified** (zero
   behavior change); added standalone handler tests; repointed one source-location assertion
   in `test_plan_creation.py`. Reviewed (no findings); full non-e2e suite green (2223 passed).
+- **SVC-P2-2a** (`surface_detail_builders.py`) — ✅ done. Split the 1610-line module into a
+  package: `_shared.py` (helpers) + nine per-surface-kind submodules (plan, summary, briefing,
+  approval, recommendation, alert, lists, insight, run) + an `__init__.py` **facade**
+  re-exporting every builder and assembling `TAB_BUILDERS`. Import path unchanged; function
+  bodies sliced verbatim (byte-identical). Largest module now 359 lines. Cross-kind
+  delegations resolve via sibling imports (no cycles). Added a registry exact-snapshot
+  characterization test. Reviewed (true no-op, no findings); suite green (2224 passed).
+  Remaining SVC-P2-2 files (`scheduler.py`, `memory_service.py`) tracked separately below.
 
 ### Error handling (completed — separate user-reported issue, not from the review)
 
