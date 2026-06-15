@@ -264,10 +264,24 @@ class JarvisOrchestrator:
                     learner._event_bus = event_bus
 
     async def shutdown(self) -> None:
-        """Await all pending background tasks on orchestrator shutdown."""
-        if self._background_tasks:
-            logger.info("Awaiting %d background tasks", len(self._background_tasks))
-            await asyncio.wait(self._background_tasks, timeout=5.0)
+        """Await all pending background tasks on orchestrator shutdown.
+
+        Tasks that don't finish within the grace period are cancelled (not
+        abandoned silently) so we surface stuck work and let cancellation run.
+        """
+        if not self._background_tasks:
+            return
+        logger.info("Awaiting %d background tasks", len(self._background_tasks))
+        _done, pending = await asyncio.wait(self._background_tasks, timeout=5.0)
+        if pending:
+            logger.warning(
+                "Cancelling %d background task(s) that did not finish within 5s shutdown grace",
+                len(pending),
+            )
+            for task in pending:
+                task.cancel()
+            # Allow cancellation to propagate; swallow the resulting CancelledErrors.
+            await asyncio.gather(*pending, return_exceptions=True)
 
     async def get_budget_status(self):
         """Public accessor for budget status — replaces private _budget access."""

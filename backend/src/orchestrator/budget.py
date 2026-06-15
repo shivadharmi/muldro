@@ -78,6 +78,11 @@ class BudgetTracker:
     ) -> float:
         pricing = MODEL_PRICING.get(model)
         if not pricing:
+            logger.warning(
+                "Unknown model %r not in MODEL_PRICING — billing at Sonnet rates; "
+                "Opus/Bedrock would be under-billed. Add it to MODEL_PRICING.",
+                model,
+            )
             pricing = MODEL_PRICING["claude-sonnet-4-6"]
         per_m = 1_000_000
         input_cost = (input_tokens / per_m) * pricing["input"]
