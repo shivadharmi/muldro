@@ -42,7 +42,7 @@ _process_core(...) -> AsyncGenerator[CoreEvent]          # single control flow, 
 | Surface / trigger | Method | Consumes |
 |---|---|---|
 | Web chat textbox — `routes_chat.py` | `process_message_stream` | the SSE event stream |
-| Telegram bot — `interface/telegram.py:231` | `process_message` | `result["presentation"]` / `["summary"]`, else `json.dumps(result)` |
+| ~~Telegram bot — `interface/telegram.py:231`~~ **(being removed — see §11)** | `process_message` | n/a after removal |
 | Scheduler/background — `scheduler/schedule_dispatch.py` (meeting_prep ×3) | `process_message` | nothing (fire-and-forget side effects) |
 | WS surface actions (default dispatch) — `routes_ws.py:316` via `_handle_orchestrator_action` | `process_message` | the whole `result` dict, returned verbatim in `action_result` |
 | WS execute-insight — `routes_ws.py:450` | `process_message` | the whole `result` dict |
@@ -101,7 +101,7 @@ must sign off on** — they are not mechanical.
 
 | # | Divergence | Batch today | Stream today | Recommendation | Intentional? | Risk |
 |---|---|---|---|---|---|---|
-| 1 | **Presenter prompt** | `"Format this for the user ({surface})… Plan: {json}"` then `Analysis: {plan_text}` | `"Respond to the user ({surface})… Intent: {intent}"` then `Plan: {json}\nAnalysis:` | Pick one canonical prompt; keep only `surface`-keyed variation (the Telegram length hint already does this) | **Likely drift** — per-surface tuning already rides on the `surface` param, not on which method | High — changes LLM output on every batch *or* stream reply |
+| 1 | **Presenter prompt** | `"Format this for the user ({surface})… Plan: {json}"` then `Analysis: {plan_text}` | `"Respond to the user ({surface})… Intent: {intent}"` then `Plan: {json}\nAnalysis:` | **PRESERVE both** — thread a `prompt_style` (conversational vs. structured-one-shot) into the core, selected by adapter | **INTENTIONAL (confirmed by owner 2026-06-16):** stream = conversational (live chat); batch = structured one-shot (WS surface-action callbacks + background scheduler runs) | Low — preserving current behavior, not changing it. The `surface == "telegram"` length-hint branch (`build_telegram_hint`) becomes **dead** once Telegram is removed (§11) and should be deleted then |
 | 2 | **Agent prior-context** | injects from the whole `result` dict (incl. `trace_id`, `interaction_id`, `plan`, `summary`, system outputs) | injects only `step_outputs` (prior agent text) | Adopt the stream's narrow `step_outputs` injection | **Drift / latent bug** — batch leaks plan/trace metadata into downstream agent prompts | Med — changes agent inputs; may shift tool choices |
 | 3 | **`direct_answer` pick** | suffix-match `k.endswith(f"_{read_step.capability}")` | `next(iter(step_outputs.values()))` | Use the explicit suffix-match (deterministic for multi-output) | Drift | Low — converges for the single-read case both guard on |
 | 4 | **Runtime events** | `plan_generated` via `_publish_event`; `run_completed` **awaited** | `plan_created` via `_fire_event` (background) + SSE `plan` | Settle on one event name + one firing discipline (background) | **Drift** — `plan_generated` vs `plan_created` is almost certainly an accident | Med — telemetry/consumers keyed on event names |
@@ -149,9 +149,9 @@ must sign off on** — they are not mechanical.
 
 ## 9. Out of scope / open questions for sign-off
 
-- **Q1 (#1):** Is the batch-vs-stream presenter-prompt difference intentional (formatting for
-  Telegram/scheduler vs. conversation for live chat) or accidental drift? This single answer drives
-  most of the effort.
+- ~~**Q1 (#1):**~~ **ANSWERED (2026-06-16): intentional** — conversational (stream) vs.
+  structured one-shot (batch). The core preserves both via a `prompt_style` parameter; do NOT
+  reconcile to one prompt.
 - **Q2 (#2):** Confirm the batch path injecting plan/trace metadata into downstream agent prompts is
   unintended before "fixing" it.
 - **Q3:** Is migrating `routes_chat` to the typed union in-scope (phase 5) or a follow-up?
@@ -161,3 +161,20 @@ must sign off on** — they are not mechanical.
 
 L. Phase 1 (golden) is the bulk of the safety value and is low-risk. Phases 2–4 are gated by the §5
 sign-offs. Recommend not bundling with release-packaging work — it wants its own focused window.
+
+## 11. Dependency: Telegram removal precedes this fold
+
+The Telegram integration is being removed completely (owner decision, 2026-06-16). It is its own
+cleanup (a feature deletion, lower-risk than this fold) and **should land first** because:
+
+- It removes one `process_message` caller (batch still has 5: WS surface-action default dispatch,
+  WS execute-insight, scheduler meeting_prep ×3) — so batch stays load-bearing; the fold is
+  unaffected in shape.
+- It makes the `surface == "telegram"` branch and `build_telegram_hint` dead, simplifying the
+  presenter-prompt logic the fold has to preserve (§5 #1).
+- Doing it first keeps the fold's golden snapshots from having to encode soon-deleted Telegram
+  behavior.
+
+Telegram removal is cross-layer (interface, the `telegram.send` communication MCP tool +
+catalog/schemas, notifier delivery surface + rate limits, surface_registry, settings, surface enums
+in models). It warrants its own removal spec/plan; see the separate Telegram-removal planning.
