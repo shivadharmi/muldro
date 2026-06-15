@@ -105,6 +105,97 @@ def test_critical_without_approval():
     assert any("external_critical" in err and "does not require approval" in err for err in errors)
 
 
+def test_high_risk_without_approval_flagged():
+    """High-risk tools without approval should be flagged (TOOL-P1-3).
+
+    Critical-only was dead (no tool is ever critical); the check now covers 'high'.
+    """
+    from dataclasses import dataclass
+
+    @dataclass(frozen=True, slots=True)
+    class MockToolDef:
+        name: str
+        capability: str
+        risk_level: str = "low"
+        requires_approval: bool = False
+        read_only: bool = False
+
+    @dataclass(frozen=True, slots=True)
+    class MockExternalSeed:
+        name: str
+        capability: str
+        server: str
+        risk_level: str = "medium"
+        requires_approval: bool = True
+        verified: bool = False
+
+    mock_catalog = {"test.capability": object()}
+
+    internal = [
+        MockToolDef(
+            name="high_internal",
+            capability="test.capability",
+            risk_level="high",
+            requires_approval=False,
+        )
+    ]
+    external = [
+        MockExternalSeed(
+            name="high_external",
+            capability="test.capability",
+            server="test",
+            risk_level="high",
+            requires_approval=False,
+        )
+    ]
+
+    errors = validate_registry(
+        internal_tools=internal,
+        external_seeds=external,
+        capability_catalog=mock_catalog,
+    )
+
+    assert any("high_internal" in err and "does not require approval" in err for err in errors)
+    assert any("high_external" in err and "does not require approval" in err for err in errors)
+
+
+def test_medium_risk_without_approval_not_flagged():
+    """Medium-risk tools without approval are allowed by design (e.g. browser_* actions)."""
+    from dataclasses import dataclass
+
+    @dataclass(frozen=True, slots=True)
+    class MockToolDef:
+        name: str
+        capability: str
+        risk_level: str = "low"
+        requires_approval: bool = False
+        read_only: bool = False
+
+    mock_catalog = {"test.capability": object()}
+
+    class MockInput(BaseModel):
+        test: str = Field(description="test")
+
+    internal = [
+        MockToolDef(
+            name="browser_click_like",
+            capability="test.capability",
+            risk_level="medium",
+            requires_approval=False,
+            read_only=False,
+        )
+    ]
+
+    errors = validate_registry(
+        internal_tools=internal,
+        external_seeds=[],
+        capability_catalog=mock_catalog,
+        tool_input_models={"browser_click_like": MockInput},
+    )
+
+    assert not any("browser_click_like" in err for err in errors)
+
+
 def test_internal_tool_missing_schema():
     """Should detect internal tool without schema."""
     from dataclasses import dataclass
