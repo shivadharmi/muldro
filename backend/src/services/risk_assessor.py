@@ -19,27 +19,9 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.config.models import get_haiku_model
+
 logger = logging.getLogger(__name__)
-
-_HAIKU_MODEL_FALLBACK = "claude-haiku-4-5-20251001"
-
-
-def _get_haiku_model() -> str:
-    """Resolve Haiku model ID from settings, avoiding circular imports."""
-    try:
-        from src.config.settings import get_settings
-
-        settings = get_settings()
-        if settings.use_bedrock:
-            from src.orchestrator.jarvis import BEDROCK_MODEL_TIERS
-
-            return BEDROCK_MODEL_TIERS["haiku"]
-        else:
-            from src.orchestrator.jarvis import MODEL_TIERS
-
-            return MODEL_TIERS["haiku"]
-    except Exception:
-        return _HAIKU_MODEL_FALLBACK
 
 
 # ── Risk Assessment ──────────────────────────────────────────────
@@ -101,7 +83,7 @@ async def assess_risk(
     Falls back to medium risk on any failure (API error, invalid JSON, etc.).
     """
     if model is None:
-        model = _get_haiku_model()
+        model = get_haiku_model()
     user_message = json.dumps(
         {
             "capability": capability,
@@ -150,7 +132,7 @@ async def get_or_assess_risk(
 ) -> RiskAssessment:
     """Redis-cached risk assessment. 24h TTL."""
     if model is None:
-        model = _get_haiku_model()
+        model = get_haiku_model()
     cache_key = build_risk_cache_key(capability, step_input, user_context)
     full_key = f"risk:{workspace_id}:{cache_key}"
 

@@ -11,27 +11,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from src.config.models import get_haiku_model
+
 logger = logging.getLogger(__name__)
-
-_HAIKU_MODEL_FALLBACK = "claude-haiku-4-5-20251001"
-
-
-def _get_haiku_model() -> str:
-    """Resolve Haiku model ID from settings, avoiding circular imports."""
-    try:
-        from src.config.settings import get_settings
-
-        settings = get_settings()
-        if settings.use_bedrock:
-            from src.orchestrator.jarvis import BEDROCK_MODEL_TIERS
-
-            return BEDROCK_MODEL_TIERS["haiku"]
-        else:
-            from src.orchestrator.jarvis import MODEL_TIERS
-
-            return MODEL_TIERS["haiku"]
-    except Exception:
-        return _HAIKU_MODEL_FALLBACK
 
 
 class SuggestedAction(BaseModel):
@@ -137,7 +119,7 @@ async def assess_relevance(
 ) -> RelevanceAssessment:
     """Call Haiku to assess signal relevance. Returns silent assessment on failure."""
     if model is None:
-        model = _get_haiku_model()
+        model = get_haiku_model()
     try:
         prompt = _RELEVANCE_PROMPT.format(
             goals=", ".join(user_context.goals) or "none specified",

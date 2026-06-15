@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
 from ulid import ULID
 
+from src.config.models import BEDROCK_MODEL_TIERS, MODEL_TIERS
 from src.config.settings import Settings, get_anthropic_client
 from src.errors import (
     _GENERIC_CODE,
@@ -85,19 +86,9 @@ AGENT_EVENT_TYPES = {
     "perception_completed",
 }
 
-# Model IDs for each tier (direct API)
-MODEL_TIERS = {
-    "opus": "claude-opus-4-8",
-    "sonnet": "claude-sonnet-4-6",
-    "haiku": "claude-haiku-4-5-20251001",
-}
-
-# Bedrock inference profile IDs (us.* cross-region, us-east-1 / us-west-2)
-BEDROCK_MODEL_TIERS = {
-    "opus": "us.anthropic.claude-opus-4-8",
-    "sonnet": "us.anthropic.claude-sonnet-4-6",
-    "haiku": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-}
+# MODEL_TIERS / BEDROCK_MODEL_TIERS now live in src.config.models (imported above)
+# so assessor services can depend on them downward instead of importing upward
+# from this orchestrator module.
 
 
 # Agents that benefit from context enrichment (read-heavy agents)
