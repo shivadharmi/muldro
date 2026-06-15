@@ -69,6 +69,56 @@ class TestGraduateTrust:
         state = _make_state(approved=3, rejected=1)
         assert graduate_trust(state) == "first_use"
 
+    # ── SVC-P1-1 boundary characterization ──────────────────────────
+    def test_high_volume_moderate_rejection_stays_learning(self):
+        """30 approved, 4 rejected = 11.8% (in the old 10-15% lenient band).
+
+        High volume no longer rescues a frequently-rejected capability to
+        trusted; it stays learning (gated).
+        """
+        state = _make_state(approved=30, rejected=4)
+        assert graduate_trust(state) == "learning"
+
+    def test_exact_ten_percent_rejection_stays_learning(self):
+        """Strict trusted cap: exactly 10% rejection does NOT earn trusted."""
+        state = _make_state(approved=18, rejected=2)  # 2/20 == 10%
+        assert graduate_trust(state) == "learning"
+
+    def test_just_under_ten_percent_is_trusted(self):
+        """Just below the 10% cap earns trusted."""
+        state = _make_state(approved=19, rejected=2)  # 2/21 ≈ 9.5%
+        assert graduate_trust(state) == "trusted"
+
+    def test_exact_five_percent_is_not_autonomous(self):
+        """Strict autonomous cap: 5% rejection earns trusted, not autonomous."""
+        state = _make_state(approved=38, rejected=2)  # 2/40 == 5.0%
+        assert graduate_trust(state) == "trusted"
+
+
+class TestGraduationConsistency:
+    """The Trust-tab UI (_graduation_progress) and the gate (graduate_trust) must
+    agree, since both now derive from GRADUATION_THRESHOLDS (anti-drift guard)."""
+
+    def test_progress_blocked_iff_gate_withholds_promotion(self):
+        from src.services.trust_engine import _graduation_progress
+
+        # A 'learning' capability with 12% rejection: the gate keeps it at
+        # learning, and the UI must show the next level (trusted) as blocked.
+        state = _make_state(approved=20, rejected=3, trust_level="learning")  # 13%
+        assert graduate_trust(state) == "learning"
+        progress = _graduation_progress(state)
+        assert progress["next_level"] == "trusted"
+        assert progress["blocked_by_rejections"] is True
+
+    def test_progress_not_blocked_when_gate_would_promote(self):
+        from src.services.trust_engine import _graduation_progress
+
+        # Clean enough to graduate learning -> trusted: UI must not show blocked.
+        state = _make_state(approved=20, rejected=1, trust_level="learning")  # ~4.8%
+        assert graduate_trust(state) == "trusted"
+        progress = _graduation_progress(state)
+        assert progress["blocked_by_rejections"] is False
+
 
 class TestApplyRejection:
     def test_autonomous_demotes_to_trusted_72h(self):

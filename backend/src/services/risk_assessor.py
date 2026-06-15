@@ -192,16 +192,31 @@ def min_trust_level(a: str, b: str) -> str:
 
 # ── Graduation Rules (pure functions) ────────────────────────────
 
+# Single source of truth for graduation thresholds. To HOLD an earned level a
+# capability needs ``>= min_approved`` approvals AND a rejection rate strictly
+# below ``max_rejection_rate``. Both graduate_trust() (the decision) and
+# _graduation_progress() (the Trust-tab UI) derive from this map, so the two can
+# never drift. Keep in sync with the table in CLAUDE.md.
+GRADUATION_THRESHOLDS: dict[str, tuple[int, float]] = {
+    "trusted": (10, 0.10),  # >= 10 approved and < 10% rejection rate
+    "autonomous": (25, 0.05),  # >= 25 approved and < 5% rejection rate
+}
+# Low-volume entry to "learning": a *clean* record earns it cheaply, before the
+# rate-based rules have enough signal to apply.
+LEARNING_MIN_APPROVED = 3
+
 
 def graduate_trust(state) -> str:
     """Compute trust level from approval counters. Pure function — no side effects.
 
-    Thresholds:
+    Thresholds (from ``GRADUATION_THRESHOLDS`` + ``LEARNING_MIN_APPROVED``):
     - 3 approved, 0 rejected → learning
     - 10 approved, <10% rejection rate → trusted
     - 25 approved, <5% rejection rate → autonomous
 
-    Cooldown blocks graduation until expiry.
+    A capability that has trusted-tier *volume* but fails its rejection rate
+    stays at "learning" (gated, not reset to first_use). Cooldown blocks
+    graduation until expiry.
     """
     if state.cooldown_until and datetime.now(timezone.utc) < state.cooldown_until:
         return state.trust_level
@@ -211,17 +226,18 @@ def graduate_trust(state) -> str:
         return "first_use"
 
     rejection_rate = state.rejected_count / total
+    auto_min, auto_max = GRADUATION_THRESHOLDS["autonomous"]
+    trust_min, trust_max = GRADUATION_THRESHOLDS["trusted"]
 
-    if state.approved_count >= 25 and rejection_rate < 0.05:
+    if state.approved_count >= auto_min and rejection_rate < auto_max:
         return "autonomous"
-    elif state.approved_count >= 25 and rejection_rate < 0.15:
-        # High volume with moderate rejections -- trust earned despite some rejections
+    if state.approved_count >= trust_min and rejection_rate < trust_max:
         return "trusted"
-    elif state.approved_count >= 10 and rejection_rate < 0.10:
-        return "trusted"
-    elif state.approved_count >= 10 and rejection_rate >= 0.10:
+    # Trusted-tier volume but failing the rejection rate → hold at learning.
+    if state.approved_count >= trust_min:
         return "learning"
-    elif state.approved_count >= 3 and state.rejected_count == 0:
+    # Low-volume bootstrap: a clean record (no rejections) earns learning.
+    if state.approved_count >= LEARNING_MIN_APPROVED and state.rejected_count == 0:
         return "learning"
 
     return "first_use"

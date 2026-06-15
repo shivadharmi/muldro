@@ -19,6 +19,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.orchestrator.contracts import PolicyDecision
 from src.services.risk_assessor import (
+    GRADUATION_THRESHOLDS,
+    LEARNING_MIN_APPROVED,
     RiskAssessment,
     _trust_level_index,
     get_or_create_trust_state,
@@ -31,36 +33,41 @@ logger = logging.getLogger(__name__)
 def _graduation_progress(state) -> dict:
     """Compute graduation progress toward the next trust level.
 
-    Returns dict with: next_level, current, target, percentage.
+    Returns dict with: next_level, current, target, percentage. Thresholds come
+    from ``GRADUATION_THRESHOLDS`` / ``LEARNING_MIN_APPROVED`` (same source of
+    truth as ``graduate_trust``) so the UI can never disagree with the gate.
     """
     level = state.trust_level
     approved = state.approved_count
     rejected = state.rejected_count
     total = approved + rejected
 
+    trusted_target, trusted_max_reject = GRADUATION_THRESHOLDS["trusted"]
+    autonomous_target, autonomous_max_reject = GRADUATION_THRESHOLDS["autonomous"]
+
     if level == "first_use":
         result = {
             "next_level": "learning",
             "current": approved,
-            "target": 3,
-            "percentage": min(approved / 3, 1.0) if approved < 3 else 1.0,
+            "target": LEARNING_MIN_APPROVED,
+            "percentage": min(approved / LEARNING_MIN_APPROVED, 1.0),
             "blocked_by_rejections": rejected > 0,
         }
     elif level == "learning":
         result = {
             "next_level": "trusted",
             "current": approved,
-            "target": 10,
-            "percentage": min(approved / 10, 1.0),
-            "blocked_by_rejections": (total > 0 and rejected / total >= 0.10),
+            "target": trusted_target,
+            "percentage": min(approved / trusted_target, 1.0),
+            "blocked_by_rejections": (total > 0 and rejected / total >= trusted_max_reject),
         }
     elif level == "trusted":
         result = {
             "next_level": "autonomous",
             "current": approved,
-            "target": 25,
-            "percentage": min(approved / 25, 1.0),
-            "blocked_by_rejections": (total > 0 and rejected / total >= 0.05),
+            "target": autonomous_target,
+            "percentage": min(approved / autonomous_target, 1.0),
+            "blocked_by_rejections": (total > 0 and rejected / total >= autonomous_max_reject),
         }
     else:
         result = {

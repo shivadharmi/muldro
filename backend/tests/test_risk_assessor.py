@@ -37,15 +37,20 @@ def mock_client():
 
 
 class TestGraduateTrust:
-    def test_high_count_moderate_rejections_returns_trusted(self):
-        """H-4: 25+ approved with 10-15% rejection should graduate to trusted."""
+    def test_high_count_moderate_rejections_stays_learning(self):
+        """SVC-P1-1: 25+ approved with 10-15% rejection stays learning.
+
+        The old undocumented `25+ and <15% -> trusted` branch let a frequently
+        rejected capability keep auto-executing (and re-escape demotion after
+        each cooldown). Removed: only <10% earns trusted, <5% earns autonomous.
+        """
         state = SimpleNamespace(
             approved_count=25,
-            rejected_count=3,  # ~10.7% rejection
+            rejected_count=3,  # ~10.7% rejection (>= 10% trusted cap)
             cooldown_until=None,
             trust_level="learning",
         )
-        assert graduate_trust(state) == "trusted"
+        assert graduate_trust(state) == "learning"
 
     def test_high_count_high_rejections_stays_learning(self):
         """H-4: 25+ approved with >=15% rejection stays learning."""
@@ -67,11 +72,15 @@ class TestGraduateTrust:
         )
         assert graduate_trust(state) == "autonomous"
 
-    def test_10_approved_exact_10_percent_stays_learning(self):
-        """Edge: exactly 10% rejection at 10+ approved stays learning."""
+    def test_10_approved_high_rejection_stays_learning(self):
+        """10+ approved with rejection rate >= 10% stays learning (not trusted).
+
+        (Data is 2/12 ≈ 16.7%. The exact-10% strict-boundary case is pinned in
+        test_trust_graduation.test_exact_ten_percent_rejection_stays_learning.)
+        """
         state = SimpleNamespace(
             approved_count=10,
-            rejected_count=2,  # 2/12 ~= 16.7% >= 10%
+            rejected_count=2,  # 2/12 ≈ 16.7% >= 10%
             cooldown_until=None,
             trust_level="first_use",
         )
