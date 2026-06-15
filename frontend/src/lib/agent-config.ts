@@ -66,7 +66,7 @@ export const AGENT_CONFIGS: AgentConfig[] = [
     temperature: 0.3,
     tools: [
       "get_briefing", "search",
-      "send_telegram", "send_approval_prompt", "push_ui_update",
+      "push_ui_update",
     ],
   },
   {
