@@ -26,8 +26,8 @@ def mock_db():
     return db
 
 
-@patch("src.services.memory_service.EmbeddingService")
-@patch("src.services.memory_service.get_anthropic_client")
+@patch("src.services.memory_service._base.EmbeddingService")
+@patch("src.services.memory_service._base.get_anthropic_client")
 @pytest.mark.asyncio
 async def test_extract_stores_with_embedding(mock_get_client, mock_embed_cls, settings, mock_db):
     """Should store memories with embeddings when available."""
@@ -68,8 +68,8 @@ async def test_extract_stores_with_embedding(mock_get_client, mock_embed_cls, se
     assert add_call.fact_text == "Alice is CFO at Acme Corp"
 
 
-@patch("src.services.memory_service.EmbeddingService")
-@patch("src.services.memory_service.get_anthropic_client")
+@patch("src.services.memory_service._base.EmbeddingService")
+@patch("src.services.memory_service._base.get_anthropic_client")
 @pytest.mark.asyncio
 async def test_semantic_retrieve_with_embedding(mock_get_client, mock_embed_cls, settings, mock_db):
     """Should use Qdrant semantic search when query embedding succeeds."""
@@ -121,8 +121,8 @@ async def test_semantic_retrieve_with_embedding(mock_get_client, mock_embed_cls,
     assert results[0]["relevance"] == 0.95
 
 
-@patch("src.services.memory_service.EmbeddingService")
-@patch("src.services.memory_service.get_anthropic_client")
+@patch("src.services.memory_service._base.EmbeddingService")
+@patch("src.services.memory_service._base.get_anthropic_client")
 @pytest.mark.asyncio
 async def test_text_fallback_when_embedding_fails(
     mock_get_client, mock_embed_cls, settings, mock_db
@@ -153,8 +153,8 @@ async def test_text_fallback_when_embedding_fails(
     assert "similarity" not in results[0]
 
 
-@patch("src.services.memory_service.EmbeddingService")
-@patch("src.services.memory_service.get_anthropic_client")
+@patch("src.services.memory_service._base.EmbeddingService")
+@patch("src.services.memory_service._base.get_anthropic_client")
 @pytest.mark.asyncio
 async def test_extract_preferences(mock_get_client, mock_embed_cls, settings, mock_db):
     """Should extract and store user preferences."""
@@ -194,8 +194,8 @@ async def test_extract_preferences(mock_get_client, mock_embed_cls, settings, mo
     assert add_call.provenance["strength"] == "strong"
 
 
-@patch("src.services.memory_service.EmbeddingService")
-@patch("src.services.memory_service.get_anthropic_client")
+@patch("src.services.memory_service._base.EmbeddingService")
+@patch("src.services.memory_service._base.get_anthropic_client")
 @pytest.mark.asyncio
 async def test_get_user_preferences(mock_get_client, mock_embed_cls, settings, mock_db):
     """Should retrieve user preferences filtered by category."""

@@ -14,7 +14,7 @@ def _make_memory_service(dead_letter=None):
     """Construct a MemoryService with mocked dependencies."""
     settings = make_mock_settings()
     db = AsyncMock()
-    with patch("src.services.memory_service.get_anthropic_client", return_value=MagicMock()):
+    with patch("src.services.memory_service._base.get_anthropic_client", return_value=MagicMock()):
         from src.services.memory_service import MemoryService
 
         return MemoryService(settings=settings, db=db, dead_letter=dead_letter)
@@ -98,16 +98,18 @@ def _make_memory_service_full(dead_letter=None, vector_store=None, embedder_retu
     db.flush = AsyncMock()
     mock_embedder = AsyncMock()
     mock_embedder.embed_text = AsyncMock(return_value=embedder_return)
-    with patch("src.services.memory_service.get_anthropic_client", return_value=MagicMock()):
-        with patch("src.services.memory_service.EmbeddingService", return_value=mock_embedder):
-            from src.services.memory_service import MemoryService
+    with (
+        patch("src.services.memory_service._base.get_anthropic_client", return_value=MagicMock()),
+        patch("src.services.memory_service._base.EmbeddingService", return_value=mock_embedder),
+    ):
+        from src.services.memory_service import MemoryService
 
-            svc = MemoryService(
-                settings=settings,
-                db=db,
-                dead_letter=dead_letter,
-                vector_store=vector_store,
-            )
+        svc = MemoryService(
+            settings=settings,
+            db=db,
+            dead_letter=dead_letter,
+            vector_store=vector_store,
+        )
     # Patch embedder on the constructed instance so embed_text returns our value
     svc._embedder = mock_embedder
     return svc

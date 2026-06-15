@@ -401,8 +401,8 @@ class TestEntityExtractionExpanded:
 
 
 class TestEntityMemoryLinking:
-    @patch("src.services.memory_service.EmbeddingService")
-    @patch("src.services.memory_service.get_anthropic_client")
+    @patch("src.services.memory_service._base.EmbeddingService")
+    @patch("src.services.memory_service._base.get_anthropic_client")
     @pytest.mark.asyncio
     async def test_extract_and_store_with_entity_ids(
         self, mock_get_client, mock_embedder_cls, settings, mock_db
