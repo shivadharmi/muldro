@@ -162,6 +162,8 @@ def extract_surface_spec(response_text: str) -> "SurfaceSpec | None":
     Returns SurfaceSpec on success, None if not found or invalid.
     Best-effort — degrades to chat-only on failure.
     """
+    from pydantic import ValidationError
+
     from src.orchestrator.contracts import SurfaceSpec
 
     match = _SURFACE_SPEC_RE.search(response_text)
@@ -170,8 +172,13 @@ def extract_surface_spec(response_text: str) -> "SurfaceSpec | None":
 
     try:
         data = json.loads(match.group(1))
+        if not isinstance(data, dict):
+            logger.debug("SurfaceSpec block was not a JSON object; ignoring")
+            return None
         return SurfaceSpec(**data)
-    except (json.JSONDecodeError, Exception):
+    except (json.JSONDecodeError, ValidationError):
+        # Malformed JSON or schema mismatch from the LLM → degrade to chat-only.
+        # Unexpected exceptions are NOT swallowed here — let them surface.
         logger.debug("Failed to parse SurfaceSpec from response", exc_info=True)
         return None
 
@@ -197,6 +204,10 @@ def extract_surface_data(response_text: str) -> "SurfaceDataPayload | None":
         raw = json.loads(match.group(1))
     except json.JSONDecodeError:
         logger.debug("surface_data block is not valid JSON", exc_info=True)
+        return None
+
+    if not isinstance(raw, dict):
+        logger.debug("surface_data block was not a JSON object; ignoring")
         return None
 
     try:
