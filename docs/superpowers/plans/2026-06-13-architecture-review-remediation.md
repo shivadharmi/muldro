@@ -27,7 +27,9 @@ implemented (see "Completed" below) and live on this branch.
 **Milestone 1 (security-adjacent hardening) — ✅ complete + reviewed.** See §2.1.
 **Milestone 2 (correctness quick-wins) — ✅ complete + reviewed.** See §2.2.
 **Milestone 3 (dependency direction, Theme B) — ✅ complete + reviewed.** See §2.3.
-**Milestone 5 (god-object extractions, Theme C) — 🟡 in progress.** See §2.4.
+**Milestone 5 (god-object extractions, Theme C) — ✅ complete + reviewed** (targets #1–#7, all
+structure-only; the full ORCH-P1-1 stream/non-stream Adapter fold is deferred as a separate
+behavior-change spec). See §2.4.
 
 The P0 work closed the **write-authorization boundary** plus a trace-redaction leak and a
 cross-tenant trigger bug. The remaining findings are correctness hardening, architectural
@@ -207,6 +209,31 @@ memory_service → scheduler) → SVC-P1-3 (graph_executor) → ORCH-P1-1 (jarvi
   construction raises), so removing it is a separate behavior change, not part of this structural
   move. Reviewed (true no-op, no findings); suite green (2248 passed = 2239 baseline + 9 seam
   tests). Remaining M5 target: ORCH-P1-1 (`jarvis.py` stream/non-stream fold).
+- **ORCH-P1-1** (`jarvis.py`) — ✅ done (**safe-extraction scope**, by decision). Live analysis
+  found the literal "fold `process_message`/`process_message_stream` into one core + thin adapter"
+  to be **behavior-changing**, not structural: the two methods share the
+  intent→plan→route→execute→present *sequence* but have **drifted** — different presenter prompt
+  text, different agent-context source (non-stream injects from the `result` dict, stream from
+  `step_outputs`), different events (`plan_generated`+`run_completed` via await vs
+  `plan_created`+`plan` SSE), and fundamentally different output contracts (batch `result` dict —
+  returned verbatim to WS clients by `routes_ws` — vs SSE event stream) consumed by 7 callers vs 1.
+  Folding would alter LLM prompts and the WS API on the primary chat path, so it cannot be a
+  structure-only commit. Scope narrowed to extracting only the **byte-identical** shared blocks
+  into new module `src/orchestrator/chat_pipeline.py` as **stateless free functions** (NOT a
+  collaborator class — engineering-standards §2 "functions over a one-method class"):
+  `resolve_plan_routing`, `build_telegram_hint`, `build_user_action_block`,
+  `format_prior_step_results`, `format_prior_results_for_presenter`. Both methods' five inline
+  blocks each (routing pre-resolution, agent prior-results injection, user-action block, presenter
+  prior-results block, telegram hint) now call these; bodies moved verbatim, empty-input guards
+  proven equivalent (functions return `""` exactly when the dict is empty, so `+= ""` and
+  `if block:` match the originals). Divergent logic (mode, prompt text, events, `direct_answer`,
+  result-dict shape) left untouched. `route_step` import dropped from `jarvis.py`;
+  `CapabilityResolver`/`PlanStep` retained. `jarvis.py` 3265 → 3184. Kills the documented "wire it
+  into BOTH methods" drift failure mode for these blocks. Added `tests/test_chat_pipeline.py` (15
+  RED-first tests pinning exact strings + routing tuples). Reviewed (behavior-identical, no
+  findings); suite green (2263 passed = 2248 baseline + 15). **The full stream/non-stream Adapter
+  fold is DEFERRED** as a separate behavior-change spec (drift reconciliation needs its own
+  characterization + sign-off). **This completes Milestone 5** (targets #1–#7, all structure-only).
 
 ### Error handling (completed — separate user-reported issue, not from the review)
 
