@@ -16,7 +16,7 @@ import { fetchConversationMessages, type ConversationMessage } from "@/lib/api";
 import { formatApiError, type ParsedApiError } from "@/lib/api-error";
 import { useToast } from "@/components/ui/toast";
 import type { WorkspaceSurfacePush, SurfacePreview, SurfaceUpdate } from "@/lib/a2ui-types";
-import type { SurfaceKind } from "@/lib/types/surfaces";
+import { normalizeSurfaceKind } from "@/lib/types/surfaces";
 
 export default function ChatPage() {
   const { user } = useAuth();
@@ -43,7 +43,7 @@ export default function ChatPage() {
     (push: WorkspaceSurfacePush) => {
       addSurface({
         id: push.id,
-        kind: push.kind || "summary",
+        kind: normalizeSurfaceKind(push.kind, push.id),
         preview: push.preview,
         detail_config: push.detail_config,
         source_run_id: push.source_run_id,
@@ -138,7 +138,7 @@ export default function ChatPage() {
       };
       addSurface({
         id: surface.id,
-        kind: (meta.kind as SurfaceKind) || "summary",
+        kind: normalizeSurfaceKind(meta.kind as string | undefined, surface.id),
         preview,
         detail_config: null,
         source_run_id: (meta.source_run_id as string) ?? null,

@@ -11,6 +11,7 @@ import { resolveFirstRunState } from "@/lib/first-run-state";
 import { useJarvisWs } from "@/hooks/use-jarvis-ws";
 import { useSurfaceStore } from "@/stores/surface-store";
 import type { WorkspaceSurface } from "@/stores/surface-store";
+import { normalizeSurfaceKind } from "@/lib/types/surfaces";
 import { useWsActionStore } from "@/stores/ws-action-store";
 import { formatApiError, type ParsedApiError } from "@/lib/api-error";
 import { useToast } from "@/components/ui/toast";
@@ -55,7 +56,7 @@ export default function WorkspacePage() {
     const raw = workspaceData?.surfaces ?? [];
     return raw.map((s) => ({
       id: s.id,
-      kind: s.kind || "summary",
+      kind: normalizeSurfaceKind(s.kind, s.id),
       preview: s.preview,
       detail_config: s.detail_config,
       source_run_id: s.source_run_id ?? null,
@@ -110,7 +111,7 @@ export default function WorkspacePage() {
     (push: WorkspaceSurfacePush) => {
       addSurface({
         id: push.id,
-        kind: push.kind || "summary",
+        kind: normalizeSurfaceKind(push.kind, push.id),
         preview: push.preview,
         detail_config: push.detail_config,
         source_run_id: push.source_run_id,

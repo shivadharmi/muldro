@@ -88,7 +88,7 @@ export const useSurfaceStore = create<SurfaceState>((set) => ({
       next[idx] = {
         ...prev,
         ...(update.phase !== undefined && { phase: update.phase }),
-        ...(update.steps && update.steps.length > 0 && { steps: update.steps }),
+        ...(update.steps !== undefined && { steps: update.steps }),
         ...(update.current_step !== undefined && { current_step: update.current_step }),
         ...(update.progress !== undefined && { progress: update.progress }),
         ...(update.approval !== undefined && { approval: update.approval }),
