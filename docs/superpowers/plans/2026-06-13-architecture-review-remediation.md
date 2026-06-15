@@ -20,9 +20,11 @@ implemented (see "Completed" below) and live on this branch.
 | Priority | Count | State |
 |----------|-------|-------|
 | P0 | 4 | ✅ Implemented + reviewed on this branch |
-| P1 | 9 | 📋 Planned (this doc) |
-| P2 | 12 | 📋 Planned (this doc) |
-| P3 | 11 | 📋 Planned (this doc) |
+| P1 | 9 | 🟡 3 done (Milestone 1), 6 planned |
+| P2 | 12 | 🟡 2 done (Milestone 1), 10 planned |
+| P3 | 11 | 🟡 1 done (Milestone 1), 10 planned |
+
+**Milestone 1 (security-adjacent hardening) — ✅ complete + reviewed.** See §2.1.
 
 The P0 work closed the **write-authorization boundary** plus a trace-redaction leak and a
 cross-tenant trigger bug. The remaining findings are correctness hardening, architectural
@@ -40,6 +42,30 @@ validation, TOOL-P2-2 oauth scoping) are security-adjacent and should land early
 Adversarial review of the P0s rejected one false-positive bypass (perception path is
 tool-less, not an open gate) and added two hardening tweaks (fail-closed `db_factory`
 fallback; empty-`workspace_id` guard). See branch history.
+
+### 2.1 Milestone 1 — security-adjacent hardening (completed on this branch)
+
+Implemented, reviewed (no CRITICAL/HIGH findings), and committed as six logical commits.
+
+- **SVC-P2-1** — RiskAssessor fails **closed** to `risk_level="high"` on assessment
+  failure (both `risk_assessor.py` and `graph_executor._assess_step_risk`). `high` →
+  `approval_required` at every trust level, so an outage can't auto-execute a write.
+- **TOOL-P1-1** — `validate_registry()` errors (and harness failures) now **abort startup**
+  (`api/app.py`); still bypassable via `JARVIS_SKIP_REGISTRY_VALIDATION`.
+- **TOOL-P1-3** — Validation Check 4 extended from dead `critical`-only to `("high","critical")`
+  write tools missing approval. Verified it passes the live catalog; `medium` (browser_*)
+  intentionally excluded.
+- **UI-P3-2** — `_handle_execute_insight` surface lookup **and** the WS reconnect-backfill
+  query are now workspace-scoped (`routes_ws.py`). Closes a cross-tenant gap. (The
+  `action_index` bounds-check already existed.)
+- **ORCH-P1-3** — Documented the chat-path-ungated-by-design + `_capability_in_scope`
+  compensating control in CLAUDE.md, with guardrail bullets so it isn't "fixed" by mistake.
+- **TOOL-P2-2** — Retired the **dead** `oauth_connections` table (model + `complete_oauth` +
+  `_upsert_oauth_connection` + Alembic drop migration). Investigation found `oauth_tokens` is
+  canonical. The surviving `oauth_tokens` index is **left as-is by design**: tokens are
+  user-level (every reader keys on `(user_id, provider)` with no `workspace_id`), so the
+  plan's `(workspace_id, user_id, provider)` change would be inert without a multi-file
+  feature; documented in `oauth_token.py` instead.
 
 ### Error handling (completed — separate user-reported issue, not from the review)
 
