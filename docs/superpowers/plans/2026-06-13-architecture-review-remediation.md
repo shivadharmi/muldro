@@ -22,11 +22,12 @@ implemented (see "Completed" below) and live on this branch.
 | P0 | 4 | ✅ Implemented + reviewed on this branch |
 | P1 | 9 | 🟡 8 done (M1–M3), 1 planned |
 | P2 | 12 | 🟡 8 done (M1–M3), 4 planned |
-| P3 | 11 | 🟡 4 done (M1–M3), 7 planned |
+| P3 | 11 | 🟡 5 done (M1–M3, M5), 6 planned |
 
 **Milestone 1 (security-adjacent hardening) — ✅ complete + reviewed.** See §2.1.
 **Milestone 2 (correctness quick-wins) — ✅ complete + reviewed.** See §2.2.
 **Milestone 3 (dependency direction, Theme B) — ✅ complete + reviewed.** See §2.3.
+**Milestone 5 (god-object extractions, Theme C) — 🟡 in progress.** See §2.4.
 
 The P0 work closed the **write-authorization boundary** plus a trace-redaction leak and a
 cross-tenant trigger bug. The remaining findings are correctness hardening, architectural
@@ -116,6 +117,27 @@ suite green (2221 passed).
 > *behavioral* symbols (`agent_registry`→`SubAgent`, `graph_executor`→`agent_loop`/`tracing`,
 > `trace_store`→`budget`). These are structural (the DAG executor wraps the agent loop), not
 > shared-symbol relocations, so they're a separate architectural question.
+
+### 2.4 Milestone 5 — god-object extractions / Theme C (in progress)
+
+Each god object is its own change: characterization/seam tests first, structure-only move,
+structure and behavior in separate commits. Done bar is pragmatic (extract the seams, shrink
+meaningfully, stop growth — not force every file under the 800-line cap). Order is
+easiest/lowest-risk → hardest, decided from live analysis (sizes were larger than this doc's
+original numbers). All five analyses confirmed **zero circular-import risk** because M3 moved
+shared contracts to the neutral `src/contracts/` package.
+
+Order: **ORCH-P3-3 → SVC-P2-2 (surface_detail_builders → intelligence_server/TOOL-P2-4 →
+memory_service → scheduler) → SVC-P1-3 (graph_executor) → ORCH-P1-1 (jarvis stream fold)**.
+
+- **ORCH-P3-3** — ✅ done. Extracted the five `system.*` capability handlers from
+  `JarvisOrchestrator` into a constructor-injected `SystemCapabilityHandler`
+  (`src/orchestrator/system_capability_handler.py`); the hub delegates via a thin
+  `_handle_system_capability`. Structure-only; method bodies moved verbatim (dispatcher
+  renamed to public `handle_system_capability`). `jarvis.py` 3519 → 3265 lines. The existing
+  characterization test (`test_system_capability_handler.py`) passed **unmodified** (zero
+  behavior change); added standalone handler tests; repointed one source-location assertion
+  in `test_plan_creation.py`. Reviewed (no findings); full non-e2e suite green (2223 passed).
 
 ### Error handling (completed — separate user-reported issue, not from the review)
 
