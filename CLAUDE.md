@@ -276,6 +276,13 @@ Single deterministic approval gate via `TrustEngine` (`src/services/trust_engine
 - **Per-tool cost attribution**: `TokenUsage` with `trigger=f"tool:{tool_name}"` in `agent_loop.py`.
 - **Trust API**: endpoints in `routes_trust.py` (dashboard, detail, ceiling, reset, time-policies GET+PUT).
 - **Frontend Trust tab**: Settings page with grouped-by-family display, progress bars, ceiling dropdown, reset.
+- **Risk assessment fails closed**: when the RiskAssessor LLM/JSON call fails, it returns `risk_level="high"` (not `medium`). `high` maps to `approval_required` at *every* trust level including `autonomous`, so an assessment outage can never silently auto-execute a write. Both fallback sites (`risk_assessor.py`, `graph_executor._assess_step_risk`) agree on this.
+
+**Two execution paths — only the autonomous path is gated (by design):**
+- **Chat path** (`jarvis.py` `process_message` / `process_message_stream`): single-step / lightweight plans execute inline via `_call_agent()` with **no TrustEngine gate**. This is intentional — the user's direct chat message *is* the authorization for that turn. Do **not** "add a trust gate to the chat path" as a bugfix; it would double-prompt the user for actions they just requested.
+- **Autonomous path** (`graph_executor.py`): multi-step / risky plans (and all scheduler/perception-triggered runs) are persisted as DB `Plan`s and executed through GraphExecutor, where **TrustEngine gates every step**.
+- **Compensating control on the chat path (ORCH-P0-1):** `agent_loop._capability_in_scope()` enforces capability-scope at tool-execution time, so even ungated, a chat-routed agent can only call tools within its `capability_scope` (fail-closed for known capabilities). This is what keeps the ungated path safe.
+- **Latent enhancement (not yet implemented):** if a chat turn's write step was triggered by *perception-sourced* content rather than the user's literal words, gating it would be defensible. Tracked, not built.
 
 **Key files:** `src/services/risk_assessor.py`, `src/services/trust_engine.py`, `src/models/trust_state.py` (TrustState + TrustCeiling), `src/api/routes_trust.py`
 
@@ -366,6 +373,8 @@ See [docs/engineering-standards.md](docs/engineering-standards.md) for the full 
 
 ### Approval & Trust
 - Do not use Governor as the primary approval gate — TrustEngine in GraphExecutor is the single approval gate. Governor hooks are audit-only
+- Do not add a TrustEngine gate to the chat path (`process_message`/`process_message_stream`) — it is ungated **by design** (user's message = authorization); capability-scope enforcement in `agent_loop` is the compensating control. See "Two execution paths" above
+- Do not make the RiskAssessor fail open — its failure default is `risk_level="high"` (forces approval). Do not "simplify" it back to `medium`
 - Do not reference `ApprovalPolicyEngine`, `TrustScore` model, or `ApprovalPolicy` model — deleted. Use `TrustEngine` + `TrustState` + `TrustCeiling`
 - Do not create tool-level approvals without `run_id` and `artifact_refs` — the approval resume path needs these
 
