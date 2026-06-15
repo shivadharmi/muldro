@@ -146,6 +146,16 @@ memory_service → scheduler) → SVC-P1-3 (graph_executor) → ORCH-P1-1 (jarvi
   delegations resolve via sibling imports (no cycles). Added a registry exact-snapshot
   characterization test. Reviewed (true no-op, no findings); suite green (2224 passed).
   Remaining SVC-P2-2 files (`scheduler.py`, `memory_service.py`) tracked separately below.
+- **TOOL-P2-4** (`intelligence_server.py`) — ✅ done. Split the 1214-line FastMCP module into
+  a package: `_shared.py` (the `intelligence` instance + runtime globals + `configure()`/
+  `_get_db()`) + four domain submodules (observation, memory, planning, persona) + an
+  `__init__.py` facade that imports all four (registering decorators) and re-exports the
+  prior public names. Import path unchanged. Tool bodies sliced verbatim; the sole edit was
+  qualifying the two runtime-rebound globals `_services`/`_settings` → `_shared._services`/
+  `_shared._settings` (attribute access reads the configured value at call time). Largest
+  module 410 lines. Added a registration-integrity test pinning the exact 19 tool + 2
+  resource-template names; repointed three tests' internal-global patch targets to `_shared`.
+  Reviewed (true no-op, no findings); suite green (2227 passed).
 
 ### Error handling (completed — separate user-reported issue, not from the review)
 
