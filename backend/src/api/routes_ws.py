@@ -97,14 +97,19 @@ async def jarvis_ws(websocket: WebSocket, user_id: str):
     try:
         from sqlalchemy import select
 
+        from src.api.deps import resolve_workspace_id
         from src.models.database import get_session_factory
         from src.models.ui_state import UISurface
 
         async with get_session_factory()() as db:
+            # Scope backfill to the user's current workspace — a multi-workspace
+            # user must not receive surfaces from another workspace on reconnect.
+            backfill_ws_id = await resolve_workspace_id(db, user_id)
             result = await db.execute(
                 select(UISurface)
                 .where(
                     UISurface.user_id == user_id,
+                    UISurface.workspace_id == backfill_ws_id,
                     UISurface.surface_type == "execution",
                 )
                 .order_by(UISurface.updated_at.desc())
@@ -408,6 +413,7 @@ async def _handle_execute_insight(user_id: str, payload: dict, app, cid: str = "
             select(UISurface).where(
                 UISurface.surface_id == surface_id,
                 UISurface.user_id == user_id,
+                UISurface.workspace_id == workspace_id,
                 UISurface.surface_type == "proactive_insight",
             )
         )
