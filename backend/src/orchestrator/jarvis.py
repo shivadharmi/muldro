@@ -788,7 +788,12 @@ class JarvisOrchestrator:
                 self._db_factory, workspace_id, plan.steps
             )
 
-            # Step 3: Execute steps sequentially
+            # Step 3: Execute steps sequentially. `step_outputs` is the narrow
+            # prior-context accumulator (agent step text only) injected into
+            # downstream agents — kept separate from `result` (the output
+            # contract) so plan/trace metadata never leaks into agent prompts
+            # (chat-pipeline-fold spec drift #2; matches the stream path).
+            step_outputs: dict[str, str] = {}
             for step_idx, (step, agent_name, tools) in enumerate(step_routing):
                 if step.capability.startswith("system."):
                     sys_result = await self._handle_system_capability(
@@ -808,13 +813,9 @@ class JarvisOrchestrator:
                     f"Goal: {plan.goal}\n"
                     f"User message: {message}"
                 )
-                # Inject prior step results so downstream agents see earlier outputs
-                prior_outputs = {
-                    k: v
-                    for k, v in result.items()
-                    if k not in ("presentation", "user_actions") and v
-                }
-                agent_message += format_prior_step_results(prior_outputs)
+                # Inject prior step results so downstream agents see earlier
+                # outputs — narrow `step_outputs` only (no plan/trace metadata).
+                agent_message += format_prior_step_results(step_outputs)
                 if history_block:
                     agent_message = f"{history_block}\n\n{agent_message}"
 
@@ -827,6 +828,8 @@ class JarvisOrchestrator:
                     tools_override=tools if tools else None,
                 )
                 result[f"step_{step_idx}_{step.capability}"] = agent_result
+                if agent_result:
+                    step_outputs[f"step_{step_idx}_{step.capability}"] = agent_result
 
             # Build user action block from user_steps
             user_action_block = ""
@@ -835,11 +838,6 @@ class JarvisOrchestrator:
                 result["user_actions"] = [
                     {"description": s.description, "context": s.user_context} for s in user_steps
                 ]
-
-            # Collect prior step results so they can answer the user.
-            step_outputs = {
-                k: v for k, v in result.items() if k not in ("presentation", "user_actions") and v
-            }
 
             # Latency: when the whole plan is one read-only Perceiver step,
             # return that read's own `synthesis` prose directly and skip the

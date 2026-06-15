@@ -257,12 +257,12 @@ def _scenario_multi_step():
 
 
 class TestDriftTwoPriorContext:
-    """DRIFT #2 (spec §5): batch injects the whole ``result`` dict (incl.
-    trace_id / interaction_id / plan / summary) into the downstream agent's
-    prompt; stream injects only prior agent text. Frozen here so the
-    reconciliation commit shows exactly this change."""
+    """DRIFT #2 (spec §5, reconciled 2026-06-16): both paths now inject only the
+    narrow ``step_outputs`` (prior agent text) into downstream agents. Batch no
+    longer leaks trace_id / interaction_id / plan / summary — it converged onto
+    the stream path's behavior."""
 
-    async def test_batch_leaks_metadata_into_downstream_agent_prompt(self):
+    async def test_batch_injects_only_prior_agent_text_no_leak(self):
         plan, routing, users, canned = _scenario_multi_step()
         orch, rec = _make_orch(canned)
         ctx = _patches(plan, routing, users)
@@ -276,10 +276,10 @@ class TestDriftTwoPriorContext:
 
         librarian_msg = rec.message_to("librarian")
         assert librarian_msg is not None
-        # Current (pre-fold) batch behavior: metadata leaks downstream.
-        assert TRACE_ID in librarian_msg
-        assert ILOG_ID in librarian_msg
-        assert "CAL_RESULT" in librarian_msg  # prior agent text also present
+        # Reconciled batch behavior: prior agent text only, no metadata leak.
+        assert "CAL_RESULT" in librarian_msg
+        assert TRACE_ID not in librarian_msg
+        assert ILOG_ID not in librarian_msg
 
     async def test_stream_injects_only_prior_agent_text(self):
         plan, routing, users, canned = _scenario_multi_step()
