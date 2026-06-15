@@ -7,6 +7,12 @@ from src.config.settings import Settings, get_settings
 from src.models.database import get_db
 from src.models.users import User
 
+# Canonical definition lives in the service layer; re-exported here so route
+# handlers can keep importing it from api.deps (the API dependency surface).
+from src.services.workspace_resolver import resolve_workspace_id
+
+__all__ = ["resolve_workspace_id"]
+
 
 async def get_current_user(
     authorization: str | None = Header(None),
@@ -65,24 +71,3 @@ async def get_current_workspace_id(
 
 async def get_session(db: AsyncSession = Depends(get_db)) -> AsyncSession:
     return db
-
-
-async def resolve_workspace_id(db: AsyncSession, user_id: str) -> str:
-    """Resolve workspace_id from user_id for background services.
-
-    API routes should use get_current_workspace_id() instead (zero extra queries).
-    This is for scheduler, worker, perception, and other non-request code paths.
-    """
-    from sqlalchemy import select
-
-    from src.models.users import WorkspaceMember
-
-    result = await db.execute(
-        select(WorkspaceMember.workspace_id)
-        .where(WorkspaceMember.user_id == user_id, WorkspaceMember.role == "owner")
-        .limit(1)
-    )
-    ws_id = result.scalar_one_or_none()
-    if not ws_id:
-        raise ValueError(f"No workspace found for user {user_id}")
-    return ws_id

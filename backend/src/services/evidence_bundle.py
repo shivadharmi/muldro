@@ -11,7 +11,7 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.schemas.command_context import (
+from src.services.evidence_models import (
     EntityRef,
     EvidenceBundle,
     MemoryRef,

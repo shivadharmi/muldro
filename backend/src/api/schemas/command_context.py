@@ -1,4 +1,9 @@
-"""Pydantic response models for command context sidebar."""
+"""Pydantic response models for command context sidebar.
+
+The evidence domain models (EntityRef/MemoryRef/SourceRef/EvidenceBundle) live in
+``src.services.evidence_models`` — the service layer builds them; this API
+wrapper imports ``EvidenceBundle`` downward.
+"""
 
 from __future__ import annotations
 
@@ -6,35 +11,7 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
-
-class EntityRef(BaseModel):
-    entity_id: str
-    name: str
-    entity_type: str
-    relevance: float = 0.0
-
-
-class MemoryRef(BaseModel):
-    memory_id: str
-    content: str
-    memory_type: str
-    relevance: float = 0.0
-
-
-class SourceRef(BaseModel):
-    source_type: str  # trace, artifact, connector, observation
-    source_id: str
-    label: str
-    url: str | None = None
-
-
-class EvidenceBundle(BaseModel):
-    entities: list[EntityRef] = []
-    memories: list[MemoryRef] = []
-    sources: list[SourceRef] = []
-    route_info: dict | None = None
-    confidence: float | None = None
-    risk_level: str | None = None
+from src.services.evidence_models import EvidenceBundle
 
 
 class ContextSidebarData(BaseModel):

@@ -8,9 +8,9 @@ import logging
 import os
 import socket
 
-from src.api.deps import resolve_workspace_id
 from src.config.settings import Settings
 from src.models.database import get_session_factory
+from src.services.workspace_resolver import resolve_workspace_id
 
 logger = logging.getLogger(__name__)
 

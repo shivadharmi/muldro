@@ -9,8 +9,8 @@ import json
 import logging
 import time
 
-from src.api.deps import resolve_workspace_id
 from src.models.database import get_session_factory
+from src.services.workspace_resolver import resolve_workspace_id
 
 logger = logging.getLogger(__name__)
 

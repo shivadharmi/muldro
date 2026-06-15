@@ -136,7 +136,7 @@ class Notifier:
         # Resolve workspace_id from user_id if not provided
         if not workspace_id and self._db and user_id:
             try:
-                from src.api.deps import resolve_workspace_id
+                from src.services.workspace_resolver import resolve_workspace_id
 
                 workspace_id = await resolve_workspace_id(self._db, user_id)
             except Exception:

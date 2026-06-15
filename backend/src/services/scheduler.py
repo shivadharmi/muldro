@@ -15,7 +15,6 @@ from datetime import datetime, timedelta, timezone
 from croniter import croniter
 from sqlalchemy import select
 
-from src.api.deps import resolve_workspace_id
 from src.config.settings import Settings
 from src.errors import classify, new_correlation_id
 from src.middleware.observability import get_correlation_id
@@ -25,6 +24,7 @@ from src.models.task_graph import TaskRun
 from src.services.dead_letter import DeadLetterService
 from src.services.execution_state import transition_run
 from src.services.heartbeat import HeartbeatService
+from src.services.workspace_resolver import resolve_workspace_id
 
 logger = logging.getLogger(__name__)
 

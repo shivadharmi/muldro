@@ -1,6 +1,6 @@
 """Tests for EvidenceBundleService."""
 
-from src.api.schemas.command_context import EntityRef, EvidenceBundle, MemoryRef, SourceRef
+from src.services.evidence_models import EntityRef, EvidenceBundle, MemoryRef, SourceRef
 
 
 class TestEvidenceBundle:
