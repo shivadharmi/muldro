@@ -89,7 +89,7 @@ class AgentToolCall(_CoreEventBase):
     type: Literal["agent_tool_call"] = "agent_tool_call"
     agent: str
     tool: str = ""
-    input: dict[str, Any] = {}
+    input: dict[str, Any] = Field(default_factory=dict)
 
 
 class AgentToolResult(_CoreEventBase):
