@@ -256,7 +256,7 @@ score = 0.40 * cosine_similarity   (relevance)
 **Purpose:** Multi-surface notification coordinator with dedup and priority scoring.
 
 **Constructor:**
-- `surface_registry`, `redis?`, `telegram_sender?`, `websocket_sender?`, `db?`
+- `surface_registry`, `redis?`, `websocket_sender?`, `db?`
 
 **Key Methods:**
 | Method | Description |
@@ -268,7 +268,7 @@ score = 0.40 * cosine_similarity   (relevance)
 
 **Priority Score:** `0.30*urgency + 0.25*goal_relevance + 0.20*novelty + 0.15*confidence + 0.10*interruptibility`
 
-**Rate Limits (per hour):** telegram: 5, web: 15, slack: 8, email: 3
+**Rate Limits (per hour):** web: 15, slack: 8, email: 3
 
 **Hold-for-Briefing:** Low-priority notifications below threshold are held and batched into the next briefing instead of immediate delivery.
 
@@ -711,7 +711,7 @@ Invalid transitions raise `InvalidTransitionError`. All status changes in GraphE
 | `get_active_surfaces(user_id)` | HGETALL |
 | `get_preferred_surface(user_id)` | Most recently active surface |
 
-**TTLs:** Web: 120s (WebSocket heartbeat), Telegram: 86400s (always active)
+**TTLs:** Web: 120s (WebSocket heartbeat)
 
 ---
 

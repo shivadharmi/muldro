@@ -6,14 +6,13 @@ A **Personal AI Operating System** for founders. Not a chatbot — an OS with a 
 Perceive -> Understand -> Update Model -> Plan -> Act -> Communicate
 ```
 
-Jarvis continuously observes your data sources (Gmail, Calendar, Slack, GitHub), extracts entities and memories, plans actions, seeks approval for external writes, executes approved plans, and communicates results through Telegram and a Next.js web frontend.
+Jarvis continuously observes your data sources (Gmail, Calendar, Slack, GitHub), extracts entities and memories, plans actions, seeks approval for external writes, executes approved plans, and communicates results through a Next.js web frontend.
 
 ## Architecture
 
 ```mermaid
 graph TB
     subgraph UI["User Interfaces"]
-        TG[Telegram Bot]
         WEB[Next.js Frontend<br/>A2UI + Chat + SSE]
     end
 
@@ -55,7 +54,7 @@ graph TB
         S3[(MinIO / S3<br/>artifact storage)]
     end
 
-    TG & WEB --> FA
+    WEB --> FA
     FA --> JO
     JO --> TR & BU
     JO --> PCV & LIB & PLN & GOV & OPR & PRS & PER
@@ -170,7 +169,7 @@ jarvis/
 | AI Models | Claude Opus/Sonnet/Haiku via Anthropic API or AWS Bedrock |
 | Embeddings | AWS Bedrock Titan V2 (1024 dim) |
 | Tool Protocol | MCP (Model Context Protocol) via FastMCP |
-| Delivery | Telegram Bot API + Web SSE |
+| Delivery | Web SSE + A2UI surfaces |
 | Infrastructure | AWS (Terraform), Caddy reverse proxy |
 
 ## Key Features

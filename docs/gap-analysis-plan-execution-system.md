@@ -313,7 +313,7 @@ HeartbeatService marks expired approvals as `status="expired"` and attempts to c
 **Fix:**
 1. Add expiry check in `_get_approval()` before processing approve/reject
 2. Emit a `failed` SurfaceUpdate when approval expires
-3. Notify user via Telegram/WebSocket that the approval timed out
+3. Notify user via WebSocket that the approval timed out
 
 ---
 

@@ -49,7 +49,7 @@ flowchart LR
 
     subgraph Delivery
         J[Surface Updates<br/>Redis → WebSocket]
-        K[Notifications<br/>Telegram / Web / Slack]
+        K[Notifications<br/>Web / Slack / Email]
         L[Memory Writeback<br/>outcome learning]
     end
 
@@ -684,7 +684,7 @@ sequenceDiagram
     GE->>DB: transition_run(awaiting_approval)
     GE->>DB: _checkpoint(reason=approval_gate)
     GE->>NT: notify(type=approval_request, broadcast=True)
-    NT->>User: Telegram inline buttons + Web UI card
+    NT->>User: Web UI card (A2UI InlineApprovalCard)
 
     alt User Approves
         User->>API: POST /v1/approvals/{id}/approve
@@ -953,12 +953,10 @@ flowchart TD
     RATE -->|"Under limit"| ROUTE["Route to preferred surface"]
     RATE -->|"Over limit"| HOLD
 
-    ROUTE --> TG["Telegram<br/>(5/hour)"]
     ROUTE --> WEB["Web<br/>(15/hour)"]
     ROUTE --> SLACK["Slack<br/>(8/hour)"]
     ROUTE --> EMAIL["Email<br/>(3/hour)"]
 
-    BYPASS --> TG
     BYPASS --> WEB
     BYPASS --> SLACK
     BYPASS --> EMAIL

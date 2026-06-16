@@ -8,7 +8,7 @@ user-invocable: true
 Tools are how sub-agents interact with the intelligence layer and external world. There are two internal MCP servers:
 
 - **Intelligence server** (`backend/src/tools/intelligence_server.py`): Tools for event ingestion, memory, entities, planning, policy, approvals, cursors, tasks, context, verification
-- **Communication server** (`backend/src/tools/communication_server.py`): Tools for Telegram, approval prompts, A2UI surface updates
+- **Communication server** (`backend/src/tools/communication_server.py`): Tools for A2UI surface updates and Slack delivery
 
 ## Steps
 
@@ -35,7 +35,7 @@ Tools are how sub-agents interact with the intelligence layer and external world
 | Planner | Plan creation + memory/entity reads |
 | Governor | Policy evaluation + approvals |
 | Operator | External writes (Gmail send, Calendar create, Slack post, GitHub) |
-| Presenter | Briefings + communication (Telegram, A2UI) |
+| Presenter | Briefings + communication (A2UI, Slack) |
 | Researcher | All reads + web search + browser (no writes) |
 | Persona | Memory search + preference extraction |
 

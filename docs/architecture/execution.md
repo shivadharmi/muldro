@@ -182,7 +182,7 @@ Step action request
     └── ToolRegistry.get_tool(name) → match backend:
         │
         ├── internal_mcp → In-process FastMCP (intelligence + communication servers)
-        │   Tools: search, ingest_event, send_telegram, etc.
+        │   Tools: search, ingest_event, push_ui_update, etc.
         │
         ├── external_mcp → MCP Bridge (external servers)
         │   Google Workspace, GitHub, Slack, Notion, Linear,
@@ -234,7 +234,7 @@ Higher trust + lower risk = more autonomy. Trust graduates over time based on su
 4. If `auto_execute_silent`: execute silently
 5. If `blocked`: mark step as failed
 
-Approvals are delivered via Telegram inline buttons and/or web UI.
+Approvals are delivered via the web UI (A2UI InlineApprovalCard).
 
 ## Execution Timeout
 

@@ -2,7 +2,7 @@
 
 ## User Chat to Response
 
-When a user sends a message (via Telegram or the web frontend), it flows through the following pipeline. Both `process_message()` and `process_message_stream()` require explicit `user_id` and `workspace_id` parameters (no default user):
+When a user sends a message (via the web frontend), it flows through the following pipeline. Both `process_message()` and `process_message_stream()` require explicit `user_id` and `workspace_id` parameters (no default user):
 
 ```mermaid
 sequenceDiagram

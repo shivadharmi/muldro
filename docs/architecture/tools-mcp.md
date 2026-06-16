@@ -78,8 +78,6 @@ Defined as `InternalToolDef` entries in `catalog.py`. Served via in-process Fast
 | `get_plan_details` | intelligence | Get detailed plan info |
 | `discover_capabilities` | intelligence | List available capabilities for Planner |
 | `report_governor_verdict` | _special | Return input as-is (inline dispatch) |
-| `send_telegram` | communication | Send Telegram message |
-| `send_approval_prompt` | communication | Send approval prompt |
 | `push_ui_update` | communication | Push A2UI surface update |
 
 ### Capability Summary
@@ -124,7 +122,7 @@ tool_name → ToolRegistry.get_tool() → tool.capability → check agent scope
 | Planner | internal.get_plans, internal.get_goals, internal.search, internal.store_memory, system.discovery |
 | Governor | internal.evaluate_policy, internal.approve_action, internal.get_plan_details |
 | Operator | email.send/draft/reply + email.list/read/search, calendar.*, messaging.*, issue.*, repo.*, workflow.*, doc.create/update/comment/append + internal.update_execution |
-| Presenter | internal.get_briefing, internal.search, internal.send_telegram, internal.send_approval, internal.push_ui, messaging.send |
+| Presenter | internal.get_briefing, internal.search, internal.push_ui, messaging.send |
 | Persona | internal.search, internal.extract_preferences, internal.store_preference |
 
 **Note:** 7 agents total. Perceiver replaces the former Observer + Researcher agents. Governor is edge-case-only (fires only when policy evaluation is needed).

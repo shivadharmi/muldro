@@ -11,7 +11,7 @@ Jarvis is a **Personal AI Operating System** for founders. It is NOT a chatbot �
 Multi-agent hub-and-spoke: a central `JarvisOrchestrator` (`backend/src/orchestrator/jarvis.py`) routes to 7 sub-agents via Claude API. Capability-based routing: Planner produces `PlanOutput` with steps, `CapabilityResolver` maps each step's capability to the appropriate agent. Internal FastMCP servers wrap the intelligence layer; external MCP servers provide connectors (Google, GitHub, Slack).
 
 ```
-User <-> Telegram Bot / Next.js Frontend (A2UI)
+User <-> Next.js Frontend (A2UI)
               |
          JarvisOrchestrator (Claude API)
          Routes to: Perceiver, Librarian, Planner, Governor,
@@ -81,7 +81,7 @@ npm run lint    # eslint
 
 ## Configuration
 
-All backend settings via env vars with `JARVIS_` prefix (pydantic-settings in `src/config/settings.py`). Key vars: `JARVIS_DATABASE_URL`, `JARVIS_REDIS_URL`, `JARVIS_ANTHROPIC_API_KEY`, `JARVIS_USE_BEDROCK`, `JARVIS_TELEGRAM_BOT_TOKEN`, `JARVIS_TELEGRAM_CHAT_ID`, `JARVIS_LOG_JSON`, `JARVIS_DAILY_TOKEN_BUDGET_USD`, `JARVIS_RERANKER_MODEL`, `JARVIS_RERANKER_ENABLED`, `JARVIS_SKIP_REGISTRY_VALIDATION`. Uses `.env` file.
+All backend settings via env vars with `JARVIS_` prefix (pydantic-settings in `src/config/settings.py`). Key vars: `JARVIS_DATABASE_URL`, `JARVIS_REDIS_URL`, `JARVIS_ANTHROPIC_API_KEY`, `JARVIS_USE_BEDROCK`, `JARVIS_LOG_JSON`, `JARVIS_DAILY_TOKEN_BUDGET_USD`, `JARVIS_RERANKER_MODEL`, `JARVIS_RERANKER_ENABLED`, `JARVIS_SKIP_REGISTRY_VALIDATION`. Uses `.env` file.
 
 ## Coding Standards
 
@@ -207,7 +207,7 @@ Fast intents (`greeting`, `chitchat`, `simple_question`, `data_fetch`, `status_q
 
 ## Data Flow
 
-Perceiver → EventProcessor (normalize, score, dedup, DLQ on failure) → Librarian (entities, memories) → Planner (PlanOutput with capability steps) → TrustEngine (single approval gate per step) → Operator (execute via GraphExecutor) → Presenter (deliver via Telegram/A2UI)
+Perceiver → EventProcessor (normalize, score, dedup, DLQ on failure) → Librarian (entities, memories) → Planner (PlanOutput with capability steps) → TrustEngine (single approval gate per step) → Operator (execute via GraphExecutor) → Presenter (deliver via A2UI / web)
 
 **Perception signal flow:** Scheduler → PerceptionPolicyService (circuit breaker, rate limiting) → Perceiver → RelevanceAssessor (tier routing: act/alert/brief/silent) → Notifier (priority-scored delivery with hold-for-briefing)
 
@@ -314,7 +314,7 @@ State transitions are enforced by `src/services/execution_state.py` — never mu
 - **JSON parsing protection**: `_draft_action` and `_summarize_action` in GraphExecutor catch `JSONDecodeError` with graceful fallback.
 - **Budget hydration**: BudgetTracker in-memory counter hydrates from DB on day change (survives restarts). `record_from_span()` as single source of truth.
 - **Input validation**: `process_message` and `process_message_stream` reject empty `user_id`, `workspace_id`, or `message` before starting a trace.
-- **Notification rate limiting**: Per-surface hourly caps (telegram:5, web:15, slack:8, email:3) via Redis INCR. Priority scoring with hold-for-briefing (score < 0.6).
+- **Notification rate limiting**: Per-surface hourly caps (web:15, slack:8, email:3) via Redis INCR. Priority scoring with hold-for-briefing (score < 0.6).
 - **Memory expiration**: Scheduler `_tick_memory_expiration()` enforces TTL with Qdrant cascade deletes. Stability decay: 0.02/day, +0.1 on access.
 - **Execution timeout**: Background runs capped at 600s, user-initiated unlimited.
 

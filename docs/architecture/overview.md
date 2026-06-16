@@ -8,14 +8,13 @@ Jarvis is a **Personal AI Operating System** for founders. It is NOT a chatbot. 
 Perceive -> Understand -> Update Model -> Plan -> Act -> Communicate
 ```
 
-Jarvis continuously observes data sources (Gmail, Calendar, Slack, GitHub), extracts entities and memories, plans actions, seeks approval for external writes, executes approved plans, and communicates results through Telegram and a Next.js web frontend.
+Jarvis continuously observes data sources (Gmail, Calendar, Slack, GitHub), extracts entities and memories, plans actions, seeks approval for external writes, executes approved plans, and communicates results through a Next.js web frontend.
 
 ## High-Level Architecture
 
 ```mermaid
 graph TB
     subgraph "User Interfaces"
-        TG[Telegram Bot]
         WEB[Next.js Frontend / A2UI]
     end
 
@@ -65,7 +64,6 @@ graph TB
         S3[(MinIO / S3<br/>Artifact Storage)]
     end
 
-    TG --> API
     WEB --> API
     API --> ORCH
     ORCH --> PCV & LIB & PLN & GOV & OPR & PRS & PER
@@ -92,7 +90,7 @@ The orchestrator routes to 7 specialized sub-agents via Claude API. Each agent h
 | **Planner** | Opus | Determine intent, produce capability-based plans (PlanOutput) | `plans`, `plan_tasks` | plan_command, get_active_plans, search, discover_capabilities |
 | **Governor** | Sonnet | Audit-only edge-case evaluation (edge_case_only=True) | `policy decisions`, `approvals` | evaluate_policy |
 | **Operator** | Sonnet | Execute approved plans via MCP tools | `executions`, `task_runs` | Gmail/Calendar/Slack/GitHub sends + execution tracking |
-| **Presenter** | Sonnet | Generate user-facing output | `briefings`, `UI payloads` | get_briefing, search, send_telegram, push_ui_update |
+| **Presenter** | Sonnet | Generate user-facing output | `briefings`, `UI payloads` | get_briefing, search, push_ui_update |
 | **Persona** | Haiku | Learn user preferences from interactions | `memories` (preference type) | search, extract_preferences |
 
 ### Agent Boundaries
@@ -167,7 +165,7 @@ graph LR
     C --> D[Planner<br/>task graphs]
     D --> E[TrustEngine<br/>approval gate]
     E --> F[Operator<br/>execute]
-    F --> G[Presenter<br/>deliver via Telegram/A2UI]
+    F --> G[Presenter<br/>deliver via web/A2UI]
 ```
 
 ## Execution State Machine

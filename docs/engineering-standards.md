@@ -81,7 +81,7 @@ wins until changed here first.
   artifact HTML — ever.
 - Artifacts render exclusively inside a sandboxed iframe: strict CSP, no parent DOM access,
   no network, no storage. All interpolated content is escaped server-side.
-- Artifact kinds are never delivered to text-only surfaces (Telegram keeps Markdown).
+- Artifact kinds are never delivered to text-only surfaces (Slack/email keep Markdown).
 - Replaced code is deleted only after the replacement passes tests and a manual verification pass.
 
 ## 7. Open-Source Hygiene
