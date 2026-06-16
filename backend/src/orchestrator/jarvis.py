@@ -712,6 +712,7 @@ class JarvisOrchestrator:
             return {"error": "Empty message"}
 
         result: dict[str, Any] = {}
+        error_result: dict[str, Any] | None = None
         async for event in self._process_core(
             message,
             user_id,
@@ -753,15 +754,22 @@ class JarvisOrchestrator:
                     trace_id=trace_id, code=code, message=fail_message, correlation_id=cid
                 ):
                     # Batch failure shape — distinct from the SSE error frame.
-                    return {
+                    # Capture and KEEP DRAINING the generator: an early return
+                    # would abandon _process_core suspended at `yield RunFailed`,
+                    # skipping its `finally: finish_trace(...)` (trace leak).
+                    error_result = {
                         "trace_id": trace_id,
                         "decision": "error",
                         "summary": fail_message,
                         "code": code,
                         "correlation_id": cid,
                     }
-                # AgentStreamEvent / IntentClassified: batch drops token-level events.
-        return result
+                case _:
+                    # AgentStreamEvent / IntentClassified / typed agent events:
+                    # batch drops token-level events. Explicit so a new CoreEvent
+                    # is a deliberate drop, not a silent one.
+                    pass
+        return error_result if error_result is not None else result
 
     async def process_message_stream(
         self,
