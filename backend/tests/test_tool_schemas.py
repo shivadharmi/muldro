@@ -11,7 +11,7 @@ class TestToolInputModels:
         assert present == set(), f"Orphan tools still in TOOL_INPUT_MODELS: {present}"
 
     def test_tool_count_is_21(self):
-        """Exactly 21 tools should remain (post Telegram-tool removal)."""
+        """TOOL_INPUT_MODELS holds exactly the 21 internal tools with Pydantic schemas."""
         assert len(TOOL_INPUT_MODELS) == 21, (
             f"Expected 21 tools, got {len(TOOL_INPUT_MODELS)}: {sorted(TOOL_INPUT_MODELS.keys())}"
         )
