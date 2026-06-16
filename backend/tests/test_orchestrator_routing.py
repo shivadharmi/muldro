@@ -104,8 +104,13 @@ class TestProcessMessageRouting:
         orch._load_conversation_history = AsyncMock(return_value="")
         orch._get_available_capabilities = AsyncMock(return_value=[])
 
+        # mode="ask" exercises the fast-path single-read optimization (the
+        # plan="plan" default forces the Planner, bypassing intent_to_plan).
         result = await orch.process_message(
-            message="what's on my calendar today", user_id="usr_1", workspace_id="ws_1"
+            message="what's on my calendar today",
+            user_id="usr_1",
+            workspace_id="ws_1",
+            mode="ask",
         )
 
         assert "perceiver" in agents_called
@@ -136,8 +141,13 @@ class TestProcessMessageRouting:
         orch._load_conversation_history = AsyncMock(return_value="")
         orch._get_available_capabilities = AsyncMock(return_value=[])
 
+        # mode="ask" exercises the fast-path single-read fallback (the
+        # plan="plan" default forces the Planner, bypassing intent_to_plan).
         await orch.process_message(
-            message="what's on my calendar today", user_id="usr_1", workspace_id="ws_1"
+            message="what's on my calendar today",
+            user_id="usr_1",
+            workspace_id="ws_1",
+            mode="ask",
         )
 
         assert "presenter" in agents_called  # fallback preserved

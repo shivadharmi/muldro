@@ -320,9 +320,11 @@ def _scenario_user_action():
 
 
 class TestUserActions:
-    async def test_batch_includes_user_actions(self):
+    async def test_batch_includes_user_actions_and_skips_risky_step(self):
+        # Batch defaults to mode="plan" (drift #6): the HIGH-risk operator step
+        # is surfaced for approval, not executed; user actions still surface.
         plan, routing, users, canned = _scenario_user_action()
-        orch, _ = _make_orch(canned)
+        orch, rec = _make_orch(canned)
         ctx = _patches(plan, routing, users)
         for c in ctx:
             c.start()
@@ -335,6 +337,29 @@ class TestUserActions:
         assert result["user_actions"] == [
             {"description": "confirm send", "context": "needs your ok"}
         ]
+        # Risky operator step was skipped, surfaced under plan_ready.
+        assert rec.message_to("operator") is None
+        assert "step_0_email.send" not in result
+        assert result["plan_ready"] == [
+            {"plan_id": plan.plan_id, "message": "Plan created. Review and approve to execute."}
+        ]
+
+    async def test_batch_ask_override_executes_risky_step(self):
+        # An interactive caller passing mode="ask" executes the risky step.
+        plan, routing, users, canned = _scenario_user_action()
+        orch, rec = _make_orch(canned)
+        ctx = _patches(plan, routing, users)
+        for c in ctx:
+            c.start()
+        try:
+            result = await _run_batch(orch, mode="ask")
+        finally:
+            for c in ctx:
+                c.stop()
+
+        assert rec.message_to("operator") is not None
+        assert result["step_0_email.send"] == "SENT"
+        assert "plan_ready" not in result
 
     async def test_stream_emits_user_actions_event(self):
         plan, routing, users, canned = _scenario_user_action()

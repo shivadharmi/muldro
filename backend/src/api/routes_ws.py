@@ -313,10 +313,13 @@ async def _handle_orchestrator_action(
         async with get_session_factory()() as db:
             workspace_id = await resolve_workspace_id(db, user_id)
 
+        # Interactive surface action: the user's click is authorization, so
+        # execute rather than re-plan (chat-pipeline-fold drift #6 override).
         result = await orchestrator.process_message(
             user_id=user_id,
             workspace_id=workspace_id,
             message=message,
+            mode="ask",
         )
         return {"status": "success", "result": result}
     except Exception as e:
@@ -447,10 +450,13 @@ async def _handle_execute_insight(user_id: str, payload: dict, app, cid: str = "
         return {"status": "error", "error": "Orchestrator not available"}
 
     try:
+        # User explicitly clicked "execute" on the insight — authorize execution
+        # rather than re-plan (chat-pipeline-fold drift #6 override).
         result = await orchestrator.process_message(
             user_id=user_id,
             workspace_id=workspace_id,
             message=f"[Execute insight action] {selected.get('description', '')}",
+            mode="ask",
         )
         return {
             "status": "success",

@@ -686,7 +686,7 @@ class JarvisOrchestrator:
         conversation_id: str | None = None,
         surface: str = "api",
         context: dict | None = None,
-        mode: str = "ask",
+        mode: str = "plan",
     ) -> dict:
         """Process a user message and return the batch ``result`` dict.
 
@@ -694,9 +694,15 @@ class JarvisOrchestrator:
         batch-shaped ``{"error": ...}``), drive the core to exhaustion, and fold
         its ``CoreEvent``s into the result dict that ``routes_ws`` returns
         verbatim. ``prompt_style="structured"`` selects the one-shot Presenter
-        prompt (chat-pipeline-fold drift #1). ``mode`` lets callers choose the
-        execution policy — see the per-caller override map in ``routes_ws`` /
-        ``schedule_dispatch``.
+        prompt (chat-pipeline-fold drift #1).
+
+        ``mode`` defaults to ``"plan"`` (chat-pipeline-fold drift #6): the batch
+        path is non-interactive, so risky (medium/high) steps are surfaced for
+        approval rather than auto-executed, closing the latent ungated-background
+        gap. Interactive callers (WS surface actions, where the user's click is
+        authorization) override to ``"ask"``; pre-authorized scheduled automation
+        (``custom_agent_task``) overrides to ``"execute"``. See the override map
+        in ``routes_ws`` / ``schedule_dispatch``.
         """
         if not user_id:
             return {"error": "user_id is required"}

@@ -137,11 +137,16 @@ class ScheduleDispatchMixin:
         elif action == "custom_agent_task":
             instructions = config.get("instructions", "")
             if self._orchestrator:
+                # Pre-authorized automation: the user authorized these
+                # instructions when creating the schedule, so execute risky
+                # steps rather than skip-and-surface them (no one is present to
+                # approve a background plan). chat-pipeline-fold drift #6 override.
                 await self._orchestrator.process_message(
                     message=instructions,
                     user_id=sched.user_id,
                     workspace_id=workspace_id,
                     surface="scheduler",
+                    mode="execute",
                 )
             else:
                 raise RuntimeError("Orchestrator required for custom_agent_task")
