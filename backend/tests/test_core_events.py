@@ -11,7 +11,13 @@ import pytest
 from pydantic import TypeAdapter
 
 from src.orchestrator.core_events import (
+    AgentDone,
+    AgentStarted,
     AgentStreamEvent,
+    AgentTextDelta,
+    AgentThinking,
+    AgentToolCall,
+    AgentToolResult,
     CoreEvent,
     IntentClassified,
     InteractionLogged,
@@ -25,6 +31,8 @@ from src.orchestrator.core_events import (
     SystemStepResult,
     TraceStarted,
     UserActionsReady,
+    ValidationFailed,
+    agent_event_from_sse,
     core_event_to_sse,
 )
 
@@ -131,3 +139,76 @@ class TestDiscriminatedUnion:
         evt = TraceStarted(trace_id="t1")
         with pytest.raises(Exception):
             evt.trace_id = "t2"
+
+
+# Full agent-loop SSE dicts as `_call_agent_stream` produces them in production.
+_AGENT_SSE_DICTS = [
+    {"event": "agent_start", "agent": "planner", "model": "claude-opus"},
+    {"event": "thinking", "agent": "planner", "text": "hmm", "is_thinking": True},
+    {"event": "text_delta", "agent": "planner", "text": "hello"},
+    {"event": "tool_call", "agent": "operator", "tool": "send", "input": {"to": "x"}},
+    {
+        "event": "tool_result",
+        "agent": "operator",
+        "tool": "send",
+        "result": {"ok": True},
+        "blocked": False,
+        "latency_ms": 42,
+    },
+    {
+        "event": "agent_done",
+        "agent": "planner",
+        "text": "done",
+        "input_tokens": 10,
+        "output_tokens": 5,
+        "cache_creation_tokens": 0,
+        "cache_read_tokens": 0,
+        "tools_called": 1,
+        "latency_ms": 100,
+        "cost_usd": 0.001,
+    },
+]
+
+
+class TestAgentEventRoundTrip:
+    """Critical fidelity guarantee: a full production agent SSE dict survives
+    dict -> typed CoreEvent (agent_event_from_sse) -> dict (core_event_to_sse)
+    BYTE-IDENTICALLY, so re-typing the agent-loop stream changes no SSE output."""
+
+    @pytest.mark.parametrize("sse", _AGENT_SSE_DICTS, ids=lambda d: d["event"])
+    def test_full_dict_round_trips_byte_identical(self, sse):
+        typed = agent_event_from_sse(sse)
+        assert core_event_to_sse(typed) == sse
+
+    @pytest.mark.parametrize(
+        "sse,expected_type",
+        [
+            (_AGENT_SSE_DICTS[0], AgentStarted),
+            (_AGENT_SSE_DICTS[1], AgentThinking),
+            (_AGENT_SSE_DICTS[2], AgentTextDelta),
+            (_AGENT_SSE_DICTS[3], AgentToolCall),
+            (_AGENT_SSE_DICTS[4], AgentToolResult),
+            (_AGENT_SSE_DICTS[5], AgentDone),
+        ],
+    )
+    def test_maps_to_expected_typed_event(self, sse, expected_type):
+        assert isinstance(agent_event_from_sse(sse), expected_type)
+
+    def test_unknown_event_falls_back_to_passthrough(self):
+        # The sanitized LoopError / Unknown-agent frames aren't typed token
+        # events; they pass through verbatim as AgentStreamEvent.
+        err = {"event": "error", "agent": "presenter", "code": "internal_error", "message": "x"}
+        typed = agent_event_from_sse(err)
+        assert isinstance(typed, AgentStreamEvent)
+        assert core_event_to_sse(typed) == err
+
+        unknown = {"event": "error", "message": "Unknown agent: ghost"}
+        assert core_event_to_sse(agent_event_from_sse(unknown)) == unknown
+
+
+class TestValidationFailed:
+    def test_maps_to_bare_error_frame(self):
+        assert core_event_to_sse(ValidationFailed(message="Empty message")) == {
+            "event": "error",
+            "message": "Empty message",
+        }

@@ -46,7 +46,6 @@ from src.orchestrator.chat_pipeline import (
     resolve_plan_routing,
 )
 from src.orchestrator.core_events import (
-    AgentStreamEvent,
     CoreEvent,
     IntentClassified,
     InteractionLogged,
@@ -60,6 +59,8 @@ from src.orchestrator.core_events import (
     SystemStepResult,
     TraceStarted,
     UserActionsReady,
+    ValidationFailed,
+    agent_event_from_sse,
     core_event_to_sse,
 )
 from src.orchestrator.intent_classifier import (
@@ -771,6 +772,43 @@ class JarvisOrchestrator:
                     pass
         return error_result if error_result is not None else result
 
+    async def process_message_events(
+        self,
+        message: str,
+        user_id: str,
+        workspace_id: str,
+        surface: str = "web",
+        mode: str = "ask",
+        context: dict | None = None,
+        conversation_id: str | None = None,
+    ) -> AsyncGenerator[CoreEvent, None]:
+        """Public typed-event entry point for the conversational (streaming) path.
+
+        Validate inputs (yielding a typed :class:`ValidationFailed`), then drive
+        :meth:`_process_core` with ``prompt_style="conversational"`` (the live-chat
+        Presenter prompt, chat-pipeline-fold drift #1). Consumers that want SSE
+        dicts use :meth:`process_message_stream`; consumers that fold typed events
+        (``routes_chat``) consume this directly via :func:`core_event_to_sse`.
+        """
+        if not user_id or not workspace_id:
+            yield ValidationFailed(message="user_id and workspace_id are required")
+            return
+        if not message or not message.strip():
+            yield ValidationFailed(message="Empty message")
+            return
+
+        async for event in self._process_core(
+            message,
+            user_id,
+            workspace_id,
+            surface=surface,
+            mode=mode,
+            prompt_style="conversational",
+            context=context,
+            conversation_id=conversation_id,
+        ):
+            yield event
+
     async def process_message_stream(
         self,
         message: str,
@@ -783,28 +821,15 @@ class JarvisOrchestrator:
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Stream SSE-compatible event dicts while processing a user message.
 
-        Thin pass-through adapter over :meth:`_process_core`: validate inputs
-        (the stream-shaped error frame), then translate each ``CoreEvent`` to
-        its SSE dict, dropping batch-only events. ``prompt_style="conversational"``
-        selects the live-chat Presenter prompt (chat-pipeline-fold drift #1).
+        Thin SSE adapter over :meth:`process_message_events`: translate each
+        ``CoreEvent`` to its SSE dict, dropping batch-only events (``None``).
         """
-        if not user_id or not workspace_id:
-            yield {
-                "event": "error",
-                "message": "user_id and workspace_id are required",
-            }
-            return
-        if not message or not message.strip():
-            yield {"event": "error", "message": "Empty message"}
-            return
-
-        async for event in self._process_core(
+        async for event in self.process_message_events(
             message,
             user_id,
             workspace_id,
             surface=surface,
             mode=mode,
-            prompt_style="conversational",
             context=context,
             conversation_id=conversation_id,
         ):
@@ -897,7 +922,7 @@ class JarvisOrchestrator:
                     trace=trace,
                     workspace_id=workspace_id,
                 ):
-                    yield AgentStreamEvent(payload=evt)
+                    yield agent_event_from_sse(evt)
                     if evt.get("event") == "agent_done":
                         plan_text = evt.get("text", "")
 
@@ -997,7 +1022,7 @@ class JarvisOrchestrator:
                     workspace_id=workspace_id,
                     tools_override=tools if tools else None,
                 ):
-                    yield AgentStreamEvent(payload=evt)
+                    yield agent_event_from_sse(evt)
                     if evt.get("event") == "agent_done":
                         done_text = evt.get("text", "")
                         yield StepResult(key=step_key, output=done_text)
@@ -1061,7 +1086,7 @@ class JarvisOrchestrator:
                     trace=trace,
                     workspace_id=workspace_id,
                 ):
-                    yield AgentStreamEvent(payload=evt)
+                    yield agent_event_from_sse(evt)
                     if evt.get("event") == "agent_done":
                         presenter_text = evt.get("text", "")
                         # Strip fenced surface blocks for the chat-visible reply

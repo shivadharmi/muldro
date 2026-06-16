@@ -66,14 +66,75 @@ class PlanReady(_CoreEventBase):
 # ── Execution ────────────────────────────────────────────────────────────────
 
 
+class AgentStarted(_CoreEventBase):
+    type: Literal["agent_started"] = "agent_started"
+    agent: str
+    model: str | None = None
+
+
+class AgentThinking(_CoreEventBase):
+    type: Literal["agent_thinking"] = "agent_thinking"
+    agent: str
+    text: str = ""
+    is_thinking: bool = False
+
+
+class AgentTextDelta(_CoreEventBase):
+    type: Literal["agent_text_delta"] = "agent_text_delta"
+    agent: str
+    text: str = ""
+
+
+class AgentToolCall(_CoreEventBase):
+    type: Literal["agent_tool_call"] = "agent_tool_call"
+    agent: str
+    tool: str = ""
+    input: dict[str, Any] = {}
+
+
+class AgentToolResult(_CoreEventBase):
+    type: Literal["agent_tool_result"] = "agent_tool_result"
+    agent: str
+    tool: str = ""
+    result: Any = None
+    blocked: bool = False
+    latency_ms: int = 0
+
+
+class AgentDone(_CoreEventBase):
+    """Final agent-loop event carrying the response text plus token/cost
+    telemetry. ``routes_chat`` folds these fields into the persisted message;
+    the batch adapter reads ``text`` for the step result."""
+
+    type: Literal["agent_done"] = "agent_done"
+    agent: str
+    text: str = ""
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cache_creation_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    tools_called: int | None = None
+    latency_ms: int | None = None
+    cost_usd: float | None = None
+
+
 class AgentStreamEvent(_CoreEventBase):
-    """Pass-through wrapper for a single ``_call_agent_stream`` event (agent_start,
-    thinking, text_delta, tool_call, tool_result, agent_done, error). The payload
-    is already a client-safe, well-formed SSE dict — the stream adapter yields it
-    verbatim; the batch adapter inspects ``agent_done`` for the final text."""
+    """Fallback pass-through for a ``_call_agent_stream`` dict that isn't one of
+    the typed token events above — i.e. the rare error frames (``Unknown agent``
+    and the sanitized ``LoopError``). The payload is already a client-safe SSE
+    dict; the stream adapter yields it verbatim."""
 
     type: Literal["agent_stream"] = "agent_stream"
     payload: dict[str, Any]
+
+
+class ValidationFailed(_CoreEventBase):
+    """Input validation rejected the request before the pipeline started. Maps to
+    the bare ``{"event": "error", "message": ...}`` SSE frame (no code / cid —
+    distinct from a mid-pipeline :class:`RunFailed`)."""
+
+    type: Literal["validation_failed"] = "validation_failed"
+    message: str
 
 
 class StepResult(_CoreEventBase):
@@ -155,6 +216,12 @@ CoreEvent = Annotated[
         IntentClassified,
         InteractionLogged,
         PlanReady,
+        AgentStarted,
+        AgentThinking,
+        AgentTextDelta,
+        AgentToolCall,
+        AgentToolResult,
+        AgentDone,
         AgentStreamEvent,
         StepResult,
         SystemStepResult,
@@ -164,9 +231,54 @@ CoreEvent = Annotated[
         Presentation,
         RunCompleted,
         RunFailed,
+        ValidationFailed,
     ],
     Field(discriminator="type"),
 ]
+
+
+def agent_event_from_sse(evt: dict[str, Any]) -> CoreEvent:
+    """Map a single ``_call_agent_stream`` SSE dict to its typed ``CoreEvent``.
+
+    The six metadata-bearing token events become typed; anything else (the rare
+    ``Unknown agent`` and sanitized ``LoopError`` error frames) is wrapped as a
+    pass-through :class:`AgentStreamEvent` so its exact shape survives. This keeps
+    ``_call_agent_stream`` itself untouched (dicts in, sanitization preserved)
+    while giving ``routes_chat`` typed events to fold.
+    """
+    kind = evt.get("event")
+    agent = evt.get("agent", "")
+    if kind == "agent_start":
+        return AgentStarted(agent=agent, model=evt.get("model"))
+    if kind == "thinking":
+        return AgentThinking(
+            agent=agent, text=evt.get("text", ""), is_thinking=evt.get("is_thinking", False)
+        )
+    if kind == "text_delta":
+        return AgentTextDelta(agent=agent, text=evt.get("text", ""))
+    if kind == "tool_call":
+        return AgentToolCall(agent=agent, tool=evt.get("tool", ""), input=evt.get("input", {}))
+    if kind == "tool_result":
+        return AgentToolResult(
+            agent=agent,
+            tool=evt.get("tool", ""),
+            result=evt.get("result"),
+            blocked=evt.get("blocked", False),
+            latency_ms=evt.get("latency_ms", 0),
+        )
+    if kind == "agent_done":
+        return AgentDone(
+            agent=agent,
+            text=evt.get("text", ""),
+            input_tokens=evt.get("input_tokens"),
+            output_tokens=evt.get("output_tokens"),
+            cache_creation_tokens=evt.get("cache_creation_tokens"),
+            cache_read_tokens=evt.get("cache_read_tokens"),
+            tools_called=evt.get("tools_called"),
+            latency_ms=evt.get("latency_ms"),
+            cost_usd=evt.get("cost_usd"),
+        )
+    return AgentStreamEvent(payload=evt)
 
 
 def core_event_to_sse(event: CoreEvent) -> dict[str, Any] | None:
@@ -183,8 +295,42 @@ def core_event_to_sse(event: CoreEvent) -> dict[str, Any] | None:
             return {"event": "intent", "intent": intent, "confidence": confidence}
         case PlanReady(plan=plan, run_id=run_id):
             return {"event": "plan", "plan": plan, "run_id": run_id}
+        case AgentStarted(agent=agent, model=model):
+            return {"event": "agent_start", "agent": agent, "model": model}
+        case AgentThinking(agent=agent, text=text, is_thinking=is_thinking):
+            return {"event": "thinking", "agent": agent, "text": text, "is_thinking": is_thinking}
+        case AgentTextDelta(agent=agent, text=text):
+            return {"event": "text_delta", "agent": agent, "text": text}
+        case AgentToolCall(agent=agent, tool=tool, input=tool_input):
+            return {"event": "tool_call", "agent": agent, "tool": tool, "input": tool_input}
+        case AgentToolResult(
+            agent=agent, tool=tool, result=tool_result, blocked=blocked, latency_ms=latency_ms
+        ):
+            return {
+                "event": "tool_result",
+                "agent": agent,
+                "tool": tool,
+                "result": tool_result,
+                "blocked": blocked,
+                "latency_ms": latency_ms,
+            }
+        case AgentDone():
+            return {
+                "event": "agent_done",
+                "agent": event.agent,
+                "text": event.text,
+                "input_tokens": event.input_tokens,
+                "output_tokens": event.output_tokens,
+                "cache_creation_tokens": event.cache_creation_tokens,
+                "cache_read_tokens": event.cache_read_tokens,
+                "tools_called": event.tools_called,
+                "latency_ms": event.latency_ms,
+                "cost_usd": event.cost_usd,
+            }
         case AgentStreamEvent(payload=payload):
             return payload
+        case ValidationFailed(message=message):
+            return {"event": "error", "message": message}
         case StepError(step_id=step_id, error=error):
             return {"event": "step_error", "step_id": step_id, "error": error}
         case PlanModeStepSkipped(plan_id=plan_id, message=message):
