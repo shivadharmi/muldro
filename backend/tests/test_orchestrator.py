@@ -410,6 +410,13 @@ class TestOrchestrator:
 
         orchestrator._get_tools_for_agent = AsyncMock(return_value=[])
 
+        # Batch folds from the streaming core; drive _call_agent_stream so the
+        # test exercises the agent path without a real streaming API client.
+        async def mock_call_agent_stream(agent_name, **kwargs):
+            yield {"event": "agent_done", "agent": agent_name, "text": "Focus on shipping."}
+
+        orchestrator._call_agent_stream = mock_call_agent_stream
+
         result = await orchestrator.process_message(
             "What should I focus on?",
             user_id=TEST_USER_ID,

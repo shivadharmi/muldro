@@ -686,15 +686,17 @@ class JarvisOrchestrator:
         conversation_id: str | None = None,
         surface: str = "api",
         context: dict | None = None,
+        mode: str = "ask",
     ) -> dict:
-        """Process a user message through the orchestrator.
+        """Process a user message and return the batch ``result`` dict.
 
-        Routes through capability-based plan steps:
-        1. Classify intent (Haiku fast path or full Planner)
-        2. Generate PlanOutput with capability steps
-        3. Pre-resolve agent routing and tools for each step
-        4. Execute steps sequentially
-        5. Presenter formats the final response
+        Accumulating adapter over :meth:`_process_core`: validate inputs (the
+        batch-shaped ``{"error": ...}``), drive the core to exhaustion, and fold
+        its ``CoreEvent``s into the result dict that ``routes_ws`` returns
+        verbatim. ``prompt_style="structured"`` selects the one-shot Presenter
+        prompt (chat-pipeline-fold drift #1). ``mode`` lets callers choose the
+        execution policy — see the per-caller override map in ``routes_ws`` /
+        ``schedule_dispatch``.
         """
         if not user_id:
             return {"error": "user_id is required"}
@@ -703,279 +705,57 @@ class JarvisOrchestrator:
         if not message or not message.strip():
             return {"error": "Empty message"}
 
-        trace = self._trace_manager.start_trace("user_message")
-
-        try:
-            await self._emit_runtime_event(
-                "command_received",
-                workspace_id=workspace_id,
-                user_id=user_id,
-                payload={"surface": surface, "message_preview": message[:100]},
-            )
-
-            history_block = await self._load_conversation_history(conversation_id, user_id=user_id)
-
-            # Step 0: Fast intent classification
-            intent, confidence, sources = await classify_intent(
-                self._client, self._haiku_model, message, history_block
-            )
-            use_planner = intent not in FAST_INTENTS or confidence < INTENT_CONFIDENCE_THRESHOLD
-
-            if sources:
-                await self._bump_perception_for_sources(sources, user_id, workspace_id)
-
-            await self._emit_runtime_event(
-                "route_selected",
-                workspace_id=workspace_id,
-                user_id=user_id,
-                payload={
-                    "intent": intent,
-                    "confidence": confidence,
-                    "use_planner": use_planner,
-                },
-            )
-
-            # Step 1: Generate PlanOutput
-            plan: PlanOutput
-            plan_text = ""
-
-            if use_planner:
-                planner_message = (
-                    f"User message: {message}\n\nContext: {json.dumps(context or {})}"
-                    f"{_PLANNER_JSON_CONTRACT_SUFFIX}"
-                )
-                if history_block:
-                    planner_message = f"{history_block}\n\n{planner_message}"
-
-                plan_text = await self._call_agent(
-                    "planner",
-                    message=planner_message,
-                    user_id=user_id,
-                    trace=trace,
-                    workspace_id=workspace_id,
-                )
-                plan = extract_plan(plan_text)
-            else:
-                capabilities = await self._get_available_capabilities(workspace_id)
-                plan = intent_to_plan(intent, message, capabilities)
-
-            # Persist Plan record if multi-step or has write risk
-            if len(plan.steps) > 1 or any(s.risk not in ("none",) for s in plan.steps):
-                import hashlib
-
-                goal_hash = hashlib.sha256((plan.goal or "").encode()).hexdigest()[:16]
-                plan = await self._persist_plan_record(
-                    plan,
-                    user_id,
-                    workspace_id,
-                    idempotency_key=f"user:{goal_hash}",
-                )
-
-            plan_dict = plan.model_dump(mode="json")
-
-            # Log this interaction for auditing
-            ilog_id = await self._log_interaction(
-                user_id=user_id,
-                workspace_id=workspace_id,
-                trace_id=trace.trace_id,
-                message_preview=message[:500],
-                intent=intent,
-                plan=plan,
-                conversation_id=conversation_id,
-            )
-
-            result: dict[str, Any] = {
-                "trace_id": trace.trace_id,
-                "run_id": None,
-                "interaction_id": ilog_id,
-                "plan": plan_dict,
-                "summary": plan.reasoning or plan_text,
-            }
-
-            # Fire the canonical durable runtime event in the background,
-            # matching the stream path's `plan_created` (chat-pipeline-fold
-            # spec drift #4). Replaces the legacy `plan_generated` agent-stream
-            # event, which no consumer read; batch now gains the durable record
-            # + metrics increment the stream path already had.
-            self._spawn_background(
-                self._emit_runtime_event(
-                    "plan_created",
-                    workspace_id=workspace_id,
-                    user_id=user_id,
-                    run_id=None,
-                    payload={"goal": plan.goal, "trace_id": trace.trace_id},
-                )
-            )
-
-            # Step 2: Pre-resolve routing and tools for all steps
-            step_routing, user_steps = await resolve_plan_routing(
-                self._db_factory, workspace_id, plan.steps
-            )
-
-            # Step 3: Execute steps sequentially. `step_outputs` is the narrow
-            # prior-context accumulator (agent step text only) injected into
-            # downstream agents — kept separate from `result` (the output
-            # contract) so plan/trace metadata never leaks into agent prompts
-            # (chat-pipeline-fold spec drift #2; matches the stream path).
-            step_outputs: dict[str, str] = {}
-            for step_idx, (step, agent_name, tools) in enumerate(step_routing):
-                if step.capability.startswith("system."):
-                    sys_result = await self._handle_system_capability(
-                        step, plan, user_id, workspace_id
+        result: dict[str, Any] = {}
+        async for event in self._process_core(
+            message,
+            user_id,
+            workspace_id,
+            surface=surface,
+            mode=mode,
+            prompt_style="structured",
+            context=context,
+            conversation_id=conversation_id,
+        ):
+            match event:
+                case TraceStarted(trace_id=trace_id):
+                    result["trace_id"] = trace_id
+                    result["run_id"] = None
+                case InteractionLogged(interaction_id=interaction_id):
+                    result["interaction_id"] = interaction_id
+                case PlanReady(plan=plan, run_id=run_id, summary=summary):
+                    result["plan"] = plan
+                    result["run_id"] = run_id
+                    result["summary"] = summary
+                case SystemStepResult(key=key, output=output):
+                    result[key] = output
+                case StepResult(key=key, output=output):
+                    result[key] = output
+                case StepError(step_id=step_id, error=error):
+                    result[f"error_{step_id}"] = error
+                case PlanModeStepSkipped(plan_id=plan_id, message=skip_message):
+                    result.setdefault("plan_ready", []).append(
+                        {"plan_id": plan_id, "message": skip_message}
                     )
-                    result[f"system_{step.capability}"] = sys_result
-                    continue
-
-                if not agent_name:
-                    error_msg = f"No tools available for capability '{step.capability}'"
-                    logger.warning(error_msg)
-                    result[f"error_{step.step_id}"] = error_msg
-                    continue
-
-                agent_message = (
-                    f"Execute this step: {step.description}\n"
-                    f"Goal: {plan.goal}\n"
-                    f"User message: {message}"
-                )
-                # Inject prior step results so downstream agents see earlier
-                # outputs — narrow `step_outputs` only (no plan/trace metadata).
-                agent_message += format_prior_step_results(step_outputs)
-                if history_block:
-                    agent_message = f"{history_block}\n\n{agent_message}"
-
-                agent_result = await self._call_agent(
-                    agent_name,
-                    message=agent_message,
-                    user_id=user_id,
-                    trace=trace,
-                    workspace_id=workspace_id,
-                    tools_override=tools if tools else None,
-                )
-                result[f"step_{step_idx}_{step.capability}"] = agent_result
-                if agent_result:
-                    step_outputs[f"step_{step_idx}_{step.capability}"] = agent_result
-
-            # Build user action block from user_steps
-            user_action_block = ""
-            if user_steps:
-                user_action_block = build_user_action_block(user_steps)
-                result["user_actions"] = [
-                    {"description": s.description, "context": s.user_context} for s in user_steps
-                ]
-
-            # Latency: when the whole plan is one read-only Perceiver step,
-            # return that read's own `synthesis` prose directly and skip the
-            # Presenter LLM call (presenter_skip.py / streaming path twin).
-            direct_answer = None
-            read_step = single_read_step(step_routing, user_steps)
-            if read_step is not None:
-                read_key = next(
-                    (k for k in step_outputs if k.endswith(f"_{read_step.capability}")), None
-                )
-                if read_key:
-                    direct_answer = extract_perceiver_synthesis(step_outputs[read_key])
-
-            # Step 4: Presenter formats response — unless we already have the
-            # read agent's own answer above (see streaming path comment).
-            if direct_answer is not None:
-                result["presentation"] = direct_answer
-            else:
-                prior_results_block = format_prior_results_for_presenter(step_outputs)
-                presenter_msg = (
-                    f"Format this for the user ({surface}). "
-                    f"Be conversational and helpful.\n\n"
-                    f"User message: {message}\n"
-                    f"Plan: {json.dumps(plan_dict)}"
-                )
-                if prior_results_block:
-                    presenter_msg += prior_results_block
-                if plan_text:
-                    presenter_msg += f"\nAnalysis: {plan_text}"
-                if user_action_block:
-                    presenter_msg += user_action_block
-                if history_block:
-                    presenter_msg = f"{history_block}\n\n{presenter_msg}"
-                present_result = await self._call_agent(
-                    "presenter",
-                    message=presenter_msg,
-                    user_id=user_id,
-                    trace=trace,
-                    workspace_id=workspace_id,
-                )
-                result["presentation"] = present_result
-
-            await self._emit_runtime_event(
-                "run_completed",
-                workspace_id=workspace_id,
-                user_id=user_id,
-                run_id=None,
-                payload={"trace_id": trace.trace_id},
-            )
-
-            # Push surface to workspace (Presenter-driven).  Keep the raw
-            # response_text for extraction — it still contains the fenced
-            # json:surface / json:surface_data blocks.
-            response_text = result.get("presentation", result.get("presenter", ""))
-            surface_id = None
-            try:
-                surface_spec = extract_surface_spec(response_text)
-                if surface_spec and surface_spec.should_surface:
-                    surface_id = await self._push_presenter_surface(
-                        spec=surface_spec,
-                        user_id=user_id,
-                        workspace_id=workspace_id,
-                        run_id=result.get("run_id"),
-                        response_text=response_text,
-                    )
-            except Exception:
-                logger.warning("Surface push failed", exc_info=True)
-            if surface_id:
-                result["surface_id"] = surface_id
-
-            # Scrub fenced surface blocks out of the chat-visible text so the
-            # caller sees a clean conversational reply rather than raw JSON.
-            if "presentation" in result and isinstance(result["presentation"], str):
-                result["presentation"] = strip_surface_blocks(result["presentation"])
-
-            # Interaction learning (async, non-blocking)
-            if self._interaction_learner:
-                await self._ensure_learner_deps()
-                self._spawn_background(
-                    self._interaction_learner.learn(
-                        user_id=user_id,
-                        workspace_id=workspace_id,
-                        user_message=message,
-                        agent_response=response_text,
-                        intent=intent,
-                        trace_id=trace.trace_id,
-                    )
-                )
-
-            return result
-
-        except Exception as e:
-            logger.error("process_message failed: %s", e, exc_info=True)
-            cid = get_correlation_id() or new_correlation_id()
-            code, safe_msg, _ = classify(e)
-            error_result = {
-                "trace_id": trace.trace_id,
-                "decision": "error",
-                "summary": safe_msg,
-                "code": code,
-                "correlation_id": cid,
-            }
-            await self._emit_runtime_event(
-                "run_failed",
-                workspace_id=workspace_id,
-                user_id=user_id,
-                run_id=None,
-                payload={"code": code, "message": safe_msg, "correlation_id": cid},
-            )
-            return error_result
-        finally:
-            await self._trace_manager.finish_trace(
-                trace.trace_id, user_id=user_id, workspace_id=workspace_id
-            )
+                case UserActionsReady(steps=steps):
+                    result["user_actions"] = steps
+                case Presentation(text=text):
+                    result["presentation"] = text
+                case RunCompleted(surface_id=surface_id):
+                    if surface_id:
+                        result["surface_id"] = surface_id
+                case RunFailed(
+                    trace_id=trace_id, code=code, message=fail_message, correlation_id=cid
+                ):
+                    # Batch failure shape — distinct from the SSE error frame.
+                    return {
+                        "trace_id": trace_id,
+                        "decision": "error",
+                        "summary": fail_message,
+                        "code": code,
+                        "correlation_id": cid,
+                    }
+                # AgentStreamEvent / IntentClassified: batch drops token-level events.
+        return result
 
     async def process_message_stream(
         self,

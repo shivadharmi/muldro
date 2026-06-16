@@ -413,7 +413,9 @@ class TestErrorContract:
         assert result["trace_id"] == TRACE_ID
         assert result["decision"] == "error"
         assert set(result) == {"trace_id", "decision", "summary", "code", "correlation_id"}
-        orch._emit_runtime_event.assert_awaited()
+        # Batch now folds from the shared core, which fires runtime events in the
+        # background (drift #4 firing-discipline convergence) — called, not awaited.
+        orch._emit_runtime_event.assert_called()
 
     async def test_stream_failure_emits_error_event(self):
         orch, _ = _make_orch({})

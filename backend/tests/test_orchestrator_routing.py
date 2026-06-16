@@ -54,11 +54,12 @@ class TestProcessMessageRouting:
 
         agents_called = []
 
-        async def mock_call_agent(agent_name, **kwargs):
+        # Batch folds from the streaming core, so it drives _call_agent_stream.
+        async def mock_call_agent_stream(agent_name, **kwargs):
             agents_called.append(agent_name)
-            return "Hello! How can I help?"
+            yield {"event": "agent_done", "agent": agent_name, "text": "Hello! How can I help?"}
 
-        orch._call_agent = mock_call_agent
+        orch._call_agent_stream = mock_call_agent_stream
         orch._log_interaction = AsyncMock(return_value="ilog_01")
         orch._push_workspace_surface = AsyncMock()
         orch._emit_runtime_event = AsyncMock()
@@ -85,16 +86,18 @@ class TestProcessMessageRouting:
 
         agents_called = []
 
-        async def mock_call_agent(agent_name, **kwargs):
+        async def mock_call_agent_stream(agent_name, **kwargs):
             agents_called.append(agent_name)
             if agent_name == "perceiver":
-                return (
+                text = (
                     '{"query": "calendar", "findings": [], '
                     '"synthesis": "You have 2 meetings today.", "gaps": []}'
                 )
-            return "should not be called"
+            else:
+                text = "should not be called"
+            yield {"event": "agent_done", "agent": agent_name, "text": text}
 
-        orch._call_agent = mock_call_agent
+        orch._call_agent_stream = mock_call_agent_stream
         orch._log_interaction = AsyncMock(return_value="ilog_01")
         orch._push_workspace_surface = AsyncMock()
         orch._emit_runtime_event = AsyncMock()
@@ -118,13 +121,15 @@ class TestProcessMessageRouting:
 
         agents_called = []
 
-        async def mock_call_agent(agent_name, **kwargs):
+        async def mock_call_agent_stream(agent_name, **kwargs):
             agents_called.append(agent_name)
             if agent_name == "perceiver":
-                return "plain prose, not the expected JSON object"
-            return "Here is your calendar."
+                text = "plain prose, not the expected JSON object"
+            else:
+                text = "Here is your calendar."
+            yield {"event": "agent_done", "agent": agent_name, "text": text}
 
-        orch._call_agent = mock_call_agent
+        orch._call_agent_stream = mock_call_agent_stream
         orch._log_interaction = AsyncMock(return_value="ilog_01")
         orch._push_workspace_surface = AsyncMock()
         orch._emit_runtime_event = AsyncMock()
@@ -150,12 +155,11 @@ class TestProcessMessageRouting:
             '"achievable": "full"}'
         )
 
-        async def mock_call_agent(agent_name, **kwargs):
-            if agent_name == "planner":
-                return plan_json
-            return "Goal set!"
+        async def mock_call_agent_stream(agent_name, **kwargs):
+            text = plan_json if agent_name == "planner" else "Goal set!"
+            yield {"event": "agent_done", "agent": agent_name, "text": text}
 
-        orch._call_agent = mock_call_agent
+        orch._call_agent_stream = mock_call_agent_stream
         orch._log_interaction = AsyncMock(return_value="ilog_01")
         orch._push_workspace_surface = AsyncMock()
         orch._emit_runtime_event = AsyncMock()
@@ -177,10 +181,10 @@ class TestProcessMessageRouting:
         orch = _make_orchestrator()
         orch._resolve_pipeline = AsyncMock(side_effect=AssertionError("Should not be called"))
 
-        async def mock_call_agent(agent_name, **kwargs):
-            return "Hi!"
+        async def mock_call_agent_stream(agent_name, **kwargs):
+            yield {"event": "agent_done", "agent": agent_name, "text": "Hi!"}
 
-        orch._call_agent = mock_call_agent
+        orch._call_agent_stream = mock_call_agent_stream
         orch._log_interaction = AsyncMock(return_value="ilog_01")
         orch._push_workspace_surface = AsyncMock()
         orch._emit_runtime_event = AsyncMock()
@@ -203,12 +207,11 @@ class TestProcessMessageRouting:
             '"achievable": "full"}'
         )
 
-        async def mock_call_agent(agent_name, **kwargs):
-            if agent_name == "planner":
-                return plan_json
-            return "Here are your emails."
+        async def mock_call_agent_stream(agent_name, **kwargs):
+            text = plan_json if agent_name == "planner" else "Here are your emails."
+            yield {"event": "agent_done", "agent": agent_name, "text": text}
 
-        orch._call_agent = mock_call_agent
+        orch._call_agent_stream = mock_call_agent_stream
         orch._log_interaction = AsyncMock(return_value="ilog_01")
         orch._push_workspace_surface = AsyncMock()
         orch._emit_runtime_event = AsyncMock()
