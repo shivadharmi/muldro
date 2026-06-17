@@ -95,10 +95,25 @@ export function SurfaceCard({ surface, onClick }: Props) {
     (surface.surface_data?.sections?.length ?? 0) - MAX_INLINE_SECTIONS,
   );
 
+  // The card body renders nested interactive content (A2UIRenderer buttons/forms,
+  // InsightSurface controls), so the clickable root must be a div with a button role —
+  // a real <button> wrapping <button> is invalid DOM (hydration warnings, dropped
+  // clicks). The keydown guard only activates when the card itself is focused, leaving
+  // nested controls to handle their own Enter/Space.
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.target !== e.currentTarget) return;
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      onClick();
+    }
+  };
+
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={handleKeyDown}
       className="w-full text-left rounded-[var(--radius-lg)] border border-b-secondary bg-surface-1 p-4 surface-card cursor-pointer group"
     >
       {/* Header: kind badge + priority */}
@@ -257,7 +272,7 @@ export function SurfaceCard({ surface, onClick }: Props) {
           />
         </svg>
       </div>
-    </button>
+    </div>
   );
 }
 
