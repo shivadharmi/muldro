@@ -67,8 +67,12 @@ class TaskRun(Base, TimestampMixin):
         Index("ix_task_runs_user_status", "user_id", "status", "created_at"),
         Index("ix_task_runs_source", "source", "created_at"),
         Index("ix_task_runs_ws_status", "workspace_id", "status"),
+        # Composite (workspace_id, idempotency_key), NOT global: task-run keys
+        # carry no workspace component, so a global unique index would let one
+        # workspace's run block another's on a shared key (cross-tenant).
         Index(
             "ix_task_runs_idempotency",
+            "workspace_id",
             "idempotency_key",
             unique=True,
             postgresql_where=text(

@@ -33,3 +33,18 @@ def test_empty_goal_handled():
     hash_empty = hashlib.sha256("".encode()).hexdigest()[:16]
     key = f"user:create_task:{hash_empty}"
     assert key.startswith("user:create_task:")
+
+
+def test_plan_idempotency_index_is_workspace_scoped():
+    """The plan idempotency unique index must be composite
+    (workspace_id, idempotency_key), not global on idempotency_key alone.
+
+    Plan keys carry no workspace component, so a global unique index would let
+    one workspace's plan block another's on a shared key. The dedup query is
+    already workspace-scoped (jarvis.persist path); this aligns the DB index.
+    Mirrors the NormalizedEvent fix.
+    """
+    from src.models.plans import Plan
+
+    idx_cols = {idx.name: [c.name for c in idx.columns] for idx in Plan.__table__.indexes}
+    assert idx_cols.get("ix_plans_idempotency_key") == ["workspace_id", "idempotency_key"]

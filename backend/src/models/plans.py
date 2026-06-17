@@ -33,8 +33,12 @@ class Plan(Base, TimestampMixin):
 
     __table_args__ = (
         Index("ix_plans_user_created", "user_id", "created_at"),
+        # Composite (workspace_id, idempotency_key), NOT global: plan keys carry
+        # no workspace component, so a global unique index would let one
+        # workspace's plan block another's on a shared key (cross-tenant).
         Index(
             "ix_plans_idempotency_key",
+            "workspace_id",
             "idempotency_key",
             unique=True,
             postgresql_where=(idempotency_key.isnot(None)),
