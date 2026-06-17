@@ -827,3 +827,174 @@ class TestAgentLoop:
             assert record.output_tokens == 20, (
                 f"Expected 20 output_tokens, got {record.output_tokens}"
             )
+
+
+# ── Thinking-fallback paths ──────────────────────────────────────────────
+
+
+@dataclass
+class _ThinkingAgent(FakeSubAgent):
+    """SubAgent with extended thinking enabled (the precondition for fallback)."""
+
+    thinking: FakeThinkingConfig = field(
+        default_factory=lambda: FakeThinkingConfig(enabled=True, budget_tokens=2048)
+    )
+
+
+class _FailingStreamCM:
+    """Async context manager whose __aenter__ raises — simulates a stream that never
+    yields a final message (response stays None, triggering the fallback branch)."""
+
+    def __init__(self, exc: Exception):
+        self._exc = exc
+
+    async def __aenter__(self):
+        raise self._exc
+
+    async def __aexit__(self, *args):
+        return False
+
+
+def _thinking_error() -> Exception:
+    """An error _is_thinking_error() classifies as a thinking-block incompatibility."""
+    return Exception(
+        "messages.1.content.0.thinking: thinking blocks are not supported in this configuration"
+    )
+
+
+def _transient_error() -> Exception:
+    """A non-thinking transient error — must NOT trigger thinking stripping."""
+    return Exception("connection reset by peer")
+
+
+def _sequenced_create(steps: list, captured_thinking: list[bool]):
+    """Build an async create() that records whether 'thinking' was in kwargs at call
+    time, then raises/returns the next queued step."""
+    queue = list(steps)
+
+    async def _create(**kwargs):
+        captured_thinking.append("thinking" in kwargs)
+        step = queue.pop(0)
+        if isinstance(step, Exception):
+            raise step
+        return step
+
+    return _create
+
+
+class TestThinkingFallback:
+    """Covers the three thinking-fallback branches in agent_loop (agent_loop.py:362-405).
+
+    Sanity for the headline 'double-strip' path: once the *stream* fails with a thinking
+    error, thinking is disabled before the fallback runs, so the nested fallback-strip
+    (lines 374-386) is only reachable when the stream fails for a *transient* reason and
+    the *fallback* then surfaces the thinking incompatibility. test_stream_transient_then_
+    fallback_thinking_error exercises exactly that path.
+    """
+
+    @pytest.fixture
+    def agent(self):
+        return _ThinkingAgent()
+
+    @pytest.fixture
+    def trace(self):
+        t = MagicMock()
+        t.trace_id = "trace_test"
+        t.trigger = "test"
+        span = MagicMock()
+        span.span_id = "span_test"
+        t.start_span.return_value = span
+        return t
+
+    async def _run(self, client, agent, trace, *, stream: bool):
+        from src.orchestrator.agent_loop import agent_loop
+
+        return await _collect_events(
+            agent_loop(
+                client=client,
+                agent=agent,
+                model="claude-sonnet-4-20250514",
+                system_blocks=[],
+                tools=[],
+                message="Hi",
+                user_id="usr_test",
+                workspace_id="ws_test",
+                db_factory=_make_db_factory(),
+                services=MagicMock(),
+                budget=_make_budget(),
+                trace=trace,
+                execute_tool_fn=AsyncMock(),
+                stream=stream,
+            )
+        )
+
+    async def test_nonstream_thinking_error_strips_and_retries(self, trace):
+        """Non-stream path: create() fails with a thinking error → thinking is stripped
+        and the call is retried without thinking → loop recovers."""
+        from src.orchestrator.agent_loop import LoopDone
+
+        client = AsyncMock()
+        captured: list[bool] = []
+        client.messages.create = _sequenced_create(
+            [_thinking_error(), make_text_response("recovered")], captured
+        )
+
+        events = await self._run(client, _ThinkingAgent(), trace, stream=False)
+
+        done = [e for e in events if isinstance(e, LoopDone)]
+        assert len(done) == 1 and done[0].text == "recovered"
+        # First call carried thinking; the retry dropped it.
+        assert captured == [True, False]
+
+    async def test_stream_thinking_error_falls_back_without_thinking(self, trace):
+        """Streaming path: the stream itself raises a thinking error → thinking disabled,
+        first (and only) fallback create() succeeds with thinking stripped."""
+        from src.orchestrator.agent_loop import LoopDone
+
+        client = AsyncMock()
+        client.messages.stream = MagicMock(return_value=_FailingStreamCM(_thinking_error()))
+        captured: list[bool] = []
+        client.messages.create = _sequenced_create([make_text_response("recovered")], captured)
+
+        events = await self._run(client, _ThinkingAgent(), trace, stream=True)
+
+        done = [e for e in events if isinstance(e, LoopDone)]
+        assert len(done) == 1 and done[0].text == "recovered"
+        # Stream error already disabled thinking, so the single fallback call has none.
+        assert captured == [False]
+
+    async def test_stream_transient_then_fallback_thinking_error(self, trace):
+        """Headline 'double-strip' path: the stream fails for a transient reason (thinking
+        stays on), the fallback create() then surfaces a thinking error → thinking is
+        stripped and a final create() succeeds. Exercises agent_loop.py:374-386."""
+        from src.orchestrator.agent_loop import LoopDone
+
+        client = AsyncMock()
+        client.messages.stream = MagicMock(return_value=_FailingStreamCM(_transient_error()))
+        captured: list[bool] = []
+        client.messages.create = _sequenced_create(
+            [_thinking_error(), make_text_response("recovered")], captured
+        )
+
+        events = await self._run(client, _ThinkingAgent(), trace, stream=True)
+
+        done = [e for e in events if isinstance(e, LoopDone)]
+        assert len(done) == 1 and done[0].text == "recovered"
+        # Transient stream error kept thinking on for the first fallback; the second
+        # fallback (after the thinking-strip) dropped it.
+        assert captured == [True, False]
+
+    async def test_stream_transient_then_nonthinking_error_propagates(self, trace):
+        """A transient stream failure followed by a non-thinking fallback error must NOT
+        be silently swallowed — the loop surfaces a LoopError rather than a LoopDone."""
+        from src.orchestrator.agent_loop import LoopDone, LoopError
+
+        client = AsyncMock()
+        client.messages.stream = MagicMock(return_value=_FailingStreamCM(_transient_error()))
+        captured: list[bool] = []
+        client.messages.create = _sequenced_create([_transient_error()], captured)
+
+        events = await self._run(client, _ThinkingAgent(), trace, stream=True)
+
+        assert any(isinstance(e, LoopError) for e in events)
+        assert not any(isinstance(e, LoopDone) and e.text == "recovered" for e in events)
