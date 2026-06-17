@@ -17,7 +17,7 @@ from src.ui.contracts import A2UIComponent, SurfaceKind
 class AgentEnvelope(BaseModel):
     """Input envelope for a sub-agent call."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     agent_name: str
     message: str
@@ -28,7 +28,7 @@ class AgentEnvelope(BaseModel):
 class AgentResult(BaseModel):
     """Result envelope from a sub-agent call."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     agent_name: str
     response_text: str | None = None
@@ -39,7 +39,7 @@ class AgentResult(BaseModel):
 class StepResult(BaseModel):
     """Result of a single execution step."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     step_id: str
     status: str
@@ -51,7 +51,7 @@ class StepResult(BaseModel):
 class ToolCallRequest(BaseModel):
     """A tool call request from an agent."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     tool_name: str
     parameters: dict[str, Any] = Field(default_factory=dict)
@@ -61,7 +61,7 @@ class ToolCallRequest(BaseModel):
 class ToolCallResult(BaseModel):
     """Result of a tool call execution."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     tool_name: str
     status: Literal["success", "error", "blocked"] = "success"
@@ -73,7 +73,7 @@ class ToolCallResult(BaseModel):
 class SpanToolCall(BaseModel):
     """A tool call within an agent span — captures full input/output for replay."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     tool_name: str
     input_data: dict[str, Any] = Field(default_factory=dict)
@@ -86,7 +86,7 @@ class SpanToolCall(BaseModel):
 class SpanRecord(BaseModel):
     """Pydantic representation of a completed agent span for persistence."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     span_id: str
     agent_name: str
@@ -109,7 +109,11 @@ class SpanRecord(BaseModel):
 
 
 class MessageToolCall(BaseModel):
-    """A tool call persisted within a message's agent step."""
+    """A tool call persisted within a message's agent step.
+
+    NOT frozen: assembled incrementally in routes_chat (status/duration filled in as
+    AgentToolResult events arrive). See ORCH-P2-2 note on MessageAgentStep.
+    """
 
     model_config = ConfigDict(extra="ignore")
 
@@ -121,7 +125,13 @@ class MessageToolCall(BaseModel):
 
 
 class MessageAgentStep(BaseModel):
-    """An agent invocation persisted within a message's metadata."""
+    """An agent invocation persisted within a message's metadata.
+
+    NOT frozen: routes_chat builds these incrementally during streaming (response_text,
+    tokens, and nested tool_calls are mutated in place as Agent* events arrive). Freezing
+    would require reworking that streaming assembly into immutable rebuilds — a behavior
+    change out of scope for the ORCH-P2-2 boundary-contract pass.
+    """
 
     model_config = ConfigDict(extra="ignore")
 
@@ -141,7 +151,11 @@ class MessageAgentStep(BaseModel):
 
 
 class MessageMetadata(BaseModel):
-    """Typed metadata stored in the message JSONB column."""
+    """Typed metadata stored in the message JSONB column.
+
+    NOT frozen: groups the incrementally-built MessageAgentStep list (see above); kept
+    mutable alongside its members for the message-assembly path.
+    """
 
     model_config = ConfigDict(extra="ignore")
 
@@ -153,7 +167,7 @@ class MessageMetadata(BaseModel):
 class DomainEvent(BaseModel):
     """Typed domain event flowing through the event bus."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     event_type: str
     user_id: str = ""
@@ -170,7 +184,7 @@ class PerceptionDecision(BaseModel):
     level.  The runtime clamps all values within system guardrails.
     """
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     next_check_seconds: int | None = Field(None, ge=30)
     mode: Literal["poll", "push", "hybrid", "paused"] | None = None
@@ -183,7 +197,7 @@ class PerceptionDecision(BaseModel):
 class PolicyDecision(BaseModel):
     """Governor verdict envelope."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     # Produced by: Governor (auto_execute, blocked), TrustEngine (auto_execute_notify,
     # auto_execute_silent, approval_required). Union of all producers.
@@ -210,7 +224,7 @@ class PolicyDecision(BaseModel):
 class RealtimeEventPayload(BaseModel):
     """Payload published to Redis Pub/Sub for real-time SSE subscribers."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     event_id: str
     event_type: str
@@ -231,7 +245,7 @@ class WorkspaceSurfacePush(BaseModel):
     grid cards render from SurfacePreview data, not A2UI component trees.
     """
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     type: Literal["surface"] = "surface"
     id: str
@@ -263,7 +277,7 @@ class SurfaceDataPayload(BaseModel):
     that routes to per-type property validation (see src/ui/component_properties.py).
     """
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     sections: list[A2UIComponent] = Field(default_factory=list)
 
@@ -271,7 +285,7 @@ class SurfaceDataPayload(BaseModel):
 class SuggestedActionRef(BaseModel):
     """Reference to a suggested action stored in the surface payload."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     description: str
     capability: str
@@ -282,7 +296,7 @@ class SuggestedActionRef(BaseModel):
 class InsightSurfaceData(BaseModel):
     """Data payload for proactive_insight surfaces, stored in UISurface.payload."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     signal_source: str
     signal_category: str = ""
@@ -301,7 +315,7 @@ class SurfaceSpec(BaseModel):
     and what PREVIEW data to show. Parsed from the Presenter's JSON output.
     """
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     should_surface: bool = False
     kind: SurfaceKind
@@ -340,7 +354,7 @@ class SurfaceSpec(BaseModel):
 class StepState(BaseModel):
     """Live status of a single execution step."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     step_id: str
     description: str
@@ -359,7 +373,7 @@ class StepState(BaseModel):
 class ApprovalContext(BaseModel):
     """Context for an approval gate within a surface update."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     # Primary
     approval_id: str
@@ -383,7 +397,7 @@ class ApprovalContext(BaseModel):
 class ResultSummary(BaseModel):
     """Summary of completed execution results."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     key_findings: list[str] = Field(default_factory=list)
     artifacts_created: list[str] = Field(default_factory=list)
@@ -398,7 +412,7 @@ class SurfaceUpdate(BaseModel):
     updates to the matching surface_id.
     """
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     surface_id: str
     phase: Literal[
@@ -417,7 +431,7 @@ class SurfaceUpdate(BaseModel):
 class CapabilityGap(BaseModel):
     """A capability the plan needs but doesn't have."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     description: str
     resolution: str  # e.g. "connect Notion" or "not currently possible"
@@ -427,7 +441,7 @@ class CapabilityGap(BaseModel):
 class PlanStep(BaseModel):
     """A single step in a capability-based plan."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     step_id: str = ""
     description: str
@@ -442,7 +456,7 @@ class PlanStep(BaseModel):
 class PlanOutput(BaseModel):
     """Validated planner output — a goal-decomposed plan."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     goal: str
     reasoning: str = ""
