@@ -167,6 +167,29 @@ class TestRuntimeBuild:
         assert svc_a.world_model._db is db_a
         assert svc_b.world_model._db is db_b
 
+    def test_attach_session_fully_wires_db_bound_services(self, settings, mock_db):
+        """Per-request DB-bound services receive the shared vector_store /
+        embedding_service / event_bus and a per-request dead_letter, so memories
+        and entities reach Qdrant, emit domain events, and use the failed-embed
+        DLQ fallback. (attach_session previously built them bare, silently
+        dropping the Qdrant upsert.)
+        """
+        from src.runtime import attach_session, build_shared
+
+        shared = build_shared(settings)
+        svc = attach_session(shared, settings, mock_db)
+
+        assert svc.memory_service._vector_store is shared.vector_store
+        assert svc.memory_service._dead_letter is not None
+        assert svc.memory_service._event_bus is shared.extras.get("event_bus")
+
+        assert svc.world_model._vector_store is shared.vector_store
+        assert svc.world_model._dead_letter is not None
+        assert svc.world_model._embedding_service is shared.extras.get("embedding_service")
+
+        assert svc.event_processor._vector_store is shared.vector_store
+        assert svc.event_processor._embedding_service is shared.extras.get("embedding_service")
+
     def test_request_services_reuses_injected_container(self, settings, mock_db):
         """request_services reuses a container that already carries DB-bound
         services (injected mocks / single-flow build) — it must NOT rebuild and

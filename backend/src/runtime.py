@@ -171,19 +171,46 @@ def attach_session(
 
     shared_redis = shared.extras.get("redis")
     event_bus = shared.extras.get("event_bus")
+    vector_store = shared.vector_store
+    embedding_service = shared.extras.get("embedding_service")
+
+    # Per-request DLQ for failed-embedding fallback in world_model/memory_service.
+    dead_letter = None
+    try:
+        from src.services.dead_letter import DeadLetterService
+
+        dead_letter = DeadLetterService(db)
+    except Exception:
+        logger.debug("DeadLetterService unavailable for per-request services", exc_info=True)
 
     # ── Tier 1: fail fast ──────────────────────────────────────────
+    # Wire the shared vector_store / embedding / event_bus + per-request DLQ so
+    # entities and memories reach Qdrant, emit domain events, and use the
+    # failed-embedding DLQ fallback — matching how the hot paths build these.
     try:
         from src.services.world_model import WorldModel
 
-        svc.world_model = WorldModel(settings, db)
+        svc.world_model = WorldModel(
+            settings,
+            db,
+            event_bus=event_bus,
+            embedding_service=embedding_service,
+            vector_store=vector_store,
+            dead_letter=dead_letter,
+        )
     except Exception as exc:
         raise RuntimeBuildError(f"Tier 1 failure: WorldModel — {exc}") from exc
 
     try:
         from src.services.memory_service import MemoryService
 
-        svc.memory_service = MemoryService(settings=settings, db=db)
+        svc.memory_service = MemoryService(
+            settings=settings,
+            db=db,
+            event_bus=event_bus,
+            vector_store=vector_store,
+            dead_letter=dead_letter,
+        )
     except Exception as exc:
         raise RuntimeBuildError(f"Tier 1 failure: MemoryService — {exc}") from exc
 
@@ -196,6 +223,10 @@ def attach_session(
             db,
             world_model=svc.world_model,
             memory_service=svc.memory_service,
+            dead_letter=dead_letter,
+            event_bus=event_bus,
+            embedding_service=embedding_service,
+            vector_store=vector_store,
         )
     except Exception:
         logger.warning("Tier 2: EventProcessor unavailable", exc_info=True)
