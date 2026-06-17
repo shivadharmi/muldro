@@ -21,6 +21,11 @@ from src.services.tool_registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
+# The Governor's structured-output tool. Capability-scoped to the Governor, so
+# its presence in an agent's tool list is the discriminator for forcing
+# tool_choice (no agent-name sniffing).
+GOVERNOR_VERDICT_TOOL = "report_governor_verdict"
+
 # Max chars persisted per span field after serialization. Live tool results are
 # unaffected — this only caps/redacts what gets written into trace spans.
 _MAX_SPAN_FIELD_CHARS = 20_000
@@ -321,20 +326,21 @@ async def agent_loop(
             if tools:
                 api_kwargs["tools"] = tools
 
-            # Governor structured output: force tool_choice for governor.
+            # Structured output: when the Governor's verdict tool is available,
+            # force tool_choice to it so the model returns the verdict as a tool
+            # call. The tool is capability-scoped to the Governor, so its presence
+            # in `tools` is the discriminator — no agent-name sniffing needed.
             # Forced tool_choice is incompatible with thinking — disable it.
-            if agent_name == "governor" and tools:
-                governor_tool = next(
-                    (t for t in tools if t["name"] == "report_governor_verdict"), None
-                )
-                if governor_tool:
-                    api_kwargs["tool_choice"] = {
-                        "type": "tool",
-                        "name": "report_governor_verdict",
-                    }
-                    api_kwargs.pop("thinking", None)
-                    if "temperature" not in api_kwargs:
-                        api_kwargs["temperature"] = agent.temperature
+            verdict_tool = (
+                next((t for t in tools if t["name"] == GOVERNOR_VERDICT_TOOL), None)
+                if tools
+                else None
+            )
+            if verdict_tool:
+                api_kwargs["tool_choice"] = {"type": "tool", "name": GOVERNOR_VERDICT_TOOL}
+                api_kwargs.pop("thinking", None)
+                if "temperature" not in api_kwargs:
+                    api_kwargs["temperature"] = agent.temperature
 
             response = None
 
