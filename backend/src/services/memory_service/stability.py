@@ -59,6 +59,7 @@ class MemoryStability:
                 "memory.updated",
                 user_id,
                 {"action": "stability_refresh", "memory_id": memory_id},
+                workspace_id=getattr(memory, "workspace_id", "") or "",
             )
         except Exception:
             try:

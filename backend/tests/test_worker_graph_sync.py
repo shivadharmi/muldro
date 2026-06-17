@@ -21,6 +21,7 @@ def _make_bus_event(payload: dict, event_type: str = "entity.created") -> MagicM
     """Build a minimal BusEvent-like mock."""
     ev = MagicMock()
     ev.user_id = TEST_USER_ID
+    ev.workspace_id = TEST_WORKSPACE_ID
     ev.event_type = event_type
     ev.payload = payload
     ev.message_id = "1234567890-0"

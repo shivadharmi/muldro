@@ -89,6 +89,7 @@ class MemoryContradictions:
                     "memory.updated",
                     user_id,
                     {"memory_id": old_id, "superseded_by": new_memory_id},
+                    workspace_id=workspace_id,
                 )
 
         return superseded

@@ -251,7 +251,12 @@ class WorldModel:
             if importance is not None:
                 existing.importance_score = max(existing.importance_score or 0.0, importance)
             await self._db.commit()
-            await self._emit_event("entity.updated", user_id, {"entity_id": existing.entity_id})
+            await self._emit_event(
+                "entity.updated",
+                user_id,
+                {"entity_id": existing.entity_id},
+                workspace_id=workspace_id,
+            )
             return existing.entity_id
 
         entity_id = f"ent_{ULID()}"
@@ -337,7 +342,9 @@ class WorldModel:
             entity_type,
             canonical_name,
         )
-        await self._emit_event("entity.created", user_id, {"entity_id": entity_id})
+        await self._emit_event(
+            "entity.created", user_id, {"entity_id": entity_id}, workspace_id=workspace_id
+        )
         return entity_id
 
     async def add_relationship(
@@ -376,6 +383,7 @@ class WorldModel:
             "relationship.created",
             user_id,
             {"relation_id": relation_id, "relationship_id": relation_id},
+            workspace_id=workspace_id,
         )
         return relation_id
 
@@ -596,12 +604,16 @@ class WorldModel:
             return "email"
         return "name"
 
-    async def _emit_event(self, event_type: str, user_id: str, payload: dict) -> None:
+    async def _emit_event(
+        self, event_type: str, user_id: str, payload: dict, workspace_id: str = ""
+    ) -> None:
         """Publish a domain event (best-effort)."""
         if not self._event_bus:
             return
         try:
-            stream = self._event_bus.agent_stream(user_id)
-            await self._event_bus.publish(stream, event_type, payload, user_id)
+            stream = self._event_bus.agent_stream(workspace_id)
+            await self._event_bus.publish(
+                stream, event_type, payload, user_id, workspace_id=workspace_id
+            )
         except Exception:
             logger.debug("Failed to emit %s event", event_type, exc_info=True)

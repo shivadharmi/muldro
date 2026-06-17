@@ -4,10 +4,10 @@ Every system event flows through here. Replaces the callback-based
 pattern in EventProcessor with decoupled consumer groups.
 
 Streams:
-  jarvis:events:{user_id}       — Normalized events from connectors
-  jarvis:agent_events:{user_id} — Agent action events
-  jarvis:system_events          — System-level events (health, budget)
-  jarvis:notifications          — Notification delivery events
+  jarvis:events:{workspace_id}       — Normalized events from connectors
+  jarvis:agent_events:{workspace_id} — Agent action events
+  jarvis:system_events               — System-level events (health, budget)
+  jarvis:notifications               — Notification delivery events
 
 Consumer groups per downstream processor:
   entity_extractor, memory_extractor, planner, notifier, briefing_collector
@@ -74,6 +74,7 @@ class EventBus:
         event_type: str,
         payload: dict,
         user_id: str = "",
+        workspace_id: str = "",
         metadata: dict | None = None,
     ) -> str:
         """Publish an event to a stream. Returns the event_id.
@@ -88,6 +89,7 @@ class EventBus:
             "event_id": event_id,
             "event_type": event_type,
             "user_id": user_id,
+            "workspace_id": workspace_id,
             "payload": json.dumps(payload),
             "metadata": json.dumps(metadata or {}),
             "created_at": created_at,
@@ -336,13 +338,13 @@ class EventBus:
         except Exception:
             return 0
 
-    def event_stream(self, user_id: str) -> str:
-        """Get the events stream name for a user."""
-        return f"jarvis:events:{user_id}"
+    def event_stream(self, workspace_id: str) -> str:
+        """Get the events stream name for a workspace."""
+        return f"jarvis:events:{workspace_id}"
 
-    def agent_stream(self, user_id: str) -> str:
-        """Get the agent events stream name for a user."""
-        return f"jarvis:agent_events:{user_id}"
+    def agent_stream(self, workspace_id: str) -> str:
+        """Get the agent events stream name for a workspace."""
+        return f"jarvis:agent_events:{workspace_id}"
 
     @staticmethod
     def _parse_event(stream: str, data: dict) -> BusEvent:
@@ -351,6 +353,7 @@ class EventBus:
             stream=stream,
             event_type=data.get("event_type", ""),
             user_id=data.get("user_id", ""),
+            workspace_id=data.get("workspace_id", ""),
             payload=json.loads(data.get("payload", "{}")),
             metadata=json.loads(data.get("metadata", "{}")),
             created_at=datetime.fromisoformat(data["created_at"])

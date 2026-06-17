@@ -227,12 +227,13 @@ async def approve_action(
 
         redis = aioredis.from_url(settings.redis_url, decode_responses=True)
         bus = EventBus(redis)
-        stream = bus.agent_stream(user_id)
+        stream = bus.agent_stream(workspace_id)
         await bus.publish(
             stream,
             "approval.approved",
             {"approval_id": approval_id, "run_id": approval.execution_id},
             user_id,
+            workspace_id=workspace_id,
         )
         await redis.aclose()
     except Exception:
@@ -501,12 +502,13 @@ async def reject_action(
 
         redis = aioredis.from_url(settings.redis_url, decode_responses=True)
         bus = EventBus(redis)
-        stream = bus.agent_stream(user_id)
+        stream = bus.agent_stream(workspace_id)
         await bus.publish(
             stream,
             "approval.rejected",
             {"approval_id": approval_id, "run_id": approval.execution_id},
             user_id,
+            workspace_id=workspace_id,
         )
         await redis.aclose()
     except Exception:

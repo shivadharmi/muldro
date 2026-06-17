@@ -78,12 +78,13 @@ def main():
             except Exception:
                 logger.exception("Orchestrator not available, scheduled actions will fail")
 
-            # Query active user IDs for worker + scheduler
+            # Query active user IDs (scheduler) + workspace IDs (stream consumer)
             user_ids = []
+            workspace_ids = []
             try:
                 from sqlalchemy import select as sa_select
 
-                from src.models.users import User
+                from src.models.users import User, Workspace
 
                 db_factory = get_session_factory()
 
@@ -92,10 +93,21 @@ def main():
                         result = await db.execute(sa_select(User.user_id))
                         return [row[0] for row in result.all()]
 
+                async def _get_workspace_ids():
+                    async with db_factory() as db:
+                        result = await db.execute(sa_select(Workspace.workspace_id))
+                        return [row[0] for row in result.all()]
+
                 user_ids = loop.run_until_complete(_get_user_ids())
+                workspace_ids = loop.run_until_complete(_get_workspace_ids())
                 logger.info("Worker serving %d user(s): %s", len(user_ids), user_ids)
+                logger.info(
+                    "Worker consuming %d workspace stream(s): %s",
+                    len(workspace_ids),
+                    workspace_ids,
+                )
             except Exception:
-                logger.warning("Could not load user IDs — worker will have no users")
+                logger.warning("Could not load user/workspace IDs — worker will have no streams")
 
             stream_consumer = StreamConsumerManager(settings)
             scheduler = SchedulerLoop(settings, orchestrator=orchestrator, user_ids=user_ids)
@@ -120,7 +132,7 @@ def main():
             try:
                 loop.run_until_complete(
                     asyncio.gather(
-                        stream_consumer.run(user_ids=user_ids),
+                        stream_consumer.run(workspace_ids=workspace_ids),
                         scheduler.run(),
                         return_exceptions=True,
                     )

@@ -89,7 +89,13 @@ class RuntimeEventEmitter:
         # Publish to Redis for realtime subscribers
         if self._event_bus and user_id:
             try:
-                stream = self._event_bus.agent_stream(user_id)
-                await self._event_bus.publish(stream, event_type, event_payload, user_id)
+                stream = self._event_bus.agent_stream(self._workspace_id)
+                await self._event_bus.publish(
+                    stream,
+                    event_type,
+                    event_payload,
+                    user_id,
+                    workspace_id=self._workspace_id,
+                )
             except Exception:
                 logger.debug("Failed to publish runtime event %s", event_type, exc_info=True)

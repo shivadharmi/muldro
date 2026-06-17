@@ -47,6 +47,20 @@ async def _resolve_user_id_for_sse(
     return user.user_id
 
 
+async def _resolve_workspace_id_for_sse(
+    user_id: str = Depends(_resolve_user_id_for_sse),
+    db: AsyncSession = Depends(get_db),
+) -> str:
+    """Resolve the connecting user's workspace_id for stream subscriptions.
+
+    The agent event stream is keyed by workspace_id (matching publishers),
+    so SSE subscribers must resolve their workspace before subscribing.
+    """
+    from src.services.workspace_resolver import resolve_workspace_id
+
+    return await resolve_workspace_id(db, user_id)
+
+
 @router.get("/v1/realtime/events")
 async def stream_global_events(
     request: Request,
@@ -107,18 +121,18 @@ async def stream_global_events(
 @router.get("/v1/realtime/runtime")
 async def stream_runtime_events(
     request: Request,
-    user_id: str = Depends(_resolve_user_id_for_sse),
+    workspace_id: str = Depends(_resolve_workspace_id_for_sse),
 ):
     """SSE endpoint for runtime lifecycle events (command, route, run, step, tool).
 
-    Subscribes to the user's agent event stream and filters for runtime events.
-    The frontend activity store can subscribe to this for live updates.
+    Subscribes to the workspace's agent event stream and filters for runtime
+    events. The frontend activity store can subscribe to this for live updates.
     """
     redis = getattr(request.app.state, "redis", None)
     if not redis:
         raise HTTPException(status_code=503, detail="Redis unavailable for realtime streaming")
 
-    channel_name = f"jarvis:agent_events:{user_id}"
+    channel_name = f"jarvis:agent_events:{workspace_id}"
 
     runtime_event_types = {
         "command_received",

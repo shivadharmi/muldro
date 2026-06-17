@@ -261,7 +261,7 @@ class EventProcessor:
         if self._event_bus:
             try:
                 await self._event_bus.publish(
-                    self._event_bus.event_stream(user_id),
+                    self._event_bus.event_stream(workspace_id),
                     "event_processed",
                     {
                         "event_id": event_id,
@@ -271,6 +271,7 @@ class EventProcessor:
                         "urgency_score": event.urgency_score or 0,
                     },
                     user_id=user_id,
+                    workspace_id=workspace_id,
                 )
             except Exception:
                 logger.warning("Failed to publish to event bus", exc_info=True)
@@ -347,7 +348,7 @@ class EventProcessor:
                     # Publish trigger fired event
                     if self._event_bus:
                         await self._event_bus.publish(
-                            self._event_bus.event_stream(user_id),
+                            self._event_bus.event_stream(workspace_id),
                             "trigger.fired",
                             {
                                 "trigger_id": trigger.trigger_id,
@@ -357,6 +358,7 @@ class EventProcessor:
                                 "action_config": trigger.action_config,
                             },
                             user_id=user_id,
+                            workspace_id=workspace_id,
                         )
                 else:
                     trigger.last_evaluated_at = now
@@ -431,7 +433,7 @@ class EventProcessor:
 
                 if self._event_bus:
                     await self._event_bus.publish(
-                        self._event_bus.event_stream(user_id),
+                        self._event_bus.event_stream(workspace_id),
                         "initiative.high_priority",
                         {
                             "event_id": event.event_id,
@@ -439,6 +441,7 @@ class EventProcessor:
                             "signals": result.signals,
                         },
                         user_id=user_id,
+                        workspace_id=workspace_id,
                     )
 
             elif result.should_notify and self._notifier:

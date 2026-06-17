@@ -26,7 +26,7 @@ NOTIFICATIONS_STREAM = "jarvis:notifications"
 class StreamConsumerManager:
     """Manages event bus consumer groups for downstream processing.
 
-    Subscribes to per-user event streams and dispatches to handlers:
+    Subscribes to per-workspace event streams and dispatches to handlers:
     - entity_extractor: Extract entities from processed events (main stream)
     - memory_extractor: Extract memories from event summaries (main stream)
     - trigger_evaluator: Evaluate user-defined triggers (main stream)
@@ -61,10 +61,10 @@ class StreamConsumerManager:
             await self._vector_store.ensure_collections()
             await self._vector_store.ensure_indexes()
 
-    async def run(self, user_ids: list[str]) -> None:
+    async def run(self, workspace_ids: list[str]) -> None:
         """Main loop: consume from event bus streams.
 
-        Launches one asyncio task per (user, consumer_group) pair so that
+        Launches one asyncio task per (workspace, consumer_group) pair so that
         slow handlers (e.g., entity extraction with Neo4j sync) don't
         block other consumer groups.
         """
@@ -72,8 +72,8 @@ class StreamConsumerManager:
 
         from src.services.event_bus import EventBus
 
-        if not user_ids:
-            raise ValueError("user_ids must be provided — no default user")
+        if not workspace_ids:
+            raise ValueError("workspace_ids must be provided — no default workspace")
 
         self._running = True
         r = aioredis.from_url(self._settings.redis_url, decode_responses=True)
@@ -92,15 +92,15 @@ class StreamConsumerManager:
         }
 
         # Create consumer groups and launch parallel tasks
-        for uid in user_ids:
-            main_stream = bus.event_stream(uid)
-            agent_stream = f"jarvis:agent_events:{uid}"
+        for ws_id in workspace_ids:
+            main_stream = bus.event_stream(ws_id)
+            agent_stream = bus.agent_stream(ws_id)
 
             for group in self.MAIN_STREAM_GROUPS:
                 await bus.create_consumer_group(main_stream, group)
                 task = asyncio.create_task(
                     self._consumer_loop(bus, main_stream, group, handler_map[group]),
-                    name=f"consumer-{uid}-{group}",
+                    name=f"consumer-{ws_id}-{group}",
                 )
                 self._tasks.append(task)
 
@@ -108,13 +108,13 @@ class StreamConsumerManager:
                 await bus.create_consumer_group(agent_stream, group)
                 task = asyncio.create_task(
                     self._consumer_loop(bus, agent_stream, group, handler_map[group]),
-                    name=f"consumer-{uid}-{group}",
+                    name=f"consumer-{ws_id}-{group}",
                 )
                 self._tasks.append(task)
 
         logger.info(
-            "StreamConsumerManager started: %d user(s), %d parallel tasks",
-            len(user_ids),
+            "StreamConsumerManager started: %d workspace(s), %d parallel tasks",
+            len(workspace_ids),
             len(self._tasks),
         )
 
@@ -215,12 +215,19 @@ class StreamConsumerManager:
         user_id = event.user_id
         if not event_id:
             return
+        workspace_id = getattr(event, "workspace_id", "") or ""
+        if not workspace_id:
+            logger.warning(
+                "Skipping entity extraction: empty workspace_id (user=%s, event=%s)",
+                user_id,
+                event_id,
+            )
+            return
 
         from src.services.world_model import WorldModel
 
         factory = get_session_factory()
         async with factory() as db:
-            workspace_id = await resolve_workspace_id(db, user_id)
             world_model = WorldModel(
                 settings=self._settings,
                 db=db,
@@ -268,6 +275,14 @@ class StreamConsumerManager:
         user_id = event.user_id
         if not event_id:
             return
+        workspace_id = getattr(event, "workspace_id", "") or ""
+        if not workspace_id:
+            logger.warning(
+                "Skipping memory extraction: empty workspace_id (user=%s, event=%s)",
+                user_id,
+                event_id,
+            )
+            return
 
         from sqlalchemy import select
 
@@ -277,8 +292,6 @@ class StreamConsumerManager:
 
         factory = get_session_factory()
         async with factory() as db:
-            workspace_id = await resolve_workspace_id(db, user_id)
-
             result = await db.execute(
                 select(NormalizedEvent).where(NormalizedEvent.event_id == event_id)
             )
@@ -319,10 +332,17 @@ class StreamConsumerManager:
         """Evaluate event against user-defined triggers."""
         from src.services.trigger_engine import TriggerEngine
 
+        user_id = event.user_id
+        workspace_id = getattr(event, "workspace_id", "") or ""
+        if not workspace_id:
+            logger.warning(
+                "Skipping trigger evaluation: empty workspace_id (user=%s)",
+                user_id,
+            )
+            return
+
         factory = get_session_factory()
         async with factory() as db:
-            user_id = event.user_id
-            workspace_id = await resolve_workspace_id(db, user_id)
             engine = TriggerEngine(db)
             fired = await engine.evaluate(event, workspace_id=workspace_id)
             await db.commit()
@@ -333,7 +353,7 @@ class StreamConsumerManager:
         """Sync entity/relationship changes to Neo4j.
 
         Triggered by entity.created / entity.updated / relationship.created
-        events on the agent events stream (jarvis:agent_events:{user_id}).
+        events on the agent events stream (jarvis:agent_events:{workspace_id}).
         Skips silently when neo4j_url is not configured.
         """
         if not self._settings.neo4j_url:
@@ -343,12 +363,18 @@ class StreamConsumerManager:
         relation_id = event.payload.get("relationship_id", event.payload.get("relation_id", ""))
         if not entity_id and not relation_id:
             return
+        workspace_id = getattr(event, "workspace_id", "") or ""
+        if not workspace_id:
+            logger.warning(
+                "Skipping graph sync: empty workspace_id (user=%s)",
+                event.user_id,
+            )
+            return
 
         from src.services.graph_sync import GraphSyncService
 
         factory = get_session_factory()
         async with factory() as db:
-            workspace_id = await resolve_workspace_id(db, event.user_id)  # noqa: F841
             graph_sync = GraphSyncService(self._settings, db)
             try:
                 if entity_id:
@@ -370,7 +396,7 @@ class StreamConsumerManager:
         """Check if a newly stored memory contradicts existing ones.
 
         Triggered by memory.stored events on the main events stream
-        (jarvis:events:{user_id}).  Skips silently when:
+        (jarvis:events:{workspace_id}).  Skips silently when:
         - memory_id is absent/empty in the payload
         - fact_text is absent/empty in the payload
         """
@@ -378,13 +404,20 @@ class StreamConsumerManager:
         fact_text = event.payload.get("fact_text", "")
         if not memory_id or not fact_text:
             return
+        user_id = event.user_id
+        workspace_id = getattr(event, "workspace_id", "") or ""
+        if not workspace_id:
+            logger.warning(
+                "Skipping contradiction check: empty workspace_id (user=%s, memory=%s)",
+                user_id,
+                memory_id,
+            )
+            return
 
         from src.services.memory_service import MemoryService
 
         factory = get_session_factory()
         async with factory() as db:
-            user_id = event.user_id
-            workspace_id = await resolve_workspace_id(db, user_id)
             memory_service = MemoryService(
                 settings=self._settings,
                 db=db,

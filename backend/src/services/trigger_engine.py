@@ -132,7 +132,7 @@ class TriggerEngine:
                 if self._event_bus:
                     try:
                         await self._event_bus.publish(
-                            self._event_bus.agent_stream(event.user_id),
+                            self._event_bus.agent_stream(workspace_id),
                             "trigger.evaluated",
                             {
                                 "trigger_id": trigger.trigger_id,
@@ -140,6 +140,7 @@ class TriggerEngine:
                                 "event_type": event.event_type,
                             },
                             user_id=event.user_id,
+                            workspace_id=workspace_id,
                         )
                     except Exception:
                         logger.debug("Failed to emit trigger.evaluated (no-match)", exc_info=True)
@@ -239,7 +240,7 @@ class TriggerEngine:
             )
         elif action_type == "plan" and self._event_bus:
             await self._event_bus.publish(
-                self._event_bus.agent_stream(event.user_id),
+                self._event_bus.agent_stream(event.workspace_id),
                 "trigger_plan_request",
                 {
                     "trigger_id": trigger.trigger_id,
@@ -249,6 +250,7 @@ class TriggerEngine:
                     "action_config": config,
                 },
                 user_id=event.user_id,
+                workspace_id=event.workspace_id,
             )
 
         logger.info(
@@ -262,7 +264,7 @@ class TriggerEngine:
         if self._event_bus:
             try:
                 await self._event_bus.publish(
-                    self._event_bus.agent_stream(event.user_id),
+                    self._event_bus.agent_stream(event.workspace_id),
                     "trigger.evaluated",
                     {
                         "trigger_id": trigger.trigger_id,
@@ -270,6 +272,7 @@ class TriggerEngine:
                         "event_type": event.event_type,
                     },
                     user_id=event.user_id,
+                    workspace_id=event.workspace_id,
                 )
             except Exception:
                 logger.debug("Failed to emit trigger.evaluated event", exc_info=True)

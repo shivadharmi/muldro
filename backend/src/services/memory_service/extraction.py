@@ -152,7 +152,7 @@ class MemoryExtraction:
                 if self._event_bus:
                     try:
                         await self._event_bus.publish(
-                            self._event_bus.event_stream(user_id),
+                            self._event_bus.event_stream(workspace_id),
                             "contradiction_check_requested",
                             {
                                 "memory_id": mid,
@@ -161,6 +161,7 @@ class MemoryExtraction:
                                 "workspace_id": workspace_id,
                             },
                             user_id=user_id,
+                            workspace_id=workspace_id,
                         )
                     except Exception:
                         logger.debug(
@@ -170,7 +171,9 @@ class MemoryExtraction:
                         )
 
             for mid in memory_ids:
-                await self._emit_event("memory.created", user_id, {"memory_id": mid})
+                await self._emit_event(
+                    "memory.created", user_id, {"memory_id": mid}, workspace_id=workspace_id
+                )
 
         return memory_ids
 

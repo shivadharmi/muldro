@@ -79,12 +79,16 @@ class MemoryServiceBase:
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
 
-    async def _emit_event(self, event_type: str, user_id: str, payload: dict) -> None:
+    async def _emit_event(
+        self, event_type: str, user_id: str, payload: dict, workspace_id: str = ""
+    ) -> None:
         """Publish a domain event (best-effort)."""
         if not self._event_bus:
             return
         try:
-            stream = self._event_bus.agent_stream(user_id)
-            await self._event_bus.publish(stream, event_type, payload, user_id)
+            stream = self._event_bus.agent_stream(workspace_id)
+            await self._event_bus.publish(
+                stream, event_type, payload, user_id, workspace_id=workspace_id
+            )
         except Exception:
             logger.debug("Failed to emit %s event", event_type, exc_info=True)

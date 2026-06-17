@@ -275,5 +275,7 @@ class MemoryStorage:
             await self._enqueue_failed_embedding(memory_id, user_id)
 
         logger.info("Memory stored: %s type=%s '%s'", memory_id, memory_type, fact_text[:80])
-        await self._emit_event("memory.created", user_id, {"memory_id": memory_id})
+        await self._emit_event(
+            "memory.created", user_id, {"memory_id": memory_id}, workspace_id=workspace_id
+        )
         return memory_id

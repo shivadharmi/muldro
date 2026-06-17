@@ -57,8 +57,10 @@ class SurfaceEmitter:
         """Publish a domain event (best-effort) + Redis progress + DB persistence."""
         if self._event_bus:
             try:
-                stream = self._event_bus.agent_stream(user_id)
-                await self._event_bus.publish(stream, event_type, payload, user_id)
+                stream = self._event_bus.agent_stream(workspace_id or "")
+                await self._event_bus.publish(
+                    stream, event_type, payload, user_id, workspace_id=workspace_id or ""
+                )
             except Exception:
                 logger.debug("Failed to emit %s event", event_type, exc_info=True)
 

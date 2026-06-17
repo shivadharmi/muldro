@@ -20,6 +20,7 @@ def _make_bus_event(payload: dict, event_type: str = "memory.stored") -> MagicMo
     """Build a minimal BusEvent-like mock."""
     ev = MagicMock()
     ev.user_id = TEST_USER_ID
+    ev.workspace_id = TEST_WORKSPACE_ID
     ev.event_type = event_type
     ev.payload = payload
     ev.message_id = "1234567890-0"
@@ -60,8 +61,7 @@ class TestHandleContradictionCheck:
             patch(
                 "src.services.worker.resolve_workspace_id",
                 new_callable=AsyncMock,
-                return_value=TEST_WORKSPACE_ID,
-            ),
+            ) as mock_resolve,
             patch(
                 "src.services.memory_service.MemoryService",
                 return_value=mock_memory_service,
@@ -69,6 +69,8 @@ class TestHandleContradictionCheck:
         ):
             await mgr._handle_contradiction_check(event)
 
+        # workspace_id now comes from the event itself, not a DB resolve
+        mock_resolve.assert_not_awaited()
         mock_memory_service.check_contradictions.assert_awaited_once_with(
             user_id=TEST_USER_ID,
             new_fact="Alice lives in Berlin",
@@ -97,11 +99,6 @@ class TestHandleContradictionCheck:
 
         with (
             patch("src.services.worker.get_session_factory", return_value=mock_factory_instance),
-            patch(
-                "src.services.worker.resolve_workspace_id",
-                new_callable=AsyncMock,
-                return_value=TEST_WORKSPACE_ID,
-            ),
             patch(
                 "src.services.memory_service.MemoryService",
                 return_value=mock_memory_service,

@@ -156,7 +156,7 @@ class IntegrationManager:
 
         # Publish events to event bus
         if events and self._event_bus:
-            stream = self._event_bus.event_stream(user_id)
+            stream = self._event_bus.event_stream(installation.workspace_id)
             for event in events:
                 await self._event_bus.publish(
                     stream,
@@ -170,6 +170,7 @@ class IntegrationManager:
                         "actor": event.actor,
                     },
                     user_id=user_id,
+                    workspace_id=installation.workspace_id,
                 )
 
         await self._db.commit()

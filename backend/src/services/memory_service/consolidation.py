@@ -109,6 +109,7 @@ class MemoryConsolidation:
                 "memory.updated",
                 user_id,
                 {"action": "consolidation", "merged_count": merged_count},
+                workspace_id=workspace_id,
             )
 
         return merged_count

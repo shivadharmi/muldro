@@ -31,15 +31,16 @@ def bus(mock_redis):
 class TestPublish:
     async def test_publishes_to_stream(self, bus, mock_redis):
         event_id = await bus.publish(
-            f"jarvis:events:{TEST_USER_ID}",
+            "jarvis:events:ws_1",
             "email_received",
             {"subject": "Test"},
             user_id=TEST_USER_ID,
+            workspace_id="ws_1",
         )
         assert event_id.startswith("be_")
         mock_redis.xadd.assert_called_once()
         call_args = mock_redis.xadd.call_args
-        assert call_args[0][0] == f"jarvis:events:{TEST_USER_ID}"
+        assert call_args[0][0] == "jarvis:events:ws_1"
         data = call_args[0][1]
         assert data["event_type"] == "email_received"
         assert json.loads(data["payload"]) == {"subject": "Test"}
@@ -53,6 +54,22 @@ class TestPublish:
         )
         data = mock_redis.xadd.call_args[0][1]
         assert json.loads(data["metadata"]) == {"trace_id": "tr_123"}
+
+    async def test_includes_workspace_id_in_xadd_data(self, bus, mock_redis):
+        await bus.publish(
+            "jarvis:events:ws_42",
+            "event_processed",
+            {"event_id": "evt_1"},
+            user_id=TEST_USER_ID,
+            workspace_id="ws_42",
+        )
+        data = mock_redis.xadd.call_args[0][1]
+        assert data["workspace_id"] == "ws_42"
+
+    async def test_workspace_id_defaults_to_empty(self, bus, mock_redis):
+        await bus.publish("jarvis:events:ws_x", "test", {})
+        data = mock_redis.xadd.call_args[0][1]
+        assert data["workspace_id"] == ""
 
 
 class TestSubscribe:
@@ -174,7 +191,37 @@ class TestReplay:
 
 class TestStreamNames:
     def test_event_stream(self, bus):
-        assert bus.event_stream("usr_123") == "jarvis:events:usr_123"
+        assert bus.event_stream("ws_123") == "jarvis:events:ws_123"
 
     def test_agent_stream(self, bus):
-        assert bus.agent_stream("usr_123") == "jarvis:agent_events:usr_123"
+        assert bus.agent_stream("ws_123") == "jarvis:agent_events:ws_123"
+
+
+class TestParseEvent:
+    def test_round_trips_workspace_id(self, bus, mock_redis):
+        from src.services.event_bus import BusEvent
+
+        data = {
+            "event_id": "be_1",
+            "event_type": "event_processed",
+            "user_id": "usr_1",
+            "workspace_id": "ws_99",
+            "payload": "{}",
+            "metadata": "{}",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        event = bus._parse_event("jarvis:events:ws_99", data)
+        assert isinstance(event, BusEvent)
+        assert event.workspace_id == "ws_99"
+
+    def test_workspace_id_defaults_to_empty(self, bus):
+        data = {
+            "event_id": "be_1",
+            "event_type": "test",
+            "user_id": "usr_1",
+            "payload": "{}",
+            "metadata": "{}",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        event = bus._parse_event("stream", data)
+        assert event.workspace_id == ""

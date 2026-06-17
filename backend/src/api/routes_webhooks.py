@@ -25,13 +25,13 @@ router = APIRouter()
 
 async def _check_backpressure(
     request: Request,
-    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     settings: Settings = Depends(get_settings),
 ):
-    """Reject webhooks when the current user's event stream lag is too high.
+    """Reject webhooks when the current workspace's event stream lag is too high.
 
-    Scoped to the requesting user's stream to avoid throttling healthy tenants
-    because another tenant is backlogged.
+    Scoped to the requesting workspace's stream to avoid throttling healthy
+    tenants because another tenant is backlogged.
     """
     redis = getattr(request.app.state, "redis", None)
     if redis and settings.webhook_lag_threshold > 0:
@@ -39,7 +39,7 @@ async def _check_backpressure(
 
         bus = EventBus(redis)
         try:
-            stream = bus.event_stream(user_id)
+            stream = bus.event_stream(workspace_id)
             lag = await bus.get_stream_lag(stream)
             if lag > settings.webhook_lag_threshold:
                 raise HTTPException(
