@@ -692,6 +692,70 @@ class TestAgentLoop:
         assert loop_kwargs["input_tokens"] == 100
         assert loop_kwargs["output_tokens"] == 40
 
+    async def test_governor_forces_verdict_tool_choice(self, client, trace):
+        """When the governor's structured-output verdict tool is available, the
+        loop forces tool_choice to it and disables thinking (forced tool_choice
+        is incompatible with thinking). Pins the structured-output behavior so it
+        survives replacing the agent-name sniff with verdict-tool detection."""
+        from src.orchestrator.agent_loop import agent_loop
+
+        gov = FakeSubAgent(name="governor")
+        gov.thinking = FakeThinkingConfig(enabled=True)
+
+        client.messages.create = AsyncMock(return_value=make_text_response("{}"))
+
+        await _collect_events(
+            agent_loop(
+                client=client,
+                agent=gov,
+                model="claude-sonnet-4-20250514",
+                system_blocks=[],
+                tools=[{"name": "report_governor_verdict", "description": "v", "input_schema": {}}],
+                message="evaluate",
+                user_id="usr_test",
+                workspace_id="ws_test",
+                db_factory=_make_db_factory(),
+                services=MagicMock(),
+                budget=_make_budget(),
+                trace=trace,
+                execute_tool_fn=AsyncMock(return_value={"ok": True}),
+            )
+        )
+
+        call_kwargs = client.messages.create.call_args.kwargs
+        assert call_kwargs["tool_choice"] == {
+            "type": "tool",
+            "name": "report_governor_verdict",
+        }
+        assert "thinking" not in call_kwargs
+
+    async def test_non_governor_does_not_force_tool_choice(self, client, agent, trace):
+        """A non-governor agent without the verdict tool never forces tool_choice."""
+        from src.orchestrator.agent_loop import agent_loop
+
+        client.messages.create = AsyncMock(return_value=make_text_response("done"))
+
+        await _collect_events(
+            agent_loop(
+                client=client,
+                agent=agent,
+                model="claude-sonnet-4-20250514",
+                system_blocks=[],
+                tools=[{"name": "search_memory", "description": "s", "input_schema": {}}],
+                message="hi",
+                user_id="usr_test",
+                workspace_id="ws_test",
+                db_factory=_make_db_factory(),
+                services=MagicMock(),
+                budget=_make_budget(),
+                trace=trace,
+                execute_tool_fn=AsyncMock(return_value={"ok": True}),
+            )
+        )
+
+        call_kwargs = client.messages.create.call_args.kwargs
+        assert "tool_choice" not in call_kwargs
+
     async def test_out_of_scope_tool_rejected(self, client, trace):
         """Agent calling a tool whose capability is NOT in its scope is rejected
         with is_error, and execute_tool_fn is NOT called (FIX #1, fail-closed)."""

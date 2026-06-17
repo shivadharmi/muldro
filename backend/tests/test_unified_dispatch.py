@@ -242,6 +242,28 @@ class TestExecuteTool:
         orchestrator._call_composite_tool.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_unknown_backend_returns_error(self, orchestrator):
+        """A registered tool with an unrecognized backend returns an error dict
+        (the match's default arm) rather than raising — pins the graceful path
+        before/after modeling backends as a discriminated ToolBackend enum."""
+        tool = _make_tool_record(name="weird", backend="bogus_backend", server="x")
+
+        mock_registry = MagicMock()
+        mock_registry.get_tool = AsyncMock(return_value=tool)
+
+        with patch("src.services.tool_registry.ToolRegistry", return_value=mock_registry):
+            db_ctx = AsyncMock()
+            db_ctx.__aenter__ = AsyncMock(return_value=MagicMock())
+            db_ctx.__aexit__ = AsyncMock(return_value=False)
+            orchestrator._db_factory = MagicMock(return_value=db_ctx)
+
+            result = await orchestrator._execute_tool("weird", {}, "usr_1", "ws_1")
+
+        assert "error" in result
+        assert "Unknown backend" in result["error"]
+        assert "bogus_backend" in result["error"]
+
+    @pytest.mark.asyncio
     async def test_unknown_tool_returns_error(self, orchestrator):
         """Unknown tool returns error dict."""
         mock_registry = MagicMock()
