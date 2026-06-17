@@ -62,6 +62,27 @@ test("a surface with no children renders without crashing", () => {
   expect(container.textContent).toBe("");
 });
 
+test("renders a deeply-but-legally nested tree in full", () => {
+  // 10 levels of Card nesting, well under the cap — the leaf must still render.
+  let node = comp({ type: "Text", id: "leaf", properties: { text: "deep leaf" } });
+  for (let i = 0; i < 10; i++) {
+    node = comp({ type: "Card", id: `card-${i}`, children: [node] });
+  }
+  render(<A2UIRenderer surface={surface([node])} onAction={vi.fn()} />);
+  expect(screen.getByText("deep leaf")).toBeInTheDocument();
+});
+
+test("caps pathologically deep trees with a truncation placeholder", () => {
+  // 60 levels of nesting exceeds MAX_RENDER_DEPTH (24): the leaf must be truncated.
+  let node = comp({ type: "Text", id: "leaf", properties: { text: "unreachable leaf" } });
+  for (let i = 0; i < 60; i++) {
+    node = comp({ type: "Card", id: `card-${i}`, children: [node] });
+  }
+  render(<A2UIRenderer surface={surface([node])} onAction={vi.fn()} />);
+  expect(screen.queryByText("unreachable leaf")).not.toBeInTheDocument();
+  expect(screen.getByText(/nested too deeply/i)).toBeInTheDocument();
+});
+
 test("missing children array on the surface is tolerated", () => {
   // Backend contract guarantees children[], but the renderer guards with `?? []`.
   const partial = { type: "surface", id: "srf", metadata: {} } as unknown as A2UISurface;
