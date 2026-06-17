@@ -77,7 +77,7 @@ class TestSeedDefaults:
         # Add internal tools
         for tool in INTERNAL_TOOLS:
             t = _make_tool_def(name=tool.name)
-            t.backend = "internal_mcp"
+            t.backend = "special" if tool.server == "_special" else "internal_mcp"
             t.source = "internal"
             t.server = tool.server
             t.capability = tool.capability
@@ -129,6 +129,28 @@ class TestSeedDefaults:
                 return
 
         pytest.fail("web_search tool was not seeded")
+
+    @pytest.mark.asyncio
+    async def test_seed_defaults_special_backend(self, registry, mock_db):
+        """report_governor_verdict (_special server) gets backend='special' (TOOL-P3-1)."""
+        result_mock = MagicMock()
+        result_mock.scalars.return_value = result_mock
+        result_mock.all.return_value = []
+        mock_db.execute = AsyncMock(return_value=result_mock)
+
+        await registry.seed_defaults()
+
+        for call in mock_db.add.call_args_list:
+            tool_def = call[0][0]
+            if tool_def.name == "report_governor_verdict":
+                assert tool_def.backend == "special", (
+                    f"report_governor_verdict should have backend='special', "
+                    f"got '{tool_def.backend}'"
+                )
+                assert tool_def.server == "_special"
+                return
+
+        pytest.fail("report_governor_verdict tool was not seeded")
 
     @pytest.mark.asyncio
     async def test_seed_defaults_writes_internal_description(self, registry, mock_db):

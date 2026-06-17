@@ -167,9 +167,9 @@ class TestExecuteTool:
 
     @pytest.mark.asyncio
     async def test_special_backend_returns_input(self, orchestrator):
-        """_special server returns tool_input as-is (report_governor_verdict)."""
+        """ "special" backend returns tool_input as-is (report_governor_verdict)."""
         tool = _make_tool_record(
-            name="report_governor_verdict", backend="internal_mcp", server="_special"
+            name="report_governor_verdict", backend="special", server="_special"
         )
 
         mock_registry = MagicMock()

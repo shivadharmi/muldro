@@ -66,7 +66,10 @@ class ToolRegistry:
                 continue
             seen.add(name)
 
-            backend = "internal_mcp"
+            # _special-server tools (report_governor_verdict) are inline-dispatched,
+            # not MCP calls — model that as a distinct backend so dispatch can match on
+            # it directly (mirrors the "_composite" server → "composite" backend below).
+            backend = "special" if tool.server == "_special" else "internal_mcp"
             source = "internal"
             server = tool.server
             capability = tool.capability

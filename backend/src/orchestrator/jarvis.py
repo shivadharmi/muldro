@@ -2980,8 +2980,10 @@ class JarvisOrchestrator:
             logger.warning("[mcp] tool disabled: %s", tool_name)
             return {"error": f"Tool '{tool_name}' is disabled", "blocked": True}
 
-        # _special server returns input as-is (report_governor_verdict)
-        if tool.backend == "internal_mcp" and tool.server == "_special":
+        # "special" backend (report_governor_verdict) is inline-dispatched: input is
+        # passed through as-is with no MCP call and, by design, no tool.started/completed
+        # events — it carries the governor's structured verdict, not a side-effecting call.
+        if tool.backend == "special":
             return tool_input
 
         logger.info(
