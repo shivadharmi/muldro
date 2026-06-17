@@ -54,3 +54,63 @@ test("updateSurface still applies a non-empty steps array", () => {
 
   expect(useSurfaceStore.getState().surfaces[0].steps).toHaveLength(2);
 });
+
+test("updateSurface merges phase/progress/current_step selectively", () => {
+  const store = useSurfaceStore.getState();
+  store.addSurface(baseSurface());
+
+  store.updateSurface(
+    "srf_1",
+    update({ phase: "completed", progress: "done", current_step: "s2" }),
+  );
+
+  const merged = useSurfaceStore.getState().surfaces[0];
+  expect(merged.phase).toBe("completed");
+  expect(merged.progress).toBe("done");
+  expect(merged.current_step).toBe("s2");
+  // Untouched identity fields survive the partial merge.
+  expect(merged.id).toBe("srf_1");
+  expect(merged.kind).toBe("run");
+});
+
+test("updateSurface applies approval and results payloads", () => {
+  const store = useSurfaceStore.getState();
+  store.addSurface(baseSurface());
+
+  const approval = { approval_id: "apr_1" } as unknown as SurfaceUpdate["approval"];
+  const results = { key_findings: ["x"] } as unknown as SurfaceUpdate["results"];
+  store.updateSurface("srf_1", update({ phase: "approval_needed", approval, results }));
+
+  const merged = useSurfaceStore.getState().surfaces[0];
+  expect(merged.approval).toEqual(approval);
+  expect(merged.results).toEqual(results);
+});
+
+test("updateSurface leaves a field untouched when the update omits it (undefined)", () => {
+  const store = useSurfaceStore.getState();
+  store.addSurface({ ...baseSurface(), progress: "original" });
+
+  // An update object whose `progress` is undefined must not clobber the existing value.
+  const partial = {
+    surface_id: "srf_1",
+    phase: "executing",
+    steps: undefined,
+    current_step: undefined,
+    progress: undefined,
+    approval: undefined,
+    results: undefined,
+  } as unknown as SurfaceUpdate;
+  store.updateSurface("srf_1", partial);
+
+  const merged = useSurfaceStore.getState().surfaces[0];
+  expect(merged.phase).toBe("executing");
+  expect(merged.progress).toBe("original");
+});
+
+test("updateSurface is a no-op for an unknown surface id", () => {
+  const store = useSurfaceStore.getState();
+  store.addSurface(baseSurface());
+  store.updateSurface("srf_missing", update({ phase: "completed" }));
+
+  expect(useSurfaceStore.getState().surfaces[0].phase).toBeUndefined();
+});
