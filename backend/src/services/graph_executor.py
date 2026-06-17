@@ -812,31 +812,35 @@ class GraphExecutor:
             )
 
             # ── Fail-closed contract guard ───────────────────────────────
-            # The Planner ALWAYS emits a capability per PlanStep (see CLAUDE.md),
-            # so an empty capability reaching the approval gate is contract drift,
-            # not a normal case. Previously control fell through past the gate and
-            # the step auto-executed with NO risk assessment and NO approval — a
-            # write step with a dropped/misnamed capability would run ungated.
-            # When a TrustEngine is present (i.e. the autonomous, gated path), we
-            # refuse to execute and fail the step as a contract violation instead
-            # of silently auto-executing. This mirrors how the executor terminates
-            # other unexecutable steps (timeout/failure) and surfaces the drift
-            # loudly rather than risking an ungated external write.
-            if self._trust_engine and not capability:
+            # The autonomous path MUST be gated by the TrustEngine. Two
+            # conditions leave a step unevaluatable and therefore unsafe to
+            # auto-execute:
+            #   • no TrustEngine — create_graph_executor and runtime always
+            #     supply one (TrustEngine construction cannot fail), so an
+            #     absent engine here is a wiring/misconfiguration, never a
+            #     normal mode. We refuse to fall back to an ungated legacy
+            #     approval path (SVC-P3-1).
+            #   • empty capability — the Planner ALWAYS emits a capability per
+            #     PlanStep (see CLAUDE.md), so a missing one is contract drift.
+            # In either case we fail the step loudly rather than auto-execute a
+            # potential external write with NO risk assessment and NO approval.
+            if not self._trust_engine or not capability:
+                reason = "missing TrustEngine" if not self._trust_engine else "empty capability"
                 logger.error(
-                    "Step %s reached approval gate with empty capability "
+                    "Step %s reached approval gate with %s "
                     "(input_data keys=%s) — failing closed as contract violation",
                     step.step_id,
+                    reason,
                     sorted((step.input_data or {}).keys()),
                 )
                 transition_step(step, "running")
                 transition_step(step, "failed")
                 step.completed_at = datetime.now(timezone.utc)
-                step.output_data = {"error": "contract_violation: empty capability"}
+                step.output_data = {"error": f"contract_violation: {reason}"}
                 step.error = {
                     "message": (
-                        "Step has no capability; refusing to execute ungated "
-                        "(TrustEngine contract violation)"
+                        f"Step cannot be gated ({reason}); refusing to execute "
+                        "ungated (TrustEngine contract violation)"
                     ),
                     "final": True,
                 }
@@ -847,164 +851,76 @@ class GraphExecutor:
                     {
                         "run_id": run.run_id,
                         "step_id": step.step_id,
-                        "error": "contract_violation: empty capability",
+                        "error": f"contract_violation: {reason}",
                     },
                     workspace_id=run.workspace_id,
                 )
                 return
 
-            if self._trust_engine and capability:
-                # ── Single TrustEngine gate ──────────────────────────
-                risk = await self._assess_step_risk(capability, step, run)
-                decision = await self._trust_engine.evaluate(
-                    capability, risk, workspace_id=run.workspace_id or ""
+            # ── Single TrustEngine gate ──────────────────────────────────
+            # The TrustEngine and capability are both guaranteed present by the
+            # fail-closed guard above, so the gate runs unconditionally — there
+            # is no ungated fall-through path out of this block.
+            risk = await self._assess_step_risk(capability, step, run)
+            decision = await self._trust_engine.evaluate(
+                capability, risk, workspace_id=run.workspace_id or ""
+            )
+
+            if decision.decision == "approval_required":
+                await self._create_approval_and_pause(
+                    run, step, capability, risk, decision, surface_id=surface_id
                 )
-
-                if decision.decision == "approval_required":
-                    await self._create_approval_and_pause(
-                        run, step, capability, risk, decision, surface_id=surface_id
-                    )
-                    return
-
-                # auto_execute_notify or auto_execute_silent — proceed
-                transition_step(step, "running")
-                step.started_at = step.started_at or datetime.now(timezone.utc)
-                await self._db.flush()
-                await self._emit_event(
-                    "step.started",
-                    run.user_id,
-                    {"run_id": run.run_id, "step_id": step.step_id},
-                    workspace_id=run.workspace_id,
-                )
-
-                resolved_input = await self._resolve_step_references(step, run.run_id)
-                if resolved_input != (step.input_data or {}):
-                    step.input_data = resolved_input
-                    await self._db.flush()
-
-                step_timeout = step.timeout_seconds or 120
-                t0 = time.monotonic()
-                try:
-                    output = await asyncio.wait_for(
-                        self._run_step_action(step, run, cancel_event=cancel_event),
-                        timeout=step_timeout,
-                    )
-                    elapsed_ms = int((time.monotonic() - t0) * 1000)
-                except asyncio.TimeoutError:
-                    elapsed_ms = int((time.monotonic() - t0) * 1000)
-                    transition_step(step, "timed_out")
-                    step.error = {"message": f"Step timed out after {step_timeout}s"}
-                    step.completed_at = datetime.now(timezone.utc)
-                    await self._db.flush()
-                    logger.warning("Step %s timed out after %ds", step.step_id, step_timeout)
-                    return
-                except CancellationRequested:
-                    transition_step(step, "cancelled")
-                    step.completed_at = datetime.now(timezone.utc)
-                    await self._db.flush()
-                    raise
-                except Exception as exc:
-                    elapsed_ms = int((time.monotonic() - t0) * 1000)
-                    await self._handle_step_failure(
-                        run, step, exc, elapsed_ms, surface_id=surface_id
-                    )
-                    return
-
-                if decision.decision == "auto_execute_notify":
-                    await self._notify_auto_executed(run, step, risk, output)
-
-                await self._finalize_step(run, step, output, elapsed_ms)
                 return
 
-            elif not self._trust_engine:
-                # ── Fallback: old per-tool requires_approval flag ────
-                needs_approval = False
-                risk_level = "low"
-
-                if self._tool_registry and capability:
-                    tool = await self._tool_registry.get_tool(capability)
-                    if tool and tool.requires_approval:
-                        needs_approval = True
-                        risk_level = tool.risk_level or "low"
-
-                if needs_approval:
-                    from src.services.approval_service import create_approval
-
-                    approval = await create_approval(
-                        self._db,
-                        user_id=run.user_id,
-                        workspace_id=run.workspace_id,
-                        approval_type=f"step:{capability}",
-                        title=f"Approve step: {step.name or capability}",
-                        summary=f"Step in run {run.run_id} requires approval",
-                        risk_level=risk_level,
-                        execution_id=run.run_id,
-                        run_id=run.run_id,
-                        step_id=step.step_id,
-                        requested_by=run.user_id,
-                    )
-                    transition_step(step, "running")
-                    transition_step(step, "waiting_approval")
-                    transition_run(run, "awaiting_approval")
-                    await self._checkpoint(run, step.step_id, "approval_gate")
-                    await self._db.flush()
-                    await self._emit_event(
-                        "approval_requested",
-                        run.user_id,
-                        {
-                            "run_id": run.run_id,
-                            "step_id": step.step_id,
-                            "approval_id": approval.approval_id,
-                            "task_type": capability,
-                            "risk_level": risk_level,
-                        },
-                        workspace_id=run.workspace_id,
-                    )
-                    if self._notifier:
-                        try:
-                            await self._notifier.notify(
-                                user_id=run.user_id,
-                                notification_type="approval_request",
-                                title=f"Approve: {step.name or capability}",
-                                body=(f"Step requires approval in run {run.run_id}"),
-                                data={
-                                    "approval_id": approval.approval_id,
-                                    "run_id": run.run_id,
-                                    "step_id": step.step_id,
-                                },
-                                workspace_id=run.workspace_id,
-                            )
-                        except Exception:
-                            logger.warning(
-                                "Failed to notify for step approval",
-                                exc_info=True,
-                            )
-                    if surface_id:
-                        from src.contracts import ApprovalContext
-
-                        await self._emit_surface_update(
-                            surface_id=surface_id,
-                            user_id=run.user_id,
-                            phase="approval_needed",
-                            approval=ApprovalContext(
-                                approval_id=approval.approval_id,
-                                step_description=step.name or capability,
-                                risk_level=risk_level,
-                                trust_level="",
-                                expires_at=(
-                                    approval.expires_at.isoformat() if approval.expires_at else None
-                                ),
-                                triggering_step_id=step.step_id,
-                                risk_reasoning=f"Risk: {risk_level}",
-                                trust_context="Legacy approval gate",
-                            ),
-                            workspace_id=run.workspace_id,
-                        )
-                    return
-
+            # auto_execute_notify or auto_execute_silent — proceed
             transition_step(step, "running")
+            step.started_at = step.started_at or datetime.now(timezone.utc)
+            await self._db.flush()
+            await self._emit_event(
+                "step.started",
+                run.user_id,
+                {"run_id": run.run_id, "step_id": step.step_id},
+                workspace_id=run.workspace_id,
+            )
 
-        # ── Common execution path (resumed or no-gate-needed) ────────
+            resolved_input = await self._resolve_step_references(step, run.run_id)
+            if resolved_input != (step.input_data or {}):
+                step.input_data = resolved_input
+                await self._db.flush()
+
+            step_timeout = step.timeout_seconds or 120
+            t0 = time.monotonic()
+            try:
+                output = await asyncio.wait_for(
+                    self._run_step_action(step, run, cancel_event=cancel_event),
+                    timeout=step_timeout,
+                )
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+            except asyncio.TimeoutError:
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+                transition_step(step, "timed_out")
+                step.error = {"message": f"Step timed out after {step_timeout}s"}
+                step.completed_at = datetime.now(timezone.utc)
+                await self._db.flush()
+                logger.warning("Step %s timed out after %ds", step.step_id, step_timeout)
+                return
+            except CancellationRequested:
+                transition_step(step, "cancelled")
+                step.completed_at = datetime.now(timezone.utc)
+                await self._db.flush()
+                raise
+            except Exception as exc:
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+                await self._handle_step_failure(run, step, exc, elapsed_ms, surface_id=surface_id)
+                return
+
+            if decision.decision == "auto_execute_notify":
+                await self._notify_auto_executed(run, step, risk, output)
+
+            await self._finalize_step(run, step, output, elapsed_ms)
+            return
+
+        # ── Common execution path (step resumed after approval) ──────
         step.started_at = step.started_at or datetime.now(timezone.utc)
         await self._db.flush()
         await self._emit_event(

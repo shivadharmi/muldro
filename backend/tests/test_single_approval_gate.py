@@ -207,10 +207,15 @@ class TestSingleGateResumedStep:
         executor._run_step_action.assert_called_once()
 
 
-class TestSingleGateFallbackNoTrustEngine:
-    """No TrustEngine -> fall back to old per-tool requires_approval."""
+class TestNoTrustEngineFailsClosed:
+    """No TrustEngine -> fail closed (SVC-P3-1).
 
-    async def test_no_trust_engine_falls_back_no_approval(self, settings, mock_db):
+    Production always supplies a TrustEngine (its construction cannot fail), so
+    an absent engine at the gate is a wiring/misconfiguration. The executor must
+    refuse to execute the step ungated rather than fall back to a legacy path.
+    """
+
+    async def test_no_trust_engine_fails_step_without_executing(self, settings, mock_db):
         executor = _make_executor(settings, mock_db, trust_engine=None)
         executor._run_step_action = AsyncMock(return_value={"ok": True})
         executor._emit_event = AsyncMock()
@@ -218,12 +223,26 @@ class TestSingleGateFallbackNoTrustEngine:
         executor._resolve_step_references = AsyncMock(return_value={"capability": "email.send"})
         executor._finalize_step = AsyncMock()
 
-        step = _make_step(status="pending")
+        step = _make_step(status="ready")
         run = _make_run()
 
-        with patch("src.services.graph_executor.transition_step"):
-            await executor._execute_step(run, step)
-        executor._run_step_action.assert_called_once()
+        await executor._execute_step(run, step)
+
+        # Fail-closed: the step action is NEVER run without a gate.
+        executor._run_step_action.assert_not_called()
+        executor._finalize_step.assert_not_called()
+        assert step.status == "failed"
+        assert "contract_violation" in (step.output_data or {}).get("error", "")
+        executor._emit_event.assert_any_await(
+            "step.failed",
+            run.user_id,
+            {
+                "run_id": run.run_id,
+                "step_id": step.step_id,
+                "error": "contract_violation: missing TrustEngine",
+            },
+            workspace_id=run.workspace_id,
+        )
 
 
 class TestStepFailureHandling:
