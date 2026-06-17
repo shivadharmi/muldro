@@ -12,7 +12,7 @@ Ceiling: user-set max autonomy per capability caps the effective trust level.
 """
 
 import logging
-from types import SimpleNamespace
+from dataclasses import dataclass
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,6 +28,15 @@ from src.services.risk_assessor import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class _DefaultCeiling:
+    """Typed, immutable default returned by ``_get_ceiling`` when no ``TrustCeiling``
+    row exists. Shaped to the only attribute callers read (``max_level``); replaces an
+    untyped ``SimpleNamespace`` so the contract is explicit and frozen."""
+
+    max_level: str = "autonomous"
 
 
 def _graduation_progress(state) -> dict:
@@ -167,7 +176,7 @@ class TrustEngine:
         if ceiling:
             return ceiling
 
-        return SimpleNamespace(max_level="autonomous")
+        return _DefaultCeiling()
 
     # ── Dashboard + Detail Methods ──────────────────────────────
 

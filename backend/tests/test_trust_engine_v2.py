@@ -42,6 +42,18 @@ def _make_risk(risk_level="low", reasoning="test"):
     return RiskAssessment(risk_level=risk_level, reasoning=reasoning)
 
 
+def test_default_ceiling_is_frozen_and_autonomous():
+    """_get_ceiling's no-row default is a typed, immutable autonomous ceiling (SVC-P3-2)."""
+    import dataclasses
+
+    from src.services.trust_engine import _DefaultCeiling
+
+    ceiling = _DefaultCeiling()
+    assert ceiling.max_level == "autonomous"
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        ceiling.max_level = "first_use"  # type: ignore[misc]
+
+
 class TestEvaluateFirstUse:
     """first_use × any risk → approval_required."""
 
