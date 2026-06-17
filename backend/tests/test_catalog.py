@@ -169,7 +169,8 @@ def test_special_tool_properties():
     tool = get_internal_tool_by_name("report_governor_verdict")
     assert tool is not None
     assert tool.server == "_special"
-    assert tool.capability == "internal.evaluate_policy"
+    # Dedicated capability (TOOL-P3-2) — distinct from evaluate_policy, keeps tool↔cap 1:1.
+    assert tool.capability == "internal.report_verdict"
     assert tool.risk_level == "low"
     assert not tool.requires_approval
 

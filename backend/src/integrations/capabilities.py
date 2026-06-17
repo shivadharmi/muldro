@@ -149,6 +149,7 @@ CAPABILITY_CATALOG: dict[str, CapabilityMeta] = {
     "internal.ingest_event": _cap(CapabilityFamily.INTERNAL, False),
     "internal.update_entity": _cap(CapabilityFamily.INTERNAL, False),
     "internal.evaluate_policy": _cap(CapabilityFamily.INTERNAL, False),
+    "internal.report_verdict": _cap(CapabilityFamily.INTERNAL, False),
     "internal.approve_action": _cap(CapabilityFamily.INTERNAL, False, "medium"),
     "internal.update_cursor": _cap(CapabilityFamily.INTERNAL, False),
     "internal.extract_preferences": _cap(CapabilityFamily.INTERNAL, False),
