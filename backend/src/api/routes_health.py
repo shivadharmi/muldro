@@ -225,6 +225,12 @@ async def _get_agent_info(workspace_id: str) -> dict:
                 .where(
                     TokenUsage.created_at >= start_of_day,
                     TokenUsage.workspace_id == workspace_id,
+                    # Exclude per-tool attribution rows (trigger='tool:*'): they
+                    # are a breakdown of the authoritative loop-level row, so
+                    # summing them alongside it double-counts tokens and inflates
+                    # the call count (ORCH-P2-1). cost is unaffected (these rows
+                    # carry cost_usd=0.0) but tokens/counts must exclude them.
+                    ~TokenUsage.trigger.like("tool:%"),
                 )
                 .group_by(TokenUsage.agent_name)
             )
