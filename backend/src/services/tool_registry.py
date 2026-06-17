@@ -201,54 +201,6 @@ class ToolRegistry:
             logger.info("Seeded/updated %d tool definitions", changed)
         return changed
 
-    async def register_tool(
-        self,
-        name: str,
-        risk_level: str = "low",
-        requires_approval: bool = False,
-        connector_type: str | None = None,
-        description: str | None = None,
-        input_schema: dict | None = None,
-        output_schema: dict | None = None,
-        timeout_seconds: int = 30,
-        idempotent: bool = False,
-        workspace_id: str = "",
-    ) -> ToolDefinition:
-        # Scope lookup by workspace to avoid MultipleResultsFound
-        stmt = select(ToolDefinition).where(ToolDefinition.name == name)
-        if workspace_id:
-            stmt = stmt.where(ToolDefinition.workspace_id == workspace_id)
-        else:
-            stmt = stmt.where(ToolDefinition.workspace_id.is_(None))
-        existing = await self._db.execute(stmt)
-        tool = existing.scalar_one_or_none()
-        if tool:
-            tool.risk_level = risk_level
-            tool.requires_approval = requires_approval
-            tool.connector_type = connector_type
-            if description:
-                tool.description = description
-            await self._db.flush()
-            return tool
-
-        tool = ToolDefinition(
-            tool_id=f"tool_{ULID()}",
-            workspace_id=workspace_id,
-            name=name,
-            risk_level=risk_level,
-            requires_approval=requires_approval,
-            connector_type=connector_type,
-            description=description,
-            input_schema=input_schema,
-            output_schema=output_schema,
-            timeout_seconds=timeout_seconds,
-            idempotent=idempotent,
-        )
-        self._db.add(tool)
-        await self._db.flush()
-        self._cache[name] = tool
-        return tool
-
     async def get_tool(self, name: str) -> ToolDefinition | None:
         if name in self._cache:
             return self._cache[name]
@@ -285,24 +237,6 @@ class ToolRegistry:
         stmt = stmt.order_by(ToolDefinition.name)
         result = await self._db.execute(stmt)
         return list(result.scalars().all())
-
-    async def is_write_tool(self, name: str) -> bool:
-        tool = await self.get_tool(name)
-        if not tool:
-            return False
-        return tool.requires_approval
-
-    async def is_blocked_tool(self, name: str) -> bool:
-        tool = await self.get_tool(name)
-        if not tool:
-            return False
-        return not tool.enabled
-
-    async def classify_risk(self, name: str) -> str:
-        tool = await self.get_tool(name)
-        if not tool:
-            return "low"
-        return tool.risk_level
 
     async def list_for_task_type(self, task_type: str) -> list[ToolDefinition]:
         """List tools relevant for a given task type."""

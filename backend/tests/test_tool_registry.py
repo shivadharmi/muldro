@@ -178,39 +178,6 @@ class TestSeedDefaults:
         assert existing.description == sample.description
 
 
-class TestRegisterTool:
-    @pytest.mark.asyncio
-    async def test_register_new_tool(self, registry, mock_db):
-        result_mock = MagicMock()
-        result_mock.scalar_one_or_none.return_value = None
-        mock_db.execute = AsyncMock(return_value=result_mock)
-
-        tool = await registry.register_tool(
-            name="custom_tool",
-            risk_level="medium",
-            requires_approval=True,
-            connector_type="custom",
-        )
-        mock_db.add.assert_called_once()
-        mock_db.flush.assert_called_once()
-        assert tool.name == "custom_tool"
-
-    @pytest.mark.asyncio
-    async def test_register_updates_existing(self, registry, mock_db):
-        existing = _make_tool_def(name="gmail_send", risk_level="high")
-        result_mock = MagicMock()
-        result_mock.scalar_one_or_none.return_value = existing
-        mock_db.execute = AsyncMock(return_value=result_mock)
-
-        tool = await registry.register_tool(
-            name="gmail_send",
-            risk_level="critical",
-            requires_approval=True,
-        )
-        assert tool.risk_level == "critical"
-        mock_db.add.assert_not_called()
-
-
 class TestGetToolCaching:
     @pytest.mark.asyncio
     async def test_get_tool_from_db(self, registry, mock_db):
@@ -244,81 +211,6 @@ class TestGetToolCaching:
 
         tool = await registry.get_tool("nonexistent")
         assert tool is None
-
-
-class TestIsWriteTool:
-    @pytest.mark.asyncio
-    async def test_is_write_tool(self, registry, mock_db):
-        tool_def = _make_tool_def(name="gmail_send", requires_approval=True)
-        result_mock = MagicMock()
-        result_mock.scalar_one_or_none.return_value = tool_def
-        mock_db.execute = AsyncMock(return_value=result_mock)
-
-        assert await registry.is_write_tool("gmail_send") is True
-
-    @pytest.mark.asyncio
-    async def test_is_write_tool_read_only(self, registry, mock_db):
-        tool_def = _make_tool_def(name="gmail_list", requires_approval=False)
-        result_mock = MagicMock()
-        result_mock.scalar_one_or_none.return_value = tool_def
-        mock_db.execute = AsyncMock(return_value=result_mock)
-
-        assert await registry.is_write_tool("gmail_list") is False
-
-    @pytest.mark.asyncio
-    async def test_is_write_tool_unknown(self, registry, mock_db):
-        result_mock = MagicMock()
-        result_mock.scalar_one_or_none.return_value = None
-        mock_db.execute = AsyncMock(return_value=result_mock)
-
-        assert await registry.is_write_tool("unknown") is False
-
-
-class TestIsBlockedTool:
-    @pytest.mark.asyncio
-    async def test_is_blocked_tool(self, registry, mock_db):
-        tool_def = _make_tool_def(name="gmail_delete", enabled=False)
-        result_mock = MagicMock()
-        result_mock.scalar_one_or_none.return_value = tool_def
-        mock_db.execute = AsyncMock(return_value=result_mock)
-
-        assert await registry.is_blocked_tool("gmail_delete") is True
-
-    @pytest.mark.asyncio
-    async def test_is_not_blocked(self, registry, mock_db):
-        tool_def = _make_tool_def(name="gmail_send", enabled=True)
-        result_mock = MagicMock()
-        result_mock.scalar_one_or_none.return_value = tool_def
-        mock_db.execute = AsyncMock(return_value=result_mock)
-
-        assert await registry.is_blocked_tool("gmail_send") is False
-
-    @pytest.mark.asyncio
-    async def test_is_blocked_unknown(self, registry, mock_db):
-        result_mock = MagicMock()
-        result_mock.scalar_one_or_none.return_value = None
-        mock_db.execute = AsyncMock(return_value=result_mock)
-
-        assert await registry.is_blocked_tool("unknown") is False
-
-
-class TestClassifyRisk:
-    @pytest.mark.asyncio
-    async def test_classify_risk(self, registry, mock_db):
-        tool_def = _make_tool_def(name="gmail_send", risk_level="high")
-        result_mock = MagicMock()
-        result_mock.scalar_one_or_none.return_value = tool_def
-        mock_db.execute = AsyncMock(return_value=result_mock)
-
-        assert await registry.classify_risk("gmail_send") == "high"
-
-    @pytest.mark.asyncio
-    async def test_classify_risk_unknown(self, registry, mock_db):
-        result_mock = MagicMock()
-        result_mock.scalar_one_or_none.return_value = None
-        mock_db.execute = AsyncMock(return_value=result_mock)
-
-        assert await registry.classify_risk("unknown") == "low"
 
 
 class TestListForTaskType:
