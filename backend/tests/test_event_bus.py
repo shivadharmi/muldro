@@ -17,6 +17,7 @@ def mock_redis():
     r.xreadgroup = AsyncMock(return_value=[])
     r.xack = AsyncMock()
     r.xpending_range = AsyncMock(return_value=[])
+    r.xautoclaim = AsyncMock(return_value=("0-0", [], []))
     r.xrange = AsyncMock(return_value=[])
     r.xgroup_create = AsyncMock()
     return r

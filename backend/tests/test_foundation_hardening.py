@@ -187,94 +187,65 @@ class TestWorkerConsumerName:
 
 
 class TestWorkerDeadLetter:
-    """Fix 2.3: Worker DLQ after 3 failed retries."""
+    """Fix 2.3: Worker persists EventBus dead-letters to the DLQ.
+
+    Retry/redelivery now lives in ``EventBus.subscribe`` (XAUTOCLAIM reclaim +
+    DLQ_MAX_DELIVERIES). The worker's only job is to provide an
+    ``on_dead_letter`` callback that durably captures exhausted messages.
+    """
 
     @pytest.mark.asyncio
-    async def test_handler_success_clears_retry_counter(self):
+    async def test_dead_letter_handler_persists_to_dlq(self):
+        from contextlib import asynccontextmanager
+        from unittest.mock import patch
+
+        from src.services.event_bus import DeadLetterContext
         from src.services.worker import StreamConsumerManager
 
         settings = make_mock_settings(neo4j_url="")
         manager = StreamConsumerManager(settings)
 
-        mock_redis = AsyncMock()
-        mock_redis.delete = AsyncMock()
+        mock_db = AsyncMock()
 
-        event = MagicMock()
-        event.payload = {"event_id": "evt_test"}
-        event.user_id = "usr_01JTEST00000000000000000000"
-
-        await manager._handle_with_retry(
-            handler=AsyncMock(),  # succeeds
-            event=event,
-            redis=mock_redis,
-            dlq=AsyncMock(),
-            bus=AsyncMock(),
-            stream="test_stream",
-            group="test_group",
-        )
-        mock_redis.delete.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_handler_failure_after_3_retries_goes_to_dlq(self):
-        from src.services.worker import StreamConsumerManager
-
-        settings = make_mock_settings(neo4j_url="")
-        manager = StreamConsumerManager(settings)
-
-        mock_redis = AsyncMock()
-        mock_redis.incr = AsyncMock(return_value=4)  # 4th attempt
-        mock_redis.expire = AsyncMock()
+        @asynccontextmanager
+        async def fake_factory_cm():
+            yield mock_db
 
         mock_dlq = AsyncMock()
         mock_dlq.enqueue = AsyncMock(return_value="dlq_001")
 
-        mock_bus = AsyncMock()
-        mock_bus.ack = AsyncMock()
-
-        event = MagicMock()
-        event.payload = {"event_id": "evt_test"}
-        event.user_id = "usr_01JTEST00000000000000000000"
-        event.message_id = "msg_test"
-
-        await manager._handle_with_retry(
-            handler=AsyncMock(side_effect=Exception("boom")),
-            event=event,
-            redis=mock_redis,
-            dlq=mock_dlq,
-            bus=mock_bus,
-            stream="test_stream",
-            group="test_group",
+        ctx = DeadLetterContext(
+            stream="jarvis:events:usr_1",
+            group="entity_extractor",
+            msg_id="5-0",
+            data={"event_id": "be_42", "user_id": "usr_1"},
+            delivery_count=3,
+            error=ValueError("boom"),
         )
+
+        with (
+            patch("src.services.worker.get_session_factory", return_value=fake_factory_cm),
+            patch("src.services.worker.resolve_workspace_id", AsyncMock(return_value="ws_1")),
+            patch("src.services.dead_letter.DeadLetterService", return_value=mock_dlq),
+        ):
+            handler = manager._build_dead_letter_handler("entity_extractor")
+            await handler(ctx)
+
         mock_dlq.enqueue.assert_called_once()
-        mock_bus.ack.assert_called_once()
+        kwargs = mock_dlq.enqueue.call_args.kwargs
+        assert kwargs["operation_type"] == "worker_entity_extractor"
+        assert kwargs["user_id"] == "usr_1"
+        assert kwargs["error_type"] == "ValueError"
+        assert kwargs["workspace_id"] == "ws_1"
+        assert kwargs["source_id"] == "be_42"
 
     @pytest.mark.asyncio
-    async def test_handler_failure_under_limit_does_not_dlq(self):
+    async def test_handle_with_retry_is_removed(self):
+        """The dead, broken retry path (referenced a nonexistent
+        ``BusEvent.message_id``) must not exist — DLQ lives in EventBus now."""
         from src.services.worker import StreamConsumerManager
 
-        settings = make_mock_settings(neo4j_url="")
-        manager = StreamConsumerManager(settings)
-
-        mock_redis = AsyncMock()
-        mock_redis.incr = AsyncMock(return_value=2)  # 2nd attempt
-        mock_redis.expire = AsyncMock()
-
-        mock_dlq = AsyncMock()
-
-        event = MagicMock()
-        event.payload = {"event_id": "evt_test"}
-        event.user_id = "usr_01JTEST00000000000000000000"
-
-        await manager._handle_with_retry(
-            handler=AsyncMock(side_effect=Exception("boom")),
-            event=event,
-            redis=mock_redis,
-            dlq=mock_dlq,
-            bus=AsyncMock(),
-            stream="test_stream",
-            group="test_group",
-        )
-        mock_dlq.enqueue.assert_not_called()
+        assert not hasattr(StreamConsumerManager, "_handle_with_retry")
 
 
 class TestEventProcessorDLQ:

@@ -127,8 +127,15 @@ class StreamConsumerManager:
         logger.info("StreamConsumerManager stopped")
 
     async def _consumer_loop(self, bus, stream: str, group: str, handler) -> None:
-        """Independent loop for one consumer group with concurrency semaphore."""
+        """Independent loop for one consumer group with concurrency semaphore.
+
+        Retry + dead-letter handling lives in ``EventBus.subscribe`` (XAUTOCLAIM
+        reclaim of stale pending messages, then dead-letter after
+        ``DLQ_MAX_DELIVERIES``). We supply ``on_dead_letter`` so exhausted
+        messages are durably captured in the DLQ rather than logged and dropped.
+        """
         sem = asyncio.Semaphore(self.HANDLER_CONCURRENCY)
+        on_dead_letter = self._build_dead_letter_handler(group)
         while self._running:
             try:
                 async with sem:
@@ -139,60 +146,53 @@ class StreamConsumerManager:
                         handler,
                         count=10,
                         block_ms=2000,
+                        on_dead_letter=on_dead_letter,
                     )
             except Exception:
                 logger.warning("Consumer %s error on %s", group, stream, exc_info=True)
                 await asyncio.sleep(1)
 
-    async def _handle_with_retry(
-        self,
-        handler,
-        event,
-        redis,
-        dlq,
-        bus,
-        stream: str,
-        group: str,
-    ) -> None:
-        """Wrap handler with retry tracking. After 3 failures -> DLQ."""
-        event_id = event.payload.get("event_id", "unknown")
-        retry_key = f"jarvis:worker:retry:{event_id}"
+    def _build_dead_letter_handler(self, group: str):
+        """Return an ``on_dead_letter`` callback bound to this consumer group."""
 
-        try:
-            await handler(event)
-            # Success — clear retry counter
-            if redis:
-                await redis.delete(retry_key)
-        except Exception as exc:
-            attempts = 0
-            if redis:
-                attempts = await redis.incr(retry_key)
-                await redis.expire(retry_key, 3600)
-            else:
-                attempts = 1
+        async def _on_dead_letter(ctx) -> None:
+            await self._persist_dead_letter(group, ctx)
 
-            if attempts > 3 and dlq:
-                logger.error(
-                    "Event %s exhausted %d retries, moving to DLQ",
-                    event_id,
-                    attempts,
-                )
-                await dlq.enqueue(
-                    user_id=event.user_id,
-                    operation_type=f"worker_{group}",
-                    error_type=type(exc).__name__,
-                    error_message=str(exc)[:500],
-                    payload={"event_id": event_id, "group": group},
-                )
-                if bus:
-                    await bus.ack(stream, group, event.message_id)
-            else:
-                logger.warning(
-                    "Handler failed for %s (attempt %d): %s",
-                    event_id,
-                    attempts,
-                    exc,
-                )
+        return _on_dead_letter
+
+    async def _persist_dead_letter(self, group: str, ctx) -> None:
+        """Capture an exhausted message in the dead-letter queue.
+
+        ``ctx.data`` is the raw stream entry (parsing may have been the failure),
+        so we read ids defensively and never re-raise out of the callback.
+        """
+        from src.services.dead_letter import DeadLetterService
+
+        data = ctx.data if isinstance(ctx.data, dict) else {}
+        user_id = data.get("user_id", "")
+        event_id = data.get("event_id", "")
+        # The event now carries workspace_id directly; prefer it. Fall back to
+        # resolving from user_id only when the raw entry lacks a workspace.
+        workspace_id = data.get("workspace_id", "")
+
+        factory = get_session_factory()
+        async with factory() as db:
+            if not workspace_id and user_id:
+                try:
+                    workspace_id = await resolve_workspace_id(db, user_id)
+                except Exception:
+                    workspace_id = ""
+            dlq = DeadLetterService(db)
+            await dlq.enqueue(
+                user_id=user_id,
+                operation_type=f"worker_{group}",
+                error_type=type(ctx.error).__name__ if ctx.error else "UnknownError",
+                error_message=str(ctx.error) if ctx.error else "handler failed",
+                source_id=event_id or None,
+                payload={"event_id": event_id, "group": group, "stream": ctx.stream},
+                workspace_id=workspace_id,
+            )
+            await db.commit()
 
     async def stop(self) -> None:
         self._running = False
