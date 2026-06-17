@@ -82,6 +82,24 @@ test("dismiss confirmation calls the API and removes the surface from the store"
   expect(useSurfaceStore.getState().surfaces.find((s) => s.id === "srf_x")).toBeUndefined();
 });
 
+test("a failed dismiss keeps the surface and re-enables the control", async () => {
+  vi.mocked(dismissInsight).mockRejectedValueOnce(new Error("network"));
+  useSurfaceStore.getState().addSurface({
+    id: "srf_x",
+    kind: "proactive_insight",
+  } as unknown as WorkspaceSurface);
+
+  render(<InsightSurface surfaceId="srf_x" insightData={insight()} />);
+
+  await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+  await userEvent.click(screen.getByRole("button", { name: "Yes, Dismiss" }));
+
+  await waitFor(() => expect(dismissInsight).toHaveBeenCalledWith("srf_x"));
+  // API failed → the surface must NOT be removed, and the control returns to "Dismiss".
+  expect(useSurfaceStore.getState().surfaces.find((s) => s.id === "srf_x")).toBeDefined();
+  expect(await screen.findByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+});
+
 test("hidden dismiss control when dismissal is unavailable", () => {
   render(
     <InsightSurface surfaceId="srf_x" insightData={insight({ dismiss_available: false })} />,

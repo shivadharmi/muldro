@@ -69,8 +69,13 @@ def test_dangerous_capability_tools_require_approval():
     """Headline invariant: a high/critical *capability* forces approval on every tool that
     maps to it, even when the tool's own risk_level diverges downward.
 
-    This is what makes the intentional tool<capability risk divergence safe: a downward
-    divergence can never drop a dangerous capability out of the approval gate.
+    This pins a *catalog* invariant (and the degraded fallback gate in
+    graph_executor's ``elif not self._trust_engine`` branch, which consults
+    ``requires_approval`` directly). The live approval decision on the autonomous path is
+    the TrustEngine 4×4 matrix, which keys off runtime RiskAssessor output, not this flag —
+    that gate is exercised elsewhere. The value here: a downward tool<capability risk
+    divergence can never silently clear the ``requires_approval`` seed for a dangerous
+    capability.
     """
     for name, capability, _risk, requires_approval in _all_tools():
         meta = CAPABILITY_CATALOG.get(capability)
