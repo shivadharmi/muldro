@@ -57,14 +57,18 @@ def main():
             try:
                 from src.models.database import get_session_factory
                 from src.orchestrator.jarvis import JarvisOrchestrator
-                from src.runtime import build as build_runtime
+                from src.runtime import build_shared
                 from src.tools import intelligence_server
 
                 db_factory = get_session_factory()
 
                 async def _build():
-                    svc_db = db_factory()
-                    services = build_runtime(settings, svc_db)
+                    # Session-free shared services; DB-bound services are built
+                    # per operation against a fresh session. The scheduler runs
+                    # perception cycles concurrently (asyncio.gather), so the
+                    # worker orchestrator must NOT hold a shared long-lived
+                    # AsyncSession either (P2 #4).
+                    services = build_shared(settings)
                     intelligence_server.configure(db_factory, settings, services)
 
                     return JarvisOrchestrator(

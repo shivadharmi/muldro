@@ -71,13 +71,13 @@ async def get_briefing(
 
     date: 'today' or ISO date string (YYYY-MM-DD)
     """
-    async with _get_db():
+    async with _get_db() as db:
         try:
             from datetime import date as date_type
 
             await ctx.report_progress(0, 3, "Loading briefing data...")
             briefing_date = date_type.today() if date == "today" else date_type.fromisoformat(date)
-            presenter = _shared._services.presenter
+            presenter = _shared.request_services(db).presenter
             await ctx.report_progress(1, 3, "Generating briefing...")
             briefing = await presenter.generate_briefing(
                 user_id, briefing_date, workspace_id=workspace_id

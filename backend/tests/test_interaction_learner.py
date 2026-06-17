@@ -256,15 +256,20 @@ async def test_orchestrator_initializes_learner_when_memory_service_present(mock
 
 @patch("src.orchestrator.jarvis.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_orchestrator_skips_learner_when_no_memory_service(mock_get_client):
-    """Verify JarvisOrchestrator does not create learner when memory_service is None."""
+async def test_orchestrator_creates_learner_without_container_memory_service(mock_get_client):
+    """Learner is created from db_factory alone (P2 #4).
+
+    The learner extracts memories via db_factory (per-op sessions), so it must
+    work in the API/shared-container path where the container carries no
+    DB-bound memory_service. Only an absent db_factory disables it.
+    """
     from src.orchestrator.jarvis import JarvisOrchestrator
     from src.orchestrator.services import ServiceContainer
 
     mock_client = MagicMock()
     mock_get_client.return_value = mock_client
 
-    services = ServiceContainer(memory_service=None)
+    services = ServiceContainer(memory_service=None)  # shared-container shape
     settings = make_mock_settings()
     db_factory = MagicMock()
 
@@ -274,4 +279,4 @@ async def test_orchestrator_skips_learner_when_no_memory_service(mock_get_client
         services=services,
     )
 
-    assert orch._interaction_learner is None
+    assert orch._interaction_learner is not None

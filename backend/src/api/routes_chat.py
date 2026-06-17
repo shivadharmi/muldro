@@ -49,21 +49,20 @@ class ChatRequest(BaseModel):
 
 
 def _build_orchestrator(settings: Settings):
-    """Build orchestrator with all services for the API process."""
+    """Build the process-wide orchestrator with session-free shared services.
+
+    The orchestrator holds only the shared singletons (``build_shared``); every
+    DB-bound service is built per request against a fresh ``AsyncSession`` via
+    ``JarvisOrchestrator._request_services``. This avoids sharing one
+    long-lived session across concurrent chat requests (P2 #4).
+    """
     from src.models.database import get_session_factory
     from src.orchestrator.jarvis import JarvisOrchestrator
-    from src.runtime import build as build_runtime
+    from src.runtime import build_shared
     from src.tools import intelligence_server
 
     db_factory = get_session_factory()
-
-    # Long-lived session for services that hold a db reference.
-    # These persist for the orchestrator lifetime (one per API process).
-    # Stored as module-level so it can be closed during app shutdown.
-    svc_db = db_factory()
-    _module_svc_db_ref.append(svc_db)
-
-    svc = build_runtime(settings, svc_db)
+    svc = build_shared(settings)
     intelligence_server.configure(db_factory, settings, svc)
 
     return JarvisOrchestrator(
@@ -75,7 +74,6 @@ def _build_orchestrator(settings: Settings):
 
 # Lazy singleton — created on first request
 _orchestrator = None
-_module_svc_db_ref: list = []  # holds the long-lived session for shutdown cleanup
 
 
 async def _get_orchestrator(settings: Settings):

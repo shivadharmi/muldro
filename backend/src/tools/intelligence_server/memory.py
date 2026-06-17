@@ -219,15 +219,17 @@ async def build_context(
     Returns assembled context from entities, memories, goals,
     and artifacts.
     """
-    async with _get_db():
+    async with _get_db() as db:
         try:
             from src.services.context_builder import ContextBuilder
 
             await ctx.report_progress(0, 4, "Initializing context builder...")
+            svc = _shared.request_services(db)
             builder = ContextBuilder(
-                world_model=_shared._services.world_model,
-                memory_service=_shared._services.memory_service,
-                artifact_store=_shared._services.artifact_store,
+                world_model=svc.world_model,
+                memory_service=svc.memory_service,
+                artifact_store=svc.artifact_store,
+                db=db,
             )
             await ctx.report_progress(1, 4, "Gathering entities and memories...")
             pack = await builder.build(

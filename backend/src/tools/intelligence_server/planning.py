@@ -145,9 +145,9 @@ async def evaluate_policy(
 
     Returns: auto_execute, approval_required, or blocked — with reasoning.
     """
-    async with _get_db():
+    async with _get_db() as db:
         try:
-            governor = _shared._services.governor
+            governor = _shared.request_services(db).governor
             result = await governor.evaluate_plan(plan_id, user_id, workspace_id=workspace_id)
             return result.model_dump()
         except Exception as e:
@@ -191,7 +191,7 @@ async def approve_action(
             await db.commit()
 
             # Log to audit
-            audit = _shared._services.audit
+            audit = _shared.request_services(db).audit
             if audit:
                 await audit.log(
                     user_id=user_id,

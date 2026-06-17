@@ -68,7 +68,7 @@ async def ingest_event(
                 raw_payload=None,
             )
 
-            processor = _shared._services.event_processor
+            processor = _shared.request_services(db).event_processor
             result = await processor.process(user_id, raw, workspace_id=workspace_id)
             await db.commit()
 

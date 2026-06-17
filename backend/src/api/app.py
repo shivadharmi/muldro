@@ -279,16 +279,9 @@ def create_app() -> FastAPI:
         except Exception:
             pass
 
-        # Shutdown: close long-lived orchestrator DB session
-        try:
-            from src.api.routes_chat import _module_svc_db_ref
-
-            for db_ref in _module_svc_db_ref:
-                await db_ref.close()
-            _module_svc_db_ref.clear()
-            logger.info("Orchestrator DB sessions closed")
-        except Exception:
-            pass
+        # The orchestrator no longer holds a long-lived DB session — DB-bound
+        # services are built per request (P2 #4), so there is nothing to close
+        # here on shutdown.
 
         # Shutdown: dispose DB engine pool (returns all connections)
         try:

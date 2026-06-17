@@ -227,7 +227,7 @@ class JarvisOrchestrator:
         self._settings = settings
         self._db_factory = db_factory
         self._services = services
-        self._system_capability_handler = SystemCapabilityHandler(db_factory, services)
+        self._system_capability_handler = SystemCapabilityHandler(db_factory, services, settings)
         self._client = get_anthropic_client(settings)
         self._trace_store = TraceStore(db_factory=db_factory)
         self._trace_manager = TraceManager(trace_store=self._trace_store)
@@ -247,12 +247,15 @@ class JarvisOrchestrator:
 
         self._circuit_breaker = AnthropicCircuitBreaker()
         # Interaction learning — async memory extraction from user messages
+        # The learner extracts memories via db_factory (per-op sessions), so it
+        # only needs the session-free vector_store from the shared container —
+        # not a DB-bound memory_service (which is None in the API/shared path).
         self._interaction_learner: InteractionLearner | None = None
-        if self._services.memory_service:
+        if db_factory is not None:
             self._interaction_learner = InteractionLearner(
                 settings=settings,
                 db_factory=db_factory,
-                vector_store=self._services.vector_store,
+                vector_store=self._services.vector_store if self._services else None,
                 redis=None,  # Populated lazily when event bus Redis is available
             )
         # Precompute haiku model ID for intent classification
@@ -260,6 +263,19 @@ class JarvisOrchestrator:
             self._haiku_model = BEDROCK_MODEL_TIERS["haiku"]
         else:
             self._haiku_model = MODEL_TIERS["haiku"]
+
+    def _request_services(self, db) -> ServiceContainer:
+        """Return a ServiceContainer whose DB-bound services use ``db``.
+
+        When a fully-built container was injected (tests, single-flow ``build``),
+        reuse it as-is. In the API path the orchestrator holds only the shared
+        session-free singletons (``build_shared``), so DB-bound services are
+        built per request here — this is what stops concurrent requests from
+        sharing one ``AsyncSession`` (P2 #4, reverses the old ADR §10).
+        """
+        from src.runtime import request_services
+
+        return request_services(self._services, self._settings, db)
 
     def _spawn_background(self, coro) -> None:
         """Launch a background task with lifecycle tracking (C2)."""
@@ -1597,6 +1613,7 @@ class JarvisOrchestrator:
                     "event_count": len(raw_events),
                     "plan_goal": perception_plan.goal if perception_plan else None,
                 },
+                workspace_id=workspace_id,
                 trace_id=trace.trace_id,
             )
 
@@ -1728,19 +1745,20 @@ class JarvisOrchestrator:
             from src.services.dead_letter import DeadLetterService
             from src.services.event_processor import EventProcessor
 
+            req = self._request_services(db)
             event_bus = await self._ensure_event_bus()
             dead_letter = DeadLetterService(db)
 
             processor = EventProcessor(
                 self._settings,
                 db,
-                world_model=self._services.world_model,
-                memory_service=self._services.memory_service,
+                world_model=req.world_model,
+                memory_service=req.memory_service,
                 dead_letter=dead_letter,
                 event_bus=event_bus,
-                notifier=self._services.notifier,
-                embedding_service=self._services.extras.get("embedding_service"),
-                vector_store=self._services.vector_store,
+                notifier=req.notifier,
+                embedding_service=req.extras.get("embedding_service"),
+                vector_store=req.vector_store,
             )
             for raw in raw_events:
                 try:
@@ -1864,19 +1882,22 @@ class JarvisOrchestrator:
                 "briefing_generated",
                 user_id,
                 {"trace_id": trace.trace_id},
+                workspace_id=workspace_id,
                 trace_id=trace.trace_id,
             )
 
             # B3: Deliver briefing to user via notifications + workspace surface
             try:
-                if self._services.notifier:
-                    await self._services.notifier.notify(
-                        user_id=user_id,
-                        notification_type="briefing",
-                        title="Daily Briefing",
-                        body=str(result)[:500],
-                        workspace_id=workspace_id,
-                    )
+                async with self._db_factory() as db:
+                    req = self._request_services(db)
+                    if req.notifier:
+                        await req.notifier.notify(
+                            user_id=user_id,
+                            notification_type="briefing",
+                            title="Daily Briefing",
+                            body=str(result)[:500],
+                            workspace_id=workspace_id,
+                        )
                 await self._push_workspace_surface(
                     PlanOutput(
                         goal="Daily Briefing",
@@ -1936,7 +1957,12 @@ class JarvisOrchestrator:
         return self._event_bus
 
     async def _publish_event(
-        self, event_type: str, user_id: str, payload: dict, trace_id: str | None = None
+        self,
+        event_type: str,
+        user_id: str,
+        payload: dict,
+        workspace_id: str = "",
+        trace_id: str | None = None,
     ) -> None:
         """Publish an agent action event to the event bus (best-effort)."""
         try:
@@ -1944,9 +1970,11 @@ class JarvisOrchestrator:
             if event_bus is None:
                 return
 
-            stream = event_bus.agent_stream(user_id)
+            stream = event_bus.agent_stream(workspace_id)
             metadata = {"trace_id": trace_id} if trace_id else {}
-            await event_bus.publish(stream, event_type, payload, user_id, metadata)
+            await event_bus.publish(
+                stream, event_type, payload, user_id, workspace_id=workspace_id, metadata=metadata
+            )
         except Exception:
             logger.debug("Failed to publish event %s to bus", event_type, exc_info=True)
 
@@ -2482,8 +2510,8 @@ class JarvisOrchestrator:
             sections.append(integration_ctx)
 
         try:
-            svc = self._services
             async with self._db_factory() as db:
+                svc = self._request_services(db)
                 builder = ContextBuilder(
                     world_model=svc.world_model,
                     memory_service=svc.memory_service,
@@ -3001,7 +3029,9 @@ class JarvisOrchestrator:
             tool.backend,
             tool.server or "default",
         )
-        await self._publish_event("tool.started", user_id, {"tool": tool_name})
+        await self._publish_event(
+            "tool.started", user_id, {"tool": tool_name}, workspace_id=workspace_id
+        )
 
         try:
             match backend:
@@ -3045,7 +3075,9 @@ class JarvisOrchestrator:
                 case _:
                     result = {"error": f"Unknown backend '{tool.backend}' for tool '{tool_name}'"}
 
-            await self._publish_event("tool.completed", user_id, {"tool": tool_name})
+            await self._publish_event(
+                "tool.completed", user_id, {"tool": tool_name}, workspace_id=workspace_id
+            )
             return result
         except Exception as e:
             logger.warning("[mcp] %s FAILED: %s", tool_name, e)
@@ -3053,6 +3085,7 @@ class JarvisOrchestrator:
                 "tool.failed",
                 user_id,
                 {"tool": tool_name, "error": str(e)[:200]},
+                workspace_id=workspace_id,
             )
             # Tool-result error is persisted to message metadata + streamed to the
             # browser — keep it generic. Full detail is logged above and in the

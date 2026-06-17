@@ -26,9 +26,21 @@ logger = logging.getLogger(__name__)
 class SystemCapabilityHandler:
     """Route and execute ``system.*`` capability steps against the data layer."""
 
-    def __init__(self, db_factory, services: ServiceContainer):
+    def __init__(self, db_factory, services: ServiceContainer, settings=None):
         self._db_factory = db_factory
         self._services = services
+        self._settings = settings
+
+    def _request_services(self, db) -> ServiceContainer:
+        """DB-bound services for ``db``; reuse an injected container when present.
+
+        Mirrors ``JarvisOrchestrator._request_services`` — in the API path the
+        container holds only session-free singletons, so DB-bound services are
+        built per request rather than sharing one ``AsyncSession`` (P2 #4).
+        """
+        from src.runtime import request_services
+
+        return request_services(self._services, self._settings, db)
 
     async def _handle_set_goal(
         self,
@@ -39,17 +51,18 @@ class SystemCapabilityHandler:
         workspace_id: str,
     ) -> dict:
         """Store a goal as a memory via MemoryService."""
-        memory_svc = self._services.memory_service
-        if not memory_svc:
-            return {"status": "error", "error": "Memory service unavailable"}
-
         title = goal_text or reasoning or "Untitled goal"
-        memory_id = await memory_svc.store_goal_memory(
-            user_id=user_id,
-            workspace_id=workspace_id,
-            title=title,
-            priority=priority,
-        )
+        async with self._db_factory() as db:
+            memory_svc = self._request_services(db).memory_service
+            if not memory_svc:
+                return {"status": "error", "error": "Memory service unavailable"}
+            memory_id = await memory_svc.store_goal_memory(
+                user_id=user_id,
+                workspace_id=workspace_id,
+                title=title,
+                priority=priority,
+            )
+            await db.commit()
         logger.info("Goal stored as memory %s: %s", memory_id, title)
         return {"status": "created", "memory_id": memory_id, "title": title}
 
@@ -65,20 +78,21 @@ class SystemCapabilityHandler:
         if not instruction:
             return {"status": "error", "error": "No instruction spec provided"}
 
-        memory_svc = self._services.memory_service
-        if not memory_svc:
-            return {"status": "error", "error": "Memory service unavailable"}
-
         inst_text = instruction.get("instruction_text", instruction_text)
         inst_type = instruction.get("instruction_type", "preference")
 
         # Store as a preference memory via public API
-        memory_id = await memory_svc.store_instruction_memory(
-            user_id=user_id,
-            workspace_id=workspace_id,
-            instruction_text=inst_text,
-            instruction_type=inst_type,
-        )
+        async with self._db_factory() as db:
+            memory_svc = self._request_services(db).memory_service
+            if not memory_svc:
+                return {"status": "error", "error": "Memory service unavailable"}
+            memory_id = await memory_svc.store_instruction_memory(
+                user_id=user_id,
+                workspace_id=workspace_id,
+                instruction_text=inst_text,
+                instruction_type=inst_type,
+            )
+            await db.commit()
 
         result: dict = {
             "status": "created",
@@ -196,17 +210,18 @@ class SystemCapabilityHandler:
 
     async def _handle_add_to_brief(self, text: str, user_id: str, workspace_id: str) -> dict:
         """Store a briefing item as a memory so the next briefing includes it."""
-        memory_svc = self._services.memory_service
-        if not memory_svc:
-            return {"status": "error", "error": "Memory service unavailable"}
-
         text = text or "Briefing item"
         try:
-            memory_id = await memory_svc.store_briefing_memory(
-                user_id=user_id,
-                workspace_id=workspace_id,
-                text=text,
-            )
+            async with self._db_factory() as db:
+                memory_svc = self._request_services(db).memory_service
+                if not memory_svc:
+                    return {"status": "error", "error": "Memory service unavailable"}
+                memory_id = await memory_svc.store_briefing_memory(
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    text=text,
+                )
+                await db.commit()
             logger.info("Briefing item stored as memory %s: %s", memory_id, text[:80])
             return {"status": "stored", "memory_id": memory_id, "text": text}
         except Exception as e:

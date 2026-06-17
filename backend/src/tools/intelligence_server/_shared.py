@@ -40,3 +40,16 @@ async def _get_db() -> AsyncGenerator[AsyncSession, None]:
         raise RuntimeError("Intelligence server not configured. Call configure() first.")
     async with _db_factory() as session:
         yield session
+
+
+def request_services(db):
+    """Return DB-bound services for the per-request session ``db``.
+
+    Reuse the configured container when it already carries DB-bound services
+    (tests / single-flow ``build``); otherwise build them per request from the
+    shared session-free singletons. This keeps MCP tool calls from operating a
+    long-lived, cross-request ``AsyncSession`` (P2 #4).
+    """
+    from src.runtime import request_services as _request_services
+
+    return _request_services(_services, _settings, db)
