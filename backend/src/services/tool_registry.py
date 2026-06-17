@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
-from src.models.tool_definitions import ToolDefinition
+from src.models.tool_definitions import ToolBackend, ToolDefinition
 from src.tools.catalog import EXTERNAL_TOOL_SEEDS, INTERNAL_TOOLS
 
 logger = logging.getLogger(__name__)
@@ -69,7 +69,7 @@ class ToolRegistry:
             # _special-server tools (report_governor_verdict) are inline-dispatched,
             # not MCP calls — model that as a distinct backend so dispatch can match on
             # it directly (mirrors the "_composite" server → "composite" backend below).
-            backend = "special" if tool.server == "_special" else "internal_mcp"
+            backend = ToolBackend.SPECIAL if tool.server == "_special" else ToolBackend.INTERNAL_MCP
             source = "internal"
             server = tool.server
             capability = tool.capability
@@ -142,7 +142,9 @@ class ToolRegistry:
                 continue
             seen.add(name)
 
-            backend = "composite" if seed.server == "_composite" else "external_mcp"
+            backend = (
+                ToolBackend.COMPOSITE if seed.server == "_composite" else ToolBackend.EXTERNAL_MCP
+            )
             source = "seed"
             server = seed.server
             capability = seed.capability

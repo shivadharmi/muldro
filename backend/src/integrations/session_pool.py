@@ -244,7 +244,7 @@ class UserMCPSessionPool:
             from ulid import ULID
 
             from src.models.database import get_session_factory
-            from src.models.tool_definitions import ToolDefinition
+            from src.models.tool_definitions import ToolBackend, ToolDefinition
             from src.services.tool_registry import ToolRegistry
 
             async with get_session_factory()() as db:
@@ -264,7 +264,7 @@ class UserMCPSessionPool:
                             workspace_id=workspace_id or None,
                             name=t.name,
                             server=server_name,
-                            backend="external_mcp",
+                            backend=ToolBackend.EXTERNAL_MCP,
                             source="discovered",
                             capability=None,
                             risk_level="medium",

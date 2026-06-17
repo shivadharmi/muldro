@@ -26,6 +26,7 @@ from src.errors import (
     new_correlation_id,
 )
 from src.middleware.observability import get_correlation_id
+from src.models.tool_definitions import ToolBackend
 from src.orchestrator.agent_loop import (
     LoopAgentStart,
     LoopDone,
@@ -2980,10 +2981,18 @@ class JarvisOrchestrator:
             logger.warning("[mcp] tool disabled: %s", tool_name)
             return {"error": f"Tool '{tool_name}' is disabled", "blocked": True}
 
+        # Resolve the stored backend string to the typed dispatch discriminator.
+        # An unrecognized value (e.g. a future or garbled backend) coerces to None
+        # and falls through to the match's default arm rather than raising.
+        try:
+            backend = ToolBackend(tool.backend)
+        except ValueError:
+            backend = None
+
         # "special" backend (report_governor_verdict) is inline-dispatched: input is
         # passed through as-is with no MCP call and, by design, no tool.started/completed
         # events — it carries the governor's structured verdict, not a side-effecting call.
-        if tool.backend == "special":
+        if backend is ToolBackend.SPECIAL:
             return tool_input
 
         logger.info(
@@ -2995,8 +3004,8 @@ class JarvisOrchestrator:
         await self._publish_event("tool.started", user_id, {"tool": tool_name})
 
         try:
-            match tool.backend:
-                case "internal_mcp":
+            match backend:
+                case ToolBackend.INTERNAL_MCP:
                     # Intelligence server tools are workspace-scoped and need
                     # user_id/workspace_id for DB queries. Communication server
                     # tools are stateless delivery tools — injecting these fields
@@ -3012,7 +3021,7 @@ class JarvisOrchestrator:
                         enriched_input,
                         server_prefix=tool.server,
                     )
-                case "external_mcp":
+                case ToolBackend.EXTERNAL_MCP:
                     # External MCP servers do not accept workspace_id in tool input —
                     # it is passed as a keyword arg for session routing only.
                     from src.connectors.mcp_bridge import call_mcp_tool
@@ -3023,7 +3032,7 @@ class JarvisOrchestrator:
                         user_id=user_id,
                         workspace_id=workspace_id,
                     )
-                case "composite":
+                case ToolBackend.COMPOSITE:
                     # Composite tools are Jarvis-internal, receive workspace_id
                     if workspace_id and "workspace_id" not in tool_input:
                         tool_input = {**tool_input, "workspace_id": workspace_id}
