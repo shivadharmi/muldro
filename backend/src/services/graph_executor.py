@@ -106,7 +106,9 @@ async def create_graph_executor(
 
     event_bus: EventBus | None = None
     try:
-        event_bus = EventBus(settings.redis_url)
+        import redis.asyncio as aioredis
+
+        event_bus = EventBus(aioredis.from_url(settings.redis_url, decode_responses=True))
     except Exception:
         logger.debug("EventBus unavailable for GraphExecutor", exc_info=True)
 
