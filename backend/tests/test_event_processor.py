@@ -395,14 +395,39 @@ async def test_evaluate_triggers_same_workspace_fires(settings):
     assert trigger.fire_count == 1
 
 
+def test_normalized_event_uniqueness_is_workspace_scoped():
+    """SVC-P3-3 follow-up: NormalizedEvent uniqueness is per
+    (workspace_id, idempotency_key), NOT global on idempotency_key alone.
+
+    make_idempotency_key has no workspace/user component, so two workspaces
+    connecting the SAME external account mint identical keys. A global unique
+    constraint would reject the second workspace's event as a cross-tenant
+    duplicate; the composite constraint isolates them.
+    """
+    from sqlalchemy import UniqueConstraint
+
+    from src.models.events import NormalizedEvent
+
+    unique_col_sets = {
+        tuple(c.name for c in con.columns)
+        for con in NormalizedEvent.__table__.constraints
+        if isinstance(con, UniqueConstraint)
+    }
+    # Composite (workspace_id, idempotency_key) present; no global single-column
+    # unique on idempotency_key alone.
+    assert ("workspace_id", "idempotency_key") in unique_col_sets
+    assert ("idempotency_key",) not in unique_col_sets
+    assert not NormalizedEvent.__table__.c.idempotency_key.unique
+
+
 # ── SVC-P3-3 — dedup/idempotency queries must be workspace-scoped ───────────
 #
-# NormalizedEvent.idempotency_key is globally unique today, so adding a
-# workspace_id predicate is behavior-identical. It is defense-in-depth: if a
-# future key scheme were ever non-unique, an un-scoped lookup could read or
-# dedup an event across a tenant boundary. The invariant below is intentionally
-# structural (any query touching idempotency_key must also be workspace-scoped)
-# so it covers every current and future dedup site uniformly.
+# NormalizedEvent uniqueness is now composite (workspace_id, idempotency_key)
+# rather than global, because make_idempotency_key carries no workspace
+# component. An un-scoped lookup could read or dedup an event across a tenant
+# boundary, so every dedup query must include workspace_id. The invariant below
+# is intentionally structural (any query touching idempotency_key must also be
+# workspace-scoped) so it covers every current and future dedup site uniformly.
 
 
 def _safe_result_mock() -> MagicMock:
