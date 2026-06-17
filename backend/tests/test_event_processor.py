@@ -393,3 +393,85 @@ async def test_evaluate_triggers_same_workspace_fires(settings):
 
     processor._execute_trigger_action.assert_awaited_once()
     assert trigger.fire_count == 1
+
+
+# ── SVC-P3-3 — dedup/idempotency queries must be workspace-scoped ───────────
+#
+# NormalizedEvent.idempotency_key is globally unique today, so adding a
+# workspace_id predicate is behavior-identical. It is defense-in-depth: if a
+# future key scheme were ever non-unique, an un-scoped lookup could read or
+# dedup an event across a tenant boundary. The invariant below is intentionally
+# structural (any query touching idempotency_key must also be workspace-scoped)
+# so it covers every current and future dedup site uniformly.
+
+
+def _safe_result_mock() -> MagicMock:
+    """Result stub that satisfies scalar_one_or_none / scalars().all() / .all()."""
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = None
+    result.scalars.return_value.all.return_value = []
+    result.all.return_value = []
+    return result
+
+
+def _idempotency_query_sqls(db_mock: MagicMock) -> list[str]:
+    """Compiled SQL for every execute() call whose query references idempotency_key."""
+    sqls = []
+    for call in db_mock.execute.await_args_list:
+        stmt = call[0][0]
+        compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+        if "idempotency_key" in compiled:
+            sqls.append(compiled)
+    return sqls
+
+
+@patch("src.services.event_processor.get_anthropic_client")
+@pytest.mark.asyncio
+async def test_process_inner_dedup_query_is_workspace_scoped(mock_get_client, settings):
+    """The single-event dedup lookup must filter by workspace_id, not key alone."""
+    db = MagicMock()
+    db.add = MagicMock()
+    db.commit = AsyncMock()
+    db.flush = AsyncMock()
+    db.execute = AsyncMock(return_value=_safe_result_mock())
+
+    scores = {"importance_score": 0.5, "urgency_score": 0.5, "confidence_score": 0.9}
+    mock_client = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=_make_claude_response(scores))
+    mock_get_client.return_value = mock_client
+
+    processor = EventProcessor(settings=settings, db=db)
+    await processor.process(make_raw_event(), TEST_USER_ID, workspace_id="ws_a")
+
+    sqls = _idempotency_query_sqls(db)
+    assert sqls, "expected at least one idempotency_key dedup query"
+    for sql in sqls:
+        assert "workspace_id" in sql, f"dedup query not workspace-scoped: {sql}"
+        assert "ws_a" in sql, f"dedup query did not bind the workspace: {sql}"
+
+
+@patch("src.services.event_processor.get_anthropic_client")
+@pytest.mark.asyncio
+async def test_batch_dedup_and_refetch_queries_are_workspace_scoped(mock_get_client, settings):
+    """Both the batch dedup lookup and the post-process re-fetch must be
+    workspace-scoped — they filter NormalizedEvent by idempotency_key."""
+    db = MagicMock()
+    db.add = MagicMock()
+    db.commit = AsyncMock()
+    db.flush = AsyncMock()
+    db.execute = AsyncMock(return_value=_safe_result_mock())
+
+    scores = {"importance_score": 0.5, "urgency_score": 0.5, "confidence_score": 0.9}
+    mock_client = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=_make_claude_response(scores))
+    mock_get_client.return_value = mock_client
+
+    processor = EventProcessor(settings=settings, db=db)
+    await processor._process_batch_chunk([make_raw_event()], TEST_USER_ID, "ws_a")
+
+    sqls = _idempotency_query_sqls(db)
+    # One dedup query + one post-process re-fetch, both touching idempotency_key.
+    assert len(sqls) >= 2, f"expected dedup + re-fetch queries, got {len(sqls)}"
+    for sql in sqls:
+        assert "workspace_id" in sql, f"batch query not workspace-scoped: {sql}"
+        assert "ws_a" in sql, f"batch query did not bind the workspace: {sql}"

@@ -156,7 +156,8 @@ class EventProcessor:
 
         existing = await self._db.execute(
             select(NormalizedEvent.event_id).where(
-                NormalizedEvent.idempotency_key == idempotency_key
+                NormalizedEvent.workspace_id == workspace_id,
+                NormalizedEvent.idempotency_key == idempotency_key,
             )
         )
         if existing.scalar_one_or_none():
@@ -584,7 +585,10 @@ class EventProcessor:
         # 1. Batch dedup check
         keys = [make_idempotency_key(r) for r in events]
         existing = await self._db.execute(
-            select(NormalizedEvent.idempotency_key).where(NormalizedEvent.idempotency_key.in_(keys))
+            select(NormalizedEvent.idempotency_key).where(
+                NormalizedEvent.workspace_id == workspace_id,
+                NormalizedEvent.idempotency_key.in_(keys),
+            )
         )
         existing_keys = {row[0] for row in existing.all()}
 
@@ -639,7 +643,10 @@ class EventProcessor:
             if key not in existing_keys:
                 try:
                     result_ = await self._db.execute(
-                        select(NormalizedEvent).where(NormalizedEvent.idempotency_key == key)
+                        select(NormalizedEvent).where(
+                            NormalizedEvent.workspace_id == workspace_id,
+                            NormalizedEvent.idempotency_key == key,
+                        )
                     )
                     ev = result_.scalar_one_or_none()
                     if ev:
