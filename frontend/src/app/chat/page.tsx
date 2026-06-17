@@ -9,7 +9,6 @@ import { SurfaceDetailModal } from "@/components/workspace/surface-detail-modal"
 import { useAuth } from "@/lib/auth";
 import { useJarvisWs } from "@/hooks/use-jarvis-ws";
 import { useSurfaceStore } from "@/stores/surface-store";
-import type { WorkspaceSurface } from "@/stores/surface-store";
 import { useCommandStore } from "@/stores/command-store";
 import { useWsActionStore } from "@/stores/ws-action-store";
 import { fetchConversationMessages, type ConversationMessage } from "@/lib/api";
@@ -17,6 +16,7 @@ import { formatApiError, type ParsedApiError } from "@/lib/api-error";
 import { useToast } from "@/components/ui/toast";
 import type { WorkspaceSurfacePush, SurfacePreview, SurfaceUpdate } from "@/lib/a2ui-types";
 import { normalizeSurfaceKind } from "@/lib/types/surfaces";
+import { sortSurfacesActiveFirst } from "@/lib/surface-merge";
 
 export default function ChatPage() {
   const { user } = useAuth();
@@ -236,15 +236,7 @@ export default function ChatPage() {
                 </span>
               </div>
 
-              {[...surfaces]
-                .sort((a, b) => {
-                  const isActive = (s: WorkspaceSurface) =>
-                    s.phase === "executing" || s.phase === "approval_needed" || s.phase === "planning";
-                  const aActive = isActive(a) ? 0 : 1;
-                  const bActive = isActive(b) ? 0 : 1;
-                  if (aActive !== bActive) return aActive - bActive;
-                  return b.created_at.localeCompare(a.created_at);
-                })
+              {sortSurfacesActiveFirst(surfaces)
                 .map((surface) => (
                   <SurfaceCard
                     key={surface.id}

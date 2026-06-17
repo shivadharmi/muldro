@@ -12,6 +12,7 @@ import { useJarvisWs } from "@/hooks/use-jarvis-ws";
 import { useSurfaceStore } from "@/stores/surface-store";
 import type { WorkspaceSurface } from "@/stores/surface-store";
 import { normalizeSurfaceKind } from "@/lib/types/surfaces";
+import { sortSurfacesActiveFirst } from "@/lib/surface-merge";
 import { useWsActionStore } from "@/stores/ws-action-store";
 import { formatApiError, type ParsedApiError } from "@/lib/api-error";
 import { useToast } from "@/components/ui/toast";
@@ -73,26 +74,12 @@ export default function WorkspacePage() {
     }));
   }, [workspaceData]);
 
-  // Merge REST + WS surfaces (WS wins on duplicate IDs)
+  // Merge REST + WS surfaces (WS wins on duplicate IDs), then order active-first.
   const allSurfaces = useMemo(() => {
     const map = new Map<string, WorkspaceSurface>();
     for (const s of restSurfaces) map.set(s.id, s);
     for (const s of wsSurfaces) map.set(s.id, s);
-    const merged = Array.from(map.values());
-
-    // Active executions first (executing or approval_needed), then by created_at desc
-    const isActive = (s: WorkspaceSurface) =>
-      s.phase === "executing" ||
-      s.phase === "approval_needed" ||
-      s.phase === "planning" ||
-      s.kind === "proactive_insight";
-    return merged.sort((a, b) => {
-      const aActive = isActive(a) ? 0 : 1;
-      const bActive = isActive(b) ? 0 : 1;
-      if (aActive !== bActive) return aActive - bActive;
-      const dateCompare = b.created_at.localeCompare(a.created_at);
-      return dateCompare !== 0 ? dateCompare : a.id.localeCompare(b.id);
-    });
+    return sortSurfacesActiveFirst(Array.from(map.values()));
   }, [restSurfaces, wsSurfaces]);
 
   const sourceCount = system?.observations
