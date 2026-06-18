@@ -10,14 +10,20 @@ caused ``uq_cursor_ws_user_source`` violations under concurrency.
 Workspace-scoping tests (TestCursorWorkspaceScoping) verify that the unique
 constraint key is ``(workspace_id, user_id, source)`` so a user who belongs
 to multiple workspaces cannot bleed cursor state across them.
+
+Atomic-ingest tests (TestAtomicIngestCursorAdvance) verify the P4 invariant:
+the cursor upsert is issued within the SAME db session/commit as the event
+loop, so the cursor only advances if ingestion reached completion.
 """
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy.dialects import postgresql
+
+from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID, make_mock_settings, make_raw_event
 
 
 def _compile(stmt) -> str:
@@ -273,3 +279,271 @@ class TestUserSettingsUpsert:
         assert "INSERT INTO USER_SETTINGS" in sql
         assert "ON CONFLICT" in sql
         assert "DO UPDATE" in sql
+
+
+class TestBuildCursorUpsertStmt:
+    """``JarvisOrchestrator._build_cursor_upsert_stmt`` is a pure builder."""
+
+    def test_returns_correct_sql_shape(self):
+        """The builder returns an INSERT … ON CONFLICT DO UPDATE statement
+        that targets ``uq_cursor_ws_user_source`` and includes workspace_id."""
+        from src.orchestrator.jarvis import JarvisOrchestrator
+
+        stmt = JarvisOrchestrator._build_cursor_upsert_stmt(
+            source="gmail",
+            user_id="usr_test",
+            workspace_id="ws_test",
+            new_cursor="hist_42",
+            cursor_type="history_id",
+        )
+        sql = _compile(stmt).upper()
+        assert "INSERT INTO OBSERVATION_CURSORS" in sql
+        assert "ON CONFLICT" in sql
+        assert "DO UPDATE" in sql
+        assert "UQ_CURSOR_WS_USER_SOURCE" in sql
+        assert "WORKSPACE_ID" in sql
+
+    def test_builder_is_deterministic(self):
+        """Two calls with the same args produce structurally identical SQL
+        (cursor_id differs via ULID but the rest of the shape is stable)."""
+        from src.orchestrator.jarvis import JarvisOrchestrator
+
+        def shape(stmt) -> str:
+            """Strip the ULID-containing cursor_id value before comparing."""
+            import re
+
+            sql = _compile(stmt).upper()
+            # Remove the cursor_id literal so ULIDs don't break equality
+            return re.sub(r"'CUR_[A-Z0-9]+'", "'CUR_PLACEHOLDER'", sql)
+
+        s1 = JarvisOrchestrator._build_cursor_upsert_stmt(
+            "gmail", "usr_x", "ws_x", "cursor_1", "opaque"
+        )
+        s2 = JarvisOrchestrator._build_cursor_upsert_stmt(
+            "gmail", "usr_x", "ws_x", "cursor_1", "opaque"
+        )
+        assert shape(s1) == shape(s2)
+
+
+def _make_ingest_mocks():
+    """Return a wired-up (orch, db, db_factory) triple for _ingest_raw_events tests."""
+    from src.orchestrator.jarvis import JarvisOrchestrator
+
+    captured_stmts: list = []
+
+    mock_db = MagicMock()
+    mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+    mock_db.__aexit__ = AsyncMock(return_value=False)
+    mock_db.execute = AsyncMock(side_effect=lambda stmt: captured_stmts.append(stmt))
+    mock_db.commit = AsyncMock()
+    mock_db.rollback = AsyncMock()
+    mock_db.add = MagicMock()
+
+    mock_factory = MagicMock(return_value=mock_db)
+
+    orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
+    orch._db_factory = mock_factory
+    orch._settings = make_mock_settings()
+
+    return orch, mock_db, mock_factory, captured_stmts
+
+
+class TestAtomicIngestCursorAdvance:
+    """P4: cursor upsert shares the ingestion unit of work.
+
+    Goal: "events ingested ⟹ cursor advanced" is a single gated code path.
+    """
+
+    @pytest.mark.asyncio
+    async def test_successful_ingest_advances_cursor_in_same_session(self):
+        """(a) Non-empty poll: ingest + cursor upsert both happen inside the
+        SAME db session (same mock_db.execute).  ``_update_cursor``'s own
+        db_factory is NOT called on the non-empty path."""
+        from src.orchestrator.jarvis import JarvisOrchestrator
+
+        orch, mock_db, mock_factory, captured_stmts = _make_ingest_mocks()
+
+        # Stub out the collaborators that _ingest_raw_events calls internally.
+        # EventProcessor / DeadLetterService are imported locally inside the
+        # method, so we must patch them at their source modules.
+        mock_processor = MagicMock()
+        mock_processor.process = AsyncMock(return_value="evt_001")
+
+        mock_req = MagicMock()
+        mock_req.world_model = MagicMock()
+        mock_req.memory_service = MagicMock()
+        mock_req.notifier = MagicMock()
+        mock_req.vector_store = MagicMock()
+        mock_req.extras = {}
+
+        with (
+            patch.object(orch, "_request_services", return_value=mock_req),
+            patch.object(orch, "_ensure_event_bus", new=AsyncMock(return_value=MagicMock())),
+            patch("src.services.event_processor.EventProcessor", return_value=mock_processor),
+            patch("src.services.dead_letter.DeadLetterService"),
+        ):
+            raw = make_raw_event()
+            await JarvisOrchestrator._ingest_raw_events(
+                orch,
+                [raw],
+                TEST_USER_ID,
+                TEST_WORKSPACE_ID,
+                source="gmail",
+                new_cursor="hist_99",
+                cursor_type="history_id",
+            )
+
+        # db_factory was called ONCE (the ingest session — not a second time for the cursor)
+        assert mock_factory.call_count == 1, (
+            "cursor advance must share the ingest session, not open a new one"
+        )
+
+        # The cursor upsert was issued on the shared db session
+        assert len(captured_stmts) == 1, "expected exactly one execute() call (the cursor upsert)"
+        sql = _compile(captured_stmts[0]).upper()
+        assert "INSERT INTO OBSERVATION_CURSORS" in sql
+        assert "ON CONFLICT" in sql
+        assert "UQ_CURSOR_WS_USER_SOURCE" in sql
+
+        # Exactly one commit — the trailing commit after the loop
+        mock_db.commit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_ingest_failure_before_loop_does_not_advance_cursor(self):
+        """(b) If the session construction / EventProcessor init raises before
+        the event loop, the cursor must NOT advance (no execute, no commit)."""
+        from src.orchestrator.jarvis import JarvisOrchestrator
+
+        orch, mock_db, mock_factory, captured_stmts = _make_ingest_mocks()
+
+        # Make _request_services explode — simulates a pre-loop failure
+        with patch.object(orch, "_request_services", side_effect=RuntimeError("db setup failed")):
+            with pytest.raises(RuntimeError, match="db setup failed"):
+                await JarvisOrchestrator._ingest_raw_events(
+                    orch,
+                    [make_raw_event()],
+                    TEST_USER_ID,
+                    TEST_WORKSPACE_ID,
+                    source="gmail",
+                    new_cursor="hist_99",
+                    cursor_type="history_id",
+                )
+
+        # No cursor write should have happened
+        assert len(captured_stmts) == 0, "cursor must not advance if pre-loop setup raises"
+        mock_db.commit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_empty_poll_path_still_advances_cursor(self):
+        """(c) Empty-poll path: ``_update_cursor`` is called (separate session)
+        and still issues the ON CONFLICT DO UPDATE for the cursor."""
+        from src.orchestrator.jarvis import JarvisOrchestrator
+
+        orch, mock_db, mock_factory, captured_stmts = _make_ingest_mocks()
+
+        await JarvisOrchestrator._update_cursor(
+            orch,
+            source="gmail",
+            user_id=TEST_USER_ID,
+            workspace_id=TEST_WORKSPACE_ID,
+            new_cursor="hist_77",
+            cursor_type="history_id",
+        )
+
+        assert mock_factory.call_count == 1
+        assert len(captured_stmts) == 1
+        sql = _compile(captured_stmts[0]).upper()
+        assert "INSERT INTO OBSERVATION_CURSORS" in sql
+        assert "ON CONFLICT" in sql
+        assert "UQ_CURSOR_WS_USER_SOURCE" in sql
+        mock_db.commit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_per_event_failure_sends_to_dlq_cursor_still_advances(self):
+        """(d) Per-event failure path: failed events land in DLQ but the loop
+        completes and the cursor IS advanced on the shared session."""
+        from src.orchestrator.jarvis import JarvisOrchestrator
+
+        orch, mock_db, mock_factory, captured_stmts = _make_ingest_mocks()
+
+        # EventProcessor.process raises for every event
+        mock_processor = MagicMock()
+        mock_processor.process = AsyncMock(side_effect=Exception("score api down"))
+
+        mock_dlq = MagicMock()
+        mock_dlq.enqueue = AsyncMock()
+
+        mock_req = MagicMock()
+        mock_req.world_model = MagicMock()
+        mock_req.memory_service = MagicMock()
+        mock_req.notifier = MagicMock()
+        mock_req.vector_store = MagicMock()
+        mock_req.extras = {}
+
+        with (
+            patch.object(orch, "_request_services", return_value=mock_req),
+            patch.object(orch, "_ensure_event_bus", new=AsyncMock(return_value=MagicMock())),
+            patch("src.services.event_processor.EventProcessor", return_value=mock_processor),
+            patch("src.services.dead_letter.DeadLetterService", return_value=mock_dlq),
+        ):
+            summaries = await JarvisOrchestrator._ingest_raw_events(
+                orch,
+                [make_raw_event()],
+                TEST_USER_ID,
+                TEST_WORKSPACE_ID,
+                source="gmail",
+                new_cursor="hist_55",
+                cursor_type="history_id",
+            )
+
+        # Summary reflects the failure
+        assert len(summaries) == 1
+        assert "ingest error" in summaries[0]
+
+        # DLQ enqueue was attempted
+        mock_dlq.enqueue.assert_awaited_once()
+
+        # Cursor upsert was still executed (loop completed, cursor advances)
+        assert len(captured_stmts) == 1
+        sql = _compile(captured_stmts[0]).upper()
+        assert "INSERT INTO OBSERVATION_CURSORS" in sql
+
+        # Single trailing commit
+        mock_db.commit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_ingest_without_cursor_params_does_not_execute_cursor_upsert(self):
+        """Backward-compat: calling _ingest_raw_events without new_cursor leaves
+        the cursor table untouched (no spurious execute calls)."""
+        from src.orchestrator.jarvis import JarvisOrchestrator
+
+        orch, mock_db, mock_factory, captured_stmts = _make_ingest_mocks()
+
+        mock_processor = MagicMock()
+        mock_processor.process = AsyncMock(return_value="evt_002")
+
+        mock_req = MagicMock()
+        mock_req.world_model = MagicMock()
+        mock_req.memory_service = MagicMock()
+        mock_req.notifier = MagicMock()
+        mock_req.vector_store = MagicMock()
+        mock_req.extras = {}
+
+        with (
+            patch.object(orch, "_request_services", return_value=mock_req),
+            patch.object(orch, "_ensure_event_bus", new=AsyncMock(return_value=MagicMock())),
+            patch("src.services.event_processor.EventProcessor", return_value=mock_processor),
+            patch("src.services.dead_letter.DeadLetterService"),
+        ):
+            await JarvisOrchestrator._ingest_raw_events(
+                orch,
+                [make_raw_event()],
+                TEST_USER_ID,
+                TEST_WORKSPACE_ID,
+                # no source / new_cursor passed
+            )
+
+        # No cursor statement should have been executed
+        assert len(captured_stmts) == 0, "no cursor write expected when new_cursor is not given"
+        # But commit still fires for the event loop
+        mock_db.commit.assert_awaited_once()

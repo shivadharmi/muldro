@@ -1401,13 +1401,18 @@ class JarvisOrchestrator:
                 await self._update_cursor(source, user_id, workspace_id, new_cursor, cursor_type)
                 return {"status": "completed", "source": source, "events": 0}
 
-            # Ingest raw events into normalized_events table
-            event_summaries = await self._ingest_raw_events(raw_events, user_id, workspace_id)
-
-            # Update the observation cursor immediately after ingestion so that
-            # downstream failures (Librarian, Planner) don't cause re-polling
-            # the same events on the next cycle.
-            await self._update_cursor(source, user_id, workspace_id, new_cursor, cursor_type)
+            # Ingest raw events into normalized_events table.
+            # The cursor upsert is folded into the ingest session so that
+            # "events ingested ⟹ cursor advanced" is a single gated commit —
+            # the cursor only advances if the event loop ran to completion.
+            event_summaries = await self._ingest_raw_events(
+                raw_events,
+                user_id,
+                workspace_id,
+                source=source,
+                new_cursor=new_cursor,
+                cursor_type=cursor_type,
+            )
 
             # Fetch full thread context for reply emails
             thread_contexts = await _fetch_thread_contexts(raw_events, user_id, workspace_id)
@@ -1762,10 +1767,69 @@ class JarvisOrchestrator:
             )
             return [], None, f"Poll failed for {source} ({error_code}): {e}", cursor_type
 
+    @staticmethod
+    def _build_cursor_upsert_stmt(
+        source: str,
+        user_id: str,
+        workspace_id: str,
+        new_cursor: str,
+        cursor_type: str,
+    ):
+        """Return a pg ``INSERT … ON CONFLICT DO UPDATE`` statement for the
+        observation cursor.  Both the ingest path and the empty-poll path use
+        this builder so the SQL shape is never duplicated.
+
+        The caller is responsible for executing the statement on its own
+        ``db`` session; this function performs no I/O.
+        """
+        from datetime import datetime, timezone
+
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+        from ulid import ULID
+
+        from src.models.observation_cursor import ObservationCursor
+
+        now = datetime.now(timezone.utc)
+        return (
+            pg_insert(ObservationCursor)
+            .values(
+                cursor_id=f"cur_{ULID()}",
+                user_id=user_id,
+                workspace_id=workspace_id,
+                source=source,
+                cursor_type=cursor_type,
+                cursor_value=new_cursor,
+                last_observation_at=now,
+            )
+            .on_conflict_do_update(
+                constraint="uq_cursor_ws_user_source",
+                set_={
+                    "cursor_value": new_cursor,
+                    "cursor_type": cursor_type,
+                    "last_observation_at": now,
+                },
+            )
+        )
+
     async def _ingest_raw_events(
-        self, raw_events: list, user_id: str, workspace_id: str
+        self,
+        raw_events: list,
+        user_id: str,
+        workspace_id: str,
+        *,
+        source: str = "",
+        new_cursor: str | None = None,
+        cursor_type: str = "opaque",
     ) -> list[str]:
-        """Ingest raw events into the event processor. Returns summary strings."""
+        """Ingest raw events into the event processor. Returns summary strings.
+
+        When *new_cursor* is provided the cursor upsert is executed inside the
+        **same** db session as the event loop, just before the final commit.
+        This makes "events ingested ⟹ cursor advanced" a single code path: the
+        cursor only advances if the loop ran to completion and the trailing
+        commit succeeds.  If the session or EventProcessor construction raises
+        before the loop, ``new_cursor`` is never written.
+        """
         summaries = []
         async with self._db_factory() as db:
             from src.services.dead_letter import DeadLetterService
@@ -1825,6 +1889,15 @@ class JarvisOrchestrator:
                         )
                     except Exception:
                         logger.debug("DLQ enqueue failed", exc_info=True)
+
+            # Fold the cursor advance into this session so it only commits if
+            # the event loop ran to completion (single gated code path).
+            if new_cursor and source:
+                stmt = self._build_cursor_upsert_stmt(
+                    source, user_id, workspace_id, new_cursor, cursor_type
+                )
+                await db.execute(stmt)
+
             await db.commit()
         return summaries
 
@@ -1841,37 +1914,17 @@ class JarvisOrchestrator:
         Uses a single ``INSERT ... ON CONFLICT DO UPDATE`` so concurrent
         perception cycles for the same ``(workspace_id, user_id, source)``
         cannot race on the ``uq_cursor_ws_user_source`` unique constraint.
+
+        This method is used by the **empty-poll path** so incremental sync
+        tokens (e.g. Gmail historyId, Calendar syncToken) advance even when
+        no new events were returned.  The non-empty-poll path folds the cursor
+        write directly into ``_ingest_raw_events`` instead.
         """
         if not new_cursor:
             return
         async with self._db_factory() as db:
-            from datetime import datetime, timezone
-
-            from sqlalchemy.dialects.postgresql import insert as pg_insert
-            from ulid import ULID
-
-            from src.models.observation_cursor import ObservationCursor
-
-            now = datetime.now(timezone.utc)
-            stmt = (
-                pg_insert(ObservationCursor)
-                .values(
-                    cursor_id=f"cur_{ULID()}",
-                    user_id=user_id,
-                    workspace_id=workspace_id,
-                    source=source,
-                    cursor_type=cursor_type,
-                    cursor_value=new_cursor,
-                    last_observation_at=now,
-                )
-                .on_conflict_do_update(
-                    constraint="uq_cursor_ws_user_source",
-                    set_={
-                        "cursor_value": new_cursor,
-                        "cursor_type": cursor_type,
-                        "last_observation_at": now,
-                    },
-                )
+            stmt = self._build_cursor_upsert_stmt(
+                source, user_id, workspace_id, new_cursor, cursor_type
             )
             await db.execute(stmt)
             await db.commit()
