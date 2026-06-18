@@ -109,8 +109,18 @@ class BackgroundTasksTickMixin:
                                 completed.status,
                             )
                     except Exception as e:
-                        # Rollback poisoned session before any further DB access
+                        # Rollback poisoned session before any further DB access.
                         await db.rollback()
+
+                        # rollback() expires ALL ORM instances (independent of
+                        # expire_on_commit). Reading run.* on the now-expired
+                        # `run` would trigger implicit lazy IO and raise
+                        # MissingGreenlet under async SQLAlchemy — silently
+                        # losing the retry bookkeeping. Re-fetch a fresh,
+                        # attached instance inside the async context first.
+                        refetched = await db.get(TaskRun, run_id)
+                        if refetched is not None:
+                            run = refetched
 
                         logger.warning(
                             "Background task %s failed: %s",

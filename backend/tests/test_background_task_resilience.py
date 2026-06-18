@@ -96,6 +96,7 @@ class TestBackgroundTaskFailure:
             return mock_step_result  # Step check
 
         mock_db.execute = mock_execute
+        mock_db.get = AsyncMock(return_value=run)  # re-fetch after rollback
 
         scheduler = SchedulerLoop(MagicMock(), orchestrator=MagicMock())
 
@@ -137,6 +138,8 @@ class TestBackgroundTaskFailure:
             return mock_step_result
 
         mock_db.execute = mock_execute
+        # After rollback the tick re-fetches the run; return the same row.
+        mock_db.get = AsyncMock(return_value=run)
 
         mock_executor = AsyncMock()
         mock_executor.execute_run = AsyncMock(side_effect=RuntimeError("Timeout"))
@@ -152,6 +155,51 @@ class TestBackgroundTaskFailure:
         assert run.retry_count == 1
         # Should stay pending for retry (not yet exhausted)
         assert run.status == "pending"
+
+    @patch("src.services.scheduler.get_session_factory")
+    async def test_retry_refetches_run_after_rollback(self, mock_factory_fn):
+        """After rollback (which expires ORM instances), the failure path must
+        re-fetch the run before mutating it. Reading an expired attribute on the
+        stale instance would raise MissingGreenlet in async SQLAlchemy and
+        silently drop the retry bookkeeping."""
+        from src.services.scheduler import SchedulerLoop
+
+        factory, mock_db = _mock_factory()
+        mock_factory_fn.return_value = factory
+
+        stale_run = _make_task_run(retry_count=0, max_retries=3)
+        fresh_run = _make_task_run(retry_count=0, max_retries=3)
+
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = [stale_run]
+        mock_step_result = MagicMock()
+        mock_step_result.scalar_one_or_none.return_value = "step_001"
+
+        call_count = 0
+
+        async def mock_execute(stmt):
+            nonlocal call_count
+            call_count += 1
+            return mock_result if call_count == 1 else mock_step_result
+
+        mock_db.execute = mock_execute
+        # Re-fetch returns a FRESH, attached instance (distinct from the stale one).
+        mock_db.get = AsyncMock(return_value=fresh_run)
+
+        mock_executor = AsyncMock()
+        mock_executor.execute_run = AsyncMock(side_effect=RuntimeError("Timeout"))
+
+        scheduler = SchedulerLoop(MagicMock(), orchestrator=MagicMock())
+        with patch(
+            "src.services.graph_executor.create_graph_executor",
+            new=AsyncMock(return_value=mock_executor),
+        ):
+            await scheduler._tick_background_tasks(factory)
+
+        # The fresh (re-fetched) run is mutated/persisted, not the stale one.
+        mock_db.get.assert_awaited()
+        assert fresh_run.retry_count == 1
+        assert stale_run.retry_count == 0
 
 
 class TestBackgroundTaskDLQ:
@@ -184,6 +232,7 @@ class TestBackgroundTaskDLQ:
             return mock_step_result
 
         mock_db.execute = mock_execute
+        mock_db.get = AsyncMock(return_value=run)  # re-fetch after rollback
 
         mock_executor = AsyncMock()
         mock_executor.execute_run = AsyncMock(side_effect=RuntimeError("Fatal"))
