@@ -161,6 +161,43 @@ The host is already provisioned with Node 22 + `uv` (`infra/user-data.sh`). Appr
   sessions; HTTP-server tools remain exposed across a restart with no eager discovery.
 - Keep the existing suite green.
 
+## Code review
+
+Each meaningful chunk of implementation is reviewed before it is considered done, using the
+`code-reviewer` agent (per the project development workflow). Review happens at natural boundaries
+rather than only at the end:
+
+1. **After the GitHub-remote + schema-decoupling change** (config + `seed_installations` + lazy
+   discover-once) — the smallest independently shippable slice.
+2. **After `LocalMCPProcessManager`** (process spawn/readiness/terminate, refcounting).
+3. **After `TurnScope`** wiring (ContextVar lifecycle, session registration/refcounting, teardown in
+   chat/graph/scheduler paths).
+4. **After removals + infra changes** (docker-compose service, Dockerfile, deploy/user-data preflight).
+5. **Final pass** across the whole change before merge.
+
+Reviewers address **CRITICAL and HIGH** issues before proceeding and fix **MEDIUM** issues where
+practical. Review focus areas specific to this change:
+
+- **Process / resource leaks:** every spawned subprocess (stdio child, `uvx` HTTP process) and every
+  FastMCP `Client` context has a guaranteed teardown path, including on exceptions, cancellation, and
+  shutdown. No orphaned PIDs; refcounts cannot go negative or strand a live process.
+- **Concurrency correctness:** `TurnScope` and `LocalMCPProcessManager` refcounting are race-free under
+  overlapping turns and `asyncio` task boundaries; ContextVar propagation to background/scheduler tasks
+  is intentional and correct.
+- **Auth handling:** OAuth/Bearer tokens are resolved at request time, never logged, never persisted to
+  disk, and never leaked into error messages; GitHub-remote and Google-workspace token paths preserve
+  existing scope and refresh behavior.
+- **Fail-closed behavior:** missing `uvx`/`npx`, readiness timeouts, and discovery failures surface as
+  structured MCP errors and trip the circuit breaker — they never silently hang or expose a tool that
+  cannot actually be called.
+- **No regressions** to MCP error classification, retry, and circuit-breaker behavior, and the existing
+  test suite stays green.
+- **Standards compliance:** one-way deps, file-size caps, immutable patterns, and no new god objects, per
+  `docs/engineering-standards.md`.
+
+A security-focused review (`security-reviewer`) covers the auth-handling and secret-management points
+before merge.
+
 ## Out-of-scope / deferred
 
 - De-Dockerizing datastores.
