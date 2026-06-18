@@ -1,12 +1,10 @@
-"""Tests for MCP bridge initialization resilience.
+"""Tests for MCP bridge initialization.
 
-Covers the four behaviors that keep worker-thread startup from stalling
-on slow/hung external MCP servers:
+Covers the key behaviors of the register-only startup model:
 
-1. Pool is usable immediately (before background discovery completes).
-2. ``timeout_seconds`` actually bounds discovery.
-3. HTTP ``list_tools`` is bounded per-server.
-4. Discovery across servers runs in parallel.
+1. Pool is wired synchronously (no background task returned).
+2. ``timeout_seconds`` bounds the DB registration call.
+3. HTTP ``list_tools`` timeout is still bounded (``discover_tools`` on session_pool).
 """
 
 from __future__ import annotations
@@ -24,7 +22,7 @@ _SKIP_KEYS = {"PYTEST_CURRENT_TEST", "JARVIS_SKIP_MCP_BRIDGE"}
 @pytest.fixture(autouse=True)
 def _bypass_pytest_skip(monkeypatch):
     """``initialize_mcp_bridge`` short-circuits in test env — neutralize that
-    guard so we can exercise the real wiring + background task paths.
+    guard so we can exercise the real wiring paths.
 
     Direct env manipulation is insufficient: pytest re-writes
     ``PYTEST_CURRENT_TEST`` when it transitions between setup/call/teardown
@@ -48,91 +46,60 @@ def _bypass_pytest_skip(monkeypatch):
 @pytest_asyncio.fixture
 async def _reset_bridge_module():
     """Clear module-level state before and after each test so one test's
-    ``_session_pool`` / ``_discovery_task`` can't leak into another."""
+    ``_session_pool`` can't leak into another."""
     from src.connectors import mcp_bridge
 
     mcp_bridge._session_pool = None
-    mcp_bridge._discovery_task = None
     yield
-    task = mcp_bridge._discovery_task
-    if task is not None and not task.done():
-        task.cancel()
-        try:
-            await task
-        except (asyncio.CancelledError, Exception):
-            pass
     mcp_bridge._session_pool = None
-    mcp_bridge._discovery_task = None
 
 
-class TestBridgeWireVsDiscover:
+class TestBridgeWire:
     """``initialize_mcp_bridge`` must wire the pool synchronously and
-    (when ``defer_discovery=True``) run discovery in the background."""
+    return None (no background task)."""
 
     @pytest.mark.asyncio
-    async def test_pool_available_before_discovery_completes(self, _reset_bridge_module):
-        """``get_session_pool()`` returns non-None as soon as the call returns,
-        even if discovery is still sleeping in the background."""
+    async def test_pool_available_after_init(self, _reset_bridge_module):
+        """``get_session_pool()`` returns non-None after initialize_mcp_bridge
+        returns and no task is returned."""
         from src.connectors import mcp_bridge
 
-        slow_called = asyncio.Event()
-        can_finish = asyncio.Event()
+        async def fast_registration(self):
+            return 2
 
-        async def slow_discovery(self):
-            slow_called.set()
-            await can_finish.wait()
+        with patch(
+            "src.integrations.mcp_pool.WorkspaceMCPPool.initialize_from_db",
+            new=fast_registration,
+        ):
+            result = await mcp_bridge.initialize_mcp_bridge(
+                oauth_manager=None,
+                timeout_seconds=30,
+            )
+
+        assert mcp_bridge.get_session_pool() is not None, (
+            "Session pool must be wired after initialize_mcp_bridge returns"
+        )
+        assert result is None, "initialize_mcp_bridge must return None (no background task)"
+
+    @pytest.mark.asyncio
+    async def test_returns_none_not_task(self, _reset_bridge_module):
+        """initialize_mcp_bridge must return None, not an asyncio.Task."""
+        from src.connectors import mcp_bridge
+
+        async def instant_register(self):
             return 0
 
         with patch(
             "src.integrations.mcp_pool.WorkspaceMCPPool.initialize_from_db",
-            new=slow_discovery,
+            new=instant_register,
         ):
-            task = await mcp_bridge.initialize_mcp_bridge(
-                oauth_manager=None,
-                timeout_seconds=30,
-                defer_discovery=True,
-            )
+            result = await mcp_bridge.initialize_mcp_bridge(oauth_manager=None)
 
-            assert mcp_bridge.get_session_pool() is not None, (
-                "Session pool must be wired before the background task finishes"
-            )
-            assert task is not None and not task.done(), (
-                "Discovery should still be running in the background"
-            )
-
-            await asyncio.wait_for(slow_called.wait(), timeout=1)
-            can_finish.set()
-            await task
-
-    @pytest.mark.asyncio
-    async def test_defer_false_awaits_discovery_inline(self, _reset_bridge_module):
-        """With ``defer_discovery=False``, the call must not return until
-        discovery completes — used by tests that want deterministic ordering."""
-        from src.connectors import mcp_bridge
-
-        completed = []
-
-        async def quick_discovery(self):
-            await asyncio.sleep(0.01)
-            completed.append(True)
-            return 0
-
-        with patch(
-            "src.integrations.mcp_pool.WorkspaceMCPPool.initialize_from_db",
-            new=quick_discovery,
-        ):
-            task = await mcp_bridge.initialize_mcp_bridge(
-                oauth_manager=None,
-                timeout_seconds=30,
-                defer_discovery=False,
-            )
-
-            assert task is None, "defer_discovery=False should not return a task"
-            assert completed, "Discovery must complete before the call returns"
+        assert not isinstance(result, asyncio.Task), "initialize_mcp_bridge must not return a Task"
 
 
-class TestDiscoveryTimeout:
-    """``timeout_seconds`` is a real bound, not a dead parameter."""
+class TestRegistrationTimeout:
+    """``timeout_seconds`` is a real bound on DB config registration."""
 
     @pytest.mark.asyncio
     async def test_timeout_seconds_is_enforced(self, _reset_bridge_module, caplog):
@@ -140,14 +107,14 @@ class TestDiscoveryTimeout:
         and the warning is logged (not re-raised)."""
         from src.connectors import mcp_bridge
 
-        async def hanging_discovery(self):
+        async def hanging_registration(self):
             await asyncio.sleep(10)
             return 0
 
         with (
             patch(
                 "src.integrations.mcp_pool.WorkspaceMCPPool.initialize_from_db",
-                new=hanging_discovery,
+                new=hanging_registration,
             ),
             caplog.at_level("WARNING", logger="src.connectors.mcp_bridge"),
         ):
@@ -155,14 +122,15 @@ class TestDiscoveryTimeout:
             await mcp_bridge.initialize_mcp_bridge(
                 oauth_manager=None,
                 timeout_seconds=0.05,
-                defer_discovery=False,
             )
             elapsed = time.monotonic() - start
 
         assert elapsed < 1.0, f"Timeout was not enforced (elapsed={elapsed:.2f}s)"
-        assert any("discovery exceeded" in rec.message.lower() for rec in caplog.records), (
-            "Expected a warning about exceeding the discovery budget"
-        )
+        assert any(
+            "registration exceeded" in rec.message.lower()
+            or "lazy on first use" in rec.message.lower()
+            for rec in caplog.records
+        ), "Expected a warning about exceeding the registration budget"
 
 
 class TestHttpDiscoveryTimeout:
@@ -208,13 +176,12 @@ class TestHttpDiscoveryTimeout:
         assert any("timed out" in rec.message.lower() for rec in caplog.records)
 
 
-class TestParallelDiscovery:
-    """HTTP discovery across multiple servers must run in parallel."""
+class TestNoEagerDiscovery:
+    """initialize_from_db must not call discover_tools or spawn sessions."""
 
     @pytest.mark.asyncio
-    async def test_http_servers_discovered_concurrently(self):
-        """With four HTTP servers each taking 0.2s, ``initialize_from_db``
-        should complete well under the serial 0.8s total."""
+    async def test_initialize_from_db_registers_only(self):
+        """initialize_from_db must register configs without calling discover_tools."""
         from src.integrations.mcp_pool import WorkspaceMCPPool
 
         installations = [
@@ -226,7 +193,7 @@ class TestParallelDiscovery:
                 status="active",
                 auth_provider="none",
                 remote_url=f"http://srv-{i}.local",
-                config_json={},
+                config=None,
             )
             for i in range(4)
         ]
@@ -243,21 +210,13 @@ class TestParallelDiscovery:
         mock_factory_getter = MagicMock(return_value=mock_factory_callable)
 
         session_pool = MagicMock()
-
-        async def slow_discover(server_name, *, workspace_id="", config=None):
-            await asyncio.sleep(0.2)
-            return []
-
-        session_pool.discover_tools = AsyncMock(side_effect=slow_discover)
+        session_pool.discover_tools = AsyncMock()
+        session_pool.register_server_config = MagicMock()
 
         pool = WorkspaceMCPPool(session_pool=session_pool)
 
         with (
-            patch(
-                "src.models.database.get_session_factory",
-                new=mock_factory_getter,
-            ),
-            patch.object(pool, "_discover_stdio_schemas", new=AsyncMock(return_value=None)),
+            patch("src.models.database.get_session_factory", new=mock_factory_getter),
             patch(
                 "src.integrations.mcp_pool._installation_to_config",
                 side_effect=lambda inst: {
@@ -267,12 +226,8 @@ class TestParallelDiscovery:
                 },
             ),
         ):
-            start = time.monotonic()
             count = await pool.initialize_from_db()
-            elapsed = time.monotonic() - start
 
         assert count == 4
-        assert session_pool.discover_tools.await_count == 4
-        assert elapsed < 0.5, (
-            f"HTTP discovery ran serially (elapsed={elapsed:.2f}s, expected <0.5s for 4×0.2s)"
-        )
+        # Crucially: no eager discovery calls
+        session_pool.discover_tools.assert_not_called()
