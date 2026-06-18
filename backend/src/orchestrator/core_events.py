@@ -113,7 +113,7 @@ class AgentDone(_CoreEventBase):
     output_tokens: int | None = None
     cache_creation_tokens: int | None = None
     cache_read_tokens: int | None = None
-    tools_called: int | None = None
+    tools_called: list[str] | None = None
     latency_ms: int | None = None
     cost_usd: float | None = None
 

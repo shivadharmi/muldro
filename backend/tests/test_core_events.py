@@ -163,7 +163,7 @@ _AGENT_SSE_DICTS = [
         "output_tokens": 5,
         "cache_creation_tokens": 0,
         "cache_read_tokens": 0,
-        "tools_called": 1,
+        "tools_called": ["send"],
         "latency_ms": 100,
         "cost_usd": 0.001,
     },
@@ -193,6 +193,25 @@ class TestAgentEventRoundTrip:
     )
     def test_maps_to_expected_typed_event(self, sse, expected_type):
         assert isinstance(agent_event_from_sse(sse), expected_type)
+
+    def test_agent_done_tools_called_is_list_from_production(self):
+        """Production ``agent_done`` carries ``tools_called`` as a list of tool
+        names (``LoopDone.tools_called: list[str]``), not an int. Regression
+        for the AgentDone validation crash that killed the live chat stream."""
+        sse = {
+            "event": "agent_done",
+            "agent": "operator",
+            "text": "done",
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "tools_called": ["search_memory", "send_email"],
+            "latency_ms": 100,
+            "cost_usd": 0.002,
+        }
+        typed = agent_event_from_sse(sse)
+        assert isinstance(typed, AgentDone)
+        assert typed.tools_called == ["search_memory", "send_email"]
+        assert core_event_to_sse(typed)["tools_called"] == ["search_memory", "send_email"]
 
     def test_unknown_event_falls_back_to_passthrough(self):
         # The sanitized LoopError / Unknown-agent frames aren't typed token
