@@ -81,19 +81,11 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
     {
         "server_name": "github",
         "display_name": "GitHub",
-        "transport": "stdio",
-        "command": "docker",
-        "args": [
-            "run",
-            "-i",
-            "--rm",
-            "-e",
-            "GITHUB_PERSONAL_ACCESS_TOKEN",
-            "ghcr.io/github/github-mcp-server",
-        ],
-        "env_template": {
-            "GITHUB_PERSONAL_ACCESS_TOKEN": "GitHub personal access token",
-        },
+        "transport": "streamable-http",
+        "remote_url": "https://api.githubcopilot.com/mcp/",
+        "command": None,
+        "args": None,
+        "env_template": {},
         "auth_provider": "github",
         "scopes_granted": [
             "issue.create",
