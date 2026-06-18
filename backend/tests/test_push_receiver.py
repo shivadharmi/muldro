@@ -167,15 +167,14 @@ class TestHandleDeliverySignatureMismatch:
         sub_result.scalar_one_or_none.return_value = sub
         db = AsyncMock()
         db.add = MagicMock()
-        db.execute = AsyncMock(side_effect=[sub_result, MagicMock()])
+        db.execute = AsyncMock(return_value=sub_result)
 
-        mock_request_run = AsyncMock()
         receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
         # Patch record_failure to avoid real DB calls; also spy to ensure request_run is not called
         receiver._webhook_manager.record_failure = AsyncMock()
 
         with patch(_POLICY_PATCH) as mock_policy_cls:
-            mock_policy_cls.return_value.request_run = mock_request_run
+            mock_policy_cls.return_value.request_run = AsyncMock()
             await receiver.handle_delivery(
                 provider="github",
                 subscription_id="whsub_123",
@@ -184,7 +183,7 @@ class TestHandleDeliverySignatureMismatch:
                 raw_body=raw_body,
             )
 
-        mock_request_run.assert_not_called()
+        mock_policy_cls.return_value.request_run.assert_not_called()
 
     async def test_no_normalized_event_on_bad_signature(self):
         from src.integrations.sync.push_receiver import PushReceiver
@@ -195,7 +194,7 @@ class TestHandleDeliverySignatureMismatch:
         sub_result.scalar_one_or_none.return_value = sub
         db = AsyncMock()
         db.add = MagicMock()
-        db.execute = AsyncMock(side_effect=[sub_result, MagicMock()])
+        db.execute = AsyncMock(return_value=sub_result)
 
         receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
         receiver._webhook_manager.record_failure = AsyncMock()
@@ -250,6 +249,7 @@ class TestHandleDeliveryValidSignedWebhook:
             mock_policy.request_run = AsyncMock(return_value=mock_state)
 
             receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
+            receiver._webhook_manager.record_delivery = AsyncMock()
             result = await receiver.handle_delivery(
                 provider="github",
                 subscription_id="whsub_123",
@@ -266,6 +266,7 @@ class TestHandleDeliveryValidSignedWebhook:
             source=sub.provider,
             signal_source="webhook",
         )
+        receiver._webhook_manager.record_delivery.assert_awaited_once_with("whsub_123")
 
     async def test_creates_zero_normalized_event_rows(self):
         """Webhook delivery must not insert any NormalizedEvent."""
@@ -365,6 +366,7 @@ class TestHandleDeliveryRequestRunFailure:
 
             receiver = PushReceiver(db, TEST_WORKSPACE_ID, "https://api.jarvis.test")
             receiver._webhook_manager.record_failure = AsyncMock()
+            receiver._webhook_manager.record_delivery = AsyncMock()
             result = await receiver.handle_delivery(
                 provider="github",
                 subscription_id="whsub_123",
@@ -374,6 +376,8 @@ class TestHandleDeliveryRequestRunFailure:
         assert result.accepted is False
         assert result.error == "wake_signal_failed"
         assert result.subscription_id == "whsub_123"
+        # record_delivery must NOT be called when the wake signal fails
+        receiver._webhook_manager.record_delivery.assert_not_awaited()
 
     async def test_calls_record_failure_on_request_run_error(self):
         from src.integrations.sync.push_receiver import PushReceiver

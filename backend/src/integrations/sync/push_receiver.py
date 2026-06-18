@@ -22,6 +22,13 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class DeliveryResult:
+    """Result of a single webhook delivery attempt.
+
+    ``event_id`` is always ``None``: webhooks are wake-signals only.
+    NormalizedEvents are created later by the scheduler-triggered poll through
+    EventProcessor, not by the webhook handler itself.
+    """
+
     accepted: bool
     subscription_id: str | None = None
     event_id: str | None = None
@@ -134,8 +141,7 @@ class PushReceiver:
             },
         )
 
-        # event_id is None: NormalizedEvents are created by the connector funnel
-        # triggered by the wake signal above, not synchronously here.
+        # event_id is always None — see DeliveryResult docstring.
         return DeliveryResult(
             accepted=True,
             subscription_id=subscription_id,
