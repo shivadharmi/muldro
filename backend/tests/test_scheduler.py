@@ -596,6 +596,9 @@ def _build_tick_mocks(due_states: list, results: list):
 
     ``results`` must be positionally aligned with ``due_states``.
     Each element is either a (src_name, event_count) tuple or an exception.
+
+    The mock lookup is keyed on (user_id, source) to avoid collisions when two
+    tenants share a source name (e.g. both polling "gmail").
     """
     mock_db = MagicMock()
     mock_db.flush = AsyncMock()
@@ -610,19 +613,19 @@ def _build_tick_mocks(due_states: list, results: list):
 
     mock_factory = MagicMock(return_value=mock_db)
 
-    # Build a side_effect that returns (source, event_count) for each state,
-    # positionally aligned.  run_perception_cycle is called with source=...,
-    # so we need a per-call mapping.
-    result_by_source = {}
+    # Keyed on (user_id, source) so two tenants that share a source name
+    # never silently overwrite each other's expected result.
+    result_by_user_source: dict[tuple[str, str], object] = {}
     for state, res in zip(due_states, results):
+        composite_key = (state.user_id, state.source)
         if isinstance(res, BaseException):
-            result_by_source[state.source] = res
+            result_by_user_source[composite_key] = res
         else:
             _src, evt_count = res
-            result_by_source[state.source] = {"status": "completed", "events": evt_count}
+            result_by_user_source[composite_key] = {"status": "completed", "events": evt_count}
 
     async def _fake_run_perception_cycle(source, *, user_id, workspace_id):
-        r = result_by_source.get(source, {"status": "completed", "events": 0})
+        r = result_by_user_source.get((user_id, source), {"status": "completed", "events": 0})
         if isinstance(r, BaseException):
             raise r
         return r
@@ -935,3 +938,51 @@ class TestCrossSourceSynthesisTenantGrouping:
         assert ws_b not in call_kwargs["workspace_id"]
         # Tenant B's source must NOT appear in Tenant A's synthesis
         assert "github" not in call_kwargs["source_names"]
+
+    # ------------------------------------------------------------------
+    # Case (e): workspace_id is empty — exercises the _resolve_workspace fallback
+    # ------------------------------------------------------------------
+    @pytest.mark.asyncio
+    async def test_empty_workspace_id_triggers_resolve_workspace_fallback(self, settings):
+        """A tenant whose perception states have workspace_id='' must resolve via
+        _resolve_workspace and pass the resolved id to run_cross_source_synthesis."""
+        resolved_ws = "ws_resolved_001"
+
+        due_states = [
+            _make_perception_state(TEST_USER_ID, "", "gmail"),
+            _make_perception_state(TEST_USER_ID, "", "slack"),
+        ]
+        # 2 sources, 4 total events — above both thresholds
+        results = [("gmail", 2), ("slack", 2)]
+
+        mock_factory, mock_svc, fake_cycle = _build_tick_mocks(due_states, results)
+
+        mock_orch = MagicMock()
+        mock_orch.run_cross_source_synthesis = AsyncMock()
+        mock_orch.run_perception_cycle = AsyncMock(side_effect=fake_cycle)
+        mock_orch._budget = MagicMock()
+        mock_orch._budget.get_budget_status = AsyncMock(return_value={"mode": "normal"})
+        mock_orch._budget.should_allow_perception = MagicMock(return_value=True)
+        mock_orch._budget.get_perception_interval_multiplier = MagicMock(return_value=1)
+
+        scheduler = _make_scheduler_for_tick(settings, mock_orch)
+
+        mock_resolve = AsyncMock(return_value=resolved_ws)
+        with (
+            patch(
+                "src.services.perception_policy.PerceptionPolicyService",
+                return_value=mock_svc,
+            ),
+            patch.object(scheduler, "_resolve_workspace", new=mock_resolve),
+        ):
+            await scheduler._tick_perception(mock_factory)
+
+        # (a) _resolve_workspace must have been awaited for the synthesis fallback path
+        mock_resolve.assert_awaited()
+
+        # (b) synthesis must be called with the resolved workspace_id
+        mock_orch.run_cross_source_synthesis.assert_awaited_once()
+        call_kwargs = mock_orch.run_cross_source_synthesis.call_args.kwargs
+        assert call_kwargs["workspace_id"] == resolved_ws
+        assert call_kwargs["user_id"] == TEST_USER_ID
+        assert set(call_kwargs["source_names"]) == {"gmail", "slack"}

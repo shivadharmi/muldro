@@ -114,22 +114,26 @@ class PerceptionTickMixin:
                 # D2: Cross-source synthesis — trigger on signal volume per tenant.
                 # Group results by (user_id, workspace_id) so synthesis never
                 # crosses tenant boundaries.
+                # Tenant identity (user_id, workspace_id) comes from due_state;
+                # polled source name and event count come from the result tuple.
                 # results is positionally aligned with due_states.
                 tenant_event_counts: dict[tuple[str, str], dict[str, int]] = {}
                 for state, r in zip(due_states, results):
                     if isinstance(r, BaseException):
                         continue
-                    _src_name, evt_count = r
+                    src_name, evt_count = r
                     if evt_count > 0:
-                        key = (state.user_id, state.workspace_id)
-                        tenant_event_counts.setdefault(key, {})[state.source] = evt_count
+                        # Normalize workspace_id so None and "" map to the same key.
+                        key = (state.user_id, state.workspace_id or "")
+                        tenant_event_counts.setdefault(key, {})[src_name] = evt_count
 
-                for (tenant_user_id, tenant_ws_id), src_counts in tenant_event_counts.items():
+                for key, src_counts in tenant_event_counts.items():
+                    tenant_user_id, ws_raw = key
                     sources_with_events = len(src_counts)
                     total_event_count = sum(src_counts.values())
                     if sources_with_events >= 2 and total_event_count >= 3 and self._orchestrator:
                         try:
-                            ws_id = tenant_ws_id
+                            ws_id = ws_raw
                             if not ws_id:
                                 try:
                                     ws_id = await self._resolve_workspace(tenant_user_id)
@@ -152,7 +156,7 @@ class PerceptionTickMixin:
                                     sources_with_events,
                                 )
                         except Exception:
-                            logger.debug(
+                            logger.warning(
                                 "Cross-source synthesis failed for user=%s",
                                 tenant_user_id,
                                 exc_info=True,
