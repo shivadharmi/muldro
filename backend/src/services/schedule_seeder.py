@@ -97,10 +97,31 @@ DEFAULT_SCHEDULES: list[dict] = [
         "source": "system",
         "priority": "medium",
     },
+    {
+        "name": "system_heartbeat",
+        "description": (
+            "Hourly maintenance sweep: invalidate stale plans past their TTL, "
+            "expire overdue approvals, and flag stale observation sources."
+        ),
+        "schedule_type": "recurring",
+        "cron_expr": "0 * * * *",
+        "action_type": "heartbeat",
+        "action_config": {},
+        "source": "system",
+        "priority": "low",
+    },
 ]
 
 # Schedules enabled when the *first* connector of any kind is authorized.
-GLOBAL_SCHEDULES = {"morning_briefing", "memory_consolidation", "slo_health_check"}
+# system_heartbeat is connector-independent housekeeping (stale-plan reaper,
+# approval expiry, observation health) so it is enabled at workspace creation
+# via WORKSPACE_CREATION_SCHEDULES below — without it, the reaper never runs.
+GLOBAL_SCHEDULES = {
+    "morning_briefing",
+    "memory_consolidation",
+    "slo_health_check",
+    "system_heartbeat",
+}
 
 # Schedules enabled immediately at workspace creation — the connector-independent
 # proactive/housekeeping ones. This makes the daily briefing and the proactive

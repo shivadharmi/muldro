@@ -516,6 +516,7 @@ class GraphExecutor:
         except Exception:
             pass
 
+        await self._reconcile_plan_status(run)
         await self._db.commit()
         return run
 
@@ -604,6 +605,7 @@ class GraphExecutor:
             self._cancel_events.pop(run.run_id, None)
             await self._finalize_trace(run)
 
+        await self._reconcile_plan_status(run)
         await self._db.commit()
         return run
 
@@ -657,6 +659,7 @@ class GraphExecutor:
                 workspace_id=run.workspace_id,
             )
 
+        await self._reconcile_plan_status(run)
         await self._db.commit()
         await self._emit_event(
             "run.cancelled",
@@ -1749,6 +1752,33 @@ class GraphExecutor:
                     transition_run(run, "completed")
         except Exception:
             logger.warning("Verification failed for run %s", run.run_id, exc_info=True)
+
+    # Map a terminal run status to the status its parent Plan should take.
+    _RUN_STATUS_TO_PLAN_STATUS = {
+        "completed": "completed",
+        "partially_completed": "completed",
+        "failed": "failed",
+        "timed_out": "failed",
+        "cancelled": "cancelled",
+    }
+
+    async def _reconcile_plan_status(self, run: TaskRun) -> None:
+        """Mirror a terminal run status onto its parent Plan.
+
+        Without this, a Plan stays in 'created'/'executing' forever after its
+        run finishes. Stale 'created' plans then get injected into every daily
+        briefing (the "phantom critical security alert" regression). Non-terminal
+        run statuses (paused, awaiting_approval) are intentionally skipped, and
+        plans already in a terminal state are left untouched so a late run can't
+        resurrect them.
+        """
+        target = self._RUN_STATUS_TO_PLAN_STATUS.get(run.status)
+        if not target or not run.plan_id:
+            return
+        result = await self._db.execute(select(Plan).where(Plan.plan_id == run.plan_id))
+        plan = result.scalar_one_or_none()
+        if plan and plan.status not in ("completed", "failed", "cancelled"):
+            plan.status = target
 
     async def _emit_event(
         self,

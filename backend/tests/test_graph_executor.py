@@ -108,18 +108,25 @@ class TestCancelRun:
         run = MagicMock()
         run.run_id = "run_001"
         run.status = "running"
+        run.plan_id = "plan_001"
 
         step2 = MagicMock()
         step2.status = "pending"
         step3 = MagicMock()
         step3.status = "ready"
 
+        plan = MagicMock()
+        plan.status = "executing"
+
         run_result = MagicMock()
         run_result.scalar_one_or_none.return_value = run
         steps_result = MagicMock()
         steps_result.scalars.return_value.all.return_value = [step2, step3]
+        plan_result = MagicMock()
+        plan_result.scalar_one_or_none.return_value = plan
 
-        mock_db.execute = AsyncMock(side_effect=[run_result, steps_result])
+        # 3rd execute is the parent-plan lookup in _reconcile_plan_status
+        mock_db.execute = AsyncMock(side_effect=[run_result, steps_result, plan_result])
 
         executor = GraphExecutor(settings, mock_db)
         cancelled = await executor.cancel_run("run_001")
@@ -127,6 +134,8 @@ class TestCancelRun:
         assert cancelled.status == "cancelled"
         assert step2.status == "skipped"
         assert step3.status == "skipped"
+        # Cancelling a run reconciles its parent plan to a terminal state
+        assert plan.status == "cancelled"
 
 
 class TestPauseRun:

@@ -348,12 +348,19 @@ class Presenter:
         return list(result.scalars().all())
 
     async def _get_active_plans(self, user_id: str, workspace_id: str = "") -> list[Plan]:
+        # Bound by the plan TTL so a stale plan the heartbeat reaper has not yet
+        # collected can never be surfaced in a briefing as if it were actionable
+        # today (regression: a stuck 'created' plan appeared as "1 critical
+        # security alert requires immediate attention" in every briefing).
+        ttl_hours = getattr(self._settings, "plan_ttl_hours", 72)
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=ttl_hours)
         result = await self._db.execute(
             select(Plan)
             .where(
                 Plan.user_id == user_id,
                 Plan.workspace_id == workspace_id,
                 Plan.status.in_(["created", "executing"]),
+                Plan.created_at >= cutoff,
             )
             .order_by(Plan.created_at.desc())
             .limit(20)
