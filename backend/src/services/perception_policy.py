@@ -77,6 +77,10 @@ _PERMANENT_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"not.?authorized", re.IGNORECASE),
     re.compile(r"permission.?denied", re.IGNORECASE),
     re.compile(r"scope.?not.?granted", re.IGNORECASE),
+    # Matches the sentinel produced by error_class_to_policy_error("permanent") so
+    # that connector-reported permanent errors (unrecoverable 4xx) open the circuit
+    # after 1 failure rather than falling through to the unknown threshold of 3.
+    re.compile(r"\bpermanent\b", re.IGNORECASE),
 ]
 
 

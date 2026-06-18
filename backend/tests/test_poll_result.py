@@ -520,3 +520,18 @@ class TestErrorClassPropagation:
         error_msg = error_class_to_policy_error("transient")
         classified = classify_error(error_msg)
         assert classified == "transient"
+
+    @pytest.mark.asyncio
+    async def test_permanent_uses_permanent_threshold(self):
+        """permanent error_class → permanent classify_error result (opens circuit after 1 failure).
+
+        Regression test: the sentinel produced by error_class_to_policy_error("permanent")
+        must match _PERMANENT_PATTERNS so that unrecoverable 4xx errors open the
+        circuit immediately (threshold=1) instead of falling through to unknown (threshold=3).
+        """
+        from src.connectors.poll_result import error_class_to_policy_error
+        from src.services.perception_policy import classify_error
+
+        error_msg = error_class_to_policy_error("permanent")
+        classified = classify_error(error_msg)
+        assert classified == "permanent"
