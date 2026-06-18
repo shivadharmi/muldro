@@ -16,6 +16,7 @@ from fastmcp import Client
 from fastmcp.client.auth import BearerAuth
 
 from src.integrations.local_process_manager import get_local_process_manager
+from src.integrations.turn_scope import current_turn_scope
 from src.services.mcp_resilience import MCPCircuitBreaker
 
 logger = logging.getLogger(__name__)
@@ -154,6 +155,9 @@ class UserMCPSessionPool:
             entry = self._sessions.get(key)
             if entry:
                 entry.last_used = time.monotonic()
+                scope = current_turn_scope()
+                if scope is not None:
+                    scope.acquire(key)
                 return entry
 
             # Create new session
@@ -243,6 +247,9 @@ class UserMCPSessionPool:
                 managed_server=managed_server,
             )
             self._sessions[key] = entry
+            scope = current_turn_scope()
+            if scope is not None:
+                scope.register(key)
 
             logger.info(
                 "Created MCP session: server=%s user=%s tools=%d",
