@@ -7,9 +7,14 @@ end every key the scope still holds is handed to ``on_close`` for teardown.
 Reference counting lets overlapping turns share a session without one turn
 killing another's live connection.
 
-The active scope is stored in a ContextVar, which asyncio copies into child
-tasks at creation — so a session opened inside a spawned sub-task is still
-attributed to the turn that spawned it.
+The active scope is stored in a ContextVar. Synchronous, awaited work within
+the turn (including nested ``async with``/``await`` calls) sees the scope and
+is tracked correctly. IMPORTANT: code spawned as a *detached* background task
+(e.g. ``asyncio.create_task`` / ``_spawn_background``) that OUTLIVES the turn
+must NOT open turn-scoped MCP sessions — ``on_close`` fires when the turn's
+``async with`` exits, which may precede the background task's execution, so any
+session it opens would not be torn down by this turn (it would be reclaimed
+only by the idle reaper). Keep MCP tool calls on the awaited turn path.
 """
 
 from __future__ import annotations
@@ -83,4 +88,4 @@ async def turn_scope(
                 if hasattr(result, "__await__"):
                     await result
             except Exception:
-                logger.debug("TurnScope on_close failed", exc_info=True)
+                logger.warning("TurnScope on_close failed", exc_info=True)

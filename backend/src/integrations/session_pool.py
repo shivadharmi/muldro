@@ -504,6 +504,12 @@ class UserMCPSessionPool:
 
         Idempotent: keys with no live session are skipped. Releases any
         managed-local process refcount the session held.
+
+        Invariant: the TurnScope refcount only gates *whether* teardown is
+        attempted for a key; the actual ``__aexit__`` is gated by the entry
+        still being present in ``_sessions`` (popped under the lock). So a
+        key that was refreshed/closed mid-turn is simply skipped here — there
+        is never a double ``__aexit__`` or double process release.
         """
         closed = 0
         async with self._lock:
