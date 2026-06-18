@@ -91,9 +91,7 @@ class TestAutoExecutionTrustFeedback:
         from src.services.graph_executor import GraphExecutor
 
         executor = GraphExecutor(MagicMock(), AsyncMock())
-        with patch(
-            "src.services.risk_assessor.record_approval_decision", new=AsyncMock()
-        ) as rec:
+        with patch("src.services.risk_assessor.record_approval_decision", new=AsyncMock()) as rec:
             await executor._record_auto_execution_outcome("email.send", "low", "ws_test")
 
         rec.assert_awaited_once()
@@ -108,9 +106,7 @@ class TestAutoExecutionTrustFeedback:
         from src.services.graph_executor import GraphExecutor
 
         executor = GraphExecutor(MagicMock(), AsyncMock())
-        with patch(
-            "src.services.risk_assessor.record_approval_decision", new=AsyncMock()
-        ) as rec:
+        with patch("src.services.risk_assessor.record_approval_decision", new=AsyncMock()) as rec:
             await executor._record_auto_execution_outcome("", "low", "ws_test")
 
         rec.assert_not_awaited()
