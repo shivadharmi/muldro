@@ -38,6 +38,8 @@ async def discover_missing_schemas(
 
     discovered: set[str] = set()
     for server in servers_missing:
+        if pool.is_discovered(server, workspace_id=workspace_id):
+            continue
         try:
             await pool.discover_and_persist(server, workspace_id=workspace_id)
             discovered.add(server)

@@ -98,6 +98,12 @@ class UserMCPSessionPool:
         """Register server configuration for later session creation."""
         self._server_configs[(workspace_id, server_name)] = config
 
+    def _effective_user(self, server_name: str, user_id: str, workspace_id: str = "") -> str:
+        """Resolve the session-key user: auth-free servers share one __shared__ session."""
+        config = self._server_configs.get((workspace_id, server_name))
+        auth_provider = (config or {}).get("auth_provider", "none")
+        return "__shared__" if auth_provider == "none" else user_id
+
     async def get_or_create_session(
         self,
         server_name: str,
@@ -111,7 +117,7 @@ class UserMCPSessionPool:
         """
         config = self._server_configs.get((workspace_id, server_name))
         auth_provider = (config or {}).get("auth_provider", "none")
-        effective_user = "__shared__" if auth_provider == "none" else user_id
+        effective_user = self._effective_user(server_name, user_id, workspace_id)
         key = (workspace_id, server_name, effective_user)
 
         # If we already have a cached session for an OAuth-backed server,
@@ -467,7 +473,8 @@ class UserMCPSessionPool:
         workspace_id: str = "",
     ) -> None:
         """Force reconnect a session (e.g., after OAuth token refresh)."""
-        key = (workspace_id, server_name, user_id)
+        effective_user = self._effective_user(server_name, user_id, workspace_id)
+        key = (workspace_id, server_name, effective_user)
 
         async with self._lock:
             entry = self._sessions.pop(key, None)

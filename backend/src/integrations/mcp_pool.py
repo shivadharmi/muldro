@@ -44,11 +44,19 @@ class WorkspaceMCPPool:
         # workspace_id → {server_name → ServerEntry}
         self._workspaces: dict[str, dict[str, ServerEntry]] = {}
         self._lock = asyncio.Lock()
+        # (workspace_id, server_name) pairs that completed a successful discovery pass
+        # in this process. The DB persists schemas across restarts, so once-per-process
+        # is correct: a server that responded is never re-probed in the same process.
+        self._discovered_servers: set[tuple[str, str]] = set()
 
     @property
     def session_pool(self) -> UserMCPSessionPool:
         """Access the underlying session pool."""
         return self._session_pool
+
+    def is_discovered(self, server_name: str, workspace_id: str = "") -> bool:
+        """True if a discovery pass already succeeded for this server in-process."""
+        return (workspace_id, server_name) in self._discovered_servers
 
     async def add_server(
         self,
@@ -205,6 +213,9 @@ class WorkspaceMCPPool:
                 server_name, user_id=user_id, workspace_id=workspace_id
             )
             count = len(session.tools)
+            # Mark discovered only after the server actually responded. Transient
+            # failures (exception path) are NOT marked so they are retried next time.
+            self._discovered_servers.add((workspace_id, server_name))
         except Exception:
             logger.debug("discover_and_persist failed for %s", server_name, exc_info=True)
             return 0
