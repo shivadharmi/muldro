@@ -95,3 +95,13 @@ class RunHealthTickMixin:
                     )
         except Exception:
             logger.warning("Run health check failed", exc_info=True)
+
+        # Reap idle MCP sessions as a safety net (sessions not closed by TurnScope).
+        try:
+            from src.connectors.mcp_bridge import get_session_pool
+
+            pool = get_session_pool()
+            if pool is not None:
+                await pool.cleanup_idle()
+        except Exception:
+            logger.warning("Idle MCP session reaper failed", exc_info=True)
