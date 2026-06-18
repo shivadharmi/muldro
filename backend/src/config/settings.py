@@ -93,7 +93,11 @@ class Settings(BaseSettings):
     google_oauth_client_id: str = ""
     google_oauth_client_secret: str = ""
     google_oauth_redirect_uri: str = "http://localhost:8000/v1/auth/google/callback"
-    google_workspace_mcp_url: str = "http://localhost:8001/mcp"
+    # Google Workspace MCP now runs as an on-demand local uvx process
+    # (LocalMCPProcessManager), so there is no static URL. These knobs tune
+    # the local-process lifecycle and the idle-session reaper.
+    mcp_local_ready_timeout_s: float = 30.0
+    mcp_session_idle_ttl_s: float = 120.0
     github_oauth_client_id: str = ""
     github_oauth_client_secret: str = ""
     github_oauth_redirect_uri: str = "http://localhost:8000/v1/auth/github/callback"
