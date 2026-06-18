@@ -74,13 +74,7 @@ class DlqTickMixin:
                 return True
 
             if op == "failed_embedding":
-                # Full re-embed requires looking up source record by record_id
-                # to retrieve text — deferred to a dedicated embedding retry service.
-                logger.info(
-                    "DLQ failed_embedding entry %s — skipping (requires dedicated retry service)",
-                    entry.entry_id,
-                )
-                return False
+                return await self._retry_failed_embedding(db, entry)
 
             if op == "perception_cycle":
                 source = payload.get("source")
@@ -113,3 +107,90 @@ class DlqTickMixin:
                 exc_info=True,
             )
             return False
+
+    async def _retry_failed_embedding(self, db, entry) -> bool:
+        """Re-embed a record whose original Qdrant upsert failed.
+
+        Looks up the source record (Memory or Entity) by ``record_id``,
+        re-embeds its text via the embedding service, and upserts the vector
+        to Qdrant. Returns True only on a successful upsert.
+        """
+        payload = entry.payload or {}
+        record_id = payload.get("record_id")
+        collection = payload.get("collection")
+        record_type = payload.get("record_type")
+        if not record_id or not collection:
+            logger.warning("DLQ failed_embedding missing record_id/collection: %s", entry.entry_id)
+            return False
+        if not getattr(self._settings, "qdrant_url", None):
+            logger.info(
+                "DLQ failed_embedding entry %s — Qdrant not configured, skipping",
+                entry.entry_id,
+            )
+            return False
+
+        text, vector_payload = await self._load_embedding_source(db, record_type, record_id)
+        if not text:
+            logger.warning(
+                "DLQ failed_embedding source record %s not found or empty: %s",
+                record_id,
+                entry.entry_id,
+            )
+            return False
+
+        from src.services.embedding_service import EmbeddingService
+        from src.services.vector_store import VectorStore
+
+        embedding = await EmbeddingService(self._settings).embed_text(text)
+        if not embedding:
+            logger.warning(
+                "DLQ failed_embedding re-embed produced no vector for %s: %s",
+                record_id,
+                entry.entry_id,
+            )
+            return False
+
+        await VectorStore(self._settings).upsert(
+            collection, record_id, embedding, vector_payload, entry.user_id
+        )
+        logger.info("DLQ failed_embedding re-embedded %s:%s", collection, record_id)
+        return True
+
+    @staticmethod
+    async def _load_embedding_source(
+        db, record_type: str | None, record_id: str
+    ) -> tuple[str | None, dict]:
+        """Resolve the (text, Qdrant payload) for a failed-embedding record.
+
+        Mirrors the payloads built at the original write sites
+        (memory_service.storage / world_model). Returns ``(None, {})`` when
+        the record no longer exists.
+        """
+        if record_type == "memory":
+            from src.models.memory import Memory
+
+            rec = await db.get(Memory, record_id)
+            if not rec or not rec.fact_text:
+                return None, {}
+            return rec.fact_text, {
+                "memory_type": rec.memory_type,
+                "fact_text": rec.fact_text,
+                "user_id": rec.user_id,
+                "confidence": rec.confidence,
+                "stability_score": rec.stability_score,
+                "entity_ids": rec.entity_ids or [],
+                "scope": rec.scope or "general",
+            }
+        if record_type == "entity":
+            from src.models.entities import Entity
+
+            rec = await db.get(Entity, record_id)
+            if not rec or not rec.canonical_name:
+                return None, {}
+            return rec.canonical_name, {
+                "entity_type": rec.entity_type,
+                "canonical_name": rec.canonical_name,
+                "user_id": rec.user_id,
+            }
+        logger.warning("DLQ failed_embedding unknown record_type %r", record_type)
+        return None, {}
