@@ -351,6 +351,12 @@ async def call_mcp_tool(
     return result
 
 
+async def close_turn_sessions(keys: list[tuple[str, str, str]]) -> None:
+    """Tear down the MCP sessions opened during a turn (called by TurnScope)."""
+    if _session_pool and keys:
+        await _session_pool.close_keys(keys)
+
+
 async def refresh_server_auth(
     server_name: str,
     user_id: str,

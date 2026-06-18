@@ -499,6 +499,28 @@ class UserMCPSessionPool:
             except Exception:
                 logger.debug("release of %s failed", entry.managed_server, exc_info=True)
 
+    async def close_keys(self, keys: list[tuple[str, str, str]]) -> int:
+        """Close specific sessions by key (used for per-turn teardown).
+
+        Idempotent: keys with no live session are skipped. Releases any
+        managed-local process refcount the session held.
+        """
+        closed = 0
+        async with self._lock:
+            for key in keys:
+                entry = self._sessions.pop(key, None)
+                if not entry:
+                    continue
+                try:
+                    await entry.client_ctx.__aexit__(None, None, None)
+                except Exception:
+                    logger.debug("close_keys: error closing %s", key, exc_info=True)
+                await self._release_managed(entry)
+                closed += 1
+        if closed:
+            logger.info("[mcp:session] closed %d session(s) at turn end", closed)
+        return closed
+
     async def refresh_session(
         self,
         server_name: str,
