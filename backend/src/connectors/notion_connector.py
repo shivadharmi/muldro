@@ -20,6 +20,7 @@ class NotionConnector(BaseConnector):
     supports_actions: bool = True
     available_actions: list[str] = ["create_page", "update_page", "search"]
 
+    # TODO: migrate to PollResult (returns bare 2-tuple — LSP violation vs BaseConnector.poll)
     async def poll(
         self, user_id: str, cursor: str | None, credentials: dict
     ) -> tuple[list[RawEvent], str | None]:

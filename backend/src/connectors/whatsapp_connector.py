@@ -26,6 +26,7 @@ class WhatsAppConnector(BaseConnector):
     def _access_token(self) -> str:
         return getattr(self._settings, "whatsapp_access_token", "") if self._settings else ""
 
+    # TODO: migrate to PollResult (returns bare 2-tuple — LSP violation vs BaseConnector.poll)
     async def poll(
         self, user_id: str, cursor: str | None, credentials: dict
     ) -> tuple[list[RawEvent], str | None]:

@@ -8,19 +8,22 @@ failure path instead of the success path.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from src.services.event_processor import RawEvent
 
 PollErrorClass = Literal["none", "transient", "permanent", "rate_limited", "auth_failed"]
 
 # Sentinel error strings that map to PerceptionPolicyService's classify_error patterns.
 # These strings are chosen so that classify_error() returns the right ErrorClass
 # without needing an additional translation layer in jarvis.py.
+# "none" is intentionally absent — a successful poll must never be passed to record_failure.
 _ERROR_CLASS_MESSAGES: dict[str, str] = {
     "transient": "transient connector error (503 service unavailable)",
     "permanent": "permanent connector error (4xx unrecoverable)",
     "rate_limited": "rate_limited connector error (429 rate limit exceeded)",
     "auth_failed": "auth_failed connector error (401 unauthorized: token invalid or revoked)",
-    "none": "",
 }
 
 
@@ -30,8 +33,33 @@ def error_class_to_policy_error(error_class: PollErrorClass) -> str:
     Used by _poll_connector to populate the poll_error 4-tuple slot, ensuring
     that the error string contains the right keywords for PerceptionPolicyService
     to select the correct circuit-breaker threshold.
+
+    Raises ValueError for ``"none"`` — a successful poll must never be converted to an
+    error message and passed to record_failure.
     """
+    if error_class == "none":
+        raise ValueError(
+            "error_class_to_policy_error called with 'none' — "
+            "successful polls must not be recorded as failures"
+        )
     return _ERROR_CLASS_MESSAGES.get(error_class, error_class)
+
+
+def _classify_http_status(status_code: int) -> PollErrorClass:
+    """Map an HTTP status code to a PollErrorClass.
+
+    Shared by all native connectors (gmail, slack, calendar, github).
+    """
+    if status_code in (401, 403):
+        return "auth_failed"
+    if status_code == 429:
+        return "rate_limited"
+    if status_code >= 500:
+        return "transient"
+    # Other 4xx errors won't self-heal on retry
+    if status_code >= 400:
+        return "permanent"
+    return "none"
 
 
 @dataclass(frozen=True)
@@ -54,7 +82,7 @@ class PollResult:
                      - ``"permanent"``   — unrecoverable 4xx (won't self-heal)
     """
 
-    events: list = field(default_factory=list)
+    events: list[RawEvent] = field(default_factory=list)
     cursor: str | None = None
     error_class: PollErrorClass = "none"
 

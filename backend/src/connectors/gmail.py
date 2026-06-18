@@ -4,24 +4,10 @@ import logging
 from datetime import datetime, timezone
 
 from src.connectors.base import BaseConnector, ConnectorHealth, register_connector
-from src.connectors.poll_result import PollErrorClass, PollResult
+from src.connectors.poll_result import PollResult, _classify_http_status
 from src.services.event_processor import RawEvent
 
 logger = logging.getLogger(__name__)
-
-
-def _classify_http_status(status_code: int) -> PollErrorClass:
-    """Map an HTTP status code to a PollErrorClass."""
-    if status_code in (401, 403):
-        return "auth_failed"
-    if status_code == 429:
-        return "rate_limited"
-    if status_code >= 500:
-        return "transient"
-    # Other 4xx errors won't self-heal on retry
-    if status_code >= 400:
-        return "permanent"
-    return "none"
 
 
 @register_connector("gmail")
@@ -108,7 +94,7 @@ class GmailConnector(BaseConnector):
                             )
                             if event:
                                 events.append(event)
-                    elif resp.status_code != 200:
+                    else:
                         error_class = _classify_http_status(resp.status_code)
                         logger.warning(
                             "Gmail messages API returned %d for user %s",

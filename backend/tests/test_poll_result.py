@@ -340,15 +340,6 @@ class TestGitHubConnectorFailurePropagation:
 class TestPerceptionCycleRouting:
     """run_perception_cycle must route PollResult.failed → record_failure."""
 
-    def _make_jarvis(self):
-        """Minimal stub of JarvisOrchestrator for _poll_connector tests."""
-        from unittest.mock import MagicMock
-
-        orchestrator = MagicMock()
-        orchestrator._db_factory = MagicMock()
-        orchestrator._settings = make_mock_settings()
-        return orchestrator
-
     @pytest.mark.asyncio
     async def test_failed_poll_returns_error_status(self):
         """run_perception_cycle returns status=error when connector poll fails."""
@@ -491,8 +482,7 @@ class TestPerceptionCycleRouting:
 class TestErrorClassPropagation:
     """Error-class from PollResult maps to correct circuit-breaker behaviour."""
 
-    @pytest.mark.asyncio
-    async def test_rate_limited_uses_transient_threshold(self):
+    def test_rate_limited_uses_transient_threshold(self):
         """rate_limited error_class → lower threshold (treated as transient)."""
         from src.connectors.poll_result import error_class_to_policy_error
 
@@ -501,8 +491,7 @@ class TestErrorClassPropagation:
         error_msg = error_class_to_policy_error("rate_limited")
         assert "429" in error_msg or "rate" in error_msg.lower()
 
-    @pytest.mark.asyncio
-    async def test_auth_failed_uses_permanent_threshold(self):
+    def test_auth_failed_uses_permanent_threshold(self):
         """auth_failed error_class → permanent classification (opens circuit fast)."""
         from src.connectors.poll_result import error_class_to_policy_error
         from src.services.perception_policy import classify_error
@@ -511,8 +500,7 @@ class TestErrorClassPropagation:
         classified = classify_error(error_msg)
         assert classified == "permanent"
 
-    @pytest.mark.asyncio
-    async def test_transient_maps_to_transient_classification(self):
+    def test_transient_maps_to_transient_classification(self):
         """transient error_class → transient classify_error result."""
         from src.connectors.poll_result import error_class_to_policy_error
         from src.services.perception_policy import classify_error
@@ -521,8 +509,7 @@ class TestErrorClassPropagation:
         classified = classify_error(error_msg)
         assert classified == "transient"
 
-    @pytest.mark.asyncio
-    async def test_permanent_uses_permanent_threshold(self):
+    def test_permanent_uses_permanent_threshold(self):
         """permanent error_class → permanent classify_error result (opens circuit after 1 failure).
 
         Regression test: the sentinel produced by error_class_to_policy_error("permanent")
