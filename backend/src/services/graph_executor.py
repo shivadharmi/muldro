@@ -19,8 +19,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
 from src.config.settings import Settings, get_anthropic_client
+from src.connectors.mcp_bridge import close_turn_sessions
 from src.contracts import PolicyDecision, ResultSummary, StepResult, StepState
 from src.errors import classify, new_correlation_id
+from src.integrations.turn_scope import turn_scope
 from src.llm_utils import parse_llm_json
 from src.middleware.observability import get_correlation_id
 from src.models.plans import Plan, PlanTask
@@ -399,126 +401,127 @@ class GraphExecutor:
         used so that every caller — live WebSocket push, REST poll, and detail
         modal — targets the same surface.
         """
-        result = await self._db.execute(select(TaskRun).where(TaskRun.run_id == run_id))
-        run = result.scalar_one_or_none()
-        if not run:
-            raise ValueError(f"Run not found: {run_id}")
+        async with turn_scope(on_close=close_turn_sessions):
+            result = await self._db.execute(select(TaskRun).where(TaskRun.run_id == run_id))
+            run = result.scalar_one_or_none()
+            if not run:
+                raise ValueError(f"Run not found: {run_id}")
 
-        # Create a live JarvisTrace so agent_loop can accumulate spans.
-        effective_trace_id = trace_id or f"trace_{ULID()}"
-        # Always stamp run.trace_id BEFORE step execution so the detail
-        # endpoint can resolve token/cost totals on a running or completed
-        # run, not only on runs that happened to be passed a trace_id.
-        run.trace_id = effective_trace_id
-        trace = JarvisTrace(
-            trace_id=effective_trace_id,
-            trigger=f"execution:{run.source or 'background'}",
-        )
-        self._active_traces[run.run_id] = trace
+            # Create a live JarvisTrace so agent_loop can accumulate spans.
+            effective_trace_id = trace_id or f"trace_{ULID()}"
+            # Always stamp run.trace_id BEFORE step execution so the detail
+            # endpoint can resolve token/cost totals on a running or completed
+            # run, not only on runs that happened to be passed a trace_id.
+            run.trace_id = effective_trace_id
+            trace = JarvisTrace(
+                trace_id=effective_trace_id,
+                trigger=f"execution:{run.source or 'background'}",
+            )
+            self._active_traces[run.run_id] = trace
 
-        transition_run(run, "running")
-        run.started_at = datetime.now(timezone.utc)
+            transition_run(run, "running")
+            run.started_at = datetime.now(timezone.utc)
 
-        # Default surface_id to the canonical run-scoped id so all emitters
-        # (execute_run, _build_run_surfaces, detail modal) converge on the
-        # same id and the frontend naturally deduplicates.
-        if not surface_id:
-            surface_id = f"run_{run_id}"
-        run.checkpoint = {**(run.checkpoint or {}), "surface_id": surface_id}
-        await self._db.flush()
+            # Default surface_id to the canonical run-scoped id so all emitters
+            # (execute_run, _build_run_surfaces, detail modal) converge on the
+            # same id and the frontend naturally deduplicates.
+            if not surface_id:
+                surface_id = f"run_{run_id}"
+            run.checkpoint = {**(run.checkpoint or {}), "surface_id": surface_id}
+            await self._db.flush()
 
-        await self._audit.log(
-            user_id=run.user_id,
-            action_type="run_started",
-            plan_id=run.plan_id,
-            execution_id=run.run_id,
-            summary=f"Run {run_id} started",
-            workspace_id=run.workspace_id,
-        )
-        await self._emit_event(
-            "run.started",
-            run.user_id,
-            {
-                "run_id": run_id,
-                "plan_id": run.plan_id,
-            },
-            workspace_id=run.workspace_id,
-        )
-
-        # Emit plan_ready so the frontend knows steps are populated and execution begins
-        if surface_id:
-            all_steps = await self._get_all_steps(run.run_id)
-            plan_ready_steps = [_step_to_state(s, status_override="pending") for s in all_steps]
-            await self._emit_surface_update(
-                surface_id=surface_id,
+            await self._audit.log(
                 user_id=run.user_id,
-                phase="plan_ready",
-                steps=plan_ready_steps,
+                action_type="run_started",
+                plan_id=run.plan_id,
+                execution_id=run.run_id,
+                summary=f"Run {run_id} started",
                 workspace_id=run.workspace_id,
             )
-
-        cancel_event = asyncio.Event()
-        self._cancel_events[run.run_id] = cancel_event
-
-        try:
-            # Enforce timeout for background runs to prevent indefinite hangs
-            timeout = run.timeout_seconds or (600 if run.source == "background" else None)
-            if timeout:
-                await asyncio.wait_for(
-                    self._execute_dag(run, surface_id=surface_id, cancel_event=cancel_event),
-                    timeout=timeout,
-                )
-            else:
-                await self._execute_dag(run, surface_id=surface_id, cancel_event=cancel_event)
-        except asyncio.TimeoutError:
-            transition_run(run, "timed_out")
-            run.completed_at = datetime.now(timezone.utc)
-            run.error = {
-                "type": "TimeoutError",
-                "message": f"Run timed out after {timeout}s",
-            }
-            logger.warning("Run %s timed out after %ds", run_id, timeout)
             await self._emit_event(
-                "run.timed_out",
-                run.user_id,
-                {"run_id": run_id, "timeout": timeout},
-                workspace_id=run.workspace_id,
-            )
-        except Exception as exc:
-            transition_run(run, "failed")
-            run.completed_at = datetime.now(timezone.utc)
-            # run.error is rendered in execution surfaces + run history (client-facing).
-            # Store the safe message + code + correlation id; raw str(exc) → logs only.
-            safe = _safe_error_fields(exc)
-            run.error = {"type": "execution_error", **safe}
-            logger.error("Run %s failed: %s", run_id, exc, exc_info=True)
-            await self._emit_event(
-                "run.failed",
+                "run.started",
                 run.user_id,
                 {
                     "run_id": run_id,
-                    "error": safe["message"],
-                    "error_code": safe["error_code"],
-                    "correlation_id": safe["correlation_id"],
+                    "plan_id": run.plan_id,
                 },
                 workspace_id=run.workspace_id,
             )
-        finally:
-            self._cancel_events.pop(run.run_id, None)
-            # Finalize and persist the trace
-            await self._finalize_trace(run)
 
-        # Record Prometheus metrics
-        try:
-            from src.services.metrics_service import MetricsService
+            # Emit plan_ready so the frontend knows steps are populated and execution begins
+            if surface_id:
+                all_steps = await self._get_all_steps(run.run_id)
+                plan_ready_steps = [_step_to_state(s, status_override="pending") for s in all_steps]
+                await self._emit_surface_update(
+                    surface_id=surface_id,
+                    user_id=run.user_id,
+                    phase="plan_ready",
+                    steps=plan_ready_steps,
+                    workspace_id=run.workspace_id,
+                )
 
-            MetricsService.record_execution_completed(run.status)
-        except Exception:
-            pass
+            cancel_event = asyncio.Event()
+            self._cancel_events[run.run_id] = cancel_event
 
-        await self._reconcile_plan_status(run)
-        await self._db.commit()
-        return run
+            try:
+                # Enforce timeout for background runs to prevent indefinite hangs
+                timeout = run.timeout_seconds or (600 if run.source == "background" else None)
+                if timeout:
+                    await asyncio.wait_for(
+                        self._execute_dag(run, surface_id=surface_id, cancel_event=cancel_event),
+                        timeout=timeout,
+                    )
+                else:
+                    await self._execute_dag(run, surface_id=surface_id, cancel_event=cancel_event)
+            except asyncio.TimeoutError:
+                transition_run(run, "timed_out")
+                run.completed_at = datetime.now(timezone.utc)
+                run.error = {
+                    "type": "TimeoutError",
+                    "message": f"Run timed out after {timeout}s",
+                }
+                logger.warning("Run %s timed out after %ds", run_id, timeout)
+                await self._emit_event(
+                    "run.timed_out",
+                    run.user_id,
+                    {"run_id": run_id, "timeout": timeout},
+                    workspace_id=run.workspace_id,
+                )
+            except Exception as exc:
+                transition_run(run, "failed")
+                run.completed_at = datetime.now(timezone.utc)
+                # run.error is rendered in execution surfaces + run history (client-facing).
+                # Store the safe message + code + correlation id; raw str(exc) → logs only.
+                safe = _safe_error_fields(exc)
+                run.error = {"type": "execution_error", **safe}
+                logger.error("Run %s failed: %s", run_id, exc, exc_info=True)
+                await self._emit_event(
+                    "run.failed",
+                    run.user_id,
+                    {
+                        "run_id": run_id,
+                        "error": safe["message"],
+                        "error_code": safe["error_code"],
+                        "correlation_id": safe["correlation_id"],
+                    },
+                    workspace_id=run.workspace_id,
+                )
+            finally:
+                self._cancel_events.pop(run.run_id, None)
+                # Finalize and persist the trace
+                await self._finalize_trace(run)
+
+            # Record Prometheus metrics
+            try:
+                from src.services.metrics_service import MetricsService
+
+                MetricsService.record_execution_completed(run.status)
+            except Exception:
+                pass
+
+            await self._reconcile_plan_status(run)
+            await self._db.commit()
+            return run
 
     async def resume_run(self, run_id: str) -> TaskRun:
         """Resume a paused/awaiting run from its last checkpoint.
