@@ -89,8 +89,12 @@ async def get_mcp_config() -> dict:
                         if env:
                             server_cfg["env"] = env
 
-                elif inst.transport in ("sse", "streamable-http") and inst.remote_url:
-                    server_cfg["url"] = inst.remote_url
+                elif inst.transport in ("sse", "streamable-http"):
+                    if inst.remote_url:
+                        server_cfg["url"] = inst.remote_url
+                    inst_cfg = getattr(inst, "config", None) or {}
+                    if isinstance(inst_cfg, dict) and inst_cfg.get("managed_local"):
+                        server_cfg["managed_local"] = True
 
                 servers[inst.server_name] = server_cfg
 

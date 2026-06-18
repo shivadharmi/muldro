@@ -506,6 +506,9 @@ def _installation_to_config(inst: Any) -> dict:
         if isinstance(defaults, dict) and defaults:
             config["tool_defaults"] = defaults
 
+    if isinstance(inst_cfg, dict) and inst_cfg.get("managed_local"):
+        config["managed_local"] = True
+
     return config
 
 

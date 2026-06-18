@@ -56,9 +56,8 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
         "server_name": "google-workspace",
         "display_name": "Google Workspace",
         "transport": "streamable-http",
-        "remote_url": os.environ.get(
-            "JARVIS_GOOGLE_WORKSPACE_MCP_URL", "http://localhost:8001/mcp"
-        ),
+        "remote_url": None,
+        "managed_local": True,
         "command": None,
         "args": None,
         "env_template": {},
@@ -236,6 +235,7 @@ async def seed_installations(db: AsyncSession, workspace_id: str, user_id: str) 
                 trust_id=trust_by_name.get(server_name),
                 auth_provider=inst_data.get("auth_provider"),
                 scopes_granted=inst_data.get("scopes_granted"),
+                config=({"managed_local": True} if inst_data.get("managed_local") else None),
             )
             db.add(installation)
             changed += 1
@@ -290,6 +290,13 @@ async def seed_installations(db: AsyncSession, workspace_id: str, user_id: str) 
                     "cloudId": stored_cloud,
                 }
                 inst.config = new_cfg
+                needs_update = True
+
+        # Sync managed_local flag into JSONB config for managed servers.
+        if inst_data.get("managed_local"):
+            current_cfg = inst.config if isinstance(inst.config, dict) else {}
+            if not current_cfg.get("managed_local"):
+                inst.config = {**current_cfg, "managed_local": True}
                 needs_update = True
 
         if needs_update:

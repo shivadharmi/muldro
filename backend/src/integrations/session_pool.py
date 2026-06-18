@@ -15,6 +15,7 @@ from typing import Any
 from fastmcp import Client
 from fastmcp.client.auth import BearerAuth
 
+from src.integrations.local_process_manager import get_local_process_manager
 from src.services.mcp_resilience import MCPCircuitBreaker
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,9 @@ class SessionEntry:
     # to a live Client" failures that manifest as Atlassian's generic
     # "We are having trouble..." error.
     bound_token: str | None = None
+    # Name of the locally-managed MCP process this session uses (if any), so
+    # every teardown path releases the process refcount exactly once.
+    managed_server: str | None = None
 
 
 class UserMCPSessionPool:
@@ -177,8 +181,19 @@ class UserMCPSessionPool:
 
             # Create Client
             transport = config.get("transport", "stdio")
+            managed_server: str | None = None
             if transport in ("sse", "streamable-http"):
-                url = config["url"]
+                if config.get("managed_local"):
+                    mgr = get_local_process_manager()
+                    if mgr is None:
+                        raise RuntimeError(
+                            f"'{server_name}' is managed_local but no "
+                            "LocalMCPProcessManager is configured"
+                        )
+                    url = await mgr.ensure_running(server_name)
+                    managed_server = server_name
+                else:
+                    url = config["url"]
                 client_ctx = Client(url, auth=auth) if auth else Client(url)
             else:
                 # stdio transport — inject auth as env var, then build config
@@ -225,6 +240,7 @@ class UserMCPSessionPool:
                 user_id=user_id,
                 tools=tool_mapping,
                 bound_token=bound_token,
+                managed_server=managed_server,
             )
             self._sessions[key] = entry
 
@@ -466,6 +482,16 @@ class UserMCPSessionPool:
             tool_name=tool_name,
         )
 
+    async def _release_managed(self, entry: SessionEntry) -> None:
+        if not entry.managed_server:
+            return
+        mgr = get_local_process_manager()
+        if mgr is not None:
+            try:
+                await mgr.release(entry.managed_server)
+            except Exception:
+                logger.debug("release of %s failed", entry.managed_server, exc_info=True)
+
     async def refresh_session(
         self,
         server_name: str,
@@ -483,6 +509,7 @@ class UserMCPSessionPool:
                     await entry.client_ctx.__aexit__(None, None, None)
                 except Exception:
                     logger.debug("Error closing session %s/%s", server_name, user_id)
+                await self._release_managed(entry)
 
         logger.info("Refreshed MCP session: server=%s user=%s", server_name, user_id)
 
@@ -502,6 +529,7 @@ class UserMCPSessionPool:
                     await entry.client_ctx.__aexit__(None, None, None)
                 except Exception:
                     pass
+                await self._release_managed(entry)
 
         if to_remove:
             logger.info("Cleaned up %d idle MCP sessions", len(to_remove))
@@ -515,6 +543,7 @@ class UserMCPSessionPool:
                     await entry.client_ctx.__aexit__(None, None, None)
                 except Exception:
                     pass
+                await self._release_managed(entry)
             self._sessions.clear()
         logger.info("MCP session pool shut down")
 
