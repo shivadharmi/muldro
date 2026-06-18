@@ -111,47 +111,51 @@ class PerceptionTickMixin:
                 await db.commit()
                 logger.info("Perception tick: %d sources processed", len(due_states))
 
-                # D2: Cross-source synthesis — trigger on signal volume
-                # (2+ sources with events AND 3+ total events)
-                source_event_counts = {}
-                for i, r in enumerate(results):
-                    if not isinstance(r, BaseException):
-                        src_name, evt_count = r
-                        if evt_count > 0:
-                            source_event_counts[src_name] = evt_count
+                # D2: Cross-source synthesis — trigger on signal volume per tenant.
+                # Group results by (user_id, workspace_id) so synthesis never
+                # crosses tenant boundaries.
+                # results is positionally aligned with due_states.
+                tenant_event_counts: dict[tuple[str, str], dict[str, int]] = {}
+                for state, r in zip(due_states, results):
+                    if isinstance(r, BaseException):
+                        continue
+                    _src_name, evt_count = r
+                    if evt_count > 0:
+                        key = (state.user_id, state.workspace_id)
+                        tenant_event_counts.setdefault(key, {})[state.source] = evt_count
 
-                sources_with_events = len(source_event_counts)
-                total_event_count = sum(source_event_counts.values())
-
-                if sources_with_events >= 2 and total_event_count >= 3 and self._orchestrator:
-                    try:
-                        user_id = due_states[0].user_id
-                        # Resolve workspace_id with fallback
-                        ws_id = ""
-                        for s in due_states:
-                            if s.workspace_id:
-                                ws_id = s.workspace_id
-                                break
-                        if not ws_id:
-                            try:
-                                ws_id = await self._resolve_workspace(user_id)
-                            except Exception:
-                                logger.warning(
-                                    "No workspace_id for cross-source synthesis, skipping"
+                for (tenant_user_id, tenant_ws_id), src_counts in tenant_event_counts.items():
+                    sources_with_events = len(src_counts)
+                    total_event_count = sum(src_counts.values())
+                    if sources_with_events >= 2 and total_event_count >= 3 and self._orchestrator:
+                        try:
+                            ws_id = tenant_ws_id
+                            if not ws_id:
+                                try:
+                                    ws_id = await self._resolve_workspace(tenant_user_id)
+                                except Exception:
+                                    logger.warning(
+                                        "No workspace_id for cross-source synthesis user=%s, "
+                                        "skipping",
+                                        tenant_user_id,
+                                    )
+                                    ws_id = ""
+                            if ws_id:
+                                await self._orchestrator.run_cross_source_synthesis(
+                                    source_names=list(src_counts.keys()),
+                                    user_id=tenant_user_id,
+                                    workspace_id=ws_id,
                                 )
-                                ws_id = ""
-                        source_names = [s.source for s in due_states]
-                        if ws_id:
-                            await self._orchestrator.run_cross_source_synthesis(
-                                source_names=source_names,
-                                user_id=user_id,
-                                workspace_id=ws_id,
+                                logger.info(
+                                    "Cross-source synthesis triggered for user=%s %d sources",
+                                    tenant_user_id,
+                                    sources_with_events,
+                                )
+                        except Exception:
+                            logger.debug(
+                                "Cross-source synthesis failed for user=%s",
+                                tenant_user_id,
+                                exc_info=True,
                             )
-                            logger.info(
-                                "Cross-source synthesis triggered for %d sources",
-                                sources_with_events,
-                            )
-                    except Exception:
-                        logger.debug("Cross-source synthesis failed", exc_info=True)
         except Exception:
             logger.warning("Perception tick error", exc_info=True)
