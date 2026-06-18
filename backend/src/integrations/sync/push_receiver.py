@@ -1,7 +1,9 @@
-"""Push Receiver — validates and routes incoming webhook deliveries.
+"""Push Receiver — validates incoming webhook deliveries and signals perception.
 
-Receives webhook payloads from external providers, verifies signatures,
-normalizes the event, and routes to the event processor.
+Receives webhook payloads from external providers, verifies signatures, and
+signals the PerceptionPolicyService to schedule a poll on the next scheduler
+tick. No NormalizedEvent is created here — event ingestion happens through
+the real connector → EventProcessor funnel triggered by the wake signal.
 """
 
 from __future__ import annotations
@@ -27,7 +29,13 @@ class DeliveryResult:
 
 
 class PushReceiver:
-    """Receives, verifies, and routes webhook deliveries."""
+    """Receives, verifies, and wake-signals webhook deliveries.
+
+    A verified delivery sets ``pending_run=True`` on the matching
+    PerceptionState so the scheduler picks up the source on its next tick and
+    runs it through the real connector → EventProcessor funnel.  No
+    NormalizedEvent row is created here.
+    """
 
     def __init__(self, db: AsyncSession, workspace_id: str, callback_base_url: str):
         self._db = db
@@ -42,12 +50,19 @@ class PushReceiver:
         signature: str | None = None,
         raw_body: bytes | None = None,
     ) -> DeliveryResult:
-        """Process an incoming webhook delivery."""
+        """Process an incoming webhook delivery.
+
+        Steps (in order):
+        1. Reject unknown / inactive subscriptions.
+        2. Verify HMAC signature (when a secret is configured).
+        3. Signal PerceptionPolicyService to schedule a poll.
+        4. Record the successful delivery.
+        """
         from sqlalchemy import select
 
         from src.models.webhook_subscription import WebhookSubscription
 
-        # Look up the subscription
+        # 1. Look up the subscription
         result = await self._db.execute(
             select(WebhookSubscription).where(
                 WebhookSubscription.subscription_id == subscription_id,
@@ -70,7 +85,7 @@ class PushReceiver:
                 error=f"subscription_{sub.status}",
             )
 
-        # Verify signature if secret is set
+        # 2. Verify signature if a secret is configured
         if sub.secret and raw_body:
             if not self._verify_signature(sub.secret, raw_body, signature, provider):
                 logger.warning(
@@ -84,13 +99,7 @@ class PushReceiver:
                     error="signature_mismatch",
                 )
 
-        # Normalize and route the event
-        event_id = await self._route_event(sub, payload)
-
-        # Record successful delivery
-        await self._webhook_manager.record_delivery(subscription_id)
-
-        # Signal perception policy — source is hot
+        # 3. Signal the perception layer — source is hot; scheduler picks it up next tick
         try:
             from src.services.perception_policy import PerceptionPolicyService
 
@@ -102,49 +111,36 @@ class PushReceiver:
                 signal_source="webhook",
             )
         except Exception:
-            logger.debug("Failed to signal perception from webhook", exc_info=True)
+            logger.warning(
+                "webhook_wake_signal_failed",
+                extra={"subscription_id": subscription_id, "provider": provider},
+                exc_info=True,
+            )
+            await self._webhook_manager.record_failure(subscription_id, "wake_signal_failed")
+            return DeliveryResult(
+                accepted=False,
+                subscription_id=subscription_id,
+                error="wake_signal_failed",
+            )
+
+        # 4. Record successful delivery
+        await self._webhook_manager.record_delivery(subscription_id)
 
         logger.info(
             "webhook_delivery_accepted",
             extra={
                 "subscription_id": subscription_id,
                 "provider": provider,
-                "event_id": event_id,
             },
         )
 
+        # event_id is None: NormalizedEvents are created by the connector funnel
+        # triggered by the wake signal above, not synchronously here.
         return DeliveryResult(
             accepted=True,
             subscription_id=subscription_id,
-            event_id=event_id,
+            event_id=None,
         )
-
-    async def _route_event(self, sub, payload: dict) -> str | None:
-        """Normalize the webhook payload and ingest as an event."""
-        normalized = _normalize_payload(sub.provider, sub.resource_type, payload)
-        if not normalized:
-            return None
-
-        from src.models.events import NormalizedEvent
-        from src.models.ids import generate_id
-
-        event_id = generate_id("evt")
-        event = NormalizedEvent(
-            event_id=event_id,
-            workspace_id=sub.workspace_id,
-            user_id=sub.user_id,
-            source=sub.provider,
-            event_type=normalized.get("event_type", "webhook_delivery"),
-            entity_type=sub.resource_type,
-            entity_id=normalized.get("entity_id", sub.resource_id),
-            title=normalized.get("title", f"Webhook from {sub.provider}"),
-            summary=normalized.get("summary"),
-            raw_payload=payload,
-            importance_score=normalized.get("importance_score", 0.5),
-        )
-        self._db.add(event)
-        await self._db.flush()
-        return event_id
 
     def _verify_signature(
         self,
@@ -168,82 +164,3 @@ class PushReceiver:
         # Default: raw HMAC-SHA256 comparison
         expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
         return hmac.compare_digest(expected, signature)
-
-
-def _normalize_payload(provider: str, resource_type: str, payload: dict) -> dict | None:
-    """Extract normalized event data from a provider-specific webhook payload."""
-    if provider == "github":
-        return _normalize_github(payload)
-    if provider == "gmail":
-        return _normalize_gmail(payload)
-    if provider == "slack":
-        return _normalize_slack(payload)
-    if provider == "calendar":
-        return _normalize_calendar(payload)
-    return {
-        "event_type": "webhook_delivery",
-        "entity_id": payload.get("id", ""),
-        "title": f"Webhook from {provider}",
-        "summary": str(payload)[:500],
-        "importance_score": 0.5,
-    }
-
-
-def _normalize_github(payload: dict) -> dict:
-    action = payload.get("action", "")
-    if "pull_request" in payload:
-        pr = payload["pull_request"]
-        return {
-            "event_type": f"pr_{action}",
-            "entity_id": str(pr.get("number", "")),
-            "title": f"PR #{pr.get('number')}: {pr.get('title', '')}",
-            "summary": f"PR {action} in {payload.get('repository', {}).get('full_name', '')}",
-            "importance_score": 0.7 if action in ("opened", "closed") else 0.4,
-        }
-    if "issue" in payload:
-        issue = payload["issue"]
-        return {
-            "event_type": f"issue_{action}",
-            "entity_id": str(issue.get("number", "")),
-            "title": f"Issue #{issue.get('number')}: {issue.get('title', '')}",
-            "summary": f"Issue {action} in {payload.get('repository', {}).get('full_name', '')}",
-            "importance_score": 0.6 if action in ("opened", "closed") else 0.3,
-        }
-    return {
-        "event_type": f"github_{action}",
-        "entity_id": str(payload.get("repository", {}).get("id", "")),
-        "title": f"GitHub event: {action}",
-        "importance_score": 0.3,
-    }
-
-
-def _normalize_gmail(payload: dict) -> dict:
-    return {
-        "event_type": "gmail_webhook_signal",
-        "entity_id": payload.get("emailAddress", "gmail_push"),
-        "title": "New Gmail activity",
-        "summary": f"Gmail push notification (historyId: {payload.get('historyId', 'unknown')})",
-        "importance_score": 0.6,
-    }
-
-
-def _normalize_slack(payload: dict) -> dict:
-    event = payload.get("event", {})
-    event_type = event.get("type", "message")
-    return {
-        "event_type": f"slack_{event_type}",
-        "entity_id": event.get("channel", ""),
-        "title": f"Slack {event_type}",
-        "summary": event.get("text", "")[:300],
-        "importance_score": 0.5,
-    }
-
-
-def _normalize_calendar(payload: dict) -> dict:
-    return {
-        "event_type": "calendar_change",
-        "entity_id": payload.get("resourceId", ""),
-        "title": "Calendar update",
-        "summary": f"Resource: {payload.get('resourceUri', '')}",
-        "importance_score": 0.5,
-    }

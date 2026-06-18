@@ -1,4 +1,4 @@
-"""Tests for webhook subscription management and push receiver."""
+"""Tests for webhook subscription management and PushReceiver."""
 
 from unittest.mock import AsyncMock, MagicMock
 
@@ -119,49 +119,3 @@ class TestPushReceiver:
 
         assert result.accepted is False
         assert result.error == "subscription_expired"
-
-
-class TestPushNormalization:
-    def test_normalize_github_pr(self):
-        from src.integrations.sync.push_receiver import _normalize_github
-
-        result = _normalize_github(
-            {
-                "action": "opened",
-                "pull_request": {"number": 42, "title": "Fix bug"},
-                "repository": {"full_name": "owner/repo"},
-            }
-        )
-        assert result["event_type"] == "pr_opened"
-        assert result["entity_id"] == "42"
-        assert "PR #42" in result["title"]
-
-    def test_normalize_github_issue(self):
-        from src.integrations.sync.push_receiver import _normalize_github
-
-        result = _normalize_github(
-            {
-                "action": "closed",
-                "issue": {"number": 10, "title": "Bug report"},
-                "repository": {"full_name": "owner/repo"},
-            }
-        )
-        assert result["event_type"] == "issue_closed"
-
-    def test_normalize_slack(self):
-        from src.integrations.sync.push_receiver import _normalize_slack
-
-        result = _normalize_slack(
-            {
-                "event": {"type": "message", "channel": "C123", "text": "hello"},
-            }
-        )
-        assert result["event_type"] == "slack_message"
-        assert result["entity_id"] == "C123"
-
-    def test_normalize_gmail(self):
-        from src.integrations.sync.push_receiver import _normalize_gmail
-
-        result = _normalize_gmail({"historyId": "12345", "emailAddress": "user@gmail.com"})
-        assert result["event_type"] == "gmail_webhook_signal"
-        assert result["entity_id"] == "user@gmail.com"
