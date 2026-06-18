@@ -14,5 +14,5 @@ def test_google_workspace_docker_dir_removed():
 
 def test_prod_compose_has_no_google_workspace_mcp_service():
     prod = ROOT / "docker-compose.prod.yml"
-    if prod.exists():
-        assert "google-workspace-mcp" not in prod.read_text()
+    assert prod.exists(), "docker-compose.prod.yml not found at repo root"
+    assert "google-workspace-mcp" not in prod.read_text()

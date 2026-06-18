@@ -1,4 +1,5 @@
 import inspect
+import re
 
 import src.integrations.seed_installations as seed_mod
 from src.integrations.seed_installations import _DEFAULT_INSTALLATIONS
@@ -33,5 +34,12 @@ def test_http_schemas_not_cleared_on_seed():
 def test_npx_servers_are_version_pinned():
     for name in ("slack", "playwright", "filesystem", "notion"):
         inst = _by_name(name)
-        pkg = next((a for a in inst["args"] if "@" in a and not a.startswith("-")), None)
-        assert pkg and "@" in pkg, f"{name} npx package should be version-pinned"
+        pkg = next(
+            (a for a in inst["args"] if not a.startswith("-") and "@" in a),
+            None,
+        )
+        assert pkg, f"{name} should have an npx package arg"
+        # The version segment is an @<digit...> AFTER the package name. For
+        # scoped packages (@scope/name@1.2.3) strip the leading scope first.
+        tail = pkg[1:] if pkg.startswith("@") else pkg
+        assert re.search(r"@\d", tail), f"{name} npx package '{pkg}' is not version-pinned"

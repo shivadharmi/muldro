@@ -117,11 +117,12 @@ def main():
             scheduler = SchedulerLoop(settings, orchestrator=orchestrator, user_ids=user_ids)
 
             # Wait for the FastAPI lifespan to reach the point where the MCP
-            # session pool is wired. Tool discovery runs in the background,
-            # so this handshake only covers pool construction + prior lifespan
-            # steps (Redis, seeds, Qdrant, Neo4j). A 30s budget is generous
-            # for that work; exceeding it usually means the API lifespan
-            # itself is stuck on an external dependency.
+            # session pool is wired. Startup only registers server configs
+            # (no background discovery); this handshake covers pool
+            # construction + prior lifespan steps (Redis, seeds, Qdrant,
+            # Neo4j). A 30s budget is generous for that work; exceeding it
+            # usually means the API lifespan itself is stuck on an external
+            # dependency.
             logger.info("Worker thread waiting for API lifespan handshake...")
             if not mcp_bridge_ready.wait(timeout=30):
                 logger.warning(

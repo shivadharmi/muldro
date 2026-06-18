@@ -4,7 +4,7 @@ Covers the key behaviors of the register-only startup model:
 
 1. Pool is wired synchronously (no background task returned).
 2. ``timeout_seconds`` bounds the DB registration call.
-3. HTTP ``list_tools`` timeout is still bounded (``discover_tools`` on session_pool).
+3. ``initialize_from_db`` registers configs without calling ``discover_tools``.
 """
 
 from __future__ import annotations
@@ -131,49 +131,6 @@ class TestRegistrationTimeout:
             or "lazy on first use" in rec.message.lower()
             for rec in caplog.records
         ), "Expected a warning about exceeding the registration budget"
-
-
-class TestHttpDiscoveryTimeout:
-    """``session_pool.discover_tools`` must not hang on a slow HTTP server."""
-
-    @pytest.mark.asyncio
-    async def test_hanging_list_tools_is_bounded(self, monkeypatch, caplog):
-        """A server whose ``list_tools`` never returns must produce a warning
-        and an empty list within the configured budget."""
-        from src.integrations import session_pool as sp
-
-        monkeypatch.setattr(sp, "HTTP_DISCOVERY_TIMEOUT_SECONDS", 0.05)
-
-        class _HangingClient:
-            def __init__(self, *args, **kwargs):
-                pass
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *exc):
-                return False
-
-            async def list_tools(self):
-                await asyncio.Event().wait()  # block forever
-
-        monkeypatch.setattr(sp, "Client", _HangingClient)
-
-        pool = sp.UserMCPSessionPool()
-        pool._server_configs[("ws_test", "slow_server")] = {
-            "transport": "streamable-http",
-            "url": "http://127.0.0.1:0",
-            "auth_provider": "none",
-        }
-
-        with caplog.at_level("WARNING", logger="src.integrations.session_pool"):
-            start = time.monotonic()
-            result = await pool.discover_tools("slow_server", workspace_id="ws_test")
-            elapsed = time.monotonic() - start
-
-        assert result == []
-        assert elapsed < 1.0, f"discover_tools did not respect the budget (elapsed={elapsed:.2f}s)"
-        assert any("timed out" in rec.message.lower() for rec in caplog.records)
 
 
 class TestNoEagerDiscovery:
