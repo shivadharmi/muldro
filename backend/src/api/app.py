@@ -222,11 +222,8 @@ def create_app() -> FastAPI:
         except Exception:
             logger.warning("OAuthManager unavailable for MCP bridge", exc_info=True)
 
-        # Initialize MCP bridge: wire the session pool synchronously (fast)
-        # and kick off eager tool discovery in the background. ``call_mcp_tool``
-        # is safe to use as soon as this returns; discovery populates schemas
-        # so they're available before the first external tool call.
-        app.state.mcp_init_task = None
+        # Initialize MCP bridge: register server configs synchronously. No eager
+        # discovery — sessions and tool schemas are created lazily on first use.
         mcp_bridge_ok = False
         try:
             from src.connectors.mcp_bridge import (
@@ -234,10 +231,9 @@ def create_app() -> FastAPI:
                 initialize_mcp_bridge,
             )
 
-            app.state.mcp_init_task = await initialize_mcp_bridge(
+            await initialize_mcp_bridge(
                 oauth_manager=oauth_manager,
-                timeout_seconds=90,
-                defer_discovery=True,
+                timeout_seconds=30,
             )
             mcp_bridge_ok = get_session_pool() is not None
         except Exception:

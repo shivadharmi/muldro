@@ -644,6 +644,7 @@ class UserMCPSessionPool:
                 result[canonical] = key[1]  # server_name
         return result
 
+    # Retained for lazy HTTP discovery; not called at startup anymore.
     async def discover_tools(
         self,
         server_name: str,

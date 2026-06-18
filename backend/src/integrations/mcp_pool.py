@@ -258,9 +258,11 @@ class WorkspaceMCPPool:
         return result
 
     async def initialize_from_db(self) -> int:
-        """Load all active installations from DB and register them.
+        """Register all active installations from DB. No network/process I/O.
 
-        Called at startup. Returns count of servers registered.
+        Tool schemas are no longer discovered eagerly — they come from the DB
+        registry (durable) and are lazily (re)discovered on first agent build
+        via discover_and_persist. Returns count of servers registered.
         """
         from src.models.database import get_session_factory
 
@@ -280,157 +282,16 @@ class WorkspaceMCPPool:
                 installations = result.scalars().all()
 
                 count = 0
-                http_servers: list[tuple[str, str, dict]] = []
                 for inst in installations:
                     config = _installation_to_config(inst)
-                    await self.add_server(
-                        inst.workspace_id,
-                        inst.server_name,
-                        config,
-                    )
+                    await self.add_server(inst.workspace_id, inst.server_name, config)
                     count += 1
-                    if config.get("transport") in ("sse", "streamable-http"):
-                        http_servers.append((inst.workspace_id, inst.server_name, config))
 
-                # Eagerly discover tools from HTTP MCP servers in parallel so
-                # schemas are available before the first tool call. Per-call
-                # timeouts live inside session_pool.discover_tools.
-                async def _http_discover(ws_id: str, srv_name: str, cfg: dict) -> None:
-                    try:
-                        await self._session_pool.discover_tools(
-                            srv_name, workspace_id=ws_id, config=cfg
-                        )
-                    except Exception as disc_err:
-                        logger.warning(
-                            "Tool discovery failed for HTTP server %s: %s",
-                            srv_name,
-                            disc_err,
-                        )
-
-                if http_servers:
-                    await asyncio.gather(
-                        *(_http_discover(w, s, c) for w, s, c in http_servers),
-                        return_exceptions=True,
-                    )
-
-                logger.info("Loaded %d MCP servers from DB", count)
-
-                # Eagerly discover tool schemas from stdio servers that have
-                # OAuth tokens available. Creates a session per (user, server),
-                # which spawns the subprocess and calls list_tools().
-                await self._discover_stdio_schemas(installations)
-
+                logger.info("Registered %d MCP server configs from DB (no discovery)", count)
                 return count
-
         except Exception as e:
-            logger.debug("Failed to load MCP servers from DB: %s", e)
+            logger.debug("Failed to register MCP servers from DB: %s", e)
             return 0
-
-    async def _discover_stdio_schemas(self, installations: list) -> None:
-        """Eagerly discover tool schemas from stdio MCP servers.
-
-        Two categories:
-        - Auth-free servers (auth_provider is None): spawned immediately, no token needed.
-        - OAuth servers: require a user with a valid token for the auth_provider.
-
-        Discovery runs in parallel; each per-server spawn is bounded by a 30s
-        timeout so one hanging subprocess cannot stall the whole pass.
-        """
-        oauth_providers = {"github", "slack", "notion"}
-
-        auth_free_servers: list[tuple[str, str]] = []
-        oauth_servers: list[tuple[str, str, str]] = []
-        for inst in installations:
-            if inst.transport != "stdio":
-                continue
-            if inst.auth_provider is None:
-                auth_free_servers.append((inst.workspace_id, inst.server_name))
-            elif inst.auth_provider in oauth_providers:
-                oauth_servers.append((inst.workspace_id, inst.server_name, inst.auth_provider))
-
-        async def _discover_auth_free(ws_id: str, srv_name: str) -> None:
-            try:
-                # Auth-free servers need a user_id for session keying but no real token.
-                # Use the workspace owner (first member) as the session key.
-                user_id = await self._resolve_workspace_user(ws_id)
-                if not user_id:
-                    logger.debug("No user for workspace %s — skipping %s", ws_id[:16], srv_name)
-                    return
-                session = await asyncio.wait_for(
-                    self._session_pool.get_or_create_session(
-                        srv_name, user_id=user_id, workspace_id=ws_id
-                    ),
-                    timeout=30,
-                )
-                logger.info(
-                    "Auth-free schema discovery for %s: %d tools",
-                    srv_name,
-                    len(session.tools),
-                )
-            except asyncio.TimeoutError:
-                logger.warning("Schema discovery timed out for %s (30s)", srv_name)
-            except Exception:
-                logger.debug("Schema discovery failed for %s", srv_name, exc_info=True)
-
-        if auth_free_servers:
-            await asyncio.gather(
-                *(_discover_auth_free(w, s) for w, s in auth_free_servers),
-                return_exceptions=True,
-            )
-
-        # Discover OAuth servers (need a user with a valid token)
-        if not oauth_servers:
-            return
-
-        oauth_mgr = self._session_pool._oauth_manager
-        if not oauth_mgr:
-            logger.debug("No OAuthManager — skipping OAuth stdio schema discovery")
-            return
-
-        async def _discover_oauth(ws_id: str, srv_name: str, auth_provider: str) -> None:
-            try:
-                from sqlalchemy import select
-
-                from src.models.oauth_token import OAuthToken
-
-                async with oauth_mgr._db_factory() as db:
-                    result = await db.execute(
-                        select(OAuthToken.user_id)
-                        .where(OAuthToken.provider == auth_provider)
-                        .limit(1)
-                    )
-                    row = result.first()
-
-                if not row:
-                    logger.debug(
-                        "No OAuth token for %s — skipping schema discovery for %s",
-                        auth_provider,
-                        srv_name,
-                    )
-                    return
-
-                user_id = row[0]
-                session = await asyncio.wait_for(
-                    self._session_pool.get_or_create_session(
-                        srv_name, user_id=user_id, workspace_id=ws_id
-                    ),
-                    timeout=30,
-                )
-                logger.info(
-                    "Stdio schema discovery for %s: %d tools (user=%s)",
-                    srv_name,
-                    len(session.tools),
-                    user_id[:16],
-                )
-            except asyncio.TimeoutError:
-                logger.warning("OAuth stdio schema discovery timed out for %s (30s)", srv_name)
-            except Exception:
-                logger.debug("Stdio schema discovery failed for %s", srv_name, exc_info=True)
-
-        await asyncio.gather(
-            *(_discover_oauth(w, s, p) for w, s, p in oauth_servers),
-            return_exceptions=True,
-        )
 
     async def _resolve_workspace_user(self, workspace_id: str) -> str | None:
         """Find any user in a workspace for session keying (auth-free servers)."""

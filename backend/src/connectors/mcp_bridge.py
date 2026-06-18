@@ -24,7 +24,6 @@ logger = logging.getLogger(__name__)
 _session_pool: UserMCPSessionPool | None = None
 _circuit_breaker = MCPCircuitBreaker()
 _discovery_failures: dict[str, dict] = {}
-_discovery_task: asyncio.Task | None = None
 
 
 def record_discovery_failure(server_name: str, error: str) -> None:
@@ -107,22 +106,17 @@ async def get_mcp_config() -> dict:
 async def initialize_mcp_bridge(
     oauth_manager: Any | None = None,
     *,
-    timeout_seconds: float = 90,
-    defer_discovery: bool = True,
-) -> asyncio.Task | None:
-    """Wire the session pool and (optionally) kick off background discovery.
+    timeout_seconds: float = 30,
+) -> None:
+    """Wire the session pool + local-process manager and register server configs.
 
-    The pool is usable for ``call_mcp_tool`` as soon as this function returns;
-    sessions are created lazily. Eager discovery (populating tool schemas for
-    all known servers) is bounded by ``timeout_seconds`` and, when
-    ``defer_discovery=True``, runs as a background task so it cannot block
-    lifespan startup or the worker-thread handshake. Skipped in test
-    environments. Returns the background task (or None) so the caller can
-    drain it on shutdown.
+    No eager tool discovery and no background tasks: sessions are created
+    lazily on first use, and tool schemas are durable in the DB (lazily
+    re-discovered per server on first agent build). Registration is a few cheap
+    DB reads, bounded by ``timeout_seconds``. Skipped in test environments.
     """
-    global _session_pool, _discovery_task
+    global _session_pool
 
-    # Skip in test environments to avoid spawning MCP subprocesses
     if os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("JARVIS_SKIP_MCP_BRIDGE"):
         logger.debug("MCP bridge skipped (test environment)")
         return None
@@ -131,7 +125,6 @@ async def initialize_mcp_bridge(
 
     _settings = get_settings()
 
-    # Create session pool and workspace pool — pool is usable immediately
     _session_pool = UserMCPSessionPool(
         oauth_manager=oauth_manager,
         circuit_breaker=_circuit_breaker,
@@ -158,46 +151,29 @@ async def initialize_mcp_bridge(
     except Exception:
         logger.exception("Failed to wire LocalMCPProcessManager")
 
-    async def _discover() -> None:
-        try:
-            count = await asyncio.wait_for(
-                workspace_pool.initialize_from_db(),
-                timeout=timeout_seconds,
-            )
-            logger.info("MCP bridge discovery complete: %d servers from DB", count)
-        except asyncio.TimeoutError:
-            logger.warning(
-                "MCP bridge discovery exceeded %.0fs budget — "
-                "sessions will be created lazily on first use",
-                timeout_seconds,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("MCP bridge discovery failed")
+    # Preflight: warn if host runtimes for spawning MCP servers are missing.
+    from src.integrations.runtime_preflight import check_mcp_runtimes
 
-    if defer_discovery:
-        _discovery_task = asyncio.create_task(_discover())
-        return _discovery_task
+    check_mcp_runtimes(["uvx", "npx"])
 
-    await _discover()
+    # Register all active server configs (no network/process I/O, no eager
+    # discovery). Bounded so a slow DB cannot stall startup.
+    try:
+        count = await asyncio.wait_for(workspace_pool.initialize_from_db(), timeout=timeout_seconds)
+        logger.info("MCP bridge ready: %d server configs registered", count)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "MCP config registration exceeded %.0fs — lazy on first use",
+            timeout_seconds,
+        )
+    except Exception:
+        logger.exception("MCP config registration failed")
     return None
 
 
 async def shutdown_mcp_bridge() -> None:
-    """Gracefully shut down the workspace pool and session pool."""
-    global _session_pool, _discovery_task
-
-    # Drain background discovery first so it doesn't race shutdown
-    if _discovery_task is not None and not _discovery_task.done():
-        _discovery_task.cancel()
-        try:
-            await asyncio.wait_for(_discovery_task, timeout=5)
-        except (asyncio.CancelledError, asyncio.TimeoutError):
-            pass
-        except Exception:
-            logger.debug("Discovery task raised during shutdown", exc_info=True)
-    _discovery_task = None
+    """Gracefully shut down the workspace pool, session pool, and local processes."""
+    global _session_pool
 
     from src.integrations.mcp_pool import get_workspace_pool, set_workspace_pool
 
