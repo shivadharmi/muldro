@@ -208,6 +208,11 @@ class WorkspaceMCPPool:
         if not user_id:
             return 0
 
+        from src.connectors.mcp_bridge import (
+            clear_discovery_failure,
+            record_discovery_failure,
+        )
+
         try:
             session = await self._session_pool.get_or_create_session(
                 server_name, user_id=user_id, workspace_id=workspace_id
@@ -216,8 +221,10 @@ class WorkspaceMCPPool:
             # Mark discovered only after the server actually responded. Transient
             # failures (exception path) are NOT marked so they are retried next time.
             self._discovered_servers.add((workspace_id, server_name))
-        except Exception:
+            clear_discovery_failure(server_name)
+        except Exception as e:
             logger.debug("discover_and_persist failed for %s", server_name, exc_info=True)
+            record_discovery_failure(server_name, str(e))
             return 0
         finally:
             try:

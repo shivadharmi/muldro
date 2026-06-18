@@ -41,68 +41,6 @@ def clear_discovery_failure(server_name: str) -> None:
     _discovery_failures.pop(server_name, None)
 
 
-async def get_mcp_config() -> dict:
-    """Build the mcpServers config dict from all active installations across workspaces.
-
-    The MCP bridge is process-global (initialized at startup), so it aggregates
-    all active installations. Per-workspace scoping happens at the pool layer.
-    """
-    from src.models.database import get_session_factory
-
-    try:
-        from sqlalchemy import select
-
-        from src.models.integration_installation import IntegrationInstallation
-
-        async with get_session_factory()() as db:
-            result = await db.execute(
-                select(IntegrationInstallation).where(
-                    IntegrationInstallation.status == "active",
-                    IntegrationInstallation.enabled.is_(True),
-                    IntegrationInstallation.transport.in_(["stdio", "sse", "streamable-http"]),
-                )
-            )
-            installations = result.scalars().all()
-
-            servers: dict[str, dict] = {}
-            for inst in installations:
-                if inst.server_name in servers:
-                    continue  # deduplicate across workspaces
-
-                server_cfg: dict = {
-                    "transport": inst.transport,
-                    "auth_provider": inst.auth_provider or "none",
-                }
-
-                if inst.transport == "stdio" and inst.command:
-                    server_cfg["command"] = inst.command
-                    if inst.args:
-                        server_cfg["args"] = inst.args
-                    # Resolve env vars
-                    if inst.env_template:
-                        env = {
-                            k: v
-                            for k, v in ((k, os.environ.get(k, "")) for k in inst.env_template)
-                            if v
-                        }
-                        if env:
-                            server_cfg["env"] = env
-
-                elif inst.transport in ("sse", "streamable-http"):
-                    if inst.remote_url:
-                        server_cfg["url"] = inst.remote_url
-                    inst_cfg = getattr(inst, "config", None) or {}
-                    if isinstance(inst_cfg, dict) and inst_cfg.get("managed_local"):
-                        server_cfg["managed_local"] = True
-
-                servers[inst.server_name] = server_cfg
-
-            return {"mcpServers": servers}
-    except Exception:
-        logger.debug("Control plane unavailable, returning empty config")
-        return {"mcpServers": {}}
-
-
 async def initialize_mcp_bridge(
     oauth_manager: Any | None = None,
     *,
