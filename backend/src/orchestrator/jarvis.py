@@ -1943,10 +1943,22 @@ class JarvisOrchestrator:
             # Double-check after acquiring lock
             if self._event_bus is not None:
                 return self._event_bus
+
+            from src.services.event_bus import EventBus
+
+            # Prefer the process-wide EventBus + Redis client from build_shared
+            # (container extras) so we don't open a second Redis connection.
+            extras = self._services.extras if self._services else {}
+            shared_bus = extras.get("event_bus")
+            if isinstance(shared_bus, EventBus):
+                self._event_bus = shared_bus
+                shared_redis = extras.get("redis")
+                if shared_redis is not None:
+                    self._event_bus_redis = shared_redis
+                return self._event_bus
+
             try:
                 import redis.asyncio as aioredis
-
-                from src.services.event_bus import EventBus
 
                 self._event_bus_redis = aioredis.from_url(
                     self._settings.redis_url, decode_responses=True

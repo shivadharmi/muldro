@@ -65,6 +65,12 @@ def _build_orchestrator(settings: Settings):
     svc = build_shared(settings)
     intelligence_server.configure(db_factory, settings, svc)
 
+    # Track the shared Redis client for shutdown cleanup (build_shared opens one
+    # process-wide client reused by the orchestrator + per-request services).
+    shared_redis = svc.extras.get("redis")
+    if shared_redis is not None:
+        _module_shared_redis.append(shared_redis)
+
     return JarvisOrchestrator(
         settings=settings,
         db_factory=db_factory,
@@ -74,6 +80,7 @@ def _build_orchestrator(settings: Settings):
 
 # Lazy singleton — created on first request
 _orchestrator = None
+_module_shared_redis: list = []  # shared Redis client(s) to close at shutdown
 
 
 async def _get_orchestrator(settings: Settings):
@@ -82,6 +89,27 @@ async def _get_orchestrator(settings: Settings):
         _orchestrator = _build_orchestrator(settings)
         await _orchestrator.load_agents_from_db()
     return _orchestrator
+
+
+async def shutdown_orchestrator() -> None:
+    """Release process-wide orchestrator resources at app shutdown.
+
+    Awaits the orchestrator's background tasks and closes the shared Redis
+    client opened by ``build_shared`` (P2 #4 polish — previously leaked).
+    """
+    global _orchestrator
+    if _orchestrator is not None:
+        try:
+            await _orchestrator.shutdown()
+        except Exception:
+            logger.debug("orchestrator.shutdown failed", exc_info=True)
+        _orchestrator = None
+    for redis in _module_shared_redis:
+        try:
+            await redis.aclose()
+        except Exception:
+            logger.debug("shared Redis aclose failed", exc_info=True)
+    _module_shared_redis.clear()
 
 
 @router.post("/v1/jarvis/chat")

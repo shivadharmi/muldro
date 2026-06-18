@@ -279,9 +279,16 @@ def create_app() -> FastAPI:
         except Exception:
             pass
 
-        # The orchestrator no longer holds a long-lived DB session — DB-bound
-        # services are built per request (P2 #4), so there is nothing to close
-        # here on shutdown.
+        # Shutdown: release the process-wide orchestrator — await its background
+        # tasks and close the shared Redis client opened by build_shared. (No
+        # long-lived DB session to close: DB-bound services are per-request.)
+        try:
+            from src.api.routes_chat import shutdown_orchestrator
+
+            await shutdown_orchestrator()
+            logger.info("Orchestrator shut down")
+        except Exception:
+            logger.debug("Orchestrator shutdown failed", exc_info=True)
 
         # Shutdown: dispose DB engine pool (returns all connections)
         try:
