@@ -116,8 +116,15 @@ async def assess_relevance(
     client: Any,
     model: str | None = None,
     engagement_context: str = "",
+    relevance_penalty: float = 0.0,
 ) -> RelevanceAssessment:
-    """Call Haiku to assess signal relevance. Returns silent assessment on failure."""
+    """Call Haiku to assess signal relevance. Returns silent assessment on failure.
+
+    ``relevance_penalty`` (0.0-1.0) is a deterministic downgrade derived from the
+    user's dismissal history (see EngagementService.get_relevance_penalty). It is
+    subtracted from the LLM's score before the tier is determined, so repeatedly
+    dismissed signal types are demoted even when the LLM rates them highly.
+    """
     if model is None:
         model = get_haiku_model()
     try:
@@ -140,9 +147,11 @@ async def assess_relevance(
         text = re.sub(r"^```\w*\n?", "", text.strip()).rstrip("`").strip()
         data = json.loads(text)
         assessment = RelevanceAssessment.model_validate(data)
+        adjusted_score = max(0.0, assessment.relevance_score - relevance_penalty)
         return assessment.model_copy(
             update={
-                "notification_tier": _determine_tier(assessment.relevance_score, assessment.urgency)
+                "relevance_score": adjusted_score,
+                "notification_tier": _determine_tier(adjusted_score, assessment.urgency),
             }
         )
     except Exception:

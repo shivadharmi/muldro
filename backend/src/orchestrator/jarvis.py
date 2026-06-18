@@ -1543,8 +1543,12 @@ class JarvisOrchestrator:
                     preferences=user_prefs,
                 )
 
-                # Fetch engagement context for the assessor
+                # Fetch engagement context + deterministic dismissal penalty.
+                # is_suppressed() hard-stops 5+-dismissal signal types; the
+                # graduated penalty (3-4 dismissals → 0.2) is applied to the
+                # assessor score so borderline signals are demoted a tier.
                 engagement_context = ""
+                relevance_penalty = 0.0
                 try:
                     from src.services.engagement_service import EngagementService
 
@@ -1558,6 +1562,9 @@ class JarvisOrchestrator:
                             )
                             return {"status": "suppressed", "source": source}
                         engagement_context = await eng_svc.get_engagement_context()
+                        relevance_penalty = await eng_svc.get_relevance_penalty(
+                            signal.source, signal.event_type
+                        )
                 except Exception:
                     logger.debug("Failed to load engagement context", exc_info=True)
 
@@ -1566,6 +1573,7 @@ class JarvisOrchestrator:
                     user_context,
                     self._client,
                     engagement_context=engagement_context,
+                    relevance_penalty=relevance_penalty,
                 )
 
                 # Route by notification tier
@@ -2790,10 +2798,42 @@ class JarvisOrchestrator:
         )
 
         if not has_system_caps and not has_write_steps and not has_tool_steps:
-            logger.debug(
-                "Perception plan from %s — no actionable steps",
-                source,
-            )
+            # No action to take, but the Planner may have produced a
+            # cross-cutting insight (esp. on the synthesis path, which has no
+            # prior relevance-routing step). Surface it as a briefing item so
+            # the reasoning isn't silently discarded.
+            if plan.goal and plan.goal.strip():
+                try:
+                    from src.services.memory_service import MemoryService
+
+                    insight_text = plan.goal.strip()
+                    if plan.reasoning and plan.reasoning.strip():
+                        insight_text = f"{insight_text}\n\n{plan.reasoning.strip()}"
+                    async with self._db_factory() as db:
+                        mem_svc = MemoryService(self._settings, db)
+                        await mem_svc.store_briefing_memory(
+                            user_id=user_id,
+                            workspace_id=workspace_id,
+                            text=insight_text,
+                            source=f"perception:{source}",
+                            signal_source=source,
+                        )
+                        await db.commit()
+                    logger.info(
+                        "Perception insight from %s surfaced as briefing item",
+                        source,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to surface non-actionable perception insight from %s",
+                        source,
+                        exc_info=True,
+                    )
+            else:
+                logger.debug(
+                    "Perception plan from %s — no actionable steps, no insight",
+                    source,
+                )
             return plan
 
         # Handle system capability steps inline
