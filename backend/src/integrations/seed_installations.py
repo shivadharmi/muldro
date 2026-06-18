@@ -246,14 +246,12 @@ async def seed_installations(db: AsyncSession, workspace_id: str, user_id: str) 
         needs_update = False
 
         if inst.transport != inst_data.get("transport", "stdio"):
+            # Transport changed — tool schemas may differ between modes, so
+            # clear them once. Steady-state restarts no longer clear schemas,
+            # making the DB the durable source of truth for tool exposure.
+            await _clear_stale_tool_schemas(db, server_name=server_name, workspace_id=workspace_id)
             inst.transport = inst_data.get("transport", "stdio")
             needs_update = True
-
-        # HTTP servers get schemas from live discovery — always clear stale
-        # DB schemas so they don't override live ones.  This handles both
-        # transport changes and schema drift (e.g., OAuth 2.1 mode changes).
-        if inst_data.get("transport", "stdio") in ("sse", "streamable-http"):
-            await _clear_stale_tool_schemas(db, server_name, workspace_id)
         if inst.remote_url != inst_data.get("remote_url"):
             inst.remote_url = inst_data.get("remote_url")
             needs_update = True
