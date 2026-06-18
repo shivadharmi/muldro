@@ -21,9 +21,8 @@ Changes:
     shared rows (the old constraint prevented it per-user).  We log a count
     for observability and skip if zero rows exist.
   - Create unique constraint ``uq_cursor_ws_user_source``
-    (workspace_id, user_id, source).
-  - Create supporting index ``ix_cursor_ws_user_source``
-    (workspace_id, user_id, source).
+    (workspace_id, user_id, source).  Postgres creates the backing btree
+    index automatically; no separate ``CREATE INDEX`` is needed.
 
 Backfill safety note: because the OLD constraint was ``(user_id, source)``,
 no two rows for the same ``(user_id, source)`` could exist — each user had
@@ -69,14 +68,11 @@ def upgrade() -> None:
     op.drop_constraint("uq_cursor_user_source", "observation_cursors", type_="unique")
     op.drop_index("ix_cursor_user_source", table_name="observation_cursors")
 
-    # Create new workspace-scoped constraint and index.
+    # Create new workspace-scoped constraint.
+    # No separate index needed — Postgres creates a backing btree index
+    # automatically to enforce the unique constraint.
     op.create_unique_constraint(
         "uq_cursor_ws_user_source",
-        "observation_cursors",
-        ["workspace_id", "user_id", "source"],
-    )
-    op.create_index(
-        "ix_cursor_ws_user_source",
         "observation_cursors",
         ["workspace_id", "user_id", "source"],
     )
@@ -87,9 +83,12 @@ def downgrade() -> None:
     # across different workspaces — true for data created before this
     # migration, but a row created after it for a second workspace would
     # block the downgrade.
+    #
+    # The unique constraint's backing btree index is dropped automatically
+    # when the constraint is dropped — no separate op.drop_index needed.
     op.drop_constraint("uq_cursor_ws_user_source", "observation_cursors", type_="unique")
-    op.drop_index("ix_cursor_ws_user_source", table_name="observation_cursors")
 
+    # Restore the OLD (user_id, source) unique constraint and its supporting index.
     op.create_unique_constraint(
         "uq_cursor_user_source",
         "observation_cursors",

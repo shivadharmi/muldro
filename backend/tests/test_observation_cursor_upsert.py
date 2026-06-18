@@ -155,10 +155,10 @@ class TestCursorWorkspaceScoping:
         assert "WORKSPACE_ID" in sql
 
     @pytest.mark.asyncio
-    async def test_two_workspaces_produce_distinct_conflict_targets(self):
-        """Two _update_cursor calls with different workspace_ids target the same
-        workspace-scoped constraint — confirming per-workspace isolation rather
-        than per-user isolation."""
+    async def test_two_workspaces_both_target_workspace_scoped_constraint(self):
+        """Two _update_cursor calls with different workspace_ids both target the
+        ``uq_cursor_ws_user_source`` constraint and include workspace_id in the
+        INSERT — confirming the SQL shape uses workspace-scoped conflict detection."""
         from src.orchestrator.jarvis import JarvisOrchestrator
 
         stmts: list = []

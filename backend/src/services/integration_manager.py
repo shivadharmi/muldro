@@ -235,7 +235,7 @@ class IntegrationManager:
         return cursor.cursor_value if cursor else None
 
     async def _update_cursor(
-        self, user_id: str, provider: str, value: str, workspace_id: str = ""
+        self, user_id: str, provider: str, value: str, workspace_id: str
     ) -> None:
         """Update the observation cursor.
 

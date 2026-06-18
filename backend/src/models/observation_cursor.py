@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.models.base import Base, TimestampMixin
@@ -27,5 +27,4 @@ class ObservationCursor(Base, TimestampMixin):
 
     __table_args__ = (
         UniqueConstraint("workspace_id", "user_id", "source", name="uq_cursor_ws_user_source"),
-        Index("ix_cursor_ws_user_source", "workspace_id", "user_id", "source"),
     )
