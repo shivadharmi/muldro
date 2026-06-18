@@ -87,6 +87,9 @@ class RunHealthTickMixin:
 
                 await db.commit()
 
+                # Refresh global loop gauges for /metrics after remediation.
+                await self._update_loop_gauges(db)
+
                 if remediated or expired_cancelled:
                     logger.info(
                         "Health check: %d stuck runs timed out, %d expired-approval runs cancelled",
@@ -96,6 +99,30 @@ class RunHealthTickMixin:
         except Exception:
             logger.warning("Run health check failed", exc_info=True)
 
+        await self._reap_idle_mcp_sessions()
+
+    async def _update_loop_gauges(self, db) -> None:
+        """Refresh global loop gauges (active runs, pending approvals) for
+        /metrics. Best-effort — never break the health tick on a metrics error."""
+        try:
+            from sqlalchemy import func
+
+            from src.models.approvals import Approval
+            from src.models.task_graph import TaskRun
+            from src.services.metrics_service import MetricsService
+
+            running = await db.execute(
+                select(func.count()).select_from(TaskRun).where(TaskRun.status == "running")
+            )
+            pending = await db.execute(
+                select(func.count()).select_from(Approval).where(Approval.status == "pending")
+            )
+            MetricsService.set_active_runs(running.scalar() or 0)
+            MetricsService.set_pending_approvals(pending.scalar() or 0)
+        except Exception:
+            logger.debug("Failed to update loop gauges", exc_info=True)
+
+    async def _reap_idle_mcp_sessions(self) -> None:
         # Reap idle MCP sessions as a safety net (sessions not closed by TurnScope).
         try:
             from src.connectors.mcp_bridge import get_session_pool

@@ -112,6 +112,28 @@ class TestStuckRunDetection:
         assert hasattr(SchedulerLoop, "_tick_run_health_check")
 
 
+class TestLoopGauges:
+    async def test_update_loop_gauges_sets_metrics(self):
+        """The health tick refreshes global loop gauges for /metrics."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from src.services.scheduler import SchedulerLoop
+
+        running = MagicMock()
+        running.scalar.return_value = 4
+        pending = MagicMock()
+        pending.scalar.return_value = 2
+        db = AsyncMock()
+        db.execute = AsyncMock(side_effect=[running, pending])
+
+        sched = SchedulerLoop(MagicMock(), orchestrator=MagicMock())
+        with patch("src.services.metrics_service.MetricsService") as mock_metrics:
+            await sched._update_loop_gauges(db)
+
+        mock_metrics.set_active_runs.assert_called_once_with(4)
+        mock_metrics.set_pending_approvals.assert_called_once_with(2)
+
+
 class TestDurableSurfaceUpdates:
     def test_emit_surface_update_method_exists(self):
         """GraphExecutor has _emit_surface_update method."""

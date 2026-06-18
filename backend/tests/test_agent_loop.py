@@ -284,6 +284,38 @@ class TestAgentLoop:
 
         mock_metrics.record_tool_call.assert_any_call("search_memory", status="error")
 
+    async def test_agent_call_records_metric(self, client, agent, trace):
+        """Each API roundtrip records an agent-call metric (name, model, duration)."""
+        from unittest.mock import patch
+
+        from src.orchestrator.agent_loop import agent_loop
+
+        client.messages.create = AsyncMock(return_value=make_text_response("Hello!"))
+
+        with patch("src.services.metrics_service.MetricsService") as mock_metrics:
+            await _collect_events(
+                agent_loop(
+                    client=client,
+                    agent=agent,
+                    model="claude-sonnet-4-20250514",
+                    system_blocks=[],
+                    tools=[],
+                    message="hi",
+                    user_id="usr_test",
+                    workspace_id="ws_test",
+                    db_factory=_make_db_factory(),
+                    services=MagicMock(),
+                    budget=_make_budget(),
+                    trace=trace,
+                    execute_tool_fn=AsyncMock(),
+                )
+            )
+
+        mock_metrics.record_agent_call.assert_called()
+        args = mock_metrics.record_agent_call.call_args.args
+        assert args[1] == "claude-sonnet-4-20250514"  # model
+        assert args[2] >= 0  # duration_ms
+
     async def test_tool_timeout_60s(self, client, agent, trace):
         """Tool exceeding 60s timeout returns timed_out error."""
         from src.orchestrator.agent_loop import LoopToolResult, agent_loop

@@ -343,6 +343,7 @@ async def agent_loop(
                     api_kwargs["temperature"] = agent.temperature
 
             response = None
+            _api_start = time.time()
 
             if stream:
                 try:
@@ -418,6 +419,16 @@ async def agent_loop(
             # Record success for circuit breaker
             if circuit_breaker:
                 circuit_breaker.record_success(model)
+
+            # Agent-call observability (never break the loop on metrics error).
+            try:
+                from src.services.metrics_service import MetricsService
+
+                MetricsService.record_agent_call(
+                    agent_name, model, (time.time() - _api_start) * 1000
+                )
+            except Exception:
+                logger.debug("Failed to record agent-call metric", exc_info=True)
 
             # Capture thinking from final message
             for block in response.content:

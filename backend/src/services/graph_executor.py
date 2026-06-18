@@ -926,6 +926,13 @@ class GraphExecutor:
                 await self._notify_auto_executed(run, step, risk, output)
 
             await self._finalize_step(run, step, output, elapsed_ms)
+            # Reinforce trust: a successful auto-execution graduates trust the
+            # same way an explicit user approval does, so the autonomous path
+            # learns from its own outcomes (not only from approval prompts).
+            risk_level = getattr(risk, "risk_level", risk)
+            await self._record_auto_execution_outcome(
+                capability, risk_level, run.workspace_id or ""
+            )
             return
 
         # ── Common execution path (step resumed after approval) ──────
@@ -1119,6 +1126,27 @@ class GraphExecutor:
             )
         except Exception:
             logger.warning("Failed to send auto_execute notification", exc_info=True)
+
+    async def _record_auto_execution_outcome(
+        self, capability: str, risk_level: str, workspace_id: str
+    ) -> None:
+        """Reinforce trust after a successful auto-executed step.
+
+        Treats a successful autonomous execution as a positive outcome
+        (``approved``), so trust graduates from the loop's own successes — not
+        only from explicit user approvals. Best-effort: a metrics/trust write
+        must never fail an otherwise-successful step.
+        """
+        if not capability:
+            return
+        try:
+            from src.services.risk_assessor import record_approval_decision
+
+            await record_approval_decision(
+                self._db, workspace_id, capability, risk_level, "approved"
+            )
+        except Exception:
+            logger.debug("Failed to record auto-execution trust outcome", exc_info=True)
 
     async def _handle_step_failure(
         self,
