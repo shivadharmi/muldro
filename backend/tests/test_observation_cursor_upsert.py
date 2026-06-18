@@ -351,7 +351,9 @@ def _make_ingest_mocks():
 class TestAtomicIngestCursorAdvance:
     """P4: cursor upsert shares the ingestion unit of work.
 
-    Goal: "events ingested ⟹ cursor advanced" is a single gated code path.
+    Goal: the cursor is not advanced unless the event loop ran to completion.
+    EventProcessor commits per-event internally; the cursor upsert is executed
+    on the same session after the loop and committed by the trailing commit.
     """
 
     @pytest.mark.asyncio
@@ -405,7 +407,9 @@ class TestAtomicIngestCursorAdvance:
         assert "ON CONFLICT" in sql
         assert "UQ_CURSOR_WS_USER_SOURCE" in sql
 
-        # Exactly one commit — the trailing commit after the loop
+        # Trailing commit after the loop (EventProcessor per-event commits are
+        # on the same mock session but the final commit is the one at the end
+        # of _ingest_raw_events; here the mock captures all awaited calls)
         mock_db.commit.assert_awaited_once()
 
     @pytest.mark.asyncio

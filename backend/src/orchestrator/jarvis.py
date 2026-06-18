@@ -1785,7 +1785,6 @@ class JarvisOrchestrator:
         from datetime import datetime, timezone
 
         from sqlalchemy.dialects.postgresql import insert as pg_insert
-        from ulid import ULID
 
         from src.models.observation_cursor import ObservationCursor
 
@@ -1823,12 +1822,18 @@ class JarvisOrchestrator:
     ) -> list[str]:
         """Ingest raw events into the event processor. Returns summary strings.
 
-        When *new_cursor* is provided the cursor upsert is executed inside the
-        **same** db session as the event loop, just before the final commit.
-        This makes "events ingested ⟹ cursor advanced" a single code path: the
-        cursor only advances if the loop ran to completion and the trailing
-        commit succeeds.  If the session or EventProcessor construction raises
-        before the loop, ``new_cursor`` is never written.
+        ``EventProcessor.process()`` commits **per event** internally, so by
+        the time the loop finishes the session may have issued many commits.
+        When *new_cursor* is also provided, the cursor upsert is executed on
+        the **same** session after the loop and committed by the single trailing
+        ``await db.commit()`` at the end of this method.
+
+        The invariant guaranteed here is narrower than a single transaction:
+        **the cursor is not advanced unless the event loop ran to completion**
+        (i.e. no ``new_cursor`` write happens if the session or
+        ``EventProcessor`` construction raises before the loop starts).
+        Per-event commit failures are caught and forwarded to the DLQ; they do
+        not prevent the cursor from advancing for the events that succeeded.
         """
         summaries = []
         async with self._db_factory() as db:
@@ -1890,13 +1895,18 @@ class JarvisOrchestrator:
                     except Exception:
                         logger.debug("DLQ enqueue failed", exc_info=True)
 
-            # Fold the cursor advance into this session so it only commits if
-            # the event loop ran to completion (single gated code path).
+            # Advance the cursor on the same session so it is not written
+            # unless the event loop ran to completion.
             if new_cursor and source:
                 stmt = self._build_cursor_upsert_stmt(
                     source, user_id, workspace_id, new_cursor, cursor_type
                 )
                 await db.execute(stmt)
+            elif new_cursor and not source:
+                logger.warning(
+                    "ingest_cursor_skipped_no_source",
+                    extra={"new_cursor": new_cursor, "user_id": user_id},
+                )
 
             await db.commit()
         return summaries
