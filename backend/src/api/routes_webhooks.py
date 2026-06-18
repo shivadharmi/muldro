@@ -90,6 +90,69 @@ async def generic_webhook(
     return EventIngestResponse(event_id=event_id, status="processed", importance_score=None)
 
 
+# ── Provider callback webhooks (wake-signal) ─────────────────
+
+
+def _extract_signature(request: Request) -> str | None:
+    """Pull the provider signature header (varies by provider)."""
+    headers = request.headers
+    return (
+        headers.get("X-Hub-Signature-256")  # GitHub, Meta
+        or headers.get("X-Slack-Signature")  # Slack
+        or headers.get("X-Signature-256")
+        or headers.get("X-Signature")
+    )
+
+
+@router.post("/v1/webhooks/{provider}/{subscription_id}")
+async def provider_webhook(
+    provider: str,
+    subscription_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_session),
+):
+    """Receive a provider webhook delivery and signal perception.
+
+    This is the callback URL WebhookManager registers with external providers.
+    The delivery is a wake-signal only: PushReceiver verifies the HMAC signature
+    and sets ``pending_run`` on the matching PerceptionState so the scheduler
+    polls the source through the real connector → EventProcessor funnel on its
+    next tick. No NormalizedEvent is created here.
+
+    Unauthenticated by design (providers cannot carry a user session); the HMAC
+    signature on the subscription is the security boundary.
+    """
+    # PushReceiver authoritatively resolves workspace/user from the subscription
+    # row; the constructor's workspace_id/callback_base_url are unused on the
+    # inbound delivery path (record_delivery/record_failure key on sub id alone).
+    from src.integrations.sync.push_receiver import PushReceiver
+
+    raw_body = await request.body()
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+
+    receiver = PushReceiver(db, workspace_id="", callback_base_url="")
+    result = await receiver.handle_delivery(
+        provider=provider,
+        subscription_id=subscription_id,
+        payload=payload,
+        signature=_extract_signature(request),
+        raw_body=raw_body,
+    )
+
+    if not result.accepted:
+        if result.error == "unknown_subscription":
+            raise HTTPException(status_code=404, detail=result.error)
+        if result.error == "signature_mismatch":
+            raise HTTPException(status_code=403, detail=result.error)
+        raise HTTPException(status_code=400, detail=result.error or "rejected")
+
+    await db.commit()
+    return {"status": "accepted", "subscription_id": subscription_id}
+
+
 # ── WhatsApp Webhooks (Meta Business API) ────────────────────
 
 
