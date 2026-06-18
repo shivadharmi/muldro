@@ -134,6 +134,54 @@ class TestLoopGauges:
         mock_metrics.set_pending_approvals.assert_called_once_with(2)
 
 
+class TestBudgetGauges:
+    async def test_update_budget_gauges_sets_per_user_remaining(self):
+        """The health tick emits a per-user budget-remaining gauge."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from src.orchestrator.budget import BudgetStatus
+        from src.services.scheduler import SchedulerLoop
+
+        status = BudgetStatus(
+            daily_spend_usd=2.0,
+            daily_limit_usd=5.0,
+            budget_mode="normal",
+            remaining_usd=3.0,
+            percent_used=40.0,
+        )
+        orchestrator = MagicMock()
+        orchestrator._budget.get_budget_status = AsyncMock(return_value=status)
+
+        sched = SchedulerLoop(MagicMock(), orchestrator=orchestrator, user_ids=["user_x"])
+        db = AsyncMock()
+
+        with (
+            patch(
+                "src.services.workspace_resolver.resolve_workspace_id",
+                AsyncMock(return_value="ws_1"),
+            ),
+            patch("src.services.metrics_service.MetricsService") as mock_metrics,
+        ):
+            await sched._update_budget_gauges(db)
+
+        orchestrator._budget.get_budget_status.assert_awaited_once_with(db, workspace_id="ws_1")
+        mock_metrics.set_budget_remaining.assert_called_once_with("user_x", 3.0)
+
+    async def test_update_budget_gauges_noop_without_users(self):
+        """No users configured → no budget gauge emitted, no error."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from src.services.scheduler import SchedulerLoop
+
+        sched = SchedulerLoop(MagicMock(), orchestrator=MagicMock(), user_ids=[])
+        db = AsyncMock()
+
+        with patch("src.services.metrics_service.MetricsService") as mock_metrics:
+            await sched._update_budget_gauges(db)
+
+        mock_metrics.set_budget_remaining.assert_not_called()
+
+
 class TestDurableSurfaceUpdates:
     def test_emit_surface_update_method_exists(self):
         """GraphExecutor has _emit_surface_update method."""

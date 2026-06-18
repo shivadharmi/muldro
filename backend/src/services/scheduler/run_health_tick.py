@@ -89,6 +89,7 @@ class RunHealthTickMixin:
 
                 # Refresh global loop gauges for /metrics after remediation.
                 await self._update_loop_gauges(db)
+                await self._update_budget_gauges(db)
 
                 if remediated or expired_cancelled:
                     logger.info(
@@ -121,6 +122,30 @@ class RunHealthTickMixin:
             MetricsService.set_pending_approvals(pending.scalar() or 0)
         except Exception:
             logger.debug("Failed to update loop gauges", exc_info=True)
+
+    async def _update_budget_gauges(self, db) -> None:
+        """Refresh per-user budget-remaining gauges for /metrics.
+
+        The gauge is labelled by ``user_id``; budget is tracked per workspace,
+        so resolve each configured user's workspace and emit its remaining
+        daily budget. Best-effort — never break the health tick on error."""
+        budget = getattr(getattr(self, "_orchestrator", None), "_budget", None)
+        user_ids = getattr(self, "_user_ids", None) or []
+        if budget is None or not user_ids:
+            return
+        try:
+            from src.services.metrics_service import MetricsService
+            from src.services.workspace_resolver import resolve_workspace_id
+
+            for user_id in user_ids:
+                try:
+                    workspace_id = await resolve_workspace_id(db, user_id)
+                    status = await budget.get_budget_status(db, workspace_id=workspace_id)
+                    MetricsService.set_budget_remaining(user_id, status.remaining_usd)
+                except Exception:
+                    logger.debug("Budget gauge update failed for user %s", user_id, exc_info=True)
+        except Exception:
+            logger.debug("Failed to update budget gauges", exc_info=True)
 
     async def _reap_idle_mcp_sessions(self) -> None:
         # Reap idle MCP sessions as a safety net (sessions not closed by TurnScope).
