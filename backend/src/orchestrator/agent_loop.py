@@ -593,6 +593,16 @@ async def agent_loop(
                     and result.get("status") not in ("ok", "success", "updated", "ingested")
                 )
 
+                # Tool-call observability (never break the loop on metrics error).
+                try:
+                    from src.services.metrics_service import MetricsService
+
+                    MetricsService.record_tool_call(
+                        tool_name, status="error" if is_error else "success"
+                    )
+                except Exception:
+                    logger.debug("Failed to record tool-call metric", exc_info=True)
+
                 tool_results.append(
                     {
                         "type": "tool_result",

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
@@ -146,7 +147,20 @@ class EventProcessor:
         Gated by a semaphore to limit concurrent Claude API scoring calls.
         """
         async with self._semaphore:
-            return await self._process_inner(raw, user_id, workspace_id)
+            start = time.monotonic()
+            event_id = await self._process_inner(raw, user_id, workspace_id)
+            # Perception-throughput latency: only for events actually stored
+            # (skip duplicates, which return None without doing scoring work).
+            if event_id is not None:
+                try:
+                    from src.services.metrics_service import MetricsService
+
+                    MetricsService.record_event_processing(
+                        raw.source, (time.monotonic() - start) * 1000
+                    )
+                except Exception:
+                    logger.debug("Failed to record event-processing latency", exc_info=True)
+            return event_id
 
     async def _process_inner(
         self, raw: RawEvent, user_id: str, workspace_id: str = ""

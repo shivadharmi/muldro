@@ -214,6 +214,76 @@ class TestAgentLoop:
         assert len(done) == 1
         assert done[0].text == "Found it!"
 
+    async def test_successful_tool_call_records_metric(self, client, agent, trace):
+        """A successful tool call increments the tool-call metric (success)."""
+        from unittest.mock import patch
+
+        from src.orchestrator.agent_loop import agent_loop
+
+        client.messages.create = AsyncMock(
+            side_effect=[
+                make_tool_response("search_memory", {"query": "test"}),
+                make_text_response("done"),
+            ]
+        )
+        tool_fn = AsyncMock(return_value={"results": ["x"]})
+
+        with patch("src.services.metrics_service.MetricsService") as mock_metrics:
+            await _collect_events(
+                agent_loop(
+                    client=client,
+                    agent=agent,
+                    model="claude-sonnet-4-20250514",
+                    system_blocks=[],
+                    tools=[{"name": "search_memory", "description": "S", "input_schema": {}}],
+                    message="go",
+                    user_id="usr_test",
+                    workspace_id="ws_test",
+                    db_factory=_make_db_factory(),
+                    services=MagicMock(),
+                    budget=_make_budget(),
+                    trace=trace,
+                    execute_tool_fn=tool_fn,
+                )
+            )
+
+        mock_metrics.record_tool_call.assert_any_call("search_memory", status="success")
+
+    async def test_errored_tool_call_records_error_metric(self, client, agent, trace):
+        """A tool that returns an error increments the tool-call metric (error)."""
+        from unittest.mock import patch
+
+        from src.orchestrator.agent_loop import agent_loop
+
+        client.messages.create = AsyncMock(
+            side_effect=[
+                make_tool_response("search_memory", {"query": "test"}),
+                make_text_response("done"),
+            ]
+        )
+        tool_fn = AsyncMock(return_value={"error": "boom"})
+
+        with patch("src.services.metrics_service.MetricsService") as mock_metrics:
+            await _collect_events(
+                agent_loop(
+                    client=client,
+                    agent=agent,
+                    model="claude-sonnet-4-20250514",
+                    system_blocks=[],
+                    tools=[{"name": "search_memory", "description": "S", "input_schema": {}}],
+                    message="go",
+                    user_id="usr_test",
+                    workspace_id="ws_test",
+                    db_factory=_make_db_factory(),
+                    services=MagicMock(),
+                    budget=_make_budget(),
+                    trace=trace,
+                    execute_tool_fn=tool_fn,
+                )
+            )
+
+        mock_metrics.record_tool_call.assert_any_call("search_memory", status="error")
+
     async def test_tool_timeout_60s(self, client, agent, trace):
         """Tool exceeding 60s timeout returns timed_out error."""
         from src.orchestrator.agent_loop import LoopToolResult, agent_loop

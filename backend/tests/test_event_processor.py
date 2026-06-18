@@ -71,6 +71,52 @@ async def test_process_stores_event(mock_get_client, settings, mock_db):
 
 @patch("src.services.event_processor.get_anthropic_client")
 @pytest.mark.asyncio
+async def test_process_records_processing_latency(mock_get_client, settings, mock_db):
+    """A stored event records perception-throughput latency for the source."""
+    scores = {
+        "importance_score": 0.5,
+        "urgency_score": 0.3,
+        "confidence_score": 0.9,
+        "summary": "x",
+    }
+    mock_client = MagicMock()
+    mock_client.messages.create = AsyncMock(return_value=_make_claude_response(scores))
+    mock_get_client.return_value = mock_client
+
+    processor = EventProcessor(settings=settings, db=mock_db)
+    raw = make_raw_event()
+
+    with patch("src.services.metrics_service.MetricsService") as mock_metrics:
+        event_id = await processor.process(raw, TEST_USER_ID)
+
+    assert event_id is not None
+    mock_metrics.record_event_processing.assert_called_once()
+    call = mock_metrics.record_event_processing.call_args
+    assert call.args[0] == raw.source
+    assert call.args[1] >= 0  # duration_ms
+
+
+@patch("src.services.event_processor.get_anthropic_client")
+@pytest.mark.asyncio
+async def test_duplicate_does_not_record_latency(mock_get_client, settings, mock_db):
+    """A duplicate (no event stored) must not record processing latency."""
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = "evt_existing"
+    mock_db.execute = AsyncMock(return_value=result_mock)
+    mock_get_client.return_value = MagicMock()
+
+    processor = EventProcessor(settings=settings, db=mock_db)
+    raw = make_raw_event()
+
+    with patch("src.services.metrics_service.MetricsService") as mock_metrics:
+        event_id = await processor.process(raw, TEST_USER_ID)
+
+    assert event_id is None
+    mock_metrics.record_event_processing.assert_not_called()
+
+
+@patch("src.services.event_processor.get_anthropic_client")
+@pytest.mark.asyncio
 async def test_process_deduplicates(mock_get_client, settings, mock_db):
     """Duplicate events (same idempotency key) should return None."""
     # Simulate existing event found
