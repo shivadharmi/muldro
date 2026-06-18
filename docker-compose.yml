@@ -50,19 +50,6 @@ services:
     volumes:
       - neo4jdata:/data
 
-  google-workspace-mcp:
-    build:
-      context: ./infra/docker/google-workspace-mcp
-    ports:
-      - "8001:8000"
-    env_file:
-      - ./backend/.env
-    environment:
-      MCP_ENABLE_OAUTH21: "true"
-      EXTERNAL_OAUTH21_PROVIDER: "true"
-      WORKSPACE_MCP_STATELESS_MODE: "true"
-    restart: unless-stopped
-
   # ── Application services (profile "app") ──────────────────────────────────
   # Bare `docker compose up` starts infra only (preserving the native
   # `python run.py` dev loop). `docker compose --profile app up` additionally
