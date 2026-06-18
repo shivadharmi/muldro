@@ -138,6 +138,20 @@ async def initialize_mcp_bridge(
     workspace_pool = WorkspaceMCPPool(session_pool=_session_pool)
     set_workspace_pool(workspace_pool)
 
+    # Wire the local-process manager for managed_local servers (Google Workspace).
+    try:
+        from src.config.settings import get_settings
+        from src.integrations.local_process_manager import (
+            LocalMCPProcessManager,
+            set_local_process_manager,
+        )
+        from src.integrations.local_servers import build_local_server_specs
+
+        specs = build_local_server_specs(get_settings())
+        set_local_process_manager(LocalMCPProcessManager(specs=specs))
+    except Exception:
+        logger.exception("Failed to wire LocalMCPProcessManager")
+
     async def _discover() -> None:
         try:
             count = await asyncio.wait_for(
@@ -189,6 +203,16 @@ async def shutdown_mcp_bridge() -> None:
     if _session_pool:
         await _session_pool.shutdown()
         _session_pool = None
+
+    from src.integrations.local_process_manager import (
+        get_local_process_manager,
+        set_local_process_manager,
+    )
+
+    mgr = get_local_process_manager()
+    if mgr is not None:
+        await mgr.shutdown()
+        set_local_process_manager(None)
 
 
 def get_session_pool() -> UserMCPSessionPool | None:
