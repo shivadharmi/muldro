@@ -4,9 +4,23 @@ import logging
 from datetime import datetime, timezone
 
 from src.connectors.base import BaseConnector, ConnectorHealth, register_connector
+from src.connectors.poll_result import PollErrorClass, PollResult
 from src.services.event_processor import RawEvent
 
 logger = logging.getLogger(__name__)
+
+
+def _classify_http_status(status_code: int) -> PollErrorClass:
+    """Map an HTTP status code to a PollErrorClass."""
+    if status_code in (401, 403):
+        return "auth_failed"
+    if status_code == 429:
+        return "rate_limited"
+    if status_code >= 500:
+        return "transient"
+    if status_code >= 400:
+        return "permanent"
+    return "none"
 
 
 @register_connector("calendar")
@@ -15,22 +29,20 @@ class CalendarConnector(BaseConnector):
 
     cursor_type: str = "sync_token"
 
-    async def poll(
-        self, user_id: str, cursor: str | None, credentials: dict
-    ) -> tuple[list[RawEvent], str | None]:
+    async def poll(self, user_id: str, cursor: str | None, credentials: dict) -> PollResult:
         """Poll Calendar for event changes since syncToken cursor."""
         import httpx
 
         access_token = credentials.get("access_token", "")
         if not access_token:
-            return [], cursor
+            return PollResult(events=[], cursor=cursor, error_class="auth_failed")
 
-        events = []
+        events: list[RawEvent] = []
         new_cursor = cursor
 
         try:
             async with httpx.AsyncClient() as client:
-                params = {"singleEvents": "true", "maxResults": 50}
+                params: dict = {"singleEvents": "true", "maxResults": 50}
                 if cursor:
                     params["syncToken"] = cursor
                 else:
@@ -46,7 +58,7 @@ class CalendarConnector(BaseConnector):
                 )
 
                 if resp.status_code == 410:
-                    # Sync token expired, full sync
+                    # Sync token expired — full sync (cursor=None, not a failure)
                     return await self.poll(user_id, None, credentials)
 
                 if resp.status_code == 200:
@@ -57,12 +69,19 @@ class CalendarConnector(BaseConnector):
                         event = self._normalize_event(item, user_id)
                         if event:
                             events.append(event)
+                else:
+                    error_class = _classify_http_status(resp.status_code)
+                    logger.warning(
+                        "Calendar API returned %d for user %s", resp.status_code, user_id
+                    )
+                    return PollResult(events=[], cursor=cursor, error_class=error_class)
 
         except Exception:
             logger.warning("Calendar poll failed for user %s", user_id, exc_info=True)
+            return PollResult(events=[], cursor=cursor, error_class="transient")
 
         logger.info("Calendar poll: %d events", len(events))
-        return events, new_cursor
+        return PollResult(events=events, cursor=new_cursor)
 
     async def test(self, credentials: dict) -> ConnectorHealth:
         """Test Calendar connection."""

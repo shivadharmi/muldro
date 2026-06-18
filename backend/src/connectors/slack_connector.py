@@ -4,9 +4,23 @@ import logging
 from datetime import datetime, timezone
 
 from src.connectors.base import BaseConnector, ConnectorHealth, register_connector
+from src.connectors.poll_result import PollErrorClass, PollResult
 from src.services.event_processor import RawEvent
 
 logger = logging.getLogger(__name__)
+
+
+def _classify_http_status(status_code: int) -> PollErrorClass:
+    """Map an HTTP status code to a PollErrorClass."""
+    if status_code in (401, 403):
+        return "auth_failed"
+    if status_code == 429:
+        return "rate_limited"
+    if status_code >= 500:
+        return "transient"
+    if status_code >= 400:
+        return "permanent"
+    return "none"
 
 
 @register_connector("slack")
@@ -15,17 +29,15 @@ class SlackConnector(BaseConnector):
 
     cursor_type: str = "oldest_ts"
 
-    async def poll(
-        self, user_id: str, cursor: str | None, credentials: dict
-    ) -> tuple[list[RawEvent], str | None]:
+    async def poll(self, user_id: str, cursor: str | None, credentials: dict) -> PollResult:
         """Poll Slack for new messages since timestamp cursor."""
         import httpx
 
         access_token = credentials.get("access_token", "")
         if not access_token:
-            return [], cursor
+            return PollResult(events=[], cursor=cursor, error_class="auth_failed")
 
-        events = []
+        events: list[RawEvent] = []
         new_cursor = cursor
 
         try:
@@ -39,17 +51,33 @@ class SlackConnector(BaseConnector):
                 )
 
                 if channels_resp.status_code != 200:
-                    return [], cursor
+                    error_class = _classify_http_status(channels_resp.status_code)
+                    logger.warning(
+                        "Slack conversations.list returned %d for user %s",
+                        channels_resp.status_code,
+                        user_id,
+                    )
+                    return PollResult(events=[], cursor=cursor, error_class=error_class)
 
                 channels_data = channels_resp.json()
                 if not channels_data.get("ok"):
-                    return [], cursor
+                    # Slack API-level error (e.g. invalid_auth) — treat as auth_failed
+                    slack_error = channels_data.get("error", "unknown")
+                    error_class: PollErrorClass = (
+                        "auth_failed"
+                        if slack_error in ("invalid_auth", "not_authed", "token_revoked")
+                        else "permanent"
+                    )
+                    logger.warning(
+                        "Slack conversations.list error=%s for user %s", slack_error, user_id
+                    )
+                    return PollResult(events=[], cursor=cursor, error_class=error_class)
 
                 for channel in channels_data.get("channels", [])[:10]:
                     channel_id = channel["id"]
                     channel_name = channel.get("name", channel_id)
 
-                    params = {"channel": channel_id, "limit": 10}
+                    params: dict = {"channel": channel_id, "limit": 10}
                     if cursor:
                         params["oldest"] = cursor
 
@@ -61,6 +89,7 @@ class SlackConnector(BaseConnector):
                     )
 
                     if hist_resp.status_code != 200:
+                        # Skip this channel on per-channel failure; don't abort entire poll
                         continue
 
                     hist_data = hist_resp.json()
@@ -77,9 +106,10 @@ class SlackConnector(BaseConnector):
 
         except Exception:
             logger.warning("Slack poll failed for user %s", user_id, exc_info=True)
+            return PollResult(events=[], cursor=cursor, error_class="transient")
 
         logger.info("Slack poll: %d events", len(events))
-        return events, new_cursor
+        return PollResult(events=events, cursor=new_cursor)
 
     async def test(self, credentials: dict) -> ConnectorHealth:
         """Test Slack connection."""

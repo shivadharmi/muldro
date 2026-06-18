@@ -4,9 +4,24 @@ import logging
 from datetime import datetime, timezone
 
 from src.connectors.base import BaseConnector, ConnectorHealth, register_connector
+from src.connectors.poll_result import PollErrorClass, PollResult
 from src.services.event_processor import RawEvent
 
 logger = logging.getLogger(__name__)
+
+
+def _classify_http_status(status_code: int) -> PollErrorClass:
+    """Map an HTTP status code to a PollErrorClass."""
+    if status_code in (401, 403):
+        return "auth_failed"
+    if status_code == 429:
+        return "rate_limited"
+    if status_code >= 500:
+        return "transient"
+    # Other 4xx errors won't self-heal on retry
+    if status_code >= 400:
+        return "permanent"
+    return "none"
 
 
 @register_connector("gmail")
@@ -24,18 +39,16 @@ class GmailConnector(BaseConnector):
         "mark_read",
     ]
 
-    async def poll(
-        self, user_id: str, cursor: str | None, credentials: dict
-    ) -> tuple[list[RawEvent], str | None]:
+    async def poll(self, user_id: str, cursor: str | None, credentials: dict) -> PollResult:
         """Poll Gmail for new messages since historyId cursor."""
         import httpx
 
         access_token = credentials.get("access_token", "")
         if not access_token:
             logger.warning("No access token for Gmail polling, user=%s", user_id)
-            return [], cursor
+            return PollResult(events=[], cursor=cursor, error_class="auth_failed")
 
-        events = []
+        events: list[RawEvent] = []
         seen_msg_ids: set[str] = set()
         new_cursor = cursor
 
@@ -64,8 +77,17 @@ class GmailConnector(BaseConnector):
                                 if event:
                                     events.append(event)
                     elif resp.status_code == 404:
-                        # History expired, do full sync
+                        # History expired — fall through to full sync (cursor=None)
                         cursor = None
+                    else:
+                        error_class = _classify_http_status(resp.status_code)
+                        logger.warning(
+                            "Gmail history API returned %d for user %s",
+                            resp.status_code,
+                            user_id,
+                        )
+                        # Return unchanged incoming cursor on failure
+                        return PollResult(events=[], cursor=cursor, error_class=error_class)
                 else:
                     # Initial: list recent messages
                     resp = await client.get(
@@ -86,6 +108,14 @@ class GmailConnector(BaseConnector):
                             )
                             if event:
                                 events.append(event)
+                    elif resp.status_code != 200:
+                        error_class = _classify_http_status(resp.status_code)
+                        logger.warning(
+                            "Gmail messages API returned %d for user %s",
+                            resp.status_code,
+                            user_id,
+                        )
+                        return PollResult(events=[], cursor=cursor, error_class=error_class)
 
                     # Get current historyId for future incremental polling
                     profile = await client.get(
@@ -98,9 +128,10 @@ class GmailConnector(BaseConnector):
 
         except Exception:
             logger.warning("Gmail poll failed for user %s", user_id, exc_info=True)
+            return PollResult(events=[], cursor=cursor, error_class="transient")
 
         logger.info("Gmail poll: %d events, cursor %s -> %s", len(events), cursor, new_cursor)
-        return events, new_cursor
+        return PollResult(events=events, cursor=new_cursor)
 
     async def test(self, credentials: dict) -> ConnectorHealth:
         """Test Gmail connection."""

@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
 
+from src.connectors.poll_result import PollResult
 from src.services.event_processor import RawEvent
 
 
@@ -31,10 +32,14 @@ class BaseConnector(ABC):
         self._settings = settings
 
     @abstractmethod
-    async def poll(
-        self, user_id: str, cursor: str | None, credentials: dict
-    ) -> tuple[list[RawEvent], str | None]:
-        """Poll for new events since cursor. Returns (events, new_cursor)."""
+    async def poll(self, user_id: str, cursor: str | None, credentials: dict) -> PollResult:
+        """Poll for new events since cursor. Returns a typed PollResult.
+
+        Implementations MUST:
+        - Return PollResult with error_class="none" on success (events may be empty).
+        - Return PollResult with the appropriate error_class and the *unchanged*
+          incoming cursor on any failure — never advance the cursor on error.
+        """
 
     @abstractmethod
     async def test(self, credentials: dict) -> ConnectorHealth:
