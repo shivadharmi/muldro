@@ -402,13 +402,21 @@ async def oauth_callback(
             workspace_id=workspace_id,
         )
 
-        # Register integrations for the Google services
+        # Google Workspace is a single integration in the UI. gmail/calendar are
+        # perception *sources* of that one connection, not standalone installs —
+        # creating a row per service rendered the single Google link as three
+        # separate cards. Reactivate the seeded google-workspace row (it carries
+        # the account email for agent context) and enable the gmail + calendar
+        # perception schedules directly, without minting extra installation rows.
         await _ensure_integration(
-            db_factory, user_id, "gmail", userinfo.get("email"), workspace_id=workspace_id
+            db_factory,
+            user_id,
+            "google-workspace",
+            userinfo.get("email"),
+            workspace_id=workspace_id,
         )
-        await _ensure_integration(
-            db_factory, user_id, "calendar", userinfo.get("email"), workspace_id=workspace_id
-        )
+        await _enable_integration_schedules(db_factory, "gmail", workspace_id=workspace_id)
+        await _enable_integration_schedules(db_factory, "calendar", workspace_id=workspace_id)
 
         logger.info(
             "Google integration linked for %s (%s)",
