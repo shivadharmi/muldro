@@ -18,6 +18,7 @@ from ulid import ULID
 
 from src.config.models import BEDROCK_MODEL_TIERS, MODEL_TIERS
 from src.config.settings import Settings, get_anthropic_client
+from src.connectors.mcp_bridge import close_turn_sessions
 from src.contracts import PlanOutput, PlanStep
 from src.errors import (
     _GENERIC_CODE,
@@ -25,6 +26,7 @@ from src.errors import (
     classify,
     new_correlation_id,
 )
+from src.integrations.turn_scope import turn_scope
 from src.middleware.observability import get_correlation_id
 from src.models.tool_definitions import ToolBackend
 from src.orchestrator.agent_loop import (
@@ -906,297 +908,303 @@ class JarvisOrchestrator:
         """
         trace = self._trace_manager.start_trace("user_message")
 
-        def _fire_event(event_type: str, **kwargs: Any) -> None:
-            self._spawn_background(self._emit_runtime_event(event_type, **kwargs))
+        async with turn_scope(on_close=close_turn_sessions):
 
-        try:
-            yield TraceStarted(trace_id=trace.trace_id)
+            def _fire_event(event_type: str, **kwargs: Any) -> None:
+                self._spawn_background(self._emit_runtime_event(event_type, **kwargs))
 
-            _fire_event(
-                "command_received",
-                workspace_id=workspace_id,
-                user_id=user_id,
-                payload={"surface": surface, "message_preview": message[:100]},
-            )
-
-            history_block = await self._load_conversation_history(conversation_id, user_id=user_id)
-
-            # Step 0: Fast intent classification
-            intent, confidence, sources = await classify_intent(
-                self._client, self._haiku_model, message, history_block
-            )
-            yield IntentClassified(intent=intent, confidence=confidence)
-
-            if sources:
-                await self._bump_perception_for_sources(sources, user_id, workspace_id)
-
-            # Decide routing based on intent AND mode
-            if mode in ("execute", "plan"):
-                use_planner = True
-            else:
-                use_planner = intent not in FAST_INTENTS or confidence < INTENT_CONFIDENCE_THRESHOLD
-
-            _fire_event(
-                "route_selected",
-                workspace_id=workspace_id,
-                user_id=user_id,
-                payload={
-                    "intent": intent,
-                    "confidence": confidence,
-                    "use_planner": use_planner,
-                },
-            )
-
-            # Step 1: Generate PlanOutput
-            plan: PlanOutput
-            plan_text = ""
-
-            if use_planner:
-                planner_message = (
-                    f"User message: {message}\n\nContext: {json.dumps(context or {})}"
-                    f"{_PLANNER_JSON_CONTRACT_SUFFIX}"
-                )
-                if history_block:
-                    planner_message = f"{history_block}\n\n{planner_message}"
-
-                async for evt in self._call_agent_stream(
-                    "planner",
-                    message=planner_message,
-                    user_id=user_id,
-                    trace=trace,
-                    workspace_id=workspace_id,
-                ):
-                    yield agent_event_from_sse(evt)
-                    if evt.get("event") == "agent_done":
-                        plan_text = evt.get("text", "")
-
-                plan = extract_plan(plan_text)
-            else:
-                capabilities = await self._get_available_capabilities(workspace_id)
-                plan = intent_to_plan(intent, message, capabilities)
-
-            # Apply mode overrides
-            if mode == "plan":
-                plan = plan.model_copy(update={"requires_user_input": True})
-
-            # Persist Plan record if multi-step or has write risk
-            if len(plan.steps) > 1 or any(s.risk not in ("none",) for s in plan.steps):
-                import hashlib
-
-                goal_hash = hashlib.sha256((plan.goal or "").encode()).hexdigest()[:16]
-                plan = await self._persist_plan_record(
-                    plan,
-                    user_id,
-                    workspace_id,
-                    idempotency_key=f"user:{goal_hash}",
-                )
-
-            plan_dict = plan.model_dump(mode="json")
-
-            ilog_id = await self._log_interaction(
-                user_id=user_id,
-                workspace_id=workspace_id,
-                trace_id=trace.trace_id,
-                message_preview=message[:500],
-                intent=intent,
-                plan=plan,
-                conversation_id=conversation_id,
-            )
-            yield InteractionLogged(interaction_id=ilog_id)
-
-            yield PlanReady(plan=plan_dict, run_id=None, summary=plan.reasoning or plan_text)
-
-            _fire_event(
-                "plan_created",
-                workspace_id=workspace_id,
-                user_id=user_id,
-                run_id=None,
-                payload={"goal": plan.goal, "trace_id": trace.trace_id},
-            )
-
-            # Step 2: Pre-resolve routing and tools for all steps
-            step_routing, user_steps = await resolve_plan_routing(
-                self._db_factory, workspace_id, plan.steps
-            )
-
-            # Step 3: Execute steps. `step_outputs` is the narrow prior-context
-            # accumulator (agent step text only) injected into downstream agents
-            # — kept separate from the batch result contract so plan/trace
-            # metadata never leaks into agent prompts (drift #2).
-            presenter_text = ""
-            step_outputs: dict[str, str] = {}
-            for step_idx, (step, agent_name, tools) in enumerate(step_routing):
-                if step.capability.startswith("system."):
-                    sys_result = await self._handle_system_capability(
-                        step, plan, user_id, workspace_id
-                    )
-                    yield SystemStepResult(key=f"system_{step.capability}", output=sys_result)
-                    continue
-
-                if not agent_name:
-                    error_msg = f"No tools available for capability '{step.capability}'"
-                    logger.warning(error_msg)
-                    yield StepError(step_id=step.step_id, error=error_msg)
-                    continue
-
-                # Plan mode: skip risky execution, present the plan
-                if mode == "plan" and step.risk in ("medium", "high"):
-                    yield PlanModeStepSkipped(
-                        plan_id=plan.plan_id,
-                        message="Plan created. Review and approve to execute.",
-                    )
-                    continue
-
-                agent_message = (
-                    f"Execute this step: {step.description}\n"
-                    f"Goal: {plan.goal}\n"
-                    f"User message: {message}"
-                )
-                # Inject prior step results so downstream agents see earlier outputs.
-                agent_message += format_prior_step_results(step_outputs)
-                if history_block:
-                    agent_message = f"{history_block}\n\n{agent_message}"
-
-                step_key = f"step_{step_idx}_{step.capability}"
-                async for evt in self._call_agent_stream(
-                    agent_name,
-                    message=agent_message,
-                    user_id=user_id,
-                    trace=trace,
-                    workspace_id=workspace_id,
-                    tools_override=tools if tools else None,
-                ):
-                    yield agent_event_from_sse(evt)
-                    if evt.get("event") == "agent_done":
-                        done_text = evt.get("text", "")
-                        yield StepResult(key=step_key, output=done_text)
-                        # Capture step outputs for downstream agents (truthy only).
-                        if done_text:
-                            step_outputs[step_key] = done_text
-                        # Capture text from respond/reason steps for surface preview.
-                        if step.capability in ("reason", "respond"):
-                            presenter_text = done_text
-
-            # Build user action block from user_steps
-            user_action_block = ""
-            if user_steps:
-                user_action_block = build_user_action_block(user_steps)
-                yield UserActionsReady(
-                    steps=[
-                        {"description": s.description, "context": s.user_context}
-                        for s in user_steps
-                    ]
-                )
-
-            # Latency: when the whole plan is one read-only Perceiver step,
-            # return that read's own `synthesis` prose directly and skip the
-            # Presenter LLM call (presenter_skip.py). Use the explicit
-            # suffix-match (deterministic for multi-output; drift #3).
-            direct_answer = None
-            read_step = single_read_step(step_routing, user_steps)
-            if read_step is not None and step_outputs:
-                read_key = next(
-                    (k for k in step_outputs if k.endswith(f"_{read_step.capability}")), None
-                )
-                if read_key:
-                    direct_answer = extract_perceiver_synthesis(step_outputs[read_key])
-
-            # Step 4: Presenter formatting — unless we already have the read
-            # agent's own answer above. system.respond steps are no-ops in
-            # _handle_system_capability and reason/respond steps execute with
-            # the wrong context, so for anything other than a single read we
-            # still call the Presenter or the chat is left empty.
-            if direct_answer is not None:
-                presenter_text = direct_answer
-                yield Presentation(text=direct_answer)
-            else:
-                # Collect prior step results so Presenter can reference them.
-                prior_results_block = format_prior_results_for_presenter(step_outputs)
-                presenter_msg = build_presenter_message(
-                    prompt_style=prompt_style,
-                    surface=surface,
-                    message=message,
-                    intent=intent,
-                    plan_dict=plan_dict,
-                    plan_text=plan_text,
-                    prior_results_block=prior_results_block,
-                    user_action_block=user_action_block,
-                    history_block=history_block,
-                )
-                async for evt in self._call_agent_stream(
-                    "presenter",
-                    message=presenter_msg,
-                    user_id=user_id,
-                    trace=trace,
-                    workspace_id=workspace_id,
-                ):
-                    yield agent_event_from_sse(evt)
-                    if evt.get("event") == "agent_done":
-                        presenter_text = evt.get("text", "")
-                        # Strip fenced surface blocks for the chat-visible reply
-                        # while keeping presenter_text raw for surface extraction.
-                        yield Presentation(text=strip_surface_blocks(presenter_text))
-
-            _fire_event(
-                "run_completed",
-                workspace_id=workspace_id,
-                user_id=user_id,
-                run_id=None,
-                payload={"trace_id": trace.trace_id},
-            )
-
-            # Push workspace surface (Presenter-driven). Keep presenter_text raw
-            # for extraction — it still carries the fenced surface blocks.
-            surface_id = None
             try:
-                surface_spec = extract_surface_spec(presenter_text)
-                if surface_spec and surface_spec.should_surface:
-                    surface_id = await self._push_presenter_surface(
-                        spec=surface_spec,
-                        user_id=user_id,
-                        workspace_id=workspace_id,
-                        run_id=None,
-                        response_text=presenter_text,
-                    )
-            except Exception:
-                logger.warning("Surface push failed", exc_info=True)
+                yield TraceStarted(trace_id=trace.trace_id)
 
-            # Interaction learning (async, non-blocking)
-            if self._interaction_learner:
-                await self._ensure_learner_deps()
-                self._spawn_background(
-                    self._interaction_learner.learn(
-                        user_id=user_id,
-                        workspace_id=workspace_id,
-                        user_message=message,
-                        agent_response=presenter_text,
-                        intent=intent,
-                        trace_id=trace.trace_id,
-                    )
+                _fire_event(
+                    "command_received",
+                    workspace_id=workspace_id,
+                    user_id=user_id,
+                    payload={"surface": surface, "message_preview": message[:100]},
                 )
 
-            yield RunCompleted(trace_id=trace.trace_id, run_id=None, surface_id=surface_id)
+                history_block = await self._load_conversation_history(
+                    conversation_id, user_id=user_id
+                )
 
-        except Exception as e:
-            logger.error("_process_core failed: %s", e, exc_info=True)
-            cid = get_correlation_id() or new_correlation_id()
-            code, safe_msg, _ = classify(e)
-            _fire_event(
-                "run_failed",
-                workspace_id=workspace_id,
-                user_id=user_id,
-                run_id=None,
-                payload={"code": code, "message": safe_msg, "correlation_id": cid},
-            )
-            yield RunFailed(
-                trace_id=trace.trace_id, code=code, message=safe_msg, correlation_id=cid
-            )
-        finally:
-            await self._trace_manager.finish_trace(
-                trace.trace_id,
-                user_id=user_id,
-                workspace_id=workspace_id,
-            )
+                # Step 0: Fast intent classification
+                intent, confidence, sources = await classify_intent(
+                    self._client, self._haiku_model, message, history_block
+                )
+                yield IntentClassified(intent=intent, confidence=confidence)
+
+                if sources:
+                    await self._bump_perception_for_sources(sources, user_id, workspace_id)
+
+                # Decide routing based on intent AND mode
+                if mode in ("execute", "plan"):
+                    use_planner = True
+                else:
+                    use_planner = (
+                        intent not in FAST_INTENTS or confidence < INTENT_CONFIDENCE_THRESHOLD
+                    )
+
+                _fire_event(
+                    "route_selected",
+                    workspace_id=workspace_id,
+                    user_id=user_id,
+                    payload={
+                        "intent": intent,
+                        "confidence": confidence,
+                        "use_planner": use_planner,
+                    },
+                )
+
+                # Step 1: Generate PlanOutput
+                plan: PlanOutput
+                plan_text = ""
+
+                if use_planner:
+                    planner_message = (
+                        f"User message: {message}\n\nContext: {json.dumps(context or {})}"
+                        f"{_PLANNER_JSON_CONTRACT_SUFFIX}"
+                    )
+                    if history_block:
+                        planner_message = f"{history_block}\n\n{planner_message}"
+
+                    async for evt in self._call_agent_stream(
+                        "planner",
+                        message=planner_message,
+                        user_id=user_id,
+                        trace=trace,
+                        workspace_id=workspace_id,
+                    ):
+                        yield agent_event_from_sse(evt)
+                        if evt.get("event") == "agent_done":
+                            plan_text = evt.get("text", "")
+
+                    plan = extract_plan(plan_text)
+                else:
+                    capabilities = await self._get_available_capabilities(workspace_id)
+                    plan = intent_to_plan(intent, message, capabilities)
+
+                # Apply mode overrides
+                if mode == "plan":
+                    plan = plan.model_copy(update={"requires_user_input": True})
+
+                # Persist Plan record if multi-step or has write risk
+                if len(plan.steps) > 1 or any(s.risk not in ("none",) for s in plan.steps):
+                    import hashlib
+
+                    goal_hash = hashlib.sha256((plan.goal or "").encode()).hexdigest()[:16]
+                    plan = await self._persist_plan_record(
+                        plan,
+                        user_id,
+                        workspace_id,
+                        idempotency_key=f"user:{goal_hash}",
+                    )
+
+                plan_dict = plan.model_dump(mode="json")
+
+                ilog_id = await self._log_interaction(
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    trace_id=trace.trace_id,
+                    message_preview=message[:500],
+                    intent=intent,
+                    plan=plan,
+                    conversation_id=conversation_id,
+                )
+                yield InteractionLogged(interaction_id=ilog_id)
+
+                yield PlanReady(plan=plan_dict, run_id=None, summary=plan.reasoning or plan_text)
+
+                _fire_event(
+                    "plan_created",
+                    workspace_id=workspace_id,
+                    user_id=user_id,
+                    run_id=None,
+                    payload={"goal": plan.goal, "trace_id": trace.trace_id},
+                )
+
+                # Step 2: Pre-resolve routing and tools for all steps
+                step_routing, user_steps = await resolve_plan_routing(
+                    self._db_factory, workspace_id, plan.steps
+                )
+
+                # Step 3: Execute steps. `step_outputs` is the narrow prior-context
+                # accumulator (agent step text only) injected into downstream agents
+                # — kept separate from the batch result contract so plan/trace
+                # metadata never leaks into agent prompts (drift #2).
+                presenter_text = ""
+                step_outputs: dict[str, str] = {}
+                for step_idx, (step, agent_name, tools) in enumerate(step_routing):
+                    if step.capability.startswith("system."):
+                        sys_result = await self._handle_system_capability(
+                            step, plan, user_id, workspace_id
+                        )
+                        yield SystemStepResult(key=f"system_{step.capability}", output=sys_result)
+                        continue
+
+                    if not agent_name:
+                        error_msg = f"No tools available for capability '{step.capability}'"
+                        logger.warning(error_msg)
+                        yield StepError(step_id=step.step_id, error=error_msg)
+                        continue
+
+                    # Plan mode: skip risky execution, present the plan
+                    if mode == "plan" and step.risk in ("medium", "high"):
+                        yield PlanModeStepSkipped(
+                            plan_id=plan.plan_id,
+                            message="Plan created. Review and approve to execute.",
+                        )
+                        continue
+
+                    agent_message = (
+                        f"Execute this step: {step.description}\n"
+                        f"Goal: {plan.goal}\n"
+                        f"User message: {message}"
+                    )
+                    # Inject prior step results so downstream agents see earlier outputs.
+                    agent_message += format_prior_step_results(step_outputs)
+                    if history_block:
+                        agent_message = f"{history_block}\n\n{agent_message}"
+
+                    step_key = f"step_{step_idx}_{step.capability}"
+                    async for evt in self._call_agent_stream(
+                        agent_name,
+                        message=agent_message,
+                        user_id=user_id,
+                        trace=trace,
+                        workspace_id=workspace_id,
+                        tools_override=tools if tools else None,
+                    ):
+                        yield agent_event_from_sse(evt)
+                        if evt.get("event") == "agent_done":
+                            done_text = evt.get("text", "")
+                            yield StepResult(key=step_key, output=done_text)
+                            # Capture step outputs for downstream agents (truthy only).
+                            if done_text:
+                                step_outputs[step_key] = done_text
+                            # Capture text from respond/reason steps for surface preview.
+                            if step.capability in ("reason", "respond"):
+                                presenter_text = done_text
+
+                # Build user action block from user_steps
+                user_action_block = ""
+                if user_steps:
+                    user_action_block = build_user_action_block(user_steps)
+                    yield UserActionsReady(
+                        steps=[
+                            {"description": s.description, "context": s.user_context}
+                            for s in user_steps
+                        ]
+                    )
+
+                # Latency: when the whole plan is one read-only Perceiver step,
+                # return that read's own `synthesis` prose directly and skip the
+                # Presenter LLM call (presenter_skip.py). Use the explicit
+                # suffix-match (deterministic for multi-output; drift #3).
+                direct_answer = None
+                read_step = single_read_step(step_routing, user_steps)
+                if read_step is not None and step_outputs:
+                    read_key = next(
+                        (k for k in step_outputs if k.endswith(f"_{read_step.capability}")), None
+                    )
+                    if read_key:
+                        direct_answer = extract_perceiver_synthesis(step_outputs[read_key])
+
+                # Step 4: Presenter formatting — unless we already have the read
+                # agent's own answer above. system.respond steps are no-ops in
+                # _handle_system_capability and reason/respond steps execute with
+                # the wrong context, so for anything other than a single read we
+                # still call the Presenter or the chat is left empty.
+                if direct_answer is not None:
+                    presenter_text = direct_answer
+                    yield Presentation(text=direct_answer)
+                else:
+                    # Collect prior step results so Presenter can reference them.
+                    prior_results_block = format_prior_results_for_presenter(step_outputs)
+                    presenter_msg = build_presenter_message(
+                        prompt_style=prompt_style,
+                        surface=surface,
+                        message=message,
+                        intent=intent,
+                        plan_dict=plan_dict,
+                        plan_text=plan_text,
+                        prior_results_block=prior_results_block,
+                        user_action_block=user_action_block,
+                        history_block=history_block,
+                    )
+                    async for evt in self._call_agent_stream(
+                        "presenter",
+                        message=presenter_msg,
+                        user_id=user_id,
+                        trace=trace,
+                        workspace_id=workspace_id,
+                    ):
+                        yield agent_event_from_sse(evt)
+                        if evt.get("event") == "agent_done":
+                            presenter_text = evt.get("text", "")
+                            # Strip fenced surface blocks for the chat-visible reply
+                            # while keeping presenter_text raw for surface extraction.
+                            yield Presentation(text=strip_surface_blocks(presenter_text))
+
+                _fire_event(
+                    "run_completed",
+                    workspace_id=workspace_id,
+                    user_id=user_id,
+                    run_id=None,
+                    payload={"trace_id": trace.trace_id},
+                )
+
+                # Push workspace surface (Presenter-driven). Keep presenter_text raw
+                # for extraction — it still carries the fenced surface blocks.
+                surface_id = None
+                try:
+                    surface_spec = extract_surface_spec(presenter_text)
+                    if surface_spec and surface_spec.should_surface:
+                        surface_id = await self._push_presenter_surface(
+                            spec=surface_spec,
+                            user_id=user_id,
+                            workspace_id=workspace_id,
+                            run_id=None,
+                            response_text=presenter_text,
+                        )
+                except Exception:
+                    logger.warning("Surface push failed", exc_info=True)
+
+                # Interaction learning (async, non-blocking)
+                if self._interaction_learner:
+                    await self._ensure_learner_deps()
+                    self._spawn_background(
+                        self._interaction_learner.learn(
+                            user_id=user_id,
+                            workspace_id=workspace_id,
+                            user_message=message,
+                            agent_response=presenter_text,
+                            intent=intent,
+                            trace_id=trace.trace_id,
+                        )
+                    )
+
+                yield RunCompleted(trace_id=trace.trace_id, run_id=None, surface_id=surface_id)
+
+            except Exception as e:
+                logger.error("_process_core failed: %s", e, exc_info=True)
+                cid = get_correlation_id() or new_correlation_id()
+                code, safe_msg, _ = classify(e)
+                _fire_event(
+                    "run_failed",
+                    workspace_id=workspace_id,
+                    user_id=user_id,
+                    run_id=None,
+                    payload={"code": code, "message": safe_msg, "correlation_id": cid},
+                )
+                yield RunFailed(
+                    trace_id=trace.trace_id, code=code, message=safe_msg, correlation_id=cid
+                )
+            finally:
+                await self._trace_manager.finish_trace(
+                    trace.trace_id,
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                )
 
     async def _call_agent_stream(
         self,
