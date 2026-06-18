@@ -26,6 +26,27 @@ router = APIRouter()
 _connections: dict[str, list[WebSocket]] = {}
 
 
+def _backfill_message_for_surface(surface) -> dict | None:
+    """Build the WS replay message for a persisted surface on reconnect.
+
+    Surface kinds replay in different shapes:
+    - ``proactive_insight`` → the live ``{"type": "surface", "surface": payload}``
+      push (so insights missed while offline still render).
+    - ``execution`` (and other live-update kinds) → the last ``SurfaceUpdate``
+      stored under ``payload["last_surface_update"]`` as a ``surface_update``.
+
+    Returns ``None`` when the surface has nothing to replay.
+    """
+    if surface.surface_type == "proactive_insight":
+        if surface.payload:
+            return {"type": "surface", "surface": surface.payload}
+        return None
+    last_update = (surface.payload or {}).get("last_surface_update")
+    if last_update:
+        return {"type": "surface_update", **last_update}
+    return None
+
+
 @router.websocket("/ws/{user_id}")
 async def jarvis_ws(websocket: WebSocket, user_id: str):
     """WebSocket endpoint for real-time A2UI surface updates.
@@ -110,17 +131,19 @@ async def jarvis_ws(websocket: WebSocket, user_id: str):
                 .where(
                     UISurface.user_id == user_id,
                     UISurface.workspace_id == backfill_ws_id,
-                    UISurface.surface_type == "execution",
+                    # Replay both live execution surfaces AND proactive insights
+                    # that arrived while the client was offline.
+                    UISurface.surface_type.in_(("execution", "proactive_insight")),
                 )
                 .order_by(UISurface.updated_at.desc())
-                .limit(5)
+                .limit(10)
             )
             active_surfaces = result.scalars().all()
 
             for surface in active_surfaces:
-                last_update = (surface.payload or {}).get("last_surface_update")
-                if last_update:
-                    await websocket.send_text(json.dumps({"type": "surface_update", **last_update}))
+                msg = _backfill_message_for_surface(surface)
+                if msg is not None:
+                    await websocket.send_text(json.dumps(msg))
     except Exception:
         logger.debug("Failed to backfill surfaces on WS connect", exc_info=True)
 

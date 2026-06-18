@@ -389,3 +389,35 @@ class TestWebSocketReconnect:
 
         source = inspect.getsource(routes_ws)
         assert "last_surface_update" in source or "backfill" in source.lower()
+
+    def test_execution_surface_replays_as_surface_update(self):
+        from src.api.routes_ws import _backfill_message_for_surface
+
+        s = MagicMock(
+            surface_type="execution",
+            payload={"last_surface_update": {"surface_id": "x", "phase": "executing"}},
+        )
+        msg = _backfill_message_for_surface(s)
+        assert msg == {"type": "surface_update", "surface_id": "x", "phase": "executing"}
+
+    def test_insight_surface_replays_as_surface_push(self):
+        """proactive_insight surfaces must replay in the live push format so the
+        client renders insights missed while offline (previously dropped)."""
+        from src.api.routes_ws import _backfill_message_for_surface
+
+        payload = {"surface_id": "surf_1", "kind": "proactive_insight"}
+        s = MagicMock(surface_type="proactive_insight", payload=payload)
+        msg = _backfill_message_for_surface(s)
+        assert msg == {"type": "surface", "surface": payload}
+
+    def test_empty_payload_returns_none(self):
+        from src.api.routes_ws import _backfill_message_for_surface
+
+        s = MagicMock(surface_type="proactive_insight", payload=None)
+        assert _backfill_message_for_surface(s) is None
+
+    def test_execution_surface_without_last_update_returns_none(self):
+        from src.api.routes_ws import _backfill_message_for_surface
+
+        s = MagicMock(surface_type="execution", payload={})
+        assert _backfill_message_for_surface(s) is None
