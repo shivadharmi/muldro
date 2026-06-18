@@ -62,3 +62,22 @@ async def test_unknown_server_raises():
     mgr = LocalMCPProcessManager({})
     with pytest.raises(KeyError):
         await mgr.ensure_running("nope")
+
+
+async def test_wait_ready_failure_stops_process_and_leaves_no_refcount():
+    mgr = LocalMCPProcessManager({"google-workspace": _spec()})
+    fake_proc = MagicMock()
+    fake_proc.returncode = None
+    fake_proc.terminate = MagicMock()
+    fake_proc.wait = AsyncMock(return_value=0)
+
+    with (
+        patch.object(mgr, "_spawn", AsyncMock(return_value=(fake_proc, 51234))),
+        patch.object(mgr, "_wait_ready", AsyncMock(side_effect=TimeoutError("boom"))),
+    ):
+        with pytest.raises(TimeoutError):
+            await mgr.ensure_running("google-workspace")
+
+    # No leaked refcount and the process was stopped.
+    assert mgr.refcount("google-workspace") == 0
+    fake_proc.terminate.assert_called_once()

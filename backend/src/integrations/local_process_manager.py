@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import socket
 from dataclasses import dataclass, field
 from typing import Any
@@ -48,6 +49,7 @@ class LocalMCPProcessManager:
     """Reference-counted lifecycle manager for local HTTP MCP processes."""
 
     specs: dict[str, LocalServerSpec]
+    ready_timeout: float = READY_TIMEOUT_SECONDS
     _running: dict[str, _Running] = field(default_factory=dict)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -61,11 +63,15 @@ class LocalMCPProcessManager:
         async with self._lock:
             running = self._running.get(server_name)
             if running is None or running.proc.returncode is not None:
+                # A crashed-process restart resets the refcount; any stale
+                # references held by callers are best-effort (acceptable edge case).
                 proc, port = await self._spawn(spec)
                 running = _Running(proc=proc, port=port)
                 self._running[server_name] = running
+                # Lock is intentionally held across spawn+readiness to prevent
+                # a duplicate-spawn race between concurrent callers.
                 try:
-                    await self._wait_ready(port, spec.path)
+                    await self._wait_ready(running.proc, port, spec.path)
                 except Exception:
                     await self._stop(server_name)
                     raise
@@ -91,8 +97,6 @@ class LocalMCPProcessManager:
     # --- internals (patched in tests) ---
 
     async def _spawn(self, spec: LocalServerSpec) -> tuple[Any, int]:
-        import os
-
         port = _free_port()
         env = {**spec.env, spec.port_env_var: str(port)}
         full_env = {**os.environ, **env}
@@ -105,17 +109,24 @@ class LocalMCPProcessManager:
         logger.info("[mcp:local] spawned %s pid=%s port=%d", spec.server_name, proc.pid, port)
         return proc, port
 
-    async def _wait_ready(self, port: int, path: str) -> None:
-        deadline = asyncio.get_event_loop().time() + READY_TIMEOUT_SECONDS
+    async def _wait_ready(self, proc: Any, port: int, path: str) -> None:
+        deadline = asyncio.get_event_loop().time() + self.ready_timeout
         url = f"http://127.0.0.1:{port}{path}"
         async with httpx.AsyncClient(timeout=2.0) as client:
             while asyncio.get_event_loop().time() < deadline:
+                # Fail fast if the child died during startup (e.g. uvx could
+                # not resolve the package) — otherwise we'd block the full
+                # timeout with no clue why.
+                if proc.returncode is not None:
+                    raise RuntimeError(
+                        f"MCP server process exited during startup (returncode={proc.returncode})"
+                    )
                 try:
                     await client.get(url)
                     return
                 except (httpx.ConnectError, httpx.ConnectTimeout):
                     await asyncio.sleep(READY_POLL_INTERVAL)
-        raise TimeoutError(f"MCP server on port {port} not ready in {READY_TIMEOUT_SECONDS}s")
+        raise TimeoutError(f"MCP server on port {port} not ready in {self.ready_timeout}s")
 
     async def _stop(self, server_name: str) -> None:
         running = self._running.pop(server_name, None)

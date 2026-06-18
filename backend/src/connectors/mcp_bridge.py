@@ -127,10 +127,15 @@ async def initialize_mcp_bridge(
         logger.debug("MCP bridge skipped (test environment)")
         return None
 
+    from src.config.settings import get_settings
+
+    _settings = get_settings()
+
     # Create session pool and workspace pool — pool is usable immediately
     _session_pool = UserMCPSessionPool(
         oauth_manager=oauth_manager,
         circuit_breaker=_circuit_breaker,
+        ttl_seconds=_settings.mcp_session_idle_ttl_s,
     )
 
     from src.integrations.mcp_pool import WorkspaceMCPPool, set_workspace_pool
@@ -140,15 +145,16 @@ async def initialize_mcp_bridge(
 
     # Wire the local-process manager for managed_local servers (Google Workspace).
     try:
-        from src.config.settings import get_settings
         from src.integrations.local_process_manager import (
             LocalMCPProcessManager,
             set_local_process_manager,
         )
         from src.integrations.local_servers import build_local_server_specs
 
-        specs = build_local_server_specs(get_settings())
-        set_local_process_manager(LocalMCPProcessManager(specs=specs))
+        specs = build_local_server_specs(_settings)
+        set_local_process_manager(
+            LocalMCPProcessManager(specs=specs, ready_timeout=_settings.mcp_local_ready_timeout_s)
+        )
     except Exception:
         logger.exception("Failed to wire LocalMCPProcessManager")
 
