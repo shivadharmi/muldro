@@ -113,6 +113,10 @@ class Settings(BaseSettings):
     s3_bucket: str = ""
     s3_endpoint_url: str = ""  # For MinIO local dev
     s3_region: str = "ap-south-1"
+    # Explicit credentials for MinIO / local dev. Leave empty in production so
+    # the default AWS credential chain (IAM role / instance profile) is used.
+    s3_access_key_id: str = ""
+    s3_secret_access_key: str = ""
 
     # Qdrant
     qdrant_url: str = ""
