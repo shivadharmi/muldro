@@ -26,6 +26,6 @@ class ObservationCursor(Base, TimestampMixin):
     )
 
     __table_args__ = (
-        UniqueConstraint("user_id", "source", name="uq_cursor_user_source"),
-        Index("ix_cursor_user_source", "user_id", "source"),
+        UniqueConstraint("workspace_id", "user_id", "source", name="uq_cursor_ws_user_source"),
+        Index("ix_cursor_ws_user_source", "workspace_id", "user_id", "source"),
     )

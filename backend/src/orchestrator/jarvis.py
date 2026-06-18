@@ -1705,6 +1705,7 @@ class JarvisOrchestrator:
 
             result = await db.execute(
                 select(ObservationCursor.cursor_value).where(
+                    ObservationCursor.workspace_id == workspace_id,
                     ObservationCursor.user_id == user_id,
                     ObservationCursor.source == source,
                 )
@@ -1838,8 +1839,8 @@ class JarvisOrchestrator:
         """Update the observation cursor after a successful poll.
 
         Uses a single ``INSERT ... ON CONFLICT DO UPDATE`` so concurrent
-        perception cycles for the same ``(user_id, source)`` cannot race on
-        the ``uq_cursor_user_source`` unique constraint.
+        perception cycles for the same ``(workspace_id, user_id, source)``
+        cannot race on the ``uq_cursor_ws_user_source`` unique constraint.
         """
         if not new_cursor:
             return
@@ -1864,7 +1865,7 @@ class JarvisOrchestrator:
                     last_observation_at=now,
                 )
                 .on_conflict_do_update(
-                    constraint="uq_cursor_user_source",
+                    constraint="uq_cursor_ws_user_source",
                     set_={
                         "cursor_value": new_cursor,
                         "cursor_type": cursor_type,

@@ -141,7 +141,7 @@ class IntegrationManager:
             return {"events": 0, "error": "No credentials found"}
 
         # Get cursor
-        cursor = await self._get_cursor(user_id, provider)
+        cursor = await self._get_cursor(user_id, provider, installation.workspace_id)
 
         # Poll
         instance = connector_cls(settings=self._settings)
@@ -222,10 +222,11 @@ class IntegrationManager:
             return {"access_token": access_token}
         return None
 
-    async def _get_cursor(self, user_id: str, provider: str) -> str | None:
-        """Get the observation cursor for a provider."""
+    async def _get_cursor(self, user_id: str, provider: str, workspace_id: str) -> str | None:
+        """Get the observation cursor for a provider, scoped to the workspace."""
         result = await self._db.execute(
             select(ObservationCursor).where(
+                ObservationCursor.workspace_id == workspace_id,
                 ObservationCursor.user_id == user_id,
                 ObservationCursor.source == provider,
             )
@@ -240,7 +241,7 @@ class IntegrationManager:
 
         Uses a single ``INSERT ... ON CONFLICT DO UPDATE`` so this writer and
         the perception-side writer (``JarvisOrchestrator._update_cursor``)
-        cannot race on the ``uq_cursor_user_source`` unique constraint.
+        cannot race on the ``uq_cursor_ws_user_source`` unique constraint.
         """
         from sqlalchemy.dialects.postgresql import insert as pg_insert
         from ulid import ULID
@@ -258,7 +259,7 @@ class IntegrationManager:
                 last_observation_at=now,
             )
             .on_conflict_do_update(
-                constraint="uq_cursor_user_source",
+                constraint="uq_cursor_ws_user_source",
                 set_={
                     "cursor_value": value,
                     "last_observation_at": now,
