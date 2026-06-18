@@ -49,11 +49,17 @@ async def find_next_meeting(ctx: WorkflowContext) -> dict:
 
     connector = cal_cls(ctx.settings) if ctx.settings else cal_cls.__new__(cal_cls)
 
-    events, _ = await connector.poll(
+    poll_result = await connector.poll(
         user_id=ctx.user_id,
         cursor=None,
         credentials=ctx.credentials,
     )
+    if poll_result.failed:
+        logger.warning(
+            "calendar_connector_poll_failed",
+            extra={"error_class": poll_result.error_class},
+        )
+    events = poll_result.events
 
     if not events:
         return {"meeting": None, "note": "No upcoming meetings found"}

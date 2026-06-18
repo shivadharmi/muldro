@@ -144,10 +144,28 @@ class IntegrationManager:
         cursor = await self._get_cursor(user_id, provider, installation.workspace_id)
 
         # Poll
-        instance = connector_cls(settings=self._settings)
-        events, new_cursor = await instance.poll(user_id, cursor, creds)
+        from src.connectors.poll_result import PollResult
 
-        # Update cursor
+        instance = connector_cls(settings=self._settings)
+        raw = await instance.poll(user_id, cursor, creds)
+
+        # Accept both PollResult (native connectors) and legacy 2-tuples
+        # (notion/drive/whatsapp carry a TODO: migrate to PollResult marker).
+        if isinstance(raw, PollResult):
+            if raw.failed:
+                logger.warning(
+                    "integration_poll_failed",
+                    extra={"provider": provider, "error_class": raw.error_class},
+                )
+                await self._db.commit()
+                return {"events": 0, "provider": provider, "error": raw.error_class}
+            events = raw.events
+            new_cursor = raw.cursor
+        else:
+            # Legacy 2-tuple fallback
+            events, new_cursor = raw
+
+        # Update cursor only on success
         if new_cursor:
             await self._update_cursor(user_id, provider, new_cursor, installation.workspace_id)
 

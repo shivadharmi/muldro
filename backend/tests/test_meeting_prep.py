@@ -1,4 +1,4 @@
-"""Tests for meeting prep — Presenter.generate_meeting_prep."""
+"""Tests for meeting prep — Presenter.generate_meeting_prep and find_next_meeting."""
 
 import json
 from datetime import datetime, timezone
@@ -6,8 +6,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.connectors.poll_result import PollResult
 from src.services.presenter import Presenter
-from tests.conftest import TEST_USER_ID, make_mock_settings
+from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID, make_mock_settings, make_raw_event
 
 
 @pytest.fixture
@@ -176,3 +177,89 @@ async def test_meeting_prep_claude_failure(mock_get_client, settings, mock_db):
 
     assert result["title"] == "Series B Strategy Meeting"
     assert "Meeting prep generation failed" in result["risks"][0]
+
+
+# ---------------------------------------------------------------------------
+# Regression tests: find_next_meeting fallback path must consume PollResult
+# (not unpack a bare 2-tuple — that was a runtime TypeError).
+# ---------------------------------------------------------------------------
+
+
+def _make_calendar_raw_event():
+    """A RawEvent that looks like a future calendar entry."""
+    evt = make_raw_event(
+        source="calendar",
+        event_type="calendar_event_created",
+        entity_type="calendar_event",
+        entity_id="cal_001",
+        title="Board sync",
+        occurred_at=datetime(2099, 1, 1, 10, 0, tzinfo=timezone.utc),
+    )
+    return evt
+
+
+@pytest.mark.asyncio
+async def test_find_next_meeting_fallback_success_consumes_poll_result():
+    """Fallback connector path: PollResult with events must yield the meeting."""
+    from src.workflows.context import WorkflowContext
+    from src.workflows.meeting_prep import find_next_meeting
+
+    calendar_event = _make_calendar_raw_event()
+    poll_result = PollResult(events=[calendar_event], cursor="tok_1", error_class="none")
+
+    mock_connector = AsyncMock()
+    mock_connector.poll = AsyncMock(return_value=poll_result)
+
+    mock_connector_cls = MagicMock(return_value=mock_connector)
+
+    ctx = MagicMock(spec=WorkflowContext)
+    ctx.user_id = TEST_USER_ID
+    ctx.workspace_id = TEST_WORKSPACE_ID
+    # settings must be truthy so the connector is constructed via cal_cls(settings)
+    # rather than the bare cal_cls.__new__(cal_cls) fallback
+    ctx.settings = MagicMock()
+    ctx.credentials = {}
+
+    with (
+        patch("src.workflows.meeting_prep._poll_calendar_via_mcp", AsyncMock(return_value=None)),
+        patch(
+            "src.connectors.base.CONNECTOR_REGISTRY",
+            {"calendar": mock_connector_cls},
+        ),
+    ):
+        result = await find_next_meeting(ctx)
+
+    assert result.get("source") == "connector"
+    assert result["meeting"]["title"] == "Board sync"
+    assert result["meeting"]["entity_id"] == "cal_001"
+
+
+@pytest.mark.asyncio
+async def test_find_next_meeting_fallback_failed_poll_result_returns_empty():
+    """Fallback connector path: failed PollResult must degrade gracefully (no TypeError)."""
+    from src.workflows.context import WorkflowContext
+    from src.workflows.meeting_prep import find_next_meeting
+
+    failed_result = PollResult(events=[], cursor=None, error_class="transient")
+
+    mock_connector = AsyncMock()
+    mock_connector.poll = AsyncMock(return_value=failed_result)
+    mock_connector_cls = MagicMock(return_value=mock_connector)
+
+    ctx = MagicMock(spec=WorkflowContext)
+    ctx.user_id = TEST_USER_ID
+    ctx.workspace_id = TEST_WORKSPACE_ID
+    ctx.settings = MagicMock()
+    ctx.credentials = {}
+
+    with (
+        patch("src.workflows.meeting_prep._poll_calendar_via_mcp", AsyncMock(return_value=None)),
+        patch(
+            "src.connectors.base.CONNECTOR_REGISTRY",
+            {"calendar": mock_connector_cls},
+        ),
+    ):
+        result = await find_next_meeting(ctx)
+
+    # Must not raise; should return a no-meeting sentinel
+    assert result.get("meeting") is None
