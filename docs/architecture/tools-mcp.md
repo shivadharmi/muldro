@@ -137,25 +137,43 @@ Governor hooks (`governor_pre_tool_hook`) are **audit-only** — they always ret
 
 ## MCP Bridge
 
-Connected via `src/connectors/mcp_bridge.py`. Session pool manages per-user authenticated connections with circuit breaking.
+Connected via `src/connectors/mcp_bridge.py`. Sessions are **turn-scoped** via `TurnScope` (`src/integrations/turn_scope.py`) — created on demand per agent turn and torn down at turn end.
 
-### Session Pool
+### External Server Transport
 
-- Per `(workspace_id, server_name, user_id)` sessions
+External MCP servers run on demand with no Docker dependency:
+
+| Server | Transport | Runtime |
+|--------|-----------|---------|
+| GitHub | Remote HTTP (Bearer token) | `https://api.githubcopilot.com/mcp/` |
+| Atlassian | Remote HTTP (Bearer token) | Remote hosted |
+| Google Workspace | On-demand local process | `uvx workspace-mcp` via `LocalMCPProcessManager` |
+| Slack, Notion, Playwright, Filesystem | stdio | `npx` (version-pinned) |
+
+`LocalMCPProcessManager` (`src/integrations/local_process_manager.py`) manages the Google Workspace process with reference counting; the process starts on first use within a turn and is torn down when all references are released. An idle reaper in the scheduler's `run_health_tick` is the safety net for leaked sessions. A startup preflight (`src/integrations/runtime_preflight.py`) warns if `uvx` or `npx` are absent from the host.
+
+### Session Lifecycle
+
+- Sessions are per `(workspace_id, server_name, user_id)` and scoped to an agent turn via `TurnScope` (ContextVar + refcounting)
+- Wired into both chokepoints: `JarvisOrchestrator._process_core` (chat path) and `GraphExecutor.execute_run` (autonomous path)
 - Real MCP names stored and dispatched directly — no normalization
 - Circuit breaker per server (consecutive failure tracking, cooldown)
 - Retry with exponential backoff for transient errors
 
-### Startup Flow
+### Startup Flow (no eager discovery)
 
 ```
 App startup → seed_defaults() (tools from catalog)
             → validate_registry() (6 cross-checks)
-            → initialize_mcp_bridge()
-            → Connect to configured MCP servers
-            → list_tools() on each server
-            → Register discovered tools in DB
+            → initialize_mcp_bridge() (register server configs only — no connections yet)
+            → runtime_preflight() (warn if uvx/npx missing)
+
+First agent build → discover_and_persist() / discover_missing_schemas()
+                 → Connect to server, list_tools()
+                 → Persist input_schema in ToolDefinition (durable across restarts)
 ```
+
+Tool schemas survive restarts in `ToolDefinition.input_schema`; `initialize_mcp_bridge` no longer clears them.
 
 ## Audit Logging
 

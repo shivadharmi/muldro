@@ -8,7 +8,7 @@ Jarvis is a **Personal AI Operating System** for founders. It is NOT a chatbot �
 
 ## Architecture
 
-Multi-agent hub-and-spoke: a central `JarvisOrchestrator` (`backend/src/orchestrator/jarvis.py`) routes to 7 sub-agents via Claude API. Capability-based routing: Planner produces `PlanOutput` with steps, `CapabilityResolver` maps each step's capability to the appropriate agent. Internal FastMCP servers wrap the intelligence layer; external MCP servers provide connectors (Google, GitHub, Slack).
+Multi-agent hub-and-spoke: a central `JarvisOrchestrator` (`backend/src/orchestrator/jarvis.py`) routes to 7 sub-agents via Claude API. Capability-based routing: Planner produces `PlanOutput` with steps, `CapabilityResolver` maps each step's capability to the appropriate agent. Internal FastMCP servers wrap the intelligence layer; external MCP servers provide connectors — all run **on demand with no Docker dependency**: GitHub and Atlassian as remote HTTP MCP servers, Google Workspace as an on-demand local `uvx` process managed by `LocalMCPProcessManager` (`backend/src/integrations/local_process_manager.py`), and stdio servers (Slack, Notion, Playwright, Filesystem) via `npx`. MCP sessions are **turn-scoped** via `TurnScope` (`backend/src/integrations/turn_scope.py`) and torn down at turn end; the scheduler's `run_health_tick` idle reaper is the safety net.
 
 ```
 User <-> Next.js Frontend (A2UI)
@@ -172,7 +172,7 @@ The `_special` value is a `server` (not a `backend`): tools with `backend="inter
 
 **Approval policy:** Handled by TrustEngine (`src/services/trust_engine.py`) — a deterministic 4×4 matrix (trust_level × risk_level) in GraphExecutor, not Governor. Governor hooks are now audit-only.
 
-**Startup:** `seed_defaults()` reads from `INTERNAL_TOOLS` + `EXTERNAL_TOOL_SEEDS` in catalog.py → upserts into `tool_definitions` table. `validate_registry()` runs startup cross-checks. `JARVIS_SKIP_REGISTRY_VALIDATION=true` disables validation in emergencies.
+**Startup:** `seed_defaults()` reads from `INTERNAL_TOOLS` + `EXTERNAL_TOOL_SEEDS` in catalog.py → upserts into `tool_definitions` table. `validate_registry()` runs startup cross-checks. `JARVIS_SKIP_REGISTRY_VALIDATION=true` disables validation in emergencies. `initialize_mcp_bridge()` registers server configs only — **no eager tool discovery at startup**. Tool schemas are durable in the DB (`ToolDefinition.input_schema`) and lazily (re)discovered per server on first agent build via `discover_and_persist` / `discover_missing_schemas`. A startup preflight (`backend/src/integrations/runtime_preflight.py`) warns if `uvx`/`npx` are missing from the host.
 
 **Key files:**
 - Catalog: `src/tools/catalog.py` (InternalToolDef, ExternalToolSeed, INTERNAL_TOOLS, EXTERNAL_TOOL_SEEDS)
@@ -394,6 +394,8 @@ See [docs/engineering-standards.md](docs/engineering-standards.md) for the full 
 - Do not hardcode tool-calling sequences — let agents discover tools autonomously
 - Do not use deleted modules: `tool_normalizer.py`, `tool_policy.py`, `tool_schemas.py`, `route_resolver.py`, `route_analytics.py`
 - Do not use `TOOL_TO_CAPABILITY`, `_DEFAULT_TOOLS`, `CANONICAL_ALIASES`, `_NATIVE_TOOL_MAP` — all deleted
+- Do not assume external MCP servers run in Docker — they run on-demand as host processes (remote HTTP for GitHub/Atlassian, `uvx` for Google Workspace, `npx` for others); the `google-workspace-mcp` Docker image and service were removed
+- Do not assume MCP tool schemas are discovered at startup — `initialize_mcp_bridge()` registers configs only; schemas are lazily fetched on first agent build and persisted in `ToolDefinition.input_schema`
 
 ### A2UI & Frontend
 - Do not push A2UI surfaces with empty `children[]` — use `renderer.py` builders

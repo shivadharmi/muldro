@@ -37,12 +37,11 @@ sequenceDiagram
     APP->>APP: validate_registry() (6 cross-checks)
     Note over APP: Capabilities known, scopes valid, schemas present
 
-    Note over APP,MCP: Connect External Tools
-    APP->>MCP: initialize_mcp_bridge()
-    MCP->>MCP: Connect to configured MCP servers
-    MCP->>MCP: list_tools() on each server
-    MCP->>DB: Register discovered unknown tools (capability=None)
-    MCP-->>APP: Tools discovered
+    Note over APP,MCP: Register External Tool Configs (no eager connect)
+    APP->>MCP: initialize_mcp_bridge() — registers server configs only
+    APP->>APP: runtime_preflight() — warn if uvx/npx missing
+    Note over MCP: Tool schemas durable in DB (ToolDefinition.input_schema)
+    Note over MCP: Per-server connect + list_tools() deferred to first agent build
 
     Note over APP,REC: Recover In-Flight State
     APP->>REC: run_startup_recovery()
