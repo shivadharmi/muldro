@@ -10,3 +10,9 @@ def test_compose_has_no_google_workspace_mcp_service():
 
 def test_google_workspace_docker_dir_removed():
     assert not (ROOT / "infra/docker/google-workspace-mcp").exists()
+
+
+def test_prod_compose_has_no_google_workspace_mcp_service():
+    prod = ROOT / "docker-compose.prod.yml"
+    if prod.exists():
+        assert "google-workspace-mcp" not in prod.read_text()

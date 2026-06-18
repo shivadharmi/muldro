@@ -103,7 +103,7 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
         "display_name": "Slack",
         "transport": "stdio",
         "command": "npx",
-        "args": ["-y", "slack-mcp-server"],
+        "args": ["-y", "slack-mcp-server@1.3.0"],
         "env_template": {
             "SLACK_MCP_XOXP_TOKEN": "Slack user OAuth token (xoxp-...)",
             "SLACK_MCP_XOXB_TOKEN": "Slack bot OAuth token (xoxb-...)",
@@ -123,7 +123,7 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
         "display_name": "Playwright Browser",
         "transport": "stdio",
         "command": "npx",
-        "args": ["-y", "@playwright/mcp", "--headless"],
+        "args": ["-y", "@playwright/mcp@0.0.76", "--headless"],
         "env_template": {},
         "auth_provider": None,
         "scopes_granted": [
@@ -141,7 +141,7 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
         "display_name": "Filesystem",
         "transport": "stdio",
         "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-filesystem", _filesystem_mcp_root()],
+        "args": ["-y", "@modelcontextprotocol/server-filesystem@2026.1.14", _filesystem_mcp_root()],
         "env_template": {},
         "auth_provider": None,
         "scopes_granted": [],
@@ -151,7 +151,7 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
         "display_name": "Notion",
         "transport": "stdio",
         "command": "npx",
-        "args": ["-y", "@notionhq/notion-mcp-server"],
+        "args": ["-y", "@notionhq/notion-mcp-server@2.4.0"],
         "env_template": {
             "NOTION_TOKEN": "Notion integration token",
         },

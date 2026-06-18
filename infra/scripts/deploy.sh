@@ -28,6 +28,15 @@ sudo -u ubuntu bash -c "
   alembic upgrade head
 "
 
+# Pre-warm MCP package caches so the first real tool call isn't a cold
+# download. Best-effort: never fail the deploy if a registry is unreachable.
+sudo -u ubuntu bash -c '
+  export PATH="/home/ubuntu/.local/bin:$PATH"
+  uvx workspace-mcp --help >/dev/null 2>&1 || true
+  npx -y slack-mcp-server --help >/dev/null 2>&1 || true
+  npx -y @playwright/mcp --help >/dev/null 2>&1 || true
+' || true
+
 # Restart services
 echo "Restarting services..."
 systemctl restart jarvis-backend

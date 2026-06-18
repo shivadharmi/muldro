@@ -28,3 +28,10 @@ def test_google_workspace_seed_is_managed_local():
 def test_http_schemas_not_cleared_on_seed():
     src = inspect.getsource(seed_mod.seed_installations)
     assert "_clear_stale_tool_schemas(db, server_name, workspace_id)" not in src
+
+
+def test_npx_servers_are_version_pinned():
+    for name in ("slack", "playwright", "filesystem", "notion"):
+        inst = _by_name(name)
+        pkg = next((a for a in inst["args"] if "@" in a and not a.startswith("-")), None)
+        assert pkg and "@" in pkg, f"{name} npx package should be version-pinned"

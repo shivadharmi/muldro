@@ -11,9 +11,9 @@ from typing import Any
 
 from src.integrations.local_process_manager import LocalServerSpec
 
-# Pin the workspace-mcp version for reproducibility (resolved in a later infra
-# task). "workspace-mcp" alone tracks latest.
-WORKSPACE_MCP_PACKAGE = "workspace-mcp"
+# Pinned to the version resolved during the infra hardening pass (2026-06-18).
+# Bump intentionally when upgrading workspace-mcp.
+WORKSPACE_MCP_PACKAGE = "workspace-mcp==1.21.3"
 
 
 def build_local_server_specs(settings: Any) -> dict[str, LocalServerSpec]:
