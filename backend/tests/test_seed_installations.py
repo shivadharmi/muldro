@@ -8,18 +8,27 @@ class TestSeedInstallations:
         return next(s for s in _DEFAULT_INSTALLATIONS if s["server_name"] == server_name)
 
     def test_google_workspace_http_transport(self):
-        """Google Workspace seed must use streamable-http with remote_url."""
+        """Google Workspace seed uses streamable-http with managed_local process (no static URL)."""
         seed = self._get_seed("google-workspace")
         assert seed["transport"] == "streamable-http", (
             f"Expected streamable-http transport, got '{seed['transport']}'"
         )
-        assert seed.get("remote_url"), "Google Workspace must have a remote_url for HTTP transport"
+        # URL is resolved at runtime by LocalMCPProcessManager — no static remote_url.
+        assert seed.get("remote_url") is None, (
+            "Google Workspace is managed_local; remote_url should be None"
+        )
+        assert seed.get("managed_local") is True, (
+            "Google Workspace must have managed_local=True "
+            "(URL resolved via LocalMCPProcessManager)"
+        )
         assert seed.get("command") is None, "HTTP transport should not have a command"
         assert seed.get("args") is None, "HTTP transport should not have args"
         assert seed["auth_provider"] == "google", (
             f"auth_provider must be 'google' for OAuth, got '{seed['auth_provider']}'"
         )
-        assert seed["env_template"] == {}, "HTTP service env vars live on Docker, not in seed"
+        assert seed["env_template"] == {}, (
+            "HTTP service env vars live in LocalServerSpec, not in seed"
+        )
 
     def test_slack_env_vars(self):
         """Slack seed must use SLACK_MCP_XOXP_TOKEN, not SLACK_BOT_TOKEN."""
