@@ -649,6 +649,33 @@ class JarvisOrchestrator:
             # Add external tools from DB registry, filtered by capability
             all_db_tools = await registry.list_tools(enabled_only=True)
 
+            # Lazy "discover-once": if any in-scope external tool lacks a
+            # persisted schema and has no live session schema yet, run a single
+            # discovery pass for its server, then re-read the registry so the
+            # freshly persisted schemas are visible this same build.
+            in_scope_missing = [
+                td
+                for td in all_db_tools
+                if td.name not in internal_names
+                and td.capability
+                and td.capability in scope
+                and not td.input_schema
+                and td.name not in mcp_schemas
+            ]
+            if in_scope_missing:
+                from src.integrations.lazy_discovery import discover_missing_schemas
+
+                discovered = await discover_missing_schemas(
+                    in_scope_missing, workspace_id=workspace_id
+                )
+                if discovered:
+                    all_db_tools = await registry.list_tools(enabled_only=True)
+                    for mcp_tool in list_mcp_tools(workspace_id=workspace_id):
+                        mcp_schemas[mcp_tool["name"]] = {
+                            "description": mcp_tool.get("description", ""),
+                            "input_schema": mcp_tool.get("input_schema", {}),
+                        }
+
             for tool_def in all_db_tools:
                 if tool_def.name in internal_names:
                     continue

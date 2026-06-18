@@ -179,6 +179,44 @@ class WorkspaceMCPPool:
             logger.error("Failed to reload server %s: %s", server_name, e)
             return None
 
+    async def discover_and_persist(
+        self,
+        server_name: str,
+        *,
+        workspace_id: str,
+    ) -> int:
+        """Spawn one short-lived discovery session, persist schemas, tear down.
+
+        Used by lazy discovery. Ensures the server config is registered, finds
+        a user for auth keying, opens a session (which calls list_tools and
+        persists discovered schemas via _register_discovered_tools), then closes
+        it immediately so nothing is left running. Returns tool count.
+        """
+        if not self._session_pool.has_server_config(server_name, workspace_id):
+            if not await self.reload_server(workspace_id, server_name):
+                return 0
+
+        user_id = await self._resolve_workspace_user(workspace_id)
+        if not user_id:
+            return 0
+
+        try:
+            session = await self._session_pool.get_or_create_session(
+                server_name, user_id=user_id, workspace_id=workspace_id
+            )
+            count = len(session.tools)
+        except Exception:
+            logger.debug("discover_and_persist failed for %s", server_name, exc_info=True)
+            return 0
+        finally:
+            try:
+                await self._session_pool.refresh_session(
+                    server_name, user_id, workspace_id=workspace_id
+                )
+            except Exception:
+                logger.debug("teardown after discovery failed for %s", server_name)
+        return count
+
     def get_servers(self, workspace_id: str) -> list[dict]:
         """List all servers for a workspace with their status."""
         ws = self._workspaces.get(workspace_id, {})
