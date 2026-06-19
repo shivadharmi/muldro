@@ -20,17 +20,20 @@ from ulid import ULID
 
 from src.config.settings import Settings, get_anthropic_client
 from src.connectors.mcp_bridge import close_turn_sessions
-from src.contracts import PolicyDecision, ResultSummary, StepResult, StepState
-from src.errors import classify, new_correlation_id
+from src.contracts import PolicyDecision, ResultSummary, StepResult
 from src.integrations.turn_scope import turn_scope
 from src.llm_utils import parse_llm_json
-from src.middleware.observability import get_correlation_id
 from src.models.plans import Plan, PlanTask
 from src.models.task_graph import TaskCheckpoint, TaskRun, TaskStep
 from src.orchestrator.agent_loop import CancellationRequested
 from src.orchestrator.tracing import JarvisTrace
 from src.services.audit import AuditService
 from src.services.execution_state import transition_run, transition_step
+from src.services.execution_support import (
+    _compute_retry_delay,
+    _safe_error_fields,
+    _step_to_state,
+)
 from src.services.execution_surface_emitter import SurfaceEmitter
 from src.services.risk_assessor import RiskAssessment, get_or_assess_risk
 
@@ -41,51 +44,6 @@ if TYPE_CHECKING:
     from src.services.verifier import Verifier
 
 logger = logging.getLogger(__name__)
-
-
-def _compute_retry_delay(retry_count: int) -> int:
-    """Compute exponential backoff delay in seconds, capped at 30."""
-    return min(2**retry_count, 30)
-
-
-def _safe_error_fields(exc: BaseException) -> dict:
-    """Build the client-safe error fields for run.error / step.error /
-    step.output_data and any event payload that reaches a surface.
-
-    The raw ``str(exc)`` is for logs only (and the secret-redacted trace) — it
-    is NEVER placed in these fields. Returns the safe message, a stable error
-    code, and a correlation id so a user can quote it to support.
-    """
-    code, message, _ = classify(exc)
-    return {
-        "message": message,
-        "error_code": code,
-        "correlation_id": get_correlation_id() or new_correlation_id(),
-    }
-
-
-def _step_to_state(s: "TaskStep", status_override: str | None = None) -> "StepState":
-    """Build a StepState from a TaskStep model, forwarding all available fields."""
-    status = status_override or s.status
-    started_iso = s.started_at.isoformat() if s.started_at else None
-    completed_iso = s.completed_at.isoformat() if s.completed_at else None
-    duration = (
-        int((s.completed_at - s.started_at).total_seconds() * 1000)
-        if s.completed_at and s.started_at
-        else None
-    )
-    return StepState(
-        step_id=s.step_id,
-        description=s.name or (s.input_data or {}).get("capability", s.task_id),
-        status=status,
-        output_summary=(str(s.output_data.get("result", "")) if s.output_data else None),
-        duration_ms=duration,
-        started_at=started_iso,
-        completed_at=completed_iso,
-        timeout_seconds=s.timeout_seconds,
-        error=s.error,
-        retry_count=s.retry_count if s.retry_count > 0 else None,
-    )
 
 
 async def create_graph_executor(
