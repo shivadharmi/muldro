@@ -183,17 +183,17 @@ class TestStepFailureSurfaceEmission:
 
         # Mock _get_all_steps
         all_steps = [step, _make_step(step_id="step_02", status="pending")]
-        executor._get_all_steps = AsyncMock(return_value=all_steps)
-        executor._emit_event = AsyncMock()
-        executor._emit_surface_update = AsyncMock()
+        executor._store.get_all_steps = AsyncMock(return_value=all_steps)
+        executor._surface_emitter.emit_event = AsyncMock()
+        executor._surface_emitter.emit_surface_update = AsyncMock()
 
-        with patch("src.services.graph_executor.transition_step"):
+        with patch("src.services.dag_runner.transition_step"):
             await executor._handle_step_failure(
                 run, step, Exception("boom"), 100, surface_id="surf_fail"
             )
 
-        executor._emit_surface_update.assert_called_once()
-        call_kwargs = executor._emit_surface_update.call_args.kwargs
+        executor._surface_emitter.emit_surface_update.assert_called_once()
+        call_kwargs = executor._surface_emitter.emit_surface_update.call_args.kwargs
         assert call_kwargs["surface_id"] == "surf_fail"
         assert call_kwargs["phase"] == "failed"
         assert len(call_kwargs["steps"]) == 2
@@ -207,14 +207,14 @@ class TestStepFailureSurfaceEmission:
         step.retry_count = 0
         step.max_retries = 3
 
-        executor._emit_surface_update = AsyncMock()
+        executor._surface_emitter.emit_surface_update = AsyncMock()
 
-        with patch("src.services.graph_executor.transition_step"):
+        with patch("src.services.dag_runner.transition_step"):
             await executor._handle_step_failure(
                 run, step, Exception("retry"), 100, surface_id="surf_x"
             )
 
-        executor._emit_surface_update.assert_not_called()
+        executor._surface_emitter.emit_surface_update.assert_not_called()
 
 
 # ── Phase 4: Redis connection reuse ──────────────────────────────

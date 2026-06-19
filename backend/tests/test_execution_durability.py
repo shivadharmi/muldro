@@ -62,7 +62,7 @@ class TestStepTimeout:
 
 class TestRetryBackoff:
     def test_backoff_delay_increases(self):
-        from src.services.graph_executor import _compute_retry_delay
+        from src.services.execution_support import _compute_retry_delay
 
         assert _compute_retry_delay(0) == 1
         assert _compute_retry_delay(1) == 2
@@ -70,7 +70,7 @@ class TestRetryBackoff:
         assert _compute_retry_delay(3) == 8
 
     def test_backoff_capped_at_30(self):
-        from src.services.graph_executor import _compute_retry_delay
+        from src.services.execution_support import _compute_retry_delay
 
         assert _compute_retry_delay(5) == 30
         assert _compute_retry_delay(10) == 30

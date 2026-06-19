@@ -562,13 +562,17 @@ class TestExecuteStepCapabilityReading:
         executor._trust_engine = trust_engine
 
         # Mock _assess_step_risk
-        executor._assess_step_risk = AsyncMock(return_value="low")
+        executor._trust_gate.assess_step_risk = AsyncMock(return_value="low")
 
         # Mock _run_step_action so we don't need full agent infra
-        executor._run_step_action = AsyncMock(return_value={"status": "completed", "result": "ok"})
-        executor._resolve_step_references = AsyncMock(return_value={"capability": "email.draft"})
-        executor._finalize_step = AsyncMock()
-        executor._emit_event = AsyncMock()
+        executor._runner.run_step_action = AsyncMock(
+            return_value={"status": "completed", "result": "ok"}
+        )
+        executor._store.resolve_step_references = AsyncMock(
+            return_value={"capability": "email.draft"}
+        )
+        executor._dag_runner.finalize_step = AsyncMock()
+        executor._surface_emitter.emit_event = AsyncMock()
 
         step = MagicMock()
         step.step_id = "step_cap_exec"
@@ -609,11 +613,13 @@ class TestExecuteStepCapabilityReading:
         trust_engine.evaluate = AsyncMock(return_value=auto_decision)
         executor._trust_engine = trust_engine
 
-        executor._assess_step_risk = AsyncMock(return_value="low")
-        executor._run_step_action = AsyncMock(return_value={"status": "completed", "result": "ok"})
-        executor._resolve_step_references = AsyncMock(return_value={"task_type": "summarize"})
-        executor._finalize_step = AsyncMock()
-        executor._emit_event = AsyncMock()
+        executor._trust_gate.assess_step_risk = AsyncMock(return_value="low")
+        executor._runner.run_step_action = AsyncMock(
+            return_value={"status": "completed", "result": "ok"}
+        )
+        executor._store.resolve_step_references = AsyncMock(return_value={"task_type": "summarize"})
+        executor._dag_runner.finalize_step = AsyncMock()
+        executor._surface_emitter.emit_event = AsyncMock()
 
         step = MagicMock()
         step.step_id = "step_fallback_exec"
@@ -683,11 +689,11 @@ class TestExecuteStepEmptyCapabilityFailsClosed:
         executor._trust_engine = trust_engine
 
         # Spy on the execution-side helpers — none must be called.
-        executor._assess_step_risk = AsyncMock()
-        executor._run_step_action = AsyncMock(return_value={"status": "completed"})
-        executor._resolve_step_references = AsyncMock(return_value={})
-        executor._finalize_step = AsyncMock()
-        executor._emit_event = AsyncMock()
+        executor._trust_gate.assess_step_risk = AsyncMock()
+        executor._runner.run_step_action = AsyncMock(return_value={"status": "completed"})
+        executor._store.resolve_step_references = AsyncMock(return_value={})
+        executor._dag_runner.finalize_step = AsyncMock()
+        executor._surface_emitter.emit_event = AsyncMock()
 
         step = MagicMock()
         step.step_id = "step_empty_cap"
@@ -709,9 +715,9 @@ class TestExecuteStepEmptyCapabilityFailsClosed:
 
         # Fail-closed: never assessed risk, never evaluated trust, never ran the action.
         trust_engine.evaluate.assert_not_called()
-        executor._assess_step_risk.assert_not_called()
-        executor._run_step_action.assert_not_called()
-        executor._finalize_step.assert_not_called()
+        executor._trust_gate.assess_step_risk.assert_not_called()
+        executor._runner.run_step_action.assert_not_called()
+        executor._dag_runner.finalize_step.assert_not_called()
         # Step ended in a terminal non-execution state (failed contract violation).
         assert step.status == "failed"
 
@@ -727,9 +733,9 @@ class TestExecuteStepEmptyCapabilityFailsClosed:
         trust_engine = MagicMock()
         trust_engine.evaluate = AsyncMock()
         executor._trust_engine = trust_engine
-        executor._run_step_action = AsyncMock(return_value={"status": "completed"})
-        executor._finalize_step = AsyncMock()
-        executor._emit_event = AsyncMock()
+        executor._runner.run_step_action = AsyncMock(return_value={"status": "completed"})
+        executor._dag_runner.finalize_step = AsyncMock()
+        executor._surface_emitter.emit_event = AsyncMock()
 
         step = MagicMock()
         step.step_id = "step_no_input"
@@ -750,8 +756,8 @@ class TestExecuteStepEmptyCapabilityFailsClosed:
         await executor._execute_step(run, step)
 
         trust_engine.evaluate.assert_not_called()
-        executor._run_step_action.assert_not_called()
-        executor._finalize_step.assert_not_called()
+        executor._runner.run_step_action.assert_not_called()
+        executor._dag_runner.finalize_step.assert_not_called()
         assert step.status == "failed"
 
     @patch("src.services.graph_executor.get_anthropic_client")
@@ -765,10 +771,10 @@ class TestExecuteStepEmptyCapabilityFailsClosed:
         trust_engine = MagicMock()
         trust_engine.evaluate = AsyncMock()
         executor._trust_engine = trust_engine
-        executor._run_step_action = AsyncMock(return_value={"status": "completed"})
-        executor._resolve_step_references = AsyncMock(return_value={})
-        executor._finalize_step = AsyncMock()
-        executor._emit_event = AsyncMock()
+        executor._runner.run_step_action = AsyncMock(return_value={"status": "completed"})
+        executor._store.resolve_step_references = AsyncMock(return_value={})
+        executor._dag_runner.finalize_step = AsyncMock()
+        executor._surface_emitter.emit_event = AsyncMock()
 
         step = MagicMock()
         step.step_id = "step_resumed"
@@ -790,5 +796,5 @@ class TestExecuteStepEmptyCapabilityFailsClosed:
 
         # Resumed path: gate skipped, action runs, finalized.
         trust_engine.evaluate.assert_not_called()
-        executor._run_step_action.assert_called_once()
-        executor._finalize_step.assert_called_once()
+        executor._runner.run_step_action.assert_called_once()
+        executor._dag_runner.finalize_step.assert_called_once()

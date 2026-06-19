@@ -98,9 +98,9 @@ class TestSingleGateApprovalRequired:
         )
 
         executor = _make_executor(settings, mock_db, trust_engine=mock_trust_engine)
-        executor._create_approval_and_pause = AsyncMock()
-        executor._emit_event = AsyncMock()
-        executor._checkpoint = AsyncMock()
+        executor._trust_gate.create_approval_and_pause = AsyncMock()
+        executor._surface_emitter.emit_event = AsyncMock()
+        executor._store.checkpoint = AsyncMock()
 
         step = _make_step()
         run = _make_run()
@@ -110,7 +110,7 @@ class TestSingleGateApprovalRequired:
         mock_trust_engine.evaluate.assert_called_once_with(
             "email.send", risk, workspace_id="ws_test"
         )
-        executor._create_approval_and_pause.assert_called_once()
+        executor._trust_gate.create_approval_and_pause.assert_called_once()
 
 
 class TestSingleGateAutoExecuteNotify:
@@ -131,21 +131,23 @@ class TestSingleGateAutoExecuteNotify:
         )
 
         executor = _make_executor(settings, mock_db, trust_engine=mock_trust_engine)
-        executor._run_step_action = AsyncMock(return_value={"ok": True})
-        executor._notify_auto_executed = AsyncMock()
-        executor._emit_event = AsyncMock()
-        executor._checkpoint = AsyncMock()
-        executor._resolve_step_references = AsyncMock(return_value={"capability": "email.send"})
-        executor._finalize_step = AsyncMock()
+        executor._runner.run_step_action = AsyncMock(return_value={"ok": True})
+        executor._trust_gate.notify_auto_executed = AsyncMock()
+        executor._surface_emitter.emit_event = AsyncMock()
+        executor._store.checkpoint = AsyncMock()
+        executor._store.resolve_step_references = AsyncMock(
+            return_value={"capability": "email.send"}
+        )
+        executor._dag_runner.finalize_step = AsyncMock()
 
         step = _make_step(status="pending")
         run = _make_run()
 
-        with patch("src.services.graph_executor.transition_step"):
+        with patch("src.services.dag_runner.transition_step"):
             await executor._execute_step(run, step)
 
-        executor._run_step_action.assert_called_once()
-        executor._notify_auto_executed.assert_called_once()
+        executor._runner.run_step_action.assert_called_once()
+        executor._trust_gate.notify_auto_executed.assert_called_once()
 
 
 class TestSingleGateAutoExecuteSilent:
@@ -166,21 +168,23 @@ class TestSingleGateAutoExecuteSilent:
         )
 
         executor = _make_executor(settings, mock_db, trust_engine=mock_trust_engine)
-        executor._run_step_action = AsyncMock(return_value={"ok": True})
-        executor._notify_auto_executed = AsyncMock()
-        executor._emit_event = AsyncMock()
-        executor._checkpoint = AsyncMock()
-        executor._resolve_step_references = AsyncMock(return_value={"capability": "email.send"})
-        executor._finalize_step = AsyncMock()
+        executor._runner.run_step_action = AsyncMock(return_value={"ok": True})
+        executor._trust_gate.notify_auto_executed = AsyncMock()
+        executor._surface_emitter.emit_event = AsyncMock()
+        executor._store.checkpoint = AsyncMock()
+        executor._store.resolve_step_references = AsyncMock(
+            return_value={"capability": "email.send"}
+        )
+        executor._dag_runner.finalize_step = AsyncMock()
 
         step = _make_step(status="pending")
         run = _make_run()
 
-        with patch("src.services.graph_executor.transition_step"):
+        with patch("src.services.dag_runner.transition_step"):
             await executor._execute_step(run, step)
 
-        executor._run_step_action.assert_called_once()
-        executor._notify_auto_executed.assert_not_called()
+        executor._runner.run_step_action.assert_called_once()
+        executor._trust_gate.notify_auto_executed.assert_not_called()
 
 
 class TestSingleGateResumedStep:
@@ -191,11 +195,13 @@ class TestSingleGateResumedStep:
         self, mock_risk, settings, mock_db, mock_trust_engine
     ):
         executor = _make_executor(settings, mock_db, trust_engine=mock_trust_engine)
-        executor._run_step_action = AsyncMock(return_value={"ok": True})
-        executor._emit_event = AsyncMock()
-        executor._checkpoint = AsyncMock()
-        executor._resolve_step_references = AsyncMock(return_value={"capability": "email.send"})
-        executor._finalize_step = AsyncMock()
+        executor._runner.run_step_action = AsyncMock(return_value={"ok": True})
+        executor._surface_emitter.emit_event = AsyncMock()
+        executor._store.checkpoint = AsyncMock()
+        executor._store.resolve_step_references = AsyncMock(
+            return_value={"capability": "email.send"}
+        )
+        executor._dag_runner.finalize_step = AsyncMock()
 
         step = _make_step(status="running")
         run = _make_run()
@@ -204,7 +210,7 @@ class TestSingleGateResumedStep:
 
         mock_risk.assert_not_called()
         mock_trust_engine.evaluate.assert_not_called()
-        executor._run_step_action.assert_called_once()
+        executor._runner.run_step_action.assert_called_once()
 
 
 class TestNoTrustEngineFailsClosed:
@@ -217,11 +223,13 @@ class TestNoTrustEngineFailsClosed:
 
     async def test_no_trust_engine_fails_step_without_executing(self, settings, mock_db):
         executor = _make_executor(settings, mock_db, trust_engine=None)
-        executor._run_step_action = AsyncMock(return_value={"ok": True})
-        executor._emit_event = AsyncMock()
-        executor._checkpoint = AsyncMock()
-        executor._resolve_step_references = AsyncMock(return_value={"capability": "email.send"})
-        executor._finalize_step = AsyncMock()
+        executor._runner.run_step_action = AsyncMock(return_value={"ok": True})
+        executor._surface_emitter.emit_event = AsyncMock()
+        executor._store.checkpoint = AsyncMock()
+        executor._store.resolve_step_references = AsyncMock(
+            return_value={"capability": "email.send"}
+        )
+        executor._dag_runner.finalize_step = AsyncMock()
 
         step = _make_step(status="ready")
         run = _make_run()
@@ -229,11 +237,11 @@ class TestNoTrustEngineFailsClosed:
         await executor._execute_step(run, step)
 
         # Fail-closed: the step action is NEVER run without a gate.
-        executor._run_step_action.assert_not_called()
-        executor._finalize_step.assert_not_called()
+        executor._runner.run_step_action.assert_not_called()
+        executor._dag_runner.finalize_step.assert_not_called()
         assert step.status == "failed"
         assert "contract_violation" in (step.output_data or {}).get("error", "")
-        executor._emit_event.assert_any_await(
+        executor._surface_emitter.emit_event.assert_any_await(
             "step.failed",
             run.user_id,
             {
@@ -250,14 +258,14 @@ class TestStepFailureHandling:
 
     async def test_failure_with_retries_remaining(self, settings, mock_db):
         executor = _make_executor(settings, mock_db)
-        executor._emit_event = AsyncMock()
+        executor._surface_emitter.emit_event = AsyncMock()
 
         step = _make_step()
         step.retry_count = 0
         step.max_retries = 3
         run = _make_run()
 
-        with patch("src.services.graph_executor.transition_step"):
+        with patch("src.services.dag_runner.transition_step"):
             await executor._handle_step_failure(run, step, RuntimeError("boom"), 100)
 
         assert step.retry_count == 1
@@ -265,19 +273,19 @@ class TestStepFailureHandling:
 
     async def test_failure_permanent(self, settings, mock_db):
         executor = _make_executor(settings, mock_db)
-        executor._emit_event = AsyncMock()
+        executor._surface_emitter.emit_event = AsyncMock()
 
         step = _make_step()
         step.retry_count = 2
         step.max_retries = 3
         run = _make_run()
 
-        with patch("src.services.graph_executor.transition_step"):
+        with patch("src.services.dag_runner.transition_step"):
             await executor._handle_step_failure(run, step, RuntimeError("final"), 200)
 
         assert step.retry_count == 3
         assert step.error["final"] is True
-        executor._emit_event.assert_called()
+        executor._surface_emitter.emit_event.assert_called()
 
 
 class TestGateIntegrationApprovalResume:
@@ -303,8 +311,8 @@ class TestGateIntegrationApprovalResume:
         )
 
         executor = _make_executor(settings, mock_db, trust_engine=mock_trust_engine)
-        executor._emit_event = AsyncMock()
-        executor._checkpoint = AsyncMock()
+        executor._surface_emitter.emit_event = AsyncMock()
+        executor._store.checkpoint = AsyncMock()
 
         step = _make_step(capability="email.send")
         run = _make_run()
@@ -346,22 +354,22 @@ class TestGateIntegrationAutoNotifyFlow:
 
         executor = _make_executor(settings, mock_db, trust_engine=mock_trust_engine)
         executor._notifier = mock_notifier
-        executor._run_step_action = AsyncMock(return_value={"event_id": "evt_123"})
-        executor._emit_event = AsyncMock()
-        executor._checkpoint = AsyncMock()
-        executor._resolve_step_references = AsyncMock(
+        executor._runner.run_step_action = AsyncMock(return_value={"event_id": "evt_123"})
+        executor._surface_emitter.emit_event = AsyncMock()
+        executor._store.checkpoint = AsyncMock()
+        executor._store.resolve_step_references = AsyncMock(
             return_value={"capability": "calendar.create"}
         )
-        executor._finalize_step = AsyncMock()
+        executor._dag_runner.finalize_step = AsyncMock()
 
         step = _make_step(capability="calendar.create")
         run = _make_run()
 
-        with patch("src.services.graph_executor.transition_step"):
+        with patch("src.services.dag_runner.transition_step"):
             await executor._execute_step(run, step)
 
         # Verify execution happened
-        executor._run_step_action.assert_called_once()
+        executor._runner.run_step_action.assert_called_once()
 
         # Verify post-execution notification sent
         mock_notifier.notify.assert_called_once()

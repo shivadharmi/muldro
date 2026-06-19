@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
@@ -19,20 +18,22 @@ from ulid import ULID
 
 from src.config.settings import Settings, get_anthropic_client
 from src.connectors.mcp_bridge import close_turn_sessions
-from src.contracts import PolicyDecision, ResultSummary, StepResult
+from src.contracts import PolicyDecision
 from src.integrations.turn_scope import turn_scope
 from src.models.plans import Plan, PlanTask
 from src.models.task_graph import TaskRun, TaskStep
-from src.orchestrator.agent_loop import CancellationRequested
 from src.orchestrator.tracing import JarvisTrace
 from src.services.audit import AuditService
+from src.services.dag_runner import DagRunner
 from src.services.execution_state import transition_run, transition_step
-from src.services.execution_support import (
-    _compute_retry_delay,
-    _safe_error_fields,
-    _step_to_state,
-)
+from src.services.execution_support import _safe_error_fields, _step_to_state
 from src.services.execution_surface_emitter import SurfaceEmitter
+
+# Re-exported so callers/tests using `from src.services.graph_executor import
+# create_graph_executor` (and patching it here) keep working after the factory
+# moved to graph_executor_factory.py. The factory imports GraphExecutor lazily,
+# so this import is acyclic.
+from src.services.graph_executor_factory import create_graph_executor  # noqa: F401
 from src.services.outcome_learner import OutcomeLearner
 from src.services.risk_assessor import RiskAssessment
 from src.services.step_graph_store import StepGraphStore
@@ -46,135 +47,6 @@ if TYPE_CHECKING:
     from src.services.verifier import Verifier
 
 logger = logging.getLogger(__name__)
-
-
-async def create_graph_executor(
-    settings: Settings,
-    db: AsyncSession,
-    workspace_id: str = "",
-    db_factory=None,
-    execute_tool_fn=None,
-    budget=None,
-    circuit_breaker=None,
-) -> GraphExecutor:
-    """Factory that creates a GraphExecutor with all deps consistently resolved.
-
-    Use this instead of instantiating GraphExecutor directly so that every
-    callsite (API routes, orchestrator, runtime) gets the same dep set.
-    """
-    from src.services.event_bus import EventBus
-    from src.services.notifier import Notifier
-    from src.services.tool_registry import ToolRegistry
-
-    event_bus: EventBus | None = None
-    try:
-        import redis.asyncio as aioredis
-
-        event_bus = EventBus(aioredis.from_url(settings.redis_url, decode_responses=True))
-    except Exception:
-        logger.debug("EventBus unavailable for GraphExecutor", exc_info=True)
-
-    notifier: Notifier | None = None
-    try:
-        import redis.asyncio as aioredis
-
-        from src.services.surface_registry import SurfaceRegistry
-
-        notifier_redis = aioredis.from_url(settings.redis_url, decode_responses=True)
-        surface_registry = SurfaceRegistry(redis=notifier_redis)
-        notifier = Notifier(
-            surface_registry=surface_registry,
-            redis=notifier_redis,
-            db=db,
-        )
-    except Exception:
-        logger.debug("Notifier unavailable for GraphExecutor", exc_info=True)
-
-    tool_registry: ToolRegistry | None = None
-    try:
-        tool_registry = ToolRegistry(db)
-    except Exception:
-        logger.debug("ToolRegistry unavailable for GraphExecutor", exc_info=True)
-
-    world_model = None
-    try:
-        from src.services.world_model import WorldModel
-
-        world_model = WorldModel(settings, db)
-    except Exception:
-        logger.debug("WorldModel unavailable for GraphExecutor", exc_info=True)
-
-    memory_service = None
-    try:
-        from src.services.memory_service import MemoryService
-
-        memory_service = MemoryService(settings=settings, db=db)
-    except Exception:
-        logger.debug("MemoryService unavailable for GraphExecutor", exc_info=True)
-
-    context_builder = None
-    try:
-        from src.services.context_builder import ContextBuilder
-
-        context_builder = ContextBuilder(
-            world_model=world_model,
-            memory_service=memory_service,
-            tool_registry=tool_registry,
-            db=db,
-        )
-    except Exception:
-        logger.debug("ContextBuilder unavailable for GraphExecutor", exc_info=True)
-
-    verifier = None
-    try:
-        from src.services.verifier import Verifier
-
-        verifier = Verifier(settings, db)
-    except Exception:
-        logger.debug("Verifier unavailable for GraphExecutor", exc_info=True)
-
-    trust_engine = None
-    try:
-        from src.services.trust_engine import TrustEngine
-
-        trust_engine = TrustEngine(db, workspace_id)
-    except Exception:
-        logger.debug("TrustEngine unavailable for GraphExecutor", exc_info=True)
-
-    redis_conn = None
-    try:
-        import redis.asyncio as aioredis
-
-        redis_conn = aioredis.from_url(settings.redis_url, decode_responses=True)
-    except Exception:
-        logger.debug("Redis unavailable for GraphExecutor", exc_info=True)
-
-    trace_store = None
-    try:
-        from src.services.trace_store import TraceStore
-
-        trace_store = TraceStore(db_factory=db_factory)
-    except Exception:
-        logger.debug("TraceStore unavailable for GraphExecutor", exc_info=True)
-
-    return GraphExecutor(
-        settings=settings,
-        db=db,
-        event_bus=event_bus,
-        notifier=notifier,
-        tool_registry=tool_registry,
-        verifier=verifier,
-        context_builder=context_builder,
-        memory_service=memory_service,
-        world_model=world_model,
-        db_factory=db_factory,
-        execute_tool_fn=execute_tool_fn,
-        budget=budget,
-        circuit_breaker=circuit_breaker,
-        trust_engine=trust_engine,
-        redis=redis_conn,
-        trace_store=trace_store,
-    )
 
 
 class GraphExecutor:
@@ -286,6 +158,19 @@ class GraphExecutor:
             verifier_provider=lambda: self._verifier,
             memory_service=memory_service,
             world_model=world_model,
+        )
+        # The DAG execution engine (ready-step loop + per-step pipeline + single
+        # TrustEngine gate) lives in an injected collaborator that orchestrates
+        # all the above. The coordinator owns run lifecycle (trace/timeout/commit)
+        # and delegates the engine to it; thin facades preserve the white-box suite.
+        self._dag_runner = DagRunner(
+            db=db,
+            store=self._store,
+            trust_gate=self._trust_gate,
+            runner=self._runner,
+            learner=self._learner,
+            emitter=self._surface_emitter,
+            trust_engine_provider=lambda: self._trust_engine,
         )
 
     async def create_run(
@@ -626,131 +511,8 @@ class GraphExecutor:
         surface_id: str | None = None,
         cancel_event: asyncio.Event | None = None,
     ) -> None:
-        """Main DAG execution loop."""
-        _dag_start = time.monotonic()
-        while True:
-            ready_steps = await self._get_ready_steps(run.run_id)
-            if not ready_steps:
-                # Check if all steps are done
-                all_steps = await self._get_all_steps(run.run_id)
-                pending = [s for s in all_steps if s.status in ("pending", "ready", "running")]
-                if not pending:
-                    # Use partially_completed before verification (if verifier exists)
-                    if self._verifier:
-                        transition_run(run, "partially_completed")
-                    else:
-                        transition_run(run, "completed")
-                    run.completed_at = datetime.now(timezone.utc)
-                    await self._emit_event(
-                        "run_completed",
-                        run.user_id,
-                        {"run_id": run.run_id, "plan_id": run.plan_id},
-                        workspace_id=run.workspace_id,
-                    )
-                    # Run verifier if available
-                    if self._verifier:
-                        await self._run_verification(run)
-                    # Writeback memories from execution results
-                    await self._writeback_memories(run)
-                    if surface_id:
-                        _comp_steps = await self._get_all_steps(run.run_id)
-                        _final_states = [_step_to_state(s) for s in _comp_steps]
-                        _findings = [
-                            str(s.output_data.get("result", ""))
-                            for s in _comp_steps
-                            if s.output_data and s.output_data.get("result")
-                        ]
-                        await self._emit_surface_update(
-                            surface_id=surface_id,
-                            user_id=run.user_id,
-                            phase="completed",
-                            steps=_final_states,
-                            progress=f"{len(_comp_steps)}/{len(_comp_steps)} steps",
-                            results=ResultSummary(key_findings=_findings[:5]),
-                            workspace_id=run.workspace_id,
-                        )
-                        # Emit a lightweight summary card for the workspace
-                        # feed and archive the run surface.
-                        await self._emit_summary_surface(run, surface_id)
-                    break
-                # If there are pending steps but none ready, we're blocked
-                failed = [s for s in all_steps if s.status == "failed"]
-                if failed:
-                    transition_run(run, "failed")
-                    run.completed_at = datetime.now(timezone.utc)
-                    run.error = {
-                        "message": f"{len(failed)} step(s) failed",
-                        "failed_steps": [s.step_id for s in failed],
-                    }
-                    if surface_id:
-                        _fail_steps = await self._get_all_steps(run.run_id)
-                        _fail_states = [_step_to_state(s) for s in _fail_steps]
-                        await self._emit_surface_update(
-                            surface_id=surface_id,
-                            user_id=run.user_id,
-                            phase="failed",
-                            steps=_fail_states,
-                            progress=f"{len(failed)} step(s) failed",
-                            workspace_id=run.workspace_id,
-                        )
-                        await self._emit_summary_surface(run, surface_id)
-                    break
-                # Must be waiting for approval or external event
-                break
-
-            # Execute ready steps sequentially (shared AsyncSession is not
-            # safe for concurrent coroutines — parallel gather caused silent
-            # step failures and permanently stuck runs).
-            run.current_step_ids = [s.step_id for s in ready_steps]
-            await self._db.flush()
-
-            # Surface update: executing phase
-            if surface_id:
-                _all_for_surface = await self._get_all_steps(run.run_id)
-                _step_states = [
-                    _step_to_state(
-                        s,
-                        status_override="executing"
-                        if s.step_id in (run.current_step_ids or [])
-                        else None,
-                    )
-                    for s in _all_for_surface
-                ]
-                _done_count = sum(1 for s in _all_for_surface if s.status == "completed")
-                await self._emit_surface_update(
-                    surface_id=surface_id,
-                    user_id=run.user_id,
-                    phase="executing",
-                    steps=_step_states,
-                    current_step=ready_steps[0].step_id if ready_steps else None,
-                    progress=f"{_done_count}/{len(_all_for_surface)} steps",
-                    workspace_id=run.workspace_id,
-                )
-
-            for step in ready_steps:
-                try:
-                    await self._execute_step(
-                        run, step, surface_id=surface_id, cancel_event=cancel_event
-                    )
-                except CancellationRequested:
-                    # Run was cancelled — cancel_run() already set the run status
-                    return
-                except Exception:
-                    logger.error("Step %s raised unexpectedly", step.step_id, exc_info=True)
-
-            # Check if run was paused by an approval gate
-            await self._db.refresh(run)
-            if run.status in ("paused", "awaiting_approval"):
-                break
-
-        _dag_elapsed = time.monotonic() - _dag_start
-        if _dag_elapsed > 120:
-            logger.warning(
-                "Long DAG execution: run %s took %.1fs — "
-                "consider db_factory pattern for connection pool safety",
-                run.run_id,
-                _dag_elapsed,
-            )
+        """Facade → DagRunner.execute_dag."""
+        await self._dag_runner.execute_dag(run, surface_id=surface_id, cancel_event=cancel_event)
 
     async def _execute_step(
         self,
@@ -759,175 +521,10 @@ class GraphExecutor:
         surface_id: str | None = None,
         cancel_event: asyncio.Event | None = None,
     ) -> None:
-        """Execute a single step, with single TrustEngine approval gate."""
-        already_approved = step.status == "running"
-
-        if not already_approved:
-            capability = (step.input_data or {}).get(
-                "capability", (step.input_data or {}).get("task_type", "")
-            )
-
-            # ── Fail-closed contract guard ───────────────────────────────
-            # The autonomous path MUST be gated by the TrustEngine. Two
-            # conditions leave a step unevaluatable and therefore unsafe to
-            # auto-execute:
-            #   • no TrustEngine — create_graph_executor and runtime always
-            #     supply one (TrustEngine construction cannot fail), so an
-            #     absent engine here is a wiring/misconfiguration, never a
-            #     normal mode. We refuse to fall back to an ungated legacy
-            #     approval path (SVC-P3-1).
-            #   • empty capability — the Planner ALWAYS emits a capability per
-            #     PlanStep (see CLAUDE.md), so a missing one is contract drift.
-            # In either case we fail the step loudly rather than auto-execute a
-            # potential external write with NO risk assessment and NO approval.
-            if not self._trust_engine or not capability:
-                reason = "missing TrustEngine" if not self._trust_engine else "empty capability"
-                logger.error(
-                    "Step %s reached approval gate with %s "
-                    "(input_data keys=%s) — failing closed as contract violation",
-                    step.step_id,
-                    reason,
-                    sorted((step.input_data or {}).keys()),
-                )
-                transition_step(step, "running")
-                transition_step(step, "failed")
-                step.completed_at = datetime.now(timezone.utc)
-                step.output_data = {"error": f"contract_violation: {reason}"}
-                step.error = {
-                    "message": (
-                        f"Step cannot be gated ({reason}); refusing to execute "
-                        "ungated (TrustEngine contract violation)"
-                    ),
-                    "final": True,
-                }
-                await self._db.flush()
-                await self._emit_event(
-                    "step.failed",
-                    run.user_id,
-                    {
-                        "run_id": run.run_id,
-                        "step_id": step.step_id,
-                        "error": f"contract_violation: {reason}",
-                    },
-                    workspace_id=run.workspace_id,
-                )
-                return
-
-            # ── Single TrustEngine gate ──────────────────────────────────
-            # The TrustEngine and capability are both guaranteed present by the
-            # fail-closed guard above, so the gate runs unconditionally — there
-            # is no ungated fall-through path out of this block.
-            risk = await self._assess_step_risk(capability, step, run)
-            decision = await self._trust_engine.evaluate(
-                capability, risk, workspace_id=run.workspace_id or ""
-            )
-
-            if decision.decision == "approval_required":
-                await self._create_approval_and_pause(
-                    run, step, capability, risk, decision, surface_id=surface_id
-                )
-                return
-
-            # auto_execute_notify or auto_execute_silent — proceed
-            transition_step(step, "running")
-            step.started_at = step.started_at or datetime.now(timezone.utc)
-            await self._db.flush()
-            await self._emit_event(
-                "step.started",
-                run.user_id,
-                {"run_id": run.run_id, "step_id": step.step_id},
-                workspace_id=run.workspace_id,
-            )
-
-            resolved_input = await self._resolve_step_references(step, run.run_id)
-            if resolved_input != (step.input_data or {}):
-                step.input_data = resolved_input
-                await self._db.flush()
-
-            step_timeout = step.timeout_seconds or 120
-            t0 = time.monotonic()
-            try:
-                output = await asyncio.wait_for(
-                    self._run_step_action(step, run, cancel_event=cancel_event),
-                    timeout=step_timeout,
-                )
-                elapsed_ms = int((time.monotonic() - t0) * 1000)
-            except asyncio.TimeoutError:
-                elapsed_ms = int((time.monotonic() - t0) * 1000)
-                transition_step(step, "timed_out")
-                step.error = {"message": f"Step timed out after {step_timeout}s"}
-                step.completed_at = datetime.now(timezone.utc)
-                await self._db.flush()
-                logger.warning("Step %s timed out after %ds", step.step_id, step_timeout)
-                return
-            except CancellationRequested:
-                transition_step(step, "cancelled")
-                step.completed_at = datetime.now(timezone.utc)
-                await self._db.flush()
-                raise
-            except Exception as exc:
-                elapsed_ms = int((time.monotonic() - t0) * 1000)
-                await self._handle_step_failure(run, step, exc, elapsed_ms, surface_id=surface_id)
-                return
-
-            if decision.decision == "auto_execute_notify":
-                await self._notify_auto_executed(run, step, risk, output)
-
-            await self._finalize_step(run, step, output, elapsed_ms)
-            # Reinforce trust: a successful auto-execution graduates trust the
-            # same way an explicit user approval does, so the autonomous path
-            # learns from its own outcomes (not only from approval prompts).
-            risk_level = getattr(risk, "risk_level", risk)
-            await self._record_auto_execution_outcome(
-                capability, risk_level, run.workspace_id or ""
-            )
-            # Remember the auto-executed (capability, risk_level) so a later
-            # verification failure can reverse this reinforcement (SVC).
-            self._remember_auto_executed(run, capability, risk_level)
-            return
-
-        # ── Common execution path (step resumed after approval) ──────
-        step.started_at = step.started_at or datetime.now(timezone.utc)
-        await self._db.flush()
-        await self._emit_event(
-            "step.started",
-            run.user_id,
-            {"run_id": run.run_id, "step_id": step.step_id},
-            workspace_id=run.workspace_id,
+        """Facade → DagRunner.execute_step."""
+        await self._dag_runner.execute_step(
+            run, step, surface_id=surface_id, cancel_event=cancel_event
         )
-
-        resolved_input = await self._resolve_step_references(step, run.run_id)
-        if resolved_input != (step.input_data or {}):
-            step.input_data = resolved_input
-            await self._db.flush()
-
-        step_timeout = step.timeout_seconds or 120
-        t0 = time.monotonic()
-        try:
-            output = await asyncio.wait_for(
-                self._run_step_action(step, run, cancel_event=cancel_event),
-                timeout=step_timeout,
-            )
-            elapsed_ms = int((time.monotonic() - t0) * 1000)
-        except asyncio.TimeoutError:
-            elapsed_ms = int((time.monotonic() - t0) * 1000)
-            transition_step(step, "timed_out")
-            step.error = {"message": f"Step timed out after {step_timeout}s"}
-            step.completed_at = datetime.now(timezone.utc)
-            await self._db.flush()
-            logger.warning("Step %s timed out after %ds", step.step_id, step_timeout)
-            return
-        except CancellationRequested:
-            transition_step(step, "cancelled")
-            step.completed_at = datetime.now(timezone.utc)
-            await self._db.flush()
-            raise
-        except Exception as exc:
-            elapsed_ms = int((time.monotonic() - t0) * 1000)
-            await self._handle_step_failure(run, step, exc, elapsed_ms, surface_id=surface_id)
-            return
-
-        await self._finalize_step(run, step, output, elapsed_ms)
 
     # ── TrustEngine helper methods ───────────────────────────────────
 
@@ -979,86 +576,10 @@ class GraphExecutor:
         elapsed_ms: int,
         surface_id: str | None = None,
     ) -> None:
-        """Handle step execution failure with retry logic."""
-        step.retry_count += 1
-        if step.retry_count < step.max_retries:
-            delay = _compute_retry_delay(step.retry_count)
-            logger.warning(
-                "Step %s failed (attempt %d/%d), retrying in %ds: %s",
-                step.step_id,
-                step.retry_count,
-                step.max_retries,
-                delay,
-                exc,
-            )
-            transition_step(step, "failed")
-            transition_step(step, "pending")  # Retry: failed → pending
-            # step.error is surfaced in execution surfaces — keep it sanitized.
-            safe = _safe_error_fields(exc)
-            step.error = {
-                "attempt": step.retry_count,
-                "message": safe["message"],
-                "error_code": safe["error_code"],
-                "correlation_id": safe["correlation_id"],
-                "retry_after_seconds": delay,
-            }
-            await self._db.flush()
-            await asyncio.sleep(delay)
-        else:
-            logger.error(
-                "Step %s permanently failed after %dms: %s",
-                step.step_id,
-                elapsed_ms,
-                exc,
-            )
-            transition_step(step, "failed")
-            # step.output_data is rendered in execution surfaces + run history,
-            # and step.error feeds the surface error line — both client-facing.
-            # Store the safe message + code + correlation id; raw str(exc) → logs/trace only.
-            safe = _safe_error_fields(exc)
-            step.output_data = {
-                "error": safe["message"],
-                "error_code": safe["error_code"],
-                "correlation_id": safe["correlation_id"],
-            }
-            step.completed_at = datetime.now(timezone.utc)
-            step.error = {
-                "message": safe["message"],
-                "error_code": safe["error_code"],
-                "correlation_id": safe["correlation_id"],
-                "final": True,
-            }
-            await self._emit_event(
-                "step.failed",
-                run.user_id,
-                {
-                    "run_id": run.run_id,
-                    "step_id": step.step_id,
-                    "error": safe["message"],
-                    "error_code": safe["error_code"],
-                    "correlation_id": safe["correlation_id"],
-                    "duration_ms": elapsed_ms,
-                },
-                workspace_id=run.workspace_id,
-            )
-            if surface_id:
-                all_steps = await self._get_all_steps(run.run_id)
-                step_states = [
-                    _step_to_state(
-                        s,
-                        status_override="failed" if s.step_id == step.step_id else None,
-                    )
-                    for s in all_steps
-                ]
-                await self._emit_surface_update(
-                    surface_id=surface_id,
-                    user_id=run.user_id,
-                    phase="failed",
-                    steps=step_states,
-                    progress=f"Step {step.step_id} permanently failed",
-                    workspace_id=run.workspace_id,
-                )
-        await self._db.flush()
+        """Facade → DagRunner.handle_step_failure."""
+        await self._dag_runner.handle_step_failure(
+            run, step, exc, elapsed_ms, surface_id=surface_id
+        )
 
     async def _finalize_step(
         self,
@@ -1067,61 +588,8 @@ class GraphExecutor:
         output: dict | None,
         elapsed_ms: int,
     ) -> None:
-        """Mark step completed, emit events, checkpoint."""
-        await self._emit_event(
-            "tool_call_completed",
-            run.user_id,
-            {
-                "run_id": run.run_id,
-                "step_id": step.step_id,
-                "tool_name": (step.input_data or {}).get(
-                    "capability",
-                    (step.input_data or {}).get("task_type", "unknown"),
-                ),
-                "duration_ms": elapsed_ms,
-            },
-            workspace_id=run.workspace_id,
-        )
-
-        transition_step(step, "completed")
-        step.output_data = output
-        step.completed_at = datetime.now(timezone.utc)
-        await self._db.flush()
-
-        result = StepResult(
-            step_id=step.step_id,
-            status="completed",
-            output_data=output,
-            duration_ms=elapsed_ms,
-        )
-
-        await self._checkpoint(run, step.step_id, "step_completed")
-
-        await self._emit_event(
-            "step_completed",
-            run.user_id,
-            {
-                "run_id": run.run_id,
-                "step_id": step.step_id,
-                "task_id": step.task_id,
-                "duration_ms": result.duration_ms,
-            },
-            workspace_id=run.workspace_id,
-        )
-
-        # Emit surface.updated for A2UI live streaming
-        if output and any(k in output for k in ("draft", "report", "summary", "result", "view")):
-            await self._emit_event(
-                "surface_created",
-                run.user_id,
-                {
-                    "run_id": run.run_id,
-                    "step_id": step.step_id,
-                    "surface_type": "step_output",
-                    "preview": str(output.get("result", output.get("summary", "")))[:200],
-                },
-                workspace_id=run.workspace_id,
-            )
+        """Facade → DagRunner.finalize_step."""
+        await self._dag_runner.finalize_step(run, step, output, elapsed_ms)
 
     async def _run_step_action(
         self,
