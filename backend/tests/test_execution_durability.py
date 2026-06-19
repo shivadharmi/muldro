@@ -95,12 +95,16 @@ class TestVerificationState:
         assert "failed" in RUN_TRANSITIONS["partially_completed"]
 
     def test_verification_promotes_to_completed(self):
-        """_run_verification should promote partially_completed to completed on pass."""
+        """run_verification should promote partially_completed to completed on pass.
+
+        The verification logic was extracted to OutcomeLearner (2026-06-20);
+        GraphExecutor._run_verification is now a thin facade over it.
+        """
         import inspect
 
-        from src.services.graph_executor import GraphExecutor
+        from src.services.outcome_learner import OutcomeLearner
 
-        source = inspect.getsource(GraphExecutor._run_verification)
+        source = inspect.getsource(OutcomeLearner.run_verification)
         assert "partially_completed" in source
         assert 'transition_run(run, "completed")' in source
 

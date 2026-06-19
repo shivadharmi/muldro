@@ -182,7 +182,7 @@ class TestVerificationTrustFeedback:
 
         with (
             patch("src.services.risk_assessor.record_approval_decision", new=AsyncMock()) as rec,
-            patch("src.services.graph_executor.transition_run"),
+            patch("src.services.outcome_learner.transition_run"),
         ):
             await executor._run_verification(run)
 
@@ -200,7 +200,7 @@ class TestVerificationTrustFeedback:
 
         with (
             patch("src.services.risk_assessor.record_approval_decision", new=AsyncMock()) as rec,
-            patch("src.services.graph_executor.transition_run"),
+            patch("src.services.outcome_learner.transition_run"),
         ):
             await executor._run_verification(run)
 
@@ -214,7 +214,7 @@ class TestVerificationTrustFeedback:
 
         with (
             patch("src.services.risk_assessor.record_approval_decision", new=AsyncMock()) as rec,
-            patch("src.services.graph_executor.transition_run"),
+            patch("src.services.outcome_learner.transition_run"),
         ):
             await executor._run_verification(run)
 
@@ -255,7 +255,7 @@ class TestVerificationTrustFeedback:
 
         with (
             patch("src.services.risk_assessor.record_approval_decision", new=AsyncMock()) as rec,
-            patch("src.services.graph_executor.transition_run"),
+            patch("src.services.outcome_learner.transition_run"),
         ):
             await executor._run_verification(run)
 

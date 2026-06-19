@@ -8,7 +8,6 @@ checkpoints after each step, and pauses at approval gates.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from datetime import datetime, timezone
@@ -34,6 +33,7 @@ from src.services.execution_support import (
     _step_to_state,
 )
 from src.services.execution_surface_emitter import SurfaceEmitter
+from src.services.outcome_learner import OutcomeLearner
 from src.services.risk_assessor import RiskAssessment
 from src.services.step_graph_store import StepGraphStore
 from src.services.step_runner import StepRunner
@@ -271,6 +271,21 @@ class GraphExecutor:
             notifier_provider=lambda: self._notifier,
             store=self._store,
             emitter=self._surface_emitter,
+        )
+        # Post-run learning (memory writeback, entity/graph enrichment,
+        # verification + trust penalty) lives in an injected collaborator.
+        # Background spawning stays coordinator-owned (injected as a callable);
+        # verifier + db_factory resolve via providers so reassigning them after
+        # construction propagates (tests do this).
+        self._learner = OutcomeLearner(
+            settings=settings,
+            db=db,
+            store=self._store,
+            spawn_background=self._spawn_background,
+            db_factory_provider=lambda: self._db_factory,
+            verifier_provider=lambda: self._verifier,
+            memory_service=memory_service,
+            world_model=world_model,
         )
 
     async def create_run(
@@ -1199,55 +1214,8 @@ class GraphExecutor:
         await self._store.checkpoint(run, step_id, reason)
 
     async def _writeback_memories(self, run: TaskRun) -> None:
-        """Learn from a completed autonomous run: store memories AND extract
-        entities + graph relationships from the outcome.
-
-        The entity/graph step brings the autonomous path to parity with the
-        chat path's InteractionLearner (which only ran chat-side); without it,
-        autonomous runs never enriched the world model from their own results.
-        """
-        if not self._memory_service:
-            return
-        all_steps = await self._get_all_steps(run.run_id)
-        completed = [s for s in all_steps if s.status == "completed" and s.output_data]
-        if not completed:
-            return
-        parts = [f"Completed plan: {run.plan_id}"]
-        for step in completed[:5]:
-            parts.append(f"- {step.task_id}: {json.dumps(step.output_data)}")
-        source_text = "\n".join(parts)
-
-        try:
-            await self._memory_service.extract_and_store(
-                user_id=run.user_id,
-                source_text=source_text,
-                source_event_ids=[run.run_id],
-                workspace_id=run.workspace_id,
-            )
-        except Exception:
-            logger.warning(
-                "Memory writeback failed for run %s — execution memories not stored",
-                run.run_id,
-                exc_info=True,
-            )
-
-        # Independent of memory storage: enrich the world model from the outcome,
-        # unless every completed step was knowledge-routed — the Librarian already
-        # extracted those entities during execution, so re-extracting from the
-        # outcome would only repeat its work (idempotent, but a wasted LLM call).
-        if not self._completed_all_knowledge_routed(completed):
-            if self._db_factory is not None:
-                # Run on its own session so the run's DB connection isn't held
-                # open during the extraction LLM call (mirrors InteractionLearner).
-                self._spawn_background(
-                    self._learn_entities_isolated(
-                        source_text, run.user_id, run.workspace_id or "", run.run_id
-                    )
-                )
-            else:
-                # No session factory wired (unit tests / minimal setups): fall
-                # back to the inline path using the injected world_model.
-                await self._learn_entities_from_outcome(source_text, run)
+        """Facade → OutcomeLearner.writeback_memories."""
+        await self._learner.writeback_memories(run)
 
     def _spawn_background(self, coro) -> None:
         """Run a best-effort coroutine fire-and-forget, tracked so it isn't GC'd
@@ -1256,154 +1224,15 @@ class GraphExecutor:
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
 
-    @staticmethod
-    def _completed_all_knowledge_routed(steps: list[TaskStep]) -> bool:
-        """True when every completed step's capability routes to the Librarian
-        (``knowledge.*``).
-
-        Mixed plans return False and still extract: non-knowledge outputs (an
-        email sent, an event created) carry entities the Librarian never saw. The
-        ``isinstance`` guard keeps this safe for steps whose ``input_data`` is
-        unset/non-dict — those are treated as non-knowledge so extraction runs."""
-        caps = [
-            s.input_data.get("capability") if isinstance(s.input_data, dict) else None
-            for s in steps
-        ]
-        return bool(caps) and all(isinstance(c, str) and c.startswith("knowledge.") for c in caps)
-
-    async def _learn_entities_from_outcome(self, source_text: str, run: TaskRun) -> None:
-        """Inline entity learning on the run's session via the injected world_model.
-
-        Fallback for setups with no ``db_factory`` (unit tests); production
-        backgrounds this via ``_learn_entities_isolated`` so the run's connection
-        isn't held during the extraction LLM call. Skipped when no world model
-        is wired (e.g. unit tests inject ``world_model=None``)."""
-        if not self._world_model:
-            return
-        await self._extract_and_sync_entities(
-            self._db,
-            self._world_model,
-            source_text,
-            run.user_id,
-            run.workspace_id or "",
-            run.run_id,
-        )
-
     async def _learn_entities_isolated(
         self, source_text: str, user_id: str, workspace_id: str, run_id: str
     ) -> None:
-        """Entity learning on its own session + world_model so the run's DB
-        connection isn't held during the extraction LLM call. Best-effort —
-        commits independently and never affects the run (the run is already
-        committed by the time this runs)."""
-        if not self._db_factory:
-            return
-        try:
-            from src.services.world_model import WorldModel
-
-            async with self._db_factory() as db:
-                world_model = WorldModel(self._settings, db)
-                await self._extract_and_sync_entities(
-                    db, world_model, source_text, user_id, workspace_id, run_id
-                )
-                await db.commit()
-        except Exception:
-            logger.debug("Isolated entity learning failed for run %s", run_id, exc_info=True)
-
-    async def _extract_and_sync_entities(
-        self,
-        db,
-        world_model,
-        source_text: str,
-        user_id: str,
-        workspace_id: str,
-        run_id: str,
-    ) -> None:
-        """Shared core: extract entities from outcome text and sync them to the
-        graph. Best-effort — entity/graph learning must never fail a run."""
-        try:
-            entity_ids = await world_model.extract_from_text(
-                source_text,
-                user_id=user_id,
-                workspace_id=workspace_id,
-            )
-            if not entity_ids:
-                return
-            if not getattr(self._settings, "neo4j_url", None):
-                return
-            from src.services.graph_sync import GraphSyncService
-
-            graph_sync = GraphSyncService(self._settings, db)
-            try:
-                await graph_sync.batch_sync_entities(entity_ids, workspace_id=workspace_id)
-            finally:
-                await graph_sync.close()
-        except Exception:
-            logger.debug("Entity learning from outcome failed for run %s", run_id, exc_info=True)
+        """Facade → OutcomeLearner.learn_entities_isolated."""
+        await self._learner.learn_entities_isolated(source_text, user_id, workspace_id, run_id)
 
     async def _run_verification(self, run: TaskRun) -> None:
-        """Run verification on a completed run."""
-        try:
-            # Load success conditions from the plan
-            plan_result = await self._db.execute(select(Plan).where(Plan.plan_id == run.plan_id))
-            plan = plan_result.scalar_one_or_none()
-            conditions = plan.success_conditions if plan else None
-
-            result = await self._verifier.verify_run(run.run_id, conditions)
-            # Store verdict in checkpoint
-            await self._checkpoint(run, None, "verification")
-            run.checkpoint = {
-                **(run.checkpoint or {}),
-                "verification": {
-                    "verdict": result.verdict.value,
-                    "score": result.score,
-                    "details": result.details,
-                },
-            }
-            if result.verdict.value == "failed":
-                transition_run(run, "failed")
-                run.error = {"verification_failed": result.details}
-                logger.warning("Run %s failed verification: %s", run.run_id, result.details)
-                await self._record_verification_trust_penalty(run)
-            else:
-                # Verification passed — promote from partially_completed to completed
-                if run.status == "partially_completed":
-                    transition_run(run, "completed")
-        except Exception:
-            logger.warning("Verification failed for run %s", run.run_id, exc_info=True)
-
-    async def _record_verification_trust_penalty(self, run: TaskRun) -> None:
-        """Reverse premature trust reinforcement when a run fails verification.
-
-        Each auto-executed step recorded an "approved" trust signal at finalize
-        (graduating the capability toward autonomy). If the run then fails
-        verification, those outcomes were not actually good — record a matching
-        "rejected" (deduped per capability+risk) so the capability is demoted
-        rather than keeping a false positive. Best-effort."""
-        auto_executed = (run.checkpoint or {}).get("auto_executed") or []
-        if not auto_executed:
-            return
-        try:
-            from src.services.risk_assessor import record_approval_decision
-
-            seen: set[tuple[str, str]] = set()
-            for entry in auto_executed:
-                capability = entry.get("capability")
-                risk_level = entry.get("risk_level")
-                if not capability or (capability, risk_level) in seen:
-                    continue
-                seen.add((capability, risk_level))
-                await record_approval_decision(
-                    self._db, run.workspace_id or "", capability, risk_level, "rejected"
-                )
-        except Exception:
-            # Security-relevant: a swallowed failure here means a capability that
-            # auto-executed a verified-bad outcome is NOT demoted. Surface it.
-            logger.warning(
-                "Verification trust penalty failed for run %s — capability not demoted",
-                run.run_id,
-                exc_info=True,
-            )
+        """Facade → OutcomeLearner.run_verification."""
+        await self._learner.run_verification(run)
 
     # Map a terminal run status to the status its parent Plan should take.
     _RUN_STATUS_TO_PLAN_STATUS = {

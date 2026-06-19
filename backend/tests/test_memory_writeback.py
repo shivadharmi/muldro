@@ -70,7 +70,7 @@ class TestMemoryWriteback:
             _make_step("s1", "t1", "completed", {"result": "email sent"}),
             _make_step("s2", "t2", "completed", {"result": "calendar created"}),
         ]
-        executor._get_all_steps = AsyncMock(return_value=steps)
+        executor._store.get_all_steps = AsyncMock(return_value=steps)
 
         await executor._writeback_memories(run)
 
@@ -97,7 +97,7 @@ class TestMemoryWriteback:
             _make_step("s1", "t1", "failed", None),
             _make_step("s2", "t2", "skipped", None),
         ]
-        executor._get_all_steps = AsyncMock(return_value=steps)
+        executor._store.get_all_steps = AsyncMock(return_value=steps)
 
         await executor._writeback_memories(run)
         mem_svc.extract_and_store.assert_not_called()
@@ -109,7 +109,7 @@ class TestMemoryWriteback:
 
         run = _make_run()
         steps = [_make_step(f"s{i}", f"t{i}", "completed", {"r": f"result_{i}"}) for i in range(10)]
-        executor._get_all_steps = AsyncMock(return_value=steps)
+        executor._store.get_all_steps = AsyncMock(return_value=steps)
 
         await executor._writeback_memories(run)
 
@@ -126,7 +126,7 @@ class TestMemoryWriteback:
 
         run = _make_run()
         steps = [_make_step("s1", "t1", "completed", {"ok": True})]
-        executor._get_all_steps = AsyncMock(return_value=steps)
+        executor._store.get_all_steps = AsyncMock(return_value=steps)
 
         # Should not raise
         await executor._writeback_memories(run)
@@ -141,7 +141,7 @@ class TestMemoryWriteback:
             _make_step("s1", "t1", "completed", {"data": "yes"}),
             _make_step("s2", "t2", "completed", None),  # no output
         ]
-        executor._get_all_steps = AsyncMock(return_value=steps)
+        executor._store.get_all_steps = AsyncMock(return_value=steps)
 
         await executor._writeback_memories(run)
 
@@ -166,7 +166,7 @@ class TestAutonomousLearningParity:
         run = _make_run()
         run.workspace_id = "ws_1"
         steps = [_make_step("s1", "t1", "completed", {"result": "met with Acme Corp"})]
-        executor._get_all_steps = AsyncMock(return_value=steps)
+        executor._store.get_all_steps = AsyncMock(return_value=steps)
 
         gs = AsyncMock()
         gs.batch_sync_entities = AsyncMock()
@@ -192,7 +192,7 @@ class TestAutonomousLearningParity:
         run = _make_run()
         run.workspace_id = "ws_1"
         steps = [_make_step("s1", "t1", "completed", {"result": "nothing notable"})]
-        executor._get_all_steps = AsyncMock(return_value=steps)
+        executor._store.get_all_steps = AsyncMock(return_value=steps)
 
         gs = AsyncMock()
         gs.batch_sync_entities = AsyncMock()
@@ -210,7 +210,7 @@ class TestAutonomousLearningParity:
 
         run = _make_run()
         steps = [_make_step("s1", "t1", "completed", {"result": "x"})]
-        executor._get_all_steps = AsyncMock(return_value=steps)
+        executor._store.get_all_steps = AsyncMock(return_value=steps)
 
         # Should not raise and should still store memories
         await executor._writeback_memories(run)
@@ -227,7 +227,7 @@ class TestAutonomousLearningParity:
         run = _make_run()
         run.workspace_id = "ws_1"
         steps = [_make_step("s1", "t1", "completed", {"result": "x"})]
-        executor._get_all_steps = AsyncMock(return_value=steps)
+        executor._store.get_all_steps = AsyncMock(return_value=steps)
 
         # Should not raise
         await executor._writeback_memories(run)
@@ -251,7 +251,7 @@ class TestAutonomousLearningParity:
         ]
         for s in steps:
             s.input_data = {"capability": "knowledge.search"}
-        executor._get_all_steps = AsyncMock(return_value=steps)
+        executor._store.get_all_steps = AsyncMock(return_value=steps)
 
         await executor._writeback_memories(run)
 
@@ -273,7 +273,7 @@ class TestAutonomousLearningParity:
         s1.input_data = {"capability": "knowledge.search"}
         s2 = _make_step("s2", "t2", "completed", {"r": "y"})
         s2.input_data = {"capability": "email.send"}
-        executor._get_all_steps = AsyncMock(return_value=[s1, s2])
+        executor._store.get_all_steps = AsyncMock(return_value=[s1, s2])
 
         gs = AsyncMock()
         gs.batch_sync_entities = AsyncMock()
@@ -333,7 +333,7 @@ class TestEntityLearningIsolation:
         run.workspace_id = "ws_1"
         step = _make_step("s1", "t1", "completed", {"r": "met Acme Corp"})
         step.input_data = {"capability": "email.send"}  # non-knowledge → extraction runs
-        executor._get_all_steps = AsyncMock(return_value=[step])
+        executor._store.get_all_steps = AsyncMock(return_value=[step])
 
         fresh_wm = AsyncMock()
         fresh_wm.extract_from_text = AsyncMock(return_value=["ent_1"])
