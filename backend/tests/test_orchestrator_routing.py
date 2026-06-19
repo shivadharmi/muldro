@@ -47,7 +47,7 @@ class TestProcessMessageRouting:
     """process_message() uses PlanOutput capability-based routing."""
 
     @pytest.mark.asyncio
-    @patch("src.orchestrator.jarvis.classify_intent")
+    @patch("src.orchestrator.chat_processor.classify_intent")
     async def test_fast_path_greeting_routes_to_presenter(self, mock_classify):
         mock_classify.return_value = ("greeting", 0.99, [])
         orch = _make_orchestrator()
@@ -59,12 +59,12 @@ class TestProcessMessageRouting:
             agents_called.append(agent_name)
             yield {"event": "agent_done", "agent": agent_name, "text": "Hello! How can I help?"}
 
-        orch._call_agent_stream = mock_call_agent_stream
-        orch._log_interaction = AsyncMock(return_value="ilog_01")
+        orch._chat._invoker.call_agent_stream = mock_call_agent_stream
+        orch._chat._plans.log_interaction = AsyncMock(return_value="ilog_01")
         orch._push_workspace_surface = AsyncMock()
-        orch._emit_runtime_event = AsyncMock()
-        orch._load_conversation_history = AsyncMock(return_value="")
-        orch._get_available_capabilities = AsyncMock(return_value=[])
+        orch._chat._events.emit_runtime_event = AsyncMock()
+        orch._chat._context.load_conversation_history = AsyncMock(return_value="")
+        orch._chat._get_available_capabilities = AsyncMock(return_value=[])
 
         result = await orch.process_message(
             message="Hey Jarvis",
@@ -77,7 +77,7 @@ class TestProcessMessageRouting:
         assert "error" not in result
 
     @pytest.mark.asyncio
-    @patch("src.orchestrator.jarvis.classify_intent")
+    @patch("src.orchestrator.chat_processor.classify_intent")
     async def test_single_read_skips_presenter(self, mock_classify):
         """A single read-only Perceiver step returns its synthesis directly;
         the Presenter LLM call is skipped (latency fix)."""
@@ -97,12 +97,12 @@ class TestProcessMessageRouting:
                 text = "should not be called"
             yield {"event": "agent_done", "agent": agent_name, "text": text}
 
-        orch._call_agent_stream = mock_call_agent_stream
-        orch._log_interaction = AsyncMock(return_value="ilog_01")
+        orch._chat._invoker.call_agent_stream = mock_call_agent_stream
+        orch._chat._plans.log_interaction = AsyncMock(return_value="ilog_01")
         orch._push_workspace_surface = AsyncMock()
-        orch._emit_runtime_event = AsyncMock()
-        orch._load_conversation_history = AsyncMock(return_value="")
-        orch._get_available_capabilities = AsyncMock(return_value=[])
+        orch._chat._events.emit_runtime_event = AsyncMock()
+        orch._chat._context.load_conversation_history = AsyncMock(return_value="")
+        orch._chat._get_available_capabilities = AsyncMock(return_value=[])
 
         # mode="ask" exercises the fast-path single-read optimization (the
         # plan="plan" default forces the Planner, bypassing intent_to_plan).
@@ -118,7 +118,7 @@ class TestProcessMessageRouting:
         assert result["presentation"] == "You have 2 meetings today."
 
     @pytest.mark.asyncio
-    @patch("src.orchestrator.jarvis.classify_intent")
+    @patch("src.orchestrator.chat_processor.classify_intent")
     async def test_single_read_falls_back_to_presenter_when_no_synthesis(self, mock_classify):
         """If the read output has no usable synthesis, the Presenter still runs."""
         mock_classify.return_value = ("data_fetch", 0.95, ["calendar"])
@@ -134,12 +134,12 @@ class TestProcessMessageRouting:
                 text = "Here is your calendar."
             yield {"event": "agent_done", "agent": agent_name, "text": text}
 
-        orch._call_agent_stream = mock_call_agent_stream
-        orch._log_interaction = AsyncMock(return_value="ilog_01")
+        orch._chat._invoker.call_agent_stream = mock_call_agent_stream
+        orch._chat._plans.log_interaction = AsyncMock(return_value="ilog_01")
         orch._push_workspace_surface = AsyncMock()
-        orch._emit_runtime_event = AsyncMock()
-        orch._load_conversation_history = AsyncMock(return_value="")
-        orch._get_available_capabilities = AsyncMock(return_value=[])
+        orch._chat._events.emit_runtime_event = AsyncMock()
+        orch._chat._context.load_conversation_history = AsyncMock(return_value="")
+        orch._chat._get_available_capabilities = AsyncMock(return_value=[])
 
         # mode="ask" exercises the fast-path single-read fallback (the
         # plan="plan" default forces the Planner, bypassing intent_to_plan).
@@ -153,7 +153,7 @@ class TestProcessMessageRouting:
         assert "presenter" in agents_called  # fallback preserved
 
     @pytest.mark.asyncio
-    @patch("src.orchestrator.jarvis.classify_intent")
+    @patch("src.orchestrator.chat_processor.classify_intent")
     async def test_system_set_goal_calls_handler(self, mock_classify):
         """Planner returns a system.set_goal step -> direct handler called."""
         mock_classify.return_value = ("command", 0.9, [])
@@ -169,11 +169,11 @@ class TestProcessMessageRouting:
             text = plan_json if agent_name == "planner" else "Goal set!"
             yield {"event": "agent_done", "agent": agent_name, "text": text}
 
-        orch._call_agent_stream = mock_call_agent_stream
-        orch._log_interaction = AsyncMock(return_value="ilog_01")
+        orch._chat._invoker.call_agent_stream = mock_call_agent_stream
+        orch._chat._plans.log_interaction = AsyncMock(return_value="ilog_01")
         orch._push_workspace_surface = AsyncMock()
-        orch._emit_runtime_event = AsyncMock()
-        orch._load_conversation_history = AsyncMock(return_value="")
+        orch._chat._events.emit_runtime_event = AsyncMock()
+        orch._chat._context.load_conversation_history = AsyncMock(return_value="")
 
         result = await orch.process_message(
             message="I want to launch the product by April",
@@ -184,7 +184,7 @@ class TestProcessMessageRouting:
         assert "error" not in result
 
     @pytest.mark.asyncio
-    @patch("src.orchestrator.jarvis.classify_intent")
+    @patch("src.orchestrator.chat_processor.classify_intent")
     async def test_no_resolve_pipeline_called(self, mock_classify):
         """_resolve_pipeline should NOT be called in the new routing."""
         mock_classify.return_value = ("greeting", 0.99, [])
@@ -194,18 +194,18 @@ class TestProcessMessageRouting:
         async def mock_call_agent_stream(agent_name, **kwargs):
             yield {"event": "agent_done", "agent": agent_name, "text": "Hi!"}
 
-        orch._call_agent_stream = mock_call_agent_stream
-        orch._log_interaction = AsyncMock(return_value="ilog_01")
+        orch._chat._invoker.call_agent_stream = mock_call_agent_stream
+        orch._chat._plans.log_interaction = AsyncMock(return_value="ilog_01")
         orch._push_workspace_surface = AsyncMock()
-        orch._emit_runtime_event = AsyncMock()
-        orch._load_conversation_history = AsyncMock(return_value="")
-        orch._get_available_capabilities = AsyncMock(return_value=[])
+        orch._chat._events.emit_runtime_event = AsyncMock()
+        orch._chat._context.load_conversation_history = AsyncMock(return_value="")
+        orch._chat._get_available_capabilities = AsyncMock(return_value=[])
 
         result = await orch.process_message(message="Hi", user_id="usr_1", workspace_id="ws_1")
         assert "error" not in result
 
     @pytest.mark.asyncio
-    @patch("src.orchestrator.jarvis.classify_intent")
+    @patch("src.orchestrator.chat_processor.classify_intent")
     async def test_uses_extract_plan_not_extract_decision(self, mock_classify):
         """Planner path uses extract_plan, returns PlanOutput in result."""
         mock_classify.return_value = ("command", 0.9, [])
@@ -221,11 +221,11 @@ class TestProcessMessageRouting:
             text = plan_json if agent_name == "planner" else "Here are your emails."
             yield {"event": "agent_done", "agent": agent_name, "text": text}
 
-        orch._call_agent_stream = mock_call_agent_stream
-        orch._log_interaction = AsyncMock(return_value="ilog_01")
+        orch._chat._invoker.call_agent_stream = mock_call_agent_stream
+        orch._chat._plans.log_interaction = AsyncMock(return_value="ilog_01")
         orch._push_workspace_surface = AsyncMock()
-        orch._emit_runtime_event = AsyncMock()
-        orch._load_conversation_history = AsyncMock(return_value="")
+        orch._chat._events.emit_runtime_event = AsyncMock()
+        orch._chat._context.load_conversation_history = AsyncMock(return_value="")
 
         result = await orch.process_message(
             message="Check my email", user_id="usr_1", workspace_id="ws_1"
@@ -239,7 +239,7 @@ class TestProcessMessageStreamRouting:
     """process_message_stream() uses PlanOutput capability-based routing."""
 
     @pytest.mark.asyncio
-    @patch("src.orchestrator.jarvis.classify_intent")
+    @patch("src.orchestrator.chat_processor.classify_intent")
     async def test_stream_fast_path_emits_plan_event(self, mock_classify):
         mock_classify.return_value = ("greeting", 0.99, [])
         orch = _make_orchestrator()
@@ -248,14 +248,14 @@ class TestProcessMessageStreamRouting:
             yield {"event": "agent_start", "agent": agent_name, "model": "sonnet"}
             yield {"event": "agent_done", "agent": agent_name, "text": "Hi!"}
 
-        orch._call_agent_stream = mock_call_agent_stream
+        orch._chat._invoker.call_agent_stream = mock_call_agent_stream
         orch._call_agent = AsyncMock(return_value="")
-        orch._log_interaction = AsyncMock(return_value="ilog_01")
+        orch._chat._plans.log_interaction = AsyncMock(return_value="ilog_01")
         orch._push_workspace_surface = AsyncMock()
-        orch._spawn_background = MagicMock()
-        orch._emit_runtime_event = AsyncMock()
-        orch._load_conversation_history = AsyncMock(return_value="")
-        orch._get_available_capabilities = AsyncMock(return_value=[])
+        orch._chat._spawn_background = MagicMock()
+        orch._chat._events.emit_runtime_event = AsyncMock()
+        orch._chat._context.load_conversation_history = AsyncMock(return_value="")
+        orch._chat._get_available_capabilities = AsyncMock(return_value=[])
 
         events = []
         async for evt in orch.process_message_stream(
@@ -270,7 +270,7 @@ class TestProcessMessageStreamRouting:
         assert "decision" not in event_types
 
     @pytest.mark.asyncio
-    @patch("src.orchestrator.jarvis.classify_intent")
+    @patch("src.orchestrator.chat_processor.classify_intent")
     async def test_stream_single_read_skips_presenter(self, mock_classify):
         """Streaming twin: single read-only step emits its synthesis as the
         response without a Presenter call."""
@@ -289,14 +289,14 @@ class TestProcessMessageStreamRouting:
             )
             yield {"event": "agent_done", "agent": agent_name, "text": text}
 
-        orch._call_agent_stream = mock_call_agent_stream
+        orch._chat._invoker.call_agent_stream = mock_call_agent_stream
         orch._call_agent = AsyncMock(return_value="")
-        orch._log_interaction = AsyncMock(return_value="ilog_01")
+        orch._chat._plans.log_interaction = AsyncMock(return_value="ilog_01")
         orch._push_workspace_surface = AsyncMock()
-        orch._spawn_background = MagicMock()
-        orch._emit_runtime_event = AsyncMock()
-        orch._load_conversation_history = AsyncMock(return_value="")
-        orch._get_available_capabilities = AsyncMock(return_value=[])
+        orch._chat._spawn_background = MagicMock()
+        orch._chat._events.emit_runtime_event = AsyncMock()
+        orch._chat._context.load_conversation_history = AsyncMock(return_value="")
+        orch._chat._get_available_capabilities = AsyncMock(return_value=[])
 
         events = []
         async for evt in orch.process_message_stream(
@@ -310,7 +310,7 @@ class TestProcessMessageStreamRouting:
         assert responses == ["You have 2 meetings today."]
 
     @pytest.mark.asyncio
-    @patch("src.orchestrator.jarvis.classify_intent")
+    @patch("src.orchestrator.chat_processor.classify_intent")
     async def test_stream_does_not_call_resolve_pipeline(self, mock_classify):
         mock_classify.return_value = ("greeting", 0.99, [])
         orch = _make_orchestrator()
@@ -319,14 +319,14 @@ class TestProcessMessageStreamRouting:
         async def mock_call_agent_stream(agent_name, **kwargs):
             yield {"event": "agent_done", "agent": agent_name, "text": "Hi!"}
 
-        orch._call_agent_stream = mock_call_agent_stream
+        orch._chat._invoker.call_agent_stream = mock_call_agent_stream
         orch._call_agent = AsyncMock(return_value="")
-        orch._log_interaction = AsyncMock(return_value="ilog_01")
+        orch._chat._plans.log_interaction = AsyncMock(return_value="ilog_01")
         orch._push_workspace_surface = AsyncMock()
-        orch._spawn_background = MagicMock()
-        orch._emit_runtime_event = AsyncMock()
-        orch._load_conversation_history = AsyncMock(return_value="")
-        orch._get_available_capabilities = AsyncMock(return_value=[])
+        orch._chat._spawn_background = MagicMock()
+        orch._chat._events.emit_runtime_event = AsyncMock()
+        orch._chat._context.load_conversation_history = AsyncMock(return_value="")
+        orch._chat._get_available_capabilities = AsyncMock(return_value=[])
 
         events = []
         async for evt in orch.process_message_stream(

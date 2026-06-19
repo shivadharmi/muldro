@@ -68,31 +68,35 @@ class TestProcessMessageStreamErrorIsSanitized:
 
     @pytest.mark.asyncio
     async def test_stream_error_event_has_safe_shape_no_leak(self):
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.chat_processor import ChatProcessor
 
-        orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
+        chat = ChatProcessor.__new__(ChatProcessor)
 
         # Minimal trace manager: start returns an object with trace_id; finish is a noop.
         trace = MagicMock()
         trace.trace_id = "trace_stream_err"
-        orch._trace_manager = MagicMock()
-        orch._trace_manager.start_trace = MagicMock(return_value=trace)
-        orch._trace_manager.finish_trace = AsyncMock()
-        orch._client = MagicMock()
-        orch._haiku_model = "claude-haiku"
-        orch._spawn_background = MagicMock()
-        orch._load_conversation_history = AsyncMock(return_value="")
+        chat._trace_manager = MagicMock()
+        chat._trace_manager.start_trace = MagicMock(return_value=trace)
+        chat._trace_manager.finish_trace = AsyncMock()
+        chat._client = MagicMock()
+        chat._haiku_model = "claude-haiku"
+        chat._spawn_background = MagicMock()
+        context = MagicMock()
+        context.load_conversation_history = AsyncMock(return_value="")
+        chat._context = context
+        chat._events = MagicMock()
+        chat._events.emit_runtime_event = AsyncMock()
 
         # classify_intent raises a leaky exception → caught by the stream's
         # except block, which must emit a sanitized frame.
         with patch(
-            "src.orchestrator.jarvis.classify_intent",
+            "src.orchestrator.chat_processor.classify_intent",
             new_callable=AsyncMock,
             side_effect=ValueError(f"connection refused to {STREAM_SECRET}"),
         ):
             events = [
                 evt
-                async for evt in orch.process_message_stream(
+                async for evt in chat.process_message_stream(
                     message="hello",
                     user_id="usr_1",
                     workspace_id="ws_1",
@@ -113,13 +117,13 @@ class TestProcessMessageStreamErrorIsSanitized:
     async def test_stream_validation_messages_are_controlled_and_safe(self):
         """Early validation messages are author-controlled (not exception text),
         so they are allowed to pass through verbatim."""
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.chat_processor import ChatProcessor
 
-        orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
+        chat = ChatProcessor.__new__(ChatProcessor)
 
         empty_uid = [
             evt
-            async for evt in orch.process_message_stream(
+            async for evt in chat.process_message_stream(
                 message="hi", user_id="", workspace_id="ws_1"
             )
         ]

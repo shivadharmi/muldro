@@ -32,7 +32,7 @@ pytestmark = pytest.mark.asyncio
 
 TRACE_ID = "trace_gold"
 ILOG_ID = "ilog_gold"
-_JARVIS = "src.orchestrator.jarvis"
+_JARVIS = "src.orchestrator.chat_processor"
 
 
 class _Recorder:
@@ -49,27 +49,32 @@ class _Recorder:
 
 
 def _make_orch(canned: dict[str, str]) -> tuple[object, _Recorder]:
-    """Construct a JarvisOrchestrator with every collaborator mocked.
+    """Construct a ChatProcessor with every collaborator mocked.
 
     ``canned`` maps agent_name -> the text that agent "returns". The same map
-    drives both the batch ``_call_agent`` and the streaming ``_call_agent_stream``
+    drives both the batch ``call_agent`` and the streaming ``call_agent_stream``
     so the two paths are exercised against identical agent outputs.
-    """
-    from src.orchestrator.jarvis import JarvisOrchestrator
 
-    orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
+    The post-chat-extraction harness builds the collaborator directly (mirroring
+    ``test_chat_plan_event.py``). For assertion ergonomics the recorded runtime/
+    publish mocks are also bound to convenience attributes (``_emit_runtime_event``,
+    ``_publish_event``, ``_trace_manager``) on the returned instance.
+    """
+    from src.orchestrator.chat_processor import ChatProcessor
+
+    chat = ChatProcessor.__new__(ChatProcessor)
     rec = _Recorder()
 
     trace = MagicMock()
     trace.trace_id = TRACE_ID
-    orch._trace_manager = MagicMock()
-    orch._trace_manager.start_trace = MagicMock(return_value=trace)
-    orch._trace_manager.finish_trace = AsyncMock()
+    chat._trace_manager = MagicMock()
+    chat._trace_manager.start_trace = MagicMock(return_value=trace)
+    chat._trace_manager.finish_trace = AsyncMock()
 
-    orch._client = MagicMock()
-    orch._haiku_model = "claude-haiku"
-    orch._db_factory = MagicMock()
-    orch._interaction_learner = None
+    chat._client = MagicMock()
+    chat._haiku_model = "claude-haiku"
+    chat._db_factory_provider = lambda: MagicMock()
+    chat._interaction_learner = None
 
     def _spawn_background(coro):
         # _fire_event / learner schedule coroutines; close them so AsyncMock
@@ -77,17 +82,37 @@ def _make_orch(canned: dict[str, str]) -> tuple[object, _Recorder]:
         if hasattr(coro, "close"):
             coro.close()
 
-    orch._spawn_background = _spawn_background
-    orch._load_conversation_history = AsyncMock(return_value="")
-    orch._bump_perception_for_sources = AsyncMock()
-    orch._emit_runtime_event = AsyncMock()
-    orch._publish_event = AsyncMock()
-    orch._get_available_capabilities = AsyncMock(return_value=[])
-    orch._persist_plan_record = AsyncMock(side_effect=lambda plan, *a, **k: plan)
-    orch._log_interaction = AsyncMock(return_value=ILOG_ID)
-    orch._handle_system_capability = AsyncMock(return_value="SYS_OK")
-    orch._push_presenter_surface = AsyncMock(return_value=None)
-    orch._ensure_learner_deps = AsyncMock()
+    chat._spawn_background = _spawn_background
+    chat._ensure_learner_deps = AsyncMock()
+
+    # Collaborators. Convenience aliases (_emit_runtime_event/_publish_event/
+    # _get_available_capabilities) keep the assertion sites unchanged.
+    emit_runtime_event = AsyncMock()
+    publish_event = AsyncMock()
+
+    chat._context = MagicMock()
+    chat._context.load_conversation_history = AsyncMock(return_value="")
+
+    chat._perception = MagicMock()
+    chat._perception._bump_perception_for_sources = AsyncMock()
+
+    chat._events = MagicMock()
+    chat._events.emit_runtime_event = emit_runtime_event
+    chat._events.publish_event = publish_event
+    chat._emit_runtime_event = emit_runtime_event
+    chat._publish_event = publish_event
+
+    chat._get_available_capabilities = AsyncMock(return_value=[])
+
+    chat._plans = MagicMock()
+    chat._plans.persist_plan_record = AsyncMock(side_effect=lambda plan, *a, **k: plan)
+    chat._plans.log_interaction = AsyncMock(return_value=ILOG_ID)
+
+    chat._system_capability_handler = MagicMock()
+    chat._system_capability_handler.handle_system_capability = AsyncMock(return_value="SYS_OK")
+
+    chat._surfaces = MagicMock()
+    chat._surfaces.push_presenter_surface = AsyncMock(return_value=None)
 
     async def _call_agent(agent_name, *, message, **kw):
         rec.agent_messages.append((agent_name, message))
@@ -100,9 +125,10 @@ def _make_orch(canned: dict[str, str]) -> tuple[object, _Recorder]:
         yield {"event": "text_delta", "agent": agent_name, "text": text}
         yield {"event": "agent_done", "agent": agent_name, "text": text}
 
-    orch._call_agent = _call_agent
-    orch._call_agent_stream = _call_agent_stream
-    return orch, rec
+    chat._invoker = MagicMock()
+    chat._invoker.call_agent = _call_agent
+    chat._invoker.call_agent_stream = _call_agent_stream
+    return chat, rec
 
 
 def _step(step_id, capability, *, actor="jarvis", risk="none", description="do", user_context=None):

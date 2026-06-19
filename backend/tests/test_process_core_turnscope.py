@@ -2,10 +2,10 @@
 
 import inspect
 
-from src.orchestrator import jarvis as jarvis_mod
+from src.orchestrator import chat_processor as chat_mod
 
 
 def test_process_core_uses_turn_scope():
-    src = inspect.getsource(jarvis_mod.JarvisOrchestrator._process_core)
+    src = inspect.getsource(chat_mod.ChatProcessor._process_core)
     assert "turn_scope(" in src
     assert "close_turn_sessions" in src
