@@ -66,16 +66,11 @@ async def client(auth_token: str) -> AsyncGenerator[httpx.AsyncClient, None]:
 async def created_ids() -> dict[str, list[str]]:
     """Track created resource IDs for reference across tests.
 
-    Keys: conversations, goals, tasks, schedules, triggers, agents, routes
+    Only conversations retain a dedicated CRUD API; goals/tasks/schedules are
+    now created via chat intent (see test_08_chat_driven.py).
     """
     return {
         "conversations": [],
-        "goals": [],
-        "tasks": [],
-        "schedules": [],
-        "triggers": [],
-        "agents": [],
-        "routes": [],
     }
 
 

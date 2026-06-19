@@ -77,31 +77,56 @@ class TestSSE:
         headers = {"Authorization": f"Bearer {auth_token}"}
         async with httpx.AsyncClient(base_url=BASE_URL, headers=headers) as client:
             async with client.stream("GET", "/v1/realtime/runs/run_fake", timeout=3.0) as resp:
-                # 200 if Redis is available, 503 if not
-                assert resp.status_code in (200, 503)
+                # 200 if the run exists and Redis is available, 404 for an
+                # unknown run, 503 if Redis is down.
+                assert resp.status_code in (200, 404, 503)
+
+
+async def _ws_authenticate(ws, auth_token: str) -> None:
+    """Perform the WS auth handshake: send the auth message, await auth_ok.
+
+    The /ws/{user_id} endpoint requires `{type: auth, token}` as the first
+    message within 5s (routes_ws.py) — no token in the URL.
+    """
+    await ws.send(json.dumps({"type": "auth", "token": auth_token}))
+    raw = await asyncio.wait_for(ws.recv(), timeout=5.0)
+    assert json.loads(raw)["type"] == "auth_ok"
 
 
 class TestWebSocket:
-    async def test_ws_connect(self, user_id: str):
-        """WebSocket connects and accepts the connection."""
+    async def test_ws_connect(self, user_id: str, auth_token: str):
+        """WebSocket connects and completes the auth handshake."""
         async with websockets.connect(f"{WS_URL}/ws/{user_id}") as ws:
-            # Send a heartbeat and verify connection is alive
-            await ws.send(json.dumps({"type": "heartbeat"}))
-            # Connection accepted without error — success
+            await _ws_authenticate(ws, auth_token)
             await ws.close()
 
-    async def test_ws_heartbeat(self, user_id: str):
-        """WebSocket receives server heartbeat within 35s."""
-        async with websockets.connect(f"{WS_URL}/ws/{user_id}") as ws:
-            # Server sends heartbeat every 30s (routes_ws.py:107)
-            try:
-                msg = await asyncio.wait_for(ws.recv(), timeout=35.0)
-                parsed = json.loads(msg)
-                assert parsed["type"] == "heartbeat"
-            except asyncio.TimeoutError:
-                pytest.fail("No server heartbeat received within 35s")
+    async def test_ws_rejects_without_auth(self, user_id: str):
+        """Connecting without sending an auth message is closed with 4001."""
+        from websockets.exceptions import ConnectionClosed
 
-    async def test_ws_redis_relay(self, user_id: str):
+        async with websockets.connect(f"{WS_URL}/ws/{user_id}") as ws:
+            with pytest.raises(ConnectionClosed) as exc_info:
+                # Never send auth → server closes after the 5s auth timeout.
+                await asyncio.wait_for(ws.recv(), timeout=10.0)
+            assert exc_info.value.rcvd.code == 4001
+
+    async def test_ws_heartbeat(self, user_id: str, auth_token: str):
+        """WebSocket receives a server heartbeat within 35s (after auth)."""
+        async with websockets.connect(f"{WS_URL}/ws/{user_id}") as ws:
+            await _ws_authenticate(ws, auth_token)
+            # Server sends heartbeat every 30s. Skip any backfill surface frames.
+            deadline = 35.0
+            while deadline > 0:
+                try:
+                    msg = await asyncio.wait_for(ws.recv(), timeout=deadline)
+                except asyncio.TimeoutError:
+                    pytest.fail("No server heartbeat received within 35s")
+                if json.loads(msg).get("type") == "heartbeat":
+                    return
+                deadline -= 1.0
+            pytest.fail("No server heartbeat received within 35s")
+
+    async def test_ws_redis_relay(self, user_id: str, auth_token: str):
         """WebSocket receives events published to Redis a2ui channel."""
         import redis.asyncio as aioredis
 
@@ -109,18 +134,21 @@ class TestWebSocket:
 
         try:
             async with websockets.connect(f"{WS_URL}/ws/{user_id}") as ws:
-                # Give the server time to subscribe to Redis channels
+                await _ws_authenticate(ws, auth_token)
+                # Give the server time to subscribe to Redis channels.
                 await asyncio.sleep(0.5)
 
-                # Publish to the a2ui channel the WS endpoint subscribes to
+                # Publish to the a2ui channel the WS endpoint subscribes to.
                 payload = json.dumps({"type": "test", "data": "e2e_ws_relay"})
                 await r.publish(f"jarvis:a2ui:{user_id}", payload)
 
-                # Read messages until we find ours (skip potential heartbeats)
+                # Read messages until we find ours (skip heartbeats / backfill).
                 try:
-                    msg = await asyncio.wait_for(ws.recv(), timeout=5.0)
-                    parsed = json.loads(msg)
-                    assert parsed["data"] == "e2e_ws_relay"
+                    while True:
+                        msg = await asyncio.wait_for(ws.recv(), timeout=5.0)
+                        parsed = json.loads(msg)
+                        if parsed.get("data") == "e2e_ws_relay":
+                            return
                 except asyncio.TimeoutError:
                     pytest.fail("WebSocket Redis relay timed out — event never arrived")
         finally:
