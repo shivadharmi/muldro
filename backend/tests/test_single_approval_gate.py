@@ -83,7 +83,7 @@ class TestTrustEngineWiring:
 class TestSingleGateApprovalRequired:
     """TrustEngine returns approval_required -> step pauses."""
 
-    @patch("src.services.graph_executor.get_or_assess_risk")
+    @patch("src.services.trust_gate.get_or_assess_risk")
     async def test_approval_required_pauses_step(
         self, mock_risk, settings, mock_db, mock_trust_engine
     ):
@@ -116,7 +116,7 @@ class TestSingleGateApprovalRequired:
 class TestSingleGateAutoExecuteNotify:
     """TrustEngine returns auto_execute_notify -> execute then notify."""
 
-    @patch("src.services.graph_executor.get_or_assess_risk")
+    @patch("src.services.trust_gate.get_or_assess_risk")
     async def test_auto_notify_executes_and_notifies(
         self, mock_risk, settings, mock_db, mock_trust_engine
     ):
@@ -151,7 +151,7 @@ class TestSingleGateAutoExecuteNotify:
 class TestSingleGateAutoExecuteSilent:
     """TrustEngine returns auto_execute_silent -> execute silently."""
 
-    @patch("src.services.graph_executor.get_or_assess_risk")
+    @patch("src.services.trust_gate.get_or_assess_risk")
     async def test_auto_silent_executes_without_notify(
         self, mock_risk, settings, mock_db, mock_trust_engine
     ):
@@ -186,7 +186,7 @@ class TestSingleGateAutoExecuteSilent:
 class TestSingleGateResumedStep:
     """Step already running (resumed after approval) -> skip gate."""
 
-    @patch("src.services.graph_executor.get_or_assess_risk")
+    @patch("src.services.trust_gate.get_or_assess_risk")
     async def test_resumed_step_skips_trust_check(
         self, mock_risk, settings, mock_db, mock_trust_engine
     ):
@@ -283,7 +283,7 @@ class TestStepFailureHandling:
 class TestGateIntegrationApprovalResume:
     """Full flow: step → approval_required → pause → approval created."""
 
-    @patch("src.services.graph_executor.get_or_assess_risk")
+    @patch("src.services.trust_gate.get_or_assess_risk")
     @patch("src.services.approval_service.create_approval")
     async def test_approval_creates_record_and_pauses(
         self, mock_create_approval, mock_risk, settings, mock_db, mock_trust_engine
@@ -309,9 +309,12 @@ class TestGateIntegrationApprovalResume:
         step = _make_step(capability="email.send")
         run = _make_run()
 
+        # The running → waiting_approval → awaiting_approval transitions happen
+        # inside TrustGate.create_approval_and_pause (extracted), so patch the
+        # transition fns in the trust_gate module where they now resolve.
         with (
-            patch("src.services.graph_executor.transition_step") as mock_ts,
-            patch("src.services.graph_executor.transition_run") as mock_tr,
+            patch("src.services.trust_gate.transition_step") as mock_ts,
+            patch("src.services.trust_gate.transition_run") as mock_tr,
         ):
             await executor._execute_step(run, step)
 
@@ -326,7 +329,7 @@ class TestGateIntegrationApprovalResume:
 class TestGateIntegrationAutoNotifyFlow:
     """Full flow: step → auto_execute_notify → execute → notify."""
 
-    @patch("src.services.graph_executor.get_or_assess_risk")
+    @patch("src.services.trust_gate.get_or_assess_risk")
     async def test_auto_notify_full_flow(self, mock_risk, settings, mock_db, mock_trust_engine):
         from src.contracts import PolicyDecision
 

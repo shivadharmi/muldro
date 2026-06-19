@@ -34,9 +34,10 @@ from src.services.execution_support import (
     _step_to_state,
 )
 from src.services.execution_surface_emitter import SurfaceEmitter
-from src.services.risk_assessor import RiskAssessment, get_or_assess_risk
+from src.services.risk_assessor import RiskAssessment
 from src.services.step_graph_store import StepGraphStore
 from src.services.step_runner import StepRunner
+from src.services.trust_gate import TrustGate
 
 if TYPE_CHECKING:
     from src.services.context_builder import ContextBuilder
@@ -257,6 +258,19 @@ class GraphExecutor:
             execute_tool_fn=execute_tool_fn,
             budget=budget,
             circuit_breaker=circuit_breaker,
+        )
+        # The side-effecting helpers of the single TrustEngine approval gate
+        # (risk assessment, approval persistence + pause, auto-execute trust
+        # feedback) live in an injected collaborator. The gate DECISION itself
+        # (TrustEngine.evaluate + the fail-closed contract guard) stays in the
+        # step pipeline below; this holds the helpers it calls.
+        self._trust_gate = TrustGate(
+            db=db,
+            client=self._client,
+            redis=redis,
+            notifier_provider=lambda: self._notifier,
+            store=self._store,
+            emitter=self._surface_emitter,
         )
 
     async def create_run(
@@ -905,28 +919,8 @@ class GraphExecutor:
     async def _assess_step_risk(
         self, capability: str, step: TaskStep, run: TaskRun
     ) -> RiskAssessment:
-        """Call get_or_assess_risk with appropriate context."""
-        try:
-            return await get_or_assess_risk(
-                capability=capability,
-                step_input=step.input_data or {},
-                user_context={"user_id": run.user_id},
-                workspace_id=run.workspace_id or "",
-                client=self._client,
-                redis=self._redis,
-            )
-        except Exception:
-            logger.warning(
-                "Risk assessment failed for %s, failing closed to high (forces approval)",
-                capability,
-                exc_info=True,
-            )
-            # Fail closed: unknown risk → high → approval_required at every trust level.
-            return RiskAssessment(
-                risk_level="high",
-                reasoning="Fallback — risk assessment unavailable, failing closed to high",
-                reversible=False,
-            )
+        """Facade → TrustGate.assess_step_risk."""
+        return await self._trust_gate.assess_step_risk(capability, step, run)
 
     async def _create_approval_and_pause(
         self,
@@ -937,86 +931,10 @@ class GraphExecutor:
         decision: PolicyDecision,
         surface_id: str | None = None,
     ) -> None:
-        """Create approval record, pause step and run, notify user."""
-        from src.services.approval_service import create_approval
-
-        approval = await create_approval(
-            self._db,
-            user_id=run.user_id,
-            workspace_id=run.workspace_id,
-            approval_type=f"step:{capability}",
-            title=f"Approve step: {step.name or capability}",
-            summary=decision.justification or f"Trust gate: {risk.reasoning}",
-            risk_level=risk.risk_level,
-            execution_id=run.run_id,
-            run_id=run.run_id,
-            step_id=step.step_id,
-            requested_by=run.user_id,
+        """Facade → TrustGate.create_approval_and_pause."""
+        await self._trust_gate.create_approval_and_pause(
+            run, step, capability, risk, decision, surface_id=surface_id
         )
-        transition_step(step, "running")
-        transition_step(step, "waiting_approval")
-        transition_run(run, "awaiting_approval")
-        await self._checkpoint(run, step.step_id, "approval_gate")
-        await self._db.flush()
-
-        await self._emit_event(
-            "approval_requested",
-            run.user_id,
-            {
-                "run_id": run.run_id,
-                "step_id": step.step_id,
-                "approval_id": approval.approval_id,
-                "capability": capability,
-                "risk_level": risk.risk_level,
-                "trust_decision": decision.decision,
-            },
-            workspace_id=run.workspace_id,
-        )
-
-        if self._notifier:
-            try:
-                await self._notifier.notify(
-                    user_id=run.user_id,
-                    notification_type="approval_request",
-                    title=f"Approve: {step.name or capability}",
-                    body=decision.justification or risk.reasoning,
-                    data={
-                        "approval_id": approval.approval_id,
-                        "run_id": run.run_id,
-                        "step_id": step.step_id,
-                        "risk_level": risk.risk_level,
-                    },
-                    workspace_id=run.workspace_id,
-                )
-            except Exception:
-                logger.warning("Failed to notify for step approval", exc_info=True)
-
-        # Surface update: approval needed
-        if surface_id:
-            from src.contracts import ApprovalContext
-
-            await self._emit_surface_update(
-                surface_id=surface_id,
-                user_id=run.user_id,
-                phase="approval_needed",
-                approval=ApprovalContext(
-                    approval_id=approval.approval_id,
-                    step_description=step.name or capability,
-                    risk_level=risk.risk_level,
-                    trust_level=decision.trust_level,
-                    expires_at=(approval.expires_at.isoformat() if approval.expires_at else None),
-                    triggering_step_id=step.step_id,
-                    graduation_hint=decision.justification or "",
-                    risk_reasoning=risk.reasoning,
-                    trust_context=decision.justification or "",
-                    reversible=risk.reversible,
-                    blast_radius=risk.blast_radius,
-                    effective_trust_level=decision.effective_trust_level,
-                    approved_count=decision.approved_count,
-                    rejected_count=decision.rejected_count,
-                ),
-                workspace_id=run.workspace_id,
-            )
 
     async def _notify_auto_executed(
         self,
@@ -1025,60 +943,18 @@ class GraphExecutor:
         risk: RiskAssessment,
         output: dict | None,
     ) -> None:
-        """Send post-execution notification for auto_execute_notify."""
-        if not self._notifier:
-            return
-
-        capability = (step.input_data or {}).get(
-            "capability", (step.input_data or {}).get("task_type", "unknown")
-        )
-        try:
-            await self._notifier.notify(
-                user_id=run.user_id,
-                notification_type="auto_execute_notify",
-                title=f"Auto-executed: {step.name or capability}",
-                body=risk.reasoning,
-                data={
-                    "run_id": run.run_id,
-                    "step_id": step.step_id,
-                    "capability": capability,
-                    "risk_level": risk.risk_level,
-                },
-                workspace_id=run.workspace_id,
-            )
-        except Exception:
-            logger.warning("Failed to send auto_execute notification", exc_info=True)
+        """Facade → TrustGate.notify_auto_executed."""
+        await self._trust_gate.notify_auto_executed(run, step, risk, output)
 
     async def _record_auto_execution_outcome(
         self, capability: str, risk_level: str, workspace_id: str
     ) -> None:
-        """Reinforce trust after a successful auto-executed step.
-
-        Treats a successful autonomous execution as a positive outcome
-        (``approved``), so trust graduates from the loop's own successes — not
-        only from explicit user approvals. Best-effort: a metrics/trust write
-        must never fail an otherwise-successful step.
-        """
-        if not capability:
-            return
-        try:
-            from src.services.risk_assessor import record_approval_decision
-
-            await record_approval_decision(
-                self._db, workspace_id, capability, risk_level, "approved"
-            )
-        except Exception:
-            logger.debug("Failed to record auto-execution trust outcome", exc_info=True)
+        """Facade → TrustGate.record_auto_execution_outcome."""
+        await self._trust_gate.record_auto_execution_outcome(capability, risk_level, workspace_id)
 
     def _remember_auto_executed(self, run: TaskRun, capability: str, risk_level: str) -> None:
-        """Record an auto-executed (capability, risk_level) on the run checkpoint.
-
-        This is the audit trail the verification feedback reads to reverse the
-        premature "approved" trust signal if the run later fails verification.
-        JSONB is reassigned (not mutated in place) so SQLAlchemy detects it."""
-        prior = list((run.checkpoint or {}).get("auto_executed") or [])
-        prior.append({"capability": capability, "risk_level": risk_level})
-        run.checkpoint = {**(run.checkpoint or {}), "auto_executed": prior}
+        """Facade → TrustGate.remember_auto_executed."""
+        self._trust_gate.remember_auto_executed(run, capability, risk_level)
 
     async def _handle_step_failure(
         self,
