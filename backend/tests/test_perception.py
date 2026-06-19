@@ -452,9 +452,10 @@ class TestPerceptionRelevanceAssessment:
                 services=ServiceContainer(),
             )
 
-            # Perception now lives on PerceptionRunner; retarget mocks there.
+            # Perception now lives on PerceptionRunner; connector I/O on its
+            # ConnectorPoller — retarget mocks accordingly.
             pr = orch._perception
-            pr._poll_connector = AsyncMock(
+            pr._poller.poll = AsyncMock(
                 return_value=(
                     [MagicMock(entity_id=None)],
                     "cursor_123",
@@ -462,8 +463,8 @@ class TestPerceptionRelevanceAssessment:
                     "opaque",
                 )
             )
-            pr._ingest_raw_events = AsyncMock(return_value=["New PR opened"])
-            pr._update_cursor = AsyncMock()
+            pr._poller.ingest_raw_events = AsyncMock(return_value=["New PR opened"])
+            pr._poller.update_cursor = AsyncMock()
             pr._invoker.call_agent = AsyncMock(return_value="extracted entities")
             pr._apply_perception_policy_from_planner = AsyncMock()
             pr._queue_perception_plan = AsyncMock(return_value=None)
@@ -530,13 +531,14 @@ class TestPerceptionRelevanceAssessment:
             orch = JarvisOrchestrator(
                 settings=settings, db_factory=db_factory, services=ServiceContainer()
             )
-            # Perception now lives on PerceptionRunner; retarget mocks there.
+            # Perception now lives on PerceptionRunner; connector I/O on its
+            # ConnectorPoller — retarget mocks accordingly.
             pr = orch._perception
-            pr._poll_connector = AsyncMock(
+            pr._poller.poll = AsyncMock(
                 return_value=([MagicMock(entity_id=None)], "c", None, "opaque")
             )
-            pr._ingest_raw_events = AsyncMock(return_value=["New PR opened"])
-            pr._update_cursor = AsyncMock()
+            pr._poller.ingest_raw_events = AsyncMock(return_value=["New PR opened"])
+            pr._poller.update_cursor = AsyncMock()
             pr._invoker.call_agent = AsyncMock(return_value="extracted entities")
             pr._apply_perception_policy_from_planner = AsyncMock()
             pr._queue_perception_plan = AsyncMock(return_value=None)

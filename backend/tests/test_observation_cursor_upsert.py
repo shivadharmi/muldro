@@ -32,13 +32,13 @@ def _compile(stmt) -> str:
 
 
 class TestJarvisUpdateCursor:
-    """``PerceptionRunner._update_cursor`` must upsert atomically."""
+    """``ConnectorPoller.update_cursor`` must upsert atomically."""
 
     @pytest.mark.asyncio
     async def test_uses_on_conflict_do_update(self):
         """The statement passed to ``db.execute`` must target the
         ``uq_cursor_ws_user_source`` constraint with DO UPDATE semantics."""
-        from src.orchestrator.perception_runner import PerceptionRunner
+        from src.orchestrator.connector_poller import ConnectorPoller
 
         # Capture the statement without wiring a real DB
         captured: dict = {}
@@ -51,12 +51,12 @@ class TestJarvisUpdateCursor:
 
         mock_factory = MagicMock(return_value=mock_db)
 
-        # Build a minimal orchestrator-like object with just _db_factory set
-        orch = PerceptionRunner.__new__(PerceptionRunner)
-        orch._db_factory_provider = lambda: mock_factory
+        # Build a minimal poller-like object with just _db_factory set
+        poller = ConnectorPoller.__new__(ConnectorPoller)
+        poller._db_factory_provider = lambda: mock_factory
 
-        await PerceptionRunner._update_cursor(
-            orch,
+        await ConnectorPoller.update_cursor(
+            poller,
             source="gmail",
             user_id="usr_test",
             workspace_id="ws_test",
@@ -74,15 +74,15 @@ class TestJarvisUpdateCursor:
     @pytest.mark.asyncio
     async def test_noop_when_new_cursor_is_falsy(self):
         """Early-return branch: no DB work when there's nothing to persist."""
-        from src.orchestrator.perception_runner import PerceptionRunner
+        from src.orchestrator.connector_poller import ConnectorPoller
 
         mock_db = MagicMock()
         mock_factory = MagicMock(return_value=mock_db)
-        orch = PerceptionRunner.__new__(PerceptionRunner)
-        orch._db_factory_provider = lambda: mock_factory
+        poller = ConnectorPoller.__new__(ConnectorPoller)
+        poller._db_factory_provider = lambda: mock_factory
 
-        await PerceptionRunner._update_cursor(
-            orch,
+        await ConnectorPoller.update_cursor(
+            poller,
             source="gmail",
             user_id="usr_test",
             workspace_id="ws_test",
@@ -134,7 +134,7 @@ class TestCursorWorkspaceScoping:
     @pytest.mark.asyncio
     async def test_update_cursor_includes_workspace_id_in_values(self):
         """workspace_id must appear in the INSERT VALUES, not just be silently dropped."""
-        from src.orchestrator.perception_runner import PerceptionRunner
+        from src.orchestrator.connector_poller import ConnectorPoller
 
         captured: dict = {}
         mock_db = MagicMock()
@@ -144,11 +144,11 @@ class TestCursorWorkspaceScoping:
         mock_db.commit = AsyncMock()
         mock_factory = MagicMock(return_value=mock_db)
 
-        orch = PerceptionRunner.__new__(PerceptionRunner)
-        orch._db_factory_provider = lambda: mock_factory
+        poller = ConnectorPoller.__new__(ConnectorPoller)
+        poller._db_factory_provider = lambda: mock_factory
 
-        await PerceptionRunner._update_cursor(
-            orch,
+        await ConnectorPoller.update_cursor(
+            poller,
             source="gmail",
             user_id="usr_multi",
             workspace_id="ws_alpha",
@@ -162,10 +162,10 @@ class TestCursorWorkspaceScoping:
 
     @pytest.mark.asyncio
     async def test_two_workspaces_both_target_workspace_scoped_constraint(self):
-        """Two _update_cursor calls with different workspace_ids both target the
+        """Two update_cursor calls with different workspace_ids both target the
         ``uq_cursor_ws_user_source`` constraint and include workspace_id in the
         INSERT — confirming the SQL shape uses workspace-scoped conflict detection."""
-        from src.orchestrator.perception_runner import PerceptionRunner
+        from src.orchestrator.connector_poller import ConnectorPoller
 
         stmts: list = []
 
@@ -180,11 +180,11 @@ class TestCursorWorkspaceScoping:
             mock_db.commit = AsyncMock()
             mock_factory = MagicMock(return_value=mock_db)
 
-            orch = PerceptionRunner.__new__(PerceptionRunner)
-            orch._db_factory_provider = lambda: mock_factory
+            poller = ConnectorPoller.__new__(ConnectorPoller)
+            poller._db_factory_provider = lambda: mock_factory
 
-            await PerceptionRunner._update_cursor(
-                orch,
+            await ConnectorPoller.update_cursor(
+                poller,
                 source="gmail",
                 user_id="usr_shared",
                 workspace_id=ws,
@@ -282,14 +282,14 @@ class TestUserSettingsUpsert:
 
 
 class TestBuildCursorUpsertStmt:
-    """``PerceptionRunner._build_cursor_upsert_stmt`` is a pure builder."""
+    """``ConnectorPoller.build_cursor_upsert_stmt`` is a pure builder."""
 
     def test_returns_correct_sql_shape(self):
         """The builder returns an INSERT … ON CONFLICT DO UPDATE statement
         that targets ``uq_cursor_ws_user_source`` and includes workspace_id."""
-        from src.orchestrator.perception_runner import PerceptionRunner
+        from src.orchestrator.connector_poller import ConnectorPoller
 
-        stmt = PerceptionRunner._build_cursor_upsert_stmt(
+        stmt = ConnectorPoller.build_cursor_upsert_stmt(
             source="gmail",
             user_id="usr_test",
             workspace_id="ws_test",
@@ -306,7 +306,7 @@ class TestBuildCursorUpsertStmt:
     def test_builder_is_deterministic(self):
         """Two calls with the same args produce structurally identical SQL
         (cursor_id differs via ULID but the rest of the shape is stable)."""
-        from src.orchestrator.perception_runner import PerceptionRunner
+        from src.orchestrator.connector_poller import ConnectorPoller
 
         def shape(stmt) -> str:
             """Strip the ULID-containing cursor_id value before comparing."""
@@ -316,23 +316,23 @@ class TestBuildCursorUpsertStmt:
             # Remove the cursor_id literal so ULIDs don't break equality
             return re.sub(r"'CUR_[A-Z0-9]+'", "'CUR_PLACEHOLDER'", sql)
 
-        s1 = PerceptionRunner._build_cursor_upsert_stmt(
+        s1 = ConnectorPoller.build_cursor_upsert_stmt(
             "gmail", "usr_x", "ws_x", "cursor_1", "opaque"
         )
-        s2 = PerceptionRunner._build_cursor_upsert_stmt(
+        s2 = ConnectorPoller.build_cursor_upsert_stmt(
             "gmail", "usr_x", "ws_x", "cursor_1", "opaque"
         )
         assert shape(s1) == shape(s2)
 
 
 def _make_ingest_mocks():
-    """Return a wired-up (orch, db, db_factory) triple for _ingest_raw_events tests.
+    """Return a wired-up (poller, db, db_factory) triple for ingest_raw_events tests.
 
-    ``orch`` is a bare ``PerceptionRunner`` (perception moved off the orchestrator
-    god-object). ``_db_factory`` is a property, so we inject via the provider.
-    ``_ensure_event_bus`` now lives on the injected EventPublisher collaborator.
+    ``poller`` is a bare ``ConnectorPoller`` (connector I/O moved off PerceptionRunner).
+    ``_db_factory`` is a property, so we inject via the provider. ``ensure_event_bus``
+    lives on the injected EventPublisher collaborator.
     """
-    from src.orchestrator.perception_runner import PerceptionRunner
+    from src.orchestrator.connector_poller import ConnectorPoller
 
     captured_stmts: list = []
 
@@ -346,13 +346,13 @@ def _make_ingest_mocks():
 
     mock_factory = MagicMock(return_value=mock_db)
 
-    orch = PerceptionRunner.__new__(PerceptionRunner)
-    orch._db_factory_provider = lambda: mock_factory
-    orch._settings = make_mock_settings()
-    orch._events = MagicMock()
-    orch._events.ensure_event_bus = AsyncMock(return_value=MagicMock())
+    poller = ConnectorPoller.__new__(ConnectorPoller)
+    poller._db_factory_provider = lambda: mock_factory
+    poller._settings = make_mock_settings()
+    poller._events = MagicMock()
+    poller._events.ensure_event_bus = AsyncMock(return_value=MagicMock())
 
-    return orch, mock_db, mock_factory, captured_stmts
+    return poller, mock_db, mock_factory, captured_stmts
 
 
 class TestAtomicIngestCursorAdvance:
@@ -368,9 +368,9 @@ class TestAtomicIngestCursorAdvance:
         """(a) Non-empty poll: ingest + cursor upsert both happen inside the
         SAME db session (same mock_db.execute).  ``_update_cursor``'s own
         db_factory is NOT called on the non-empty path."""
-        from src.orchestrator.perception_runner import PerceptionRunner
+        from src.orchestrator.connector_poller import ConnectorPoller
 
-        orch, mock_db, mock_factory, captured_stmts = _make_ingest_mocks()
+        poller, mock_db, mock_factory, captured_stmts = _make_ingest_mocks()
 
         # Stub out the collaborators that _ingest_raw_events calls internally.
         # EventProcessor / DeadLetterService are imported locally inside the
@@ -386,13 +386,13 @@ class TestAtomicIngestCursorAdvance:
         mock_req.extras = {}
 
         with (
-            patch.object(orch, "_request_services", return_value=mock_req),
+            patch.object(poller, "_request_services", return_value=mock_req),
             patch("src.services.event_processor.EventProcessor", return_value=mock_processor),
             patch("src.services.dead_letter.DeadLetterService"),
         ):
             raw = make_raw_event()
-            await PerceptionRunner._ingest_raw_events(
-                orch,
+            await ConnectorPoller.ingest_raw_events(
+                poller,
                 [raw],
                 TEST_USER_ID,
                 TEST_WORKSPACE_ID,
@@ -422,15 +422,15 @@ class TestAtomicIngestCursorAdvance:
     async def test_ingest_failure_before_loop_does_not_advance_cursor(self):
         """(b) If the session construction / EventProcessor init raises before
         the event loop, the cursor must NOT advance (no execute, no commit)."""
-        from src.orchestrator.perception_runner import PerceptionRunner
+        from src.orchestrator.connector_poller import ConnectorPoller
 
-        orch, mock_db, mock_factory, captured_stmts = _make_ingest_mocks()
+        poller, mock_db, mock_factory, captured_stmts = _make_ingest_mocks()
 
         # Make _request_services explode — simulates a pre-loop failure
-        with patch.object(orch, "_request_services", side_effect=RuntimeError("db setup failed")):
+        with patch.object(poller, "_request_services", side_effect=RuntimeError("db setup failed")):
             with pytest.raises(RuntimeError, match="db setup failed"):
-                await PerceptionRunner._ingest_raw_events(
-                    orch,
+                await ConnectorPoller.ingest_raw_events(
+                    poller,
                     [make_raw_event()],
                     TEST_USER_ID,
                     TEST_WORKSPACE_ID,
@@ -447,12 +447,12 @@ class TestAtomicIngestCursorAdvance:
     async def test_empty_poll_path_still_advances_cursor(self):
         """(c) Empty-poll path: ``_update_cursor`` is called (separate session)
         and still issues the ON CONFLICT DO UPDATE for the cursor."""
-        from src.orchestrator.perception_runner import PerceptionRunner
+        from src.orchestrator.connector_poller import ConnectorPoller
 
-        orch, mock_db, mock_factory, captured_stmts = _make_ingest_mocks()
+        poller, mock_db, mock_factory, captured_stmts = _make_ingest_mocks()
 
-        await PerceptionRunner._update_cursor(
-            orch,
+        await ConnectorPoller.update_cursor(
+            poller,
             source="gmail",
             user_id=TEST_USER_ID,
             workspace_id=TEST_WORKSPACE_ID,
@@ -472,9 +472,9 @@ class TestAtomicIngestCursorAdvance:
     async def test_per_event_failure_sends_to_dlq_cursor_still_advances(self):
         """(d) Per-event failure path: failed events land in DLQ but the loop
         completes and the cursor IS advanced on the shared session."""
-        from src.orchestrator.perception_runner import PerceptionRunner
+        from src.orchestrator.connector_poller import ConnectorPoller
 
-        orch, mock_db, mock_factory, captured_stmts = _make_ingest_mocks()
+        poller, mock_db, mock_factory, captured_stmts = _make_ingest_mocks()
 
         # EventProcessor.process raises for every event
         mock_processor = MagicMock()
@@ -491,12 +491,12 @@ class TestAtomicIngestCursorAdvance:
         mock_req.extras = {}
 
         with (
-            patch.object(orch, "_request_services", return_value=mock_req),
+            patch.object(poller, "_request_services", return_value=mock_req),
             patch("src.services.event_processor.EventProcessor", return_value=mock_processor),
             patch("src.services.dead_letter.DeadLetterService", return_value=mock_dlq),
         ):
-            summaries = await PerceptionRunner._ingest_raw_events(
-                orch,
+            summaries = await ConnectorPoller.ingest_raw_events(
+                poller,
                 [make_raw_event()],
                 TEST_USER_ID,
                 TEST_WORKSPACE_ID,
@@ -524,9 +524,9 @@ class TestAtomicIngestCursorAdvance:
     async def test_ingest_without_cursor_params_does_not_execute_cursor_upsert(self):
         """Backward-compat: calling _ingest_raw_events without new_cursor leaves
         the cursor table untouched (no spurious execute calls)."""
-        from src.orchestrator.perception_runner import PerceptionRunner
+        from src.orchestrator.connector_poller import ConnectorPoller
 
-        orch, mock_db, mock_factory, captured_stmts = _make_ingest_mocks()
+        poller, mock_db, mock_factory, captured_stmts = _make_ingest_mocks()
 
         mock_processor = MagicMock()
         mock_processor.process = AsyncMock(return_value="evt_002")
@@ -539,12 +539,12 @@ class TestAtomicIngestCursorAdvance:
         mock_req.extras = {}
 
         with (
-            patch.object(orch, "_request_services", return_value=mock_req),
+            patch.object(poller, "_request_services", return_value=mock_req),
             patch("src.services.event_processor.EventProcessor", return_value=mock_processor),
             patch("src.services.dead_letter.DeadLetterService"),
         ):
-            await PerceptionRunner._ingest_raw_events(
-                orch,
+            await ConnectorPoller.ingest_raw_events(
+                poller,
                 [make_raw_event()],
                 TEST_USER_ID,
                 TEST_WORKSPACE_ID,

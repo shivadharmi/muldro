@@ -344,14 +344,9 @@ class TestPerceptionCycleRouting:
     async def test_failed_poll_returns_error_status(self):
         """run_perception_cycle returns status=error when connector poll fails."""
 
-        with (
-            patch(
-                "src.orchestrator.perception_runner.PerceptionRunner._poll_connector"
-            ) as mock_poll,
-            patch(
-                "src.connectors.base.CONNECTOR_REGISTRY",
-                {"gmail": MagicMock()},
-            ),
+        with patch(
+            "src.connectors.base.CONNECTOR_REGISTRY",
+            {"gmail": MagicMock()},
         ):
             from src.orchestrator.perception_runner import PerceptionRunner
 
@@ -366,10 +361,13 @@ class TestPerceptionCycleRouting:
             )
             orchestrator._trace_manager.finish_trace = AsyncMock()
 
-            # Simulate _poll_connector returning ([], None, "Poll timed out", "opaque")
-            # which is what happens when PollResult.failed is detected
-            mock_poll.return_value = ([], "cursor_abc", "Poll failed: transient", "opaque")
-            orchestrator._poll_connector = mock_poll
+            # Connector polling now lives on ConnectorPoller; run_perception_cycle
+            # calls self._poller.poll(). Simulate a failed poll returning
+            # ([], cursor, error_msg, type) — what PollResult.failed produces.
+            orchestrator._poller = MagicMock()
+            orchestrator._poller.poll = AsyncMock(
+                return_value=([], "cursor_abc", "Poll failed: transient", "opaque")
+            )
 
             result = await PerceptionRunner.run_perception_cycle(
                 orchestrator, "gmail", TEST_USER_ID, "ws_test"
@@ -379,7 +377,7 @@ class TestPerceptionCycleRouting:
 
     @pytest.mark.asyncio
     async def test_poll_connector_transient_failure_sets_error(self):
-        """_poll_connector translates PollResult.failed into ([], cursor, error_msg, type)."""
+        """ConnectorPoller.poll translates PollResult.failed into ([], cursor, error_msg, type)."""
         from src.connectors.poll_result import PollResult
 
         with patch("src.connectors.base.CONNECTOR_REGISTRY") as mock_registry:
@@ -393,10 +391,10 @@ class TestPerceptionCycleRouting:
             failed_result = PollResult(events=[], cursor="old_cursor", error_class="transient")
             mock_connector.poll = AsyncMock(return_value=failed_result)
 
-            from src.orchestrator.perception_runner import PerceptionRunner
+            from src.orchestrator.connector_poller import ConnectorPoller
 
-            orchestrator = MagicMock(spec=PerceptionRunner)
-            orchestrator._settings = make_mock_settings()
+            poller = MagicMock(spec=ConnectorPoller)
+            poller._settings = make_mock_settings()
 
             # Mock DB session context for cursor fetch
             mock_db = AsyncMock()
@@ -405,9 +403,9 @@ class TestPerceptionCycleRouting:
             mock_result = MagicMock()
             mock_result.first = MagicMock(return_value=None)
             mock_db.execute = AsyncMock(return_value=mock_result)
-            orchestrator._db_factory = MagicMock(return_value=mock_db)
+            poller._db_factory = MagicMock(return_value=mock_db)
 
-            # OAuthManager is a local import inside _poll_connector; patch the module it lives in
+            # OAuthManager is a local import inside poll(); patch the module it lives in
             with patch("src.services.oauth_manager.OAuthManager") as mock_oauth_cls:
                 mock_oauth = AsyncMock()
                 mock_oauth.get_valid_token = AsyncMock(return_value="tok")
@@ -418,9 +416,7 @@ class TestPerceptionCycleRouting:
                     new_cursor,
                     poll_error,
                     cursor_type,
-                ) = await PerceptionRunner._poll_connector(
-                    orchestrator, "gmail", TEST_USER_ID, "ws_test"
-                )
+                ) = await ConnectorPoller.poll(poller, "gmail", TEST_USER_ID, "ws_test")
 
             assert events == []
             assert poll_error is not None
@@ -430,7 +426,7 @@ class TestPerceptionCycleRouting:
 
     @pytest.mark.asyncio
     async def test_poll_connector_ok_empty_no_error(self):
-        """_poll_connector with ok-empty PollResult returns no error and advances cursor."""
+        """ConnectorPoller.poll with ok-empty PollResult returns no error and advances cursor."""
         from src.connectors.poll_result import PollResult
 
         with patch("src.connectors.base.CONNECTOR_REGISTRY") as mock_registry:
@@ -443,10 +439,10 @@ class TestPerceptionCycleRouting:
             ok_empty_result = PollResult(events=[], cursor="new_cursor_789", error_class="none")
             mock_connector.poll = AsyncMock(return_value=ok_empty_result)
 
-            from src.orchestrator.perception_runner import PerceptionRunner
+            from src.orchestrator.connector_poller import ConnectorPoller
 
-            orchestrator = MagicMock(spec=PerceptionRunner)
-            orchestrator._settings = make_mock_settings()
+            poller = MagicMock(spec=ConnectorPoller)
+            poller._settings = make_mock_settings()
 
             mock_db = AsyncMock()
             mock_db.__aenter__ = AsyncMock(return_value=mock_db)
@@ -454,9 +450,9 @@ class TestPerceptionCycleRouting:
             mock_result = MagicMock()
             mock_result.first = MagicMock(return_value=None)
             mock_db.execute = AsyncMock(return_value=mock_result)
-            orchestrator._db_factory = MagicMock(return_value=mock_db)
+            poller._db_factory = MagicMock(return_value=mock_db)
 
-            # OAuthManager is a local import inside _poll_connector; patch the module it lives in
+            # OAuthManager is a local import inside poll(); patch the module it lives in
             with patch("src.services.oauth_manager.OAuthManager") as mock_oauth_cls:
                 mock_oauth = AsyncMock()
                 mock_oauth.get_valid_token = AsyncMock(return_value="tok")
@@ -467,9 +463,7 @@ class TestPerceptionCycleRouting:
                     new_cursor,
                     poll_error,
                     cursor_type,
-                ) = await PerceptionRunner._poll_connector(
-                    orchestrator, "gmail", TEST_USER_ID, "ws_test"
-                )
+                ) = await ConnectorPoller.poll(poller, "gmail", TEST_USER_ID, "ws_test")
 
             assert events == []
             assert poll_error is None

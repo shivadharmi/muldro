@@ -1,21 +1,19 @@
 """PerceptionRunner — the perception + cross-source-synthesis engine.
 
 Extracted from ``JarvisOrchestrator`` (god-object decomposition, 2026-06-19).
-Owns the autonomous (scheduler-triggered) intelligence loop: polling connectors,
-ingesting raw events, advancing observation cursors, assessing relevance, asking
-the Planner to evaluate observations, and queuing actionable perception plans for
-background execution.
+Owns the autonomous (scheduler-triggered) intelligence loop: orchestrating each
+perception cycle, assessing relevance, asking the Planner to evaluate
+observations, and queuing actionable perception plans for background execution.
+The connector-facing half — polling, raw-event ingest, and cursor I/O — lives in
+``ConnectorPoller``, which this class composes.
 
-Depends downward on AgentInvoker (running sub-agents), EventPublisher (event bus +
-runtime events), SurfacePusher (insight surfaces), PlanStore (plan persistence), and
-the SystemCapabilityHandler — never on the chat path, which is what keeps the
-chat<->perception relationship acyclic.
+Depends downward on ConnectorPoller (connector I/O), AgentInvoker (running
+sub-agents), EventPublisher (event bus + runtime events), SurfacePusher (insight
+surfaces), PlanStore (plan persistence), and the SystemCapabilityHandler — never
+on the chat path, which is what keeps the chat<->perception relationship acyclic.
 """
 
-import asyncio
 import logging
-
-from ulid import ULID
 
 from src.config.settings import Settings
 from src.contracts import PlanOutput
@@ -23,10 +21,10 @@ from src.errors import classify, new_correlation_id
 from src.middleware.observability import get_correlation_id
 from src.orchestrator.agent_invoker import AgentInvoker
 from src.orchestrator.budget import BudgetTracker
+from src.orchestrator.connector_poller import ConnectorPoller
 from src.orchestrator.event_publisher import EventPublisher
 from src.orchestrator.intent_classifier import extract_plan
 from src.orchestrator.plan_store import PlanStore
-from src.orchestrator.services import ServiceContainer
 from src.orchestrator.surface_pusher import SurfacePusher
 from src.orchestrator.tracing import TraceManager
 
@@ -93,10 +91,10 @@ class PerceptionRunner:
         self,
         settings: Settings,
         client,
-        services: ServiceContainer | None,
         budget: BudgetTracker,
         trace_manager: TraceManager,
         db_factory_provider,
+        poller: ConnectorPoller,
         invoker: AgentInvoker,
         events: EventPublisher,
         surfaces: SurfacePusher,
@@ -106,12 +104,13 @@ class PerceptionRunner:
     ):
         self._settings = settings
         self._client = client
-        self._services = services
         self._budget = budget
         self._trace_manager = trace_manager
         # Provider (not a captured value) so reassigning db_factory on the
         # orchestrator propagates to this collaborator.
         self._db_factory_provider = db_factory_provider
+        # ConnectorPoller owns connector polling, raw-event ingest, and cursor I/O.
+        self._poller = poller
         self._invoker = invoker
         self._events = events
         self._surfaces = surfaces
@@ -123,12 +122,6 @@ class PerceptionRunner:
     def _db_factory(self):
         """Resolve the current DB session factory live via the provider."""
         return self._db_factory_provider()
-
-    def _request_services(self, db) -> ServiceContainer:
-        """Return a ServiceContainer whose DB-bound services use ``db``."""
-        from src.runtime import request_services
-
-        return request_services(self._services, self._settings, db)
 
     async def run_cross_source_synthesis(
         self,
@@ -222,7 +215,7 @@ class PerceptionRunner:
                 return {"status": "skipped", "reason": "budget_exhausted"}
 
             # Step 1: Poll the connector directly for new events
-            raw_events, new_cursor, poll_error, cursor_type = await self._poll_connector(
+            raw_events, new_cursor, poll_error, cursor_type = await self._poller.poll(
                 source, user_id, workspace_id
             )
 
@@ -240,14 +233,16 @@ class PerceptionRunner:
                 )
                 # Save cursor even on empty polls so incremental sync
                 # advances (e.g. Gmail historyId, Calendar syncToken).
-                await self._update_cursor(source, user_id, workspace_id, new_cursor, cursor_type)
+                await self._poller.update_cursor(
+                    source, user_id, workspace_id, new_cursor, cursor_type
+                )
                 return {"status": "completed", "source": source, "events": 0}
 
             # Ingest raw events into normalized_events table.
             # The cursor upsert is folded into the ingest session so that
             # "events ingested ⟹ cursor advanced" is a single gated commit —
             # the cursor only advances if the event loop ran to completion.
-            event_summaries = await self._ingest_raw_events(
+            event_summaries = await self._poller.ingest_raw_events(
                 raw_events,
                 user_id,
                 workspace_id,
@@ -521,275 +516,6 @@ class PerceptionRunner:
             await self._trace_manager.finish_trace(
                 trace.trace_id, user_id=user_id, workspace_id=workspace_id
             )
-
-    async def _poll_connector(
-        self, source: str, user_id: str, workspace_id: str
-    ) -> tuple[list, str | None, str | None, str]:
-        """Poll a connector for new events. Returns (events, new_cursor, error, cursor_type)."""
-        from src.connectors.base import CONNECTOR_REGISTRY
-        from src.services.oauth_manager import OAuthManager
-
-        connector_cls = CONNECTOR_REGISTRY.get(source)
-        if not connector_cls:
-            return [], None, f"No connector registered for source: {source}", "opaque"
-
-        connector = connector_cls(settings=self._settings)
-        cursor_type = connector.cursor_type
-
-        # Get OAuth credentials
-        oauth_mgr = OAuthManager(
-            self._db_factory,
-            encryption_key=self._settings.oauth_encryption_key,
-            settings=self._settings,
-        )
-        # Map source to OAuth provider (gmail/calendar share "google" provider)
-        oauth_provider = "google" if source in ("gmail", "calendar") else source
-        access_token = await oauth_mgr.get_valid_token(user_id, oauth_provider)
-        if not access_token:
-            return (
-                [],
-                None,
-                f"No valid credentials for {source} — user may need to re-authorize",
-                cursor_type,
-            )
-
-        # Get current cursor
-        cursor = None
-        async with self._db_factory() as db:
-            from sqlalchemy import select
-
-            from src.models.observation_cursor import ObservationCursor
-
-            result = await db.execute(
-                select(ObservationCursor.cursor_value).where(
-                    ObservationCursor.workspace_id == workspace_id,
-                    ObservationCursor.user_id == user_id,
-                    ObservationCursor.source == source,
-                )
-            )
-            row = result.first()
-            if row:
-                cursor = row[0]
-
-        try:
-            from src.connectors.poll_result import PollResult, error_class_to_policy_error
-
-            result = await asyncio.wait_for(
-                connector.poll(user_id, cursor, {"access_token": access_token}),
-                timeout=30,
-            )
-
-            # Connectors now return PollResult; accept legacy 2-tuple for safety.
-            if isinstance(result, PollResult):
-                if result.failed:
-                    # Sentinel message contains the keyword classify_error() needs;
-                    # prefix with source for observability without repeating error_class.
-                    policy_err = error_class_to_policy_error(result.error_class)
-                    error_msg = f"Poll failed for {source}: {policy_err}"
-                    logger.warning(
-                        "connector_poll_error",
-                        extra={
-                            "source": source,
-                            "error_class": result.error_class,
-                            "error": error_msg[:500],
-                        },
-                    )
-                    # Return unchanged cursor — never advance on failure
-                    return [], result.cursor, error_msg, cursor_type
-                return result.events, result.cursor, None, cursor_type
-            else:
-                # Legacy 2-tuple fallback (non-native connectors)
-                events, new_cursor = result
-                return events, new_cursor, None, cursor_type
-
-        except asyncio.TimeoutError:
-            logger.warning(
-                "Connector %s poll timed out after 30s for user %s",
-                source,
-                user_id,
-            )
-            return [], cursor, "Poll timed out after 30s", cursor_type
-        except Exception as e:
-            from src.integrations.mcp_errors import classify_error
-
-            error_code = classify_error(e)
-            logger.warning(
-                "connector_poll_error",
-                extra={"source": source, "error_code": error_code, "error": str(e)[:500]},
-            )
-            return [], None, f"Poll failed for {source} ({error_code}): {e}", cursor_type
-
-    @staticmethod
-    def _build_cursor_upsert_stmt(
-        source: str,
-        user_id: str,
-        workspace_id: str,
-        new_cursor: str,
-        cursor_type: str,
-    ):
-        """Return a pg ``INSERT … ON CONFLICT DO UPDATE`` statement for the
-        observation cursor.  Both the ingest path and the empty-poll path use
-        this builder so the SQL shape is never duplicated.
-
-        The caller is responsible for executing the statement on its own
-        ``db`` session; this function performs no I/O.
-        """
-        from datetime import datetime, timezone
-
-        from sqlalchemy.dialects.postgresql import insert as pg_insert
-
-        from src.models.observation_cursor import ObservationCursor
-
-        now = datetime.now(timezone.utc)
-        return (
-            pg_insert(ObservationCursor)
-            .values(
-                cursor_id=f"cur_{ULID()}",
-                user_id=user_id,
-                workspace_id=workspace_id,
-                source=source,
-                cursor_type=cursor_type,
-                cursor_value=new_cursor,
-                last_observation_at=now,
-            )
-            .on_conflict_do_update(
-                constraint="uq_cursor_ws_user_source",
-                set_={
-                    "cursor_value": new_cursor,
-                    "cursor_type": cursor_type,
-                    "last_observation_at": now,
-                },
-            )
-        )
-
-    async def _ingest_raw_events(
-        self,
-        raw_events: list,
-        user_id: str,
-        workspace_id: str,
-        *,
-        source: str = "",
-        new_cursor: str | None = None,
-        cursor_type: str = "opaque",
-    ) -> list[str]:
-        """Ingest raw events into the event processor. Returns summary strings.
-
-        ``EventProcessor.process()`` commits **per event** internally, so by
-        the time the loop finishes the session may have issued many commits.
-        When *new_cursor* is also provided, the cursor upsert is executed on
-        the **same** session after the loop and committed by the single trailing
-        ``await db.commit()`` at the end of this method.
-
-        The invariant guaranteed here is narrower than a single transaction:
-        **the cursor is not advanced unless the event loop ran to completion**
-        (i.e. no ``new_cursor`` write happens if the session or
-        ``EventProcessor`` construction raises before the loop starts).
-        Per-event commit failures are caught and forwarded to the DLQ; they do
-        not prevent the cursor from advancing for the events that succeeded.
-        """
-        summaries = []
-        async with self._db_factory() as db:
-            from src.services.dead_letter import DeadLetterService
-            from src.services.event_processor import EventProcessor
-
-            req = self._request_services(db)
-            event_bus = await self._events.ensure_event_bus()
-            dead_letter = DeadLetterService(db)
-
-            processor = EventProcessor(
-                self._settings,
-                db,
-                world_model=req.world_model,
-                memory_service=req.memory_service,
-                dead_letter=dead_letter,
-                event_bus=event_bus,
-                notifier=req.notifier,
-                embedding_service=req.extras.get("embedding_service"),
-                vector_store=req.vector_store,
-            )
-            for raw in raw_events:
-                try:
-                    event_id = await processor.process(
-                        raw,
-                        user_id=user_id,
-                        workspace_id=workspace_id,
-                    )
-                    title = raw.title or getattr(raw, "raw_data", {}).get("subject", "")
-                    summary = f"[{raw.source}] {raw.event_type}: {title}"
-                    if event_id:
-                        summary += f" (event_id={event_id})"
-                    summaries.append(summary)
-                except Exception as e:
-                    await db.rollback()
-                    logger.warning(
-                        "event_ingest_failed",
-                        extra={
-                            "source": raw.source,
-                            "event_type": raw.event_type,
-                            "error": str(e)[:500],
-                        },
-                    )
-                    summaries.append(f"[{raw.source}] {raw.event_type} (ingest error)")
-                    try:
-                        await dead_letter.enqueue(
-                            user_id=user_id,
-                            operation_type="event_ingest",
-                            error_type=type(e).__name__,
-                            error_message=str(e),
-                            source_id=raw.entity_id,
-                            payload={
-                                "source": raw.source,
-                                "event_type": raw.event_type,
-                                "entity_id": raw.entity_id,
-                            },
-                            workspace_id=workspace_id,
-                        )
-                    except Exception:
-                        logger.debug("DLQ enqueue failed", exc_info=True)
-
-            # Advance the cursor on the same session so it is not written
-            # unless the event loop ran to completion.
-            if new_cursor and source:
-                stmt = self._build_cursor_upsert_stmt(
-                    source, user_id, workspace_id, new_cursor, cursor_type
-                )
-                await db.execute(stmt)
-            elif new_cursor and not source:
-                logger.warning(
-                    "ingest_cursor_skipped_no_source",
-                    extra={"new_cursor": new_cursor, "user_id": user_id},
-                )
-
-            await db.commit()
-        return summaries
-
-    async def _update_cursor(
-        self,
-        source: str,
-        user_id: str,
-        workspace_id: str,
-        new_cursor: str | None,
-        cursor_type: str = "opaque",
-    ) -> None:
-        """Update the observation cursor after a successful poll.
-
-        Uses a single ``INSERT ... ON CONFLICT DO UPDATE`` so concurrent
-        perception cycles for the same ``(workspace_id, user_id, source)``
-        cannot race on the ``uq_cursor_ws_user_source`` unique constraint.
-
-        This method is used by the **empty-poll path** so incremental sync
-        tokens (e.g. Gmail historyId, Calendar syncToken) advance even when
-        no new events were returned.  The non-empty-poll path folds the cursor
-        write directly into ``_ingest_raw_events`` instead.
-        """
-        if not new_cursor:
-            return
-        async with self._db_factory() as db:
-            stmt = self._build_cursor_upsert_stmt(
-                source, user_id, workspace_id, new_cursor, cursor_type
-            )
-            await db.execute(stmt)
-            await db.commit()
 
     async def _apply_perception_policy_from_planner(
         self,

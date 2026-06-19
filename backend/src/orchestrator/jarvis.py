@@ -27,6 +27,7 @@ from src.orchestrator.agent_invoker import AgentInvoker
 from src.orchestrator.agents import AGENTS, SubAgent, build_agent_set
 from src.orchestrator.budget import BudgetTracker
 from src.orchestrator.chat_processor import ChatProcessor
+from src.orchestrator.connector_poller import ConnectorPoller
 from src.orchestrator.context_assembler import ContextAssembler
 from src.orchestrator.core_events import CoreEvent
 from src.orchestrator.event_publisher import EventPublisher
@@ -132,17 +133,25 @@ class JarvisOrchestrator:
             self._context,
             self._agents,
         )
+        # ConnectorPoller owns connector polling, raw-event ingest, and cursor
+        # I/O — the connector-facing half of each perception cycle.
+        self._poller = ConnectorPoller(
+            settings,
+            services,
+            _db_factory_provider,
+            self._events,
+        )
         # PerceptionRunner owns the autonomous perception + synthesis loop. It
-        # depends downward on the invoker, events, surfaces, plans and system
-        # capability handler — never on the chat path — which keeps the
+        # depends downward on the poller, invoker, events, surfaces, plans and
+        # system capability handler — never on the chat path — which keeps the
         # chat<->perception relationship acyclic.
         self._perception = PerceptionRunner(
             settings,
             self._client,
-            services,
             self._budget,
             self._trace_manager,
             _db_factory_provider,
+            self._poller,
             self._invoker,
             self._events,
             self._surfaces,
@@ -446,8 +455,8 @@ class JarvisOrchestrator:
     async def _poll_connector(
         self, source: str, user_id: str, workspace_id: str
     ) -> tuple[list, str | None, str | None, str]:
-        """Facade → PerceptionRunner._poll_connector."""
-        return await self._perception._poll_connector(source, user_id, workspace_id)
+        """Facade → ConnectorPoller.poll."""
+        return await self._poller.poll(source, user_id, workspace_id)
 
     @staticmethod
     def _build_cursor_upsert_stmt(
@@ -457,8 +466,8 @@ class JarvisOrchestrator:
         new_cursor: str,
         cursor_type: str,
     ):
-        """Facade → PerceptionRunner._build_cursor_upsert_stmt (staticmethod)."""
-        return PerceptionRunner._build_cursor_upsert_stmt(
+        """Facade → ConnectorPoller.build_cursor_upsert_stmt (staticmethod)."""
+        return ConnectorPoller.build_cursor_upsert_stmt(
             source, user_id, workspace_id, new_cursor, cursor_type
         )
 
@@ -472,8 +481,8 @@ class JarvisOrchestrator:
         new_cursor: str | None = None,
         cursor_type: str = "opaque",
     ) -> list[str]:
-        """Facade → PerceptionRunner._ingest_raw_events."""
-        return await self._perception._ingest_raw_events(
+        """Facade → ConnectorPoller.ingest_raw_events."""
+        return await self._poller.ingest_raw_events(
             raw_events,
             user_id,
             workspace_id,
@@ -490,10 +499,8 @@ class JarvisOrchestrator:
         new_cursor: str | None,
         cursor_type: str = "opaque",
     ) -> None:
-        """Facade → PerceptionRunner._update_cursor."""
-        await self._perception._update_cursor(
-            source, user_id, workspace_id, new_cursor, cursor_type
-        )
+        """Facade → ConnectorPoller.update_cursor."""
+        await self._poller.update_cursor(source, user_id, workspace_id, new_cursor, cursor_type)
 
     async def generate_briefing(self, user_id: str, workspace_id: str = "") -> dict:
         """Generate the daily briefing through the Presenter agent.
