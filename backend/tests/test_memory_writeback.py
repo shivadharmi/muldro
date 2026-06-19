@@ -1,8 +1,22 @@
 """Tests for Phase 3A: Memory writeback from execution results."""
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from tests.conftest import make_mock_settings
+
+
+class _FakeSessionCtx:
+    """Minimal async-context-manager standing in for a db_factory() session."""
+
+    def __init__(self, db):
+        self._db = db
+
+    async def __aenter__(self):
+        return self._db
+
+    async def __aexit__(self, *exc):
+        return False
 
 
 def _make_executor(memory_service=None, world_model=None):
@@ -166,7 +180,7 @@ class TestAutonomousLearningParity:
         assert "Acme Corp" in source_text
         assert _kwargs.get("user_id") == "usr_1"
         assert _kwargs.get("workspace_id") == "ws_1"
-        gs.batch_sync_entities.assert_awaited_once_with(["ent_1", "ent_2"])
+        gs.batch_sync_entities.assert_awaited_once_with(["ent_1", "ent_2"], workspace_id="ws_1")
 
     async def test_writeback_no_graph_sync_when_no_entities(self):
         """No entities extracted → no graph sync attempted."""
@@ -218,6 +232,125 @@ class TestAutonomousLearningParity:
         # Should not raise
         await executor._writeback_memories(run)
         mem_svc.extract_and_store.assert_called_once()
+
+    async def test_writeback_skips_extraction_when_all_knowledge_routed(self):
+        """Every completed step knowledge-routed → the Librarian already extracted
+        those entities, so the redundant outcome pass is skipped (memory writeback
+        still runs)."""
+        mem_svc = AsyncMock()
+        mem_svc.extract_and_store = AsyncMock()
+        world_model = AsyncMock()
+        world_model.extract_from_text = AsyncMock(return_value=["ent_1"])
+        executor = _make_executor(memory_service=mem_svc, world_model=world_model)
+
+        run = _make_run()
+        run.workspace_id = "ws_1"
+        steps = [
+            _make_step("s1", "t1", "completed", {"r": "x"}),
+            _make_step("s2", "t2", "completed", {"r": "y"}),
+        ]
+        for s in steps:
+            s.input_data = {"capability": "knowledge.search"}
+        executor._get_all_steps = AsyncMock(return_value=steps)
+
+        await executor._writeback_memories(run)
+
+        world_model.extract_from_text.assert_not_awaited()
+        mem_svc.extract_and_store.assert_awaited_once()
+
+    async def test_writeback_extracts_when_mixed_routing(self):
+        """A single non-knowledge step keeps the outcome entity-extraction alive —
+        its output carries entities the Librarian never saw."""
+        mem_svc = AsyncMock()
+        mem_svc.extract_and_store = AsyncMock()
+        world_model = AsyncMock()
+        world_model.extract_from_text = AsyncMock(return_value=["ent_1"])
+        executor = _make_executor(memory_service=mem_svc, world_model=world_model)
+
+        run = _make_run()
+        run.workspace_id = "ws_1"
+        s1 = _make_step("s1", "t1", "completed", {"r": "x"})
+        s1.input_data = {"capability": "knowledge.search"}
+        s2 = _make_step("s2", "t2", "completed", {"r": "y"})
+        s2.input_data = {"capability": "email.send"}
+        executor._get_all_steps = AsyncMock(return_value=[s1, s2])
+
+        gs = AsyncMock()
+        gs.batch_sync_entities = AsyncMock()
+        gs.close = AsyncMock()
+        with patch("src.services.graph_sync.GraphSyncService", return_value=gs):
+            await executor._writeback_memories(run)
+
+        world_model.extract_from_text.assert_awaited_once()
+
+
+class TestEntityLearningIsolation:
+    """Entity learning runs on its own session when a db_factory is wired, so the
+    run's DB connection isn't held during the extraction LLM call."""
+
+    async def test_learn_entities_isolated_uses_fresh_session_and_commits(self):
+        executor = _make_executor()
+        fresh_db = AsyncMock()
+        fresh_db.commit = AsyncMock()
+        executor._db_factory = lambda: _FakeSessionCtx(fresh_db)
+
+        wm = AsyncMock()
+        wm.extract_from_text = AsyncMock(return_value=["ent_1"])
+        gs = AsyncMock()
+        gs.batch_sync_entities = AsyncMock()
+        gs.close = AsyncMock()
+        with (
+            patch("src.services.world_model.WorldModel", return_value=wm),
+            patch("src.services.graph_sync.GraphSyncService", return_value=gs),
+        ):
+            await executor._learn_entities_isolated("text", "usr_1", "ws_1", "run_1")
+
+        wm.extract_from_text.assert_awaited_once()
+        gs.batch_sync_entities.assert_awaited_once_with(["ent_1"], workspace_id="ws_1")
+        fresh_db.commit.assert_awaited_once()
+
+    async def test_learn_entities_isolated_noop_without_factory(self):
+        executor = _make_executor()
+        executor._db_factory = None
+        # Must not raise.
+        await executor._learn_entities_isolated("text", "usr_1", "ws_1", "run_1")
+
+    async def test_writeback_backgrounds_entity_learning_when_factory_present(self):
+        """With a db_factory wired, writeback spawns a background task that learns
+        on a fresh session/world_model — the injected world_model is NOT used inline
+        (which would hold the run's connection during the LLM call)."""
+        mem_svc = AsyncMock()
+        mem_svc.extract_and_store = AsyncMock()
+        injected_wm = AsyncMock()
+        injected_wm.extract_from_text = AsyncMock(return_value=["should_not_run"])
+        executor = _make_executor(memory_service=mem_svc, world_model=injected_wm)
+
+        fresh_db = AsyncMock()
+        fresh_db.commit = AsyncMock()
+        executor._db_factory = lambda: _FakeSessionCtx(fresh_db)
+
+        run = _make_run()
+        run.workspace_id = "ws_1"
+        step = _make_step("s1", "t1", "completed", {"r": "met Acme Corp"})
+        step.input_data = {"capability": "email.send"}  # non-knowledge → extraction runs
+        executor._get_all_steps = AsyncMock(return_value=[step])
+
+        fresh_wm = AsyncMock()
+        fresh_wm.extract_from_text = AsyncMock(return_value=["ent_1"])
+        gs = AsyncMock()
+        gs.batch_sync_entities = AsyncMock()
+        gs.close = AsyncMock()
+        with (
+            patch("src.services.world_model.WorldModel", return_value=fresh_wm),
+            patch("src.services.graph_sync.GraphSyncService", return_value=gs),
+        ):
+            await executor._writeback_memories(run)
+            assert executor._background_tasks  # a task was spawned
+            await asyncio.gather(*list(executor._background_tasks))
+
+        injected_wm.extract_from_text.assert_not_awaited()
+        fresh_wm.extract_from_text.assert_awaited_once()
+        fresh_db.commit.assert_awaited_once()
 
 
 class TestGraphExecutorMemoryServiceParam:

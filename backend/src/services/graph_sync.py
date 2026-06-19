@@ -6,7 +6,7 @@ to Neo4j. Also runs periodic full reconciliation.
 
 import logging
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config.settings import Settings
@@ -112,10 +112,21 @@ class GraphSyncService:
                 end_date=rel.end_date.isoformat() if rel.end_date else None,
             )
 
-    async def batch_sync_entities(self, entity_ids: list[str]) -> dict:
-        """Sync multiple entities and their relationships in bulk queries."""
+    async def batch_sync_entities(
+        self, entity_ids: list[str], workspace_id: str | None = None
+    ) -> dict:
+        """Sync multiple entities and their relationships in bulk queries.
+
+        When *workspace_id* is given, both the entity and relationship loads are
+        additionally constrained to that workspace — defence-in-depth so a caller
+        can never sync rows outside its tenant. Omitted (None) preserves the
+        unscoped behaviour for callers that don't carry a workspace.
+        """
         # Batch-load all entities in one query
-        result = await self._db.execute(select(Entity).where(Entity.entity_id.in_(entity_ids)))
+        entity_filter = Entity.entity_id.in_(entity_ids)
+        if workspace_id is not None:
+            entity_filter = and_(entity_filter, Entity.workspace_id == workspace_id)
+        result = await self._db.execute(select(Entity).where(entity_filter))
         entities = result.scalars().all()
 
         synced = 0
@@ -136,14 +147,13 @@ class GraphSyncService:
                 logger.warning("Batch entity sync failed for %s: %s", entity.entity_id, exc)
 
         # Batch-load relationships for all entities
-        result = await self._db.execute(
-            select(EntityRelationship).where(
-                or_(
-                    EntityRelationship.from_entity_id.in_(entity_ids),
-                    EntityRelationship.to_entity_id.in_(entity_ids),
-                )
-            )
+        rel_filter = or_(
+            EntityRelationship.from_entity_id.in_(entity_ids),
+            EntityRelationship.to_entity_id.in_(entity_ids),
         )
+        if workspace_id is not None:
+            rel_filter = and_(rel_filter, EntityRelationship.workspace_id == workspace_id)
+        result = await self._db.execute(select(EntityRelationship).where(rel_filter))
         rels = result.scalars().all()
         rels_synced = 0
         for rel in rels:

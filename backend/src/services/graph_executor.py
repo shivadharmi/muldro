@@ -264,6 +264,9 @@ class GraphExecutor:
         self._trace_store = trace_store
         self._cancel_events: dict[str, asyncio.Event] = {}
         self._active_traces: dict[str, JarvisTrace] = {}
+        # Fire-and-forget best-effort work (e.g. entity learning) that must not
+        # hold the run's DB connection. Tracked so tasks aren't GC'd mid-flight.
+        self._background_tasks: set[asyncio.Task] = set()
         # Surface/event emission cluster lives in an injected collaborator
         # (SVC-P1-3); the hub forwards to it. Built from the same deps so the
         # public constructor signature is unchanged.
@@ -1742,7 +1745,12 @@ class GraphExecutor:
             state_snapshot=snapshot,
         )
         self._db.add(checkpoint)
-        run.checkpoint = snapshot
+        # run.checkpoint shares its JSONB column with application-state keys
+        # written by other paths (the ``auto_executed`` trust audit trail, the
+        # ``verification`` verdict). _checkpoint owns only the execution-snapshot
+        # keys built above — merge so those other keys survive instead of being
+        # clobbered. The persisted TaskCheckpoint row still stores pure snapshot.
+        run.checkpoint = {**(run.checkpoint or {}), **snapshot}
         await self._db.flush()
 
     async def _writeback_memories(self, run: TaskRun) -> None:
@@ -1778,22 +1786,101 @@ class GraphExecutor:
                 exc_info=True,
             )
 
-        # Independent of memory storage: enrich the world model from the outcome.
-        await self._learn_entities_from_outcome(source_text, run)
+        # Independent of memory storage: enrich the world model from the outcome,
+        # unless every completed step was knowledge-routed — the Librarian already
+        # extracted those entities during execution, so re-extracting from the
+        # outcome would only repeat its work (idempotent, but a wasted LLM call).
+        if not self._completed_all_knowledge_routed(completed):
+            if self._db_factory is not None:
+                # Run on its own session so the run's DB connection isn't held
+                # open during the extraction LLM call (mirrors InteractionLearner).
+                self._spawn_background(
+                    self._learn_entities_isolated(
+                        source_text, run.user_id, run.workspace_id or "", run.run_id
+                    )
+                )
+            else:
+                # No session factory wired (unit tests / minimal setups): fall
+                # back to the inline path using the injected world_model.
+                await self._learn_entities_from_outcome(source_text, run)
+
+    def _spawn_background(self, coro) -> None:
+        """Run a best-effort coroutine fire-and-forget, tracked so it isn't GC'd
+        before completion. Used for learning that must not hold the run's session."""
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    @staticmethod
+    def _completed_all_knowledge_routed(steps: list[TaskStep]) -> bool:
+        """True when every completed step's capability routes to the Librarian
+        (``knowledge.*``).
+
+        Mixed plans return False and still extract: non-knowledge outputs (an
+        email sent, an event created) carry entities the Librarian never saw. The
+        ``isinstance`` guard keeps this safe for steps whose ``input_data`` is
+        unset/non-dict — those are treated as non-knowledge so extraction runs."""
+        caps = [
+            s.input_data.get("capability") if isinstance(s.input_data, dict) else None
+            for s in steps
+        ]
+        return bool(caps) and all(isinstance(c, str) and c.startswith("knowledge.") for c in caps)
 
     async def _learn_entities_from_outcome(self, source_text: str, run: TaskRun) -> None:
-        """Extract entities from an execution outcome and sync them to the graph.
+        """Inline entity learning on the run's session via the injected world_model.
 
-        Best-effort and fully isolated — entity/graph learning must never fail
-        an otherwise-successful run. Skipped entirely when no world model is
-        wired (e.g. unit tests inject ``world_model=None``)."""
+        Fallback for setups with no ``db_factory`` (unit tests); production
+        backgrounds this via ``_learn_entities_isolated`` so the run's connection
+        isn't held during the extraction LLM call. Skipped when no world model
+        is wired (e.g. unit tests inject ``world_model=None``)."""
         if not self._world_model:
             return
+        await self._extract_and_sync_entities(
+            self._db,
+            self._world_model,
+            source_text,
+            run.user_id,
+            run.workspace_id or "",
+            run.run_id,
+        )
+
+    async def _learn_entities_isolated(
+        self, source_text: str, user_id: str, workspace_id: str, run_id: str
+    ) -> None:
+        """Entity learning on its own session + world_model so the run's DB
+        connection isn't held during the extraction LLM call. Best-effort —
+        commits independently and never affects the run (the run is already
+        committed by the time this runs)."""
+        if not self._db_factory:
+            return
         try:
-            entity_ids = await self._world_model.extract_from_text(
+            from src.services.world_model import WorldModel
+
+            async with self._db_factory() as db:
+                world_model = WorldModel(self._settings, db)
+                await self._extract_and_sync_entities(
+                    db, world_model, source_text, user_id, workspace_id, run_id
+                )
+                await db.commit()
+        except Exception:
+            logger.debug("Isolated entity learning failed for run %s", run_id, exc_info=True)
+
+    async def _extract_and_sync_entities(
+        self,
+        db,
+        world_model,
+        source_text: str,
+        user_id: str,
+        workspace_id: str,
+        run_id: str,
+    ) -> None:
+        """Shared core: extract entities from outcome text and sync them to the
+        graph. Best-effort — entity/graph learning must never fail a run."""
+        try:
+            entity_ids = await world_model.extract_from_text(
                 source_text,
-                user_id=run.user_id,
-                workspace_id=run.workspace_id or "",
+                user_id=user_id,
+                workspace_id=workspace_id,
             )
             if not entity_ids:
                 return
@@ -1801,15 +1888,13 @@ class GraphExecutor:
                 return
             from src.services.graph_sync import GraphSyncService
 
-            graph_sync = GraphSyncService(self._settings, self._db)
+            graph_sync = GraphSyncService(self._settings, db)
             try:
-                await graph_sync.batch_sync_entities(entity_ids)
+                await graph_sync.batch_sync_entities(entity_ids, workspace_id=workspace_id)
             finally:
                 await graph_sync.close()
         except Exception:
-            logger.debug(
-                "Entity learning from outcome failed for run %s", run.run_id, exc_info=True
-            )
+            logger.debug("Entity learning from outcome failed for run %s", run_id, exc_info=True)
 
     async def _run_verification(self, run: TaskRun) -> None:
         """Run verification on a completed run."""
@@ -1867,7 +1952,13 @@ class GraphExecutor:
                     self._db, run.workspace_id or "", capability, risk_level, "rejected"
                 )
         except Exception:
-            logger.debug("Verification trust penalty failed for run %s", run.run_id, exc_info=True)
+            # Security-relevant: a swallowed failure here means a capability that
+            # auto-executed a verified-bad outcome is NOT demoted. Surface it.
+            logger.warning(
+                "Verification trust penalty failed for run %s — capability not demoted",
+                run.run_id,
+                exc_info=True,
+            )
 
     # Map a terminal run status to the status its parent Plan should take.
     _RUN_STATUS_TO_PLAN_STATUS = {

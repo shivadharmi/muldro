@@ -369,6 +369,54 @@ class TestNeo4jBatchSync:
         assert result["entities_synced"] == 2
         assert sync._graph.sync_entity.call_count == 2
 
+    async def test_batch_sync_entities_filters_by_workspace(self):
+        """Passing workspace_id constrains BOTH the entity and relationship loads."""
+        from src.services.graph_sync import GraphSyncService
+
+        settings = make_mock_settings(neo4j_url="bolt://localhost:7687")
+        db = AsyncMock()
+        empty = MagicMock()
+        empty.scalars.return_value.all.return_value = []
+        db.execute = AsyncMock(side_effect=[empty, empty])
+
+        sync = GraphSyncService(settings, db)
+        sync._graph = AsyncMock()
+
+        await sync.batch_sync_entities(["ent_001"], workspace_id="ws_1")
+
+        stmts = [
+            str(c.args[0].compile(compile_kwargs={"literal_binds": True}))
+            for c in db.execute.call_args_list
+        ]
+        # The workspace literal only appears when the equality filter is applied
+        # (workspace_id is always in the SELECT column list, so check the value).
+        assert len(stmts) == 2
+        for sql in stmts:
+            assert "ws_1" in sql
+
+    async def test_batch_sync_entities_unscoped_without_workspace(self):
+        """Omitting workspace_id preserves the original unfiltered behaviour."""
+        from src.services.graph_sync import GraphSyncService
+
+        settings = make_mock_settings(neo4j_url="bolt://localhost:7687")
+        db = AsyncMock()
+        empty = MagicMock()
+        empty.scalars.return_value.all.return_value = []
+        db.execute = AsyncMock(side_effect=[empty, empty])
+
+        sync = GraphSyncService(settings, db)
+        sync._graph = AsyncMock()
+
+        await sync.batch_sync_entities(["ent_001"])
+
+        stmts = [
+            str(c.args[0].compile(compile_kwargs={"literal_binds": True}))
+            for c in db.execute.call_args_list
+        ]
+        # No workspace equality filter → no workspace literal in the SQL.
+        for sql in stmts:
+            assert "ws_1" not in sql
+
     def test_sync_stats_initial_state(self):
         from src.services.graph_sync import GraphSyncService
 

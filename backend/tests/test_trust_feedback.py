@@ -219,3 +219,76 @@ class TestVerificationTrustFeedback:
             await executor._run_verification(run)
 
         rec.assert_not_awaited()
+
+    async def test_failed_verification_real_checkpoint_preserves_auto_executed(self):
+        """Regression: with the REAL _checkpoint (not mocked), the auto_executed
+        audit trail must survive the verification checkpoint so the penalty still
+        fires. Previously _checkpoint overwrote run.checkpoint wholesale, leaving
+        the penalty reading an empty list — so the reversal silently never ran in
+        production even though the mocked-_checkpoint tests above passed."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from src.services.graph_executor import GraphExecutor
+
+        executor = GraphExecutor(MagicMock(), AsyncMock())
+        verdict = MagicMock()
+        verdict.value = "failed"
+        result = MagicMock()
+        result.verdict = verdict
+        result.score = 0.1
+        result.details = "d"
+        executor._verifier = MagicMock()
+        executor._verifier.verify_run = AsyncMock(return_value=result)
+        # Do NOT mock _checkpoint — exercise the real merge-preservation path.
+        executor._get_all_steps = AsyncMock(return_value=[])
+        plan_res = MagicMock()
+        plan_res.scalar_one_or_none.return_value = MagicMock(success_conditions=None)
+        executor._db.execute = AsyncMock(return_value=plan_res)
+
+        run = MagicMock()
+        run.run_id = "run_1"
+        run.plan_id = "plan_1"
+        run.workspace_id = "ws_1"
+        run.status = "partially_completed"
+        run.current_step_ids = []
+        run.checkpoint = {"auto_executed": [{"capability": "email.send", "risk_level": "medium"}]}
+
+        with (
+            patch("src.services.risk_assessor.record_approval_decision", new=AsyncMock()) as rec,
+            patch("src.services.graph_executor.transition_run"),
+        ):
+            await executor._run_verification(run)
+
+        rec.assert_awaited_once()
+        assert rec.await_args.args[2:5] == ("email.send", "medium", "rejected")
+        # The audit trail must still be present after checkpointing.
+        assert run.checkpoint.get("auto_executed") == [
+            {"capability": "email.send", "risk_level": "medium"}
+        ]
+
+
+class TestCheckpointPreservation:
+    """_checkpoint owns only the execution-snapshot keys; it must merge-preserve
+    other application-state keys on run.checkpoint instead of clobbering them."""
+
+    async def test_checkpoint_preserves_auto_executed(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from src.services.graph_executor import GraphExecutor
+
+        executor = GraphExecutor(MagicMock(), AsyncMock())
+        executor._get_all_steps = AsyncMock(return_value=[])
+        run = MagicMock()
+        run.run_id = "run_1"
+        run.workspace_id = "ws_1"
+        run.status = "running"
+        run.current_step_ids = ["s1"]
+        run.checkpoint = {"auto_executed": [{"capability": "email.send", "risk_level": "low"}]}
+
+        await executor._checkpoint(run, None, "step_completed")
+
+        assert run.checkpoint["auto_executed"] == [
+            {"capability": "email.send", "risk_level": "low"}
+        ]
+        assert run.checkpoint["status"] == "running"
+        assert "checkpoint_at" in run.checkpoint
