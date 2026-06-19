@@ -2,7 +2,16 @@
 
 **Date:** 2026-06-20
 **Branch:** `review/architecture-remediation`
-**Status:** PROPOSED (awaiting sign-off)
+**Status:** IMPLEMENTED (2026-06-20). All collaborators extracted; `graph_executor.py`
+reduced 2,053 → **782 lines** (under the 800 cap). Full non-e2e suite green
+(**2,476 passed**) after every step. Commits `8a03a0b`..`3bebaf6`.
+Final module sizes: `dag_runner.py` 534, `step_runner.py` 319,
+`execution_surface_emitter.py` 327 (pre-existing), `outcome_learner.py` 275,
+`step_graph_store.py` 251, `trust_gate.py` 240, `graph_executor_factory.py` 156,
+`execution_support.py` 65. Import DAG verified acyclic (no collaborator imports
+`graph_executor`). One refinement vs. the plan below: `create_graph_executor` was
+also split into `graph_executor_factory.py` (re-exported) to land the coordinator
+under the 800-line cap — the DAG-engine extraction alone left it at ~905.
 **Target:** `backend/src/services/graph_executor.py` (`GraphExecutor`, ~2,053 lines, ~41 methods)
 
 This follows the recipes proven in the jarvis.py decomposition
