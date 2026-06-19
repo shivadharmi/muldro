@@ -1,7 +1,13 @@
-"""Tests for _resolve_step_references warning logging."""
+"""Tests for StepGraphStore.resolve_step_references warning logging.
+
+Retargeted to the StepGraphStore collaborator (extracted from GraphExecutor in
+the 2026-06-20 decomposition). The executor exposes ``_resolve_step_references``
+as a thin facade over ``self._store.resolve_step_references``; the resolution
+logic and its warnings now live in ``src.services.step_graph_store``.
+"""
 
 import logging
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -21,33 +27,26 @@ def _make_upstream_step(task_id, output_data):
     return step
 
 
-def _make_executor():
-    with patch("src.services.graph_executor.get_anthropic_client") as mock_client:
-        mock_client.return_value = MagicMock()
-        from src.services.graph_executor import GraphExecutor
-        from tests.conftest import make_mock_settings
+def _make_store(upstream_steps):
+    """Build a StepGraphStore whose get_all_steps returns the given steps."""
+    from src.services.step_graph_store import StepGraphStore
 
-        db = AsyncMock()
-        return GraphExecutor(make_mock_settings(), db)
-
-
-def _mock_get_all_steps(executor, upstream_steps):
-    """Mock _get_all_steps to return the given upstream steps."""
-    executor._get_all_steps = AsyncMock(return_value=upstream_steps)
+    store = StepGraphStore(AsyncMock())
+    store.get_all_steps = AsyncMock(return_value=upstream_steps)
+    return store
 
 
 @pytest.mark.asyncio
 async def test_unresolved_task_reference_logs_warning(caplog):
     """Reference to missing task -> warning with 'not found'."""
-    executor = _make_executor()
+    store = _make_store([])
     step = _make_step(
         task_id="downstream",
         input_data={"query": "{missing_task}.output.result"},
     )
-    _mock_get_all_steps(executor, [])
 
-    with caplog.at_level(logging.WARNING, logger="src.services.graph_executor"):
-        result = await executor._resolve_step_references(step, "run_001")
+    with caplog.at_level(logging.WARNING, logger="src.services.step_graph_store"):
+        result = await store.resolve_step_references(step, "run_001")
 
     assert result["query"] == "{missing_task}.output.result"
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
@@ -57,16 +56,15 @@ async def test_unresolved_task_reference_logs_warning(caplog):
 @pytest.mark.asyncio
 async def test_missing_field_in_output_logs_warning(caplog):
     """Field missing in upstream output -> warning with 'not in'."""
-    executor = _make_executor()
     step = _make_step(
         task_id="downstream",
         input_data={"query": "{upstream}.output.nonexistent"},
     )
     upstream = _make_upstream_step("upstream", {"result": "ok"})
-    _mock_get_all_steps(executor, [upstream])
+    store = _make_store([upstream])
 
-    with caplog.at_level(logging.WARNING, logger="src.services.graph_executor"):
-        result = await executor._resolve_step_references(step, "run_002")
+    with caplog.at_level(logging.WARNING, logger="src.services.step_graph_store"):
+        result = await store.resolve_step_references(step, "run_002")
 
     assert result["query"] == "{upstream}.output.nonexistent"
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
@@ -76,16 +74,15 @@ async def test_missing_field_in_output_logs_warning(caplog):
 @pytest.mark.asyncio
 async def test_successful_resolution_no_warnings(caplog):
     """Successful resolution -> no warnings."""
-    executor = _make_executor()
     step = _make_step(
         task_id="downstream",
         input_data={"query": "{upstream}.output.result"},
     )
     upstream = _make_upstream_step("upstream", {"result": "hello"})
-    _mock_get_all_steps(executor, [upstream])
+    store = _make_store([upstream])
 
-    with caplog.at_level(logging.WARNING, logger="src.services.graph_executor"):
-        result = await executor._resolve_step_references(step, "run_003")
+    with caplog.at_level(logging.WARNING, logger="src.services.step_graph_store"):
+        result = await store.resolve_step_references(step, "run_003")
 
     assert result["query"] == "hello"
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
