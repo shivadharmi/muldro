@@ -29,9 +29,9 @@ class TestInternalToolServerMapping:
         mock_result.is_error = False
         mock_result.structured_content = {"result": {"status": "ok"}}
         mock_client.call_tool = AsyncMock(return_value=mock_result)
-        orchestrator._internal_client = mock_client
+        orchestrator._tool_executor._internal_client = mock_client
 
-        await orchestrator._call_internal_tool(
+        await orchestrator._tool_executor.call_internal_tool(
             "search", {"query": "test"}, server_prefix="intelligence"
         )
         mock_client.call_tool.assert_called_once_with("intelligence_search", {"query": "test"})
@@ -42,9 +42,9 @@ class TestInternalToolServerMapping:
         mock_result.is_error = False
         mock_result.structured_content = {"result": {"status": "published"}}
         mock_client.call_tool = AsyncMock(return_value=mock_result)
-        orchestrator._internal_client = mock_client
+        orchestrator._tool_executor._internal_client = mock_client
 
-        await orchestrator._call_internal_tool(
+        await orchestrator._tool_executor.call_internal_tool(
             "push_ui_update",
             {"surface_id": "daily_brief", "payload": "{}", "user_id": "usr_001"},
             server_prefix="communication",
