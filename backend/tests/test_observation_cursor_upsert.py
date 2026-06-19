@@ -32,13 +32,13 @@ def _compile(stmt) -> str:
 
 
 class TestJarvisUpdateCursor:
-    """``JarvisOrchestrator._update_cursor`` must upsert atomically."""
+    """``PerceptionRunner._update_cursor`` must upsert atomically."""
 
     @pytest.mark.asyncio
     async def test_uses_on_conflict_do_update(self):
         """The statement passed to ``db.execute`` must target the
         ``uq_cursor_ws_user_source`` constraint with DO UPDATE semantics."""
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.perception_runner import PerceptionRunner
 
         # Capture the statement without wiring a real DB
         captured: dict = {}
@@ -52,10 +52,10 @@ class TestJarvisUpdateCursor:
         mock_factory = MagicMock(return_value=mock_db)
 
         # Build a minimal orchestrator-like object with just _db_factory set
-        orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
-        orch._db_factory = mock_factory
+        orch = PerceptionRunner.__new__(PerceptionRunner)
+        orch._db_factory_provider = lambda: mock_factory
 
-        await JarvisOrchestrator._update_cursor(
+        await PerceptionRunner._update_cursor(
             orch,
             source="gmail",
             user_id="usr_test",
@@ -74,14 +74,14 @@ class TestJarvisUpdateCursor:
     @pytest.mark.asyncio
     async def test_noop_when_new_cursor_is_falsy(self):
         """Early-return branch: no DB work when there's nothing to persist."""
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.perception_runner import PerceptionRunner
 
         mock_db = MagicMock()
         mock_factory = MagicMock(return_value=mock_db)
-        orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
-        orch._db_factory = mock_factory
+        orch = PerceptionRunner.__new__(PerceptionRunner)
+        orch._db_factory_provider = lambda: mock_factory
 
-        await JarvisOrchestrator._update_cursor(
+        await PerceptionRunner._update_cursor(
             orch,
             source="gmail",
             user_id="usr_test",
@@ -134,7 +134,7 @@ class TestCursorWorkspaceScoping:
     @pytest.mark.asyncio
     async def test_update_cursor_includes_workspace_id_in_values(self):
         """workspace_id must appear in the INSERT VALUES, not just be silently dropped."""
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.perception_runner import PerceptionRunner
 
         captured: dict = {}
         mock_db = MagicMock()
@@ -144,10 +144,10 @@ class TestCursorWorkspaceScoping:
         mock_db.commit = AsyncMock()
         mock_factory = MagicMock(return_value=mock_db)
 
-        orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
-        orch._db_factory = mock_factory
+        orch = PerceptionRunner.__new__(PerceptionRunner)
+        orch._db_factory_provider = lambda: mock_factory
 
-        await JarvisOrchestrator._update_cursor(
+        await PerceptionRunner._update_cursor(
             orch,
             source="gmail",
             user_id="usr_multi",
@@ -165,7 +165,7 @@ class TestCursorWorkspaceScoping:
         """Two _update_cursor calls with different workspace_ids both target the
         ``uq_cursor_ws_user_source`` constraint and include workspace_id in the
         INSERT — confirming the SQL shape uses workspace-scoped conflict detection."""
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.perception_runner import PerceptionRunner
 
         stmts: list = []
 
@@ -180,10 +180,10 @@ class TestCursorWorkspaceScoping:
             mock_db.commit = AsyncMock()
             mock_factory = MagicMock(return_value=mock_db)
 
-            orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
-            orch._db_factory = mock_factory
+            orch = PerceptionRunner.__new__(PerceptionRunner)
+            orch._db_factory_provider = lambda: mock_factory
 
-            await JarvisOrchestrator._update_cursor(
+            await PerceptionRunner._update_cursor(
                 orch,
                 source="gmail",
                 user_id="usr_shared",
@@ -282,14 +282,14 @@ class TestUserSettingsUpsert:
 
 
 class TestBuildCursorUpsertStmt:
-    """``JarvisOrchestrator._build_cursor_upsert_stmt`` is a pure builder."""
+    """``PerceptionRunner._build_cursor_upsert_stmt`` is a pure builder."""
 
     def test_returns_correct_sql_shape(self):
         """The builder returns an INSERT … ON CONFLICT DO UPDATE statement
         that targets ``uq_cursor_ws_user_source`` and includes workspace_id."""
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.perception_runner import PerceptionRunner
 
-        stmt = JarvisOrchestrator._build_cursor_upsert_stmt(
+        stmt = PerceptionRunner._build_cursor_upsert_stmt(
             source="gmail",
             user_id="usr_test",
             workspace_id="ws_test",
@@ -306,7 +306,7 @@ class TestBuildCursorUpsertStmt:
     def test_builder_is_deterministic(self):
         """Two calls with the same args produce structurally identical SQL
         (cursor_id differs via ULID but the rest of the shape is stable)."""
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.perception_runner import PerceptionRunner
 
         def shape(stmt) -> str:
             """Strip the ULID-containing cursor_id value before comparing."""
@@ -316,18 +316,23 @@ class TestBuildCursorUpsertStmt:
             # Remove the cursor_id literal so ULIDs don't break equality
             return re.sub(r"'CUR_[A-Z0-9]+'", "'CUR_PLACEHOLDER'", sql)
 
-        s1 = JarvisOrchestrator._build_cursor_upsert_stmt(
+        s1 = PerceptionRunner._build_cursor_upsert_stmt(
             "gmail", "usr_x", "ws_x", "cursor_1", "opaque"
         )
-        s2 = JarvisOrchestrator._build_cursor_upsert_stmt(
+        s2 = PerceptionRunner._build_cursor_upsert_stmt(
             "gmail", "usr_x", "ws_x", "cursor_1", "opaque"
         )
         assert shape(s1) == shape(s2)
 
 
 def _make_ingest_mocks():
-    """Return a wired-up (orch, db, db_factory) triple for _ingest_raw_events tests."""
-    from src.orchestrator.jarvis import JarvisOrchestrator
+    """Return a wired-up (orch, db, db_factory) triple for _ingest_raw_events tests.
+
+    ``orch`` is a bare ``PerceptionRunner`` (perception moved off the orchestrator
+    god-object). ``_db_factory`` is a property, so we inject via the provider.
+    ``_ensure_event_bus`` now lives on the injected EventPublisher collaborator.
+    """
+    from src.orchestrator.perception_runner import PerceptionRunner
 
     captured_stmts: list = []
 
@@ -341,9 +346,11 @@ def _make_ingest_mocks():
 
     mock_factory = MagicMock(return_value=mock_db)
 
-    orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
-    orch._db_factory = mock_factory
+    orch = PerceptionRunner.__new__(PerceptionRunner)
+    orch._db_factory_provider = lambda: mock_factory
     orch._settings = make_mock_settings()
+    orch._events = MagicMock()
+    orch._events.ensure_event_bus = AsyncMock(return_value=MagicMock())
 
     return orch, mock_db, mock_factory, captured_stmts
 
@@ -361,7 +368,7 @@ class TestAtomicIngestCursorAdvance:
         """(a) Non-empty poll: ingest + cursor upsert both happen inside the
         SAME db session (same mock_db.execute).  ``_update_cursor``'s own
         db_factory is NOT called on the non-empty path."""
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.perception_runner import PerceptionRunner
 
         orch, mock_db, mock_factory, captured_stmts = _make_ingest_mocks()
 
@@ -380,12 +387,11 @@ class TestAtomicIngestCursorAdvance:
 
         with (
             patch.object(orch, "_request_services", return_value=mock_req),
-            patch.object(orch, "_ensure_event_bus", new=AsyncMock(return_value=MagicMock())),
             patch("src.services.event_processor.EventProcessor", return_value=mock_processor),
             patch("src.services.dead_letter.DeadLetterService"),
         ):
             raw = make_raw_event()
-            await JarvisOrchestrator._ingest_raw_events(
+            await PerceptionRunner._ingest_raw_events(
                 orch,
                 [raw],
                 TEST_USER_ID,
@@ -416,14 +422,14 @@ class TestAtomicIngestCursorAdvance:
     async def test_ingest_failure_before_loop_does_not_advance_cursor(self):
         """(b) If the session construction / EventProcessor init raises before
         the event loop, the cursor must NOT advance (no execute, no commit)."""
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.perception_runner import PerceptionRunner
 
         orch, mock_db, mock_factory, captured_stmts = _make_ingest_mocks()
 
         # Make _request_services explode — simulates a pre-loop failure
         with patch.object(orch, "_request_services", side_effect=RuntimeError("db setup failed")):
             with pytest.raises(RuntimeError, match="db setup failed"):
-                await JarvisOrchestrator._ingest_raw_events(
+                await PerceptionRunner._ingest_raw_events(
                     orch,
                     [make_raw_event()],
                     TEST_USER_ID,
@@ -441,11 +447,11 @@ class TestAtomicIngestCursorAdvance:
     async def test_empty_poll_path_still_advances_cursor(self):
         """(c) Empty-poll path: ``_update_cursor`` is called (separate session)
         and still issues the ON CONFLICT DO UPDATE for the cursor."""
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.perception_runner import PerceptionRunner
 
         orch, mock_db, mock_factory, captured_stmts = _make_ingest_mocks()
 
-        await JarvisOrchestrator._update_cursor(
+        await PerceptionRunner._update_cursor(
             orch,
             source="gmail",
             user_id=TEST_USER_ID,
@@ -466,7 +472,7 @@ class TestAtomicIngestCursorAdvance:
     async def test_per_event_failure_sends_to_dlq_cursor_still_advances(self):
         """(d) Per-event failure path: failed events land in DLQ but the loop
         completes and the cursor IS advanced on the shared session."""
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.perception_runner import PerceptionRunner
 
         orch, mock_db, mock_factory, captured_stmts = _make_ingest_mocks()
 
@@ -486,11 +492,10 @@ class TestAtomicIngestCursorAdvance:
 
         with (
             patch.object(orch, "_request_services", return_value=mock_req),
-            patch.object(orch, "_ensure_event_bus", new=AsyncMock(return_value=MagicMock())),
             patch("src.services.event_processor.EventProcessor", return_value=mock_processor),
             patch("src.services.dead_letter.DeadLetterService", return_value=mock_dlq),
         ):
-            summaries = await JarvisOrchestrator._ingest_raw_events(
+            summaries = await PerceptionRunner._ingest_raw_events(
                 orch,
                 [make_raw_event()],
                 TEST_USER_ID,
@@ -519,7 +524,7 @@ class TestAtomicIngestCursorAdvance:
     async def test_ingest_without_cursor_params_does_not_execute_cursor_upsert(self):
         """Backward-compat: calling _ingest_raw_events without new_cursor leaves
         the cursor table untouched (no spurious execute calls)."""
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.perception_runner import PerceptionRunner
 
         orch, mock_db, mock_factory, captured_stmts = _make_ingest_mocks()
 
@@ -535,11 +540,10 @@ class TestAtomicIngestCursorAdvance:
 
         with (
             patch.object(orch, "_request_services", return_value=mock_req),
-            patch.object(orch, "_ensure_event_bus", new=AsyncMock(return_value=MagicMock())),
             patch("src.services.event_processor.EventProcessor", return_value=mock_processor),
             patch("src.services.dead_letter.DeadLetterService"),
         ):
-            await JarvisOrchestrator._ingest_raw_events(
+            await PerceptionRunner._ingest_raw_events(
                 orch,
                 [make_raw_event()],
                 TEST_USER_ID,

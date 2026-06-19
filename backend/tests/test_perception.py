@@ -391,9 +391,9 @@ class TestPerceptionCycleDLQ:
         """run_perception_cycle's except block should enqueue to DLQ."""
         import inspect
 
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.perception_runner import PerceptionRunner
 
-        source = inspect.getsource(JarvisOrchestrator.run_perception_cycle)
+        source = inspect.getsource(PerceptionRunner.run_perception_cycle)
         assert "DeadLetterService" in source
         assert "dlq.enqueue" in source
 
@@ -452,7 +452,9 @@ class TestPerceptionRelevanceAssessment:
                 services=ServiceContainer(),
             )
 
-            orch._poll_connector = AsyncMock(
+            # Perception now lives on PerceptionRunner; retarget mocks there.
+            pr = orch._perception
+            pr._poll_connector = AsyncMock(
                 return_value=(
                     [MagicMock(entity_id=None)],
                     "cursor_123",
@@ -460,18 +462,18 @@ class TestPerceptionRelevanceAssessment:
                     "opaque",
                 )
             )
-            orch._ingest_raw_events = AsyncMock(return_value=["New PR opened"])
-            orch._update_cursor = AsyncMock()
-            orch._call_agent = AsyncMock(return_value="extracted entities")
-            orch._apply_perception_policy_from_planner = AsyncMock()
-            orch._queue_perception_plan = AsyncMock(return_value=None)
-            orch._publish_event = AsyncMock()
-            orch._trace_manager = MagicMock()
-            orch._trace_manager.start_trace.return_value = MagicMock(trace_id="trace_1")
-            orch._trace_manager.finish_trace = AsyncMock()
-            orch._budget = MagicMock()
-            orch._budget.get_budget_status = AsyncMock(return_value=MagicMock())
-            orch._budget.should_allow_perception.return_value = True
+            pr._ingest_raw_events = AsyncMock(return_value=["New PR opened"])
+            pr._update_cursor = AsyncMock()
+            pr._invoker.call_agent = AsyncMock(return_value="extracted entities")
+            pr._apply_perception_policy_from_planner = AsyncMock()
+            pr._queue_perception_plan = AsyncMock(return_value=None)
+            pr._events.publish_event = AsyncMock()
+            pr._trace_manager = MagicMock()
+            pr._trace_manager.start_trace.return_value = MagicMock(trace_id="trace_1")
+            pr._trace_manager.finish_trace = AsyncMock()
+            pr._budget = MagicMock()
+            pr._budget.get_budget_status = AsyncMock(return_value=MagicMock())
+            pr._budget.should_allow_perception.return_value = True
 
             result = await orch.run_perception_cycle(
                 source="github",
@@ -528,21 +530,23 @@ class TestPerceptionRelevanceAssessment:
             orch = JarvisOrchestrator(
                 settings=settings, db_factory=db_factory, services=ServiceContainer()
             )
-            orch._poll_connector = AsyncMock(
+            # Perception now lives on PerceptionRunner; retarget mocks there.
+            pr = orch._perception
+            pr._poll_connector = AsyncMock(
                 return_value=([MagicMock(entity_id=None)], "c", None, "opaque")
             )
-            orch._ingest_raw_events = AsyncMock(return_value=["New PR opened"])
-            orch._update_cursor = AsyncMock()
-            orch._call_agent = AsyncMock(return_value="extracted entities")
-            orch._apply_perception_policy_from_planner = AsyncMock()
-            orch._queue_perception_plan = AsyncMock(return_value=None)
-            orch._publish_event = AsyncMock()
-            orch._trace_manager = MagicMock()
-            orch._trace_manager.start_trace.return_value = MagicMock(trace_id="t1")
-            orch._trace_manager.finish_trace = AsyncMock()
-            orch._budget = MagicMock()
-            orch._budget.get_budget_status = AsyncMock(return_value=MagicMock())
-            orch._budget.should_allow_perception.return_value = True
+            pr._ingest_raw_events = AsyncMock(return_value=["New PR opened"])
+            pr._update_cursor = AsyncMock()
+            pr._invoker.call_agent = AsyncMock(return_value="extracted entities")
+            pr._apply_perception_policy_from_planner = AsyncMock()
+            pr._queue_perception_plan = AsyncMock(return_value=None)
+            pr._events.publish_event = AsyncMock()
+            pr._trace_manager = MagicMock()
+            pr._trace_manager.start_trace.return_value = MagicMock(trace_id="t1")
+            pr._trace_manager.finish_trace = AsyncMock()
+            pr._budget = MagicMock()
+            pr._budget.get_budget_status = AsyncMock(return_value=MagicMock())
+            pr._budget.should_allow_perception.return_value = True
 
             await orch.run_perception_cycle(
                 source="github",
@@ -574,7 +578,7 @@ class TestNonActionableSynthesisSurfacing:
 
         with (
             patch("src.orchestrator.jarvis.get_anthropic_client"),
-            patch("src.orchestrator.jarvis.extract_plan", return_value=plan),
+            patch("src.orchestrator.perception_runner.extract_plan", return_value=plan),
             patch("src.services.memory_service.MemoryService") as mock_mem,
         ):
             mem = AsyncMock()
@@ -615,7 +619,7 @@ class TestNonActionableSynthesisSurfacing:
 
         with (
             patch("src.orchestrator.jarvis.get_anthropic_client"),
-            patch("src.orchestrator.jarvis.extract_plan", return_value=plan),
+            patch("src.orchestrator.perception_runner.extract_plan", return_value=plan),
             patch("src.services.memory_service.MemoryService") as mock_mem,
         ):
             mem = AsyncMock()

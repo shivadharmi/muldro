@@ -345,15 +345,17 @@ class TestPerceptionCycleRouting:
         """run_perception_cycle returns status=error when connector poll fails."""
 
         with (
-            patch("src.orchestrator.jarvis.JarvisOrchestrator._poll_connector") as mock_poll,
+            patch(
+                "src.orchestrator.perception_runner.PerceptionRunner._poll_connector"
+            ) as mock_poll,
             patch(
                 "src.connectors.base.CONNECTOR_REGISTRY",
                 {"gmail": MagicMock()},
             ),
         ):
-            from src.orchestrator.jarvis import JarvisOrchestrator
+            from src.orchestrator.perception_runner import PerceptionRunner
 
-            orchestrator = MagicMock(spec=JarvisOrchestrator)
+            orchestrator = MagicMock(spec=PerceptionRunner)
             orchestrator._db_factory = AsyncMock()
             orchestrator._budget = MagicMock()
             orchestrator._budget.get_budget_status = AsyncMock(return_value=MagicMock())
@@ -369,7 +371,7 @@ class TestPerceptionCycleRouting:
             mock_poll.return_value = ([], "cursor_abc", "Poll failed: transient", "opaque")
             orchestrator._poll_connector = mock_poll
 
-            result = await JarvisOrchestrator.run_perception_cycle(
+            result = await PerceptionRunner.run_perception_cycle(
                 orchestrator, "gmail", TEST_USER_ID, "ws_test"
             )
 
@@ -391,9 +393,9 @@ class TestPerceptionCycleRouting:
             failed_result = PollResult(events=[], cursor="old_cursor", error_class="transient")
             mock_connector.poll = AsyncMock(return_value=failed_result)
 
-            from src.orchestrator.jarvis import JarvisOrchestrator
+            from src.orchestrator.perception_runner import PerceptionRunner
 
-            orchestrator = MagicMock(spec=JarvisOrchestrator)
+            orchestrator = MagicMock(spec=PerceptionRunner)
             orchestrator._settings = make_mock_settings()
 
             # Mock DB session context for cursor fetch
@@ -416,7 +418,7 @@ class TestPerceptionCycleRouting:
                     new_cursor,
                     poll_error,
                     cursor_type,
-                ) = await JarvisOrchestrator._poll_connector(
+                ) = await PerceptionRunner._poll_connector(
                     orchestrator, "gmail", TEST_USER_ID, "ws_test"
                 )
 
@@ -441,9 +443,9 @@ class TestPerceptionCycleRouting:
             ok_empty_result = PollResult(events=[], cursor="new_cursor_789", error_class="none")
             mock_connector.poll = AsyncMock(return_value=ok_empty_result)
 
-            from src.orchestrator.jarvis import JarvisOrchestrator
+            from src.orchestrator.perception_runner import PerceptionRunner
 
-            orchestrator = MagicMock(spec=JarvisOrchestrator)
+            orchestrator = MagicMock(spec=PerceptionRunner)
             orchestrator._settings = make_mock_settings()
 
             mock_db = AsyncMock()
@@ -465,7 +467,7 @@ class TestPerceptionCycleRouting:
                     new_cursor,
                     poll_error,
                     cursor_type,
-                ) = await JarvisOrchestrator._poll_connector(
+                ) = await PerceptionRunner._poll_connector(
                     orchestrator, "gmail", TEST_USER_ID, "ws_test"
                 )
 

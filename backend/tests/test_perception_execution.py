@@ -16,13 +16,12 @@ from src.contracts import PlanOutput, PlanStep
 
 class TestQueuePerceptionPlan:
     @pytest.mark.asyncio
-    @patch("src.orchestrator.jarvis.get_anthropic_client")
-    async def test_respond_only_plan_skipped(self, mock_client):
+    async def test_respond_only_plan_skipped(self):
         """Plans with only respond/reason steps should not create background runs."""
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.perception_runner import PerceptionRunner
 
-        orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
-        orch._db_factory = MagicMock()
+        orch = PerceptionRunner.__new__(PerceptionRunner)
+        orch._db_factory_provider = lambda: MagicMock()
         orch._settings = MagicMock()
 
         planner_text = (
@@ -39,15 +38,15 @@ class TestQueuePerceptionPlan:
         assert result.goal == "Nothing important"
 
     @pytest.mark.asyncio
-    @patch("src.orchestrator.jarvis.get_anthropic_client")
-    async def test_system_capability_handled_inline(self, mock_client):
+    async def test_system_capability_handled_inline(self):
         """system.schedule_reminder steps should be handled inline."""
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.perception_runner import PerceptionRunner
 
-        orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
-        orch._db_factory = MagicMock()
+        orch = PerceptionRunner.__new__(PerceptionRunner)
+        orch._db_factory_provider = lambda: MagicMock()
         orch._settings = MagicMock()
-        orch._handle_system_capability = AsyncMock(return_value={})
+        orch._system_capability_handler = MagicMock()
+        orch._system_capability_handler.handle_system_capability = AsyncMock(return_value={})
 
         planner_text = (
             '{"goal": "Remind about call", "steps": ['
@@ -59,21 +58,19 @@ class TestQueuePerceptionPlan:
             planner_text, "gmail", "usr_test", "ws_test", "trace_01"
         )
 
-        # Should have been handled inline via _handle_system_capability
-        orch._handle_system_capability.assert_awaited_once()
+        # Should have been handled inline via the system capability handler
+        orch._system_capability_handler.handle_system_capability.assert_awaited_once()
         assert result is not None
 
     @pytest.mark.asyncio
-    @patch("src.orchestrator.jarvis.get_anthropic_client")
-    async def test_tool_steps_queue_background_run(self, mock_client):
+    async def test_tool_steps_queue_background_run(self):
         """Plans with tool steps should persist plan and create background run."""
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.perception_runner import PerceptionRunner
 
-        orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
-        orch._db_factory = MagicMock()
+        orch = PerceptionRunner.__new__(PerceptionRunner)
         orch._settings = MagicMock()
 
-        # Mock _persist_plan_record to return plan with plan_id
+        # Mock persist_plan_record to return plan with plan_id
         plan_with_id = PlanOutput(
             goal="Send follow-up email",
             reasoning="Important investor",
@@ -87,7 +84,8 @@ class TestQueuePerceptionPlan:
                 ),
             ],
         )
-        orch._persist_plan_record = AsyncMock(return_value=plan_with_id)
+        orch._plans = MagicMock()
+        orch._plans.persist_plan_record = AsyncMock(return_value=plan_with_id)
 
         # Mock db_factory and graph executor
         mock_db = AsyncMock()
@@ -95,7 +93,7 @@ class TestQueuePerceptionPlan:
         mock_cm = AsyncMock()
         mock_cm.__aenter__ = AsyncMock(return_value=mock_db)
         mock_cm.__aexit__ = AsyncMock(return_value=False)
-        orch._db_factory = MagicMock(return_value=mock_cm)
+        orch._db_factory_provider = lambda: MagicMock(return_value=mock_cm)
 
         mock_run = MagicMock()
         mock_run.run_id = "run_test_123"
@@ -119,9 +117,9 @@ class TestQueuePerceptionPlan:
 
         assert result is not None
         assert result.plan_id == "plan_test_123"
-        orch._persist_plan_record.assert_awaited_once()
+        orch._plans.persist_plan_record.assert_awaited_once()
         # Verify trigger_type is "perception"
-        call_kwargs = orch._persist_plan_record.call_args.kwargs
+        call_kwargs = orch._plans.persist_plan_record.call_args.kwargs
         assert call_kwargs.get("trigger_type") == "perception"
 
 

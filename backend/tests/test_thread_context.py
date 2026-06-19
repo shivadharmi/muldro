@@ -54,7 +54,7 @@ def _make_new_email_event(thread_id="thr_002"):
 @pytest.mark.asyncio
 async def test_fetch_thread_context_for_replies():
     """When raw_events contain a reply, thread context should be fetched."""
-    from src.orchestrator.jarvis import _fetch_thread_contexts
+    from src.orchestrator.perception_runner import _fetch_thread_contexts
 
     mock_thread_result = {
         "status": "ok",
@@ -83,7 +83,7 @@ async def test_fetch_thread_context_for_replies():
 @pytest.mark.asyncio
 async def test_fetch_thread_context_skips_non_gmail():
     """Non-Gmail events should not trigger thread fetch."""
-    from src.orchestrator.jarvis import _fetch_thread_contexts
+    from src.orchestrator.perception_runner import _fetch_thread_contexts
 
     slack_event = RawEvent(
         source="slack",
@@ -107,7 +107,7 @@ async def test_fetch_thread_context_skips_non_gmail():
 @pytest.mark.asyncio
 async def test_fetch_thread_context_failure_returns_empty():
     """MCP tool failure should return empty dict, not crash."""
-    from src.orchestrator.jarvis import _fetch_thread_contexts
+    from src.orchestrator.perception_runner import _fetch_thread_contexts
 
     with patch("src.connectors.mcp_bridge.call_mcp_tool", new_callable=AsyncMock) as mock_mcp:
         with patch("src.connectors.mcp_bridge.is_mcp_tool", return_value=True):
