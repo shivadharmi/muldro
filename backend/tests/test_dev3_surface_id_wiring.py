@@ -69,17 +69,7 @@ class TestPushWorkspaceSurfaceReturnsSurfaceId:
     async def test_returns_surface_id_on_success(self):
         """When surface kind is derivable, method returns surf_xxx string."""
         from src.contracts import PlanOutput, PlanStep
-        from src.orchestrator.jarvis import JarvisOrchestrator
-
-        settings = MagicMock()
-        settings.redis_url = "redis://localhost"
-        settings.resolved_model = "claude-sonnet-4-6-20250514"
-        settings.anthropic_api_key = "test"
-        settings.use_bedrock = False
-
-        orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
-        orch._settings = settings
-        orch._db_factory = MagicMock()
+        from src.orchestrator.surface_pusher import SurfacePusher
 
         # Mock event bus with Redis that returns integer from incr (rate limit check)
         mock_redis = AsyncMock()
@@ -87,12 +77,16 @@ class TestPushWorkspaceSurfaceReturnsSurfaceId:
         mock_redis.expire = AsyncMock()
         mock_event_bus = AsyncMock()
         mock_event_bus._redis = mock_redis
-        orch._ensure_event_bus = AsyncMock(return_value=mock_event_bus)
+        events = MagicMock()
+        events.ensure_event_bus = AsyncMock(return_value=mock_event_bus)
 
         # Mock DB persistence (inner context manager)
+        db_factory = MagicMock()
         mock_db = AsyncMock()
-        orch._db_factory.return_value.__aenter__ = AsyncMock(return_value=mock_db)
-        orch._db_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+        db_factory.return_value.__aenter__ = AsyncMock(return_value=mock_db)
+        db_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        sp = SurfacePusher(events, lambda: db_factory)
 
         plan = PlanOutput(
             goal="Send email",
@@ -100,7 +94,7 @@ class TestPushWorkspaceSurfaceReturnsSurfaceId:
             steps=[PlanStep(description="Send email", capability="email.send")],
         )
 
-        result = await orch._push_workspace_surface(
+        result = await sp.push_workspace_surface(
             plan=plan,
             user_id="usr_01",
             workspace_id="ws_01",
@@ -114,19 +108,18 @@ class TestPushWorkspaceSurfaceReturnsSurfaceId:
     async def test_returns_none_when_no_mapping(self):
         """When plan has no visual surface kind, returns None."""
         from src.contracts import PlanOutput, PlanStep
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.surface_pusher import SurfacePusher
 
-        orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
+        sp = SurfacePusher(MagicMock(), lambda: MagicMock())
 
-        # Mock _derive_surface_kind to return None
         plan = PlanOutput(
             goal="Hello",
             reasoning="greeting",
             steps=[PlanStep(description="Greet", capability="respond")],
         )
 
-        with patch("src.orchestrator.jarvis.derive_surface_kind", return_value=None):
-            result = await orch._push_workspace_surface(
+        with patch("src.orchestrator.surface_pusher.derive_surface_kind", return_value=None):
+            result = await sp.push_workspace_surface(
                 plan=plan,
                 user_id="usr_01",
                 workspace_id="ws_01",

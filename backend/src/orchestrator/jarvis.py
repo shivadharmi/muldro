@@ -78,6 +78,7 @@ from src.orchestrator.plan_store import PlanStore
 from src.orchestrator.presenter_skip import extract_perceiver_synthesis, single_read_step
 from src.orchestrator.prompts import JARVIS_SOUL_CORE
 from src.orchestrator.services import ServiceContainer
+from src.orchestrator.surface_pusher import SurfacePusher
 from src.orchestrator.system_capability_handler import SystemCapabilityHandler
 from src.orchestrator.tool_executor import ToolExecutor
 from src.orchestrator.tracing import TraceManager
@@ -85,9 +86,6 @@ from src.services.agent_registry import AgentRegistry
 from src.services.capability_resolver import CapabilityResolver
 from src.services.interaction_learner import InteractionLearner
 from src.services.surface_mapping import (
-    build_surface_preview_from_plan,
-    derive_surface_kind,
-    extract_surface_data,
     extract_surface_spec,
     strip_surface_blocks,
 )
@@ -177,18 +175,6 @@ async def _fetch_thread_contexts(
     return contexts
 
 
-def _build_action_preview(capability: str, description: str) -> str:
-    """Generate tooltip preview text for an insight action based on capability type."""
-    cap = capability.lower()
-    if any(w in cap for w in ("send", "create", "update", "delete", "write")):
-        return f"Creates a task to {description.lower()}"
-    if any(w in cap for w in ("read", "search", "fetch", "list", "get")):
-        return f"Fetches {capability.split('.')[-1]} data without taking action"
-    if any(w in cap for w in ("respond", "reason", "summarize")):
-        return f"Generates a response about {description.lower()}"
-    return ""
-
-
 class JarvisOrchestrator:
     """The Jarvis brain — orchestrates sub-agents via Claude API.
 
@@ -233,6 +219,8 @@ class JarvisOrchestrator:
         self._plans = PlanStore(_db_factory_provider)
         # ToolExecutor builds tool definitions and dispatches tool calls.
         self._tool_executor = ToolExecutor(self._events, _db_factory_provider)
+        # SurfacePusher builds + delivers A2UI workspace surfaces.
+        self._surfaces = SurfacePusher(self._events, _db_factory_provider)
         self._background_tasks: set[asyncio.Task] = set()  # C2: track fire-and-forget tasks
         # C1: API circuit breaker — fail fast when Claude API is in sustained outage
         from src.orchestrator.api_circuit_breaker import AnthropicCircuitBreaker
@@ -1789,27 +1777,8 @@ class JarvisOrchestrator:
         )
 
     async def _check_surface_rate(self, user_id: str, surface_type: str) -> bool:
-        """Return True if push is allowed under rate limit.
-
-        Uses Redis INCR with TTL for a sliding window counter.
-        Workspace: 5 per minute. Insight: 3 per 30 minutes.
-        """
-        event_bus = await self._ensure_event_bus()
-        if not event_bus or not getattr(event_bus, "_redis", None):
-            return True
-
-        redis = event_bus._redis
-        if surface_type == "insight":
-            key = f"jarvis:surface_rate:insight:{user_id}"
-            limit, window = 3, 1800
-        else:
-            key = f"jarvis:surface_rate:workspace:{user_id}"
-            limit, window = 5, 60
-
-        count = await redis.incr(key)
-        if count == 1:
-            await redis.expire(key, window)
-        return count <= limit
+        """Delegate to SurfacePusher (facade kept for internal callers)."""
+        return await self._surfaces.check_surface_rate(user_id, surface_type)
 
     async def _push_presenter_surface(
         self,
@@ -1819,114 +1788,10 @@ class JarvisOrchestrator:
         run_id: str | None = None,
         response_text: str = "",
     ) -> str | None:
-        """Push a Presenter-specified surface to the workspace.
-
-        Builds WorkspaceSurfacePush from a SurfaceSpec produced by the Presenter agent.
-        """
-        from datetime import datetime, timedelta, timezone
-
-        from ulid import ULID
-
-        from src.contracts import WorkspaceSurfacePush
-        from src.ui.contracts import SurfaceMetric, SurfacePreview
-        from src.ui.renderer import build_detail_config
-
-        if not await self._check_surface_rate(user_id, "workspace"):
-            logger.debug("Presenter surface rate-limited for user %s", user_id)
-            return None
-
-        try:
-            event_bus = await self._ensure_event_bus()
-            if not event_bus:
-                return None
-
-            surface_id = f"surf_{ULID()}"
-            preview = SurfacePreview(
-                title=spec.title,
-                subtitle=spec.subtitle,
-                status=spec.status,
-                priority=spec.priority,
-                metrics=[SurfaceMetric(**m) for m in spec.metrics] if spec.metrics else [],
-                tags=spec.tags or [],
-            )
-            detail_config = build_detail_config(spec.kind, surface_id)
-
-            # Extract typed surface_data before building the push so both the
-            # WebSocket broadcast and the DB row carry the same payload.
-            surface_data_payload = extract_surface_data(response_text)
-            surface_data_dict = (
-                surface_data_payload.model_dump(mode="json") if surface_data_payload else None
-            )
-
-            # Structural promotion gate — only push Presenter message
-            # surfaces (kind=message) to the workspace feed when the
-            # response carries at least one structural component or
-            # multiple distinct sections. Plain-text replies stay
-            # chat-only and return None here. Other kinds (briefing,
-            # alert, etc.) always push because they are system
-            # categorizations, not agent chat replies.
-            if spec.kind == "message":
-                from src.services.message_promotion import should_promote_to_workspace
-
-                children = (
-                    surface_data_payload.sections
-                    if surface_data_payload and surface_data_payload.sections
-                    else []
-                )
-                if not should_promote_to_workspace(children):
-                    logger.debug(
-                        "Presenter message surface not promoted — plain-text reply (user %s)",
-                        user_id,
-                    )
-                    return None
-
-            clean_preview = strip_surface_blocks(response_text) if response_text else ""
-
-            surface = WorkspaceSurfacePush(
-                id=surface_id,
-                kind=spec.kind,
-                preview=preview.model_dump(mode="json"),
-                detail_config=(detail_config.model_dump(mode="json") if detail_config else None),
-                source_run_id=run_id,
-                response_preview=(clean_preview[:300] if clean_preview else None),
-                created_at=datetime.now(timezone.utc).isoformat(),
-                surface_data=surface_data_dict,
-            )
-
-            channel = f"jarvis:a2ui:{user_id}"
-            ws_msg = json.dumps({"type": "surface", "surface": surface.model_dump(mode="json")})
-            await event_bus.publish_to_channel(channel, ws_msg)
-
-            # Persist to DB
-            try:
-                from src.models.ui_state import UISurface
-
-                async with self._db_factory() as db:
-                    payload = surface.model_dump(mode="json")
-                    # Keep the persisted payload consistent with the WS shape;
-                    # surface_data is already serialized on the model.
-                    db.add(
-                        UISurface(
-                            surface_id=surface.id,
-                            user_id=user_id,
-                            workspace_id=workspace_id,
-                            surface_type=spec.kind,
-                            payload=payload,
-                            preview=preview.model_dump(mode="json"),
-                            detail_config=(
-                                detail_config.model_dump(mode="json") if detail_config else None
-                            ),
-                            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
-                        )
-                    )
-                    await db.commit()
-            except Exception:
-                logger.debug("Failed to persist presenter surface", exc_info=True)
-
-            return surface_id
-        except Exception:
-            logger.warning("Failed to push presenter surface", exc_info=True)
-            return None
+        """Delegate to SurfacePusher (facade kept for internal callers)."""
+        return await self._surfaces.push_presenter_surface(
+            spec, user_id, workspace_id, run_id=run_id, response_text=response_text
+        )
 
     async def _push_workspace_surface(
         self,
@@ -1936,87 +1801,10 @@ class JarvisOrchestrator:
         run_id: str | None = None,
         response_text: str = "",
     ) -> str | None:
-        """Push a typed surface to the workspace via Redis Pub/Sub.
-
-        Derives surface kind from plan step capabilities.
-        Only pushes for plans with visual value beyond the chat response.
-        Returns the generated surface_id on success, None otherwise.
-        """
-        from datetime import datetime, timedelta, timezone
-
-        from src.contracts import WorkspaceSurfacePush
-        from src.ui.renderer import build_detail_config
-
-        mapping = derive_surface_kind(plan)
-        if not mapping:
-            return None
-
-        if not await self._check_surface_rate(user_id, "workspace"):
-            logger.debug("Surface push rate-limited for user %s", user_id)
-            return None
-
-        kind, default_title = mapping
-
-        try:
-            event_bus = await self._ensure_event_bus()
-            if not event_bus:
-                return
-
-            from ulid import ULID
-
-            surface_id = f"surf_{ULID()}"
-            preview = build_surface_preview_from_plan(plan, kind, default_title, response_text)
-            detail_config = build_detail_config(kind, surface_id)
-
-            surface = WorkspaceSurfacePush(
-                id=surface_id,
-                kind=kind,
-                preview=preview.model_dump(mode="json"),
-                detail_config=(detail_config.model_dump(mode="json") if detail_config else None),
-                decision=None,
-                source_run_id=run_id,
-                response_preview=(response_text[:300] if response_text else None),
-                created_at=datetime.now(timezone.utc).isoformat(),
-            )
-
-            channel = f"jarvis:a2ui:{user_id}"
-            ws_msg = json.dumps(
-                {
-                    "type": "surface",
-                    "surface": surface.model_dump(mode="json"),
-                }
-            )
-            await event_bus.publish_to_channel(channel, ws_msg)
-
-            # Persist to ui_surfaces table so the workspace survives page refresh
-            try:
-                from src.models.ui_state import UISurface
-
-                async with self._db_factory() as db:
-                    db.add(
-                        UISurface(
-                            surface_id=surface.id,
-                            user_id=user_id,
-                            workspace_id=workspace_id,
-                            surface_type=kind,
-                            payload=surface.model_dump(mode="json"),
-                            preview=preview.model_dump(mode="json"),
-                            detail_config=(
-                                detail_config.model_dump(mode="json") if detail_config else None
-                            ),
-                            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
-                        )
-                    )
-                    await db.commit()
-            except Exception:
-                logger.debug(
-                    "Failed to persist workspace surface to DB",
-                    exc_info=True,
-                )
-            return surface_id
-        except Exception:
-            logger.warning("Failed to push workspace surface", exc_info=True)
-            return None
+        """Delegate to SurfacePusher (facade kept for internal callers)."""
+        return await self._surfaces.push_workspace_surface(
+            plan, user_id, workspace_id, run_id=run_id, response_text=response_text
+        )
 
     async def _push_insight_surface(
         self,
@@ -2025,101 +1813,8 @@ class JarvisOrchestrator:
         user_id: str,
         workspace_id: str,
     ) -> None:
-        """Push a proactive insight surface to the workspace.
-
-        Called when the relevance assessor routes a signal to the push tier.
-        Creates a WorkspaceSurfacePush with kind='proactive_insight' and
-        persists to ui_surfaces for workspace reconnection.
-        """
-        from datetime import datetime, timedelta, timezone
-
-        from ulid import ULID
-
-        from src.contracts import (
-            InsightSurfaceData,
-            SuggestedActionRef,
-            WorkspaceSurfacePush,
-        )
-        from src.ui.contracts import SurfacePreview
-
-        try:
-            event_bus = await self._ensure_event_bus()
-            if not event_bus:
-                return
-
-            if not await self._check_surface_rate(user_id, "insight"):
-                logger.debug("Insight surface rate-limited for user %s", user_id)
-                return
-
-            surface_id = f"surf_{ULID()}"
-
-            suggested_actions = [
-                SuggestedActionRef(
-                    description=a.description,
-                    capability=a.capability,
-                    action_input=a.action_input,
-                    action_preview=_build_action_preview(a.capability, a.description),
-                )
-                for a in assessment.suggested_actions
-            ]
-
-            insight_data = InsightSurfaceData(
-                signal_source=signal.source,
-                signal_category=signal.event_type,
-                signal_summary=signal.summary,
-                relevance_score=assessment.relevance_score,
-                relevance_reasoning=assessment.reasoning,
-                related_goals=assessment.relates_to_goals,
-                suggested_actions=suggested_actions,
-            )
-
-            preview = SurfacePreview(
-                title=signal.summary[:120],
-                subtitle=assessment.reasoning[:200] if assessment.reasoning else None,
-                status="proposal",
-                priority="high" if assessment.urgency == "immediate" else "medium",
-                tags=[signal.source],
-            )
-
-            surface = WorkspaceSurfacePush(
-                id=surface_id,
-                kind="proactive_insight",
-                preview=preview.model_dump(mode="json"),
-                detail_config=None,
-                created_at=datetime.now(timezone.utc).isoformat(),
-            )
-
-            # Include insight data in the payload for the frontend
-            surface_payload = surface.model_dump(mode="json")
-            surface_payload["insight_data"] = insight_data.model_dump(mode="json")
-
-            channel = f"jarvis:a2ui:{user_id}"
-            ws_msg = json.dumps({"type": "surface", "surface": surface_payload})
-            await event_bus.publish_to_channel(channel, ws_msg)
-
-            # Persist to ui_surfaces
-            try:
-                from src.models.ui_state import UISurface
-
-                async with self._db_factory() as db:
-                    db.add(
-                        UISurface(
-                            surface_id=surface_id,
-                            user_id=user_id,
-                            workspace_id=workspace_id,
-                            surface_type="proactive_insight",
-                            payload=surface_payload,
-                            preview=preview.model_dump(mode="json"),
-                            detail_config=None,
-                            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
-                        )
-                    )
-                    await db.commit()
-            except Exception:
-                logger.debug("Failed to persist insight surface to DB", exc_info=True)
-
-        except Exception:
-            logger.warning("Failed to push insight surface", exc_info=True)
+        """Delegate to SurfacePusher (facade kept for internal callers)."""
+        await self._surfaces.push_insight_surface(signal, assessment, user_id, workspace_id)
 
     async def _load_conversation_history(
         self,
