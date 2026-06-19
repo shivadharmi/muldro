@@ -2,7 +2,12 @@
 
 **Date:** 2026-06-19
 **Branch:** `review/architecture-remediation`
-**Status:** Design — awaiting implementation plan
+**Status:** IMPLEMENTED (2026-06-19). All 8 collaborators extracted on
+`review/architecture-remediation` (commits `83dfff4`..`6c684c2`). `jarvis.py`
+reduced from 3,269 → 780 lines (under the 800 cap); full non-e2e suite green
+(2,476 passed) after every step. Follow-up: `perception_runner.py` (1,033 lines)
+is cohesive but over the 800 cap — a candidate for a further sub-split
+(connector-polling + cursor I/O vs. cycle/synthesis orchestration).
 **Target:** `backend/src/orchestrator/jarvis.py` (`JarvisOrchestrator`, ~3,269 lines)
 
 ## 1. Problem
