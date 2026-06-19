@@ -231,48 +231,39 @@ class TestCallAgentErrorPropagation:
 
     @pytest.mark.asyncio
     async def test_loop_error_propagated(self):
+        from src.orchestrator.agent_invoker import AgentInvoker
         from src.orchestrator.agent_loop import LoopError
 
         async def mock_agent_loop(**kwargs):
             yield LoopError(agent="presenter", message="circuit breaker open")
 
-        with (
-            patch("src.orchestrator.jarvis.agent_loop", side_effect=mock_agent_loop),
-            patch("src.orchestrator.jarvis.get_anthropic_client"),
-        ):
-            from src.orchestrator.jarvis import JarvisOrchestrator
-
+        with patch("src.orchestrator.agent_invoker.agent_loop", side_effect=mock_agent_loop):
             settings = MagicMock()
             settings.use_bedrock = False
-            settings.anthropic_api_key = "test"
-            settings.daily_token_budget_usd = 10.0
 
-            orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
-            orch._client = MagicMock()
-            orch._settings = settings
-            orch._agents = {
-                "presenter": MagicMock(
-                    name="presenter",
-                    prompt="test",
-                    capability_scope=[],
-                    model_tier="haiku",
-                    thinking=None,
-                ),
-            }
-            orch._db_factory = AsyncMock()
-            orch._services = MagicMock()
-            orch._budget = MagicMock()
-            orch._circuit_breaker = MagicMock()
-            orch._event_bus = None
+            tool_executor = MagicMock()
+            tool_executor.apply_cache_control_to_tools = MagicMock(return_value=[])
+            tool_executor.get_tools_for_agent = AsyncMock(return_value=[])
+            context = MagicMock()
+            context.assemble_context = AsyncMock(return_value="")
 
-            # Mock _get_model_for_agent and _get_tools_for_agent
-            orch._get_model_for_agent = MagicMock(return_value="claude-haiku-4-20250514")
-            orch._get_tools_for_agent = AsyncMock(return_value=[])
-            orch._apply_cache_control_to_tools = MagicMock(return_value=[])
-            orch._assemble_context = AsyncMock(return_value="")
-            orch._build_system_prompt = MagicMock(return_value=[{"type": "text", "text": "test"}])
+            invoker = AgentInvoker(
+                settings,
+                MagicMock(),  # client
+                MagicMock(),  # services
+                MagicMock(),  # budget
+                MagicMock(),  # circuit_breaker
+                lambda: AsyncMock(),  # db_factory_provider
+                tool_executor,
+                context,
+                {
+                    "presenter": MagicMock(name="presenter", prompt="test", model_tier="haiku"),
+                },
+            )
+            invoker.get_model_for_agent = MagicMock(return_value="claude-haiku-4-20250514")
+            invoker.build_system_prompt = MagicMock(return_value=[{"type": "text", "text": "test"}])
 
-            result = await orch._call_agent(
+            result = await invoker.call_agent(
                 "presenter",
                 message="test",
                 user_id="u1",

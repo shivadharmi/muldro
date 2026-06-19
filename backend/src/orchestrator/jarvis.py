@@ -21,23 +21,12 @@ from src.config.settings import Settings, get_anthropic_client
 from src.connectors.mcp_bridge import close_turn_sessions
 from src.contracts import PlanOutput, PlanStep
 from src.errors import (
-    _GENERIC_CODE,
-    _GENERIC_MESSAGE,
     classify,
     new_correlation_id,
 )
 from src.integrations.turn_scope import turn_scope
 from src.middleware.observability import get_correlation_id
-from src.orchestrator.agent_loop import (
-    LoopAgentStart,
-    LoopDone,
-    LoopError,
-    LoopTextDelta,
-    LoopThinking,
-    LoopToolCall,
-    LoopToolResult,
-    agent_loop,
-)
+from src.orchestrator.agent_invoker import AgentInvoker
 from src.orchestrator.agents import AGENTS, SubAgent, build_agent_set
 from src.orchestrator.budget import BudgetTracker
 from src.orchestrator.chat_pipeline import (
@@ -76,7 +65,6 @@ from src.orchestrator.intent_classifier import (
 )
 from src.orchestrator.plan_store import PlanStore
 from src.orchestrator.presenter_skip import extract_perceiver_synthesis, single_read_step
-from src.orchestrator.prompts import JARVIS_SOUL_CORE
 from src.orchestrator.services import ServiceContainer
 from src.orchestrator.surface_pusher import SurfacePusher
 from src.orchestrator.system_capability_handler import SystemCapabilityHandler
@@ -226,6 +214,20 @@ class JarvisOrchestrator:
         from src.orchestrator.api_circuit_breaker import AnthropicCircuitBreaker
 
         self._circuit_breaker = AnthropicCircuitBreaker()
+        # AgentInvoker runs a single sub-agent through the agent loop — shared by
+        # the chat (streaming) and perception (batch) paths. Depends on the tool
+        # executor + context assembler; agent set is kept in sync via set_agents().
+        self._invoker = AgentInvoker(
+            settings,
+            self._client,
+            services,
+            self._budget,
+            self._circuit_breaker,
+            _db_factory_provider,
+            self._tool_executor,
+            self._context,
+            self._agents,
+        )
         # Interaction learning — async memory extraction from user messages
         # The learner extracts memories via db_factory (per-op sessions), so it
         # only needs the session-free vector_store from the shared container —
@@ -333,6 +335,8 @@ class JarvisOrchestrator:
                 db_agents = await registry.load_as_sub_agents()
                 if db_agents:
                     self._agents = build_agent_set(db_agents, self._settings.cheap_mode)
+                    # Keep the invoker's agent set in sync (single source of truth).
+                    self._invoker.set_agents(self._agents)
                     logger.info(
                         "Loaded %d agents from DB: %s",
                         len(db_agents),
@@ -396,10 +400,8 @@ class JarvisOrchestrator:
         return await self._tool_executor.get_tools_for_agent(agent, workspace_id=workspace_id)
 
     def _get_model_for_agent(self, agent: SubAgent) -> str:
-        """Get the Claude model ID for an agent's tier."""
-        if self._settings.use_bedrock:
-            return BEDROCK_MODEL_TIERS.get(agent.model_tier, BEDROCK_MODEL_TIERS["sonnet"])
-        return MODEL_TIERS.get(agent.model_tier, MODEL_TIERS["sonnet"])
+        """Delegate to AgentInvoker (facade kept for internal callers)."""
+        return self._invoker.get_model_for_agent(agent)
 
     async def process_message(
         self,
@@ -882,7 +884,7 @@ class JarvisOrchestrator:
                     workspace_id=workspace_id,
                 )
 
-    async def _call_agent_stream(
+    def _call_agent_stream(
         self,
         agent_name: str,
         message: str,
@@ -893,111 +895,17 @@ class JarvisOrchestrator:
         capability_summary: str = "",
         tools_override: list[dict] | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
-        """Call a sub-agent with streaming, yielding SSE-compatible dicts."""
-        agent = self._agents.get(agent_name)
-        if not agent:
-            yield {"event": "error", "message": f"Unknown agent: {agent_name}"}
-            return
-
-        model = self._get_model_for_agent(agent)
-
-        if tools_override is not None:
-            tools = self._apply_cache_control_to_tools(tools_override)
-        else:
-            tools = self._apply_cache_control_to_tools(
-                await self._get_tools_for_agent(agent, workspace_id=workspace_id)
-            )
-
-        # Auto-generate capability summary for planner if not provided
-        if agent_name == "planner" and not capability_summary:
-            try:
-                from src.orchestrator.capability_summary import (
-                    generate_capability_summary,
-                )
-
-                async with self._db_factory() as db:
-                    capability_summary = await generate_capability_summary(db, workspace_id)
-            except Exception:
-                logger.debug("Failed to generate capability summary", exc_info=True)
-
-        context_block = await self._assemble_context(
-            agent_name, message, user_id=user_id, workspace_id=workspace_id
-        )
-        system_blocks = self._build_system_prompt(
-            agent, context_block, capability_summary=capability_summary
-        )
-
-        async for evt in agent_loop(
-            client=self._client,
-            agent=agent,
-            model=model,
-            system_blocks=system_blocks,
-            tools=tools,
-            message=message,
-            user_id=user_id,
-            workspace_id=workspace_id,
-            db_factory=self._db_factory,
-            services=self._services,
-            budget=self._budget,
+        """Delegate to AgentInvoker (facade kept for internal callers)."""
+        return self._invoker.call_agent_stream(
+            agent_name,
+            message,
+            user_id,
             trace=trace,
-            execute_tool_fn=self._execute_tool,
             max_tool_rounds=max_tool_rounds,
-            stream=True,
-            circuit_breaker=self._circuit_breaker,
-        ):
-            if isinstance(evt, LoopAgentStart):
-                yield {"event": "agent_start", "agent": evt.agent, "model": evt.model}
-            elif isinstance(evt, LoopThinking):
-                yield {
-                    "event": "thinking",
-                    "agent": evt.agent,
-                    "text": evt.text,
-                    "is_thinking": evt.is_thinking,
-                }
-            elif isinstance(evt, LoopTextDelta):
-                yield {"event": "text_delta", "agent": evt.agent, "text": evt.text}
-            elif isinstance(evt, LoopToolCall):
-                yield {
-                    "event": "tool_call",
-                    "agent": evt.agent,
-                    "tool": evt.tool_name,
-                    "input": evt.tool_input,
-                }
-            elif isinstance(evt, LoopToolResult):
-                yield {
-                    "event": "tool_result",
-                    "agent": evt.agent,
-                    "tool": evt.tool_name,
-                    "result": evt.result,
-                    "blocked": evt.blocked,
-                    "latency_ms": evt.latency_ms,
-                }
-            elif isinstance(evt, LoopError):
-                # evt.message may carry a raw upstream exception string (see
-                # agent_loop LoopError(message=str(e))). Log it, but only emit a
-                # client-safe generic frame — never the raw detail.
-                logger.error("agent_loop error agent=%s: %s", evt.agent, evt.message)
-                cid = get_correlation_id() or new_correlation_id()
-                yield {
-                    "event": "error",
-                    "agent": evt.agent,
-                    "code": _GENERIC_CODE,
-                    "message": _GENERIC_MESSAGE,
-                    "correlation_id": cid,
-                }
-            elif isinstance(evt, LoopDone):
-                yield {
-                    "event": "agent_done",
-                    "agent": evt.agent,
-                    "text": evt.text,
-                    "input_tokens": evt.input_tokens,
-                    "output_tokens": evt.output_tokens,
-                    "cache_creation_tokens": evt.cache_creation_tokens,
-                    "cache_read_tokens": evt.cache_read_tokens,
-                    "tools_called": evt.tools_called,
-                    "latency_ms": evt.latency_ms,
-                    "cost_usd": round(evt.cost_usd, 6),
-                }
+            workspace_id=workspace_id,
+            capability_summary=capability_summary,
+            tools_override=tools_override,
+        )
 
     async def run_cross_source_synthesis(
         self,
@@ -2078,30 +1986,10 @@ class JarvisOrchestrator:
     def _build_system_prompt(
         self, agent: SubAgent, context: str = "", capability_summary: str = ""
     ) -> list[dict]:
-        """Build system prompt with cache_control for prompt caching.
-
-        For the Planner, injects the runtime capability summary into
-        PLANNER_PROMPT_V2 (replacing the {capability_summary} placeholder).
-        Other agents get JARVIS_SOUL_CORE + their role prompt unchanged.
-        """
-        soul = JARVIS_SOUL_CORE
-
-        prompt = agent.prompt
-        if agent.name == "planner":
-            prompt = prompt.format(
-                capability_summary=capability_summary or "No capabilities connected yet."
-            )
-
-        blocks = [
-            {
-                "type": "text",
-                "text": f"{soul}\n\n--- YOUR ROLE ---\n{prompt}",
-                "cache_control": {"type": "ephemeral"},
-            },
-        ]
-        if context:
-            blocks.append({"type": "text", "text": context})
-        return blocks
+        """Delegate to AgentInvoker (facade kept for internal callers)."""
+        return self._invoker.build_system_prompt(
+            agent, context, capability_summary=capability_summary
+        )
 
     def _apply_cache_control_to_tools(self, tools: list[dict]) -> list[dict]:
         """Delegate to ToolExecutor (facade kept for internal callers)."""
@@ -2130,83 +2018,17 @@ class JarvisOrchestrator:
         capability_summary: str = "",
         tools_override: list[dict] | None = None,
     ) -> str:
-        """Call a sub-agent (non-streaming). Returns final text response."""
-        agent = self._agents.get(agent_name)
-        if not agent:
-            raise ValueError(f"Unknown agent: {agent_name}")
-
-        model = self._get_model_for_agent(agent)
-
-        if tools_override is not None:
-            tools = self._apply_cache_control_to_tools(tools_override)
-        else:
-            tools = self._apply_cache_control_to_tools(
-                await self._get_tools_for_agent(agent, workspace_id=workspace_id)
-            )
-
-        # Auto-generate capability summary for planner if not provided
-        if agent_name == "planner" and not capability_summary:
-            try:
-                from src.orchestrator.capability_summary import (
-                    generate_capability_summary,
-                )
-
-                async with self._db_factory() as db:
-                    capability_summary = await generate_capability_summary(db, workspace_id)
-            except Exception:
-                logger.debug("Failed to generate capability summary", exc_info=True)
-
-        context_block = await self._assemble_context(
-            agent_name, message, user_id=user_id, workspace_id=workspace_id
-        )
-        system_blocks = self._build_system_prompt(
-            agent, context_block, capability_summary=capability_summary
-        )
-
-        text = ""
-        error = None
-        async for evt in agent_loop(
-            client=self._client,
-            agent=agent,
-            model=model,
-            system_blocks=system_blocks,
-            tools=tools,
-            message=message,
-            user_id=user_id,
-            workspace_id=workspace_id,
-            db_factory=self._db_factory,
-            services=self._services,
-            budget=self._budget,
+        """Delegate to AgentInvoker (facade kept for internal callers)."""
+        return await self._invoker.call_agent(
+            agent_name,
+            message,
+            user_id,
             trace=trace,
-            execute_tool_fn=self._execute_tool,
             max_tool_rounds=max_tool_rounds,
-            stream=False,
-            circuit_breaker=self._circuit_breaker,
-        ):
-            if isinstance(evt, LoopDone):
-                text = evt.text
-                logger.info(
-                    "agent_call_complete",
-                    extra={
-                        "agent": agent_name,
-                        "model": model,
-                        "input_tokens": evt.input_tokens,
-                        "output_tokens": evt.output_tokens,
-                        "tools_called": evt.tools_called,
-                        "latency_ms": evt.latency_ms,
-                        "trace_id": trace.trace_id if trace else None,
-                    },
-                )
-            elif isinstance(evt, LoopError):
-                error = evt.message
-                logger.warning(
-                    "agent_call_failed",
-                    extra={"agent": agent_name, "error": error},
-                )
-
-        if error and not text:
-            return f"[Agent error: {error}]"
-        return text
+            workspace_id=workspace_id,
+            capability_summary=capability_summary,
+            tools_override=tools_override,
+        )
 
     async def _call_composite_tool(
         self, tool_name: str, tool_input: dict, user_id: str = "", workspace_id: str = ""

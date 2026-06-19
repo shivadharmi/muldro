@@ -149,32 +149,41 @@ class TestCallAgentStreamLoopErrorSanitized:
 
     @pytest.mark.asyncio
     async def test_loop_error_frame_is_generic_no_leak(self):
+        from src.orchestrator.agent_invoker import AgentInvoker
         from src.orchestrator.agent_loop import LoopError
-        from src.orchestrator.jarvis import JarvisOrchestrator
 
         leaky = f"anthropic 529 overloaded {STREAM_SECRET}"
 
         async def fake_agent_loop(**kwargs):
             yield LoopError(agent="presenter", message=leaky)
 
-        orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
         agent = MagicMock()
-        orch._agents = {"presenter": agent}
-        orch._get_model_for_agent = MagicMock(return_value="claude-haiku")
-        orch._apply_cache_control_to_tools = MagicMock(return_value=[])
-        orch._get_tools_for_agent = AsyncMock(return_value=[])
-        orch._assemble_context = AsyncMock(return_value="")
-        orch._build_system_prompt = MagicMock(return_value=[{"type": "text", "text": "x"}])
-        orch._client = MagicMock()
-        orch._db_factory = MagicMock()
-        orch._services = MagicMock()
-        orch._budget = MagicMock()
-        orch._circuit_breaker = MagicMock()
+        tool_executor = MagicMock()
+        tool_executor.apply_cache_control_to_tools = MagicMock(return_value=[])
+        tool_executor.get_tools_for_agent = AsyncMock(return_value=[])
+        context = MagicMock()
+        context.assemble_context = AsyncMock(return_value="")
+        settings = MagicMock()
+        settings.use_bedrock = False
 
-        with patch("src.orchestrator.jarvis.agent_loop", side_effect=fake_agent_loop):
+        invoker = AgentInvoker(
+            settings,
+            MagicMock(),  # client
+            MagicMock(),  # services
+            MagicMock(),  # budget
+            MagicMock(),  # circuit_breaker
+            lambda: MagicMock(),  # db_factory_provider
+            tool_executor,
+            context,
+            {"presenter": agent},
+        )
+        invoker.get_model_for_agent = MagicMock(return_value="claude-haiku")
+        invoker.build_system_prompt = MagicMock(return_value=[{"type": "text", "text": "x"}])
+
+        with patch("src.orchestrator.agent_invoker.agent_loop", side_effect=fake_agent_loop):
             events = [
                 evt
-                async for evt in orch._call_agent_stream(
+                async for evt in invoker.call_agent_stream(
                     "presenter",
                     message="go",
                     user_id="u1",
