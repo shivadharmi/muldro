@@ -68,17 +68,16 @@ class TestLogInteraction:
     @pytest.mark.asyncio
     async def test_creates_interaction_log(self):
         from src.contracts import PlanOutput
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.plan_store import PlanStore
 
         mock_db = AsyncMock()
         mock_db_factory = MagicMock()
         mock_db_factory.return_value.__aenter__ = AsyncMock(return_value=mock_db)
         mock_db_factory.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
-        orch._db_factory = mock_db_factory
+        store = PlanStore(lambda: mock_db_factory)
 
-        ilog_id = await orch._log_interaction(
+        ilog_id = await store.log_interaction(
             user_id="usr_01",
             workspace_id="ws_01",
             trace_id="trc_01",
@@ -99,16 +98,15 @@ class TestLogInteraction:
 
     @pytest.mark.asyncio
     async def test_returns_none_on_failure(self):
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.plan_store import PlanStore
 
         mock_db_factory = MagicMock()
         mock_db_factory.return_value.__aenter__ = AsyncMock(side_effect=Exception("DB down"))
         mock_db_factory.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
-        orch._db_factory = mock_db_factory
+        store = PlanStore(lambda: mock_db_factory)
 
-        ilog_id = await orch._log_interaction(
+        ilog_id = await store.log_interaction(
             user_id="usr_01",
             workspace_id="ws_01",
             trace_id="trc_01",
@@ -117,18 +115,17 @@ class TestLogInteraction:
 
     @pytest.mark.asyncio
     async def test_truncates_long_previews(self):
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.plan_store import PlanStore
 
         mock_db = AsyncMock()
         mock_db_factory = MagicMock()
         mock_db_factory.return_value.__aenter__ = AsyncMock(return_value=mock_db)
         mock_db_factory.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
-        orch._db_factory = mock_db_factory
+        store = PlanStore(lambda: mock_db_factory)
 
         long_message = "x" * 1000
-        await orch._log_interaction(
+        await store.log_interaction(
             user_id="usr_01",
             workspace_id="ws_01",
             trace_id="trc_01",

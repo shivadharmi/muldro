@@ -9,7 +9,7 @@ import pytest
 
 from src.contracts import PlanOutput, PlanStep
 from src.orchestrator.intent_classifier import extract_plan
-from src.orchestrator.jarvis import _build_step_to_task_map
+from src.orchestrator.plan_store import _build_step_to_task_map
 
 
 class TestExtractPlanFallback:
@@ -137,12 +137,16 @@ class TestPlanModelHasPlanOutputJson:
 
 class TestPerceptionIdempotency:
     def test_idempotency_return_preserves_existing_plan_id(self):
-        """When idempotency key matches, returned PlanOutput should have plan_id set."""
+        """When idempotency key matches, returned PlanOutput should have plan_id set.
+
+        Persistence lives on PlanStore (extracted from the JarvisOrchestrator god
+        object); the orchestrator now delegates to it.
+        """
         import inspect
 
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.plan_store import PlanStore
 
-        source = inspect.getsource(JarvisOrchestrator._persist_plan_record)
+        source = inspect.getsource(PlanStore.persist_plan_record)
         assert "model_copy" in source  # Uses model_copy to set plan_id on idempotency match
 
 

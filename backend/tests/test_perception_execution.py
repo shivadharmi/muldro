@@ -70,6 +70,7 @@ class TestQueuePerceptionPlan:
         from src.orchestrator.jarvis import JarvisOrchestrator
 
         orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
+        orch._db_factory = MagicMock()
         orch._settings = MagicMock()
 
         # Mock _persist_plan_record to return plan with plan_id
@@ -134,10 +135,7 @@ class TestPersistPlanIdempotency:
     @patch("src.orchestrator.jarvis.get_anthropic_client")
     async def test_idempotency_prevents_duplicate_plans(self, mock_client):
         """Same idempotency_key should skip plan creation."""
-        from src.orchestrator.jarvis import JarvisOrchestrator
-
-        orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
-        orch._settings = MagicMock()
+        from src.orchestrator.plan_store import PlanStore
 
         plan = PlanOutput(
             goal="Follow up with investor",
@@ -158,9 +156,10 @@ class TestPersistPlanIdempotency:
         mock_cm = AsyncMock()
         mock_cm.__aenter__ = AsyncMock(return_value=mock_db)
         mock_cm.__aexit__ = AsyncMock(return_value=False)
-        orch._db_factory = MagicMock(return_value=mock_cm)
+        db_factory = MagicMock(return_value=mock_cm)
+        store = PlanStore(lambda: db_factory)
 
-        result = await orch._persist_plan_record(
+        result = await store.persist_plan_record(
             plan,
             "usr_test",
             "ws_test",
@@ -175,10 +174,7 @@ class TestPersistPlanIdempotency:
     @patch("src.orchestrator.jarvis.get_anthropic_client")
     async def test_trigger_type_perception(self, mock_client):
         """Perception plans should be persisted with trigger_type='perception'."""
-        from src.orchestrator.jarvis import JarvisOrchestrator
-
-        orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
-        orch._settings = MagicMock()
+        from src.orchestrator.plan_store import PlanStore
 
         plan = PlanOutput(
             goal="Send report",
@@ -206,9 +202,10 @@ class TestPersistPlanIdempotency:
         mock_cm = AsyncMock()
         mock_cm.__aenter__ = AsyncMock(return_value=mock_db)
         mock_cm.__aexit__ = AsyncMock(return_value=False)
-        orch._db_factory = MagicMock(return_value=mock_cm)
+        db_factory = MagicMock(return_value=mock_cm)
+        store = PlanStore(lambda: db_factory)
 
-        result = await orch._persist_plan_record(
+        result = await store.persist_plan_record(
             plan,
             "usr_test",
             "ws_test",

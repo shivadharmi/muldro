@@ -291,7 +291,10 @@ class TestConversationEmbedding:
         mock_client.messages.create = AsyncMock(return_value=mock_response)
 
         ctx = ContextAssembler(
-            settings=settings, services=None, db_factory=MagicMock(), client=mock_client
+            settings=settings,
+            services=None,
+            db_factory_provider=MagicMock(),
+            client=mock_client,
         )
         summary = await ctx._summarize_history(
             lines=["User: hello", "Assistant: hi"],

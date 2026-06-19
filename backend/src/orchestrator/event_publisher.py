@@ -27,14 +27,21 @@ class EventPublisher:
         self,
         settings: Settings,
         services: ServiceContainer | None,
-        db_factory,
+        db_factory_provider,
     ):
         self._settings = settings
         self._services = services
-        self._db_factory = db_factory
+        # Provider (not a captured value) so the orchestrator stays the single
+        # source of truth for db_factory — reassigning it there propagates here.
+        self._db_factory_provider = db_factory_provider
         self._event_bus = None  # Lazy-init when Redis available
         self._event_bus_lock = asyncio.Lock()  # C5: guard lazy EventBus init
         self._event_bus_redis = None
+
+    @property
+    def _db_factory(self):
+        """Resolve the current DB session factory live via the provider."""
+        return self._db_factory_provider()
 
     @property
     def event_bus(self):

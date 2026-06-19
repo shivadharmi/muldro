@@ -35,13 +35,20 @@ class ContextAssembler:
         self,
         settings: Settings,
         services: ServiceContainer | None,
-        db_factory,
+        db_factory_provider,
         client,
     ):
         self._settings = settings
         self._services = services
-        self._db_factory = db_factory
+        # Provider (not a captured value) so reassigning db_factory on the
+        # orchestrator propagates to this collaborator (see EventPublisher).
+        self._db_factory_provider = db_factory_provider
         self._client = client
+
+    @property
+    def _db_factory(self):
+        """Resolve the current DB session factory live via the provider."""
+        return self._db_factory_provider()
 
     def _request_services(self, db) -> ServiceContainer:
         """Return a ServiceContainer whose DB-bound services use ``db``."""
