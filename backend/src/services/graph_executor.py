@@ -206,6 +206,7 @@ async def create_graph_executor(
         verifier=verifier,
         context_builder=context_builder,
         memory_service=memory_service,
+        world_model=world_model,
         db_factory=db_factory,
         execute_tool_fn=execute_tool_fn,
         budget=budget,
@@ -230,6 +231,7 @@ class GraphExecutor:
         context_builder: ContextBuilder | None = None,
         connector_credentials_fn=None,
         memory_service: MemoryService | None = None,
+        world_model=None,
         # Agent loop dependencies (for agentic step execution)
         db_factory=None,
         execute_tool_fn=None,
@@ -252,6 +254,7 @@ class GraphExecutor:
         self._context_builder = context_builder
         self._connector_credentials_fn = connector_credentials_fn
         self._memory_service = memory_service
+        self._world_model = world_model
         self._db_factory = db_factory
         self._execute_tool_fn = execute_tool_fn
         self._budget = budget
@@ -933,6 +936,9 @@ class GraphExecutor:
             await self._record_auto_execution_outcome(
                 capability, risk_level, run.workspace_id or ""
             )
+            # Remember the auto-executed (capability, risk_level) so a later
+            # verification failure can reverse this reinforcement (SVC).
+            self._remember_auto_executed(run, capability, risk_level)
             return
 
         # ── Common execution path (step resumed after approval) ──────
@@ -1147,6 +1153,16 @@ class GraphExecutor:
             )
         except Exception:
             logger.debug("Failed to record auto-execution trust outcome", exc_info=True)
+
+    def _remember_auto_executed(self, run: TaskRun, capability: str, risk_level: str) -> None:
+        """Record an auto-executed (capability, risk_level) on the run checkpoint.
+
+        This is the audit trail the verification feedback reads to reverse the
+        premature "approved" trust signal if the run later fails verification.
+        JSONB is reassigned (not mutated in place) so SQLAlchemy detects it."""
+        prior = list((run.checkpoint or {}).get("auto_executed") or [])
+        prior.append({"capability": capability, "risk_level": risk_level})
+        run.checkpoint = {**(run.checkpoint or {}), "auto_executed": prior}
 
     async def _handle_step_failure(
         self,
@@ -1730,20 +1746,28 @@ class GraphExecutor:
         await self._db.flush()
 
     async def _writeback_memories(self, run: TaskRun) -> None:
-        """Extract and store memories from completed execution results."""
+        """Learn from a completed autonomous run: store memories AND extract
+        entities + graph relationships from the outcome.
+
+        The entity/graph step brings the autonomous path to parity with the
+        chat path's InteractionLearner (which only ran chat-side); without it,
+        autonomous runs never enriched the world model from their own results.
+        """
         if not self._memory_service:
             return
+        all_steps = await self._get_all_steps(run.run_id)
+        completed = [s for s in all_steps if s.status == "completed" and s.output_data]
+        if not completed:
+            return
+        parts = [f"Completed plan: {run.plan_id}"]
+        for step in completed[:5]:
+            parts.append(f"- {step.task_id}: {json.dumps(step.output_data)}")
+        source_text = "\n".join(parts)
+
         try:
-            all_steps = await self._get_all_steps(run.run_id)
-            completed = [s for s in all_steps if s.status == "completed" and s.output_data]
-            if not completed:
-                return
-            parts = [f"Completed plan: {run.plan_id}"]
-            for step in completed[:5]:
-                parts.append(f"- {step.task_id}: {json.dumps(step.output_data)}")
             await self._memory_service.extract_and_store(
                 user_id=run.user_id,
-                source_text="\n".join(parts),
+                source_text=source_text,
                 source_event_ids=[run.run_id],
                 workspace_id=run.workspace_id,
             )
@@ -1752,6 +1776,39 @@ class GraphExecutor:
                 "Memory writeback failed for run %s — execution memories not stored",
                 run.run_id,
                 exc_info=True,
+            )
+
+        # Independent of memory storage: enrich the world model from the outcome.
+        await self._learn_entities_from_outcome(source_text, run)
+
+    async def _learn_entities_from_outcome(self, source_text: str, run: TaskRun) -> None:
+        """Extract entities from an execution outcome and sync them to the graph.
+
+        Best-effort and fully isolated — entity/graph learning must never fail
+        an otherwise-successful run. Skipped entirely when no world model is
+        wired (e.g. unit tests inject ``world_model=None``)."""
+        if not self._world_model:
+            return
+        try:
+            entity_ids = await self._world_model.extract_from_text(
+                source_text,
+                user_id=run.user_id,
+                workspace_id=run.workspace_id or "",
+            )
+            if not entity_ids:
+                return
+            if not getattr(self._settings, "neo4j_url", None):
+                return
+            from src.services.graph_sync import GraphSyncService
+
+            graph_sync = GraphSyncService(self._settings, self._db)
+            try:
+                await graph_sync.batch_sync_entities(entity_ids)
+            finally:
+                await graph_sync.close()
+        except Exception:
+            logger.debug(
+                "Entity learning from outcome failed for run %s", run.run_id, exc_info=True
             )
 
     async def _run_verification(self, run: TaskRun) -> None:
@@ -1777,12 +1834,40 @@ class GraphExecutor:
                 transition_run(run, "failed")
                 run.error = {"verification_failed": result.details}
                 logger.warning("Run %s failed verification: %s", run.run_id, result.details)
+                await self._record_verification_trust_penalty(run)
             else:
                 # Verification passed — promote from partially_completed to completed
                 if run.status == "partially_completed":
                     transition_run(run, "completed")
         except Exception:
             logger.warning("Verification failed for run %s", run.run_id, exc_info=True)
+
+    async def _record_verification_trust_penalty(self, run: TaskRun) -> None:
+        """Reverse premature trust reinforcement when a run fails verification.
+
+        Each auto-executed step recorded an "approved" trust signal at finalize
+        (graduating the capability toward autonomy). If the run then fails
+        verification, those outcomes were not actually good — record a matching
+        "rejected" (deduped per capability+risk) so the capability is demoted
+        rather than keeping a false positive. Best-effort."""
+        auto_executed = (run.checkpoint or {}).get("auto_executed") or []
+        if not auto_executed:
+            return
+        try:
+            from src.services.risk_assessor import record_approval_decision
+
+            seen: set[tuple[str, str]] = set()
+            for entry in auto_executed:
+                capability = entry.get("capability")
+                risk_level = entry.get("risk_level")
+                if not capability or (capability, risk_level) in seen:
+                    continue
+                seen.add((capability, risk_level))
+                await record_approval_decision(
+                    self._db, run.workspace_id or "", capability, risk_level, "rejected"
+                )
+        except Exception:
+            logger.debug("Verification trust penalty failed for run %s", run.run_id, exc_info=True)
 
     # Map a terminal run status to the status its parent Plan should take.
     _RUN_STATUS_TO_PLAN_STATUS = {

@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from tests.conftest import make_mock_settings
 
 
-def _make_executor(memory_service=None):
+def _make_executor(memory_service=None, world_model=None):
     """Create a GraphExecutor with mocked dependencies."""
     from src.services.graph_executor import GraphExecutor
 
@@ -21,6 +21,7 @@ def _make_executor(memory_service=None):
             settings=settings,
             db=db,
             memory_service=memory_service,
+            world_model=world_model,
         )
     return executor
 
@@ -133,6 +134,90 @@ class TestMemoryWriteback:
         call_kwargs = mem_svc.extract_and_store.call_args[1]
         lines = call_kwargs["source_text"].split("\n")
         assert len(lines) == 2  # header + 1 step with output
+
+
+class TestAutonomousLearningParity:
+    """The autonomous path must learn entities + graph relationships from its
+    outcomes, reaching parity with the chat path's InteractionLearner (which
+    the autonomous path never invoked)."""
+
+    async def test_writeback_extracts_entities_and_syncs_graph(self):
+        """Completed run extracts entities from outcome text and syncs to graph."""
+        mem_svc = AsyncMock()
+        mem_svc.extract_and_store = AsyncMock()
+        world_model = AsyncMock()
+        world_model.extract_from_text = AsyncMock(return_value=["ent_1", "ent_2"])
+        executor = _make_executor(memory_service=mem_svc, world_model=world_model)
+
+        run = _make_run()
+        run.workspace_id = "ws_1"
+        steps = [_make_step("s1", "t1", "completed", {"result": "met with Acme Corp"})]
+        executor._get_all_steps = AsyncMock(return_value=steps)
+
+        gs = AsyncMock()
+        gs.batch_sync_entities = AsyncMock()
+        gs.close = AsyncMock()
+        with patch("src.services.graph_sync.GraphSyncService", return_value=gs):
+            await executor._writeback_memories(run)
+
+        world_model.extract_from_text.assert_awaited_once()
+        _args, _kwargs = world_model.extract_from_text.call_args
+        source_text = _args[0] if _args else _kwargs.get("text")
+        assert "Acme Corp" in source_text
+        assert _kwargs.get("user_id") == "usr_1"
+        assert _kwargs.get("workspace_id") == "ws_1"
+        gs.batch_sync_entities.assert_awaited_once_with(["ent_1", "ent_2"])
+
+    async def test_writeback_no_graph_sync_when_no_entities(self):
+        """No entities extracted → no graph sync attempted."""
+        mem_svc = AsyncMock()
+        world_model = AsyncMock()
+        world_model.extract_from_text = AsyncMock(return_value=[])
+        executor = _make_executor(memory_service=mem_svc, world_model=world_model)
+
+        run = _make_run()
+        run.workspace_id = "ws_1"
+        steps = [_make_step("s1", "t1", "completed", {"result": "nothing notable"})]
+        executor._get_all_steps = AsyncMock(return_value=steps)
+
+        gs = AsyncMock()
+        gs.batch_sync_entities = AsyncMock()
+        with patch("src.services.graph_sync.GraphSyncService", return_value=gs):
+            await executor._writeback_memories(run)
+
+        world_model.extract_from_text.assert_awaited_once()
+        gs.batch_sync_entities.assert_not_awaited()
+
+    async def test_writeback_no_entity_learning_without_world_model(self):
+        """No world_model collaborator → entity learning silently skipped."""
+        mem_svc = AsyncMock()
+        mem_svc.extract_and_store = AsyncMock()
+        executor = _make_executor(memory_service=mem_svc, world_model=None)
+
+        run = _make_run()
+        steps = [_make_step("s1", "t1", "completed", {"result": "x"})]
+        executor._get_all_steps = AsyncMock(return_value=steps)
+
+        # Should not raise and should still store memories
+        await executor._writeback_memories(run)
+        mem_svc.extract_and_store.assert_called_once()
+
+    async def test_writeback_tolerates_entity_learning_failure(self):
+        """An entity-learning failure never breaks memory writeback."""
+        mem_svc = AsyncMock()
+        mem_svc.extract_and_store = AsyncMock()
+        world_model = AsyncMock()
+        world_model.extract_from_text = AsyncMock(side_effect=RuntimeError("boom"))
+        executor = _make_executor(memory_service=mem_svc, world_model=world_model)
+
+        run = _make_run()
+        run.workspace_id = "ws_1"
+        steps = [_make_step("s1", "t1", "completed", {"result": "x"})]
+        executor._get_all_steps = AsyncMock(return_value=steps)
+
+        # Should not raise
+        await executor._writeback_memories(run)
+        mem_svc.extract_and_store.assert_called_once()
 
 
 class TestGraphExecutorMemoryServiceParam:
