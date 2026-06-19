@@ -66,6 +66,7 @@ from src.orchestrator.core_events import (
     agent_event_from_sse,
     core_event_to_sse,
 )
+from src.orchestrator.event_publisher import EventPublisher
 from src.orchestrator.intent_classifier import (
     FAST_INTENTS,
     INTENT_CONFIDENCE_THRESHOLD,
@@ -241,8 +242,8 @@ class JarvisOrchestrator:
         # halved thinking budgets) when JARVIS_CHEAP_MODE is set.
         self._agents: dict[str, SubAgent] = build_agent_set(AGENTS, settings.cheap_mode)
         self._tools = self._build_tool_definitions()
-        self._event_bus = None  # Lazy-init when Redis available
-        self._event_bus_lock = asyncio.Lock()  # C5: guard lazy EventBus init
+        # EventPublisher owns the lazy event bus + runtime-event emission (C5).
+        self._events = EventPublisher(settings, services, db_factory)
         self._background_tasks: set[asyncio.Task] = set()  # C2: track fire-and-forget tasks
         # C1: API circuit breaker — fail fast when Claude API is in sustained outage
         from src.orchestrator.api_circuit_breaker import AnthropicCircuitBreaker
@@ -291,12 +292,11 @@ class JarvisOrchestrator:
             return
         learner = self._interaction_learner
         if learner._redis is None or learner._event_bus is None:
-            event_bus = await self._ensure_event_bus()
-            if hasattr(self, "_event_bus_redis"):
-                if learner._redis is None:
-                    learner._redis = self._event_bus_redis
-                if learner._event_bus is None and event_bus:
-                    learner._event_bus = event_bus
+            event_bus = await self._events.ensure_event_bus()
+            if learner._redis is None and self._events.event_bus_redis is not None:
+                learner._redis = self._events.event_bus_redis
+            if learner._event_bus is None and event_bus:
+                learner._event_bus = event_bus
 
     async def shutdown(self) -> None:
         """Await all pending background tasks on orchestrator shutdown.
@@ -2064,41 +2064,8 @@ class JarvisOrchestrator:
             )
 
     async def _ensure_event_bus(self):
-        """Lazily initialize the event bus. Returns the bus or None on failure.
-
-        Uses asyncio.Lock to prevent race condition where two concurrent
-        requests both create a Redis connection (C5).
-        """
-        if self._event_bus is not None:
-            return self._event_bus
-        async with self._event_bus_lock:
-            # Double-check after acquiring lock
-            if self._event_bus is not None:
-                return self._event_bus
-
-            from src.services.event_bus import EventBus
-
-            # Prefer the process-wide EventBus + Redis client from build_shared
-            # (container extras) so we don't open a second Redis connection.
-            extras = self._services.extras if self._services else {}
-            shared_bus = extras.get("event_bus")
-            if isinstance(shared_bus, EventBus):
-                self._event_bus = shared_bus
-                shared_redis = extras.get("redis")
-                if shared_redis is not None:
-                    self._event_bus_redis = shared_redis
-                return self._event_bus
-
-            try:
-                import redis.asyncio as aioredis
-
-                self._event_bus_redis = aioredis.from_url(
-                    self._settings.redis_url, decode_responses=True
-                )
-                self._event_bus = EventBus(self._event_bus_redis)
-            except Exception:
-                logger.debug("Failed to init event_bus", exc_info=True)
-        return self._event_bus
+        """Delegate to EventPublisher (facade kept for internal callers)."""
+        return await self._events.ensure_event_bus()
 
     async def _publish_event(
         self,
@@ -2108,19 +2075,10 @@ class JarvisOrchestrator:
         workspace_id: str = "",
         trace_id: str | None = None,
     ) -> None:
-        """Publish an agent action event to the event bus (best-effort)."""
-        try:
-            event_bus = await self._ensure_event_bus()
-            if event_bus is None:
-                return
-
-            stream = event_bus.agent_stream(workspace_id)
-            metadata = {"trace_id": trace_id} if trace_id else {}
-            await event_bus.publish(
-                stream, event_type, payload, user_id, workspace_id=workspace_id, metadata=metadata
-            )
-        except Exception:
-            logger.debug("Failed to publish event %s to bus", event_type, exc_info=True)
+        """Delegate to EventPublisher (facade kept for internal callers)."""
+        await self._events.publish_event(
+            event_type, user_id, payload, workspace_id=workspace_id, trace_id=trace_id
+        )
 
     async def _emit_runtime_event(
         self,
@@ -2132,22 +2090,15 @@ class JarvisOrchestrator:
         step_id: str | None = None,
         payload: dict | None = None,
     ) -> None:
-        """Emit a durable runtime event to DB + Redis (best-effort)."""
-        try:
-            async with self._db_factory() as db:
-                from src.services.runtime_events import RuntimeEventEmitter
-
-                emitter = RuntimeEventEmitter(db, workspace_id, self._event_bus)
-                await emitter.emit(
-                    event_type,
-                    run_id=run_id,
-                    step_id=step_id,
-                    user_id=user_id,
-                    payload=payload,
-                )
-                await db.commit()
-        except Exception:
-            logger.warning("Failed to emit runtime event %s", event_type, exc_info=True)
+        """Delegate to EventPublisher (facade kept for internal callers)."""
+        await self._events.emit_runtime_event(
+            event_type,
+            workspace_id=workspace_id,
+            user_id=user_id,
+            run_id=run_id,
+            step_id=step_id,
+            payload=payload,
+        )
 
     async def _check_surface_rate(self, user_id: str, surface_type: str) -> bool:
         """Return True if push is allowed under rate limit.

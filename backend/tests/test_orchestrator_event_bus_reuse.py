@@ -36,7 +36,7 @@ async def test_ensure_event_bus_reuses_shared_bus():
     bus = await orch._ensure_event_bus()
 
     assert bus is shared_bus
-    assert orch._event_bus_redis is shared_redis
+    assert orch._events.event_bus_redis is shared_redis
 
 
 @pytest.mark.asyncio
