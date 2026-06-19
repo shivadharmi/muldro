@@ -11,6 +11,64 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import anthropic
 import pytest
 
+
+class TestThinkingParamsModelAware:
+    """build_thinking_params must speak each model's dialect.
+
+    Opus 4.7/4.8 and Fable/Mythos 5 reject `temperature` and
+    `thinking:{type:enabled}` — they require adaptive thinking +
+    output_config.effort. Legacy models keep the enabled+budget+temperature
+    surface. Regression for the live Planner 400 ("temperature is deprecated",
+    "thinking.type.enabled is not supported")."""
+
+    def test_opus_4_8_adaptive_no_temperature(self):
+        from src.orchestrator.agent_loop import build_thinking_params
+
+        params = build_thinking_params(
+            "claude-opus-4-8", thinking_enabled=True, budget_tokens=8192, temperature=0.3
+        )
+        assert params["thinking"]["type"] == "adaptive"
+        assert "temperature" not in params
+        assert params["output_config"]["effort"] == "high"
+
+    def test_opus_4_8_disabled_sends_no_temperature(self):
+        from src.orchestrator.agent_loop import build_thinking_params
+
+        params = build_thinking_params(
+            "claude-opus-4-8", thinking_enabled=False, budget_tokens=None, temperature=0.3
+        )
+        # Sampling params 400 on these models — must not appear, even disabled.
+        assert "temperature" not in params
+        assert "thinking" not in params
+
+    def test_bedrock_opus_4_8_profile_is_adaptive(self):
+        from src.orchestrator.agent_loop import build_thinking_params
+
+        params = build_thinking_params(
+            "us.anthropic.claude-opus-4-8", thinking_enabled=True, budget_tokens=2048, temperature=1
+        )
+        assert params["thinking"]["type"] == "adaptive"
+        assert "temperature" not in params
+        assert params["output_config"]["effort"] == "low"  # small budget → low effort
+
+    def test_legacy_sonnet_keeps_enabled_thinking_and_temperature(self):
+        from src.orchestrator.agent_loop import build_thinking_params
+
+        params = build_thinking_params(
+            "claude-sonnet-4-6", thinking_enabled=True, budget_tokens=4096, temperature=0.3
+        )
+        assert params["thinking"] == {"type": "enabled", "budget_tokens": 4096}
+        assert params["temperature"] == 1  # required when enabled-thinking is on
+
+    def test_legacy_sonnet_disabled_uses_agent_temperature(self):
+        from src.orchestrator.agent_loop import build_thinking_params
+
+        params = build_thinking_params(
+            "claude-sonnet-4-6", thinking_enabled=False, budget_tokens=None, temperature=0.3
+        )
+        assert params == {"temperature": 0.3}
+
+
 # ── Helpers ─────────────────────────────────────────────────────────────
 
 

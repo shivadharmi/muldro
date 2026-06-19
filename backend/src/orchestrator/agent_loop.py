@@ -232,6 +232,83 @@ def _is_thinking_error(err: Exception) -> bool:
     )
 
 
+# Models whose API rejects `temperature`/`top_p`/`top_k` and the legacy
+# `thinking:{type:"enabled", budget_tokens}` shape — they require adaptive
+# thinking + output_config.effort (Opus 4.7/4.8, Fable 5, Mythos 5). Matched as
+# substrings so Bedrock inference-profile IDs (us.anthropic.claude-opus-4-8)
+# are covered too.
+_ADAPTIVE_THINKING_MARKERS = (
+    "opus-4-8",
+    "opus-4-7",
+    "fable-5",
+    "mythos-5",
+    "mythos-preview",
+)
+
+
+def _requires_adaptive_thinking(model: str) -> bool:
+    """True when *model* rejects temperature + enabled-thinking (adaptive only)."""
+    m = (model or "").lower()
+    return any(marker in m for marker in _ADAPTIVE_THINKING_MARKERS)
+
+
+def _effort_for_budget(budget_tokens: int | None) -> str:
+    """Map a legacy per-agent thinking budget to an effort tier.
+
+    Preserves the relative intent (Planner=8192 thinks hardest) without sending
+    the now-rejected token budget. Default high — the recommended floor for
+    intelligence-sensitive work on Opus 4.7/4.8."""
+    if not budget_tokens or budget_tokens >= 8192:
+        return "high"
+    if budget_tokens >= 4096:
+        return "medium"
+    return "low"
+
+
+def build_thinking_params(
+    model: str,
+    *,
+    thinking_enabled: bool,
+    budget_tokens: int | None,
+    temperature: float,
+) -> dict:
+    """Return model-aware thinking/sampling kwargs for ``messages.create``.
+
+    Adaptive-only models (Opus 4.7/4.8, Fable/Mythos 5) reject ``temperature``
+    and ``thinking:{type:"enabled"}`` — use ``thinking:{type:"adaptive"}`` +
+    ``output_config.effort`` and omit sampling params entirely. Legacy models
+    keep the enabled-thinking + temperature surface they still accept."""
+    if _requires_adaptive_thinking(model):
+        if thinking_enabled:
+            return {
+                "thinking": {"type": "adaptive", "display": "summarized"},
+                "output_config": {"effort": _effort_for_budget(budget_tokens)},
+            }
+        # No thinking and no sampling params — both 400 on these models.
+        return {}
+    if thinking_enabled:
+        return {
+            "temperature": 1,  # required when enabled-thinking is on
+            "thinking": {"type": "enabled", "budget_tokens": budget_tokens},
+        }
+    return {"temperature": temperature}
+
+
+def _disable_thinking_in_kwargs(api_kwargs: dict, model: str, agent_temperature: float) -> None:
+    """Disable thinking mid-loop after a thinking-incompatibility error.
+
+    Drops the thinking block (and its paired effort), strips thinking blocks
+    from history, and restores ``temperature`` only on models that accept it —
+    adaptive-only models 400 on any sampling param."""
+    api_kwargs.pop("thinking", None)
+    api_kwargs.pop("output_config", None)
+    if _requires_adaptive_thinking(model):
+        api_kwargs.pop("temperature", None)
+    else:
+        api_kwargs["temperature"] = agent_temperature
+    _strip_thinking_from_messages(api_kwargs.get("messages", []))
+
+
 def _strip_thinking_from_messages(messages: list[dict]) -> None:
     """Remove thinking blocks from assistant messages in-place.
 
@@ -314,14 +391,14 @@ async def agent_loop(
                 "messages": messages,
             }
 
-            if thinking_enabled:
-                api_kwargs["temperature"] = 1  # required when thinking is enabled
-                api_kwargs["thinking"] = {
-                    "type": "enabled",
-                    "budget_tokens": thinking_budget_tokens,
-                }
-            else:
-                api_kwargs["temperature"] = agent.temperature
+            api_kwargs.update(
+                build_thinking_params(
+                    model,
+                    thinking_enabled=thinking_enabled,
+                    budget_tokens=thinking_budget_tokens,
+                    temperature=agent.temperature,
+                )
+            )
 
             if tools:
                 api_kwargs["tools"] = tools
@@ -338,8 +415,13 @@ async def agent_loop(
             )
             if verdict_tool:
                 api_kwargs["tool_choice"] = {"type": "tool", "name": GOVERNOR_VERDICT_TOOL}
+                # Forced tool_choice is incompatible with thinking; effort rides
+                # with thinking, so drop both.
                 api_kwargs.pop("thinking", None)
-                if "temperature" not in api_kwargs:
+                api_kwargs.pop("output_config", None)
+                # Re-add temperature only for models that accept it (adaptive-only
+                # models 400 on any sampling param).
+                if not _requires_adaptive_thinking(model) and "temperature" not in api_kwargs:
                     api_kwargs["temperature"] = agent.temperature
 
             response = None
@@ -369,9 +451,7 @@ async def agent_loop(
                         # Only disable thinking if the error is specifically about
                         # thinking blocks — not for transient network/Bedrock errors.
                         if thinking_enabled and _is_thinking_error(stream_err):
-                            api_kwargs["temperature"] = agent.temperature
-                            api_kwargs.pop("thinking", None)
-                            _strip_thinking_from_messages(api_kwargs.get("messages", []))
+                            _disable_thinking_in_kwargs(api_kwargs, model, agent.temperature)
                             thinking_enabled = False
                         try:
                             response = await _api_call_with_retry(client, api_kwargs, agent_name)
@@ -384,9 +464,7 @@ async def agent_loop(
                                     agent_name,
                                     fallback_err,
                                 )
-                                api_kwargs["temperature"] = agent.temperature
-                                api_kwargs.pop("thinking", None)
-                                _strip_thinking_from_messages(api_kwargs.get("messages", []))
+                                _disable_thinking_in_kwargs(api_kwargs, model, agent.temperature)
                                 thinking_enabled = False
                                 response = await _api_call_with_retry(
                                     client, api_kwargs, agent_name
@@ -403,9 +481,7 @@ async def agent_loop(
                             agent_name,
                             think_err,
                         )
-                        api_kwargs["temperature"] = agent.temperature
-                        api_kwargs.pop("thinking", None)
-                        _strip_thinking_from_messages(api_kwargs.get("messages", []))
+                        _disable_thinking_in_kwargs(api_kwargs, model, agent.temperature)
                         thinking_enabled = False
                         response = await _api_call_with_retry(client, api_kwargs, agent_name)
                     else:
