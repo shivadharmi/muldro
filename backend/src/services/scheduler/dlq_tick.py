@@ -1,6 +1,7 @@
 """Dead-letter queue retry and per-operation re-dispatch."""
 
 import logging
+from datetime import datetime, timezone
 
 from src.models.task_graph import TaskRun
 from src.services.dead_letter import DeadLetterService
@@ -180,6 +181,12 @@ class DlqTickMixin:
                 "stability_score": rec.stability_score,
                 "entity_ids": rec.entity_ids or [],
                 "scope": rec.scope or "general",
+                # Mirror MemoryService._build_memory_payload exactly so re-embedded
+                # records carry the same Qdrant filter fields as the original write.
+                # preference_strength is not persisted on the row → None (its
+                # default); created_at stamps the (delayed) write, as the original.
+                "preference_strength": None,
+                "created_at": datetime.now(timezone.utc).isoformat(),
             }
         if record_type == "entity":
             from src.models.entities import Entity
