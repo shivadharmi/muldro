@@ -19,7 +19,9 @@ class TestNotFound:
         assert resp.status_code == 404
 
     async def test_run_not_found(self, client: httpx.AsyncClient):
-        resp = await client.get("/v1/runs/run_nonexistent")
+        # Run detail is served by /v1/history/{run_id} (there is no GET /v1/runs/{id});
+        # this exercises the ORM 404 guard, not FastAPI's route-not-found 404.
+        resp = await client.get("/v1/history/run_nonexistent")
         assert resp.status_code == 404
 
     async def test_trace_not_found(self, client: httpx.AsyncClient):
