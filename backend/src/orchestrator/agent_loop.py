@@ -237,6 +237,9 @@ def _is_thinking_error(err: Exception) -> bool:
 # thinking + output_config.effort (Opus 4.7/4.8, Fable 5, Mythos 5). Matched as
 # substrings so Bedrock inference-profile IDs (us.anthropic.claude-opus-4-8)
 # are covered too.
+# MAINTENANCE: every new adaptive-only model (e.g. a future Opus 4.9) MUST be
+# added here. A model not listed falls through to the legacy temperature+enabled
+# path and 400s on every call (the exact outage this list was added to fix).
 _ADAPTIVE_THINKING_MARKERS = (
     "opus-4-8",
     "opus-4-7",
