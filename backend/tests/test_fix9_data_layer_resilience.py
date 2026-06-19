@@ -276,8 +276,8 @@ class TestConversationEmbedding:
     """Tasks 4.1-4.4: summarize_history returns summary text."""
 
     async def test_summary_returned(self):
-        """Verify _summarize_history returns the Claude summary text."""
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        """Verify ContextAssembler._summarize_history returns the Claude summary text."""
+        from src.orchestrator.context_assembler import ContextAssembler
 
         settings = make_mock_settings()
         mock_client = MagicMock()
@@ -290,18 +290,16 @@ class TestConversationEmbedding:
         mock_client.messages = AsyncMock()
         mock_client.messages.create = AsyncMock(return_value=mock_response)
 
-        with patch("src.orchestrator.jarvis.get_anthropic_client", return_value=mock_client):
-            orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
-            orch._client = mock_client
-            orch._settings = settings
+        ctx = ContextAssembler(
+            settings=settings, services=None, db_factory=MagicMock(), client=mock_client
+        )
+        summary = await ctx._summarize_history(
+            lines=["User: hello", "Assistant: hi"],
+            conversation_id="conv_123",
+            user_id="usr_456",
+        )
 
-            summary = await orch._summarize_history(
-                lines=["User: hello", "Assistant: hi"],
-                conversation_id="conv_123",
-                user_id="usr_456",
-            )
-
-            assert summary == "Discussion about project planning."
+        assert summary == "Discussion about project planning."
 
 
 # ---------------------------------------------------------------------------
