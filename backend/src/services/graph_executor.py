@@ -22,7 +22,6 @@ from src.config.settings import Settings, get_anthropic_client
 from src.connectors.mcp_bridge import close_turn_sessions
 from src.contracts import PolicyDecision, ResultSummary, StepResult
 from src.integrations.turn_scope import turn_scope
-from src.llm_utils import parse_llm_json
 from src.models.plans import Plan, PlanTask
 from src.models.task_graph import TaskRun, TaskStep
 from src.orchestrator.agent_loop import CancellationRequested
@@ -37,6 +36,7 @@ from src.services.execution_support import (
 from src.services.execution_surface_emitter import SurfaceEmitter
 from src.services.risk_assessor import RiskAssessment, get_or_assess_risk
 from src.services.step_graph_store import StepGraphStore
+from src.services.step_runner import StepRunner
 
 if TYPE_CHECKING:
     from src.services.context_builder import ContextBuilder
@@ -241,6 +241,23 @@ class GraphExecutor:
         # white-box suite (which calls _get_all_steps/_checkpoint/etc. directly)
         # keeps passing unchanged.
         self._store = StepGraphStore(db=db, context_builder=context_builder)
+        # Agentic step execution (Operator agent loop + minimal-Claude fallback)
+        # lives in an injected collaborator. db_factory + the per-run trace map
+        # are resolved live via providers so the coordinator stays the single
+        # source of truth (tests reassign _db_factory; _active_traces is owned here).
+        self._runner = StepRunner(
+            settings=settings,
+            client=self._client,
+            store=self._store,
+            emitter=self._surface_emitter,
+            db_factory_provider=lambda: self._db_factory,
+            active_traces_provider=lambda: self._active_traces,
+            tool_registry=tool_registry,
+            context_builder=context_builder,
+            execute_tool_fn=execute_tool_fn,
+            budget=budget,
+            circuit_breaker=circuit_breaker,
+        )
 
     async def create_run(
         self,
@@ -1221,118 +1238,8 @@ class GraphExecutor:
         run: TaskRun,
         cancel_event: asyncio.Event | None = None,
     ) -> dict:
-        """Execute the actual action for a step.
-
-        Routes to agent loop if dependencies are available, otherwise uses
-        a minimal single-turn Claude fallback.
-        """
-        input_data = step.input_data or {}
-        task_type = input_data.get("capability", input_data.get("task_type", "unknown"))
-
-        await self._emit_event(
-            "tool_call_started",
-            run.user_id,
-            {"run_id": run.run_id, "step_id": step.step_id, "tool_name": task_type},
-            workspace_id=run.workspace_id,
-        )
-
-        # Check if agent loop dependencies are available
-        if self._db_factory and self._execute_tool_fn and self._budget:
-            return await self._run_step_via_agent_loop(step, run, cancel_event=cancel_event)
-
-        # Fallback: minimal single-turn Claude call
-        return await self._minimal_claude_action(step, run)
-
-    async def _minimal_claude_action(self, step: TaskStep, run: TaskRun) -> dict:
-        """Minimal single-turn Claude action without tool discovery.
-
-        Used as fallback when agent loop dependencies are not available.
-        """
-        input_data = step.input_data or {}
-        task_type = input_data.get("capability", input_data.get("task_type", "unknown"))
-        context_prompt = await self._build_step_context(run, step)
-
-        goal = input_data.get("goal", input_data.get("context", ""))
-        parts = [f"Task type: {task_type}"]
-        if goal:
-            parts.append(f"Goal: {goal}")
-        for key, value in input_data.items():
-            if key not in ("task_type", "goal", "context"):
-                parts.append(f"{key}: {value}")
-        if context_prompt:
-            parts.append(f"\n--- Background ---\n{context_prompt}")
-
-        system = (
-            f"You are Jarvis's task execution engine handling a '{task_type}' step. "
-            "Complete the task described below. "
-            'Respond with JSON: {"status": "completed", "result": "...", "details": {...}}'
-        )
-
-        response = await self._client.messages.create(
-            model=self._settings.resolved_model,
-            max_tokens=1024,
-            system=system,
-            messages=[{"role": "user", "content": "\n".join(parts)}],
-        )
-
-        try:
-            return parse_llm_json(response.content[0].text)
-        except json.JSONDecodeError:
-            return {"status": "completed", "result": response.content[0].text}
-
-    async def _build_operator_tools(self) -> list[dict]:
-        """Build Claude API tool definitions filtered by Operator's capability scope."""
-        if not self._tool_registry:
-            return []
-
-        from src.orchestrator.agents import AGENTS
-        from src.tools.schemas import TOOL_INPUT_MODELS
-
-        operator = AGENTS.get("operator")
-        if not operator:
-            return []
-
-        scope = operator.capability_scope
-        tools = []
-        seen = set()
-
-        # Internal tools from TOOL_INPUT_MODELS
-        for tool_name, model_cls in TOOL_INPUT_MODELS.items():
-            tool_def = await self._tool_registry.get_tool(tool_name)
-            if tool_def and tool_def.capability and tool_def.capability in scope:
-                schema = model_cls.model_json_schema()
-                tools.append(
-                    {
-                        "name": tool_name,
-                        "description": (
-                            model_cls.__doc__.strip() if model_cls.__doc__ else tool_name
-                        ),
-                        "input_schema": schema,
-                    }
-                )
-                seen.add(tool_name)
-
-        # External tools from registry
-        try:
-            all_tools = await self._tool_registry.list_tools(enabled_only=True)
-            for tool_def in all_tools:
-                if (
-                    tool_def.name not in seen
-                    and tool_def.capability
-                    and tool_def.capability in scope
-                ):
-                    tools.append(
-                        {
-                            "name": tool_def.name,
-                            "description": tool_def.description or tool_def.name,
-                            "input_schema": tool_def.input_schema or {"type": "object"},
-                        }
-                    )
-                    seen.add(tool_def.name)
-        except Exception:
-            logger.debug("Failed to list external tools", exc_info=True)
-
-        return tools
+        """Facade → StepRunner.run_step_action."""
+        return await self._runner.run_step_action(step, run, cancel_event=cancel_event)
 
     async def _run_step_via_agent_loop(
         self,
@@ -1340,110 +1247,8 @@ class GraphExecutor:
         run: TaskRun,
         cancel_event: asyncio.Event | None = None,
     ) -> dict:
-        """Execute a step via the Operator agent loop with full tool discovery."""
-        from src.orchestrator.agent_loop import (
-            LoopDone,
-            LoopError,
-            LoopToolCall,
-            agent_loop,
-        )
-        from src.orchestrator.agents import AGENTS
-
-        input_data = step.input_data or {}
-        task_type = input_data.get("capability", input_data.get("task_type", "unknown"))
-        goal = input_data.get("goal", input_data.get("context", ""))
-
-        # Build message from step input
-        message_parts = [f"Task type: {task_type}"]
-        if goal:
-            message_parts.append(f"Goal: {goal}")
-        for key, value in input_data.items():
-            if key not in ("task_type", "goal", "context"):
-                message_parts.append(f"{key}: {value}")
-
-        message = "\n".join(message_parts)
-
-        # Inject completed predecessor step outputs so the operator sees
-        # what earlier agents (e.g. Perceiver) read or produced.
-        all_steps = await self._get_all_steps(run.run_id)
-        prior_parts: list[str] = []
-        for s in all_steps:
-            if s.step_id == step.step_id:
-                continue
-            if s.status != "completed" or not s.output_data:
-                continue
-            result_text = s.output_data.get("result", "")
-            if not result_text:
-                continue
-            cap = (s.input_data or {}).get("capability", "unknown")
-            desc = (s.input_data or {}).get("goal", cap)
-            prior_parts.append(f"[{desc}]:\n{str(result_text)}")
-        if prior_parts:
-            message += (
-                "\n\n--- Prior step results ---\n"
-                + "\n\n".join(prior_parts)
-                + "\n--- End of prior step results ---\n"
-            )
-
-        # Get context
-        context_prompt = await self._build_step_context(run, step)
-
-        # Resolve operator agent
-        operator = AGENTS.get("operator")
-        if not operator:
-            return {
-                "status": "completed",
-                "result": "Operator agent not found",
-                "errors": ["Operator agent not configured"],
-            }
-
-        # Build system blocks
-        system_blocks = [{"type": "text", "text": operator.prompt}]
-        if context_prompt:
-            system_blocks.append({"type": "text", "text": f"\n--- Context ---\n{context_prompt}"})
-
-        # Build tools list
-        tools = await self._build_operator_tools()
-
-        # Collect events from agent loop
-        text = ""
-        tools_called = []
-        errors = []
-
-        async for event in agent_loop(
-            client=self._client,
-            agent=operator,
-            model=self._settings.resolved_model,
-            system_blocks=system_blocks,
-            tools=tools,
-            message=message,
-            user_id=run.user_id,
-            workspace_id=run.workspace_id or "",
-            db_factory=self._db_factory,
-            services=None,
-            budget=self._budget,
-            trace=self._active_traces.get(run.run_id),
-            execute_tool_fn=self._execute_tool_fn,
-            max_tool_rounds=10,
-            stream=False,
-            circuit_breaker=self._circuit_breaker,
-            run_id=run.run_id,
-            cancel_event=cancel_event,
-        ):
-            if isinstance(event, LoopDone):
-                text = event.text
-                tools_called = event.tools_called
-            elif isinstance(event, LoopError):
-                errors.append(event.message)
-            elif isinstance(event, LoopToolCall):
-                pass  # Already tracked in LoopDone.tools_called
-
-        return {
-            "status": "completed",
-            "result": text,
-            "tools_called": tools_called,
-            "errors": errors,
-        }
+        """Facade → StepRunner.run_step_via_agent_loop."""
+        return await self._runner.run_step_via_agent_loop(step, run, cancel_event=cancel_event)
 
     async def _finalize_trace(self, run: TaskRun) -> None:
         """Finalize and persist the JarvisTrace for a completed/failed run.
@@ -1500,26 +1305,6 @@ class GraphExecutor:
                     run.run_id,
                     exc_info=True,
                 )
-
-    async def _build_step_context(self, run: TaskRun, step: TaskStep) -> str:
-        """Build context prompt for a step using ContextBuilder."""
-        if not self._context_builder:
-            return ""
-        try:
-            input_data = step.input_data or {}
-            query = input_data.get("goal", input_data.get("context", ""))
-            task_type = input_data.get("task_type")
-            pack = await self._context_builder.build(
-                user_id=run.user_id,
-                query=query or "",
-                task_type=task_type,
-            )
-            from src.services.context_builder import ContextBuilder
-
-            return ContextBuilder.to_prompt(pack)
-        except Exception:
-            logger.debug("ContextBuilder failed for step %s", step.step_id, exc_info=True)
-            return ""
 
     async def _get_ready_steps(self, run_id: str) -> list[TaskStep]:
         """Facade → StepGraphStore.get_ready_steps."""

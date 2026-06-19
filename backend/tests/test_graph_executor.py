@@ -280,7 +280,7 @@ class TestAgenticStepExecution:
             yield LoopDone(agent="operator", text="Task completed successfully")
 
         mock_agent_loop.side_effect = fake_agent_loop
-        executor_with_agent_deps._get_all_steps = AsyncMock(return_value=[])
+        executor_with_agent_deps._store.get_all_steps = AsyncMock(return_value=[])
 
         # Create mock step and run
         step = MagicMock()
@@ -309,7 +309,7 @@ class TestAgenticStepExecution:
             yield LoopDone(agent="operator", text="Done")
 
         mock_agent_loop.side_effect = fake_agent_loop
-        executor_with_agent_deps._get_all_steps = AsyncMock(return_value=[])
+        executor_with_agent_deps._store.get_all_steps = AsyncMock(return_value=[])
 
         step = MagicMock()
         step.input_data = {"task_type": "test_task"}
@@ -333,7 +333,7 @@ class TestAgenticStepExecution:
             yield LoopDone(agent="operator", text="Recovered and completed")
 
         mock_agent_loop.side_effect = fake_agent_loop
-        executor_with_agent_deps._get_all_steps = AsyncMock(return_value=[])
+        executor_with_agent_deps._store.get_all_steps = AsyncMock(return_value=[])
 
         step = MagicMock()
         step.input_data = {"task_type": "test_task"}
@@ -360,7 +360,7 @@ class TestAgenticStepExecution:
             yield LoopDone(agent="operator", text="Done via agent loop")
 
         mock_agent_loop.side_effect = fake_loop
-        executor_with_agent_deps._get_all_steps = AsyncMock(return_value=[])
+        executor_with_agent_deps._store.get_all_steps = AsyncMock(return_value=[])
 
         step = MagicMock()
         step.step_id = "step_dispatch"
@@ -399,7 +399,9 @@ class TestAgenticStepExecution:
         current_step.step_id = "step_operator"
         current_step.input_data = {"capability": "notion.create_page", "goal": "Copy to Notion"}
 
-        executor_with_agent_deps._get_all_steps = AsyncMock(return_value=[prior_step, current_step])
+        executor_with_agent_deps._store.get_all_steps = AsyncMock(
+            return_value=[prior_step, current_step]
+        )
 
         run = MagicMock()
         run.run_id = "run_copy"
