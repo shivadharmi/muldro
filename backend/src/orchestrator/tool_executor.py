@@ -7,8 +7,10 @@ the agent-scoped tool list builder, and the in-process FastMCP client. Depends o
 session factory live via a provider.
 """
 
+import inspect
 import json
 import logging
+from functools import lru_cache
 
 from src.models.tool_definitions import ToolBackend
 from src.orchestrator.agents import SubAgent
@@ -16,6 +18,50 @@ from src.orchestrator.event_publisher import EventPublisher
 from src.tools.schemas import build_tool_definitions
 
 logger = logging.getLogger(__name__)
+
+# Contextual args the dispatcher may inject into internal MCP tools. These are
+# supplied by Jarvis (from auth/turn context), never invented by the LLM, so the
+# LLM-facing schemas in schemas.py deliberately omit them.
+_CONTEXT_ARGS = ("user_id", "workspace_id")
+
+
+@lru_cache(maxsize=1)
+def _internal_tool_context_args() -> dict[str, frozenset[str]]:
+    """Map each internal tool name → the contextual args its impl actually accepts.
+
+    Built once by introspecting the FastMCP impl functions in the intelligence
+    and communication servers. Injection is signature-aware: a tool only receives
+    a contextual arg (user_id / workspace_id) if its implementation declares it.
+    This is what lets push_ui_update (user_id only, no workspace_id) work without
+    re-breaking validation, and removes any per-server special-casing.
+    """
+    from src.tools import communication_server, intelligence_server
+
+    mapping: dict[str, frozenset[str]] = {}
+    for module in (intelligence_server, communication_server):
+        for name, obj in vars(module).items():
+            if not inspect.iscoroutinefunction(obj):
+                continue
+            params = inspect.signature(obj).parameters
+            accepted = frozenset(arg for arg in _CONTEXT_ARGS if arg in params)
+            if accepted:
+                mapping[name] = accepted
+    return mapping
+
+
+def _enrich_internal_input(tool_name: str, tool_input: dict, user_id: str, workspace_id: str):
+    """Inject user_id/workspace_id into an internal tool's input, signature-aware.
+
+    Only injects a contextual arg if (a) the tool's impl declares that parameter
+    and (b) it is not already present in tool_input. Returns a new dict (no mutation).
+    """
+    accepted = _internal_tool_context_args().get(tool_name, frozenset())
+    enriched = dict(tool_input)
+    if "user_id" in accepted and "user_id" not in enriched:
+        enriched["user_id"] = user_id
+    if "workspace_id" in accepted and workspace_id and "workspace_id" not in enriched:
+        enriched["workspace_id"] = workspace_id
+    return enriched
 
 
 class ToolExecutor:
@@ -301,16 +347,14 @@ class ToolExecutor:
         try:
             match backend:
                 case ToolBackend.INTERNAL_MCP:
-                    # Intelligence server tools are workspace-scoped and need
-                    # user_id/workspace_id for DB queries. Communication server
-                    # tools are stateless delivery tools — injecting these fields
-                    # causes Pydantic validation errors on their strict schemas.
-                    if tool.server == "intelligence":
-                        if workspace_id and "workspace_id" not in tool_input:
-                            tool_input = {**tool_input, "workspace_id": workspace_id}
-                        enriched_input = {**tool_input, "user_id": user_id}
-                    else:
-                        enriched_input = tool_input
+                    # Inject contextual args (user_id / workspace_id) signature-aware:
+                    # each internal tool receives only the contextual args its impl
+                    # actually declares. Intelligence tools take both; communication's
+                    # push_ui_update takes user_id but not workspace_id. The LLM-facing
+                    # schemas omit these fields, so the dispatcher supplies them here.
+                    enriched_input = _enrich_internal_input(
+                        tool_name, tool_input, user_id, workspace_id
+                    )
                     result = await self.call_internal_tool(
                         tool_name,
                         enriched_input,
