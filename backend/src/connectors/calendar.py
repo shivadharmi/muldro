@@ -241,6 +241,13 @@ class CalendarConnector(BaseConnector):
         if start_time:
             try:
                 occurred_at = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
+                # All-day events expose start.date ("2026-06-25") with no time or
+                # offset, so fromisoformat yields a NAIVE datetime, whereas timed
+                # events (start.dateTime with offset) yield tz-aware. Normalize the
+                # naive date-midnight to UTC-aware so occurred_at is uniformly aware
+                # and downstream comparisons never raise on mixed naive/aware values.
+                if occurred_at.tzinfo is None:
+                    occurred_at = occurred_at.replace(tzinfo=timezone.utc)
             except ValueError:
                 pass
 

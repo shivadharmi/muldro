@@ -1,5 +1,6 @@
 """Tests for the Google Calendar connector — pagination + syncToken handling."""
 
+from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -181,6 +182,41 @@ async def test_calendar_all_day_event_does_not_crash():
     assert event.entity_id == "evt_allday"
     # A date-only start is a valid ISO date → occurred_at parses (date midnight).
     assert event.occurred_at is not None
+    assert event.occurred_at.year == 2026
+    assert event.occurred_at.month == 6
+    assert event.occurred_at.day == 25
+
+
+@pytest.mark.asyncio
+async def test_calendar_all_day_event_occurred_at_is_tz_aware():
+    """All-day events (start.date) must yield a UTC-aware occurred_at.
+
+    A date-only string parses to a NAIVE datetime via fromisoformat, whereas
+    timed events (start.dateTime with offset) parse to tz-aware. Mixed
+    naive/aware occurred_at can raise TypeError on downstream comparison, so
+    all-day occurred_at must be normalized to UTC-aware.
+    """
+    connector = CalendarConnector(make_mock_settings())
+
+    all_day = {
+        "id": "evt_allday_tz",
+        "status": "confirmed",
+        "summary": "Company holiday",
+        "start": {"date": "2026-06-25"},
+        "end": {"date": "2026-06-26"},
+    }
+    page = _resp(200, {"items": [all_day], "nextSyncToken": "tok_after"})
+
+    with patch("httpx.AsyncClient") as mock_cls:
+        mock_cls.return_value = _patched_client([page])
+        result = await connector.poll(TEST_USER_ID, "c", {"access_token": "tok"})
+
+    event = result.events[0]
+    assert event.occurred_at is not None
+    # Must be tz-aware (not naive) to match timed events and avoid comparison errors.
+    assert event.occurred_at.tzinfo is not None
+    assert event.occurred_at.utcoffset() == timedelta(0)
+    # Still the correct date.
     assert event.occurred_at.year == 2026
     assert event.occurred_at.month == 6
     assert event.occurred_at.day == 25
