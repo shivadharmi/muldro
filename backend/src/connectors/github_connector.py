@@ -1,6 +1,7 @@
 """GitHub connector — polls for notifications and events."""
 
 import logging
+import re
 from datetime import datetime, timezone
 
 from src.connectors.base import BaseConnector, ConnectorHealth, register_connector
@@ -8,6 +9,25 @@ from src.connectors.poll_result import PollResult, _classify_http_status
 from src.services.event_processor import RawEvent
 
 logger = logging.getLogger(__name__)
+
+# Defensive page cap for a single notifications poll. GitHub paginates via the
+# RFC5988 Link header (``rel="next"``); a misbehaving provider that always
+# returns a next link would otherwise loop forever. On truncation we warn so
+# silent data loss is visible, consistent with the gmail/calendar connectors.
+MAX_PAGES = 50
+
+# Matches one RFC5988 Link header segment, e.g. <https://...>; rel="next".
+_LINK_SEGMENT_RE = re.compile(r'<(?P<url>[^>]+)>\s*;\s*rel="(?P<rel>[^"]+)"')
+
+
+def _next_page_url(link_header: str | None) -> str | None:
+    """Extract the ``rel="next"`` URL from an RFC5988 Link header, if present."""
+    if not link_header:
+        return None
+    for match in _LINK_SEGMENT_RE.finditer(link_header):
+        if match.group("rel") == "next":
+            return match.group("url")
+    return None
 
 
 @register_connector("github")
@@ -25,59 +45,95 @@ class GitHubConnector(BaseConnector):
             return PollResult(events=[], cursor=cursor, error_class="auth_failed")
 
         events: list[RawEvent] = []
-        new_cursor = cursor
+        # GitHub's cursor is the ISO-8601 ``since`` timestamp. Advance it to the
+        # MAX updated_at across all returned notifications — NOT wall-clock now().
+        # Advancing to now() would skip any notification updated between the last
+        # item and now() forever. ``since`` is inclusive, so the boundary item may
+        # re-appear next poll; that's fine — EventProcessor dedups on entity_id.
+        max_updated_at: str | None = None
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/vnd.github+json",
+        }
 
         try:
             async with httpx.AsyncClient() as client:
+                # First request carries the query params (`since`, filters); follow-up
+                # requests target the absolute rel="next" URL, which already encodes
+                # the pagination state, so they pass no params.
                 params: dict = {"all": "false", "participating": "true"}
                 if cursor:
                     params["since"] = cursor
 
-                resp = await client.get(
-                    "https://api.github.com/notifications",
-                    params=params,
-                    headers={
-                        "Authorization": f"Bearer {access_token}",
-                        "Accept": "application/vnd.github+json",
-                    },
-                    timeout=15,
-                )
+                next_url: str | None = "https://api.github.com/notifications"
+                first_request = True
+                pages_fetched = 0
+                truncated = False
 
-                if resp.status_code == 200:
+                while next_url:
+                    if first_request:
+                        resp = await client.get(
+                            next_url, params=params, headers=headers, timeout=15
+                        )
+                        first_request = False
+                    else:
+                        resp = await client.get(next_url, headers=headers, timeout=15)
+
+                    if resp.status_code != 200:
+                        # GitHub returns 403 (not 429) for rate limits: the primary
+                        # limit sets X-RateLimit-Remaining: 0, the secondary/abuse
+                        # limit sets Retry-After. These are recoverable rate limits,
+                        # NOT auth failures — the shared helper can't see headers, so
+                        # discriminate here before falling back to status-only mapping.
+                        if resp.status_code == 403 and (
+                            resp.headers.get("X-RateLimit-Remaining") == "0"
+                            or resp.headers.get("Retry-After")
+                        ):
+                            error_class = "rate_limited"
+                        else:
+                            error_class = _classify_http_status(resp.status_code)
+                        logger.warning(
+                            "GitHub notifications API returned %d for user %s",
+                            resp.status_code,
+                            user_id,
+                        )
+                        # Cursor never advances on error.
+                        return PollResult(events=[], cursor=cursor, error_class=error_class)
+
                     notifications = resp.json()
                     for notif in notifications:
                         event = self._normalize_notification(notif)
                         if event:
                             events.append(event)
+                        updated_at = notif.get("updated_at")
+                        if updated_at and (max_updated_at is None or updated_at > max_updated_at):
+                            max_updated_at = updated_at
 
-                    # Update cursor to latest
-                    if notifications:
-                        new_cursor = datetime.now(timezone.utc).isoformat()
-                else:
-                    # GitHub returns 403 (not 429) for rate limits: the primary
-                    # limit sets X-RateLimit-Remaining: 0, the secondary/abuse
-                    # limit sets Retry-After. These are recoverable rate limits,
-                    # NOT auth failures — the shared helper can't see headers, so
-                    # discriminate here before falling back to status-only mapping.
-                    if resp.status_code == 403 and (
-                        resp.headers.get("X-RateLimit-Remaining") == "0"
-                        or resp.headers.get("Retry-After")
-                    ):
-                        error_class = "rate_limited"
-                    else:
-                        error_class = _classify_http_status(resp.status_code)
+                    pages_fetched += 1
+                    next_url = _next_page_url(resp.headers.get("Link"))
+                    if not next_url:
+                        break
+                    if pages_fetched >= MAX_PAGES:
+                        truncated = True
+                        break
+
+                if truncated:
                     logger.warning(
-                        "GitHub notifications API returned %d for user %s",
-                        resp.status_code,
+                        "GitHub notifications poll truncated at %d pages for user %s; "
+                        "remaining pages were not drained this poll",
+                        MAX_PAGES,
                         user_id,
                     )
-                    return PollResult(events=[], cursor=cursor, error_class=error_class)
 
         except Exception:
             logger.warning("GitHub poll failed for user %s", user_id, exc_info=True)
             return PollResult(events=[], cursor=cursor, error_class="transient")
 
-        logger.info("GitHub poll: %d events", len(events))
+        # Advance the cursor to the max updated_at; if nothing was returned (or
+        # updated_at was missing), keep the incoming cursor — never jump to now().
+        new_cursor = max_updated_at if max_updated_at is not None else cursor
+
+        logger.info("GitHub poll: %d events, cursor %s -> %s", len(events), cursor, new_cursor)
         return PollResult(events=events, cursor=new_cursor)
 
     async def test(self, credentials: dict) -> ConnectorHealth:
