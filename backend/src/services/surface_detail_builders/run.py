@@ -258,8 +258,9 @@ async def build_run_trace_tab(db: AsyncSession, surface: Any, **kwargs: Any) -> 
     Uses the three-layer fallback from routes_history: trace_id JOIN,
     traces.run_id reverse lookup, then the task_runs rollup cache.
     """
-    from src.models.task_graph import TaskRun
+    from src.models.task_graph import TaskRun, TaskStep
     from src.models.traces import ModelCall, Trace
+    from src.ui import renderer as r
     from src.ui import units
 
     run_id = _extract_run_id(surface)
@@ -287,9 +288,13 @@ async def build_run_trace_tab(db: AsyncSession, surface: Any, **kwargs: Any) -> 
             await db.execute(select(Trace).where(Trace.run_id == run.run_id))
         ).scalar_one_or_none()
 
-    input_t = int((trace_row.total_input_tokens if trace_row else 0) or run.input_tokens or 0)
-    output_t = int((trace_row.total_output_tokens if trace_row else 0) or run.output_tokens or 0)
-    cost = float((trace_row.total_cost_usd if trace_row else 0) or run.cost_usd or 0.0)
+    # The run-level rollup columns are the canonical CROSS-SEGMENT total (a paused/
+    # resumed run accumulates one trace per segment; run.trace_id only points at the
+    # first segment's trace). Prefer them; fall back to the single trace_row only for
+    # legacy runs whose rollup was never written.
+    input_t = int(run.input_tokens or (trace_row.total_input_tokens if trace_row else 0) or 0)
+    output_t = int(run.output_tokens or (trace_row.total_output_tokens if trace_row else 0) or 0)
+    cost = float(run.cost_usd or (trace_row.total_cost_usd if trace_row else 0) or 0.0)
     duration_ms = (
         trace_row.duration_ms
         if trace_row and trace_row.duration_ms
@@ -300,13 +305,69 @@ async def build_run_trace_tab(db: AsyncSession, surface: Any, **kwargs: Any) -> 
         )
     )
 
+    # Honest empty-state: a grid of zeros looks broken. When there is no model
+    # usage to show, render an informative alert instead — distinguishing a run
+    # that simply hasn't done any model work YET (still pending/awaiting) from a
+    # terminal run that genuinely made no model calls.
+    if input_t == 0 and output_t == 0 and cost == 0.0:
+        completed_steps = list(
+            (
+                await db.execute(
+                    select(TaskStep).where(
+                        TaskStep.run_id == run_id, TaskStep.status == "completed"
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        not_yet_statuses = {
+            "pending",
+            "planned",
+            "approved",
+            "awaiting_approval",
+            "awaiting_input",
+            "paused",
+            "running",
+        }
+        if run.status in not_yet_statuses and not completed_steps:
+            message = "No model calls yet — this run hasn't executed."
+        else:
+            message = "No model usage recorded for this run."
+        return DetailTabResponse(
+            tab_id="trace",
+            sections=[
+                _section(
+                    "trace",
+                    "Trace",
+                    [r.alert("trace_empty", message, severity="info")],
+                    collapsed=False,
+                )
+            ],
+        )
+
+    # Per-agent breakdown across ALL trace segments for this run (not just the first
+    # trace_row), so the breakdown sums to the same headline total for resumed runs.
     step_breakdown: list[dict[str, Any]] = []
-    if trace_row is not None:
+    calls = list(
+        (
+            await db.execute(
+                select(ModelCall)
+                .join(Trace, ModelCall.trace_id == Trace.trace_id)
+                .where(Trace.run_id == run.run_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not calls and trace_row is not None:
+        # Legacy fallback: traces without run_id linkage — use the single trace_row.
         calls = list(
             (await db.execute(select(ModelCall).where(ModelCall.trace_id == trace_row.trace_id)))
             .scalars()
             .all()
         )
+    if calls:
         by_agent: dict[str, dict[str, Any]] = {}
         for c in calls:
             key = c.agent_name or "unknown"

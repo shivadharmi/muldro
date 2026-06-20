@@ -157,7 +157,19 @@ class TraceStore:
             metadata_json=trace_dict.get("metadata"),
         )
 
+        from sqlalchemy import delete
+
         async with self._db_factory() as db:
+            # Upsert by trace_id: a trace may be stored more than once for the
+            # same id — first as a partial checkpoint when a run pauses at an
+            # approval gate, then again (complete) at terminal finalize. A plain
+            # INSERT would violate the traces PK on the second write, so clear
+            # any prior rows for this trace_id (+ its ModelCalls) and re-insert
+            # the latest version. Resume segments use a fresh trace_id and are
+            # unaffected.
+            trace_id = trace.trace_id
+            await db.execute(delete(ModelCall).where(ModelCall.trace_id == trace_id))
+            await db.execute(delete(Trace).where(Trace.trace_id == trace_id))
             db.add(trace)
             for mc in model_calls:
                 db.add(mc)

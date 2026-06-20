@@ -306,6 +306,16 @@ class GraphExecutor:
                     )
                 else:
                     await self._execute_dag(run, surface_id=surface_id, cancel_event=cancel_event)
+                # On a pause (awaiting_approval / awaiting_input / paused), roll the
+                # partial segment trace up onto the run row so steps executed BEFORE
+                # the pause are reflected and a Trace row exists for the surface to
+                # read. _finalize_trace in the finally below ALSO fires on every exit
+                # (and additionally pops/finishes the trace); it rolls the SAME
+                # trace_id, so this checkpoint is an idempotent overwrite, never a
+                # double count (see _roll_trace_onto_run). The explicit call keeps the
+                # pause-time rollup intent clear and independent of finally ordering.
+                if run.status in ("awaiting_approval", "awaiting_input", "paused"):
+                    await self._checkpoint_trace(run)
             except asyncio.TimeoutError:
                 transition_run(run, "timed_out")
                 run.completed_at = datetime.now(timezone.utc)
@@ -429,6 +439,11 @@ class GraphExecutor:
         surface_id = (run.checkpoint or {}).get("surface_id")
         try:
             await self._execute_dag(run, surface_id=surface_id, cancel_event=cancel_event)
+            # A resumed run can pause again at the next approval gate; checkpoint
+            # this segment's partial trace so its tokens accumulate onto the run
+            # row even though _finalize_trace won't fire (non-terminal status).
+            if run.status in ("awaiting_approval", "awaiting_input", "paused"):
+                await self._checkpoint_trace(run)
         except Exception as exc:
             transition_run(run, "failed")
             run.completed_at = datetime.now(timezone.utc)
@@ -609,18 +624,27 @@ class GraphExecutor:
         """Facade → StepRunner.run_step_via_agent_loop."""
         return await self._runner.run_step_via_agent_loop(step, run, cancel_event=cancel_event)
 
-    async def _finalize_trace(self, run: TaskRun) -> None:
-        """Finalize and persist the JarvisTrace for a completed/failed run.
+    def _roll_trace_onto_run(self, run: TaskRun, trace: JarvisTrace) -> tuple[int, int, float]:
+        """Accumulate one segment's trace totals onto the run's rollup columns.
 
-        Also writes the aggregate token/cost rollup onto the TaskRun row so
-        history views can render observability metrics without joining the
-        Trace table (and so that the detail endpoint has a deterministic
-        non-zero result even if the trace persistence fails).
+        ROLLUP INVARIANT: ``run.{input_tokens,output_tokens,cost_usd}`` always
+        equal the SUM of every *distinct* segment trace's totals — never more,
+        never less. A multi-segment run (each resume creates a fresh trace_id)
+        therefore reflects work across all segments, while re-rolling the SAME
+        trace_id is idempotent (no double-count).
+
+        Mechanism: ``run.checkpoint['trace_rollup']`` maps ``trace_id`` → that
+        trace's last-known ``{input_tokens, output_tokens, cost_usd}``. Rolling
+        a trace OVERWRITES its own entry (so a later, more complete store of the
+        same segment replaces the partial one rather than adding to it), then
+        the run columns are recomputed as the sum over all entries. The JSONB is
+        REASSIGNED (not mutated in place) so SQLAlchemy detects the change.
+
+        This is why the pause ``_checkpoint_trace`` and terminal
+        ``_finalize_trace`` cannot double-count when both fire for the same
+        segment: they key on the same trace_id and the second simply replaces
+        the first's entry.
         """
-        trace = self._active_traces.pop(run.run_id, None)
-        if not trace:
-            return
-        trace.finish()
         input_t, output_t = trace.total_tokens()
         total_cost = 0.0
         try:
@@ -629,14 +653,90 @@ class GraphExecutor:
         except Exception:
             total_cost = 0.0
 
-        # Roll up onto the run row. Safe to set even when trace persistence
-        # fails — the numbers reflect what agent_loop actually recorded.
+        rollup = dict((run.checkpoint or {}).get("trace_rollup") or {})
+        rollup[trace.trace_id] = {
+            "input_tokens": int(input_t or 0),
+            "output_tokens": int(output_t or 0),
+            "cost_usd": round(float(total_cost), 6),
+        }
+        sum_input = sum(int(e.get("input_tokens", 0)) for e in rollup.values())
+        sum_output = sum(int(e.get("output_tokens", 0)) for e in rollup.values())
+        sum_cost = sum(float(e.get("cost_usd", 0.0)) for e in rollup.values())
+
+        # JSONB reassigned (not mutated) for SQLAlchemy change detection.
+        run.checkpoint = {**(run.checkpoint or {}), "trace_rollup": rollup}
         try:
-            run.input_tokens = int(input_t or 0)
-            run.output_tokens = int(output_t or 0)
-            run.cost_usd = round(float(total_cost), 6)
+            run.input_tokens = sum_input
+            run.output_tokens = sum_output
+            run.cost_usd = round(sum_cost, 6)
         except Exception:
             logger.debug("Failed to roll up token usage onto run %s", run.run_id, exc_info=True)
+        return sum_input, sum_output, round(sum_cost, 6)
+
+    async def _persist_trace(self, run: TaskRun, trace: JarvisTrace) -> None:
+        """Persist (upsert) a trace linked to the run. Best-effort."""
+        if not self._trace_store:
+            return
+        try:
+            await self._trace_store.store_trace(
+                trace.to_dict(),
+                user_id=run.user_id,
+                workspace_id=run.workspace_id or "",
+                run_id=run.run_id,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to persist trace %s for run %s",
+                trace.trace_id,
+                run.run_id,
+                exc_info=True,
+            )
+
+    async def _checkpoint_trace(self, run: TaskRun) -> None:
+        """Roll up + persist the CURRENT segment's trace when a run PAUSES.
+
+        Unlike ``_finalize_trace``, this does NOT pop ``_active_traces`` and does
+        NOT call ``trace.finish()`` — the segment is still live (the run is only
+        paused at an approval gate and may resume in-process). Leaving the entry
+        in place means a subsequent ``_finalize_trace`` (terminal) or another
+        ``_checkpoint_trace`` (next pause) sees the same JarvisTrace, and
+        ``_roll_trace_onto_run`` keys on its trace_id so re-rolling is idempotent.
+        """
+        trace = self._active_traces.get(run.run_id)
+        if not trace:
+            return
+        sum_input, sum_output, sum_cost = self._roll_trace_onto_run(run, trace)
+        logger.info(
+            "run_trace_checkpointed",
+            extra={
+                "run_id": run.run_id,
+                "trace_id": trace.trace_id,
+                "spans": len(trace.spans),
+                "rolled_input_tokens": sum_input,
+                "rolled_output_tokens": sum_output,
+                "rolled_cost_usd": sum_cost,
+            },
+        )
+        # store_trace upserts by trace_id, so persisting the partial here and the
+        # complete trace later at finalize does not violate the traces PK.
+        await self._persist_trace(run, trace)
+
+    async def _finalize_trace(self, run: TaskRun) -> None:
+        """Finalize and persist the JarvisTrace for a completed/failed run.
+
+        Also writes the aggregate token/cost rollup onto the TaskRun row so
+        history views can render observability metrics without joining the
+        Trace table (and so that the detail endpoint has a deterministic
+        non-zero result even if the trace persistence fails). The rollup
+        ACCUMULATES across resume segments and is idempotent per trace_id
+        (see ``_roll_trace_onto_run``), so finalizing a segment already
+        checkpointed at a pause does not double-count it.
+        """
+        trace = self._active_traces.pop(run.run_id, None)
+        if not trace:
+            return
+        trace.finish()
+        sum_input, sum_output, sum_cost = self._roll_trace_onto_run(run, trace)
 
         logger.info(
             "run_trace_finalized",
@@ -644,26 +744,12 @@ class GraphExecutor:
                 "run_id": run.run_id,
                 "trace_id": trace.trace_id,
                 "spans": len(trace.spans),
-                "input_tokens": input_t,
-                "output_tokens": output_t,
-                "cost_usd": total_cost,
+                "input_tokens": sum_input,
+                "output_tokens": sum_output,
+                "cost_usd": sum_cost,
             },
         )
-        if self._trace_store:
-            try:
-                await self._trace_store.store_trace(
-                    trace.to_dict(),
-                    user_id=run.user_id,
-                    workspace_id=run.workspace_id or "",
-                    run_id=run.run_id,
-                )
-            except Exception:
-                logger.warning(
-                    "Failed to persist trace %s for run %s",
-                    trace.trace_id,
-                    run.run_id,
-                    exc_info=True,
-                )
+        await self._persist_trace(run, trace)
 
     async def _get_ready_steps(self, run_id: str) -> list[TaskStep]:
         """Facade → StepGraphStore.get_ready_steps."""
