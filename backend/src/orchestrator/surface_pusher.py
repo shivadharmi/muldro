@@ -8,6 +8,7 @@ to ``ui_surfaces``. Depends on ``EventPublisher`` and the db-factory provider.
 
 import json
 import logging
+import re
 from typing import TYPE_CHECKING
 
 from src.orchestrator.event_publisher import EventPublisher
@@ -23,6 +24,67 @@ if TYPE_CHECKING:
     from src.services.relevance_assessor import PerceptionSignal, RelevanceAssessment
 
 logger = logging.getLogger(__name__)
+
+
+# Per-event line emitted by ConnectorPoller.ingest_raw_events, e.g.
+#   "- [gmail] email_received: INR 1087 spent ... (event_id=evt_01...)"
+# We strip the "[source] event_type:" prefix and any trailing "(event_id=...)"
+# / bare ULID so only the human subject remains.
+_EVENT_PREFIX_RE = re.compile(r"^\s*[-*]?\s*\[[^\]]+\]\s*[\w.]+\s*:\s*")
+_EVENT_ID_SUFFIX_RE = re.compile(r"\s*\(event_id=[^)]*\)\s*$")
+
+
+def _clean_event_subject(line: str) -> str:
+    """Strip the ``[source] event_type:`` prefix and ``(event_id=...)`` suffix.
+
+    Returns the human-readable subject only. Empty string if nothing remains.
+    """
+    cleaned = _EVENT_PREFIX_RE.sub("", line)
+    cleaned = _EVENT_ID_SUFFIX_RE.sub("", cleaned)
+    return cleaned.strip()
+
+
+def _clean_insight_title(raw_summary: str, *, max_len: int = 120) -> str:
+    """Derive a clean, human insight-card title from a raw observer summary.
+
+    The observer summary is agent-facing pipeline prose, e.g.::
+
+        Polled gmail: 2 new event(s).
+        - [gmail] email_received: INR 1087 spent ... (event_id=evt_01...)
+        - [gmail] email_received: Lunch tomorrow? (event_id=evt_02...)
+
+    This extracts the per-event subject lines, strips the ``[source] type:``
+    prefix and ``(event_id=...)`` suffix, and builds a concise headline:
+
+      - 0 subjects -> first non-"Polled" line, else "New activity"
+      - 1 subject  -> that subject
+      - N subjects -> "<N> new updates: <first subject>"
+
+    The result is always truncated to ``max_len`` characters.
+    """
+    subjects: list[str] = []
+    for raw_line in raw_summary.splitlines():
+        line = raw_line.strip()
+        if not line.startswith(("-", "*")):
+            continue
+        # Stop at the thread-context section — those are not new-event subjects.
+        if line.startswith("---"):
+            break
+        subject = _clean_event_subject(line)
+        if subject:
+            subjects.append(subject)
+
+    if not subjects:
+        title = "New activity"
+    elif len(subjects) == 1:
+        title = subjects[0]
+    else:
+        title = f"{len(subjects)} new updates: {subjects[0]}"
+
+    title = title.strip() or "New activity"
+    if len(title) > max_len:
+        title = title[: max_len - 1].rstrip() + "…"
+    return title
 
 
 def _build_action_preview(capability: str, description: str) -> str:
@@ -324,10 +386,15 @@ class SurfacePusher:
                 for a in assessment.suggested_actions
             ]
 
+            # Derive a clean, human headline from the raw agent-facing summary.
+            # The raw observer summary ("Polled gmail: ... (event_id=...)") is
+            # pipeline jargon and must never reach a user-facing surface.
+            clean_title = _clean_insight_title(signal.summary)
+
             insight_data = InsightSurfaceData(
                 signal_source=signal.source,
                 signal_category=signal.event_type,
-                signal_summary=signal.summary,
+                signal_summary=clean_title,
                 relevance_score=assessment.relevance_score,
                 relevance_reasoning=assessment.reasoning,
                 related_goals=assessment.relates_to_goals,
@@ -335,7 +402,7 @@ class SurfacePusher:
             )
 
             preview = SurfacePreview(
-                title=signal.summary[:120],
+                title=clean_title,
                 subtitle=assessment.reasoning[:200] if assessment.reasoning else None,
                 status="proposal",
                 priority="high" if assessment.urgency == "immediate" else "medium",

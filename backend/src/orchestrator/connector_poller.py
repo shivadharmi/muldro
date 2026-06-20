@@ -292,15 +292,20 @@ class ConnectorPoller:
             )
             for raw in raw_events:
                 try:
-                    event_id = await processor.process(
+                    # Ingest the event (persists to normalized_events with its
+                    # own event_id). The returned id is intentionally not woven
+                    # into the human-readable summary below — see comment there.
+                    await processor.process(
                         raw,
                         user_id=user_id,
                         workspace_id=workspace_id,
                     )
                     title = raw.title or getattr(raw, "raw_data", {}).get("subject", "")
+                    # Agent-facing observation line. Carries source/type/subject so
+                    # the Librarian/Planner can reason about it, but NOT the internal
+                    # event_id ULID — that leaks into user-facing surface titles and
+                    # briefing memory. event_id is persisted in normalized_events.
                     summary = f"[{raw.source}] {raw.event_type}: {title}"
-                    if event_id:
-                        summary += f" (event_id={event_id})"
                     summaries.append(summary)
                 except Exception as e:
                     await db.rollback()

@@ -265,10 +265,11 @@ class TestRecommendationEvidence:
 
 
 class TestRegistryComplete:
-    def test_tab_builders_has_38_entries(self):
+    def test_tab_builders_has_40_entries(self):
         from src.services.surface_detail_builders import TAB_BUILDERS
 
-        assert len(TAB_BUILDERS) == 38
+        # 38 original + ("run","approval") + ("summary","approval") (A2UI Phase 1).
+        assert len(TAB_BUILDERS) == 40
 
     def test_all_13_kinds_covered(self):
         from src.services.surface_detail_builders import TAB_BUILDERS
@@ -314,10 +315,12 @@ class TestRegistryComplete:
             ("run", "plan"): "build_run_plan_tab",
             ("run", "events"): "build_run_events_tab",
             ("run", "trace"): "build_run_trace_tab",
+            ("run", "approval"): "build_run_approval_tab",
             ("summary", "steps"): "build_run_steps_tab",
             ("summary", "plan"): "build_run_plan_tab",
             ("summary", "events"): "build_run_events_tab",
             ("summary", "trace"): "build_run_trace_tab",
+            ("summary", "approval"): "build_run_approval_tab",
             ("plan", "overview"): "build_plan_overview",
             ("plan", "context"): "build_plan_context",
             ("plan", "execution"): "build_plan_execution",

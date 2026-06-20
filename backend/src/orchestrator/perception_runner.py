@@ -25,7 +25,7 @@ from src.orchestrator.connector_poller import ConnectorPoller
 from src.orchestrator.event_publisher import EventPublisher
 from src.orchestrator.intent_classifier import extract_plan
 from src.orchestrator.plan_store import PlanStore
-from src.orchestrator.surface_pusher import SurfacePusher
+from src.orchestrator.surface_pusher import SurfacePusher, _clean_insight_title
 from src.orchestrator.tracing import TraceManager
 
 logger = logging.getLogger(__name__)
@@ -388,10 +388,15 @@ class PerceptionRunner:
                     try:
                         async with self._db_factory() as db:
                             mem_svc = MemoryService(self._settings, db)
+                            # Use the clean human headline (not the raw
+                            # "Polled ... (event_id=...)" observer prose) so the
+                            # briefing memory and any surface built from it stay
+                            # user-facing-clean.
+                            briefing_headline = _clean_insight_title(signal.summary)
                             await mem_svc.store_briefing_memory(
                                 user_id=user_id,
                                 workspace_id=workspace_id,
-                                text=f"{observer_summary[:300]}\n\nWhy: {assessment.reasoning}",
+                                text=f"{briefing_headline}\n\nWhy: {assessment.reasoning}",
                                 source=f"perception:{source}",
                                 relevance_score=assessment.relevance_score,
                                 signal_source=source,
