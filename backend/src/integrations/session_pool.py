@@ -200,7 +200,21 @@ class UserMCPSessionPool:
                     url = config["url"]
                 client_ctx = Client(url, auth=auth) if auth else Client(url)
             else:
-                # stdio transport — inject auth as env var, then build config
+                # stdio transport — inject auth as env var, then build config.
+                #
+                # Guard: token-required stdio servers (slack/github/notion)
+                # fatal-crash when spawned with no token — the npx subprocess
+                # dumps raw Go/Node stack traces and exits. Refuse to spawn
+                # when no usable bearer token was resolved (user hasn't
+                # connected the integration). Raising here is handled at every
+                # caller boundary (call_tool, discover_and_persist, OAuth
+                # callback) as a recorded failure — never a crash.
+                if _requires_stdio_token(server_name, config) and not _bearer_token(auth):
+                    raise ConnectionError(
+                        f"'{server_name}' is not connected for this user "
+                        f"(no auth token) — connect it in Integrations; "
+                        f"skipping spawn"
+                    )
                 if auth and isinstance(auth, BearerAuth):
                     # BearerAuth wraps token in SecretStr; unwrap for env dict
                     raw_token = (
@@ -747,6 +761,30 @@ def _strip_injected_params(schema: Any, keys: set[str]) -> dict:
         new_schema["required"] = [k for k in required if k not in keys]
 
     return new_schema
+
+
+def _requires_stdio_token(server_name: str, config: dict) -> bool:
+    """Return True if a stdio server cannot run without an injected token.
+
+    A server is token-required when it has an env-var mapping (directly or via
+    its inferred provider) — i.e. spawning it without a token guarantees a
+    fatal crash. No-auth stdio servers (filesystem, playwright; auth_provider
+    "none") have no mapping and are excluded.
+    """
+    if config.get("auth_provider", "none") == "none":
+        return False
+    if server_name in _STDIO_TOKEN_ENV_VARS:
+        return True
+    return _infer_provider(server_name) in _STDIO_TOKEN_ENV_VARS
+
+
+def _bearer_token(auth: BearerAuth | str | None) -> str | None:
+    """Extract a non-empty bearer token string from a resolved auth, else None."""
+    if not isinstance(auth, BearerAuth):
+        return None
+    token = auth.token
+    raw = token.get_secret_value() if hasattr(token, "get_secret_value") else str(token)
+    return raw or None
 
 
 def _infer_provider(server_name: str) -> str:
