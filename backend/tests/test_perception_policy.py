@@ -272,7 +272,27 @@ class TestRequestRun:
         assert result.signal_at is not None
 
     @pytest.mark.asyncio
-    async def test_wakes_paused_source_on_activation_signal(self):
+    async def test_wakes_paused_source_on_user_intent_signal(self):
+        """A user-driven activation signal still un-pauses a paused source."""
+        db = _mock_db()
+        state = _make_state(mode="paused", pending_run=False)
+        svc = PerceptionPolicyService(db)
+        svc.get_or_create_state = AsyncMock(return_value=state)
+
+        result = await svc.request_run("ws_test", "usr_test", "gmail", "user_intent")
+
+        assert result.mode == "active"
+        assert result.pending_run is True
+
+    @pytest.mark.asyncio
+    async def test_webhook_does_not_resurrect_paused_source(self):
+        """SECURITY (flaw 5): a webhook wake must NOT un-pause a paused source.
+
+        A paused source represents an explicit/lifecycle decision to stop
+        polling. A forged or even valid inbound webhook is an untrusted external
+        signal and must not override that — the source stays paused and no run is
+        scheduled. The poll/lifecycle path remains the only way to resume it.
+        """
         db = _mock_db()
         state = _make_state(mode="paused", pending_run=False)
         svc = PerceptionPolicyService(db)
@@ -280,8 +300,22 @@ class TestRequestRun:
 
         result = await svc.request_run("ws_test", "usr_test", "gmail", "webhook")
 
+        assert result.mode == "paused"
+        assert result.pending_run is False
+
+    @pytest.mark.asyncio
+    async def test_webhook_wakes_active_source(self):
+        """A webhook on an ALREADY-active source still sets pending_run."""
+        db = _mock_db()
+        state = _make_state(mode="active", pending_run=False)
+        svc = PerceptionPolicyService(db)
+        svc.get_or_create_state = AsyncMock(return_value=state)
+
+        result = await svc.request_run("ws_test", "usr_test", "gmail", "webhook")
+
         assert result.mode == "active"
         assert result.pending_run is True
+        assert result.signal_source == "webhook"
 
     @pytest.mark.asyncio
     async def test_does_not_wake_paused_source_for_non_activation_signal(self):
@@ -533,3 +567,27 @@ class TestErrorClassAwareCircuitBreaker:
 
         assert result.consecutive_failures == CIRCUIT_FAILURE_THRESHOLD
         assert result.circuit_state == "open"
+
+    @pytest.mark.asyncio
+    async def test_missing_error_key_default_is_not_threshold_three(self):
+        """The default error sentinel for a missing 'error' key must fail safe.
+
+        Foot-gun: callers do ``result.get("error", DEFAULT)``. If DEFAULT is the
+        bare string "unknown", a missing error key silently lands on the
+        unknown/threshold-3 bucket. The shared default sentinel must instead
+        classify as transient so a missing key never opens the circuit after 3.
+        """
+        from src.connectors.poll_result import MISSING_ERROR_SENTINEL
+
+        assert classify_error(MISSING_ERROR_SENTINEL) == "transient"
+
+        db = _mock_db()
+        # Sit one below the *unknown* threshold; a transient-classified default
+        # must NOT open the circuit here.
+        state = _make_state(consecutive_failures=CIRCUIT_FAILURE_THRESHOLD - 1)
+        svc = PerceptionPolicyService(db)
+
+        result = await svc.record_failure(state, MISSING_ERROR_SENTINEL)
+
+        assert result.consecutive_failures == CIRCUIT_FAILURE_THRESHOLD
+        assert result.circuit_state == "closed"

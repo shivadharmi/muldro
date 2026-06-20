@@ -18,6 +18,7 @@ from src.api.routes_auth_oauth_integration import (
     _enable_integration_schedules,
     _ensure_integration,
     _error_redirect,
+    _register_webhooks_for_sources,
     _trigger_initial_observation,
 )
 from src.api.routes_auth_schemas import OAuthUrlResponse
@@ -300,6 +301,15 @@ async def oauth_callback(
         )
         background_tasks.add_task(
             _trigger_initial_observation, user_id, ["gmail", "calendar"], workspace_id
+        )
+        # Best-effort push registration (no-op unless webhooks_configured).
+        # A failure here must never fail the connect — it falls back to poll.
+        background_tasks.add_task(
+            _register_webhooks_for_sources,
+            db_factory,
+            user_id,
+            ["gmail", "calendar"],
+            workspace_id,
         )
 
     elif provider == "github":

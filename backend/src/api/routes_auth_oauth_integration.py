@@ -95,6 +95,80 @@ async def _trigger_initial_observation(user_id: str, sources: list[str], workspa
         logger.warning("Initial observation dispatch failed", exc_info=True)
 
 
+async def _register_webhooks_for_sources(
+    db_factory,
+    user_id: str,
+    sources: list[str],
+    workspace_id: str,
+) -> None:
+    """Best-effort push-webhook registration for newly connected sources.
+
+    No-op unless ``settings.webhooks_configured`` (master switch + public
+    callback base URL). A registration failure NEVER fails the OAuth connect —
+    the source simply stays in poll mode. Idempotency is handled inside
+    ``WebhookManager.register`` (reuses an existing active channel).
+    """
+    try:
+        from src.config.settings import get_settings
+
+        settings = get_settings()
+        if not getattr(settings, "webhooks_configured", False):
+            return  # poll-only deployment — nothing to do
+
+        from src.integrations.sync.webhook_manager import WebhookManager
+        from src.services.oauth_manager import OAuthManager
+
+        oauth_mgr = OAuthManager(
+            db_factory, encryption_key=settings.oauth_encryption_key, settings=settings
+        )
+        # Map perception sources → (provider, resource_type, resource_id).
+        resource_map = {
+            "gmail": ("mailbox", "me"),
+            "calendar": ("calendar", "primary"),
+        }
+        async with db_factory() as db:
+            mgr = WebhookManager(
+                db,
+                workspace_id,
+                settings.webhook_callback_base_url,
+                settings=settings,
+                oauth_manager=oauth_mgr,
+            )
+            registered = False
+            for source in sources:
+                if source not in resource_map:
+                    continue
+                resource_type, resource_id = resource_map[source]
+                try:
+                    sub = await mgr.register(
+                        user_id=user_id,
+                        provider=source,
+                        resource_type=resource_type,
+                        resource_id=resource_id,
+                    )
+                    registered = True
+                    logger.info(
+                        "webhook_registered_on_connect",
+                        extra={
+                            "provider": source,
+                            "subscription_id": sub.subscription_id,
+                            "status": sub.status,
+                        },
+                    )
+                except Exception:
+                    logger.warning(
+                        "Webhook registration failed for %s/%s; staying poll-only",
+                        user_id,
+                        source,
+                        exc_info=True,
+                    )
+            if registered:
+                await db.commit()
+    except Exception:
+        # Connect must never fail because of webhook setup.
+        logger.warning("Webhook registration dispatch failed", exc_info=True)
+
+
 async def _ensure_integration(
     db_factory,
     user_id: str,

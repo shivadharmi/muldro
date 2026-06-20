@@ -138,6 +138,27 @@ class Settings(BaseSettings):
     # Created at app startup if missing. Defaults to ~/jarvis-workspace.
     filesystem_mcp_root: str = ""
 
+    # Webhook / push-notification infrastructure (OPTIONAL — empty = poll-only).
+    # When unset, webhook registration is a graceful no-op and the system stays
+    # poll-only exactly as before. All three must be satisfied (see
+    # ``webhooks_configured``) for any provider channel to be created.
+    webhooks_enabled: bool = False  # master switch (JARVIS_WEBHOOKS_ENABLED)
+    # Public HTTPS base, e.g. "https://jarvis.example.com". The full provider
+    # callback is "{base}/v1/webhooks/{provider}/{subscription_id}".
+    webhook_callback_base_url: str = ""  # JARVIS_WEBHOOK_CALLBACK_BASE_URL
+    # Full Pub/Sub topic name "projects/{proj}/topics/{topic}" for Gmail users.watch.
+    gmail_pubsub_topic: str = ""  # JARVIS_GMAIL_PUBSUB_TOPIC
+
+    @property
+    def webhooks_configured(self) -> bool:
+        """True only when push registration can actually create provider channels.
+
+        Requires the master switch AND a public callback base URL. When False,
+        ``WebhookManager.register`` short-circuits to a no-op and every source
+        stays in poll mode — the default, infra-free behavior.
+        """
+        return bool(self.webhooks_enabled and self.webhook_callback_base_url)
+
     @property
     def resolved_model(self) -> str:
         """Return the model ID appropriate for the configured backend (direct API or Bedrock)."""

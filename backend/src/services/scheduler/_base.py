@@ -103,6 +103,11 @@ class SchedulerBase:
         # 4d. Stuck run health check — every tick
         await self._tick_run_health_check(factory)
 
+        # 4e. Webhook push-channel renewal — every 120th tick (~1h).
+        # No-op unless settings.webhooks_configured (poll-only default).
+        if self._tick_count % 120 == 0:
+            await self._tick_webhook_renewal(factory)
+
         # 5. Process due schedules
         async with factory() as db:
             now = datetime.now(timezone.utc)

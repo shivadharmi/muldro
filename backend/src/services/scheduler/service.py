@@ -15,6 +15,7 @@ from src.services.scheduler.perception_tick import PerceptionTickMixin
 from src.services.scheduler.persona_tick import PersonaTickMixin
 from src.services.scheduler.run_health_tick import RunHealthTickMixin
 from src.services.scheduler.schedule_dispatch import ScheduleDispatchMixin
+from src.services.scheduler.webhook_renewal_tick import WebhookRenewalTickMixin
 
 
 class SchedulerLoop(
@@ -26,6 +27,7 @@ class SchedulerLoop(
     RunHealthTickMixin,
     PersonaTickMixin,
     ScheduleDispatchMixin,
+    WebhookRenewalTickMixin,
     SchedulerBase,
 ):
     """Backend-owned scheduler. Runs as asyncio task in worker thread."""

@@ -123,7 +123,12 @@ class PerceptionPolicyService:
 
     def __init__(self, db: AsyncSession) -> None:
         self._db = db
-        self._wake_signals = {"user_intent", "webhook", "agent", "bootstrap", "manual_poll"}
+        # Signals that may RESUME a paused source. A ``webhook`` is intentionally
+        # NOT here: an inbound webhook is an untrusted external signal and must
+        # not resurrect a source that was deliberately paused (explicit/admin/
+        # user/lifecycle pause). It may only wake an already-active source (see
+        # request_run). The poll/lifecycle path is the sole resume route.
+        self._wake_signals = {"user_intent", "agent", "bootstrap", "manual_poll"}
 
     # ------------------------------------------------------------------
     # State management

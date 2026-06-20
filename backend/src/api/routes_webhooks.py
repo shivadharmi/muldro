@@ -110,17 +110,27 @@ async def provider_webhook(
     subscription_id: str,
     request: Request,
     db: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ):
     """Receive a provider webhook delivery and signal perception.
 
     This is the callback URL WebhookManager registers with external providers.
-    The delivery is a wake-signal only: PushReceiver verifies the HMAC signature
-    and sets ``pending_run`` on the matching PerceptionState so the scheduler
-    polls the source through the real connector → EventProcessor funnel on its
-    next tick. No NormalizedEvent is created here.
+    The delivery is a wake-signal only: PushReceiver verifies the provider proof
+    of origin and sets ``pending_run`` on the matching PerceptionState so the
+    scheduler polls the source through the real connector → EventProcessor
+    funnel on its next tick. No NormalizedEvent is created here.
 
-    Unauthenticated by design (providers cannot carry a user session); the HMAC
-    signature on the subscription is the security boundary.
+    Unauthenticated by design (providers cannot carry a user session); the
+    provider-specific signature/token on the subscription is the security
+    boundary. Verification is fail-closed in PushReceiver.
+
+    Backpressure is enforced INSIDE PushReceiver (not as a route dependency):
+    the provider route carries no user session, so the workspace is unknown
+    until the subscription row resolves. PushReceiver checks the real
+    per-workspace event-stream lag (``jarvis:events:{workspace_id}``) AFTER
+    verifying origin and BEFORE scheduling a poll, returning ``backpressure``
+    (→ 429) when the workspace stream is backlogged. (The previous coarse
+    ``_global`` stream check was inert: nothing produces to ``_global``.)
     """
     # PushReceiver authoritatively resolves workspace/user from the subscription
     # row; the constructor's workspace_id/callback_base_url are unused on the
@@ -133,13 +143,21 @@ async def provider_webhook(
     except Exception:
         payload = {}
 
-    receiver = PushReceiver(db, workspace_id="", callback_base_url="")
+    redis = getattr(request.app.state, "redis", None)
+    receiver = PushReceiver(
+        db,
+        workspace_id="",
+        callback_base_url="",
+        redis=redis,
+        lag_threshold=settings.webhook_lag_threshold,
+    )
     result = await receiver.handle_delivery(
         provider=provider,
         subscription_id=subscription_id,
         payload=payload,
         signature=_extract_signature(request),
         raw_body=raw_body,
+        headers=dict(request.headers),
     )
 
     if not result.accepted:
@@ -147,6 +165,14 @@ async def provider_webhook(
             raise HTTPException(status_code=404, detail=result.error)
         if result.error == "signature_mismatch":
             raise HTTPException(status_code=403, detail=result.error)
+        if result.error == "duplicate_delivery":
+            # Idempotent ACK: already processed, nothing more to do.
+            return {"status": "duplicate", "subscription_id": subscription_id}
+        if result.error == "backpressure":
+            raise HTTPException(
+                status_code=429,
+                detail="Event queue backlogged, retry later",
+            )
         raise HTTPException(status_code=400, detail=result.error or "rejected")
 
     await db.commit()

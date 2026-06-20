@@ -86,3 +86,66 @@ def test_provider_webhook_signature_mismatch_returns_403():
             assert resp.status_code == 403
     finally:
         _clear_session()
+
+
+def test_provider_webhook_maps_backpressure_to_429():
+    """The route maps a ``backpressure`` DeliveryResult to HTTP 429.
+
+    The real lag decision now lives in PushReceiver (it needs the
+    subscription's workspace, unknown at route-dependency time); the route's
+    job is only to translate the result. See
+    test_push_receiver.TestBackpressure for the real per-workspace lag path.
+    """
+    _override_session()
+    try:
+        with patch("src.integrations.sync.push_receiver.PushReceiver") as mock_pr:
+            instance = MagicMock()
+            instance.handle_delivery = AsyncMock(
+                return_value=DeliveryResult(
+                    accepted=False, subscription_id="whsub_1", error="backpressure"
+                )
+            )
+            mock_pr.return_value = instance
+
+            resp = client.post(
+                "/v1/webhooks/github/whsub_1",
+                json={"action": "opened"},
+                headers={"X-Hub-Signature-256": "sha256=deadbeef"},
+            )
+
+            assert resp.status_code == 429
+    finally:
+        _clear_session()
+
+
+def test_provider_webhook_forwards_provider_headers():
+    """The route must forward provider-specific headers (Slack ts, Google
+    channel headers, GitHub delivery id) to PushReceiver for verification."""
+    _override_session()
+    try:
+        with patch("src.integrations.sync.push_receiver.PushReceiver") as mock_pr:
+            instance = MagicMock()
+            instance.handle_delivery = AsyncMock(
+                return_value=DeliveryResult(accepted=True, subscription_id="whsub_1")
+            )
+            mock_pr.return_value = instance
+
+            resp = client.post(
+                "/v1/webhooks/google/whsub_1",
+                content=b"",
+                headers={
+                    "X-Goog-Channel-Id": "chan_1",
+                    "X-Goog-Channel-Token": "tok_1",
+                    "X-Goog-Resource-State": "exists",
+                    "X-Goog-Message-Number": "7",
+                },
+            )
+
+            assert resp.status_code == 200
+            kwargs = instance.handle_delivery.call_args.kwargs
+            headers = kwargs["headers"]
+            assert headers["x-goog-channel-id"] == "chan_1"
+            assert headers["x-goog-channel-token"] == "tok_1"
+            assert headers["x-goog-resource-state"] == "exists"
+    finally:
+        _clear_session()
