@@ -511,6 +511,23 @@ class JarvisOrchestrator:
         """
         trace = self._trace_manager.start_trace("scheduled_briefing")
         try:
+            # Per-day delivery idempotency: if a briefing row already exists for
+            # today, an earlier run already generated AND delivered it. A slow
+            # scheduler tick / worker restart must not re-notify or re-push.
+            # The (user_id, briefing_date) row is the idempotency key.
+            #
+            # INVARIANT: there is a wide check-to-write gap (this read happens at
+            # the start of the run, but the Briefing row is only written later,
+            # mid-run, by the get_briefing tool below). This is safe ONLY because
+            # the SchedulerLoop fires briefing schedules serially on a single
+            # instance, so no second tick can start the same briefing until this
+            # run commits. The briefings table has a NON-unique index on
+            # (user_id, briefing_date), so the DB will NOT stop a double-insert.
+            # Before this can run multi-instance (or via skip_locked parallel
+            # dispatch), add a UNIQUE constraint on briefings(user_id,
+            # briefing_date) to enforce idempotency at the DB layer.
+            already_delivered = await self._briefing_already_exists(user_id, workspace_id)
+
             # Step 1: Gather raw briefing data from intelligence server
             raw_data = await self._execute_tool(
                 "get_briefing", {"date": "today"}, user_id=user_id, workspace_id=workspace_id
@@ -538,35 +555,44 @@ class JarvisOrchestrator:
                 trace_id=trace.trace_id,
             )
 
-            # B3: Deliver briefing to user via notifications + workspace surface
-            try:
-                async with self._db_factory() as db:
-                    req = self._request_services(db)
-                    if req.notifier:
-                        await req.notifier.notify(
-                            user_id=user_id,
-                            notification_type="briefing",
-                            title="Daily Briefing",
-                            body=str(result)[:500],
-                            workspace_id=workspace_id,
-                        )
-                await self._push_workspace_surface(
-                    PlanOutput(
-                        goal="Daily Briefing",
-                        reasoning=str(result)[:200],
-                        steps=[
-                            PlanStep(
-                                description="Briefing update",
-                                capability="system.add_to_brief",
+            # B3: Deliver briefing to user via notifications + workspace surface.
+            # Single owner of delivery (the Presenter no longer notifies). Skip
+            # delivery entirely if today's briefing was already delivered by an
+            # earlier run — exactly one notification + one surface per day.
+            if not already_delivered:
+                try:
+                    async with self._db_factory() as db:
+                        req = self._request_services(db)
+                        if req.notifier:
+                            await req.notifier.notify(
+                                user_id=user_id,
+                                notification_type="briefing",
+                                title="Daily Briefing",
+                                body=str(result)[:500],
+                                workspace_id=workspace_id,
                             )
-                        ],
-                    ),
-                    user_id=user_id,
-                    workspace_id=workspace_id,
-                    response_text=str(result)[:1000],
+                    await self._push_workspace_surface(
+                        PlanOutput(
+                            goal="Daily Briefing",
+                            reasoning=str(result)[:200],
+                            steps=[
+                                PlanStep(
+                                    description="Briefing update",
+                                    capability="system.add_to_brief",
+                                )
+                            ],
+                        ),
+                        user_id=user_id,
+                        workspace_id=workspace_id,
+                        response_text=str(result)[:1000],
+                    )
+                except Exception:
+                    logger.debug("Briefing delivery failed", exc_info=True)
+            else:
+                logger.info(
+                    "Briefing already delivered today for %s — skipping re-delivery",
+                    user_id,
                 )
-            except Exception:
-                logger.debug("Briefing delivery failed", exc_info=True)
 
             return {"status": "completed", "trace_id": trace.trace_id, "briefing": result}
         except Exception as e:
@@ -582,6 +608,33 @@ class JarvisOrchestrator:
             await self._trace_manager.finish_trace(
                 trace.trace_id, user_id=user_id, workspace_id=workspace_id
             )
+
+    async def _briefing_already_exists(self, user_id: str, workspace_id: str) -> bool:
+        """Return True if a briefing row already exists for (user, today).
+
+        Used as the per-day delivery idempotency key in generate_briefing so a
+        scheduler re-fire does not re-notify / re-push.
+        """
+        from datetime import date as _date
+
+        from sqlalchemy import select as _select
+
+        from src.models.briefings import Briefing
+
+        try:
+            async with self._db_factory() as db:
+                result = await db.execute(
+                    _select(Briefing.briefing_id).where(
+                        Briefing.user_id == user_id,
+                        Briefing.briefing_date == _date.today(),
+                    )
+                )
+                return result.scalar_one_or_none() is not None
+        except Exception:
+            # Fail open on the idempotency check: if we cannot tell, prefer
+            # delivering (a missed briefing is worse than a rare duplicate).
+            logger.debug("Briefing idempotency check failed", exc_info=True)
+            return False
 
     async def _ensure_event_bus(self):
         """Delegate to EventPublisher (facade kept for internal callers)."""
