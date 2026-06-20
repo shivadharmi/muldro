@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timezone
 
 from src.connectors.base import BaseConnector, ConnectorHealth, register_connector
+from src.connectors.poll_result import PollResult, _classify_http_status
 from src.services.event_processor import RawEvent
 
 logger = logging.getLogger(__name__)
@@ -11,6 +12,13 @@ logger = logging.getLogger(__name__)
 DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files"
 DRIVE_CHANGES_URL = "https://www.googleapis.com/drive/v3/changes"
 DRIVE_START_PAGE_URL = "https://www.googleapis.com/drive/v3/changes/startPageToken"
+
+# Defensive page cap for a single incremental sync. Google Drive returns
+# newStartPageToken ONLY on the final page; intermediate pages carry
+# nextPageToken. A misbehaving provider that always returns a nextPageToken
+# would otherwise loop forever. On truncation we log a warning so silent data
+# loss is visible, consistent with the gmail/calendar MAX_PAGES caps.
+MAX_PAGES = 50
 
 
 @register_connector("drive")
@@ -21,83 +29,147 @@ class DriveConnector(BaseConnector):
     supports_actions: bool = True
     available_actions: list[str] = ["create_file", "share_file"]
 
-    # TODO: migrate to PollResult (returns bare 2-tuple — LSP violation vs BaseConnector.poll)
-    async def poll(
-        self, user_id: str, cursor: str | None, credentials: dict
-    ) -> tuple[list[RawEvent], str | None]:
+    async def poll(self, user_id: str, cursor: str | None, credentials: dict) -> PollResult:
         """Poll Drive for file changes since page token cursor.
 
         On first poll (no cursor), lists recent files and obtains a startPageToken.
-        On subsequent polls, uses the Changes API for incremental fetch.
+        On subsequent polls, walks the Changes API (following nextPageToken) for an
+        incremental fetch. An expired pageToken (HTTP 410) triggers a re-init via the
+        first-poll path rather than a silent stall, mirroring calendar's 410 handling.
         """
         import httpx
 
         access_token = credentials.get("access_token", "")
         if not access_token:
             logger.warning("No access token for Drive polling, user=%s", user_id)
-            return [], cursor
-
-        events: list[RawEvent] = []
-        new_cursor = cursor
+            return PollResult(events=[], cursor=cursor, error_class="auth_failed")
 
         try:
             async with httpx.AsyncClient() as client:
                 headers = {"Authorization": f"Bearer {access_token}"}
-
                 if cursor:
-                    # Incremental: use Changes API
-                    resp = await client.get(
-                        DRIVE_CHANGES_URL,
-                        params={
-                            "pageToken": cursor,
-                            "fields": "newStartPageToken,changes(fileId,file(id,name,mimeType,"
-                            "modifiedTime,lastModifyingUser,webViewLink))",
-                            "spaces": "drive",
-                        },
-                        headers=headers,
-                        timeout=15,
-                    )
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        new_cursor = data.get("newStartPageToken", cursor)
-                        for change in data.get("changes", []):
-                            file_info = change.get("file")
-                            if file_info:
-                                event = self._file_to_event(file_info, "file_modified", user_id)
-                                events.append(event)
-                else:
-                    # Initial: list recent files
-                    resp = await client.get(
-                        DRIVE_FILES_URL,
-                        params={
-                            "pageSize": 20,
-                            "orderBy": "modifiedTime desc",
-                            "fields": "files(id,name,mimeType,modifiedTime,"
-                            "lastModifyingUser,webViewLink)",
-                        },
-                        headers=headers,
-                        timeout=15,
-                    )
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        for file_info in data.get("files", []):
-                            event = self._file_to_event(file_info, "file_created", user_id)
-                            events.append(event)
-
-                    # Obtain startPageToken for future incremental polling
-                    token_resp = await client.get(
-                        DRIVE_START_PAGE_URL,
-                        headers=headers,
-                        timeout=10,
-                    )
-                    if token_resp.status_code == 200:
-                        new_cursor = token_resp.json().get("startPageToken")
-
+                    return await self._poll_changes(client, headers, user_id, cursor, credentials)
+                return await self._poll_initial(client, headers, user_id, cursor)
         except Exception:
             logger.warning("Drive poll failed for user %s", user_id, exc_info=True)
+            return PollResult(events=[], cursor=cursor, error_class="transient")
+
+    async def _poll_changes(
+        self, client, headers: dict, user_id: str, cursor: str, credentials: dict
+    ) -> PollResult:
+        """Incremental fetch via the Changes API, paginating to the final page.
+
+        Google returns ``newStartPageToken`` ONLY on the last page; intermediate
+        pages carry ``nextPageToken``. The cursor advances ONLY to that final
+        ``newStartPageToken`` after every page has been drained.
+        """
+        events: list[RawEvent] = []
+        new_cursor = cursor
+        page_token = cursor
+        pages_fetched = 0
+        truncated = False
+
+        while True:
+            resp = await client.get(
+                DRIVE_CHANGES_URL,
+                params={
+                    "pageToken": page_token,
+                    "includeRemoved": "true",
+                    "fields": "newStartPageToken,nextPageToken,changes(fileId,removed,"
+                    "file(id,name,mimeType,modifiedTime,trashed,lastModifyingUser,webViewLink))",
+                    "spaces": "drive",
+                },
+                headers=headers,
+                timeout=15,
+            )
+
+            if resp.status_code == 410:
+                # pageToken expired — re-init via the first-poll path (cursor=None),
+                # mirroring calendar's 410 syncToken handling. The first-poll path uses
+                # different endpoints (files.list + startPageToken), so this single
+                # re-entry cannot itself 410 here and recurse forever.
+                return await self.poll(user_id, None, credentials)
+
+            if resp.status_code != 200:
+                error_class = _classify_http_status(resp.status_code)
+                logger.warning(
+                    "Drive changes API returned %d for user %s", resp.status_code, user_id
+                )
+                # Return unchanged incoming cursor on failure
+                return PollResult(events=[], cursor=cursor, error_class=error_class)
+
+            data = resp.json()
+            for change in data.get("changes", []):
+                event = self._change_to_event(change, user_id)
+                if event:
+                    events.append(event)
+
+            # newStartPageToken only appears on the final page; capture it so the
+            # cursor advances correctly after the loop.
+            final_token = data.get("newStartPageToken")
+            if final_token:
+                new_cursor = final_token
+
+            pages_fetched += 1
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
+            if pages_fetched >= MAX_PAGES:
+                truncated = True
+                break
+
+        if truncated:
+            logger.warning(
+                "Drive changes sync truncated at %d pages for user %s; remaining "
+                "changes were not drained this poll",
+                MAX_PAGES,
+                user_id,
+            )
 
         logger.info("Drive poll: %d events, cursor %s -> %s", len(events), cursor, new_cursor)
-        return events, new_cursor
+        return PollResult(events=events, cursor=new_cursor)
+
+    async def _poll_initial(
+        self, client, headers: dict, user_id: str, cursor: str | None
+    ) -> PollResult:
+        """First-poll path: list recent files, then obtain a startPageToken cursor."""
+        events: list[RawEvent] = []
+        new_cursor = cursor
+
+        resp = await client.get(
+            DRIVE_FILES_URL,
+            params={
+                "pageSize": 20,
+                "orderBy": "modifiedTime desc",
+                "fields": "files(id,name,mimeType,modifiedTime,lastModifyingUser,webViewLink)",
+            },
+            headers=headers,
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            error_class = _classify_http_status(resp.status_code)
+            logger.warning("Drive files API returned %d for user %s", resp.status_code, user_id)
+            return PollResult(events=[], cursor=cursor, error_class=error_class)
+
+        for file_info in resp.json().get("files", []):
+            events.append(self._file_to_event(file_info, "file_created", user_id))
+
+        # Obtain startPageToken for future incremental polling. A failure here leaves
+        # the cursor unusable, so the poll is a transient failure — NOT a success with
+        # a null cursor (which would re-trigger a full sync every poll).
+        token_resp = await client.get(DRIVE_START_PAGE_URL, headers=headers, timeout=10)
+        if token_resp.status_code != 200:
+            error_class = _classify_http_status(token_resp.status_code)
+            logger.warning(
+                "Drive startPageToken returned %d for user %s after list; treating as failure",
+                token_resp.status_code,
+                user_id,
+            )
+            return PollResult(events=events, cursor=cursor, error_class=error_class)
+        new_cursor = token_resp.json().get("startPageToken")
+
+        logger.info("Drive poll: %d events, cursor %s -> %s", len(events), cursor, new_cursor)
+        return PollResult(events=events, cursor=new_cursor)
 
     async def test(self, credentials: dict) -> ConnectorHealth:
         """Test Drive connection by fetching about info."""
@@ -192,6 +264,38 @@ class DriveConnector(BaseConnector):
         if resp.status_code in (200, 201):
             return {"status": "ok", "file_id": file_id, "shared_with": email, "role": role}
         return {"status": "error", "error": f"HTTP {resp.status_code}", "body": resp.text}
+
+    def _change_to_event(self, change: dict, user_id: str) -> RawEvent | None:
+        """Convert a Drive change record to a RawEvent.
+
+        A change with ``removed: true`` (no ``file``) or a file whose ``trashed``
+        flag is set emits a ``file_removed`` event keyed on the change's ``fileId``.
+        Present files emit ``file_modified``.
+        """
+        file_info = change.get("file")
+        if change.get("removed") or (file_info and file_info.get("trashed")):
+            return self._removed_to_event(change, file_info, user_id)
+        if file_info:
+            return self._file_to_event(file_info, "file_modified", user_id)
+        return None
+
+    @staticmethod
+    def _removed_to_event(change: dict, file_info: dict | None, user_id: str) -> RawEvent:
+        """Build a file_removed RawEvent from a change record."""
+        file_id = change.get("fileId", "")
+        name = (file_info or {}).get("name", "Untitled")
+        return RawEvent(
+            source="drive",
+            source_account_id="drive_primary",
+            event_type="file_removed",
+            entity_type="file",
+            entity_id=file_id,
+            occurred_at=None,
+            title=name,
+            summary=f"{name} (removed)",
+            actor={"type": "person", "email": "", "name": ""},
+            raw_payload={"file_id": file_id, "removed": True},
+        )
 
     @staticmethod
     def _file_to_event(file_info: dict, event_type: str, user_id: str) -> RawEvent:
