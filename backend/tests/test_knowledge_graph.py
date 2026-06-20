@@ -37,8 +37,8 @@ def mock_db():
 
 class TestEntityRelationTypes:
     def test_entity_types_expanded(self):
-        """Should have 24 entity types (15 work + 9 personal)."""
-        assert len(ENTITY_TYPES) == 24
+        """Should have 26 entity types (15 work + 9 personal + 2 financial)."""
+        assert len(ENTITY_TYPES) == 26
         # Original 4
         for t in ("person", "organization", "project", "meeting"):
             assert t in ENTITY_TYPES
@@ -70,10 +70,13 @@ class TestEntityRelationTypes:
             "contact_group",
         ):
             assert t in ENTITY_TYPES
+        # Financial-domain types
+        for t in ("financial_transaction", "merchant"):
+            assert t in ENTITY_TYPES
 
     def test_relation_types_expanded(self):
-        """Should have 24 relation types (17 work + 7 personal)."""
-        assert len(RELATION_TYPES) == 24
+        """Should have 26 relation types (17 work + 7 personal + 2 financial)."""
+        assert len(RELATION_TYPES) == 26
         # Original 5
         for r in ("works_on", "related_to", "scheduled_with", "reports_to", "owns"):
             assert r in RELATION_TYPES
@@ -103,6 +106,9 @@ class TestEntityRelationTypes:
             "shares_with",
             "cares_for",
         ):
+            assert r in RELATION_TYPES
+        # Financial-domain types
+        for r in ("paid_to", "charged_to"):
             assert r in RELATION_TYPES
 
 
@@ -482,3 +488,154 @@ class TestFindEntityTemporal:
         assert results[0]["importance_score"] == 0.85
         assert results[0]["interaction_count"] == 12
         assert results[0]["last_seen_at"] is not None
+
+
+# ── Financial Entity Extraction ──────────────────────────────────
+
+
+class TestFinancialEntities:
+    @patch("src.services.world_model.get_anthropic_client")
+    @pytest.mark.asyncio
+    async def test_financial_transaction_type_preserved(self, mock_get_client, settings, mock_db):
+        """A financial_transaction type from the extractor must NOT be coerced to person."""
+        extracted = {
+            "entities": [
+                {
+                    "entity_type": "financial_transaction",
+                    "canonical_name": "INR 1087 at SwiftPay",
+                    "attributes": {
+                        "amount": 1087,
+                        "currency": "INR",
+                        "merchant": "SwiftPay",
+                        "account_last4": "3971",
+                        "direction": "debit",
+                    },
+                    "importance": 0.6,
+                },
+                {
+                    "entity_type": "merchant",
+                    "canonical_name": "SwiftPay",
+                    "importance": 0.4,
+                },
+            ],
+            "relationships": [],
+        }
+
+        mock_get_client.return_value = MagicMock()
+        wm = WorldModel(settings=settings, db=mock_db)
+
+        event = MagicMock(
+            spec=["event_id", "event_type", "source", "title", "summary", "actor_entities"]
+        )
+        event.event_id = "evt_x"
+        event.event_type = "email_received"
+        event.source = "gmail"
+        event.title = "Card charged"
+        event.summary = "INR 1087 spent on credit card no. XX3971"
+        event.actor_entities = None
+
+        # First execute() is the NormalizedEvent lookup; later lookups (dedup /
+        # find_entity for relationships) must return no existing entity.
+        event_result = MagicMock()
+        event_result.scalar_one_or_none.return_value = event
+        empty_result = MagicMock()
+        empty_result.scalar_one_or_none.return_value = None
+        empty_result.scalars.return_value.all.return_value = []
+        mock_db.execute = AsyncMock(side_effect=[event_result] + [empty_result] * 30)
+
+        with patch.object(wm, "_call_extraction", AsyncMock(return_value=extracted)):
+            await wm.extract_from_event("evt_x", TEST_USER_ID)
+
+        created_types = [
+            call.args[0].entity_type
+            for call in mock_db.add.call_args_list
+            if hasattr(call.args[0], "entity_type")
+        ]
+        assert "financial_transaction" in created_types
+        assert "merchant" in created_types
+        assert "person" not in created_types  # nothing coerced
+
+
+# ── PII-as-name Privacy Guard ────────────────────────────────────
+
+
+class TestSanitizeCanonicalName:
+    def test_bare_email_replaced_with_label_and_aliased(self):
+        from src.services.world_model import sanitize_canonical_name
+
+        name, aliases = sanitize_canonical_name("john.doe@acme.com", None)
+        assert "@" not in name
+        assert name == "John Doe"
+        assert "john.doe@acme.com" in aliases
+
+    def test_bare_email_numeric_local_falls_back_to_domain(self):
+        from src.services.world_model import sanitize_canonical_name
+
+        name, aliases = sanitize_canonical_name("12345@acme.com", [])
+        assert "@" not in name
+        assert name == "Sender (acme.com)"
+        assert "12345@acme.com" in aliases
+
+    def test_normal_name_untouched(self):
+        from src.services.world_model import sanitize_canonical_name
+
+        name, aliases = sanitize_canonical_name("John Doe", ["jdoe@acme.com"])
+        assert name == "John Doe"
+        assert aliases == ["jdoe@acme.com"]
+
+    def test_email_not_duplicated_in_aliases(self):
+        from src.services.world_model import sanitize_canonical_name
+
+        name, aliases = sanitize_canonical_name("a@b.com", ["a@b.com"])
+        assert aliases.count("a@b.com") == 1
+
+    def test_empty_name_becomes_unknown(self):
+        from src.services.world_model import sanitize_canonical_name
+
+        name, aliases = sanitize_canonical_name("", None)
+        assert name == "Unknown"
+
+    @patch("src.services.world_model.get_anthropic_client")
+    @pytest.mark.asyncio
+    async def test_upsert_entity_enforces_pii_guard(self, mock_get_client, settings, mock_db):
+        """upsert_entity stores a non-email canonical name and aliases the raw email."""
+        mock_get_client.return_value = MagicMock()
+        wm = WorldModel(settings=settings, db=mock_db)
+
+        await wm.upsert_entity(
+            user_id=TEST_USER_ID,
+            entity_type="person",
+            canonical_name="jane@example.com",
+        )
+
+        entity = next(
+            call.args[0]
+            for call in mock_db.add.call_args_list
+            if hasattr(call.args[0], "canonical_name")
+        )
+        assert "@" not in entity.canonical_name
+        alias_rows = [
+            call.args[0] for call in mock_db.add.call_args_list if hasattr(call.args[0], "alias")
+        ]
+        assert any(a.alias == "jane@example.com" for a in alias_rows)
+
+
+# ── Prompt ↔ Constant Consistency ────────────────────────────────
+
+
+class TestPromptConstantConsistency:
+    def test_prompt_entity_types_match_constant(self):
+        from src.services.world_model import ENTITY_EXTRACTION_PROMPT, ENTITY_TYPES
+
+        block = ENTITY_EXTRACTION_PROMPT.split("Entity types:", 1)[1]
+        block = block.split("Relation types:", 1)[0]
+        named = {t.strip() for t in block.replace("\n", " ").split(",") if t.strip()}
+        assert named == set(ENTITY_TYPES), f"Prompt/constant drift: {named ^ set(ENTITY_TYPES)}"
+
+    def test_prompt_relation_types_match_constant(self):
+        from src.services.world_model import ENTITY_EXTRACTION_PROMPT, RELATION_TYPES
+
+        block = ENTITY_EXTRACTION_PROMPT.split("Relation types:", 1)[1]
+        block = block.split("\n\n", 1)[0]
+        named = {r.strip() for r in block.replace("\n", " ").split(",") if r.strip()}
+        assert named == set(RELATION_TYPES), f"Prompt/constant drift: {named ^ set(RELATION_TYPES)}"
