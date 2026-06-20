@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.connectors.gmail import GmailConnector
+from src.connectors.gmail import MAX_BACKFILL_PAGES, GmailConnector
 from tests.conftest import TEST_USER_ID, make_mock_settings
 
 
@@ -246,3 +246,155 @@ async def test_poll_expired_history_recovers_via_full_sync():
     # ... and the cursor advances to the FRESH historyId, never the expired one.
     assert result.cursor == fresh_history_id
     assert result.cursor != expired_cursor
+
+
+@pytest.mark.asyncio
+async def test_history_list_paginates():
+    """history.list must follow nextPageToken and ingest messagesAdded on every page.
+
+    Regression: before the fix the connector read only page 1, then advanced the
+    cursor to the page-1 historyId — silently dropping page-2+ messagesAdded
+    forever (the cursor jumped past data that was never fetched).
+    """
+    connector = GmailConnector(make_mock_settings())
+
+    start_cursor = "history_start_100"
+    final_history_id = "history_final_200"
+
+    # history.list page 1: one message + nextPageToken
+    history_page1 = MagicMock()
+    history_page1.status_code = 200
+    history_page1.json.return_value = {
+        "historyId": "history_intermediate_150",
+        "history": [{"messagesAdded": [{"message": {"id": "msg_p1"}}]}],
+        "nextPageToken": "page2tok",
+    }
+    # history.list page 2 (final): another message, no nextPageToken
+    history_page2 = MagicMock()
+    history_page2.status_code = 200
+    history_page2.json.return_value = {
+        "historyId": final_history_id,
+        "history": [{"messagesAdded": [{"message": {"id": "msg_p2"}}]}],
+    }
+
+    detail_p1 = MagicMock()
+    detail_p1.status_code = 200
+    detail_p1.json.return_value = _make_gmail_message(msg_id="msg_p1")
+
+    detail_p2 = MagicMock()
+    detail_p2.status_code = 200
+    detail_p2.json.return_value = _make_gmail_message(msg_id="msg_p2")
+
+    # Order: page1 list -> msg_p1 detail -> page2 list -> msg_p2 detail
+    with patch("httpx.AsyncClient") as mock_cls:
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.get = AsyncMock(
+            side_effect=[history_page1, detail_p1, history_page2, detail_p2]
+        )
+        mock_cls.return_value = mock_client
+
+        result = await connector.poll(TEST_USER_ID, start_cursor, {"access_token": "tok"})
+
+    assert result.ok is True
+    ingested = {e.raw_payload["message_id"] for e in result.events}
+    assert ingested == {"msg_p1", "msg_p2"}
+
+    # Cursor only advances AFTER both pages were consumed — to the final historyId.
+    assert result.cursor == final_history_id
+
+
+@pytest.mark.asyncio
+async def test_initial_sync_paginates_bounded():
+    """Initial full-sync messages.list follows nextPageToken up to MAX_BACKFILL_PAGES.
+
+    Fetches more than one page, but stops at the bound even when the provider keeps
+    returning nextPageToken (silent-truncation guard).
+    """
+    connector = GmailConnector(make_mock_settings())
+
+    fresh_history_id = "history_fresh_777"
+
+    def _list_page(msg_id: str) -> MagicMock:
+        resp = MagicMock()
+        resp.status_code = 200
+        # Always include a nextPageToken so the loop would run forever w/o the bound.
+        resp.json.return_value = {
+            "messages": [{"id": msg_id}],
+            "nextPageToken": f"next_after_{msg_id}",
+        }
+        return resp
+
+    def _detail(msg_id: str) -> MagicMock:
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = _make_gmail_message(msg_id=msg_id)
+        return resp
+
+    profile_resp = MagicMock()
+    profile_resp.status_code = 200
+    profile_resp.json.return_value = {"historyId": fresh_history_id}
+
+    # The connector fetches exactly MAX_BACKFILL_PAGES list pages (each followed by
+    # one detail GET), THEN the profile. Every list page returns a nextPageToken, so
+    # if the bound were not enforced the connector would keep consuming list pages
+    # and the profile_resp would never be reached — the cursor would come back None.
+    side_effects = []
+    for i in range(MAX_BACKFILL_PAGES):
+        side_effects.append(_list_page(f"msg_{i}"))
+        side_effects.append(_detail(f"msg_{i}"))
+    side_effects.append(profile_resp)
+
+    with patch("httpx.AsyncClient") as mock_cls:
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.get = AsyncMock(side_effect=side_effects)
+        mock_cls.return_value = mock_client
+
+        result = await connector.poll(TEST_USER_ID, None, {"access_token": "tok"})
+
+    assert result.ok is True
+    # More than one page fetched ...
+    assert len(result.events) > 1
+    # ... but capped at MAX_BACKFILL_PAGES (one event per page here).
+    assert len(result.events) == MAX_BACKFILL_PAGES
+    assert result.cursor == fresh_history_id
+
+
+@pytest.mark.asyncio
+async def test_profile_failure_after_list_returns_transient():
+    """A getProfile failure after a successful messages.list is transient.
+
+    The connector must NOT return success with a null cursor (which would persist
+    None and re-trigger a full sync every poll). It returns the incoming cursor
+    unchanged with error_class='transient'.
+    """
+    connector = GmailConnector(make_mock_settings())
+
+    messages_list_resp = MagicMock()
+    messages_list_resp.status_code = 200
+    messages_list_resp.json.return_value = {"messages": [{"id": "msg_001"}]}
+
+    detail_resp = MagicMock()
+    detail_resp.status_code = 200
+    detail_resp.json.return_value = _make_gmail_message(msg_id="msg_001")
+
+    profile_fail = MagicMock()
+    profile_fail.status_code = 503
+
+    with patch("httpx.AsyncClient") as mock_cls:
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.get = AsyncMock(side_effect=[messages_list_resp, detail_resp, profile_fail])
+        mock_cls.return_value = mock_client
+
+        # Incoming cursor is None (initial sync); cursor must stay None, NOT advance,
+        # and the poll must be classified transient (a failure, not a success).
+        result = await connector.poll(TEST_USER_ID, None, {"access_token": "tok"})
+
+    assert result.error_class == "transient"
+    assert result.ok is False
+    assert result.cursor is None
