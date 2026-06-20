@@ -56,6 +56,106 @@ async def test_drive_returns_pollresult():
 
 
 @pytest.mark.asyncio
+async def test_drive_first_poll_seeds_from_files_and_start_token():
+    """First poll (cursor=None) emits files.list events AND returns startPageToken as cursor."""
+    connector = DriveConnector(make_mock_settings())
+
+    files_resp = MagicMock()
+    files_resp.status_code = 200
+    files_resp.json.return_value = {
+        "files": [_make_drive_file("seed_1", "First"), _make_drive_file("seed_2", "Second")],
+    }
+    start_token_resp = MagicMock()
+    start_token_resp.status_code = 200
+    start_token_resp.json.return_value = {"startPageToken": "seed_cursor_55"}
+
+    with patch("httpx.AsyncClient") as mock_cls:
+        mock_client = _mock_client([files_resp, start_token_resp])
+        mock_cls.return_value = mock_client
+        result = await connector.poll(TEST_USER_ID, None, {"access_token": "tok"})
+
+    assert result.ok is True
+    by_id = {e.entity_id: e for e in result.events}
+    assert set(by_id) == {"seed_1", "seed_2"}
+    # First-poll files are seeded as file_created.
+    assert by_id["seed_1"].event_type == "file_created"
+    # Cursor seeded from startPageToken, not None.
+    assert result.cursor == "seed_cursor_55"
+
+
+@pytest.mark.asyncio
+async def test_drive_start_page_token_failure_is_transient():
+    """A non-200 on getStartPageToken after files.list is a failure, not a null cursor."""
+    connector = DriveConnector(make_mock_settings())
+
+    files_resp = MagicMock()
+    files_resp.status_code = 200
+    files_resp.json.return_value = {"files": [_make_drive_file("f1")]}
+
+    token_fail = MagicMock()
+    token_fail.status_code = 503
+
+    with patch("httpx.AsyncClient") as mock_cls:
+        mock_cls.return_value = _mock_client([files_resp, token_fail])
+        # Incoming cursor is None (first poll); on failure it must stay None, NOT
+        # advance, and the poll must be classified as a failure (transient for 503).
+        result = await connector.poll(TEST_USER_ID, None, {"access_token": "tok"})
+
+    assert result.failed is True
+    assert result.error_class == "transient"
+    assert result.cursor is None
+
+
+@pytest.mark.asyncio
+async def test_drive_empty_incremental_poll_advances_cursor():
+    """An incremental poll with no changes (changes=[], newStartPageToken) advances the cursor."""
+    connector = DriveConnector(make_mock_settings())
+
+    page = MagicMock()
+    page.status_code = 200
+    page.json.return_value = {"newStartPageToken": "advanced_token", "changes": []}
+
+    with patch("httpx.AsyncClient") as mock_cls:
+        mock_cls.return_value = _mock_client([page])
+        result = await connector.poll(TEST_USER_ID, "old_token", {"access_token": "tok"})
+
+    assert result.ok is True
+    assert result.events == []
+    assert result.cursor == "advanced_token"
+
+
+@pytest.mark.asyncio
+async def test_drive_present_file_normalization():
+    """A present-file change normalizes: source, entity_id, occurred_at, actor."""
+    connector = DriveConnector(make_mock_settings())
+
+    page = MagicMock()
+    page.status_code = 200
+    page.json.return_value = {
+        "newStartPageToken": "tok_after",
+        "changes": [{"fileId": "f_norm", "file": _make_drive_file("f_norm", "Spec")}],
+    }
+
+    with patch("httpx.AsyncClient") as mock_cls:
+        mock_cls.return_value = _mock_client([page])
+        result = await connector.poll(TEST_USER_ID, "tok_1", {"access_token": "tok"})
+
+    assert result.ok is True
+    assert len(result.events) == 1
+    event = result.events[0]
+    assert event.source == "drive"
+    assert event.entity_id == "f_norm"
+    assert event.entity_type == "file"
+    assert event.event_type == "file_modified"
+    # occurred_at parsed from modifiedTime (Z suffix handled).
+    assert event.occurred_at is not None
+    assert event.occurred_at.tzinfo is not None
+    # actor sourced from lastModifyingUser.
+    assert event.actor["email"] == "alice@example.com"
+    assert event.actor["name"] == "Alice"
+
+
+@pytest.mark.asyncio
 async def test_drive_410_reinitializes_page_token():
     """A 410 on changes.list (expired pageToken) must re-init via startPageToken, not stall.
 

@@ -149,6 +149,104 @@ async def test_notion_pagination_respects_max_pages_cap():
     assert mock_client.post.await_count == MAX_PAGES
 
 
+@pytest.mark.asyncio
+async def test_notion_normalization_created_vs_updated():
+    """page_created (created==edited) vs page_updated (edited>created) discrimination."""
+    connector = NotionConnector(make_mock_settings())
+
+    created = _make_page("p_new", "2026-06-20T09:00:00.000Z", "Brand new")
+    created["created_time"] = "2026-06-20T09:00:00.000Z"  # created == edited
+
+    updated = _make_page("p_old", "2026-06-20T10:00:00.000Z", "Edited")
+    updated["created_time"] = "2026-06-01T00:00:00.000Z"  # edited > created
+
+    resp = _resp(200, {"results": [created, updated], "has_more": False})
+
+    with patch("httpx.AsyncClient") as mock_cls:
+        mock_cls.return_value = _mock_client([resp])
+        result = await connector.poll(TEST_USER_ID, None, {"access_token": "tok"})
+
+    assert result.ok is True
+    by_id = {e.entity_id: e for e in result.events}
+    assert by_id["p_new"].event_type == "page_created"
+    assert by_id["p_old"].event_type == "page_updated"
+    # occurred_at parsed from last_edited_time, Z suffix handled → tz-aware.
+    assert by_id["p_new"].source == "notion"
+    assert by_id["p_new"].occurred_at is not None
+    assert by_id["p_new"].occurred_at.tzinfo is not None
+    assert by_id["p_old"].occurred_at.hour == 10
+
+
+@pytest.mark.asyncio
+async def test_notion_empty_workspace_cursor_unchanged():
+    """An empty workspace (results=[]) → ok, no events, cursor unchanged."""
+    connector = NotionConnector(make_mock_settings())
+    resp = _resp(200, {"results": [], "has_more": False})
+
+    incoming = "2026-06-20T08:00:00.000Z"
+    with patch("httpx.AsyncClient") as mock_cls:
+        mock_cls.return_value = _mock_client([resp])
+        result = await connector.poll(TEST_USER_ID, incoming, {"access_token": "tok"})
+
+    assert result.ok is True
+    assert result.events == []
+    # Nothing newer than the cursor → cursor must not jump forward.
+    assert result.cursor == incoming
+
+
+@pytest.mark.asyncio
+async def test_notion_cursor_boundary_is_exclusive():
+    """An edit exactly equal to the cursor is skipped; only strictly-newer edits emit."""
+    connector = NotionConnector(make_mock_settings())
+
+    cursor = "2026-06-20T09:00:00.000Z"
+    at_boundary = _make_page("p_boundary", cursor)  # edited == cursor → skipped
+    newer = _make_page("p_newer", "2026-06-20T09:30:00.000Z")  # > cursor → emitted
+
+    resp = _resp(200, {"results": [at_boundary, newer], "has_more": False})
+
+    with patch("httpx.AsyncClient") as mock_cls:
+        mock_cls.return_value = _mock_client([resp])
+        result = await connector.poll(TEST_USER_ID, cursor, {"access_token": "tok"})
+
+    assert result.ok is True
+    emitted = {e.entity_id for e in result.events}
+    assert emitted == {"p_newer"}
+    assert "p_boundary" not in emitted
+    # Cursor advances to the newest emitted edit.
+    assert result.cursor == "2026-06-20T09:30:00.000Z"
+
+
+@pytest.mark.xfail(
+    reason="SOURCE BUG: NotionConnector._normalize_page does not guard an empty/missing "
+    "page id — it emits a RawEvent with entity_id='' which produces a collision-prone "
+    "'notion::<edited>:page_updated' idempotency key. Test-only task; source fix tracked "
+    "separately.",
+    strict=True,
+)
+@pytest.mark.asyncio
+async def test_notion_malformed_page_id_is_guarded():
+    """A page with an empty/missing id must not produce a `notion::` idempotency key."""
+    connector = NotionConnector(make_mock_settings())
+
+    bad = _make_page("", "2026-06-20T09:30:00.000Z")  # empty id
+    del bad["id"]  # missing entirely
+    good = _make_page("p_good", "2026-06-20T09:45:00.000Z")
+
+    resp = _resp(200, {"results": [bad, good], "has_more": False})
+
+    with patch("httpx.AsyncClient") as mock_cls:
+        mock_cls.return_value = _mock_client([resp])
+        result = await connector.poll(TEST_USER_ID, None, {"access_token": "tok"})
+
+    assert result.ok is True
+    # No event with an empty entity_id should leak through (would yield a
+    # collision-prone "notion::..." idempotency key).
+    keys = {make_idempotency_key(e) for e in result.events}
+    assert all(not k.startswith("notion::") for k in keys)
+    assert {e.entity_id for e in result.events} == {"p_good"}
+
+
 def test_notion_repeat_edits_distinct_events():
     """Same page_id edited twice (distinct last_edited_time) → TWO distinct idempotency keys."""
     edit1 = make_raw_event(
