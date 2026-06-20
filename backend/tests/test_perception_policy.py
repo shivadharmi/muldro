@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from src.connectors.poll_result import error_class_to_policy_error
 from src.models.perception_state import PerceptionState
 from src.services.perception_policy import (
     CIRCUIT_COOLDOWN_S,
@@ -16,6 +17,7 @@ from src.services.perception_policy import (
     STARVATION_CEILING_S,
     TRANSIENT_FAILURE_THRESHOLD,
     PerceptionPolicyService,
+    _threshold_for_error_class,
     classify_error,
 )
 
@@ -660,3 +662,146 @@ class TestErrorClassAwareCircuitBreaker:
 
         assert result.consecutive_failures == CIRCUIT_FAILURE_THRESHOLD
         assert result.circuit_state == "closed"
+
+
+# ---------------------------------------------------------------------------
+# Circuit-breaker full recovery cycle (Task 5.4)
+# ---------------------------------------------------------------------------
+
+
+class TestCircuitBreakerRecoveryCycle:
+    """End-to-end circuit lifecycle driven through the real transition methods.
+
+    Phase 1 covered the individual transitions in isolation. These tests walk
+    the full state machine — open → cooldown → half_open → trial → closed (and
+    the re-open branch) — asserting the real fields at every hop so a regression
+    in any single transition surfaces as a broken cycle, not just a unit gap.
+    """
+
+    @pytest.mark.asyncio
+    async def test_open_cooldown_halfopen_trial_success_closes(self):
+        db = _mock_db()
+        svc = PerceptionPolicyService(db)
+
+        # 1) Drive the circuit OPEN via real record_failure on an unknown error
+        #    (default threshold = 3). One below threshold first.
+        state = _make_state(consecutive_failures=CIRCUIT_FAILURE_THRESHOLD - 1)
+        state = await svc.record_failure(state, "something unexpected happened")
+        assert state.circuit_state == "open"
+        assert state.circuit_opened_at is not None
+        assert state.consecutive_failures == CIRCUIT_FAILURE_THRESHOLD
+
+        # 2) Before cooldown elapses, the circuit stays OPEN.
+        svc._maybe_reopen_circuit(state, datetime.now(timezone.utc))
+        assert state.circuit_state == "open"
+
+        # 3) After cooldown elapses, _maybe_reopen_circuit → HALF_OPEN (trial allowed),
+        #    failure counter reset so a fresh trial starts from zero.
+        state.circuit_opened_at = datetime.now(timezone.utc) - timedelta(
+            seconds=CIRCUIT_COOLDOWN_S + 5
+        )
+        svc._maybe_reopen_circuit(state, datetime.now(timezone.utc))
+        assert state.circuit_state == "half_open"
+        assert state.consecutive_failures == 0
+
+        # 4) Trial run SUCCEEDS → circuit fully CLOSED, counters/opened_at cleared.
+        state = await svc.record_success(state, event_count=2)
+        assert state.circuit_state == "closed"
+        assert state.consecutive_failures == 0
+        assert state.circuit_opened_at is None
+        assert state.next_run_at is not None
+
+    @pytest.mark.asyncio
+    async def test_halfopen_trial_failure_reopens(self):
+        db = _mock_db()
+        svc = PerceptionPolicyService(db)
+
+        # Enter HALF_OPEN via the real cooldown transition.
+        opened = datetime.now(timezone.utc) - timedelta(seconds=CIRCUIT_COOLDOWN_S + 5)
+        state = _make_state(
+            circuit_state="open",
+            circuit_opened_at=opened,
+            consecutive_failures=CIRCUIT_FAILURE_THRESHOLD,
+        )
+        svc._maybe_reopen_circuit(state, datetime.now(timezone.utc))
+        assert state.circuit_state == "half_open"
+        assert state.consecutive_failures == 0
+
+        # Trial run FAILS with a permanent error → re-open immediately
+        # (permanent threshold = 1, so a single trial failure re-opens).
+        state = await svc.record_failure(state, "HTTP 401 Unauthorized")
+        assert state.circuit_state == "open"
+        assert state.circuit_opened_at is not None
+        assert state.consecutive_failures == PERMANENT_FAILURE_THRESHOLD
+
+
+# ---------------------------------------------------------------------------
+# Error-class sentinel round-trip to thresholds (Task 5.4)
+# ---------------------------------------------------------------------------
+
+
+class TestErrorClassSentinelRoundTrip:
+    """Round-trip a connector's PollErrorClass through the *real* translation
+    chain (error_class_to_policy_error → classify_error → threshold selection)
+    instead of asserting the constants in isolation.
+
+    This is the seam where a connector reports ``error_class="rate_limited"``
+    and the policy service must end up at the transient threshold (6), and
+    ``auth_failed`` must end up at the permanent threshold (1). A drift between
+    the sentinel strings and the classifier patterns would silently mis-bucket
+    real connector failures — these tests guard that contract.
+    """
+
+    @pytest.mark.parametrize(
+        "error_class,expected_policy_class,expected_threshold",
+        [
+            ("rate_limited", "transient", TRANSIENT_FAILURE_THRESHOLD),
+            ("transient", "transient", TRANSIENT_FAILURE_THRESHOLD),
+            ("auth_failed", "permanent", PERMANENT_FAILURE_THRESHOLD),
+            ("permanent", "permanent", PERMANENT_FAILURE_THRESHOLD),
+        ],
+    )
+    def test_sentinel_classifies_to_expected_threshold(
+        self, error_class, expected_policy_class, expected_threshold
+    ):
+        # 1) Connector sentinel string for this PollErrorClass.
+        sentinel = error_class_to_policy_error(error_class)
+        # 2) Policy classifier buckets it.
+        assert classify_error(sentinel) == expected_policy_class
+        # 3) Threshold the circuit breaker will use.
+        assert _threshold_for_error_class(classify_error(sentinel)) == expected_threshold
+
+    @pytest.mark.asyncio
+    async def test_rate_limited_recovers_needs_six_failures(self):
+        """A connector reporting rate_limited must NOT open the circuit at the
+        default threshold (3) — it needs the transient count (6)."""
+        sentinel = error_class_to_policy_error("rate_limited")
+        db = _mock_db()
+        svc = PerceptionPolicyService(db)
+
+        # Sit one below the *default* threshold; a transient-classified error
+        # must NOT open the circuit here.
+        state = _make_state(consecutive_failures=CIRCUIT_FAILURE_THRESHOLD - 1)
+        state = await svc.record_failure(state, sentinel)
+        assert state.consecutive_failures == CIRCUIT_FAILURE_THRESHOLD
+        assert state.circuit_state == "closed"
+
+        # Drive it up to the transient threshold — now it opens.
+        state.consecutive_failures = TRANSIENT_FAILURE_THRESHOLD - 1
+        state = await svc.record_failure(state, sentinel)
+        assert state.consecutive_failures == TRANSIENT_FAILURE_THRESHOLD
+        assert state.circuit_state == "open"
+
+    @pytest.mark.asyncio
+    async def test_auth_failed_opens_at_one(self):
+        """A connector reporting auth_failed must open the circuit after a
+        single failure (permanent threshold = 1)."""
+        sentinel = error_class_to_policy_error("auth_failed")
+        db = _mock_db()
+        svc = PerceptionPolicyService(db)
+
+        state = _make_state(consecutive_failures=0)
+        state = await svc.record_failure(state, sentinel)
+        assert state.consecutive_failures == PERMANENT_FAILURE_THRESHOLD
+        assert state.circuit_state == "open"
+        assert state.circuit_opened_at is not None

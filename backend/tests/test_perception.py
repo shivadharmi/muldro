@@ -753,3 +753,154 @@ class TestNonActionableSynthesisSurfacing:
                 "ignored", "synthesis", TEST_USER_ID, TEST_WORKSPACE_ID, "trace_1"
             )
             mem.store_briefing_memory.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Cursor non-advance on poll_error (Task 5.4)
+# ---------------------------------------------------------------------------
+
+
+class TestCursorNonAdvanceOnPollError:
+    """A failing poll must NOT advance the cursor.
+
+    ``run_perception_cycle`` short-circuits when the poller returns a truthy
+    ``poll_error`` — it returns ``{"status": "error"}`` BEFORE either ingesting
+    events or upserting the cursor. Advancing the cursor on a failed poll would
+    silently skip events that the next (successful) poll should have picked up.
+    These tests assert no cursor write happens on the failure path, contrasted
+    with the success-empty path which DOES persist the cursor.
+    """
+
+    @pytest.mark.asyncio
+    async def test_poll_error_does_not_advance_cursor(self):
+        from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID, make_mock_settings
+
+        settings = make_mock_settings()
+
+        with patch("src.orchestrator.jarvis.get_anthropic_client"):
+            mock_db = AsyncMock()
+            mock_db.commit = AsyncMock()
+            db_ctx = AsyncMock()
+            db_ctx.__aenter__ = AsyncMock(return_value=mock_db)
+            db_ctx.__aexit__ = AsyncMock(return_value=False)
+            db_factory = MagicMock(return_value=db_ctx)
+
+            from src.orchestrator.jarvis import JarvisOrchestrator
+            from src.orchestrator.services import ServiceContainer
+
+            orch = JarvisOrchestrator(
+                settings=settings, db_factory=db_factory, services=ServiceContainer()
+            )
+
+            pr = orch._perception
+            # Poll returns a FAILING result: empty events, unchanged cursor,
+            # and a truthy poll_error string (the 4-tuple seam used by the runner).
+            pr._poller.poll = AsyncMock(
+                return_value=(
+                    [],
+                    "old_cursor",
+                    "auth_failed connector error (401 unauthorized)",
+                    "opaque",
+                )
+            )
+            pr._poller.ingest_raw_events = AsyncMock()
+            pr._poller.update_cursor = AsyncMock()
+            pr._invoker.call_agent = AsyncMock()
+            pr._events.publish_event = AsyncMock()
+            pr._trace_manager = MagicMock()
+            pr._trace_manager.start_trace.return_value = MagicMock(trace_id="t1")
+            pr._trace_manager.finish_trace = AsyncMock()
+            pr._budget = MagicMock()
+            pr._budget.get_budget_status = AsyncMock(return_value=MagicMock())
+            pr._budget.should_allow_perception.return_value = True
+
+            result = await orch.run_perception_cycle(
+                source="gmail",
+                user_id=TEST_USER_ID,
+                workspace_id=TEST_WORKSPACE_ID,
+            )
+
+            assert result["status"] == "error"
+            # The cursor must NOT be persisted on a failed poll.
+            pr._poller.update_cursor.assert_not_awaited()
+            # No events were ingested either (the cursor-fold ingest path).
+            pr._poller.ingest_raw_events.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_successful_empty_poll_does_advance_cursor(self):
+        """Control: a successful (no error) empty poll DOES persist the cursor,
+        proving the non-advance above is specifically the failure-path behaviour."""
+        from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID, make_mock_settings
+
+        settings = make_mock_settings()
+
+        with patch("src.orchestrator.jarvis.get_anthropic_client"):
+            mock_db = AsyncMock()
+            mock_db.commit = AsyncMock()
+            db_ctx = AsyncMock()
+            db_ctx.__aenter__ = AsyncMock(return_value=mock_db)
+            db_ctx.__aexit__ = AsyncMock(return_value=False)
+            db_factory = MagicMock(return_value=db_ctx)
+
+            from src.orchestrator.jarvis import JarvisOrchestrator
+            from src.orchestrator.services import ServiceContainer
+
+            orch = JarvisOrchestrator(
+                settings=settings, db_factory=db_factory, services=ServiceContainer()
+            )
+
+            pr = orch._perception
+            pr._poller.poll = AsyncMock(return_value=([], "new_cursor", None, "opaque"))
+            pr._poller.ingest_raw_events = AsyncMock()
+            pr._poller.update_cursor = AsyncMock()
+            pr._invoker.call_agent = AsyncMock()
+            pr._events.publish_event = AsyncMock()
+            pr._trace_manager = MagicMock()
+            pr._trace_manager.start_trace.return_value = MagicMock(trace_id="t1")
+            pr._trace_manager.finish_trace = AsyncMock()
+            pr._budget = MagicMock()
+            pr._budget.get_budget_status = AsyncMock(return_value=MagicMock())
+            pr._budget.should_allow_perception.return_value = True
+
+            result = await orch.run_perception_cycle(
+                source="gmail",
+                user_id=TEST_USER_ID,
+                workspace_id=TEST_WORKSPACE_ID,
+            )
+
+            assert result["status"] == "completed"
+            assert result["events"] == 0
+            pr._poller.update_cursor.assert_awaited_once()
+            # Empty success path saves the cursor but does NOT ingest events.
+            pr._poller.ingest_raw_events.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Connector registry guards (Task 5.4 — post-removal of web_search/whatsapp)
+# ---------------------------------------------------------------------------
+
+
+class TestConnectorRegistryGuards:
+    """web_search and whatsapp were removed as pollable connectors. Guard against
+    their reintroduction, and confirm the canonical poll sources remain present."""
+
+    def test_removed_sources_absent(self):
+        # Import the connectors package so all @register_connector decorators fire.
+        import src.connectors  # noqa: F401
+        from src.connectors.base import CONNECTOR_REGISTRY
+
+        assert "web_search" not in CONNECTOR_REGISTRY
+        assert "whatsapp" not in CONNECTOR_REGISTRY
+
+    def test_canonical_sources_present(self):
+        import src.connectors  # noqa: F401
+        from src.connectors.base import CONNECTOR_REGISTRY
+
+        for source in ("gmail", "calendar", "slack", "github"):
+            assert source in CONNECTOR_REGISTRY, f"{source} missing from CONNECTOR_REGISTRY"
+
+    def test_removed_sources_not_valid_perception_sources(self):
+        from src.orchestrator.intent_classifier import VALID_PERCEPTION_SOURCES
+
+        assert "web_search" not in VALID_PERCEPTION_SOURCES
+        assert "whatsapp" not in VALID_PERCEPTION_SOURCES
