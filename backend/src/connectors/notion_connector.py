@@ -95,6 +95,16 @@ class NotionConnector(BaseConnector):
                     for result in data.get("results", []):
                         if result.get("object") != "page":
                             continue
+                        # Skip pages with no usable id: an empty entity_id collapses
+                        # the idempotency key to "notion::<edited>:..." so two id-less
+                        # pages edited at the same instant collide (silent event loss).
+                        if not result.get("id"):
+                            logger.warning(
+                                "Notion search returned a page with no id for user %s; "
+                                "skipping to avoid idempotency-key collision",
+                                user_id,
+                            )
+                            continue
                         edited = result.get("last_edited_time", "")
                         if cursor and edited <= cursor:
                             continue

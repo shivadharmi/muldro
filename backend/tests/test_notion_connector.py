@@ -217,13 +217,6 @@ async def test_notion_cursor_boundary_is_exclusive():
     assert result.cursor == "2026-06-20T09:30:00.000Z"
 
 
-@pytest.mark.xfail(
-    reason="SOURCE BUG: NotionConnector._normalize_page does not guard an empty/missing "
-    "page id — it emits a RawEvent with entity_id='' which produces a collision-prone "
-    "'notion::<edited>:page_updated' idempotency key. Test-only task; source fix tracked "
-    "separately.",
-    strict=True,
-)
 @pytest.mark.asyncio
 async def test_notion_malformed_page_id_is_guarded():
     """A page with an empty/missing id must not produce a `notion::` idempotency key."""
