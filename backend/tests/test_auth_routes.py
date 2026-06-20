@@ -149,7 +149,7 @@ class TestAuthErrorEnvelopeNoLeak:
     def test_refresh_does_not_leak_raw_exception(self):
         from unittest.mock import AsyncMock, patch
 
-        with patch("src.api.routes_auth.AuthService") as mock_auth:
+        with patch("src.api.routes_auth_session.AuthService") as mock_auth:
             mock_auth.return_value.refresh_session = AsyncMock(
                 side_effect=ValueError(_LEAKY_DETAIL)
             )

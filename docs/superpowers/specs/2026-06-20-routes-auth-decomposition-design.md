@@ -2,7 +2,14 @@
 
 **Date:** 2026-06-20
 **Branch:** `review/architecture-remediation`
-**Status:** PROPOSED
+**Status:** IMPLEMENTED (2026-06-20). `routes_auth.py` reduced 1,051 → **16 lines**
+(pure aggregator). Full non-e2e suite green (**2,476 passed**) after every step.
+Subagent-driven. Final module sizes: `routes_auth_oauth.py` 667,
+`routes_auth_oauth_integration.py` 185, `routes_auth_magic_link.py` 106,
+`routes_auth_session.py` 87, `routes_auth_schemas.py` 46, `routes_auth_profile.py` 25,
+`routes_auth.py` 16 — all under the 800 cap. Refinement vs. the plan: the OAuth
+module came out at 832 (over cap), so the 4 integration-provisioning helpers were
+split further into `routes_auth_oauth_integration.py` (leaf). Imports verified acyclic.
 **Target:** `backend/src/api/routes_auth.py` (~1,051 lines, ~7 route handlers + 5 OAuth helpers + 7 models)
 
 Subagent-driven (per [[feedback_subagent_driven_refactoring]]): the main loop owns
