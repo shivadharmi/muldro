@@ -223,7 +223,15 @@ class SurfaceService:
                 progress=completed / total if total > 0 else 0.0,
                 metrics=metrics,
             )
-            detail_config = build_detail_config("run", surface_id)
+            # When a run is gated on user decision, expose an Approval tab so the
+            # persisted detail modal renders the actionable approval card, and
+            # default the modal to it.
+            detail_config = build_detail_config(
+                "run",
+                surface_id,
+                extra_tabs=[("approval", "Approval")] if awaiting else None,
+                default_tab="approval" if awaiting else None,
+            )
 
             surfaces.append(
                 WorkspaceSurfacePush(

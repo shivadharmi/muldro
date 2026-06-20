@@ -45,6 +45,33 @@ def _resolve_ephemeral(surface_id: str) -> tuple[str, dict] | None:
     return None
 
 
+async def _verify_ephemeral_ownership(db: AsyncSession, metadata: dict, user_id: str) -> None:
+    """Raise 404 if the record an ephemeral surface_id references exists but is
+    owned by a different user. Missing records are allowed through so the builder
+    can render its own empty-state. Only id-bearing references are checked."""
+    checks: list[tuple[str, type, str]] = []
+    if metadata.get("run_id"):
+        from src.models.task_graph import TaskRun
+
+        checks.append((metadata["run_id"], TaskRun, "run_id"))
+    if metadata.get("approval_id"):
+        from src.models.approvals import Approval
+
+        checks.append((metadata["approval_id"], Approval, "approval_id"))
+    if metadata.get("briefing_id"):
+        from src.models.briefings import Briefing
+
+        checks.append((metadata["briefing_id"], Briefing, "briefing_id"))
+
+    for ref_value, model, id_attr in checks:
+        row = (
+            await db.execute(select(model).where(getattr(model, id_attr) == ref_value))
+        ).scalar_one_or_none()
+        if row is not None and getattr(row, "user_id", None) != user_id:
+            # Do not distinguish "not yours" from "not found" to avoid id enumeration.
+            raise HTTPException(status_code=404, detail="Surface not found.")
+
+
 class _VirtualSurface:
     """Lightweight stand-in for UISurface when no DB row exists."""
 
@@ -82,6 +109,13 @@ async def get_surface_detail(
         if not resolved:
             raise HTTPException(status_code=404, detail="Surface not found.")
         kind, metadata = resolved
+        # Tenant guard: ephemeral surfaces reference a workspace-scoped record by id
+        # embedded in the surface_id. Unlike the persisted path (filtered by user_id),
+        # nothing here verifies the caller owns that record, so a guessed/enumerated id
+        # could read another tenant's run/approval/briefing detail. Verify ownership
+        # when the referenced record exists; a genuinely-missing record falls through
+        # to the builder's own empty-state (preserving "No linked …" UX).
+        await _verify_ephemeral_ownership(db, metadata, user_id)
         surface = _VirtualSurface(
             surface_id=surface_id,
             surface_type=kind,

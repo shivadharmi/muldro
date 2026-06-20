@@ -99,6 +99,16 @@ class TrustGate:
         """Create approval record, pause step and run, notify user."""
         from src.services.approval_service import create_approval
 
+        # Preview of *what* will be executed so the approval card has context
+        # (CLAUDE.md: an approval needs run_id + artifact_refs).
+        artifact_refs = {
+            "capability": capability,
+            "step_name": step.name or capability,
+            "description": (step.input_data or {}).get("description") or "",
+            "reversible": risk.reversible,
+            "blast_radius": risk.blast_radius,
+        }
+
         approval = await create_approval(
             self._db,
             user_id=run.user_id,
@@ -111,6 +121,7 @@ class TrustGate:
             run_id=run.run_id,
             step_id=step.step_id,
             requested_by=run.user_id,
+            artifact_refs=artifact_refs,
         )
         transition_step(step, "running")
         transition_step(step, "waiting_approval")

@@ -1,11 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { A2UIRenderer } from "@/components/a2ui/renderer";
 import { A2UIExecutionSurface } from "@/components/a2ui/components/execution-surface";
 import { handleA2UIAction } from "@/components/a2ui/action-handler";
+import { routeApprovalAction } from "@/components/a2ui/approval-actions";
 import { fetchSurfaceDetail } from "@/lib/api";
+import { useToast } from "@/components/ui/toast";
 import { useWsActionStore } from "@/stores/ws-action-store";
 import type { WorkspaceSurface } from "@/stores/surface-store";
 import type { DetailTabResponse, DetailTab } from "@/lib/a2ui-types";
@@ -26,6 +29,32 @@ const priorityBadge: Record<string, string> = {
 
 export function SurfaceDetailModal({ surface, open, onClose }: Props) {
   const sendAction = useWsActionStore((s) => s.sendAction);
+  const queryClient = useQueryClient();
+  const { addToast } = useToast();
+
+  // A2UI button clicks: approval.* actions go to REST (approveAction/rejectAction/
+  // editApproval) — the WS registry does not handle them. Everything else keeps
+  // going through the WS action handler. Only a *successful* approve/reject refreshes
+  // the workspace surfaces (the run leaves awaiting_approval; resume is scheduler-driven)
+  // and closes the modal — on a REST failure or an unsupported edit the modal stays open
+  // so the user can retry, with the reason shown via toast.
+  const handleAction = useCallback(
+    (action: string, payload: Record<string, unknown>) => {
+      const enriched = { ...payload, surface_id: surface.id };
+      void routeApprovalAction(
+        enriched,
+        (msg) => addToast(msg, "error"),
+        () => {
+          void queryClient.invalidateQueries({ queryKey: ["workspace-surfaces"] });
+          onClose();
+        },
+        (msg) => addToast(msg, "info"),
+      ).then((handled) => {
+        if (!handled) handleA2UIAction(sendAction, action, enriched);
+      });
+    },
+    [surface.id, queryClient, addToast, onClose, sendAction],
+  );
   // Presenter-authored typed content takes precedence over on-demand tab fetches.
   // When surface_data.sections exist, render them inline via A2UIRenderer and
   // suppress the tab bar — those tabs only contain DB-derived detail for kinds
@@ -174,12 +203,7 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
                 children: presenterSections,
                 metadata: {},
               }}
-              onAction={(action, payload) =>
-                handleA2UIAction(sendAction, action, {
-                  ...payload,
-                  surface_id: surface.id,
-                })
-              }
+              onAction={handleAction}
             />
           )}
 
@@ -211,12 +235,7 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
                       children: section.children,
                       metadata: {},
                     }}
-                    onAction={(action, payload) =>
-                      handleA2UIAction(sendAction, action, {
-                        ...payload,
-                        surface_id: surface.id,
-                      })
-                    }
+                    onAction={handleAction}
                   />
                 </CollapsibleSection>
               ))}

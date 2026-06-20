@@ -72,3 +72,33 @@ async def test_second_approval_on_same_run_does_not_crash(mock_create_approval):
     await gate.create_approval_and_pause(run, step_b, "email.send", risk, decision)
     assert run.status == "awaiting_approval"
     assert step_b.status == "waiting_approval"
+
+
+@patch("src.services.approval_service.create_approval")
+async def test_create_approval_and_pause_populates_artifact_refs(mock_create_approval):
+    """The approval must carry a preview of what will be executed (artifact_refs)."""
+    mock_create_approval.return_value = MagicMock(approval_id="apr_y", expires_at=None)
+
+    db = MagicMock()
+    db.flush = AsyncMock()
+    gate = _make_gate(db)
+
+    run = _make_run()
+    risk = RiskAssessment(
+        risk_level="high", reasoning="r", reversible=False, blast_radius="external_single"
+    )
+    decision = PolicyDecision(decision="approval_required", reason="needs approval")
+
+    step = _make_step("step_a")
+    step.name = "Send launch email"
+    step.input_data = {"capability": "email.send", "description": "Email investors"}
+
+    await gate.create_approval_and_pause(run, step, "email.send", risk, decision)
+
+    _, kwargs = mock_create_approval.call_args
+    refs = kwargs["artifact_refs"]
+    assert refs["capability"] == "email.send"
+    assert refs["step_name"] == "Send launch email"
+    assert refs["description"] == "Email investors"
+    assert refs["reversible"] is False
+    assert refs["blast_radius"] == "external_single"

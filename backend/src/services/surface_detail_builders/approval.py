@@ -39,7 +39,9 @@ async def build_approval_request(
         r.text("apr_summary", apr.summary or "No details available."),
     ]
     if apr.artifact_refs and isinstance(apr.artifact_refs, dict):
-        tool_name = apr.artifact_refs.get("tool_name", "")
+        # TrustGate step approvals store "capability"/"step_name"; tool-level approvals
+        # store "tool_name"/"tool_params". Accept either so both render tool context.
+        tool_name = apr.artifact_refs.get("tool_name") or apr.artifact_refs.get("capability", "")
         if tool_name:
             children.append(r.badge("apr_tool", f"Tool: {tool_name}"))
         tool_params = apr.artifact_refs.get("tool_params")
@@ -97,13 +99,19 @@ async def build_approval_request(
                         f"approve_{apr.approval_id}",
                         "Approve",
                         variant="primary",
-                        action_payload={"action": "approve", "id": apr.approval_id},
+                        action_payload={
+                            "type": "approval.approve",
+                            "approval_id": apr.approval_id,
+                        },
                     ),
                     r.button(
                         f"reject_{apr.approval_id}",
                         "Reject",
                         variant="danger",
-                        action_payload={"action": "reject", "id": apr.approval_id},
+                        action_payload={
+                            "type": "approval.reject",
+                            "approval_id": apr.approval_id,
+                        },
                     ),
                 ],
             )

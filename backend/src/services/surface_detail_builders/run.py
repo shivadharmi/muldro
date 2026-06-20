@@ -190,6 +190,68 @@ async def build_run_events_tab(db: AsyncSession, surface: Any, **kwargs: Any) ->
     )
 
 
+async def build_run_approval_tab(
+    db: AsyncSession, surface: Any, **kwargs: Any
+) -> DetailTabResponse:
+    """Approval tab: pending approvals for the run, rendered as actionable cards.
+
+    Surfaces the existing ``units.approval_card`` (Approve/Reject/Edit) for the
+    run the user opens, so an ``awaiting_approval`` run is actionable from its
+    persisted detail modal — not only from a transient WS frame.
+    """
+    from src.models.approvals import Approval
+    from src.ui import units
+
+    run_id = _extract_run_id(surface)
+    if not run_id:
+        surface_id = getattr(surface, "surface_id", "") or ""
+        if surface_id.startswith("run_"):
+            run_id = surface_id.removeprefix("run_")
+        elif surface_id.startswith("summary_"):
+            run_id = surface_id.removeprefix("summary_")
+
+    if not run_id:
+        return _empty_tab("approval", "No linked run.")
+
+    approvals = list(
+        (
+            await db.execute(
+                select(Approval)
+                .where(Approval.run_id == run_id, Approval.status == "pending")
+                .order_by(Approval.created_at, Approval.expires_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    if not approvals:
+        return _empty_tab("approval", "No pending approval for this run.")
+
+    cards = []
+    for apr in approvals:
+        refs = apr.artifact_refs if isinstance(apr.artifact_refs, dict) else {}
+        card_data = {
+            "approval_id": apr.approval_id,
+            "step_description": apr.title or apr.summary or "Approval required to proceed.",
+            "risk_level": apr.risk_level or "medium",
+            "risk_reasoning": apr.summary or "",
+            "expires_at": apr.expires_at.isoformat() if apr.expires_at else None,
+            "reversible": refs.get("reversible", True),
+            "blast_radius": refs.get("blast_radius", "self"),
+        }
+        if refs.get("capability"):
+            card_data["capability"] = refs["capability"]
+        if refs.get("step_name"):
+            card_data["step_name"] = refs["step_name"]
+        cards.append(units.approval_card(card_data, include_actions=True))
+
+    return DetailTabResponse(
+        tab_id="approval",
+        sections=[_section("approval", "Approval", cards, collapsed=False)],
+    )
+
+
 async def build_run_trace_tab(db: AsyncSession, surface: Any, **kwargs: Any) -> DetailTabResponse:
     """Trace tab: token/cost totals + per-agent breakdown.
 

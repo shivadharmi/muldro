@@ -34,6 +34,7 @@ from .recommendation import (
     build_recommendation_overview,
 )
 from .run import (
+    build_run_approval_tab,
     build_run_events_tab,
     build_run_plan_tab,
     build_run_steps_tab,
@@ -47,11 +48,13 @@ TAB_BUILDERS: dict[tuple[str, str], Any] = {
     ("run", "plan"): build_run_plan_tab,
     ("run", "events"): build_run_events_tab,
     ("run", "trace"): build_run_trace_tab,
+    ("run", "approval"): build_run_approval_tab,
     # Summary surface reuses the same tabs (maps to the archived run).
     ("summary", "steps"): build_run_steps_tab,
     ("summary", "plan"): build_run_plan_tab,
     ("summary", "events"): build_run_events_tab,
     ("summary", "trace"): build_run_trace_tab,
+    ("summary", "approval"): build_run_approval_tab,
     # Legacy
     ("plan", "overview"): build_plan_overview,
     ("plan", "context"): build_plan_context,
@@ -122,4 +125,5 @@ __all__ = [
     "build_run_plan_tab",
     "build_run_events_tab",
     "build_run_trace_tab",
+    "build_run_approval_tab",
 ]
