@@ -57,12 +57,19 @@ def make_idempotency_key(raw: RawEvent) -> str:
     """Build a unique idempotency key for an event.
 
     Includes message_id when available (e.g., Gmail) for per-message
-    granularity within threads. Falls back to source:entity_id:event_type
-    for sources without message-level IDs.
+    granularity within threads. For Notion, includes last_edited_time so
+    repeat edits of the same page produce distinct events (the same page_id
+    edited twice would otherwise collapse into one). Falls back to
+    source:entity_id:event_type for sources without finer-grained IDs.
     """
-    message_id = (raw.raw_payload or {}).get("message_id", "")
+    payload = raw.raw_payload or {}
+    message_id = payload.get("message_id", "")
     if message_id:
         return f"{raw.source}:{raw.entity_id}:{message_id}:{raw.event_type}"
+    if raw.source == "notion":
+        last_edited_time = payload.get("last_edited_time", "")
+        if last_edited_time:
+            return f"{raw.source}:{raw.entity_id}:{last_edited_time}:{raw.event_type}"
     return f"{raw.source}:{raw.entity_id}:{raw.event_type}"
 
 
