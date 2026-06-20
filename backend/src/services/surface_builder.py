@@ -104,14 +104,33 @@ class SurfaceService:
         }
 
     async def _build_briefing_surface(self, user_id: str) -> WorkspaceSurfacePush | None:
+        # Prefer today's briefing; if it hasn't been generated yet, fall back to
+        # the most recent briefing for this user/workspace so the grid card and
+        # the detail tabs resolve to the same briefing_id (avoids the visible
+        # card / "No linked briefing found" mismatch).
         today = date.today()
         result = await self._db.execute(
-            select(Briefing).where(
+            select(Briefing)
+            .where(
                 Briefing.user_id == user_id,
+                Briefing.workspace_id == self._workspace_id,
                 Briefing.briefing_date == today,
             )
+            .order_by(Briefing.created_at.desc())
+            .limit(1)
         )
         briefing = result.scalar_one_or_none()
+        if not briefing:
+            recent = await self._db.execute(
+                select(Briefing)
+                .where(
+                    Briefing.user_id == user_id,
+                    Briefing.workspace_id == self._workspace_id,
+                )
+                .order_by(Briefing.briefing_date.desc(), Briefing.created_at.desc())
+                .limit(1)
+            )
+            briefing = recent.scalar_one_or_none()
         if not briefing:
             return None
 

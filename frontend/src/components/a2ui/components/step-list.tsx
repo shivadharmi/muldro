@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import type { StepState } from "@/lib/a2ui-types";
 import { statusTextColor } from "@/lib/design-tokens";
+import { stepStatusIcon, formatDuration } from "./step-presentation";
 
 interface StepListProps {
   steps: StepState[];
@@ -57,15 +58,6 @@ function ElapsedBadge({ step }: { step: StepState }) {
 
   return null;
 }
-
-const statusIcon: Record<string, { icon: string; className: string }> = {
-  pending: { icon: "○", className: "text-t-tertiary" },
-  executing: { icon: "◉", className: `${statusTextColor("executing")} animate-pulse` },
-  completed: { icon: "✓", className: statusTextColor("completed") },
-  failed: { icon: "✗", className: statusTextColor("failed") },
-  approval_needed: { icon: "⚠", className: statusTextColor("awaiting_approval") },
-  user_action: { icon: "👤", className: statusTextColor("user_action") },
-};
 
 function CompletedGroupSummary({
   count,
@@ -154,7 +146,7 @@ export function StepList({ steps, currentStep, triggeringStepId }: StepListProps
 
         const isCurrent = step.step_id === currentStep;
         const isTriggering = step.step_id === triggeringStepId;
-        const { icon, className } = statusIcon[step.status] ?? statusIcon.pending;
+        const { icon, className } = stepStatusIcon(step.status);
         const isExpanded = expandedSteps.has(step.step_id);
         const hasLongOutput = (step.output_summary?.length ?? 0) > 120;
 
@@ -247,10 +239,4 @@ export function StepListCompact({ steps }: { steps: StepState[] }) {
       )}
     </div>
   );
-}
-
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
 }

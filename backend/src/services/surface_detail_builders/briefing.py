@@ -12,11 +12,13 @@ from src.ui.contracts import A2UIComponent, DetailSection, DetailTabResponse
 
 from ._shared import (
     _empty_tab,
-    _extract_briefing_id,
     _format_ts,
+    _resolve_briefing,
     _section,
     _truncate,
 )
+
+_NO_BRIEFING_YET = "No briefing has been generated yet today."
 
 logger = logging.getLogger(__name__)
 
@@ -24,16 +26,12 @@ logger = logging.getLogger(__name__)
 async def build_briefing_priorities(
     db: AsyncSession, surface: Any, **kwargs: Any
 ) -> DetailTabResponse:
-    from src.models.briefings import Briefing
-
-    briefing_id = _extract_briefing_id(surface)
-    if not briefing_id:
-        return _empty_tab("priorities", "No linked briefing found.")
-
-    result = await db.execute(select(Briefing).where(Briefing.briefing_id == briefing_id))
-    briefing = result.scalar_one_or_none()
+    briefing, had_id = await _resolve_briefing(surface, db)
     if not briefing:
-        return _empty_tab("priorities", "Briefing not found.")
+        return _empty_tab(
+            "priorities",
+            "Briefing not found." if had_id else _NO_BRIEFING_YET,
+        )
 
     priorities = briefing.top_priorities or []
     children: list[A2UIComponent] = []
@@ -58,18 +56,11 @@ async def build_briefing_events(db: AsyncSession, surface: Any, **kwargs: Any) -
     """Briefing events — recent perception events from the last 24h."""
     from src.models.events import NormalizedEvent
 
-    # Get workspace_id from surface or query from briefing
+    # Get workspace_id from surface or resolve via the linked/most-recent briefing
     ws_id = getattr(surface, "workspace_id", None)
     if not ws_id:
-        briefing_id = _extract_briefing_id(surface)
-        if briefing_id:
-            from src.models.briefings import Briefing
-
-            br = await db.execute(
-                select(Briefing.workspace_id).where(Briefing.briefing_id == briefing_id)
-            )
-            row = br.first()
-            ws_id = row[0] if row else None
+        briefing, _ = await _resolve_briefing(surface, db)
+        ws_id = getattr(briefing, "workspace_id", None) if briefing else None
 
     if not ws_id:
         return _empty_tab("events", "Could not resolve workspace for events.")
@@ -120,16 +111,12 @@ async def build_briefing_events(db: AsyncSession, surface: Any, **kwargs: Any) -
 async def build_briefing_actions(
     db: AsyncSession, surface: Any, **kwargs: Any
 ) -> DetailTabResponse:
-    from src.models.briefings import Briefing
-
-    briefing_id = _extract_briefing_id(surface)
-    if not briefing_id:
-        return _empty_tab("actions", "No linked briefing found.")
-
-    result = await db.execute(select(Briefing).where(Briefing.briefing_id == briefing_id))
-    briefing = result.scalar_one_or_none()
+    briefing, had_id = await _resolve_briefing(surface, db)
     if not briefing:
-        return _empty_tab("actions", "Briefing not found.")
+        return _empty_tab(
+            "actions",
+            "Briefing not found." if had_id else _NO_BRIEFING_YET,
+        )
 
     actions = briefing.recommended_actions or []
     children: list[A2UIComponent] = []
