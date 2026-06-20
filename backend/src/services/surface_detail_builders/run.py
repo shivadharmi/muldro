@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 async def build_run_steps_tab(db: AsyncSession, surface: Any, **kwargs: Any) -> DetailTabResponse:
     """Steps tab for a run surface: ordered list with status, duration, output."""
+    from src.contracts import step_status_to_ui
     from src.models.task_graph import TaskRun, TaskStep
     from src.ui import units
 
@@ -53,7 +54,7 @@ async def build_run_steps_tab(db: AsyncSession, surface: Any, **kwargs: Any) -> 
         {
             "step_id": s.step_id,
             "description": s.name or (s.input_data or {}).get("description", "") or s.step_id,
-            "status": s.status or "pending",
+            "status": step_status_to_ui(s.status),
             "output_summary": (
                 _truncate(str((s.output_data or {}).get("result", "")), 240)
                 if s.output_data

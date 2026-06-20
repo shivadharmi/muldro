@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from src.contracts import StepState
+from src.contracts import StepState, step_status_to_ui
 from src.errors import classify, new_correlation_id
 from src.middleware.observability import get_correlation_id
 
@@ -42,8 +42,13 @@ def _safe_error_fields(exc: BaseException) -> dict:
 
 
 def _step_to_state(s: "TaskStep", status_override: str | None = None) -> "StepState":
-    """Build a StepState from a TaskStep model, forwarding all available fields."""
-    status = status_override or s.status
+    """Build a StepState from a TaskStep model, forwarding all available fields.
+
+    ``status_override`` (when given) is already a UI literal; the persisted
+    ``s.status`` is a DB execution-state value and must be mapped to the UI
+    vocabulary or the strict ``StepState.status`` Literal will reject it.
+    """
+    status = status_override or step_status_to_ui(s.status)
     started_iso = s.started_at.isoformat() if s.started_at else None
     completed_iso = s.completed_at.isoformat() if s.completed_at else None
     duration = (

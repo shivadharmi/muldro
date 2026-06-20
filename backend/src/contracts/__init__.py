@@ -370,6 +370,40 @@ class StepState(BaseModel):
     retry_count: int | None = None
 
 
+# DB execution-state vocabulary → UI ``StepState.status`` vocabulary.
+#
+# The execution state machine (services/execution_state.py) uses a richer status
+# set than the UI literal above (e.g. ``ready``, ``running``, ``waiting_approval``,
+# ``blocked``, ``timed_out``, ``cancelled``). This dict is the single bridge between
+# the two — anything building a ``StepState`` from a persisted ``TaskStep`` MUST map
+# through ``step_status_to_ui`` instead of passing the raw DB status, or the strict
+# Literal will raise a ValidationError (see the surfaces detail-tab 500 regression).
+_STEP_STATUS_TO_UI: dict[str, str] = {
+    "pending": "pending",
+    "ready": "pending",
+    "running": "executing",
+    "completed": "completed",
+    "failed": "failed",
+    "skipped": "completed",
+    "waiting_approval": "approval_needed",
+    "awaiting_input": "user_action",
+    "blocked": "pending",
+    "timed_out": "failed",
+    "cancelled": "failed",
+}
+
+
+def step_status_to_ui(status: str | None) -> str:
+    """Map a DB ``TaskStep`` status to a valid ``StepState.status`` UI literal.
+
+    Falls back to ``"pending"`` for an empty or unknown status so a read-only
+    display endpoint never 500s on an as-yet-unmapped future status.
+    """
+    if not status:
+        return "pending"
+    return _STEP_STATUS_TO_UI.get(status, "pending")
+
+
 class ApprovalContext(BaseModel):
     """Context for an approval gate within a surface update."""
 

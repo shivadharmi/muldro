@@ -114,7 +114,11 @@ class TrustGate:
         )
         transition_step(step, "running")
         transition_step(step, "waiting_approval")
-        transition_run(run, "awaiting_approval")
+        # Idempotent: a sibling step in the same ready batch may have already
+        # paused the run. awaiting_approval → awaiting_approval is not a legal
+        # transition, so only move the run when it isn't already paused there.
+        if run.status != "awaiting_approval":
+            transition_run(run, "awaiting_approval")
         await self._store.checkpoint(run, step.step_id, "approval_gate")
         await self._db.flush()
 

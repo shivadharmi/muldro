@@ -190,6 +190,16 @@ class DagRunner:
                 except Exception:
                     logger.error("Step %s raised unexpectedly", step.step_id, exc_info=True)
 
+                # Stop dispatching the rest of this ready batch the moment a step
+                # pauses the run (approval gate / awaiting input). transition_run
+                # mutates run.status in place, so this reflects the pause without a
+                # refresh. Without this, a second ready step in the same batch would
+                # call create_approval_and_pause while the run is already
+                # awaiting_approval → InvalidTransitionError. The remaining ready
+                # steps are re-evaluated on resume.
+                if run.status in ("paused", "awaiting_approval", "awaiting_input"):
+                    break
+
             # Check if run was paused by an approval gate
             await self._db.refresh(run)
             if run.status in ("paused", "awaiting_approval"):
