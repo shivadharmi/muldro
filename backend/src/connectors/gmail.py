@@ -14,6 +14,15 @@ logger = logging.getLogger(__name__)
 # truncates, we log a warning so silent data loss is visible.
 MAX_BACKFILL_PAGES = 4
 
+# Max pages of history.list to walk during an incremental sync. Active mailboxes
+# can legitimately span many history pages, so this is set generous (much larger
+# than MAX_BACKFILL_PAGES) — it should never truncate a realistic mailbox. It is
+# purely a defensive cap: a buggy/abusive provider that always returns a
+# nextPageToken would otherwise loop forever (with N per-message detail GETs per
+# iteration). On hitting the cap we warn and advance the cursor to the last
+# fetched historyId, so the next poll resumes from there.
+MAX_HISTORY_PAGES = 50
+
 
 @register_connector("gmail")
 class GmailConnector(BaseConnector):
@@ -51,6 +60,8 @@ class GmailConnector(BaseConnector):
                     # forever otherwise (cursor jumps past data never fetched).
                     final_history_id = cursor
                     page_token: str | None = None
+                    pages_fetched = 0
+                    truncated = False
                     while True:
                         params = {
                             "startHistoryId": cursor,
@@ -95,11 +106,29 @@ class GmailConnector(BaseConnector):
                                 if event:
                                     events.append(event)
 
+                        pages_fetched += 1
                         page_token = data.get("nextPageToken")
                         if not page_token:
                             break
+                        if pages_fetched >= MAX_HISTORY_PAGES:
+                            truncated = True
+                            break
 
-                    # Only advance the cursor after all pages were consumed.
+                    if truncated:
+                        logger.warning(
+                            "Gmail incremental sync truncated at %d pages for user %s; "
+                            "remaining history was not drained this poll — next poll "
+                            "resumes from historyId %s",
+                            MAX_HISTORY_PAGES,
+                            user_id,
+                            final_history_id,
+                        )
+
+                    # Only advance the cursor after all pages were consumed (or the
+                    # defensive page cap was hit). Advancing to the last fetched
+                    # historyId on truncation is consistent with normal completion;
+                    # the warning above surfaces that we may not have drained
+                    # everything, and the next poll continues from here.
                     new_cursor = final_history_id
                 else:
                     # Initial: list recent messages, following nextPageToken up to a

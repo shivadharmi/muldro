@@ -1,10 +1,11 @@
 """Tests for Gmail connector — header capture."""
 
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.connectors.gmail import MAX_BACKFILL_PAGES, GmailConnector
+from src.connectors.gmail import MAX_BACKFILL_PAGES, MAX_HISTORY_PAGES, GmailConnector
 from tests.conftest import TEST_USER_ID, make_mock_settings
 
 
@@ -398,3 +399,68 @@ async def test_profile_failure_after_list_returns_transient():
     assert result.error_class == "transient"
     assert result.ok is False
     assert result.cursor is None
+
+
+@pytest.mark.asyncio
+async def test_history_pagination_capped(caplog):
+    """Incremental history.list pagination is bounded by MAX_HISTORY_PAGES.
+
+    Defensive guard: a buggy/abusive provider that ALWAYS returns a nextPageToken
+    would otherwise loop forever (with a per-message detail GET each iteration).
+    The loop must stop at MAX_HISTORY_PAGES, log a truncation warning, and still
+    advance the cursor to the last fetched historyId so the next poll resumes.
+    """
+    connector = GmailConnector(make_mock_settings())
+
+    start_cursor = "history_start_100"
+    last_history_id = f"history_id_{MAX_HISTORY_PAGES - 1}"
+
+    def _history_page(idx: int) -> MagicMock:
+        resp = MagicMock()
+        resp.status_code = 200
+        # ALWAYS return a nextPageToken — the loop would never terminate on its own.
+        resp.json.return_value = {
+            "historyId": f"history_id_{idx}",
+            "history": [{"messagesAdded": [{"message": {"id": f"msg_{idx}"}}]}],
+            "nextPageToken": f"page_after_{idx}",
+        }
+        return resp
+
+    def _detail(idx: int) -> MagicMock:
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = _make_gmail_message(msg_id=f"msg_{idx}")
+        return resp
+
+    # The connector should consume exactly MAX_HISTORY_PAGES history pages (each
+    # followed by one detail GET) and then break on the cap. If the cap were not
+    # enforced, AsyncMock would exhaust this finite side_effect list and raise
+    # StopAsyncIteration instead of returning a bounded result.
+    side_effects = []
+    for i in range(MAX_HISTORY_PAGES):
+        side_effects.append(_history_page(i))
+        side_effects.append(_detail(i))
+
+    with patch("httpx.AsyncClient") as mock_cls:
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.get = AsyncMock(side_effect=side_effects)
+        mock_cls.return_value = mock_client
+
+        with caplog.at_level(logging.WARNING, logger="src.connectors.gmail"):
+            result = await connector.poll(TEST_USER_ID, start_cursor, {"access_token": "tok"})
+
+        # Loop stopped at the cap: exactly MAX_HISTORY_PAGES list + detail GETs,
+        # i.e. 2 * MAX_HISTORY_PAGES calls — never an unbounded number.
+        assert mock_client.get.call_count == 2 * MAX_HISTORY_PAGES
+
+    assert result.ok is True
+    # One event per consumed page, bounded by the cap.
+    assert len(result.events) == MAX_HISTORY_PAGES
+    # Cursor still advances to the last fetched historyId (next poll resumes here).
+    assert result.cursor == last_history_id
+    # Truncation is visible in the logs.
+    assert any(
+        "truncated" in rec.message and rec.levelno == logging.WARNING for rec in caplog.records
+    )
