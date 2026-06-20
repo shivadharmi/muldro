@@ -9,6 +9,21 @@ from src.services.event_processor import RawEvent
 
 logger = logging.getLogger(__name__)
 
+# Slack returns HTTP 200 with {"ok": false, "error": ...} for API-level failures.
+# Map known error strings to PollErrorClass. Unknown errors default to "transient"
+# (fail-safe) — never "permanent", which would open the circuit at threshold 1 and
+# permanently disable Slack perception on a recoverable error (e.g. a rate limit).
+_SLACK_OK_FALSE_ERROR_CLASS: dict[str, PollErrorClass] = {
+    "ratelimited": "rate_limited",
+    "account_inactive": "auth_failed",
+    "token_revoked": "auth_failed",
+    "invalid_auth": "auth_failed",
+    "not_authed": "auth_failed",
+    "internal_error": "transient",
+    "fatal_error": "transient",
+    "service_unavailable": "transient",
+}
+
 
 @register_connector("slack")
 class SlackConnector(BaseConnector):
@@ -48,15 +63,19 @@ class SlackConnector(BaseConnector):
 
                 channels_data = channels_resp.json()
                 if not channels_data.get("ok"):
-                    # Slack API-level error (e.g. invalid_auth) — treat as auth_failed
+                    # Slack returns HTTP 200 with {"ok": false, "error": ...} for many
+                    # failures. Map known errors explicitly; default to "transient"
+                    # (fail-safe) so an unrecognized error never lands on "permanent",
+                    # which opens the circuit at threshold 1 and disables the source.
                     slack_error = channels_data.get("error", "unknown")
-                    error_class: PollErrorClass = (
-                        "auth_failed"
-                        if slack_error in ("invalid_auth", "not_authed", "token_revoked")
-                        else "permanent"
+                    error_class: PollErrorClass = _SLACK_OK_FALSE_ERROR_CLASS.get(
+                        slack_error, "transient"
                     )
                     logger.warning(
-                        "Slack conversations.list error=%s for user %s", slack_error, user_id
+                        "Slack conversations.list error=%s (class=%s) for user %s",
+                        slack_error,
+                        error_class,
+                        user_id,
                     )
                     return PollResult(events=[], cursor=cursor, error_class=error_class)
 

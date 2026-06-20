@@ -233,6 +233,50 @@ class TestSlackConnectorFailurePropagation:
         assert result.failed is True
         assert result.cursor == "ts_abc"
 
+    @pytest.mark.parametrize(
+        ("slack_error", "expected_class"),
+        [
+            ("ratelimited", "rate_limited"),
+            ("token_revoked", "auth_failed"),
+            ("invalid_auth", "auth_failed"),
+            ("not_authed", "auth_failed"),
+            ("account_inactive", "auth_failed"),
+            ("internal_error", "transient"),
+            ("fatal_error", "transient"),
+            ("service_unavailable", "transient"),
+            # Unknown error must fail-safe to transient, NEVER permanent —
+            # permanent opens the circuit at threshold 1, killing a live source.
+            ("weird_error", "transient"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_conversations_list_ok_false_error_classification(
+        self, slack_error, expected_class
+    ):
+        """HTTP 200 + {"ok": false, "error": X} maps to the correct error_class."""
+        from src.connectors.poll_result import PollResult
+        from src.connectors.slack_connector import SlackConnector
+
+        connector = SlackConnector(make_mock_settings())
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"ok": False, "error": slack_error}
+
+        with patch("httpx.AsyncClient") as mock_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client.get = AsyncMock(return_value=mock_resp)
+            mock_cls.return_value = mock_client
+
+            result = await connector.poll(TEST_USER_ID, "ts_abc", {"access_token": "tok"})
+
+        assert isinstance(result, PollResult)
+        assert result.failed is True
+        assert result.error_class == expected_class
+        # Cursor must never advance on error.
+        assert result.cursor == "ts_abc"
+
 
 class TestCalendarConnectorFailurePropagation:
     """Calendar connector poll() must return typed PollResult on failure."""
