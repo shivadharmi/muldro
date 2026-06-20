@@ -150,7 +150,7 @@ class IntegrationManager:
         raw = await instance.poll(user_id, cursor, creds)
 
         # Accept both PollResult (native connectors) and legacy 2-tuples
-        # (notion/drive/whatsapp carry a TODO: migrate to PollResult marker).
+        # (notion/drive carry a TODO: migrate to PollResult marker).
         if isinstance(raw, PollResult):
             if raw.failed:
                 logger.warning(

@@ -2,14 +2,12 @@
 
 Includes:
 - /v1/webhooks/generic — backwards-compatible generic passthrough
-- /v1/webhooks/whatsapp — Meta WhatsApp Business API webhooks
+- /v1/webhooks/{provider}/{subscription_id} — provider wake-signal callbacks
 """
 
-import hashlib
-import hmac
 import logging
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
@@ -177,52 +175,3 @@ async def provider_webhook(
 
     await db.commit()
     return {"status": "accepted", "subscription_id": subscription_id}
-
-
-# ── WhatsApp Webhooks (Meta Business API) ────────────────────
-
-
-@router.get("/v1/webhooks/whatsapp")
-async def whatsapp_verify(
-    hub_mode: str = Query("", alias="hub.mode"),
-    hub_challenge: str = Query("", alias="hub.challenge"),
-    hub_verify_token: str = Query("", alias="hub.verify_token"),
-    settings: Settings = Depends(get_settings),
-):
-    """Meta webhook verification challenge (GET)."""
-    expected_token = getattr(settings, "whatsapp_verify_token", "")
-    if hub_mode == "subscribe" and hub_verify_token == expected_token:
-        return Response(content=hub_challenge, media_type="text/plain")
-    raise HTTPException(status_code=403, detail="Verification failed")
-
-
-@router.post("/v1/webhooks/whatsapp")
-async def whatsapp_webhook(
-    request: Request,
-    x_hub_signature_256: str = Header("", alias="X-Hub-Signature-256"),
-    settings: Settings = Depends(get_settings),
-):
-    """Receive WhatsApp incoming messages via Meta webhook."""
-    raw_body = await request.body()
-
-    # Verify signature
-    whatsapp_secret = getattr(settings, "whatsapp_app_secret", "")
-    if whatsapp_secret:
-        expected = (
-            "sha256=" + hmac.new(whatsapp_secret.encode(), raw_body, hashlib.sha256).hexdigest()
-        )
-        if not hmac.compare_digest(expected, x_hub_signature_256):
-            raise HTTPException(status_code=403, detail="Invalid signature")
-
-    body = await request.json()
-
-    # Forward to WhatsApp connector's handle_webhook if registered
-    from src.connectors.base import CONNECTOR_REGISTRY
-
-    connector_cls = CONNECTOR_REGISTRY.get("whatsapp")
-    if connector_cls:
-        instance = connector_cls(settings=settings)
-        events = await instance.handle_webhook(body)
-        return {"status": "ok", "events": len(events)}
-
-    return {"status": "ok", "events": 0}

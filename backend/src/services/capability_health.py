@@ -52,7 +52,7 @@ FAMILY_PROVIDERS: dict[str, list[str]] = {
     "issue": ["github", "atlassian"],
     "doc": ["notion", "drive", "atlassian"],
     "workflow": ["atlassian"],
-    "messaging": ["slack", "whatsapp"],
+    "messaging": ["slack"],
     "browser": ["playwright"],
     "search": ["perplexity"],
     "internal": [],
