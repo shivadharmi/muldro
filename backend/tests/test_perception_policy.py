@@ -197,6 +197,29 @@ class TestRecordSuccess:
         result = await svc.record_success(state, event_count=0)
         assert result.total_runs == 11
 
+    @pytest.mark.asyncio
+    async def test_budget_multiplier_stretches_next_run(self):
+        """budget_multiplier must thread from record_success into next_run_at.
+
+        Without the multiplier the next run is ~base interval away; with a
+        multiplier of 2 it should be ~2x further out (less frequent polling
+        under budget pressure). Asserts the ratio rather than exact seconds to
+        tolerate the sub-second wall-clock drift between the two calls.
+        """
+        svc = PerceptionPolicyService(_mock_db())
+
+        baseline_state = _make_state(base_interval_s=300, effective_interval_s=300)
+        baseline = await svc.record_success(baseline_state, event_count=0, budget_multiplier=1)
+        baseline_delta = (baseline.next_run_at - baseline.last_run_at).total_seconds()
+
+        stretched_state = _make_state(base_interval_s=300, effective_interval_s=300)
+        stretched = await svc.record_success(stretched_state, event_count=0, budget_multiplier=2)
+        stretched_delta = (stretched.next_run_at - stretched.last_run_at).total_seconds()
+
+        # Stretched interval should be ~2x the baseline (allow small tolerance).
+        assert stretched_delta >= baseline_delta * 1.9
+        assert stretched_delta <= baseline_delta * 2.1
+
 
 # ---------------------------------------------------------------------------
 # Record failure

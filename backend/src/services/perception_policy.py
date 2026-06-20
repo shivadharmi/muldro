@@ -165,9 +165,7 @@ class PerceptionPolicyService:
     # Due-source queries
     # ------------------------------------------------------------------
 
-    async def get_due_sources(
-        self, user_id: str, budget_multiplier: int = 1
-    ) -> list[PerceptionState]:
+    async def get_due_sources(self, user_id: str) -> list[PerceptionState]:
         """Return sources due for a single user."""
         now = datetime.now(timezone.utc)
         reopen_before = now - timedelta(seconds=CIRCUIT_COOLDOWN_S)
@@ -205,7 +203,7 @@ class PerceptionPolicyService:
 
         return [s for s in states if s.circuit_state != "open"]
 
-    async def get_due_sources_all_users(self, budget_multiplier: int = 1) -> list[PerceptionState]:
+    async def get_due_sources_all_users(self) -> list[PerceptionState]:
         """Return due sources across all users (used by scheduler)."""
         now = datetime.now(timezone.utc)
         reopen_before = now - timedelta(seconds=CIRCUIT_COOLDOWN_S)
@@ -247,8 +245,15 @@ class PerceptionPolicyService:
         self,
         state: PerceptionState,
         event_count: int,
+        budget_multiplier: int = 1,
     ) -> PerceptionState:
-        """After a successful perception cycle."""
+        """After a successful perception cycle.
+
+        ``budget_multiplier`` (>1 under budget pressure) stretches the next-run
+        interval so polling slows down when the token budget is tight. The
+        starvation ceiling in ``_compute_next_run`` still applies, so a stretched
+        source is never starved forever.
+        """
         now = datetime.now(timezone.utc)
         state.consecutive_failures = 0
         state.last_error = None
@@ -260,7 +265,7 @@ class PerceptionPolicyService:
         state.pending_run = False
 
         state.effective_interval_s = self._compute_effective_interval(state)
-        state.next_run_at = self._compute_next_run(state)
+        state.next_run_at = self._compute_next_run(state, budget_multiplier=budget_multiplier)
         await self._db.flush()
         return state
 

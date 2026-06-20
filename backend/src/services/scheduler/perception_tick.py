@@ -33,7 +33,7 @@ class PerceptionTickMixin:
 
             async with factory() as db:
                 svc = PerceptionPolicyService(db)
-                due_states = await svc.get_due_sources_all_users(budget_multiplier)
+                due_states = await svc.get_due_sources_all_users()
 
                 if not due_states:
                     return
@@ -87,7 +87,9 @@ class PerceptionTickMixin:
                                     state, result.get("error") or MISSING_ERROR_SENTINEL
                                 )
                             else:
-                                await svc.record_success(state, event_count)
+                                await svc.record_success(
+                                    state, event_count, budget_multiplier=budget_multiplier
+                                )
                             return state.source, event_count
                         except Exception as e:
                             # An uncategorized cycle failure has no recognized

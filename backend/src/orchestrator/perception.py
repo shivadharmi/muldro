@@ -29,7 +29,7 @@ class PerceptionCoordinator:
     # Due-source resolution
     # ------------------------------------------------------------------
 
-    async def get_due_sources(self, budget_multiplier: int = 1):
+    async def get_due_sources(self):
         """Return PerceptionState rows that are due for observation."""
         from src.models.database import get_session_factory
         from src.services.perception_policy import PerceptionPolicyService
@@ -37,7 +37,7 @@ class PerceptionCoordinator:
         factory = get_session_factory()
         async with factory() as db:
             svc = PerceptionPolicyService(db)
-            return await svc.get_due_sources(self._user_id, budget_multiplier)
+            return await svc.get_due_sources(self._user_id)
 
     # ------------------------------------------------------------------
     # Cycle execution
@@ -54,7 +54,7 @@ class PerceptionCoordinator:
         factory = get_session_factory()
         async with factory() as db:
             svc = PerceptionPolicyService(db)
-            due_states = await svc.get_due_sources(self._user_id, budget_multiplier)
+            due_states = await svc.get_due_sources(self._user_id)
 
             results: list[dict] = []
             for state in due_states:
@@ -77,7 +77,9 @@ class PerceptionCoordinator:
                         )
                     else:
                         event_count = result.get("events", 0)
-                        await svc.record_success(state, event_count)
+                        await svc.record_success(
+                            state, event_count, budget_multiplier=budget_multiplier
+                        )
 
                     await self._publish_event(
                         "connector.synced",
