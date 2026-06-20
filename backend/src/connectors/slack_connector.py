@@ -95,19 +95,39 @@ class SlackConnector(BaseConnector):
                     )
 
                     if hist_resp.status_code != 200:
-                        # Skip this channel on per-channel failure; don't abort entire poll
+                        # Surface the failure (incl. HTTP 429) instead of skipping the
+                        # channel: a skipped rate-limit is invisible to the circuit
+                        # breaker AND advances the cursor past unfetched messages →
+                        # permanent message loss. Abort the whole poll with the INCOMING
+                        # cursor (no advance, no partial events); it retries cleanly next tick.
+                        error_class = _classify_http_status(hist_resp.status_code)
                         logger.warning(
                             "Slack conversations.history returned %d for channel %s "
-                            "(user %s); skipping channel",
+                            "(user %s, class=%s); aborting poll without advancing cursor",
                             hist_resp.status_code,
                             channel_id,
                             user_id,
+                            error_class,
                         )
-                        continue
+                        return PollResult(events=[], cursor=cursor, error_class=error_class)
 
                     hist_data = hist_resp.json()
                     if not hist_data.get("ok"):
-                        continue
+                        # Slack returns HTTP 200 + {"ok": false, "error": ...} for API-level
+                        # failures (e.g. ratelimited). Map known errors; default transient.
+                        # Abort the whole poll with the incoming cursor — never swallow as
+                        # success, which would advance the cursor and lose messages.
+                        slack_error = hist_data.get("error", "unknown")
+                        error_class = _SLACK_OK_FALSE_ERROR_CLASS.get(slack_error, "transient")
+                        logger.warning(
+                            "Slack conversations.history error=%s (class=%s) for channel %s "
+                            "(user %s); aborting poll without advancing cursor",
+                            slack_error,
+                            error_class,
+                            channel_id,
+                            user_id,
+                        )
+                        return PollResult(events=[], cursor=cursor, error_class=error_class)
 
                     for msg in hist_data.get("messages", []):
                         event = self._normalize_message(msg, channel_id, channel_name)

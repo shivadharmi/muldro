@@ -277,6 +277,101 @@ class TestSlackConnectorFailurePropagation:
         # Cursor must never advance on error.
         assert result.cursor == "ts_abc"
 
+    @pytest.mark.asyncio
+    async def test_slack_history_429_returns_rate_limited(self):
+        """A 429 on conversations.history must surface as rate_limited, not silent success."""
+        from src.connectors.poll_result import PollResult
+        from src.connectors.slack_connector import SlackConnector
+
+        connector = SlackConnector(make_mock_settings())
+
+        # conversations.list succeeds with one channel.
+        list_resp = MagicMock()
+        list_resp.status_code = 200
+        list_resp.json.return_value = {"ok": True, "channels": [{"id": "C1", "name": "general"}]}
+
+        # conversations.history rate-limits (HTTP 429).
+        hist_resp = MagicMock()
+        hist_resp.status_code = 429
+
+        with patch("httpx.AsyncClient") as mock_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client.get = AsyncMock(side_effect=[list_resp, hist_resp])
+            mock_cls.return_value = mock_client
+
+            result = await connector.poll(TEST_USER_ID, "ts_abc", {"access_token": "tok"})
+
+        assert isinstance(result, PollResult)
+        assert result.failed is True
+        assert result.error_class == "rate_limited"
+        assert result.events == []
+        # Cursor must NOT advance — prevents permanent message loss.
+        assert result.cursor == "ts_abc"
+
+    @pytest.mark.asyncio
+    async def test_slack_history_okfalse_ratelimited_not_success(self):
+        """HTTP 200 + {"ok": false, "error": "ratelimited"} must NOT be swallowed as success."""
+        from src.connectors.poll_result import PollResult
+        from src.connectors.slack_connector import SlackConnector
+
+        connector = SlackConnector(make_mock_settings())
+
+        list_resp = MagicMock()
+        list_resp.status_code = 200
+        list_resp.json.return_value = {"ok": True, "channels": [{"id": "C1", "name": "general"}]}
+
+        hist_resp = MagicMock()
+        hist_resp.status_code = 200
+        hist_resp.json.return_value = {"ok": False, "error": "ratelimited"}
+
+        with patch("httpx.AsyncClient") as mock_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client.get = AsyncMock(side_effect=[list_resp, hist_resp])
+            mock_cls.return_value = mock_client
+
+            result = await connector.poll(TEST_USER_ID, "ts_abc", {"access_token": "tok"})
+
+        assert isinstance(result, PollResult)
+        assert result.failed is True
+        assert result.error_class == "rate_limited"
+        assert result.events == []
+        assert result.cursor == "ts_abc"
+
+    @pytest.mark.asyncio
+    async def test_slack_history_okfalse_auth_returns_auth_failed(self):
+        """HTTP 200 + {"ok": false, "error": "token_revoked"} maps to auth_failed."""
+        from src.connectors.poll_result import PollResult
+        from src.connectors.slack_connector import SlackConnector
+
+        connector = SlackConnector(make_mock_settings())
+
+        list_resp = MagicMock()
+        list_resp.status_code = 200
+        list_resp.json.return_value = {"ok": True, "channels": [{"id": "C1", "name": "general"}]}
+
+        hist_resp = MagicMock()
+        hist_resp.status_code = 200
+        hist_resp.json.return_value = {"ok": False, "error": "token_revoked"}
+
+        with patch("httpx.AsyncClient") as mock_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client.get = AsyncMock(side_effect=[list_resp, hist_resp])
+            mock_cls.return_value = mock_client
+
+            result = await connector.poll(TEST_USER_ID, "ts_abc", {"access_token": "tok"})
+
+        assert isinstance(result, PollResult)
+        assert result.failed is True
+        assert result.error_class == "auth_failed"
+        assert result.events == []
+        assert result.cursor == "ts_abc"
+
 
 class TestCalendarConnectorFailurePropagation:
     """Calendar connector poll() must return typed PollResult on failure."""
