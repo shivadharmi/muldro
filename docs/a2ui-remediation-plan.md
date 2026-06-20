@@ -1,7 +1,16 @@
 # A2UI End-to-End Remediation Plan
 
-> Status: PROPOSED — 2026-06-21. Branch: `review/architecture-remediation`.
+> Status: IMPLEMENTED — 2026-06-21. Branch: `review/architecture-remediation` (committed 4740678→3cdbe0d, not pushed).
 > Scope: backend + frontend + infra. Driven by screenshot-observed defects and a 5-agent code audit.
+> All 5 phases landed, each review-gated; full non-e2e backend suite 2683 green, frontend 85 green.
+> No Alembic migration required (new entity types validate in Python; artifact_refs/trace use existing JSONB/columns).
+
+## Outcome (per phase)
+- **P1 (4740678)** approvals actionable: run-surface Approval tab + REST-wired buttons + artifact_refs preview; cross-tenant ownership guard on ephemeral detail.
+- **P2 (12df814)** clean text: event_id/pipeline-jargon stripped from insight titles + briefing memory.
+- **P3 (c3c8c39)** trace: token/cost rollup at pause (accumulated across resume segments) + honest empty-state.
+- **P4 (7acd6f1)** linkage+UI: briefing fallback-to-most-recent fixes "No linked briefing"; run-detail modal on Jarvis design tokens; shared step renderer.
+- **P5 (3cdbe0d)** entity quality: financial_transaction/merchant types + paid_to/charged_to; bare-email-as-name PII guard.
 
 ## 1. Symptoms → Root Causes (audited, with file:line)
 
