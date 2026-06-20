@@ -24,6 +24,22 @@ from src.orchestrator.services import ServiceContainer
 
 logger = logging.getLogger(__name__)
 
+# Map mcp_errors.MCPErrorCode string values to a PollErrorClass so generic poll()
+# exceptions route through error_class_to_policy_error() and carry a classification
+# keyword. Unmapped/unknown codes fall back to "transient" (fail-safe threshold 6) at
+# the call site. Auth-related exceptions are permanent: a confirmed auth failure thrown
+# from the connector won't self-heal on retry.
+_MCP_CODE_TO_POLL_CLASS: dict[str, str] = {
+    "auth_error": "permanent",
+    "timeout": "transient",
+    "rate_limit": "rate_limited",
+    "server_error": "transient",
+    "validation_error": "permanent",
+    "circuit_open": "transient",
+    "not_found": "permanent",
+    "unknown_error": "transient",
+}
+
 
 class ConnectorPoller:
     """Polls connectors, ingests raw events, and advances observation cursors."""
@@ -58,11 +74,21 @@ class ConnectorPoller:
     ) -> tuple[list, str | None, str | None, str]:
         """Poll a connector for new events. Returns (events, new_cursor, error, cursor_type)."""
         from src.connectors.base import CONNECTOR_REGISTRY
+        from src.connectors.poll_result import error_class_to_policy_error
         from src.services.oauth_manager import OAuthManager
 
         connector_cls = CONNECTOR_REGISTRY.get(source)
         if not connector_cls:
-            return [], None, f"No connector registered for source: {source}", "opaque"
+            # Unregistered source is a config error — it never self-heals on retry.
+            # Classify as permanent so the circuit opens immediately (threshold 1)
+            # instead of falling through to the unknown/threshold-3 bucket.
+            permanent_err = error_class_to_policy_error("permanent")
+            return (
+                [],
+                None,
+                f"No connector registered for source: {source} ({permanent_err})",
+                "opaque",
+            )
 
         connector = connector_cls(settings=self._settings)
         cursor_type = connector.cursor_type
@@ -77,10 +103,19 @@ class ConnectorPoller:
         oauth_provider = "google" if source in ("gmail", "calendar") else source
         access_token = await oauth_mgr.get_valid_token(user_id, oauth_provider)
         if not access_token:
+            # Failure to *acquire* a local token is classified transient (NOT
+            # permanent): this layer cannot tell a momentary token-refresh blip
+            # from a real revocation, and the observed production case is a blip.
+            # Transient -> threshold 6, so refresh blips no longer open the
+            # circuit after 3. A confirmed provider 401/403 surfaces separately as
+            # PollResult.auth_failed (-> permanent), so real revocations still open
+            # fast.
+            from src.connectors.poll_result import CREDENTIAL_ACQUISITION_ERROR
+
             return (
                 [],
                 None,
-                f"No valid credentials for {source} — user may need to re-authorize",
+                f"No valid credentials for {source} — {CREDENTIAL_ACQUISITION_ERROR}",
                 cursor_type,
             )
 
@@ -144,11 +179,30 @@ class ConnectorPoller:
             from src.integrations.mcp_errors import classify_error
 
             error_code = classify_error(e)
+            # mcp_errors codes (auth_error/server_error/unknown_error/...) don't
+            # carry the keywords perception_policy.classify_error() greps for, so
+            # without translation every exception bucketed as unknown (threshold 3).
+            # Map to a PollErrorClass and route through error_class_to_policy_error
+            # so the failure carries a classification keyword. A truly unknown
+            # exception is treated as transient (threshold 6) — fail safe, never
+            # open the circuit fast on an under-classified blip.
+            poll_class = _MCP_CODE_TO_POLL_CLASS.get(error_code, "transient")
+            policy_err = error_class_to_policy_error(poll_class)
             logger.warning(
                 "connector_poll_error",
-                extra={"source": source, "error_code": error_code, "error": str(e)[:500]},
+                extra={
+                    "source": source,
+                    "error_code": error_code,
+                    "poll_class": poll_class,
+                    "error": str(e)[:500],
+                },
             )
-            return [], None, f"Poll failed for {source} ({error_code}): {e}", cursor_type
+            return (
+                [],
+                None,
+                f"Poll failed for {source} ({error_code}: {policy_err}): {e}",
+                cursor_type,
+            )
 
     @staticmethod
     def build_cursor_upsert_stmt(

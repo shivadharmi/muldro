@@ -70,7 +70,11 @@ class PerceptionCoordinator:
                     results.append(result)
 
                     if result.get("status") == "error":
-                        await svc.record_failure(state, result.get("error", "unknown"))
+                        from src.connectors.poll_result import MISSING_ERROR_SENTINEL
+
+                        await svc.record_failure(
+                            state, result.get("error") or MISSING_ERROR_SENTINEL
+                        )
                     else:
                         event_count = result.get("events", 0)
                         await svc.record_success(state, event_count)

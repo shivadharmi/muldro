@@ -518,3 +518,136 @@ class TestErrorClassPropagation:
         error_msg = error_class_to_policy_error("permanent")
         classified = classify_error(error_msg)
         assert classified == "permanent"
+
+
+# ---------------------------------------------------------------------------
+# (f) Preflight / exception error paths must carry a classification keyword
+#
+# Regression for: "Circuit opened for .../gmail after 3 failures
+# (error_class=unknown, threshold=3)" triggered by transient OAuth token-refresh
+# blips. The preflight/exception branches of ConnectorPoller.poll() bypassed the
+# typed-error pipeline and emitted prose with no classification keyword, so every
+# one of them bucketed as unknown (threshold=3). They must instead classify so
+# that:
+#   - credential-acquisition failure  -> transient (threshold 6, tolerates blips)
+#   - no connector registered         -> permanent (threshold 1, never self-heals)
+#   - generic exception               -> classified, never bare unknown
+# ---------------------------------------------------------------------------
+
+
+async def _run_poll_with_token(token, *, source="gmail"):
+    """Drive ConnectorPoller.poll with a stubbed connector + given OAuth token.
+
+    The connector itself returns an ok-empty PollResult; the test controls
+    whether the *preflight* token check fails by choosing ``token``.
+    """
+    from src.connectors.poll_result import PollResult
+    from src.orchestrator.connector_poller import ConnectorPoller
+
+    with patch("src.connectors.base.CONNECTOR_REGISTRY") as mock_registry:
+        mock_connector_cls = MagicMock()
+        mock_connector = AsyncMock()
+        mock_connector.cursor_type = "opaque"
+        mock_connector_cls.return_value = mock_connector
+        mock_registry.get.return_value = mock_connector_cls
+        mock_connector.poll = AsyncMock(
+            return_value=PollResult(events=[], cursor="c", error_class="none")
+        )
+
+        poller = MagicMock(spec=ConnectorPoller)
+        poller._settings = make_mock_settings()
+
+        mock_db = AsyncMock()
+        mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_db.__aexit__ = AsyncMock(return_value=False)
+        mock_result = MagicMock()
+        mock_result.first = MagicMock(return_value=None)
+        mock_db.execute = AsyncMock(return_value=mock_result)
+        poller._db_factory = MagicMock(return_value=mock_db)
+
+        with patch("src.services.oauth_manager.OAuthManager") as mock_oauth_cls:
+            mock_oauth = AsyncMock()
+            mock_oauth.get_valid_token = AsyncMock(return_value=token)
+            mock_oauth_cls.return_value = mock_oauth
+
+            return await ConnectorPoller.poll(poller, source, TEST_USER_ID, "ws_test")
+
+
+class TestPreflightErrorClassification:
+    @pytest.mark.asyncio
+    async def test_no_valid_credentials_classifies_transient(self):
+        """A credential-acquisition failure must classify as transient (NOT unknown).
+
+        Observed bug: transient OAuth token-refresh blips opened the circuit
+        after 3 failures because the message bucketed as unknown. It must
+        instead be transient (threshold 6) so refresh blips tolerate more
+        failures, while a confirmed provider 401 (PollResult auth_failed) stays
+        permanent.
+        """
+        from src.services.perception_policy import classify_error
+
+        events, new_cursor, poll_error, _ = await _run_poll_with_token(None)
+
+        assert events == []
+        assert poll_error is not None
+        assert classify_error(poll_error) == "transient"
+
+    @pytest.mark.asyncio
+    async def test_no_connector_registered_classifies_permanent(self):
+        """An unregistered source is a config error that never self-heals."""
+        from src.orchestrator.connector_poller import ConnectorPoller
+        from src.services.perception_policy import classify_error
+
+        with patch("src.connectors.base.CONNECTOR_REGISTRY") as mock_registry:
+            mock_registry.get.return_value = None
+
+            poller = MagicMock(spec=ConnectorPoller)
+            poller._settings = make_mock_settings()
+
+            events, new_cursor, poll_error, _ = await ConnectorPoller.poll(
+                poller, "nonexistent", TEST_USER_ID, "ws_test"
+            )
+
+        assert events == []
+        assert poll_error is not None
+        assert classify_error(poll_error) == "permanent"
+
+    @pytest.mark.asyncio
+    async def test_generic_exception_classifies_not_unknown(self):
+        """A generic poll() exception must classify to a real class, not unknown."""
+        from src.connectors.poll_result import PollResult  # noqa: F401
+        from src.orchestrator.connector_poller import ConnectorPoller
+        from src.services.perception_policy import classify_error
+
+        with patch("src.connectors.base.CONNECTOR_REGISTRY") as mock_registry:
+            mock_connector_cls = MagicMock()
+            mock_connector = AsyncMock()
+            mock_connector.cursor_type = "opaque"
+            mock_connector_cls.return_value = mock_connector
+            mock_registry.get.return_value = mock_connector_cls
+            mock_connector.poll = AsyncMock(side_effect=RuntimeError("kaboom"))
+
+            poller = MagicMock(spec=ConnectorPoller)
+            poller._settings = make_mock_settings()
+
+            mock_db = AsyncMock()
+            mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+            mock_db.__aexit__ = AsyncMock(return_value=False)
+            mock_result = MagicMock()
+            mock_result.first = MagicMock(return_value=None)
+            mock_db.execute = AsyncMock(return_value=mock_result)
+            poller._db_factory = MagicMock(return_value=mock_db)
+
+            with patch("src.services.oauth_manager.OAuthManager") as mock_oauth_cls:
+                mock_oauth = AsyncMock()
+                mock_oauth.get_valid_token = AsyncMock(return_value="tok")
+                mock_oauth_cls.return_value = mock_oauth
+
+                events, _, poll_error, _ = await ConnectorPoller.poll(
+                    poller, "gmail", TEST_USER_ID, "ws_test"
+                )
+
+        assert events == []
+        assert poll_error is not None
+        # A generic exception must not silently bucket as unknown/threshold-3.
+        assert classify_error(poll_error) != "unknown"

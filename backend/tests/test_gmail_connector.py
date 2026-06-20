@@ -1,11 +1,11 @@
 """Tests for Gmail connector — header capture."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from src.connectors.gmail import GmailConnector
-from tests.conftest import make_mock_settings
+from tests.conftest import TEST_USER_ID, make_mock_settings
 
 
 def _make_gmail_message(
@@ -182,3 +182,67 @@ async def test_fetch_message_detail_missing_optional_headers():
     assert detail["rfc_message_id"] == ""
     assert detail["in_reply_to"] == ""
     assert detail["references"] == ""
+
+
+@pytest.mark.asyncio
+async def test_poll_expired_history_recovers_via_full_sync():
+    """A 404 on history.list (expired historyId cursor) must recover via full sync.
+
+    Gmail returns HTTP 404 from history.list when the stored historyId is older
+    than ~a week. The connector must re-enter the initial full-sync path
+    (cursor=None) — listing recent messages and fetching a FRESH historyId from
+    the profile endpoint — NOT silently re-save the dead cursor and return [].
+
+    Regression: before the fix, the 404 branch did a dead `cursor = None` store
+    and fell through to return events=[] with the OLD expired cursor, so every
+    subsequent poll 404'd forever and Gmail perception died silently.
+    """
+    connector = GmailConnector(make_mock_settings())
+
+    expired_cursor = "expired_history_id_111"
+    fresh_history_id = "fresh_history_id_999"
+
+    # Response sequence over the recursive recovery path:
+    #   1. history.list (incremental, original cursor) -> 404 (expired)
+    #   2. recurse with cursor=None -> messages.list -> 200, one message
+    #   3. _fetch_message_as_event -> message detail GET -> 200
+    #   4. profile GET -> 200 with the FRESH historyId
+    history_404 = MagicMock()
+    history_404.status_code = 404
+
+    messages_list_resp = MagicMock()
+    messages_list_resp.status_code = 200
+    messages_list_resp.json.return_value = {"messages": [{"id": "msg_001"}]}
+
+    message_detail_resp = MagicMock()
+    message_detail_resp.status_code = 200
+    message_detail_resp.json.return_value = _make_gmail_message(msg_id="msg_001")
+
+    profile_resp = MagicMock()
+    profile_resp.status_code = 200
+    profile_resp.json.return_value = {"historyId": fresh_history_id}
+
+    with patch("httpx.AsyncClient") as mock_cls:
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.get = AsyncMock(
+            side_effect=[
+                history_404,
+                messages_list_resp,
+                message_detail_resp,
+                profile_resp,
+            ]
+        )
+        mock_cls.return_value = mock_client
+
+        result = await connector.poll(TEST_USER_ID, expired_cursor, {"access_token": "tok"})
+
+    # Recovered: the backfilled message is returned as an event ...
+    assert result.ok is True
+    assert len(result.events) == 1
+    assert result.events[0].raw_payload["message_id"] == "msg_001"
+
+    # ... and the cursor advances to the FRESH historyId, never the expired one.
+    assert result.cursor == fresh_history_id
+    assert result.cursor != expired_cursor

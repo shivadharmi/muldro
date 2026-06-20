@@ -26,6 +26,25 @@ _ERROR_CLASS_MESSAGES: dict[str, str] = {
     "auth_failed": "auth_failed connector error (401 unauthorized: token invalid or revoked)",
 }
 
+# Default sentinel for callers doing ``result.get("error", MISSING_ERROR_SENTINEL)``.
+# A *missing* error key is a programming gap, not a confirmed failure mode — it must
+# not silently land on the unknown/threshold-3 bucket and open the circuit fast.
+# The "transient" keyword makes classify_error() bucket it as transient (threshold 6),
+# the safe default for an under-specified failure.
+MISSING_ERROR_SENTINEL = (
+    "transient connector error (503 service unavailable): unclassified — error detail missing"
+)
+
+# Preflight failure to *acquire* a local OAuth access token (e.g. token-refresh blip).
+# Deliberately classified as transient, NOT permanent: this layer cannot distinguish
+# a momentary refresh failure from a real revocation, and the observed production case
+# is a transient blip. A confirmed provider 401/403 surfaces as PollResult.auth_failed
+# (-> permanent) on the connector return path, so real revocations still open fast.
+CREDENTIAL_ACQUISITION_ERROR = (
+    "transient connector error (503 service unavailable): "
+    "could not acquire OAuth credentials — likely token-refresh blip"
+)
+
 
 def error_class_to_policy_error(error_class: PollErrorClass) -> str:
     """Convert a PollErrorClass into an error string that classify_error() will bucket correctly.

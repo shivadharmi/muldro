@@ -81,7 +81,11 @@ class PerceptionTickMixin:
                             )
                             event_count = result.get("events", 0)
                             if result.get("status") == "error":
-                                await svc.record_failure(state, result.get("error", "unknown"))
+                                from src.connectors.poll_result import MISSING_ERROR_SENTINEL
+
+                                await svc.record_failure(
+                                    state, result.get("error") or MISSING_ERROR_SENTINEL
+                                )
                             else:
                                 await svc.record_success(state, event_count)
                             return state.source, event_count

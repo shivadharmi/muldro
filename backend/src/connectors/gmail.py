@@ -63,8 +63,12 @@ class GmailConnector(BaseConnector):
                                 if event:
                                     events.append(event)
                     elif resp.status_code == 404:
-                        # History expired — fall through to full sync (cursor=None)
-                        cursor = None
+                        # historyId expired — recurse into full sync (cursor=None).
+                        # Mirrors calendar.py's 410 syncToken handling. The full-sync
+                        # path uses different endpoints (messages.list + profile, not
+                        # history.list), so this single re-entry cannot itself 404 here
+                        # and recurse forever.
+                        return await self.poll(user_id, None, credentials)
                     else:
                         error_class = _classify_http_status(resp.status_code)
                         logger.warning(
