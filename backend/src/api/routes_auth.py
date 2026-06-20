@@ -6,7 +6,6 @@ from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import (
@@ -14,6 +13,15 @@ from src.api.deps import (
     get_current_user_id,
     get_current_workspace_id,
     get_session,
+)
+from src.api.routes_auth_schemas import (
+    AuthTokenResponse,
+    MagicLinkRequest,
+    MagicLinkResponse,
+    OAuthUrlResponse,
+    RefreshRequest,
+    UserProfileResponse,
+    VerifyRequest,
 )
 from src.config.settings import Settings, get_settings
 from src.errors import AuthError, ValidationError
@@ -23,45 +31,6 @@ from src.services.auth_service import AuthService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
-
-# ── Request / Response Schemas ───────────────────────────────
-
-
-class MagicLinkRequest(BaseModel):
-    email: str
-
-
-class MagicLinkResponse(BaseModel):
-    status: str
-    message: str
-    token: str | None = None  # Only returned in dev mode (no backend_token set)
-
-
-class VerifyRequest(BaseModel):
-    token: str
-
-
-class AuthTokenResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-    expires_at: str
-    user: dict
-
-
-class UserProfileResponse(BaseModel):
-    user_id: str
-    email: str
-    display_name: str | None
-    avatar_url: str | None
-    status: str
-    onboarding_completed: bool
-    settings: dict | None
-
-
-class OAuthUrlResponse(BaseModel):
-    url: str
-    provider: str
 
 
 # ── Magic Link ───────────────────────────────────────────────
@@ -964,10 +933,6 @@ def _error_redirect(settings: Settings, message: str) -> RedirectResponse:
 
 
 # ── Session Management ───────────────────────────────────────
-
-
-class RefreshRequest(BaseModel):
-    refresh_token: str
 
 
 @router.post("/v1/auth/refresh", response_model=AuthTokenResponse)
