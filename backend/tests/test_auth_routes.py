@@ -128,7 +128,7 @@ class TestAuthErrorEnvelopeNoLeak:
     def test_verify_does_not_leak_raw_exception(self):
         from unittest.mock import AsyncMock, patch
 
-        with patch("src.api.routes_auth.AuthService") as mock_auth:
+        with patch("src.api.routes_auth_magic_link.AuthService") as mock_auth:
             mock_auth.return_value.verify_magic_link = AsyncMock(
                 side_effect=ValueError(_LEAKY_DETAIL)
             )
