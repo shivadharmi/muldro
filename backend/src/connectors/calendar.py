@@ -9,6 +9,13 @@ from src.services.event_processor import RawEvent
 
 logger = logging.getLogger(__name__)
 
+# Defensive page cap for a single incremental/initial sync. Google Calendar
+# returns nextSyncToken only on the final page; intermediate pages carry
+# nextPageToken. A misbehaving provider that always returns a nextPageToken
+# would otherwise loop forever. On truncation we log a warning so silent data
+# loss is visible, consistent with the gmail connector's MAX_HISTORY_PAGES.
+MAX_PAGES = 50
+
 
 @register_connector("calendar")
 class CalendarConnector(BaseConnector):
@@ -29,39 +36,71 @@ class CalendarConnector(BaseConnector):
 
         try:
             async with httpx.AsyncClient() as client:
-                params: dict = {"singleEvents": "true", "maxResults": 50}
-                if cursor:
-                    params["syncToken"] = cursor
-                else:
-                    # Initial sync: get events from now to 7 days out
-                    now = datetime.now(timezone.utc).isoformat()
-                    params["timeMin"] = now
+                # Walk every page before advancing the cursor. Google returns
+                # nextSyncToken ONLY on the final page; intermediate pages carry
+                # nextPageToken. The first request of a sync carries syncToken
+                # (incremental) or timeMin (first sync) — subsequent requests carry
+                # ONLY pageToken, since the API rejects combining a pageToken with
+                # syncToken/timeMin.
+                page_token: str | None = None
+                pages_fetched = 0
+                truncated = False
+                while True:
+                    params: dict = {"singleEvents": "true", "maxResults": 50}
+                    if page_token:
+                        params["pageToken"] = page_token
+                    elif cursor:
+                        params["syncToken"] = cursor
+                    else:
+                        # Initial sync: get events from now onward.
+                        params["timeMin"] = datetime.now(timezone.utc).isoformat()
 
-                resp = await client.get(
-                    "https://www.googleapis.com/calendar/v3/calendars/primary/events",
-                    params=params,
-                    headers={"Authorization": f"Bearer {access_token}"},
-                    timeout=15,
-                )
+                    resp = await client.get(
+                        "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+                        params=params,
+                        headers={"Authorization": f"Bearer {access_token}"},
+                        timeout=15,
+                    )
 
-                if resp.status_code == 410:
-                    # Sync token expired — full sync (cursor=None, not a failure)
-                    return await self.poll(user_id, None, credentials)
+                    if resp.status_code == 410:
+                        # Sync token expired — full sync (cursor=None, not a failure)
+                        return await self.poll(user_id, None, credentials)
 
-                if resp.status_code == 200:
+                    if resp.status_code != 200:
+                        error_class = _classify_http_status(resp.status_code)
+                        logger.warning(
+                            "Calendar API returned %d for user %s", resp.status_code, user_id
+                        )
+                        # Return unchanged incoming cursor on failure
+                        return PollResult(events=[], cursor=cursor, error_class=error_class)
+
                     data = resp.json()
-                    new_cursor = data.get("nextSyncToken", cursor)
-
                     for item in data.get("items", []):
                         event = self._normalize_event(item, user_id)
                         if event:
                             events.append(event)
-                else:
-                    error_class = _classify_http_status(resp.status_code)
+
+                    # nextSyncToken only appears on the final page; keep the last
+                    # seen value so the cursor advances correctly after the loop.
+                    sync_token = data.get("nextSyncToken")
+                    if sync_token:
+                        new_cursor = sync_token
+
+                    pages_fetched += 1
+                    page_token = data.get("nextPageToken")
+                    if not page_token:
+                        break
+                    if pages_fetched >= MAX_PAGES:
+                        truncated = True
+                        break
+
+                if truncated:
                     logger.warning(
-                        "Calendar API returned %d for user %s", resp.status_code, user_id
+                        "Calendar sync truncated at %d pages for user %s; remaining "
+                        "events were not drained this poll",
+                        MAX_PAGES,
+                        user_id,
                     )
-                    return PollResult(events=[], cursor=cursor, error_class=error_class)
 
         except Exception:
             logger.warning("Calendar poll failed for user %s", user_id, exc_info=True)
