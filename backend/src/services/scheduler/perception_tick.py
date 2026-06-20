@@ -90,12 +90,23 @@ class PerceptionTickMixin:
                                 await svc.record_success(state, event_count)
                             return state.source, event_count
                         except Exception as e:
-                            await svc.record_failure(state, str(e)[:512])
+                            # An uncategorized cycle failure has no recognized
+                            # keyword, so a bare str(e) would classify as
+                            # unknown (threshold 3). Fail-safe to the transient
+                            # sentinel (threshold 6) — consistent with the
+                            # connector-poller error paths. Keep the real error
+                            # in the log for debuggability.
+                            from src.connectors.poll_result import error_class_to_policy_error
+
+                            await svc.record_failure(
+                                state, error_class_to_policy_error("transient")
+                            )
                             logger.warning(
                                 "Perception cycle failed for %s/%s: %s",
                                 state.user_id,
                                 state.source,
                                 e,
+                                extra={"error": str(e)[:512]},
                             )
                             return state.source, 0
 
