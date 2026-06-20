@@ -104,6 +104,10 @@ async def test_drive_start_page_token_failure_is_transient():
     assert result.failed is True
     assert result.error_class == "transient"
     assert result.cursor is None
+    # No partial events survive a failing poll — the consumer discards events on
+    # any failure, so the connector must return empty (fail -> empty + unchanged
+    # cursor), consistent with every other connector.
+    assert result.events == []
 
 
 @pytest.mark.asyncio

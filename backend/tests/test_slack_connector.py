@@ -204,12 +204,16 @@ async def test_slack_legacy_bare_string_cursor_tolerated():
 
 
 @pytest.mark.asyncio
-async def test_slack_per_channel_error_preserves_drained_channels():
-    """A rate-limit in one channel must NOT discard successfully-drained channels.
+async def test_slack_channel_error_returns_empty_and_unchanged_cursor():
+    """A per-channel failure aborts the whole poll: empty events + INCOMING cursor.
 
-    The failing poll still reports error_class (so the breaker sees it), but the
-    returned cursor advances the watermark for channels that drained, so healthy
-    channels aren't re-fetched.
+    The connector follows the established "fail -> empty + unchanged cursor"
+    contract shared by all connectors. The pipeline never ingests events nor
+    advances the cursor on a failing poll (cursor advances only on error_class
+    none), so returning partial events / a partially-advanced channel map would
+    be silently discarded by the consumer. Instead the failure is surfaced via
+    error_class (the breaker sees it) while events stay empty and the cursor map
+    is returned UNCHANGED (== incoming), so nothing advances.
     """
     connector = SlackConnector(make_mock_settings())
 
@@ -235,13 +239,14 @@ async def test_slack_per_channel_error_preserves_drained_channels():
     assert result.error_class == "rate_limited"
     assert result.failed is True
 
-    # Successful channel's events preserved.
-    assert any(e.raw_payload["ts"] == "150.000" for e in result.events)
+    # NO partial events survive a failing poll — the consumer would drop them anyway.
+    assert result.events == []
 
-    # Cursor advanced ONLY for the drained channel; the failed channel keeps its
-    # prior watermark (cursor-never-advance-on-error, per channel).
+    # Cursor returned UNCHANGED (== incoming) so NOTHING advances, including the
+    # channel that happened to drain. Honest about the pipeline invariant.
+    assert result.cursor == incoming
     cursor_map = json.loads(result.cursor)
-    assert cursor_map["C_OK"] == "150.000"
+    assert cursor_map["C_OK"] == "100.000"
     assert cursor_map["C_FAIL"] == "200.000"
 
 

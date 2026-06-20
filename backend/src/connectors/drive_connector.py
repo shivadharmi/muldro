@@ -165,7 +165,11 @@ class DriveConnector(BaseConnector):
                 token_resp.status_code,
                 user_id,
             )
-            return PollResult(events=events, cursor=cursor, error_class=error_class)
+            # Fail -> empty events + INCOMING cursor unchanged. The files.list page
+            # drained above is discarded: the consumer drops events on any failure
+            # and never advances the cursor on a failing poll, so emitting partial
+            # events here would be silently dropped. The next clean poll re-lists.
+            return PollResult(events=[], cursor=cursor, error_class=error_class)
         new_cursor = token_resp.json().get("startPageToken")
 
         logger.info("Drive poll: %d events, cursor %s -> %s", len(events), cursor, new_cursor)

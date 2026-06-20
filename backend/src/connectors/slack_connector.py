@@ -72,12 +72,10 @@ class SlackConnector(BaseConnector):
 
         incoming_map = self._parse_cursor(cursor)
         events: list[RawEvent] = []
-        # Start from the incoming watermarks; channels that drain successfully
-        # overwrite their own entry. Channels that error keep their prior value.
+        # Start from the incoming watermarks; on a fully-clean poll each channel
+        # that drains successfully overwrites its own entry. On ANY channel error
+        # we discard this map entirely and return the INCOMING cursor unchanged.
         new_map: dict[str, str] = dict(incoming_map)
-        # First channel-level error encountered; surfaced to the breaker while still
-        # preserving progress on healthy channels.
-        poll_error: PollErrorClass | None = None
 
         try:
             async with httpx.AsyncClient() as client:
@@ -100,15 +98,24 @@ class SlackConnector(BaseConnector):
                         channel_name,
                         oldest,
                     )
-                    events.extend(drained)
 
                     if channel_error is not None:
-                        # Per-channel error: record the failure for the breaker but
-                        # keep this channel's prior watermark (cursor-never-advance-
-                        # on-error, per channel). Other channels still advance.
-                        if poll_error is None:
-                            poll_error = channel_error
-                        continue
+                        # Per-channel error → fail the whole poll with empty events
+                        # and the INCOMING cursor UNCHANGED. The consumer discards
+                        # events on any failure and never advances the cursor on a
+                        # failing poll, so returning partial events / a partially-
+                        # advanced channel map would be silently dropped. Be honest
+                        # about that pipeline invariant: nothing advances on error.
+                        logger.warning(
+                            "Slack poll: channel %s errored (class=%s) for user %s; "
+                            "returning empty events and unchanged cursor",
+                            channel_id,
+                            channel_error,
+                            user_id,
+                        )
+                        return PollResult(events=[], cursor=cursor, error_class=channel_error)
+
+                    events.extend(drained)
 
                     # Channel drained cleanly: advance ITS OWN watermark to its max ts.
                     if max_ts is not None:
@@ -120,20 +127,9 @@ class SlackConnector(BaseConnector):
             logger.warning("Slack poll failed for user %s", user_id, exc_info=True)
             return PollResult(events=[], cursor=cursor, error_class="transient")
 
+        # Clean poll across ALL channels: per-channel isolation preserved — each
+        # successfully-drained channel advanced its OWN watermark independently.
         new_cursor = json.dumps(new_map) if new_map else cursor
-
-        if poll_error is not None:
-            # Failure visible to the circuit breaker, but successful channels'
-            # advanced watermarks are preserved so they aren't re-fetched.
-            logger.warning(
-                "Slack poll: %d events with channel error class=%s for user %s; "
-                "advancing only successfully-drained channels",
-                len(events),
-                poll_error,
-                user_id,
-            )
-            return PollResult(events=events, cursor=new_cursor, error_class=poll_error)
-
         logger.info("Slack poll: %d events", len(events))
         return PollResult(events=events, cursor=new_cursor)
 

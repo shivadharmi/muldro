@@ -138,35 +138,33 @@ class ConnectorPoller:
                 cursor = row[0]
 
         try:
-            from src.connectors.poll_result import PollResult, error_class_to_policy_error
+            from src.connectors.poll_result import error_class_to_policy_error
 
+            # Every registered connector returns a PollResult. On any failure it
+            # carries empty events + the incoming cursor unchanged (fail -> empty +
+            # unchanged cursor), so we never ingest events nor advance the cursor on
+            # a failing poll.
             result = await asyncio.wait_for(
                 connector.poll(user_id, cursor, {"access_token": access_token}),
                 timeout=30,
             )
 
-            # Connectors now return PollResult; accept legacy 2-tuple for safety.
-            if isinstance(result, PollResult):
-                if result.failed:
-                    # Sentinel message contains the keyword classify_error() needs;
-                    # prefix with source for observability without repeating error_class.
-                    policy_err = error_class_to_policy_error(result.error_class)
-                    error_msg = f"Poll failed for {source}: {policy_err}"
-                    logger.warning(
-                        "connector_poll_error",
-                        extra={
-                            "source": source,
-                            "error_class": result.error_class,
-                            "error": error_msg[:500],
-                        },
-                    )
-                    # Return unchanged cursor — never advance on failure
-                    return [], result.cursor, error_msg, cursor_type
-                return result.events, result.cursor, None, cursor_type
-            else:
-                # Legacy 2-tuple fallback (non-native connectors)
-                events, new_cursor = result
-                return events, new_cursor, None, cursor_type
+            if result.failed:
+                # Sentinel message contains the keyword classify_error() needs;
+                # prefix with source for observability without repeating error_class.
+                policy_err = error_class_to_policy_error(result.error_class)
+                error_msg = f"Poll failed for {source}: {policy_err}"
+                logger.warning(
+                    "connector_poll_error",
+                    extra={
+                        "source": source,
+                        "error_class": result.error_class,
+                        "error": error_msg[:500],
+                    },
+                )
+                # Return unchanged cursor — never advance on failure
+                return [], result.cursor, error_msg, cursor_type
+            return result.events, result.cursor, None, cursor_type
 
         except asyncio.TimeoutError:
             logger.warning(
