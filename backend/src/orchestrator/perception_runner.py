@@ -220,8 +220,13 @@ class PerceptionRunner:
             )
 
             if poll_error:
+                # Keep the source + error in the *message* (not only ``extra``):
+                # the human-readable log formatter drops ``extra``, so a bare
+                # "perception_poll_failed" line was undiagnosable in plain-text logs.
                 logger.warning(
-                    "perception_poll_failed",
+                    "perception_poll_failed source=%s error=%s",
+                    source,
+                    poll_error,
                     extra={"source": source, "error": poll_error},
                 )
                 return {"status": "error", "source": source, "error": poll_error}

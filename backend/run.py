@@ -2,20 +2,21 @@
 
 import argparse
 import logging
-import threading
 
 import uvicorn
 
 from src.config.logging import configure_logging
 from src.config.settings import get_settings
 
+# Cross-thread gate: set by the FastAPI lifespan after MCP bridge init, waited on
+# by the worker thread before processing tasks. Sourced from a normal ``src.``
+# module (NOT defined here) so the lifespan's ``from src.runtime_signals import``
+# and this script's ``__main__`` bind the SAME Event object — see runtime_signals.
+from src.runtime_signals import mcp_bridge_ready
+
 _component_health: dict[str, dict] = {
     "worker": {"status": "not_started"},
 }
-
-# Cross-thread gate: set by the FastAPI lifespan after MCP bridge init,
-# waited on by the worker thread before processing tasks.
-mcp_bridge_ready = threading.Event()
 
 
 def get_component_health() -> dict:
@@ -58,7 +59,7 @@ def main():
                 from src.models.database import get_session_factory
                 from src.orchestrator.jarvis import JarvisOrchestrator
                 from src.runtime import build_shared
-                from src.tools import intelligence_server
+                from src.tools import configure_tool_servers
 
                 db_factory = get_session_factory()
 
@@ -69,7 +70,7 @@ def main():
                     # worker orchestrator must NOT hold a shared long-lived
                     # AsyncSession either (P2 #4).
                     services = build_shared(settings)
-                    intelligence_server.configure(db_factory, settings, services)
+                    configure_tool_servers(db_factory, settings, services)
 
                     return JarvisOrchestrator(
                         settings=settings,
@@ -123,14 +124,26 @@ def main():
             # Neo4j). A 30s budget is generous for that work; exceeding it
             # usually means the API lifespan itself is stuck on an external
             # dependency.
-            logger.info("Worker thread waiting for API lifespan handshake...")
-            if not mcp_bridge_ready.wait(timeout=30):
-                logger.warning(
-                    "API lifespan handshake not received within 30s — "
-                    "worker starting anyway (API startup may still be in progress)"
+            #
+            # Under ``uvicorn --reload`` (settings.debug) the lifespan runs in a
+            # separate child process, so this in-process Event can never be set
+            # from there. Waiting would guarantee a misleading 30s timeout every
+            # dev startup; skip it and proceed (the worker's own internal MCP
+            # servers are already configured synchronously above).
+            if settings.debug:
+                logger.info(
+                    "Reload mode (debug=True): API lifespan runs in a separate "
+                    "process — skipping in-process MCP bridge handshake."
                 )
             else:
-                logger.info("MCP bridge wired, worker proceeding")
+                logger.info("Worker thread waiting for API lifespan handshake...")
+                if not mcp_bridge_ready.wait(timeout=30):
+                    logger.warning(
+                        "API lifespan handshake not received within 30s — "
+                        "worker starting anyway (API startup may still be in progress)"
+                    )
+                else:
+                    logger.info("MCP bridge wired, worker proceeding")
 
             logger.info("Worker thread starting (StreamConsumerManager + SchedulerLoop)")
             _component_health["worker"] = {"status": "running"}

@@ -245,7 +245,11 @@ def create_app() -> FastAPI:
         # failures on every tool call.
         if mcp_bridge_ok:
             try:
-                from run import mcp_bridge_ready
+                # Shared ``src.`` module so this binds the SAME Event the worker
+                # waits on. Importing ``from run`` would load run.py a second time
+                # (it ran as __main__) and set a different Event — see
+                # runtime_signals for the full rationale.
+                from src.runtime_signals import mcp_bridge_ready
 
                 mcp_bridge_ready.set()
             except ImportError:

@@ -22,7 +22,7 @@ async def _trigger_initial_observation(user_id: str, sources: list[str], workspa
         from src.models.database import get_session_factory
         from src.orchestrator.jarvis import JarvisOrchestrator
         from src.runtime import build as build_runtime
-        from src.tools import intelligence_server
+        from src.tools import configure_tool_servers
 
         settings = get_settings()
         db_factory = get_session_factory()
@@ -31,7 +31,7 @@ async def _trigger_initial_observation(user_id: str, sources: list[str], workspa
         svc_db = db_factory()
         try:
             svc = build_runtime(settings, svc_db)
-            intelligence_server.configure(db_factory, settings, svc)
+            configure_tool_servers(db_factory, settings, svc)
             orchestrator = JarvisOrchestrator(
                 settings=settings,
                 db_factory=db_factory,

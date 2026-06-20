@@ -59,11 +59,11 @@ def _build_orchestrator(settings: Settings):
     from src.models.database import get_session_factory
     from src.orchestrator.jarvis import JarvisOrchestrator
     from src.runtime import build_shared
-    from src.tools import intelligence_server
+    from src.tools import configure_tool_servers
 
     db_factory = get_session_factory()
     svc = build_shared(settings)
-    intelligence_server.configure(db_factory, settings, svc)
+    configure_tool_servers(db_factory, settings, svc)
 
     # Track the shared Redis client for shutdown cleanup (build_shared opens one
     # process-wide client reused by the orchestrator + per-request services).
