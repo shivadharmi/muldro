@@ -306,14 +306,16 @@ class TestGitHubConnectorFailurePropagation:
         assert result.error_class == "transient"
         assert result.cursor == "2026-01-01T00:00:00Z"
 
-    @pytest.mark.asyncio
-    async def test_403_returns_auth_failed(self):
+    async def _poll_403(self, headers: dict) -> object:
+        """Drive github poll() against a mocked 403 response with the given headers."""
         from src.connectors.github_connector import GitHubConnector
-        from src.connectors.poll_result import PollResult
 
         connector = GitHubConnector(make_mock_settings())
         mock_resp = MagicMock()
         mock_resp.status_code = 403
+        # headers must be a real dict so .get() returns None for absent keys
+        # (a bare MagicMock.get() returns a truthy mock and would defeat discrimination).
+        mock_resp.headers = headers
 
         with patch("httpx.AsyncClient") as mock_cls:
             mock_client = AsyncMock()
@@ -322,9 +324,42 @@ class TestGitHubConnectorFailurePropagation:
             mock_client.get = AsyncMock(return_value=mock_resp)
             mock_cls.return_value = mock_client
 
-            result = await connector.poll(
+            return await connector.poll(
                 TEST_USER_ID, "2026-01-01T00:00:00Z", {"access_token": "tok"}
             )
+
+    @pytest.mark.asyncio
+    async def test_github_403_ratelimit_is_rate_limited(self):
+        """403 + X-RateLimit-Remaining: 0 is a primary rate limit, not an auth failure."""
+        from src.connectors.poll_result import PollResult
+
+        result = await self._poll_403(
+            {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1700000000"}
+        )
+
+        assert isinstance(result, PollResult)
+        assert result.failed is True
+        assert result.error_class == "rate_limited"
+        assert result.cursor == "2026-01-01T00:00:00Z"
+
+    @pytest.mark.asyncio
+    async def test_github_403_secondary_ratelimit_is_rate_limited(self):
+        """403 + Retry-After is a secondary/abuse rate limit, not an auth failure."""
+        from src.connectors.poll_result import PollResult
+
+        result = await self._poll_403({"Retry-After": "60"})
+
+        assert isinstance(result, PollResult)
+        assert result.failed is True
+        assert result.error_class == "rate_limited"
+        assert result.cursor == "2026-01-01T00:00:00Z"
+
+    @pytest.mark.asyncio
+    async def test_github_403_no_ratelimit_headers_is_auth_failed(self):
+        """403 with no rate-limit headers is a genuine auth/permission failure."""
+        from src.connectors.poll_result import PollResult
+
+        result = await self._poll_403({})
 
         assert isinstance(result, PollResult)
         assert result.failed is True

@@ -54,7 +54,18 @@ class GitHubConnector(BaseConnector):
                     if notifications:
                         new_cursor = datetime.now(timezone.utc).isoformat()
                 else:
-                    error_class = _classify_http_status(resp.status_code)
+                    # GitHub returns 403 (not 429) for rate limits: the primary
+                    # limit sets X-RateLimit-Remaining: 0, the secondary/abuse
+                    # limit sets Retry-After. These are recoverable rate limits,
+                    # NOT auth failures — the shared helper can't see headers, so
+                    # discriminate here before falling back to status-only mapping.
+                    if resp.status_code == 403 and (
+                        resp.headers.get("X-RateLimit-Remaining") == "0"
+                        or resp.headers.get("Retry-After")
+                    ):
+                        error_class = "rate_limited"
+                    else:
+                        error_class = _classify_http_status(resp.status_code)
                     logger.warning(
                         "GitHub notifications API returned %d for user %s",
                         resp.status_code,
