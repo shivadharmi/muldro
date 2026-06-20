@@ -147,6 +147,18 @@ class TestComputeNextRun:
         delta = (next_run - now).total_seconds()
         assert 899 <= delta <= 901
 
+    def test_budget_multiplier_clamped_to_max_interval(self):
+        # A huge multiplier would push the interval to 300*100 = 30000s, but the
+        # hard guardrail clamps it to MAX_INTERVAL_S by construction. Fresh
+        # last_run_at ensures the starvation ceiling does NOT fire first.
+        now = datetime.now(timezone.utc)
+        state = _make_state(effective_interval_s=300, last_run_at=now)
+        svc = PerceptionPolicyService(_mock_db())
+        next_run = svc._compute_next_run(state, budget_multiplier=100)
+        delta = (next_run - now).total_seconds()
+        assert MAX_INTERVAL_S - 1 <= delta <= MAX_INTERVAL_S + 1
+        assert delta < 300 * 100  # not the unclamped value
+
     def test_starvation_ceiling_forces_immediate_run(self):
         long_ago = datetime.now(timezone.utc) - timedelta(seconds=STARVATION_CEILING_S + 100)
         state = _make_state(effective_interval_s=300, last_run_at=long_ago)

@@ -370,15 +370,15 @@ class PerceptionPolicyService:
     def _compute_next_run(self, state: PerceptionState, budget_multiplier: int = 1) -> datetime:
         """Compute next_run_at from effective interval."""
         now = datetime.now(timezone.utc)
-        interval = state.effective_interval_s * max(budget_multiplier, 1)
+        # Budget pressure stretches the interval, but never past the hard
+        # guardrail (clamp by construction, not by coincidence).
+        interval = min(state.effective_interval_s * max(budget_multiplier, 1), MAX_INTERVAL_S)
 
         # Starvation prevention: if last_run_at is very old, don't push further
         if state.last_run_at is not None:
             silence = (now - state.last_run_at).total_seconds()
             if silence >= STARVATION_CEILING_S:
                 return now  # run immediately
-
-        from datetime import timedelta
 
         return now + timedelta(seconds=interval)
 
