@@ -116,8 +116,8 @@ async def build_run_plan_tab(db: AsyncSession, surface: Any, **kwargs: Any) -> D
                 [
                     units.plan_summary(
                         goal=plan.goal or "",
-                        reasoning=plan.reasoning or "",
-                        success_criteria=plan.success_criteria or "",
+                        reasoning=plan.reasoning_summary or "",
+                        success_criteria=_format_success_conditions(plan.success_conditions),
                         priority=plan.priority or "",
                         trigger_type=plan.trigger_type or "",
                         run_id=run_id,
@@ -127,6 +127,17 @@ async def build_run_plan_tab(db: AsyncSession, surface: Any, **kwargs: Any) -> D
             )
         ],
     )
+
+
+def _format_success_conditions(conditions: dict | None) -> str:
+    """Render the Plan.success_conditions JSONB (dict|None) into a readable string.
+
+    ``plan_summary`` expects a plain string for ``success_criteria``; the model
+    stores a dict, so join its key/value pairs. None / empty → "".
+    """
+    if not conditions:
+        return ""
+    return "; ".join(f"{key}: {value}" for key, value in conditions.items())
 
 
 async def build_run_events_tab(db: AsyncSession, surface: Any, **kwargs: Any) -> DetailTabResponse:

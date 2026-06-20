@@ -88,6 +88,9 @@ class _FakeScalars:
     def all(self):
         return self._rows
 
+    def first(self):
+        return self._rows[0] if self._rows else None
+
     def one_or_none(self):
         return self._rows[0] if self._rows else None
 
@@ -103,6 +106,13 @@ class _FakeResult:
         return _FakeScalars(self._rows)
 
     def scalar_one_or_none(self):
+        # Mirror SQLAlchemy semantics: raises when >1 row is present.
+        if len(self._rows) > 1:
+            from sqlalchemy.exc import MultipleResultsFound
+
+            raise MultipleResultsFound("Multiple rows were found when one or none was required")
+        if self._rows:
+            return self._rows[0]
         return self._scalar
 
     def scalar(self):
@@ -196,6 +206,84 @@ async def test_list_history_returns_items_with_correct_shape():
     assert item.step_count == 1
     assert item.status == "completed"
     assert item.approval is None
+
+
+@pytest.mark.asyncio
+async def test_list_history_handles_multiple_pending_approvals():
+    """A run with >1 pending approvals must not 500 (regression for MultipleResultsFound).
+
+    The approval query must be 0/1/many-safe and deterministically pick the most
+    recent pending approval rather than raising sqlalchemy.exc.MultipleResultsFound.
+    """
+    from src.api.routes_history import list_history
+
+    run = MagicMock()
+    run.run_id = "run_multi"
+    run.plan_id = None
+    run.user_id = "usr_01JTEST00000000000000000000"
+    run.workspace_id = "ws_test"
+    run.status = "awaiting_approval"
+    run.source = "background"
+    run.retry_count = 0
+    run.started_at = datetime(2026, 4, 13, 10, 0, tzinfo=timezone.utc)
+    run.completed_at = None
+    run.error = None
+
+    # Two pending approvals for the SAME run, newest first (ordered by created_at desc).
+    appr_newer = MagicMock()
+    appr_newer.approval_id = "apr_newer"
+    appr_newer.step_id = "step_002"
+    appr_newer.title = "Send follow-up email"
+    appr_newer.risk_level = "medium"
+    appr_newer.created_at = datetime(2026, 4, 13, 10, 0, 5, tzinfo=timezone.utc)
+
+    appr_older = MagicMock()
+    appr_older.approval_id = "apr_older"
+    appr_older.step_id = "step_001"
+    appr_older.title = "Create calendar event"
+    appr_older.risk_level = "low"
+    appr_older.created_at = datetime(2026, 4, 13, 10, 0, 1, tzinfo=timezone.utc)
+
+    # db.execute() call sequence for one awaiting_approval run (no plan_id):
+    #   1) count, 2) runs, 3) steps, 4) approval (2 pending rows)
+    execute_results = [
+        _FakeResult(scalar=1),  # count
+        _FakeResult(rows=[run]),  # runs
+        _FakeResult(rows=[]),  # steps (none)
+        _FakeResult(rows=[appr_newer, appr_older]),  # approval — MULTIPLE pending
+    ]
+    call_index = 0
+
+    async def fake_execute(_stmt, *args, **kwargs):
+        nonlocal call_index
+        result = execute_results[call_index] if call_index < len(execute_results) else _FakeResult()
+        call_index += 1
+        return result
+
+    mock_db = MagicMock()
+    mock_db.execute = fake_execute
+
+    with patch("src.models.ui_state.UISurface", create=True):
+        resp = await list_history(
+            status="all",
+            source="all",
+            search=None,
+            date_from=None,
+            date_to=None,
+            limit=20,
+            offset=0,
+            user_id="usr_01JTEST00000000000000000000",
+            workspace_id="ws_test",
+            db=mock_db,
+        )
+
+    # No exception raised; the run surfaces with exactly one approval (the newest).
+    assert resp.total == 1
+    assert len(resp.items) == 1
+    item = resp.items[0]
+    assert item.approval is not None
+    assert item.approval.approval_id == "apr_newer"
+    assert item.approval.step_id == "step_002"
 
 
 # ---------------------------------------------------------------------------

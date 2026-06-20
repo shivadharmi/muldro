@@ -149,12 +149,18 @@ async def list_history(
         approval_ctx: HistoryApprovalContext | None = None
         if run.status == "awaiting_approval":
             appr_result = await db.execute(
-                select(Approval).where(
+                select(Approval)
+                .where(
                     Approval.run_id == run.run_id,
                     Approval.status == "pending",
                 )
+                .order_by(Approval.created_at.desc())
+                .limit(1)
             )
-            appr = appr_result.scalar_one_or_none()
+            # A run may have multiple pending approvals (multi-step plans or
+            # historical data); pick the most recent. .scalars().first() is
+            # 0/1/many-safe and never raises MultipleResultsFound.
+            appr = appr_result.scalars().first()
             if appr:
                 approval_ctx = HistoryApprovalContext(
                     approval_id=appr.approval_id,
