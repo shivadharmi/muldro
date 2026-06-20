@@ -189,6 +189,10 @@ class PerceptionPolicyService:
                 )
             )
             .order_by(PerceptionState.next_run_at.asc().nullslast())
+            # Claim rows so two scheduler workers can't double-pick the same
+            # source (duplicate polls/ingest). Locks release when the caller's
+            # transaction commits/rolls back per tick.
+            .with_for_update(skip_locked=True)
         )
         result = await self._db.execute(stmt)
         states = list(result.scalars().all())
@@ -222,6 +226,10 @@ class PerceptionPolicyService:
                 )
             )
             .order_by(PerceptionState.next_run_at.asc().nullslast())
+            # Claim rows so two scheduler workers can't double-pick the same
+            # source (duplicate polls/ingest). Locks release when the caller's
+            # transaction commits/rolls back per tick.
+            .with_for_update(skip_locked=True)
         )
         result = await self._db.execute(stmt)
         states = list(result.scalars().all())

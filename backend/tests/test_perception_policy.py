@@ -432,6 +432,40 @@ class TestCircuitBreaker:
 
 class TestDueSources:
     @pytest.mark.asyncio
+    async def test_get_due_sources_uses_skip_locked(self):
+        """Both due-source SELECTs must carry FOR UPDATE SKIP LOCKED.
+
+        Two worker processes must not both claim the same PerceptionState row
+        (duplicate polls/ingest). The query must lock claimed rows and skip
+        rows already locked by a peer — mirroring the proven background-task
+        pattern in scheduler/background_tasks_tick.py.
+        """
+        from sqlalchemy.dialects import postgresql
+
+        captured: list[str] = []
+
+        async def capturing_execute(stmt, *args, **kwargs):
+            compiled = stmt.compile(
+                dialect=postgresql.dialect(),
+                compile_kwargs={"literal_binds": True},
+            )
+            captured.append(str(compiled))
+            return _mock_scalar_result([])
+
+        db = _mock_db()
+        db.execute = AsyncMock(side_effect=capturing_execute)
+        svc = PerceptionPolicyService(db)
+
+        await svc.get_due_sources_all_users()
+        await svc.get_due_sources(user_id="usr_test")
+
+        assert len(captured) == 2, "Expected one query per due-source method"
+        for query in captured:
+            lowered = query.lower()
+            assert "for update" in lowered, f"Query missing FOR UPDATE: {query}"
+            assert "skip locked" in lowered, f"Query missing SKIP LOCKED: {query}"
+
+    @pytest.mark.asyncio
     async def test_reopens_open_circuit_without_next_run(self):
         db = _mock_db()
         cooled = datetime.now(timezone.utc) - timedelta(seconds=CIRCUIT_COOLDOWN_S + 30)
