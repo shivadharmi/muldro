@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.models.base import Base, TimestampMixin
@@ -20,7 +20,10 @@ class ObservationCursor(Base, TimestampMixin):
     cursor_type: Mapped[str] = mapped_column(
         String(32), nullable=False
     )  # last_history_id, sync_token, oldest_ts, since_timestamp
-    cursor_value: Mapped[str] = mapped_column(String(512), nullable=False)
+    # Text (not String(512)): the Slack connector stores a per-channel JSON map
+    # {channel_id: last_ts}, which can exceed 512 bytes on large workspaces. Other
+    # sources store a short opaque token; Text holds both without truncation.
+    cursor_value: Mapped[str] = mapped_column(Text, nullable=False)
     last_observation_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

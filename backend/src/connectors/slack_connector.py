@@ -1,5 +1,6 @@
 """Slack connector — polls for messages and mentions."""
 
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -8,6 +9,13 @@ from src.connectors.poll_result import PollErrorClass, PollResult, _classify_htt
 from src.services.event_processor import RawEvent
 
 logger = logging.getLogger(__name__)
+
+# Defensive page cap for a single conversations.list / conversations.history walk.
+# Slack paginates via response_metadata.next_cursor; a misbehaving provider that
+# always returned a next_cursor would otherwise loop forever. On truncation we warn
+# so silent data loss is visible, consistent with the gmail/calendar/github
+# connectors. Applied per channel for history and once for the channel list.
+MAX_PAGES = 50
 
 # Slack returns HTTP 200 with {"ok": false, "error": ...} for API-level failures.
 # Map known error strings to PollErrorClass. Unknown errors default to "transient"
@@ -29,120 +37,275 @@ _SLACK_OK_FALSE_ERROR_CLASS: dict[str, PollErrorClass] = {
 class SlackConnector(BaseConnector):
     """Polls Slack Web API for messages in configured channels."""
 
-    cursor_type: str = "oldest_ts"
+    # Cursor is a JSON map {channel_id: last_ts} serialized into the opaque cursor
+    # string. Each channel keeps its own high-watermark so a chatty channel's
+    # watermark can never skip a quiet channel's older messages.
+    cursor_type: str = "per_channel_ts"
+
+    @staticmethod
+    def _parse_cursor(cursor: str | None) -> dict[str, str]:
+        """Deserialize the per-channel cursor map from the opaque cursor string.
+
+        Tolerates a legacy bare-string ``oldest_ts`` cursor (pre-Task-3.4) and any
+        malformed value by starting fresh (empty map). A one-time re-scan per
+        channel is acceptable; EventProcessor dedups on entity_id so no duplicates
+        are surfaced downstream.
+        """
+        if not cursor:
+            return {}
+        try:
+            parsed = json.loads(cursor)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+        if not isinstance(parsed, dict):
+            return {}
+        # Keep only str->str entries; ignore anything malformed.
+        return {str(k): str(v) for k, v in parsed.items() if isinstance(v, (str, int, float))}
 
     async def poll(self, user_id: str, cursor: str | None, credentials: dict) -> PollResult:
-        """Poll Slack for new messages since timestamp cursor."""
+        """Poll Slack for new messages, per-channel since each channel's watermark."""
         import httpx
 
         access_token = credentials.get("access_token", "")
         if not access_token:
             return PollResult(events=[], cursor=cursor, error_class="auth_failed")
 
+        incoming_map = self._parse_cursor(cursor)
         events: list[RawEvent] = []
-        new_cursor = cursor
+        # Start from the incoming watermarks; channels that drain successfully
+        # overwrite their own entry. Channels that error keep their prior value.
+        new_map: dict[str, str] = dict(incoming_map)
+        # First channel-level error encountered; surfaced to the breaker while still
+        # preserving progress on healthy channels.
+        poll_error: PollErrorClass | None = None
 
         try:
             async with httpx.AsyncClient() as client:
-                # Get channels the user is in
-                channels_resp = await client.get(
-                    "https://slack.com/api/conversations.list",
-                    params={"types": "public_channel,private_channel,im,mpim", "limit": 20},
-                    headers={"Authorization": f"Bearer {access_token}"},
-                    timeout=15,
-                )
+                channels = await self._list_channels(client, access_token, user_id)
+                if isinstance(channels, PollResult):
+                    # conversations.list failed outright — abort with the INCOMING
+                    # cursor (never advance on error); _list_channels can't see it.
+                    return PollResult(events=[], cursor=cursor, error_class=channels.error_class)
 
-                if channels_resp.status_code != 200:
-                    error_class = _classify_http_status(channels_resp.status_code)
-                    logger.warning(
-                        "Slack conversations.list returned %d for user %s",
-                        channels_resp.status_code,
-                        user_id,
-                    )
-                    return PollResult(events=[], cursor=cursor, error_class=error_class)
-
-                channels_data = channels_resp.json()
-                if not channels_data.get("ok"):
-                    # Slack returns HTTP 200 with {"ok": false, "error": ...} for many
-                    # failures. Map known errors explicitly; default to "transient"
-                    # (fail-safe) so an unrecognized error never lands on "permanent",
-                    # which opens the circuit at threshold 1 and disables the source.
-                    slack_error = channels_data.get("error", "unknown")
-                    error_class: PollErrorClass = _SLACK_OK_FALSE_ERROR_CLASS.get(
-                        slack_error, "transient"
-                    )
-                    logger.warning(
-                        "Slack conversations.list error=%s (class=%s) for user %s",
-                        slack_error,
-                        error_class,
-                        user_id,
-                    )
-                    return PollResult(events=[], cursor=cursor, error_class=error_class)
-
-                for channel in channels_data.get("channels", [])[:10]:
+                for channel in channels:
                     channel_id = channel["id"]
                     channel_name = channel.get("name", channel_id)
+                    oldest = incoming_map.get(channel_id)
 
-                    params: dict = {"channel": channel_id, "limit": 10}
-                    if cursor:
-                        params["oldest"] = cursor
-
-                    hist_resp = await client.get(
-                        "https://slack.com/api/conversations.history",
-                        params=params,
-                        headers={"Authorization": f"Bearer {access_token}"},
-                        timeout=10,
+                    drained, max_ts, channel_error = await self._poll_channel(
+                        client,
+                        access_token,
+                        user_id,
+                        channel_id,
+                        channel_name,
+                        oldest,
                     )
+                    events.extend(drained)
 
-                    if hist_resp.status_code != 200:
-                        # Surface the failure (incl. HTTP 429) instead of skipping the
-                        # channel: a skipped rate-limit is invisible to the circuit
-                        # breaker AND advances the cursor past unfetched messages →
-                        # permanent message loss. Abort the whole poll with the INCOMING
-                        # cursor (no advance, no partial events); it retries cleanly next tick.
-                        error_class = _classify_http_status(hist_resp.status_code)
-                        logger.warning(
-                            "Slack conversations.history returned %d for channel %s "
-                            "(user %s, class=%s); aborting poll without advancing cursor",
-                            hist_resp.status_code,
-                            channel_id,
-                            user_id,
-                            error_class,
-                        )
-                        return PollResult(events=[], cursor=cursor, error_class=error_class)
+                    if channel_error is not None:
+                        # Per-channel error: record the failure for the breaker but
+                        # keep this channel's prior watermark (cursor-never-advance-
+                        # on-error, per channel). Other channels still advance.
+                        if poll_error is None:
+                            poll_error = channel_error
+                        continue
 
-                    hist_data = hist_resp.json()
-                    if not hist_data.get("ok"):
-                        # Slack returns HTTP 200 + {"ok": false, "error": ...} for API-level
-                        # failures (e.g. ratelimited). Map known errors; default transient.
-                        # Abort the whole poll with the incoming cursor — never swallow as
-                        # success, which would advance the cursor and lose messages.
-                        slack_error = hist_data.get("error", "unknown")
-                        error_class = _SLACK_OK_FALSE_ERROR_CLASS.get(slack_error, "transient")
-                        logger.warning(
-                            "Slack conversations.history error=%s (class=%s) for channel %s "
-                            "(user %s); aborting poll without advancing cursor",
-                            slack_error,
-                            error_class,
-                            channel_id,
-                            user_id,
-                        )
-                        return PollResult(events=[], cursor=cursor, error_class=error_class)
-
-                    for msg in hist_data.get("messages", []):
-                        event = self._normalize_message(msg, channel_id, channel_name)
-                        if event:
-                            events.append(event)
-                            ts = msg.get("ts", "")
-                            if not new_cursor or ts > new_cursor:
-                                new_cursor = ts
+                    # Channel drained cleanly: advance ITS OWN watermark to its max ts.
+                    if max_ts is not None:
+                        prior = new_map.get(channel_id)
+                        if prior is None or max_ts > prior:
+                            new_map[channel_id] = max_ts
 
         except Exception:
             logger.warning("Slack poll failed for user %s", user_id, exc_info=True)
             return PollResult(events=[], cursor=cursor, error_class="transient")
 
+        new_cursor = json.dumps(new_map) if new_map else cursor
+
+        if poll_error is not None:
+            # Failure visible to the circuit breaker, but successful channels'
+            # advanced watermarks are preserved so they aren't re-fetched.
+            logger.warning(
+                "Slack poll: %d events with channel error class=%s for user %s; "
+                "advancing only successfully-drained channels",
+                len(events),
+                poll_error,
+                user_id,
+            )
+            return PollResult(events=events, cursor=new_cursor, error_class=poll_error)
+
         logger.info("Slack poll: %d events", len(events))
         return PollResult(events=events, cursor=new_cursor)
+
+    async def _list_channels(
+        self, client, access_token: str, user_id: str
+    ) -> list[dict] | PollResult:
+        """Enumerate ALL channels, following response_metadata.next_cursor.
+
+        Returns the accumulated channel list, or a failing PollResult (with the
+        INCOMING cursor untouched) if conversations.list fails — a channel-listing
+        failure aborts the whole poll, since we can't know which channels to drain.
+        """
+        channels: list[dict] = []
+        next_cursor: str | None = None
+        pages_fetched = 0
+        truncated = False
+
+        while True:
+            params: dict = {
+                "types": "public_channel,private_channel,im,mpim",
+                "limit": 200,
+            }
+            if next_cursor:
+                params["cursor"] = next_cursor
+
+            resp = await client.get(
+                "https://slack.com/api/conversations.list",
+                params=params,
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=15,
+            )
+
+            if resp.status_code != 200:
+                error_class = _classify_http_status(resp.status_code)
+                logger.warning(
+                    "Slack conversations.list returned %d for user %s",
+                    resp.status_code,
+                    user_id,
+                )
+                return PollResult(events=[], cursor=None, error_class=error_class)
+
+            data = resp.json()
+            if not data.get("ok"):
+                # Slack returns HTTP 200 with {"ok": false, "error": ...}. Map known
+                # errors; default transient (never permanent → no threshold-1 open).
+                slack_error = data.get("error", "unknown")
+                error_class = _SLACK_OK_FALSE_ERROR_CLASS.get(slack_error, "transient")
+                logger.warning(
+                    "Slack conversations.list error=%s (class=%s) for user %s",
+                    slack_error,
+                    error_class,
+                    user_id,
+                )
+                return PollResult(events=[], cursor=None, error_class=error_class)
+
+            channels.extend(data.get("channels", []))
+
+            pages_fetched += 1
+            next_cursor = (data.get("response_metadata") or {}).get("next_cursor") or None
+            if not next_cursor:
+                break
+            if pages_fetched >= MAX_PAGES:
+                truncated = True
+                break
+
+        if truncated:
+            logger.warning(
+                "Slack conversations.list truncated at %d pages for user %s; "
+                "remaining channels were not enumerated this poll",
+                MAX_PAGES,
+                user_id,
+            )
+
+        return channels
+
+    async def _poll_channel(
+        self,
+        client,
+        access_token: str,
+        user_id: str,
+        channel_id: str,
+        channel_name: str,
+        oldest: str | None,
+    ) -> tuple[list[RawEvent], str | None, PollErrorClass | None]:
+        """Drain one channel's history, following response_metadata.next_cursor.
+
+        Returns ``(events, max_ts, error_class)``. ``error_class`` is ``None`` on
+        success. On error, the partial events drained before the failure are still
+        returned, but ``max_ts`` is ``None`` so the caller does NOT advance this
+        channel's watermark (cursor-never-advance-on-error, per channel).
+        """
+        events: list[RawEvent] = []
+        max_ts: str | None = None
+        next_cursor: str | None = None
+        pages_fetched = 0
+        truncated = False
+
+        while True:
+            params: dict = {"channel": channel_id, "limit": 200}
+            if next_cursor:
+                params["cursor"] = next_cursor
+            elif oldest:
+                params["oldest"] = oldest
+
+            resp = await client.get(
+                "https://slack.com/api/conversations.history",
+                params=params,
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=10,
+            )
+
+            if resp.status_code != 200:
+                error_class = _classify_http_status(resp.status_code)
+                logger.warning(
+                    "Slack conversations.history returned %d for channel %s "
+                    "(user %s, class=%s); keeping this channel's prior watermark",
+                    resp.status_code,
+                    channel_id,
+                    user_id,
+                    error_class,
+                )
+                return events, None, error_class
+
+            data = resp.json()
+            if not data.get("ok"):
+                slack_error = data.get("error", "unknown")
+                error_class = _SLACK_OK_FALSE_ERROR_CLASS.get(slack_error, "transient")
+                logger.warning(
+                    "Slack conversations.history error=%s (class=%s) for channel %s "
+                    "(user %s); keeping this channel's prior watermark",
+                    slack_error,
+                    error_class,
+                    channel_id,
+                    user_id,
+                )
+                return events, None, error_class
+
+            for msg in data.get("messages", []):
+                ts = msg.get("ts", "")
+                if ts and (max_ts is None or ts > max_ts):
+                    max_ts = ts
+                event = self._normalize_message(msg, channel_id, channel_name)
+                if event:
+                    events.append(event)
+
+            pages_fetched += 1
+            next_cursor = (data.get("response_metadata") or {}).get("next_cursor") or None
+            if not next_cursor:
+                break
+            if pages_fetched >= MAX_PAGES:
+                truncated = True
+                break
+
+        if truncated:
+            # Slack conversations.history returns newest-first; next_cursor pages
+            # walk BACKWARD in time toward `oldest`. On truncation we've drained the
+            # newest pages but NOT the older ones near the prior watermark. Advancing
+            # to max_ts (the newest) would skip those undrained older messages
+            # forever. Keep the channel's prior watermark (return max_ts=None) so the
+            # gap is re-fetched next poll; EventProcessor dedups the already-ingested
+            # newer messages on entity_id.
+            logger.warning(
+                "Slack conversations.history truncated at %d pages for channel %s "
+                "(user %s); keeping prior watermark so undrained older messages "
+                "are re-fetched next poll",
+                MAX_PAGES,
+                channel_id,
+                user_id,
+            )
+            return events, None, None
+
+        return events, max_ts, None
 
     async def test(self, credentials: dict) -> ConnectorHealth:
         """Test Slack connection."""
