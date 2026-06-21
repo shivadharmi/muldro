@@ -793,6 +793,11 @@ export interface KnowledgeMemoryItem {
   expires_at: string | null;
   entity_ids: string[];
   entity_names: string[];
+  /**
+   * Source-system provenance slugs (e.g. "gmail", "slack", "notion").
+   * Optional — the list endpoint may omit it; chips render only when present.
+   */
+  sources?: string[];
 }
 
 export interface KnowledgeMemoryListResponse {

@@ -8,15 +8,7 @@ import { useWsActionStore } from "@/stores/ws-action-store";
 import { Tooltip } from "@/components/ui/tooltip";
 import { Modal } from "@/components/ui/modal";
 import { InlineMarkdown } from "@/components/jarvis/markdown-renderer";
-
-const sourceIcons: Record<string, string> = {
-  gmail: "\u2709\uFE0F",
-  github: "\uD83D\uDC19",
-  calendar: "\uD83D\uDCC5",
-  slack: "\uD83D\uDCAC",
-  notion: "\uD83D\uDCDD",
-  atlassian: "\uD83D\uDD37",
-};
+import { SourceIcon } from "@/components/integrations/source-icon";
 
 interface InsightSurfaceProps {
   surfaceId: string;
@@ -53,8 +45,6 @@ export function InsightSurface({ surfaceId, insightData }: InsightSurfaceProps) 
     [sendAction, surfaceId],
   );
 
-  const icon = sourceIcons[insightData.signal_source] ?? "\uD83D\uDD14";
-
   return (
     <>
       <div className="space-y-3">
@@ -65,7 +55,7 @@ export function InsightSurface({ surfaceId, insightData }: InsightSurfaceProps) 
 
         {/* 2. Source + relevance */}
         <div className="flex items-center gap-1.5 text-xs text-t-muted">
-          <span>{icon}</span>
+          <SourceIcon source={insightData.signal_source} className="w-3.5 h-3.5" />
           <span>{insightData.signal_source}</span>
           {insightData.relevance_score >= 0.7 && (
             <>
