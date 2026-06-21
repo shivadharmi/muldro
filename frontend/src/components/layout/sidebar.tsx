@@ -103,7 +103,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             )}
           </svg>
         </button>
-        <JarvisMark />
+        {!collapsed && <JarvisMark />}
         {!collapsed && (
           <div className="animate-fade-in flex items-baseline gap-1.5">
             <h1 className="text-[15px] font-semibold tracking-tight brand-gradient-text leading-none">
