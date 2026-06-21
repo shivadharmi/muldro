@@ -177,6 +177,28 @@ export function riskLevelTextColor(level: string): string {
   }
 }
 
+/** Canonical, Title-case display labels for execution/task statuses */
+export const STATUS_LABELS: Record<string, string> = {
+  pending: "Pending",
+  running: "Running",
+  executing: "Executing",
+  in_progress: "In progress",
+  completed: "Completed",
+  approved: "Approved",
+  awaiting_approval: "Awaiting approval",
+  pending_approval: "Awaiting approval",
+  failed: "Failed",
+  rejected: "Rejected",
+  cancelled: "Cancelled",
+  paused: "Paused",
+  proposal: "Proposal",
+};
+
+/** Title-case display label for a status, falling back to the raw value */
+export function statusLabel(status: string): string {
+  return STATUS_LABELS[status] ?? status;
+}
+
 /** Maps surface kind to badge styling (bg + text classes) */
 export function kindStyle(kind: string): { bg: string; text: string } {
   switch (kind) {
