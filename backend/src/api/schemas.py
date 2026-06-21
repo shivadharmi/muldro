@@ -122,6 +122,8 @@ class SearchResult(BaseModel):
     title: str
     summary: str | None = None
     score: float | None = None
+    source_db: str | None = None  # which backend matched: qdrant | postgres_fts | neo4j
+    why_matched: str | None = None  # provenance: why this result surfaced
 
 
 class SearchResponse(BaseModel):

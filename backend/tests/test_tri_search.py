@@ -60,6 +60,8 @@ async def test_qdrant_memory_results_use_enriched_payload():
     assert result["stability"] == 0.8
     assert result.get("preference_strength") == "strong"
     assert result.get("entity_ids") == ["ent_abc"]
+    # Provenance: Qdrant-sourced results are tagged with source_db.
+    assert result.get("source_db") == "qdrant"
 
 
 @pytest.mark.asyncio
@@ -106,6 +108,53 @@ def test_collection_to_type_includes_new_mappings():
     assert _collection_to_type("conversations") == "conversation"
     assert _collection_to_type("approvals") == "approval"
     assert _collection_to_type("memories") == "memory"
+
+
+def test_search_result_exposes_provenance_fields():
+    """SearchResult must serialize source_db and why_matched (not drop them).
+
+    The /v1/search route constructs SearchResult from TriSearch dicts that
+    carry source/provenance. With extra="ignore" these were silently stripped;
+    they are now first-class fields so the UI can render source badges.
+    """
+    from src.api.schemas import SearchResult
+
+    # Route-shaped construction (mirrors routes_search.search()).
+    raw = {
+        "result_type": "memory",
+        "id": "mem_001",
+        "title": "User prefers concise briefings",
+        "text": "User prefers concise briefings",
+        "final_score": 0.91,
+        "source_db": "qdrant",
+        "why_matched": "semantic match on 'briefings'",
+    }
+    result = SearchResult(
+        type=raw.get("result_type", "unknown"),
+        id=raw.get("id", ""),
+        title=raw.get("title", ""),
+        summary=raw.get("text", ""),
+        score=raw.get("final_score") or raw.get("score"),
+        source_db=raw.get("source_db"),
+        why_matched=raw.get("why_matched"),
+    )
+
+    dumped = result.model_dump()
+    assert dumped["source_db"] == "qdrant"
+    assert dumped["why_matched"] == "semantic match on 'briefings'"
+    # Existing fields remain intact.
+    assert dumped["score"] == 0.91
+    assert dumped["type"] == "memory"
+
+
+def test_search_result_provenance_defaults_to_none():
+    """source_db and why_matched are optional with safe None defaults."""
+    from src.api.schemas import SearchResult
+
+    result = SearchResult(type="entity", id="ent_1", title="Acme")
+    dumped = result.model_dump()
+    assert dumped["source_db"] is None
+    assert dumped["why_matched"] is None
 
 
 def test_compute_final_score_preference_boost():
