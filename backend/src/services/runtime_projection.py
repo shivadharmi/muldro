@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.runtime_event import RuntimeEvent
 from src.models.task_graph import TaskRun, TaskStep
-from src.models.traces import Trace
+from src.models.traces import ModelCall
 
 logger = logging.getLogger(__name__)
 
@@ -109,19 +109,20 @@ class RuntimeProjectionService:
         """Return workload per agent based on recent runs."""
         cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
 
+        # Agent attribution lives on ModelCall (per-invocation), not Trace.
+        # Trace only carries aggregate token/cost and an agents_invoked array.
         result = await self._db.execute(
             select(
-                Trace.agent_name,
-                func.count(Trace.trace_id).label("call_count"),
-                func.avg(Trace.duration_ms).label("avg_duration_ms"),
+                ModelCall.agent_name,
+                func.count(ModelCall.call_id).label("call_count"),
+                func.avg(ModelCall.duration_ms).label("avg_duration_ms"),
             )
             .where(
-                Trace.workspace_id == self._workspace_id,
-                Trace.created_at >= cutoff,
-                Trace.agent_name.isnot(None),
+                ModelCall.workspace_id == self._workspace_id,
+                ModelCall.created_at >= cutoff,
             )
-            .group_by(Trace.agent_name)
-            .order_by(func.count(Trace.trace_id).desc())
+            .group_by(ModelCall.agent_name)
+            .order_by(func.count(ModelCall.call_id).desc())
         )
 
         workloads = []

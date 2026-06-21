@@ -151,3 +151,54 @@ class TestGetActiveAgents:
         svc = RuntimeProjectionService(_make_db(step_rows, []), "ws_test")
         agents = await svc.get_active_agents()
         assert agents == []
+
+
+def _workload_row(agent_name, call_count, avg_duration_ms):
+    row = MagicMock()
+    row.agent_name = agent_name
+    row.call_count = call_count
+    row.avg_duration_ms = avg_duration_ms
+    return row
+
+
+class TestGetAgentWorkload:
+    """Regression coverage: workload is sourced from ModelCall (per-agent grain),
+    not Trace — which has no ``agent_name``/``created_at`` columns. Building the
+    query exercises those column references, so a wrong table throws here."""
+
+    @pytest.mark.asyncio
+    async def test_maps_modelcall_rows_to_workload(self):
+        rows = [
+            _workload_row("planner", 12, 1840.6),
+            _workload_row("operator", 5, 920.0),
+        ]
+        db = MagicMock()
+
+        async def fake_execute(_stmt, *args, **kwargs):
+            return _FakeResult(rows)
+
+        db.execute = fake_execute
+        svc = RuntimeProjectionService(db, "ws_test")
+
+        workload = await svc.get_agent_workload()
+
+        assert workload == [
+            {"agent_name": "planner", "call_count_24h": 12, "avg_duration_ms": 1840.6},
+            {"agent_name": "operator", "call_count_24h": 5, "avg_duration_ms": 920.0},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_empty_and_null_avg_duration(self):
+        db = MagicMock()
+
+        async def fake_execute(_stmt, *args, **kwargs):
+            return _FakeResult([_workload_row("presenter", 1, None)])
+
+        db.execute = fake_execute
+        svc = RuntimeProjectionService(db, "ws_test")
+
+        workload = await svc.get_agent_workload()
+        # None avg_duration_ms collapses to 0.0 (no crash).
+        assert workload == [
+            {"agent_name": "presenter", "call_count_24h": 1, "avg_duration_ms": 0.0},
+        ]
