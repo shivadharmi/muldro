@@ -250,6 +250,31 @@ export function sourceDbStyle(db: string): string {
   }
 }
 
+/** Maps search source DB slug to a friendly label */
+export function sourceDbLabel(db: string): string {
+  switch (db) {
+    case "qdrant":
+      return "Vector";
+    case "postgres_fts":
+      return "Keyword";
+    case "neo4j":
+      return "Graph";
+    default:
+      return db;
+  }
+}
+
+/** Canonical source-db badge descriptor: friendly label + token style classes */
+export interface SourceDbBadge {
+  label: string;
+  style: string;
+}
+
+/** Single source of truth for rendering a search result's source-db badge */
+export function sourceDbBadge(db: string): SourceDbBadge {
+  return { label: sourceDbLabel(db), style: sourceDbStyle(db) };
+}
+
 /** Human-readable labels for trust levels */
 export const TRUST_LEVEL_LABELS: Record<string, string> = {
   first_use: "First Use",
