@@ -395,6 +395,8 @@ def insight_body(data: InsightSurfaceData | dict[str, Any]) -> A2UIComponent:
                 variant="default",
             )
         )
+    if d.evidence:
+        meta_row.append(r.badge(f"{base}_evidence", d.evidence, variant="default"))
     if meta_row:
         children.append(r.row(f"{base}_meta", meta_row))
 

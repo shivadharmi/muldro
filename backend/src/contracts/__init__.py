@@ -306,6 +306,9 @@ class InsightSurfaceData(BaseModel):
     related_goals: list[str] = Field(default_factory=list)
     suggested_actions: list[SuggestedActionRef] = Field(default_factory=list)
     dismiss_available: bool = True
+    # Human-readable observation evidence, e.g. "42 days observed" / "4 recurrences".
+    # Rendered under the insight headline so the user sees why it surfaced.
+    evidence: str | None = None
 
 
 class SurfaceSpec(BaseModel):

@@ -12,6 +12,7 @@ import re
 from typing import TYPE_CHECKING
 
 from src.orchestrator.event_publisher import EventPublisher
+from src.services.relevance_assessor import format_evidence
 from src.services.surface_mapping import (
     build_surface_preview_from_plan,
     derive_surface_kind,
@@ -391,6 +392,10 @@ class SurfacePusher:
             # pipeline jargon and must never reach a user-facing surface.
             clean_title = _clean_insight_title(signal.summary)
 
+            # Format the supporting-observation count into a human-readable
+            # evidence line (e.g. "42 days observed"); None when unavailable.
+            evidence = format_evidence(assessment.evidence_count, assessment.evidence_unit)
+
             insight_data = InsightSurfaceData(
                 signal_source=signal.source,
                 signal_category=signal.event_type,
@@ -399,6 +404,7 @@ class SurfacePusher:
                 relevance_reasoning=assessment.reasoning,
                 related_goals=assessment.relates_to_goals,
                 suggested_actions=suggested_actions,
+                evidence=evidence,
             )
 
             preview = SurfacePreview(
@@ -407,6 +413,7 @@ class SurfacePusher:
                 status="proposal",
                 priority="high" if assessment.urgency == "immediate" else "medium",
                 tags=[signal.source],
+                evidence=insight_data.evidence,
             )
 
             surface = WorkspaceSurfacePush(
