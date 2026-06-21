@@ -208,7 +208,24 @@ class KnowledgeService:
 
         entity_name_map = await self._resolve_entity_names(all_entity_ids, workspace_id)
 
-        items = [self._memory_to_dict(mem, entity_name_map) for mem in memories]
+        # Batch-resolve provenance source slugs for the whole page in ONE query
+        # (no N+1), reusing the same approach as the knowledge-cards path.
+        per_memory_event_ids = {
+            mem.memory_id: _normalize_source_event_ids(mem.source_event_ids) for mem in memories
+        }
+        all_event_ids: set[str] = set()
+        for ids in per_memory_event_ids.values():
+            all_event_ids.update(ids)
+        event_source_map = await self._resolve_event_sources(all_event_ids, workspace_id)
+
+        items = [
+            self._memory_to_dict(
+                mem,
+                entity_name_map,
+                self._memory_sources(per_memory_event_ids.get(mem.memory_id, []), event_source_map),
+            )
+            for mem in memories
+        ]
 
         pages = max(1, math.ceil(total / limit))
 
@@ -454,21 +471,33 @@ class KnowledgeService:
         cards: list[dict] = []
         for m in memories:
             kind = "preference" if m.memory_type == "preference" else "fact"
-            sources: list[str] = []
-            for eid in per_memory_event_ids.get(m.memory_id, []):
-                src = event_source_map.get(eid)
-                if src and src not in sources:
-                    sources.append(src)
             cards.append(
                 {
                     "id": m.memory_id,
                     "kind": kind,
                     "label": _derive_label(m.fact_text),
                     "desc": m.fact_text,
-                    "sources": sources,
+                    "sources": self._memory_sources(
+                        per_memory_event_ids.get(m.memory_id, []), event_source_map
+                    ),
                 }
             )
         return cards
+
+    @staticmethod
+    def _memory_sources(event_ids: list[str], event_source_map: dict[str, str]) -> list[str]:
+        """De-duplicated, order-preserving source slugs for one memory.
+
+        Maps a memory's normalized event IDs through the batched event→source
+        map. Empty when none resolve. Shared by the memories-list and cards
+        paths to keep provenance resolution DRY.
+        """
+        sources: list[str] = []
+        for eid in event_ids:
+            src = event_source_map.get(eid)
+            if src and src not in sources:
+                sources.append(src)
+        return sources
 
     async def _resolve_event_sources(
         self, event_ids: set[str], workspace_id: str
@@ -601,8 +630,13 @@ class KnowledgeService:
         result = await self._db.execute(stmt)
         return {row.entity_id: row.canonical_name for row in result.all()}
 
-    def _memory_to_dict(self, mem: Memory, entity_name_map: dict[str, str]) -> dict:
-        """Convert a Memory row to a dict with resolved entity names."""
+    def _memory_to_dict(
+        self,
+        mem: Memory,
+        entity_name_map: dict[str, str],
+        sources: list[str] | None = None,
+    ) -> dict:
+        """Convert a Memory row to a dict with resolved entity names + sources."""
         eids = mem.entity_ids or []
         return {
             "memory_id": mem.memory_id,
@@ -618,6 +652,7 @@ class KnowledgeService:
             "created_at": mem.created_at.isoformat() if mem.created_at else None,
             "entity_ids": list(eids),
             "entity_names": [entity_name_map.get(eid, eid) for eid in eids],
+            "sources": sources or [],
         }
 
     def _resolve_memory_sort(self, sort_by: str):

@@ -52,6 +52,7 @@ class MemoryListItem(BaseModel):
     created_at: str | None = None
     entity_ids: list[str] = []
     entity_names: list[str] = []
+    sources: list[str] = []
 
 
 class MemoryListResponse(BaseModel):

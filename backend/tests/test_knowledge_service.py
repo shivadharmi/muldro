@@ -348,6 +348,71 @@ async def test_get_memories_paginated_clamps_params():
     assert result["pages"] == 1  # min 1
 
 
+async def test_get_memories_paginated_resolves_sources_batched():
+    """List items carry source slugs resolved from events in ONE batched query."""
+    from src.services.knowledge_service import KnowledgeService
+
+    mem1 = _make_memory(
+        memory_id="mem_001",
+        entity_ids=None,
+        source_event_ids=["evt_001"],
+    )
+    mem2 = _make_memory(
+        memory_id="mem_002",
+        entity_ids=None,
+        source_event_ids={"slack": "evt_002", "notion": "evt_003"},
+    )
+
+    src_row1 = MagicMock(event_id="evt_001", source="gmail")
+    src_row2 = MagicMock(event_id="evt_002", source="slack")
+    src_row3 = MagicMock(event_id="evt_003", source="notion")
+
+    # Neither memory has entity_ids, so the entity-name query short-circuits
+    # (no DB call). DB calls: count, memories, event-source resolution.
+    db = _mock_db_execute(
+        [
+            2,  # total count
+            [mem1, mem2],  # memories
+            [src_row1, src_row2, src_row3],  # event sources (ONE batched query)
+        ]
+    )
+
+    graph_engine = _make_graph_engine()
+    svc = KnowledgeService(make_mock_settings(), db, graph_engine)
+    result = await svc.get_memories_paginated(TEST_USER_ID, TEST_WORKSPACE_ID)
+
+    by_id = {item["memory_id"]: item for item in result["items"]}
+    assert by_id["mem_001"]["sources"] == ["gmail"]
+    assert by_id["mem_002"]["sources"] == ["slack", "notion"]
+    # Exactly one event-source query for the whole page (no N+1):
+    # count + memories + single batched event-source query.
+    assert db.execute.await_count == 3
+
+
+async def test_get_memories_paginated_sources_empty_when_no_events():
+    """Memories with no provenance yield empty sources and skip the event query."""
+    from src.services.knowledge_service import KnowledgeService
+
+    mem = _make_memory(memory_id="mem_001", entity_ids=None, source_event_ids=None)
+
+    # No entity_ids and no event IDs across the page -> neither the entity-name
+    # nor the event-source query is issued.
+    db = _mock_db_execute(
+        [
+            1,  # total count
+            [mem],  # memories
+        ]
+    )
+
+    graph_engine = _make_graph_engine()
+    svc = KnowledgeService(make_mock_settings(), db, graph_engine)
+    result = await svc.get_memories_paginated(TEST_USER_ID, TEST_WORKSPACE_ID)
+
+    assert result["items"][0]["sources"] == []
+    # count + memories only — no entity-name and no event-source query.
+    assert db.execute.await_count == 2
+
+
 # ── Tests: get_memory_detail ────────────────────────────────────────────
 
 
