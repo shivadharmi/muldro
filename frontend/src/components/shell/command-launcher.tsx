@@ -22,6 +22,12 @@ const MODES: { value: CommandMode; label: string; icon: string }[] = [
   { value: "execute", label: "Execute", icon: "▶" },
 ];
 
+const SUGGESTIONS: { mode: CommandMode; text: string }[] = [
+  { mode: "ask", text: "Triage my inbox from this morning" },
+  { mode: "plan", text: "Plan a weekly digest for my team" },
+  { mode: "execute", text: "Sync Linear issues to Notion" },
+];
+
 export function CommandLauncher() {
   const { commandLauncherOpen, closeCommandLauncher } = useShellStore();
   const { mode, setMode } = useCommandStore();
@@ -64,15 +70,30 @@ export function CommandLauncher() {
 
   const { setPendingCommand } = useCommandStore();
 
-  const submitMessage = useCallback(() => {
-    const trimmed = value.trim();
-    if (!trimmed) return;
+  const submitText = useCallback(
+    (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
 
-    // Set pending command in store, then navigate to chat
-    setPendingCommand(trimmed);
-    router.push("/chat");
-    handleClose();
-  }, [value, router, handleClose, setPendingCommand]);
+      // Set pending command in store, then navigate to chat
+      setPendingCommand(trimmed);
+      router.push("/chat");
+      handleClose();
+    },
+    [router, handleClose, setPendingCommand]
+  );
+
+  const submitMessage = useCallback(() => {
+    submitText(value);
+  }, [value, submitText]);
+
+  const selectSuggestion = useCallback(
+    (suggestion: (typeof SUGGESTIONS)[number]) => {
+      setMode(suggestion.mode);
+      submitText(suggestion.text);
+    },
+    [setMode, submitText]
+  );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Escape") {
@@ -144,15 +165,50 @@ export function CommandLauncher() {
               onKeyDown={handleKeyDown}
               placeholder={
                 mode === "ask"
-                  ? "Ask Jarvis anything..."
+                  ? "Ask Jarvis anything…"
                   : mode === "plan"
-                    ? "Describe what you want to plan..."
+                    ? "Describe what you want to plan…"
                     : "What should Jarvis execute?"
               }
               className="w-full bg-transparent text-base sm:text-[15px] text-t-primary placeholder-t-muted focus:outline-none"
               autoFocus
             />
           </div>
+
+          {/* Empty-state suggestions — shown before the user types */}
+          {!value && (
+            <div className="border-t border-b-secondary">
+              <div className="px-4 pt-3 pb-1 text-[10px] font-medium uppercase tracking-wide text-t-muted">
+                Suggestions
+              </div>
+              {SUGGESTIONS.map((s) => (
+                <button
+                  key={s.text}
+                  type="button"
+                  onClick={() => selectSuggestion(s)}
+                  className="w-full text-left px-4 py-2.5 text-sm flex justify-between items-center gap-3 cursor-pointer text-t-primary hover:bg-surface-2 transition-colors group"
+                >
+                  <span className="truncate">{s.text}</span>
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    className="shrink-0 text-t-muted group-hover:text-j-primary transition-colors"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M4 8h8M8.5 4.5L12 8l-3.5 3.5"
+                      stroke="currentColor"
+                      strokeWidth="1.3"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
+              ))}
+            </div>
+          )}
 
           {/* Slash command palette */}
           {isSlash && filtered.length > 0 && (
