@@ -1,44 +1,27 @@
-import { TrustSection } from "./trust-section";
-import type { TrustDashboardEntry } from "@/lib/types";
-
 interface PolicyMode {
   value: string;
   label: string;
   description: string;
 }
 
-interface HowJarvisActsTabProps {
+interface PolicyTabProps {
   policyMode: string;
   policyModes: PolicyMode[];
   policyLoading: boolean;
   onPolicyChange: (value: string) => void;
-  trustByFamily: Record<string, TrustDashboardEntry[]>;
-  trustLoading: boolean;
-  onTrustExpand: () => void;
-  onCeilingChange: (capability: string, maxLevel: string) => void;
-  onReset: (capability: string) => void;
-  ceilingLoading: string | null;
-  resetLoading: string | null;
 }
 
-export function HowJarvisActsTab({
+export function PolicyTab({
   policyMode,
   policyModes,
   policyLoading,
   onPolicyChange,
-  trustByFamily,
-  trustLoading,
-  onTrustExpand,
-  onCeilingChange,
-  onReset,
-  ceilingLoading,
-  resetLoading,
-}: HowJarvisActsTabProps) {
+}: PolicyTabProps) {
   return (
     <div className="space-y-6">
       <p className="text-sm text-t-tertiary leading-relaxed">
-        Your overall posture applies to everything; per-capability trust fine-tunes
-        how much Jarvis can do on its own for each kind of action.
+        Your overall posture applies to everything Jarvis does. Fine-tune how much
+        Jarvis can do on its own for each kind of action in the Trust tab.
       </p>
 
       <div>
@@ -61,9 +44,11 @@ export function HowJarvisActsTab({
                 } disabled:opacity-50`}
               >
                 <div className="flex items-center gap-3">
-                  <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 ${
-                    isActive ? "border-j-primary" : "border-b-strong"
-                  }`}>
+                  <div
+                    className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 ${
+                      isActive ? "border-j-primary" : "border-b-strong"
+                    }`}
+                  >
                     {isActive && <div className="w-2 h-2 rounded-full bg-j-primary" />}
                   </div>
                   <div>
@@ -75,18 +60,6 @@ export function HowJarvisActsTab({
             );
           })}
         </div>
-      </div>
-
-      <div className="border-t border-b-secondary pt-2">
-        <TrustSection
-          trustByFamily={trustByFamily}
-          loading={trustLoading}
-          onExpand={onTrustExpand}
-          onCeilingChange={onCeilingChange}
-          onReset={onReset}
-          ceilingLoading={ceilingLoading}
-          resetLoading={resetLoading}
-        />
       </div>
     </div>
   );

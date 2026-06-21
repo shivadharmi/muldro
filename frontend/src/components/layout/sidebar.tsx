@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation";
 import { NavItem } from "./nav-item";
 import { useTheme } from "@/lib/theme";
 import { useAuth } from "@/lib/auth";
+import { useSettingsModalStore } from "@/stores/settings-modal-store";
 
 interface SidebarProps {
   collapsed: boolean;
@@ -37,6 +38,8 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const pathname = usePathname();
   const { theme, setTheme, resolved } = useTheme();
   const { user } = useAuth();
+  const openSettings = useSettingsModalStore((s) => s.openSettings);
+  const settingsOpen = useSettingsModalStore((s) => s.open);
 
   const displayName = user?.display_name?.trim() || user?.email?.split("@")[0] || "Account";
   const email = user?.email ?? "";
@@ -190,12 +193,21 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         />
 
         <div className="pt-2 mt-2 border-t border-b-secondary">
-          <NavItem
-            href="/settings"
-            label="Settings"
-            active={pathname === "/settings"}
-            collapsed={collapsed}
-            icon={
+          <button
+            type="button"
+            onClick={() => openSettings()}
+            title={collapsed ? "Settings" : undefined}
+            aria-label="Settings"
+            aria-haspopup="dialog"
+            className={`w-full flex items-center gap-2.5 rounded-[var(--radius-md)] text-[13px] transition-all duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-j-ring ${
+              collapsed ? "justify-center p-2.5" : "px-3 py-2"
+            } ${
+              settingsOpen
+                ? "bg-j-primary-soft text-j-primary font-medium"
+                : "text-t-tertiary hover:text-t-primary hover:bg-surface-2"
+            }`}
+          >
+            <span className="flex-shrink-0 w-[18px] h-[18px]">
               <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
                 <circle cx="9" cy="9" r="2.5" stroke="currentColor" strokeWidth="1.4" />
                 <path
@@ -205,8 +217,9 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                   strokeLinecap="round"
                 />
               </svg>
-            }
-          />
+            </span>
+            {!collapsed && <span className="flex-1 truncate text-left">Settings</span>}
+          </button>
         </div>
       </nav>
 

@@ -12,6 +12,7 @@ import { TopBar } from "@/components/shell/top-bar";
 import { ContextSidebar } from "@/components/shell/context-sidebar";
 import { ActivityStrip } from "@/components/shell/activity-strip";
 import { CommandLauncher } from "@/components/shell/command-launcher";
+import { SettingsModal } from "@/components/settings/settings-modal";
 import { useShellStore } from "@/stores/shell-store";
 
 const PUBLIC_ROUTES = ["/login", "/auth/callback"];
@@ -112,6 +113,7 @@ function AuthGate({ children }: { children: ReactNode }) {
 
         {/* Global overlays */}
         <CommandLauncher />
+        <SettingsModal />
 
         <div className="flex-1 flex flex-col min-w-0">
           <ErrorBoundary><TopBar /></ErrorBoundary>
