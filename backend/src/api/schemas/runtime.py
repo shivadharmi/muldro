@@ -55,4 +55,5 @@ class RuntimeSummaryResponse(BaseModel):
     completed_24h: int = 0
     failed_24h: int = 0
     agents_active: int = 0
+    active_agents: list[str] = Field(default_factory=list)
     top_agents: list[AgentWorkloadResponse] = []

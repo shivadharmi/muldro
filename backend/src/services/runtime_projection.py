@@ -135,11 +135,78 @@ class RuntimeProjectionService:
             )
         return workloads
 
+    async def get_active_agents(self) -> list[str]:
+        """Return distinct agent names currently executing in this workspace.
+
+        "Currently executing" means a ``TaskStep`` in ``running`` status whose
+        parent ``TaskRun`` is also ``running``. Each step's capability (stored
+        in ``input_data["capability"]``) is resolved to the agent that owns it
+        via the same routing logic as :func:`capability_resolver.route_step`.
+
+        Implemented as a single DISTINCT query for in-flight step capabilities,
+        followed by an in-memory resolution against a single enabled-tools load
+        (no per-capability N+1 DB round-trips). Returns an empty list when
+        nothing is running. Names are sorted for stable output.
+        """
+        from src.services.capability_resolver import CapabilityResolver
+
+        result = await self._db.execute(
+            select(TaskStep.input_data)
+            .join(TaskRun, TaskStep.run_id == TaskRun.run_id)
+            .where(
+                TaskStep.workspace_id == self._workspace_id,
+                TaskStep.status == "running",
+                TaskRun.status == "running",
+            )
+            .distinct()
+        )
+
+        capabilities: set[str] = set()
+        for (input_data,) in result.all():
+            capability = (input_data or {}).get("capability")
+            if isinstance(capability, str) and capability:
+                capabilities.add(capability)
+
+        if not capabilities:
+            return []
+
+        # Resolve capability -> agent using a single enabled-tools snapshot so
+        # the read/write classification does not issue one query per capability.
+        resolver = CapabilityResolver(self._db, self._workspace_id)
+        tools = await resolver._list_enabled_tools()
+
+        agents: set[str] = set()
+        for capability in capabilities:
+            agent = self._route_capability_to_agent(capability, tools)
+            if agent:
+                agents.add(agent)
+        return sorted(agents)
+
+    @staticmethod
+    def _route_capability_to_agent(capability: str, tools: list) -> str:
+        """Resolve a capability to an agent using a preloaded tool list.
+
+        Mirrors :func:`capability_resolver.route_step` but takes the enabled
+        tools as an argument to avoid per-capability DB queries.
+        """
+        if capability in ("reason", "respond", "none"):
+            return "presenter"
+        if capability.startswith("knowledge."):
+            return "librarian"
+
+        matching = [t for t in tools if t.capability == capability]
+        if not matching:
+            return ""  # unroutable / unknown capability
+        if all(not t.requires_approval for t in matching):
+            return "perceiver"
+        return "operator"
+
     async def get_runtime_summary(self) -> dict:
         """Aggregate runtime summary for the workspace."""
         active_runs = await self.get_active_runs(limit=100)
         blocked_runs = await self.get_blocked_runs()
         agent_workload = await self.get_agent_workload()
+        active_agents = await self.get_active_agents()
 
         # Recent completions
         cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
@@ -167,6 +234,7 @@ class RuntimeProjectionService:
             "completed_24h": completed_24h,
             "failed_24h": failed_24h,
             "agents_active": len([w for w in agent_workload if w["call_count_24h"] > 0]),
+            "active_agents": active_agents,
             "top_agents": agent_workload[:5],
         }
 
