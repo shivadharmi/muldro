@@ -717,6 +717,10 @@ export interface UnifiedIntegration {
   health_status: string;
   scopes: string[];
   install_id: string | null;
+  // Stable slug identifier for the integration.
+  slug?: string;
+  // Access scopes granted to Jarvis, a subset of read/write.
+  access_scopes?: ("read" | "write")[];
 }
 
 export function fetchInstallations(): Promise<Installation[]> {
@@ -853,6 +857,18 @@ export function fetchKnowledgeMemoryDetail(
 
 export function fetchKnowledgeStats(): Promise<KnowledgeStatsResponse> {
   return api("/knowledge/stats");
+}
+
+export interface KnowledgeCard {
+  id: string;
+  kind: "person" | "project" | "fact" | "preference";
+  label: string;
+  desc?: string | null;
+  sources: string[];
+}
+
+export function fetchKnowledgeCards(): Promise<KnowledgeCard[]> {
+  return api("/knowledge/cards");
 }
 
 // ── Trust ──────────────────────────────────────────────────────

@@ -66,4 +66,6 @@ export interface RuntimeSummary {
   failed_24h: number;
   agents_active: number;
   top_agents: AgentWorkload[];
+  // Names of agents currently active, when the backend provides them.
+  active_agents?: string[];
 }
