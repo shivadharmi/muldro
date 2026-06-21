@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
+  fetchRuntimeSummary,
   fetchSystemDashboard,
   fetchWorkspaceSurfaces,
 } from "@/lib/api";
@@ -20,6 +21,7 @@ import { GreetingHero } from "@/components/dashboard/greeting-hero";
 import { BriefingGatheringCard } from "@/components/dashboard/briefing-gathering-card";
 import { OnboardingCard } from "@/components/dashboard/onboarding-card";
 import { WorkspaceCanvas } from "@/components/workspace/workspace-canvas";
+import { WorkspaceStatusBar } from "@/components/workspace/workspace-status-bar";
 import { SurfaceDetailModal } from "@/components/workspace/surface-detail-modal";
 import type { WorkspaceSurfacePush, SurfaceUpdate } from "@/lib/a2ui-types";
 
@@ -43,6 +45,12 @@ export default function WorkspacePage() {
   const { data: system } = useQuery({
     queryKey: ["system-dashboard"],
     queryFn: fetchSystemDashboard,
+    refetchInterval: 30_000,
+  });
+
+  const { data: runtime } = useQuery({
+    queryKey: ["runtime-summary"],
+    queryFn: fetchRuntimeSummary,
     refetchInterval: 30_000,
   });
 
@@ -135,7 +143,11 @@ export default function WorkspacePage() {
         headline={headline}
         approvalCount={approvalCount}
         sourceCount={sourceCount}
+      />
+
+      <WorkspaceStatusBar
         system={system}
+        activeAgents={runtime?.active_agents ?? []}
       />
 
       {firstRunState === "onboarding" && <OnboardingCard />}

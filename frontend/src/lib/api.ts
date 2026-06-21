@@ -20,6 +20,7 @@ import type {
   TrustCapabilityDetail,
   TimePolicyRule,
 } from "./types";
+import type { RuntimeSummary } from "./types/runtime";
 
 
 import { getStoredToken } from "./auth";
@@ -293,6 +294,10 @@ export function fetchRecentEvents(
 
 export function fetchSystemDashboard(): Promise<SystemDashboard> {
   return api("/system/dashboard");
+}
+
+export function fetchRuntimeSummary(): Promise<RuntimeSummary> {
+  return api("/runtime/summary");
 }
 
 // ── Observations ────────────────────────────────────────────────
