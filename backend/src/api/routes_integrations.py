@@ -85,6 +85,10 @@ class UnifiedIntegrationResponse(BaseModel):
     enabled: bool
     install_id: str | None = None
     scopes: list[str] = []
+    # Stable lowercase brand key for logo asset lookup (e.g. "google", "github").
+    slug: str = ""
+    # Coarse access level derived from `scopes`: subset of ["read", "write"].
+    access_scopes: list[str] = []
 
 
 # ── Endpoints ────────────────────────────────────────────────────────
@@ -140,6 +144,8 @@ async def list_unified_integrations(
             enabled=s.enabled,
             install_id=s.install_id,
             scopes=s.scopes,
+            slug=s.slug,
+            access_scopes=s.access_scopes,
         )
         for s in statuses
     ]
@@ -316,6 +322,9 @@ async def disconnect_installation(
     if inst.auth_provider and inst.auth_provider not in ("token", "none"):
         provider_name = inst.auth_provider
 
+    from src.services.integration_status import coarsen_scopes, derive_slug
+
+    raw_scopes = inst.scopes_granted or []
     return UnifiedIntegrationResponse(
         server_name=inst.server_name,
         display_name=inst.display_name,
@@ -326,7 +335,9 @@ async def disconnect_installation(
         health_status=inst.health_status,
         enabled=inst.enabled,
         install_id=inst.install_id,
-        scopes=inst.scopes_granted or [],
+        scopes=raw_scopes,
+        slug=derive_slug(provider_name, inst.server_name),
+        access_scopes=coarsen_scopes(raw_scopes),
     )
 
 

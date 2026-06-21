@@ -12,7 +12,7 @@ local/token integrations are treated as connected when installed.
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,6 +36,73 @@ _SERVER_TO_OAUTH_PROVIDER: dict[str, str] = {
     "atlassian": "atlassian",
 }
 
+# Capability verb fragments that imply a write-level action.
+_WRITE_MARKERS: tuple[str, ...] = (
+    "send",
+    "create",
+    "update",
+    "delete",
+    "merge",
+    "write",
+    "post",
+    "edit",
+    "remove",
+    "add",
+    "set",
+    "label",
+    "archive",
+    "move",
+    "comment",
+)
+
+# Capability verb fragments that imply a read-level action.
+_READ_MARKERS: tuple[str, ...] = (
+    "read",
+    "list",
+    "search",
+    "get",
+    "fetch",
+    "view",
+)
+
+
+def derive_slug(provider: str | None, server_name: str) -> str:
+    """Return a stable lowercase key for brand-logo asset lookup.
+
+    Prefers the OAuth provider when present (it is already normalized to a
+    short brand key), otherwise falls back to the server_name, lowercased and
+    stripped of common suffixes/separators so e.g. "google-workspace" → "google".
+    """
+    base = (provider or server_name or "").strip().lower()
+    # Normalize separators to a single token boundary, then take the brand root.
+    base = base.replace("_", "-").replace(" ", "-")
+    # Drop a trailing descriptor (e.g. "google-workspace" → "google").
+    root = base.split("-", 1)[0] if base else ""
+    return root or base
+
+
+def coarsen_scopes(scopes: list[str]) -> list[str]:
+    """Coarsen capability strings into the design's ["read", "write"] subset.
+
+    A capability contributes "write" if it matches any write marker, and
+    "read" if it matches any read marker. Order is deterministic: read before
+    write. Capabilities matching neither are ignored.
+    """
+    has_read = False
+    has_write = False
+    for scope in scopes:
+        low = scope.lower()
+        if any(marker in low for marker in _WRITE_MARKERS):
+            has_write = True
+        if any(marker in low for marker in _READ_MARKERS):
+            has_read = True
+    result: list[str] = []
+    if has_read:
+        result.append("read")
+    if has_write:
+        result.append("write")
+    return result
+
 
 @dataclass(frozen=True)
 class IntegrationStatus:
@@ -51,6 +118,8 @@ class IntegrationStatus:
     enabled: bool
     install_id: str | None
     scopes: list[str]
+    slug: str = ""
+    access_scopes: list[str] = field(default_factory=list)
 
 
 async def get_integration_statuses(
@@ -116,6 +185,7 @@ async def get_integration_statuses(
         if auth_provider and auth_provider not in ("token", "none"):
             provider_name = _SERVER_TO_OAUTH_PROVIDER.get(auth_provider, auth_provider)
 
+        raw_scopes = inst.scopes_granted or []
         results.append(
             IntegrationStatus(
                 server_name=inst.server_name,
@@ -127,7 +197,9 @@ async def get_integration_statuses(
                 health_status=inst.health_status,
                 enabled=inst.enabled,
                 install_id=inst.install_id,
-                scopes=inst.scopes_granted or [],
+                scopes=raw_scopes,
+                slug=derive_slug(provider_name, inst.server_name),
+                access_scopes=coarsen_scopes(raw_scopes),
             )
         )
 
