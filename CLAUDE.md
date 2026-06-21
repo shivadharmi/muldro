@@ -272,7 +272,7 @@ Single deterministic approval gate via `TrustEngine` (`src/services/trust_engine
 - **Trust demotion**: Rejection applies cooldowns (72h/48h/24h) with demotion ladder.
 - **Per-tool cost attribution**: `TokenUsage` with `trigger=f"tool:{tool_name}"` in `agent_loop.py`.
 - **Trust API**: endpoints in `routes_trust.py` (dashboard, detail, ceiling, reset, time-policies GET+PUT).
-- **Frontend Trust tab**: Settings page with grouped-by-family display, progress bars, ceiling dropdown, reset.
+- **Frontend Trust tab**: the Trust tab inside the Settings popup modal — grouped-by-family display, progress bars, ceiling dropdown, reset.
 - **Risk assessment fails closed**: when the RiskAssessor LLM/JSON call fails, it returns `risk_level="high"` (not `medium`). `high` maps to `approval_required` at *every* trust level including `autonomous`, so an assessment outage can never silently auto-execute a write. Both fallback sites (`risk_assessor.py`, `graph_executor._assess_step_risk`) agree on this.
 
 **Two execution paths — only the autonomous path is gated (by design):**
