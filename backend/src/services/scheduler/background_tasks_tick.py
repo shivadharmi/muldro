@@ -11,6 +11,11 @@ from src.middleware.observability import get_correlation_id
 logger = logging.getLogger(__name__)
 
 
+# Log the degraded "no orchestrator" state every Nth tick so it is observable
+# without flooding the log on every 30s cycle.
+_NO_ORCH_LOG_EVERY = 20
+
+
 class BackgroundTasksTickMixin:
     """Executes pending background TaskRuns, retrying then dead-lettering."""
 
@@ -22,6 +27,18 @@ class BackgroundTasksTickMixin:
         then moved to the dead-letter queue.
         """
         if not self._orchestrator:
+            # Degraded: the worker's orchestrator failed to build, so the
+            # background + approval-resume execution path is dead. This is a
+            # P0 silent no-op if left unlogged — surface it loudly (throttled)
+            # so /health and operators can see the worker is half-broken.
+            self._no_orch_ticks = getattr(self, "_no_orch_ticks", 0) + 1
+            if self._no_orch_ticks % _NO_ORCH_LOG_EVERY == 1:
+                logger.error(
+                    "Scheduler background tick has NO orchestrator — background "
+                    "tasks and approval-resume runs cannot execute (degraded). "
+                    "Consecutive degraded ticks: %d",
+                    self._no_orch_ticks,
+                )
             return
 
         try:

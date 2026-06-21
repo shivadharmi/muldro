@@ -63,6 +63,11 @@ def make_mock_settings(**overrides) -> MagicMock:
         event_processor_concurrency=5,
         max_perception_per_tick=5,
         webhook_lag_threshold=5000,
+        db_idle_in_transaction_timeout_ms=60_000,
+        db_statement_timeout_ms=120_000,
+        scheduler_subtick_timeout_s=90.0,
+        resume_reaper_stale_after_s=300.0,
+        resume_reaper_max_attempts=5,
     )
     defaults.update(overrides)
     for k, v in defaults.items():

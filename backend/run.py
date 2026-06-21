@@ -81,7 +81,16 @@ def main():
                 orchestrator = loop.run_until_complete(_build())
                 logger.info("Orchestrator initialized for scheduler")
             except Exception:
-                logger.exception("Orchestrator not available, scheduled actions will fail")
+                # Fail LOUD, not silent: with no orchestrator the background +
+                # approval-resume execution path is dead. Reflect the degraded
+                # state in /health/readiness instead of only logging, but do
+                # NOT crash — perception/streams may still be useful.
+                logger.error(
+                    "Orchestrator build FAILED — background tasks and "
+                    "approval-resume runs will NOT execute (worker degraded)",
+                    exc_info=True,
+                )
+                _component_health["worker"] = {"status": "degraded_no_orchestrator"}
 
             # Query active user IDs (scheduler) + workspace IDs (stream consumer)
             user_ids = []
@@ -146,7 +155,13 @@ def main():
                     logger.info("MCP bridge wired, worker proceeding")
 
             logger.info("Worker thread starting (StreamConsumerManager + SchedulerLoop)")
-            _component_health["worker"] = {"status": "running"}
+            # Preserve the degraded marker if the orchestrator failed to build —
+            # the worker still runs (perception/streams) but the resume path is
+            # dead, and /health must keep reflecting that.
+            if orchestrator is None:
+                _component_health["worker"] = {"status": "degraded_no_orchestrator"}
+            else:
+                _component_health["worker"] = {"status": "running"}
             try:
                 loop.run_until_complete(
                     asyncio.gather(

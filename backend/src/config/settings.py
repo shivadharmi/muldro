@@ -16,6 +16,39 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://jarvis:jarvis@localhost:5432/jarvis"
     redis_url: str = "redis://localhost:6379/0"
 
+    # Database connection self-protection (asyncpg server_settings, milliseconds).
+    # Every connection bounds idle-in-transaction and statement duration so a
+    # leaked transaction (e.g. a stuck perception tick holding a row lock) cannot
+    # freeze the worker indefinitely — a durable, env-agnostic backstop.
+    #
+    # The idle ceiling MUST exceed the longest legitimate idle-in-transaction
+    # window. GraphExecutor holds ONE long-lived session across an entire DAG;
+    # between per-step flushes that connection sits idle-in-transaction while the
+    # agent loop runs (on separate sessions). A single step can take up to the
+    # step timeout (120s) and a background run is capped at 600s, so a 60s ceiling
+    # would terminate the executor's connection mid-run — the reaper would then
+    # re-drive → re-kill → DLQ. 900s (15 min) sits safely above the 600s run cap.
+    # Settings-overridable. statement_timeout stays at 120s (single statements
+    # are always short; only the transaction-level idle window is long).
+    db_idle_in_transaction_timeout_ms: int = 900_000
+    db_statement_timeout_ms: int = 120_000
+
+    # Scheduler resilience knobs.
+    # Per-sub-tick timeout: a single hung sub-tick (e.g. perception holding a
+    # lock) must never starve later sub-ticks (resume / health). On timeout the
+    # dispatcher logs and continues to the next sub-tick.
+    scheduler_subtick_timeout_s: float = 90.0
+    # Stale approval-resume reaper: a run approved by the user but never resumed
+    # by the background tick is re-driven through resume_run after this age, and
+    # failed after the attempt cap to avoid hot-looping.
+    resume_reaper_stale_after_s: float = 300.0
+    resume_reaper_max_attempts: int = 5
+    # Max stale runs re-driven per reaper pass. Bounded + SELECT … FOR UPDATE
+    # SKIP LOCKED so (a) two schedulers can never double-drive the same run and
+    # (b) an unbounded batch cannot starve the 90s sub-tick timeout. The gauge
+    # count (in _update_loop_gauges) stays unbounded — it reports the full backlog.
+    resume_reaper_batch_limit: int = 5
+
     # Anthropic
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-4-6"

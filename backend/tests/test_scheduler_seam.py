@@ -14,6 +14,7 @@ The one structure-sensitive detail is ``_GSF`` — the lookup location of
 ``_base`` submodule during the refactor; the constant is updated in lockstep.
 """
 
+import asyncio
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -153,3 +154,30 @@ class TestTickCadence:
             for _ in range(7):
                 await scheduler._tick()
         assert scheduler._tick_count == 7
+
+
+class TestSubTickIsolation:
+    """A single hung sub-tick must not starve later sub-ticks (resume/health)."""
+
+    @pytest.mark.asyncio
+    async def test_hung_subtick_does_not_block_later_subticks(self):
+        scheduler = _mocked_scheduler()
+        # Make the perception sub-tick (step 1) hang forever.
+        hang_started = {"flag": False}
+
+        async def _hang(*_a, **_kw):
+            hang_started["flag"] = True
+            await asyncio.sleep(3600)
+
+        scheduler._tick_perception = AsyncMock(side_effect=_hang)
+        # Tighten the per-sub-tick timeout so the test runs fast.
+        scheduler._settings.scheduler_subtick_timeout_s = 0.05
+
+        with patch(_GSF, return_value=_empty_schedule_factory()):
+            await scheduler._tick()
+
+        # The hung perception tick was entered but timed out...
+        assert hang_started["flag"] is True
+        # ...and later sub-ticks (background-resume + health) still ran.
+        assert scheduler._tick_background_tasks.await_count == 1
+        assert scheduler._tick_run_health_check.await_count == 1

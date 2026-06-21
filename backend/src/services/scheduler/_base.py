@@ -52,27 +52,63 @@ class SchedulerBase:
         """Signal the scheduler to stop."""
         self._running = False
 
+    async def _subtick_timeout(self) -> float:
+        """Per-sub-tick wall-clock budget. Each sub-tick uses its own DB
+        session, so a timed-out tick's session is torn down by its own
+        ``async with`` context — nothing leaks across the boundary."""
+        return float(getattr(self._settings, "scheduler_subtick_timeout_s", 90.0))
+
+    async def _run_subtick(self, name: str, coro) -> bool:
+        """Run a single sub-tick under a wall-clock timeout.
+
+        A hung sub-tick (e.g. perception blocked on a leaked ``idle in
+        transaction`` row lock) must never starve later sub-ticks — above all
+        the approval-resume and health ticks that are the recovery path. On
+        timeout we log and return False so the dispatcher CONTINUES to the next
+        sub-tick instead of awaiting forever (head-of-line blocking).
+        """
+        timeout = await self._subtick_timeout()
+        try:
+            await asyncio.wait_for(coro, timeout=timeout)
+            return True
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Scheduler sub-tick %s exceeded %.0fs budget — skipping this cycle "
+                "(later sub-ticks still run)",
+                name,
+                timeout,
+            )
+            return False
+        except Exception:
+            logger.warning("Scheduler sub-tick %s errored", name, exc_info=True)
+            return False
+
     async def _tick(self) -> None:
-        """One scheduler cycle: perception, follow-ups, background tasks, eviction, schedules."""
+        """One scheduler cycle: perception, follow-ups, background tasks, eviction, schedules.
+
+        Each sub-tick is wrapped in a per-tick timeout so a single hung tick
+        cannot freeze the whole loop (head-of-line blocking). Sub-ticks each
+        open their own DB session, so a timed-out tick leaks no session.
+        """
         factory = get_session_factory()
 
         # 1. Drive perception from perception_state table
-        await self._tick_perception(factory)
+        await self._run_subtick("perception", self._tick_perception(factory))
 
         # 2. Check follow-up notifications
-        await self._check_follow_ups(factory)
+        await self._run_subtick("follow_ups", self._check_follow_ups(factory))
 
         # 2b. Re-deliver pending notifications reset by _check_follow_ups
-        await self._tick_pending_notifications(factory)
+        await self._run_subtick("pending_notifications", self._tick_pending_notifications(factory))
 
-        # 3. Execute pending background tasks
-        await self._tick_background_tasks(factory)
+        # 3. Execute pending background tasks (approval-resume recovery path)
+        await self._run_subtick("background_tasks", self._tick_background_tasks(factory))
 
         # 4a. Eviction + DLQ retry — every 5th tick (~150s)
         self._tick_count = getattr(self, "_tick_count", 0) + 1
         if self._tick_count % 5 == 0:
-            await self._tick_eviction(factory)
-            await self._tick_dlq_retry(factory)
+            await self._run_subtick("eviction", self._tick_eviction(factory))
+            await self._run_subtick("dlq_retry", self._tick_dlq_retry(factory))
 
             # Memory expiration — cascade to Qdrant
             vector_store = None
@@ -80,17 +116,19 @@ class SchedulerBase:
                 from src.services.vector_store import VectorStore
 
                 vector_store = VectorStore(self._settings)
-            await self._tick_memory_expiration(factory, vector_store)
+            await self._run_subtick(
+                "memory_expiration", self._tick_memory_expiration(factory, vector_store)
+            )
 
         # 4b. Persona batch — every 10th tick (~5 min)
-        await self._tick_persona_batch()
+        await self._run_subtick("persona_batch", self._tick_persona_batch())
 
         # 4c. Memory consolidation — once daily at ~2 AM UTC
         from datetime import datetime
 
         current_hour = datetime.now(timezone.utc).hour
         if self._tick_count % 120 == 0 and current_hour == 2:
-            await self._tick_consolidation(factory)
+            await self._run_subtick("consolidation", self._tick_consolidation(factory))
 
             # 4c-ii. Stability refresh — sync Qdrant payloads with Postgres scores
             daily_vector_store = None
@@ -98,17 +136,24 @@ class SchedulerBase:
                 from src.services.vector_store import VectorStore
 
                 daily_vector_store = VectorStore(self._settings)
-            await self._tick_stability_refresh(factory, daily_vector_store)
+            await self._run_subtick(
+                "stability_refresh",
+                self._tick_stability_refresh(factory, daily_vector_store),
+            )
 
-        # 4d. Stuck run health check — every tick
-        await self._tick_run_health_check(factory)
+        # 4d. Stuck run health check — every tick (resume reaper lives here)
+        await self._run_subtick("run_health_check", self._tick_run_health_check(factory))
 
         # 4e. Webhook push-channel renewal — every 120th tick (~1h).
         # No-op unless settings.webhooks_configured (poll-only default).
         if self._tick_count % 120 == 0:
-            await self._tick_webhook_renewal(factory)
+            await self._run_subtick("webhook_renewal", self._tick_webhook_renewal(factory))
 
-        # 5. Process due schedules
+        # 5. Process due schedules (bounded so a stuck schedule fire can't hang the loop)
+        await self._run_subtick("schedule_dispatch", self._process_due_schedules(factory))
+
+    async def _process_due_schedules(self, factory) -> None:
+        """Fire any schedules that are due; repair null next_run_at."""
         async with factory() as db:
             now = datetime.now(timezone.utc)
 
