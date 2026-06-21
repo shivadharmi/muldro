@@ -15,6 +15,7 @@ Hard guardrails this service enforces:
 
 import logging
 import re
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
@@ -36,6 +37,20 @@ CIRCUIT_COOLDOWN_S = 300  # 5 min circuit breaker cooldown
 CIRCUIT_FAILURE_THRESHOLD = 3
 STARVATION_CEILING_S = 1800  # force run after 30 min silence
 BACKOFF_CAP = 8  # max backoff multiplier (2^3)
+
+# Provisional lease applied to a source when it is CLAIMED (pending_run cleared,
+# next_run_at pushed out) so the row lock can be released *before* the long
+# LLM/MCP perception cycle runs. The scheduler holds the FOR UPDATE lock only
+# for the claim transaction; once committed the lease — not a held lock — is
+# what prevents the next tick (or a peer worker) from double-picking the source.
+#
+# LEASE_TTL_S MUST exceed the scheduler sub-tick timeout (~90s): a perception
+# cycle is force-cancelled at the sub-tick timeout, so as long as the lease is
+# longer than that timeout a cycle can never outlive its own lease and cause a
+# double-pick. On crash/cancel/timeout (no outcome recorded) the source simply
+# becomes due again once the lease expires — preserving crash recovery without
+# relying on holding the row lock across the cycle.
+LEASE_TTL_S = 180
 
 DEFAULT_INTERVALS: dict[str, int] = {
     "gmail": 300,
@@ -82,6 +97,20 @@ _PERMANENT_PATTERNS: list[re.Pattern[str]] = [
     # after 1 failure rather than falling through to the unknown threshold of 3.
     re.compile(r"\bpermanent\b", re.IGNORECASE),
 ]
+
+
+@dataclass(frozen=True)
+class ClaimedSource:
+    """Detached, plain-data snapshot of a leased perception source.
+
+    Captured inside the short CLAIM transaction so phase 2 can run cycles after
+    the row lock has been released (no ORM instance held across the long cycle).
+    """
+
+    state_id: str
+    source: str
+    user_id: str
+    workspace_id: str
 
 
 def classify_error(error: str) -> ErrorClass:
@@ -236,6 +265,45 @@ class PerceptionPolicyService:
             self._maybe_reopen_circuit(s, now)
 
         return [s for s in states if s.circuit_state != "open"]
+
+    async def claim_due_sources(
+        self, sources: list[PerceptionState], now: datetime | None = None
+    ) -> list[ClaimedSource]:
+        """Lease the given due sources so the row lock can be released early.
+
+        For each source: clear ``pending_run`` (so the next tick won't re-pick it
+        on the pending flag) and push ``next_run_at`` out by ``LEASE_TTL_S`` (a
+        provisional lease, so the due-window query won't re-pick it either). The
+        caller is expected to ``commit`` immediately after this returns —
+        releasing the ``FOR UPDATE`` lock — and only THEN run the long cycles.
+
+        Returns plain, detached-safe snapshots so callers never touch the ORM
+        instances after the claim transaction is closed.
+        """
+        if now is None:
+            now = datetime.now(timezone.utc)
+        lease_until = now + timedelta(seconds=LEASE_TTL_S)
+
+        claimed: list[ClaimedSource] = []
+        for state in sources:
+            state.pending_run = False
+            state.next_run_at = lease_until
+            claimed.append(
+                ClaimedSource(
+                    state_id=state.state_id,
+                    source=state.source,
+                    user_id=state.user_id,
+                    workspace_id=state.workspace_id or "",
+                )
+            )
+        await self._db.flush()
+        return claimed
+
+    async def get_by_state_id(self, state_id: str) -> PerceptionState | None:
+        """Re-fetch a perception state by primary key (for per-source recording)."""
+        stmt = select(PerceptionState).where(PerceptionState.state_id == state_id)
+        result = await self._db.execute(stmt)
+        return result.scalar_one_or_none()
 
     # ------------------------------------------------------------------
     # Lifecycle: success / failure / signal

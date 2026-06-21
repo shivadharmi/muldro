@@ -11,6 +11,7 @@ from src.services.perception_policy import (
     CIRCUIT_COOLDOWN_S,
     CIRCUIT_FAILURE_THRESHOLD,
     DEFAULT_INTERVALS,
+    LEASE_TTL_S,
     MAX_INTERVAL_S,
     MIN_INTERVAL_S,
     PERMANENT_FAILURE_THRESHOLD,
@@ -805,3 +806,84 @@ class TestErrorClassSentinelRoundTrip:
         assert state.consecutive_failures == PERMANENT_FAILURE_THRESHOLD
         assert state.circuit_state == "open"
         assert state.circuit_opened_at is not None
+
+
+class TestClaimDueSources:
+    """claim_due_sources leases sources so the row lock can be released early."""
+
+    @pytest.mark.asyncio
+    async def test_lease_clears_pending_and_advances_next_run(self):
+        """Claiming clears pending_run and pushes next_run_at out by LEASE_TTL_S."""
+        db = _mock_db()
+        svc = PerceptionPolicyService(db)
+        now = datetime.now(timezone.utc)
+        state = _make_state(
+            pending_run=True,
+            next_run_at=now - timedelta(seconds=10),
+        )
+
+        claimed = await svc.claim_due_sources([state], now=now)
+
+        assert len(claimed) == 1
+        assert claimed[0].state_id == "pst_test"
+        assert claimed[0].source == "gmail"
+        assert claimed[0].user_id == "usr_test"
+        assert claimed[0].workspace_id == "ws_test"
+        # Lease applied
+        assert state.pending_run is False
+        assert state.next_run_at == now + timedelta(seconds=LEASE_TTL_S)
+        db.flush.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_lease_prevents_repick_within_window(self):
+        """After claim, the source is no longer due (pending cleared, next_run
+        in the future) so a same-window re-query would skip it."""
+        db = _mock_db()
+        svc = PerceptionPolicyService(db)
+        now = datetime.now(timezone.utc)
+        state = _make_state(pending_run=True, next_run_at=now - timedelta(seconds=10))
+
+        await svc.claim_due_sources([state], now=now)
+
+        # Re-evaluate the due predicate at a time still inside the lease window.
+        check_at = now + timedelta(seconds=LEASE_TTL_S - 5)
+        is_due = state.pending_run or (
+            state.next_run_at is not None and state.next_run_at <= check_at
+        )
+        assert is_due is False
+
+    @pytest.mark.asyncio
+    async def test_lease_expires_makes_source_due_again(self):
+        """Once the lease elapses (crash/cancel, no outcome recorded), the source
+        becomes due again — crash recovery without holding the lock."""
+        db = _mock_db()
+        svc = PerceptionPolicyService(db)
+        now = datetime.now(timezone.utc)
+        state = _make_state(pending_run=True, next_run_at=now - timedelta(seconds=10))
+
+        await svc.claim_due_sources([state], now=now)
+
+        after_lease = now + timedelta(seconds=LEASE_TTL_S + 1)
+        is_due = state.pending_run or (
+            state.next_run_at is not None and state.next_run_at <= after_lease
+        )
+        assert is_due is True
+
+    @pytest.mark.asyncio
+    async def test_lease_ttl_exceeds_subtick_timeout(self):
+        """LEASE_TTL_S must exceed the ~90s sub-tick timeout so a force-cancelled
+        cycle can never outlive its own lease and cause a double-pick."""
+        assert LEASE_TTL_S > 90
+
+    @pytest.mark.asyncio
+    async def test_get_by_state_id_returns_state(self):
+        """get_by_state_id re-fetches a state for per-source outcome recording."""
+        state = _make_state()
+        db = _mock_db()
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = state
+        db.execute = AsyncMock(return_value=result)
+        svc = PerceptionPolicyService(db)
+
+        fetched = await svc.get_by_state_id("pst_test")
+        assert fetched is state

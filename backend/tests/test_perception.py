@@ -53,6 +53,28 @@ def _mock_db():
     return db
 
 
+def _make_tick_svc(states, db):
+    """Mock PerceptionPolicyService for the claim-and-release _tick_perception.
+
+    Uses the real ``claim_due_sources`` so the lease (pending_run + next_run_at)
+    is applied to the states; ``get_by_state_id`` re-fetches by id for the
+    per-source recording transaction.
+    """
+    from src.services.perception_policy import PerceptionPolicyService
+
+    svc = AsyncMock()
+    svc._db = db
+    svc.get_due_sources_all_users = AsyncMock(return_value=list(states))
+
+    async def _claim(sources, now=None):
+        return await PerceptionPolicyService.claim_due_sources(svc, sources, now)
+
+    svc.claim_due_sources = AsyncMock(side_effect=_claim)
+    by_id = {s.state_id: s for s in states}
+    svc.get_by_state_id = AsyncMock(side_effect=lambda sid: by_id.get(sid))
+    return svc
+
+
 # ---------------------------------------------------------------------------
 # Coordinator: workspace passthrough
 # ---------------------------------------------------------------------------
@@ -226,9 +248,7 @@ class TestSchedulerPerceptionTick:
         mock_settings.max_perception_per_tick = 5
         scheduler = SchedulerLoop(mock_settings, orchestrator=orchestrator)
 
-        mock_svc_instance = AsyncMock()
-        mock_svc_instance.get_due_sources_all_users = AsyncMock(return_value=[state])
-        mock_svc_instance.record_success = AsyncMock(return_value=state)
+        mock_svc_instance = _make_tick_svc([state], mock_db)
 
         with (
             patch(
@@ -294,8 +314,7 @@ class TestSchedulerPerceptionTick:
             recorded.append(error)
             return _state
 
-        mock_svc_instance = AsyncMock()
-        mock_svc_instance.get_due_sources_all_users = AsyncMock(return_value=[state])
+        mock_svc_instance = _make_tick_svc([state], mock_db)
         mock_svc_instance.record_failure = AsyncMock(side_effect=_capture_failure)
 
         with (

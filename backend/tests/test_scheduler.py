@@ -574,6 +574,7 @@ def _make_perception_state(
 ) -> MagicMock:
     """Factory for mock PerceptionState objects used in perception tick tests."""
     state = MagicMock()
+    state.state_id = overrides.get("state_id", f"pst_{user_id}_{source}")
     state.user_id = user_id
     state.workspace_id = workspace_id
     state.source = source
@@ -607,9 +608,21 @@ def _build_tick_mocks(due_states: list, results: list):
     mock_db.__aexit__ = AsyncMock(return_value=False)
 
     mock_svc = MagicMock()
+    mock_svc._db = mock_db
     mock_svc.get_due_sources_all_users = AsyncMock(return_value=due_states)
     mock_svc.record_success = AsyncMock()
     mock_svc.record_failure = AsyncMock()
+
+    # Claim-and-release plumbing: use the real claim (applies the lease to the
+    # mock states) and re-fetch by id for per-source outcome recording.
+    from src.services.perception_policy import PerceptionPolicyService
+
+    async def _claim(sources, now=None):
+        return await PerceptionPolicyService.claim_due_sources(mock_svc, sources, now)
+
+    mock_svc.claim_due_sources = AsyncMock(side_effect=_claim)
+    _by_id = {s.state_id: s for s in due_states}
+    mock_svc.get_by_state_id = AsyncMock(side_effect=lambda sid: _by_id.get(sid))
 
     mock_factory = MagicMock(return_value=mock_db)
 
