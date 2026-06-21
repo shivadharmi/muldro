@@ -20,6 +20,7 @@ from src.config.settings import Settings, get_anthropic_client
 from src.connectors.mcp_bridge import close_turn_sessions
 from src.contracts import PolicyDecision
 from src.integrations.turn_scope import turn_scope
+from src.models.ids import ensure_prefix
 from src.models.plans import Plan, PlanTask
 from src.models.task_graph import TaskRun, TaskStep
 from src.orchestrator.tracing import JarvisTrace
@@ -259,7 +260,9 @@ class GraphExecutor:
             # (execute_run, _build_run_surfaces, detail modal) converge on the
             # same id and the frontend naturally deduplicates.
             if not surface_id:
-                surface_id = f"run_{run_id}"
+                # run_id is already ``run_<ULID>``; the canonical run surface id
+                # IS the run_id (re-prefixing produced the doubled ``run_run_…``).
+                surface_id = ensure_prefix("run", run_id)
             run.checkpoint = {**(run.checkpoint or {}), "surface_id": surface_id}
             await self._db.flush()
 

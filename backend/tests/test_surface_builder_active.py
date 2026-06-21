@@ -72,7 +72,8 @@ class TestBuildActiveExecutionSurfaces:
         assert len(surfaces) == 1
         s = surfaces[0]
         assert s.kind == "run"
-        assert s.id == "run_run_01"
+        # Canonical run surface id IS the run_id (no doubled run_run_…).
+        assert s.id == "run_01"
         assert s.source_run_id == "run_01"
         preview = s.preview
         assert preview["status"] == "running"

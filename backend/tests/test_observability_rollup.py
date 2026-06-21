@@ -52,8 +52,9 @@ async def test_execute_run_stamps_trace_id_before_first_step():
     # path — it's the precondition for the detail endpoint resolving
     # tokens/cost from the Trace table.
     assert run.trace_id is not None
-    # And execute_run should default the surface_id to run_{run_id}
-    assert run.checkpoint["surface_id"] == "run_run_xyz"
+    # And execute_run should default the surface_id to the run_id itself
+    # (the canonical run surface id — not a re-prefixed ``run_run_…``).
+    assert run.checkpoint["surface_id"] == "run_xyz"
 
 
 def test_history_trace_info_schema_includes_step_breakdown():

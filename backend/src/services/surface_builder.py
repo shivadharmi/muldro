@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.contracts import WorkspaceSurfacePush
 from src.models.briefings import Briefing
+from src.models.ids import ensure_prefix
 from src.models.task_graph import TaskRun, TaskStep
 from src.models.trust_state import TrustState
 from src.models.ui_state import UISurface
@@ -246,7 +247,9 @@ class SurfaceService:
                     current_step_name = s.name or (s.input_data or {}).get("capability", "")
                     break
 
-            surface_id = f"run_{run.run_id}"
+            # run_id is already ``run_<ULID>``; the canonical run surface id IS
+            # the run_id (re-prefixing produced the doubled ``run_run_…``).
+            surface_id = ensure_prefix("run", run.run_id)
             subtitle = f"Step {completed + 1}/{total}" if total else "No steps yet"
             if current_step_name:
                 subtitle += f": {current_step_name}"
