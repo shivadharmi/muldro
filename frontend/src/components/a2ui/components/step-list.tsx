@@ -171,6 +171,17 @@ export function StepList({ steps, currentStep, triggeringStepId }: StepListProps
                   awaiting
                 </span>
               )}
+              {/* Sub-line on in-flight steps (e.g. "142 messages · 3 flagged"). */}
+              {step.output_summary &&
+                (step.status === "executing" || step.status === "pending") && (
+                  <p
+                    className={`text-xs mt-0.5 ${
+                      step.status === "executing" ? "text-j-info" : "text-t-tertiary"
+                    }`}
+                  >
+                    {step.output_summary}
+                  </p>
+                )}
               {step.output_summary && step.status === "completed" && (
                 <div className="mt-0.5">
                   <p className={`text-xs text-t-tertiary ${!isExpanded && hasLongOutput ? "line-clamp-2" : ""}`}>

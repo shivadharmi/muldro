@@ -8,6 +8,8 @@ import { useShellStore } from "@/stores/shell-store";
 import { CommandInput } from "./command-input";
 import { MarkdownRenderer } from "./markdown-renderer";
 import { AgentTrace, type AgentStep } from "./agent-trace";
+import { StepList } from "@/components/a2ui/components/step-list";
+import type { StepState } from "@/lib/a2ui-types";
 
 interface ChatMessage {
   id: string;
@@ -74,6 +76,81 @@ function tryParseJson(s: string): unknown {
   } catch {
     return s;
   }
+}
+
+interface MessageMetrics {
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+  latencyMs: number;
+  hasData: boolean;
+}
+
+/** Roll the per-agent token/cost/latency already in state up to one
+ *  message-level total for the design's footer line. */
+function aggregateMetrics(agents: AgentStep[]): MessageMetrics {
+  const totals = agents.reduce(
+    (acc, a) => ({
+      inputTokens: acc.inputTokens + (a.inputTokens ?? 0),
+      outputTokens: acc.outputTokens + (a.outputTokens ?? 0),
+      costUsd: acc.costUsd + (a.costUsd ?? 0),
+      latencyMs: acc.latencyMs + (a.latencyMs ?? 0),
+    }),
+    { inputTokens: 0, outputTokens: 0, costUsd: 0, latencyMs: 0 },
+  );
+  return {
+    ...totals,
+    hasData: totals.inputTokens > 0 || totals.outputTokens > 0 || totals.costUsd > 0,
+  };
+}
+
+function formatCost(costUsd: number): string {
+  return costUsd < 0.01 ? costUsd.toFixed(4) : costUsd.toFixed(3);
+}
+
+function formatLatency(ms: number): string {
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
+}
+
+/** Build a StepState[] from the message's PlanOutput so a chat-only user can
+ *  see the plan → pipeline steps inline (reusing the faithful StepList).
+ *
+ *  The chat SSE stream carries the plan and per-agent progress, but not a
+ *  per-step live status feed (that flows through the autonomous WS path into the
+ *  surfaces pane). We derive a faithful-but-honest status: while streaming, the
+ *  first not-yet-done step is "executing" and the rest "pending"; once the turn
+ *  finishes, every step is "completed". */
+function planToStepStates(msg: ChatMessage): StepState[] {
+  const steps = msg.plan?.steps ?? [];
+  if (steps.length === 0) return [];
+
+  const doneAgents = msg.agents.filter((a) => a.status === "done").length;
+  const failed = msg.agents.some((a) => a.status === "error");
+
+  return steps.map((s, i): StepState => {
+    let status: StepState["status"];
+    if (!msg.streaming) {
+      status = failed && i === steps.length - 1 ? "failed" : "completed";
+    } else if (i < doneAgents) {
+      status = "completed";
+    } else if (i === doneAgents) {
+      status = "executing";
+    } else {
+      status = "pending";
+    }
+    return {
+      step_id: s.step_id,
+      description: s.description,
+      status,
+      output_summary: s.user_context,
+      duration_ms: null,
+      started_at: null,
+      completed_at: null,
+      timeout_seconds: null,
+      error: null,
+      retry_count: null,
+    };
+  });
 }
 
 export function ChatPanel({
@@ -428,6 +505,9 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
   const focusedId = useCommandStore((s) => s.focusedMessageId);
   const setFocused = useCommandStore((s) => s.setFocusedMessageId);
   const isFocused = focusedId === msg.id;
+  const metrics = aggregateMetrics(msg.agents);
+  const planSteps = planToStepStates(msg);
+  const currentStep = planSteps.find((s) => s.status === "executing")?.step_id ?? null;
 
   const handleFocus = () => {
     if (msg.streaming) return;
@@ -446,6 +526,15 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
       <div className="max-w-[95%] w-full space-y-2">
         {/* Agent pipeline ("how Jarvis answered") */}
         <AgentTrace agents={msg.agents} plan={msg.plan ?? null} streaming={!!msg.streaming} />
+
+        {/* Inline plan → pipeline steps (reuses the faithful StepList so a
+            chat-only user sees the pipeline, not just the surfaces pane). */}
+        {planSteps.length > 0 && (
+          <div className="rounded-[var(--radius-lg)] bg-surface-1 border border-b-primary px-3 py-2.5">
+            <p className="text-[10px] uppercase tracking-wider text-t-tertiary mb-2">Pipeline</p>
+            <StepList steps={planSteps} currentStep={currentStep} />
+          </div>
+        )}
 
         {/* Final response */}
         {msg.content ? (
@@ -472,11 +561,19 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
           </div>
         ) : null}
 
-        {/* Trace ID */}
-        {msg.traceId && !msg.streaming && (
-          <p className="text-[10px] text-t-muted px-2">
-            trace: {msg.traceId}
-          </p>
+        {/* Message footer: trace id + rolled-up tokens / cost / latency */}
+        {!msg.streaming && (msg.traceId || metrics.hasData) && (
+          <div className="flex items-center gap-2 px-2 text-[10px] text-t-muted">
+            {msg.traceId && <span>trace: {msg.traceId}</span>}
+            {metrics.hasData && (
+              <span className="font-mono tabular-nums">
+                {metrics.inputTokens.toLocaleString()} in /{" "}
+                {metrics.outputTokens.toLocaleString()} out tok ·{" "}
+                <span className="text-j-success">${formatCost(metrics.costUsd)}</span>
+                {metrics.latencyMs > 0 && ` · ${formatLatency(metrics.latencyMs)}`}
+              </span>
+            )}
+          </div>
         )}
       </div>
     </div>

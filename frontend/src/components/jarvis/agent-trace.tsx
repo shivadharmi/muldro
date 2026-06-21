@@ -2,6 +2,17 @@
 
 import { useState } from "react";
 import { type PlanOutput } from "@/lib/api";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { stepStatusIcon } from "@/components/a2ui/components/step-presentation";
+
+/** Maps the agent-card status union to the canonical step status used by
+ *  stepStatusIcon / StatusBadge, so the chat trace shares one glyph + dot
+ *  language with the execution surfaces (running → ◉ pulsing, not ○). */
+function agentStatusToStep(status: AgentStep["status"]): string {
+  if (status === "done") return "completed";
+  if (status === "error") return "failed";
+  return "running";
+}
 
 export interface AgentStep {
   agent: string;
@@ -64,18 +75,19 @@ export function AgentTrace({ agents, plan, streaming }: AgentTraceProps) {
   };
 
   const runningAgent = streaming ? agents.find((a) => a.status === "running") : undefined;
+  // Agent names read as processes — keep them lowercase.
   const summaryLabel = runningAgent
-    ? `${runningAgent.agent} working…`
+    ? `${runningAgent.agent.toLowerCase()} working…`
     : `${agents.length} step${agents.length !== 1 ? "s" : ""}`;
 
   if (!showDetails) {
     return (
       <button
         onClick={() => setShowDetails(true)}
-        className="flex items-center gap-1.5 px-2 py-0.5 text-[11px] text-t-muted hover:text-t-secondary transition-colors cursor-pointer capitalize"
+        className="flex items-center gap-1.5 px-2 py-0.5 text-[11px] text-t-muted hover:text-t-secondary transition-colors cursor-pointer"
       >
         <span className={runningAgent ? "text-j-primary animate-pulse" : ""}>{summaryLabel}</span>
-        <span className="text-t-muted/70 normal-case">· details ▾</span>
+        <span className="text-t-muted/70">· details ▾</span>
       </button>
     );
   }
@@ -128,15 +140,8 @@ function AgentCard({
   expanded: boolean;
   onToggle: () => void;
 }) {
-  const statusColor =
-    agent.status === "running"
-      ? "text-j-primary"
-      : agent.status === "done"
-        ? "text-j-success"
-        : "text-j-error";
-
-  const statusIcon =
-    agent.status === "running" ? "○" : agent.status === "done" ? "✓" : "✗";
+  const stepStatus = agentStatusToStep(agent.status);
+  const { icon: statusIcon, className: statusIconClass } = stepStatusIcon(stepStatus);
 
   return (
     <div className="rounded border border-b-primary bg-surface-1 text-xs">
@@ -144,26 +149,30 @@ function AgentCard({
         onClick={onToggle}
         className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-surface-2 transition-colors cursor-pointer"
       >
-        <span className={statusColor}>{statusIcon}</span>
-        <span className="font-medium text-t-primary capitalize">{agent.agent}</span>
+        <span className={statusIconClass}>{statusIcon}</span>
+        {/* pipeline · {agent} eyebrow — agent name lowercase (reads as a process). */}
+        <span className="text-[10px] uppercase tracking-wider text-t-tertiary">pipeline</span>
+        <span className="text-t-tertiary">·</span>
+        <span className="font-medium text-t-primary">{agent.agent.toLowerCase()}</span>
         {agent.model && (
-          <span className="text-t-muted">
+          <span className="text-t-muted font-mono">
             {agent.model.replace("claude-", "").replace(/-\d+$/, "")}
           </span>
         )}
         {agent.costUsd != null && agent.costUsd > 0 && (
-          <span className="text-j-success/70">
+          <span className="text-j-success/70 font-mono tabular-nums">
             ${agent.costUsd < 0.01 ? agent.costUsd.toFixed(4) : agent.costUsd.toFixed(3)}
           </span>
         )}
         {agent.latencyMs != null && (
-          <span className="text-t-muted ml-auto">
+          <span className="text-t-muted ml-auto font-mono tabular-nums">
             {agent.latencyMs > 1000
               ? `${(agent.latencyMs / 1000).toFixed(1)}s`
               : `${agent.latencyMs}ms`}
           </span>
         )}
-        <span className="text-t-muted ml-auto">{expanded ? "▲" : "▼"}</span>
+        <StatusBadge status={stepStatus} />
+        <span className="text-t-muted">{expanded ? "▲" : "▼"}</span>
       </button>
 
       {expanded && (
@@ -214,10 +223,10 @@ function AgentCard({
 
           {/* Token usage + cost stats */}
           {(agent.inputTokens || agent.outputTokens) && (
-            <div className="text-t-muted mt-1 space-y-0.5">
+            <div className="text-t-muted mt-1 space-y-0.5 font-mono tabular-nums">
               <p>
-                Tokens: {agent.inputTokens?.toLocaleString()} in /{" "}
-                {agent.outputTokens?.toLocaleString()} out
+                {agent.inputTokens?.toLocaleString()} in /{" "}
+                {agent.outputTokens?.toLocaleString()} out tok
                 {agent.costUsd != null && agent.costUsd > 0 && (
                   <span className="text-j-success/60 ml-2">
                     ${agent.costUsd < 0.01 ? agent.costUsd.toFixed(4) : agent.costUsd.toFixed(3)}
@@ -227,7 +236,7 @@ function AgentCard({
               {((agent.cacheCreationTokens != null && agent.cacheCreationTokens > 0) ||
                 (agent.cacheReadTokens != null && agent.cacheReadTokens > 0)) && (
                 <p className="text-j-info/60">
-                  Cache: {agent.cacheCreationTokens?.toLocaleString() || 0} write /{" "}
+                  cache: {agent.cacheCreationTokens?.toLocaleString() || 0} write /{" "}
                   {agent.cacheReadTokens?.toLocaleString() || 0} read
                 </p>
               )}
