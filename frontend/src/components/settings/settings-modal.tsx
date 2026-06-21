@@ -33,6 +33,63 @@ const TABS: Array<{ key: SettingsTab; label: string }> = [
   { key: "trust", label: "Trust" },
 ];
 
+/**
+ * Inline stroke-SVG icon per settings tab. Matches the design iconography:
+ * 16px, viewBox 0 0 16 16, 1.4px strokes, currentColor, round caps. No icon library.
+ */
+function TabIcon({ tab }: { tab: SettingsTab }) {
+  const common = {
+    width: 16,
+    height: 16,
+    viewBox: "0 0 16 16",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 1.4,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+    "aria-hidden": true,
+  };
+  switch (tab) {
+    case "account": // person
+      return (
+        <svg {...common}>
+          <circle cx="8" cy="5" r="2.5" />
+          <path d="M3 13c0-2.5 2.2-4 5-4s5 1.5 5 4" />
+        </svg>
+      );
+    case "preferences": // sliders
+      return (
+        <svg {...common}>
+          <path d="M3 5h6M11 5h2M3 11h2M7 11h6" />
+          <circle cx="10" cy="5" r="1.4" />
+          <circle cx="6" cy="11" r="1.4" />
+        </svg>
+      );
+    case "policy": // shield
+      return (
+        <svg {...common}>
+          <path d="M8 2l5 2v4c0 3-2.2 5-5 6-2.8-1-5-3-5-6V4l5-2z" />
+        </svg>
+      );
+    case "budget": // coin / dollar
+      return (
+        <svg {...common}>
+          <circle cx="8" cy="8" r="6" />
+          <path d="M8 4.5v7M9.8 6c-.4-.7-1.1-1-1.8-1-1 0-1.7.6-1.7 1.4 0 1.9 3.5 1 3.5 2.9 0 .8-.8 1.4-1.8 1.4-.8 0-1.5-.3-1.9-1" />
+        </svg>
+      );
+    case "trust": // verified badge (check in circle)
+      return (
+        <svg {...common}>
+          <circle cx="8" cy="8" r="6" />
+          <path d="M5.5 8.2l1.7 1.7 3.3-3.6" />
+        </svg>
+      );
+    default:
+      return null;
+  }
+}
+
 const POLICY_MODES = [
   { value: "lockdown", label: "Lockdown", description: "All actions blocked" },
   {
@@ -218,12 +275,15 @@ export function SettingsModal() {
                 type="button"
                 onClick={() => setActiveTab(tab.key)}
                 aria-current={isActive ? "true" : undefined}
-                className={`text-left rounded-[var(--radius-md)] px-3 py-2 text-[13px] whitespace-nowrap transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-j-ring ${
+                className={`flex items-center gap-2.5 text-left rounded-[var(--radius-md)] px-3 py-2 text-[13px] whitespace-nowrap transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-j-ring ${
                   isActive
                     ? "bg-j-primary-soft text-j-primary font-medium"
                     : "text-t-tertiary hover:text-t-primary hover:bg-surface-2"
                 }`}
               >
+                <span className="shrink-0">
+                  <TabIcon tab={tab.key} />
+                </span>
                 {tab.label}
               </button>
             );

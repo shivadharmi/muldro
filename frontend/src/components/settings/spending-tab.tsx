@@ -57,7 +57,7 @@ export function SpendingTab({
               </div>
             ) : (
               <div className="flex items-center gap-3">
-                <p className="text-2xl font-semibold text-t-primary tracking-tight">
+                <p className="text-2xl font-semibold text-t-primary tracking-tight tabular-nums">
                   ${budgetLimit?.toFixed(2) ?? "—"}
                   <span className="text-sm text-t-muted font-normal ml-1">/ day</span>
                 </p>
