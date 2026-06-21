@@ -4,7 +4,7 @@ import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
@@ -109,6 +109,14 @@ async def list_history(
     runs: list[TaskRun] = runs_result.scalars().all()
 
     # ------------------------------------------------------------------ #
+    # Batch-resolve primary agent for this page of runs in a single query.
+    # Mirrors the detail path's agent attribution (Trace.agents_invoked),
+    # resolving by trace_id first and the reverse index (Trace.run_id) as a
+    # fallback — but for the whole page at once to avoid an N+1.
+    # ------------------------------------------------------------------ #
+    agent_by_run = await _resolve_agents_for_runs(db, workspace_id, runs)
+
+    # ------------------------------------------------------------------ #
     # Enrich each run
     # ------------------------------------------------------------------ #
     items: list[HistoryItemResponse] = []
@@ -192,6 +200,17 @@ async def list_history(
         except Exception:
             pass
 
+        # Duration from run timestamps (None while still running)
+        duration_ms: int | None = None
+        if run.started_at and run.completed_at:
+            delta = run.completed_at - run.started_at
+            duration_ms = int(delta.total_seconds() * 1000)
+
+        # Cost from the denormalized rollup column on the run (same source the
+        # detail path uses as its secondary fallback). Expose None when no cost
+        # was recorded so the UI can render an em-dash rather than "$0.00".
+        cost_usd = float(run.cost_usd) if run.cost_usd else None
+
         items.append(
             HistoryItemResponse(
                 run_id=run.run_id,
@@ -203,10 +222,14 @@ async def list_history(
                 risk_level=risk_level,
                 started_at=run.started_at,
                 completed_at=run.completed_at,
+                updated_at=run.updated_at,
+                duration_ms=duration_ms,
                 error=run.error,
                 retry_count=run.retry_count,
                 step_count=len(steps),
                 completed_step_count=completed_step_count,
+                cost_usd=cost_usd,
+                agent=agent_by_run.get(run.run_id),
                 steps=step_summaries,
                 approval=approval_ctx,
                 live_phase=live_phase,
@@ -455,6 +478,65 @@ async def get_history_detail(
         trace=trace,
         events=event_entries,
     )
+
+
+async def _resolve_agents_for_runs(
+    db: AsyncSession,
+    workspace_id: str,
+    runs: list[TaskRun],
+) -> dict[str, str]:
+    """Resolve the primary (last-invoked) agent for a page of runs in one query.
+
+    Mirrors the detail path's attribution source (Trace.agents_invoked) but
+    batches the lookup across the whole page to avoid an N+1. Traces are matched
+    either by the run's stamped trace_id or by the reverse index (Trace.run_id),
+    same as the detail endpoint's resolution order. The last entry in
+    agents_invoked is treated as the most representative agent for the row.
+    """
+    if not runs:
+        return {}
+
+    from src.models.traces import Trace as TraceModel
+
+    run_ids = [r.run_id for r in runs]
+    trace_ids = [r.trace_id for r in runs if r.trace_id]
+
+    conditions = [TraceModel.run_id.in_(run_ids)]
+    if trace_ids:
+        conditions.append(TraceModel.trace_id.in_(trace_ids))
+
+    trace_rows = (
+        (
+            await db.execute(
+                select(TraceModel).where(
+                    TraceModel.workspace_id == workspace_id,
+                    or_(*conditions),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    # Index traces by both keys so either resolution path finds them.
+    by_trace_id: dict[str, TraceModel] = {}
+    by_run_id: dict[str, TraceModel] = {}
+    for t in trace_rows:
+        if t.trace_id:
+            by_trace_id[t.trace_id] = t
+        if t.run_id:
+            by_run_id[t.run_id] = t
+
+    agent_by_run: dict[str, str] = {}
+    for run in runs:
+        trace = None
+        if run.trace_id:
+            trace = by_trace_id.get(run.trace_id)
+        if trace is None:
+            trace = by_run_id.get(run.run_id)
+        if trace and trace.agents_invoked:
+            agent_by_run[run.run_id] = trace.agents_invoked[-1]
+    return agent_by_run
 
 
 def _capability_from_step(step: TaskStep) -> str | None:

@@ -38,11 +38,14 @@ class HistoryItemResponse(BaseModel):
     risk_level: str | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
+    updated_at: datetime | None = None
+    duration_ms: int | None = None
     error: dict | None = None
     retry_count: int = 0
     step_count: int = 0
     completed_step_count: int = 0
     cost_usd: float | None = None
+    agent: str | None = None
     steps: list[HistoryStepSummary] = []
     approval: HistoryApprovalContext | None = None
     live_phase: str | None = None
