@@ -210,9 +210,12 @@ async def knowledge_cards(
     settings: Settings = Depends(get_settings),
     limit: int = Query(50, ge=1, le=100),
 ):
-    """Unified knowledge-card feed (kind/label/desc/sources) from entities + memories."""
-    graph = GraphEngine(settings)
-    svc = KnowledgeService(settings=settings, db=db, graph_engine=graph)
+    """Unified knowledge-card feed (kind/label/desc/sources) from entities + memories.
+
+    Reads from Postgres only (entities + memories); no Neo4j graph access is
+    needed, so no GraphEngine is constructed for this endpoint.
+    """
+    svc = KnowledgeService(settings=settings, db=db)
     try:
         return await svc.get_knowledge_cards(user_id, workspace_id, limit=limit)
     finally:

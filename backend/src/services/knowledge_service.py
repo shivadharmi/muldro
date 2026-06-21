@@ -87,14 +87,17 @@ def _entity_sources(entity: "Entity") -> list[str]:
 class KnowledgeService:
     """Orchestrates GraphEngine (Neo4j) + Postgres for knowledge page queries."""
 
-    def __init__(self, settings: Settings, db: AsyncSession, graph_engine: GraphEngine):
+    def __init__(
+        self, settings: Settings, db: AsyncSession, graph_engine: GraphEngine | None = None
+    ):
         self._settings = settings
         self._db = db
         self._graph = graph_engine
 
     async def close(self) -> None:
-        """Release GraphEngine resources."""
-        await self._graph.close()
+        """Release GraphEngine resources (no-op when no graph engine was attached)."""
+        if self._graph is not None:
+            await self._graph.close()
 
     async def __aenter__(self) -> "KnowledgeService":
         return self

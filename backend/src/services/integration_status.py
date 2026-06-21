@@ -12,6 +12,7 @@ local/token integrations are treated as connected when installed.
 """
 
 import logging
+import re
 from dataclasses import dataclass, field
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -81,20 +82,37 @@ def derive_slug(provider: str | None, server_name: str) -> str:
     return root or base
 
 
+# Split a scope string on token/verb boundaries: dots, slashes, colons,
+# dashes, underscores, and whitespace. Used so markers match whole tokens
+# (e.g. "send" in "email.send") instead of arbitrary substrings (so "add"
+# does NOT match inside "address").
+_SCOPE_TOKEN_SEP = re.compile(r"[^a-z0-9]+")
+
+
+def _scope_tokens(scope: str) -> list[str]:
+    """Split a raw scope string into lowercase alphanumeric tokens."""
+    return [tok for tok in _SCOPE_TOKEN_SEP.split(scope.lower()) if tok]
+
+
 def coarsen_scopes(scopes: list[str]) -> list[str]:
     """Coarsen capability strings into the design's ["read", "write"] subset.
 
-    A capability contributes "write" if it matches any write marker, and
-    "read" if it matches any read marker. Order is deterministic: read before
-    write. Capabilities matching neither are ignored.
+    A capability contributes "write" if any of its whole tokens matches a write
+    marker, and "read" if any token matches a read marker. Matching is
+    token/verb-boundary aware (scopes are split on ``. / : - _`` and whitespace),
+    so a marker only matches a complete token — e.g. "add" will not false-match
+    inside "address". Order is deterministic: read before write. Capabilities
+    whose tokens match neither marker set are ignored.
     """
+    write_markers = set(_WRITE_MARKERS)
+    read_markers = set(_READ_MARKERS)
     has_read = False
     has_write = False
     for scope in scopes:
-        low = scope.lower()
-        if any(marker in low for marker in _WRITE_MARKERS):
+        tokens = _scope_tokens(scope)
+        if any(tok in write_markers for tok in tokens):
             has_write = True
-        if any(marker in low for marker in _READ_MARKERS):
+        if any(tok in read_markers for tok in tokens):
             has_read = True
     result: list[str] = []
     if has_read:

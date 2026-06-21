@@ -148,7 +148,10 @@ class RuntimeProjectionService:
         (no per-capability N+1 DB round-trips). Returns an empty list when
         nothing is running. Names are sorted for stable output.
         """
-        from src.services.capability_resolver import CapabilityResolver
+        from src.services.capability_resolver import (
+            CapabilityResolver,
+            classify_capability_agent,
+        )
 
         result = await self._db.execute(
             select(TaskStep.input_data)
@@ -177,29 +180,10 @@ class RuntimeProjectionService:
 
         agents: set[str] = set()
         for capability in capabilities:
-            agent = self._route_capability_to_agent(capability, tools)
+            agent = classify_capability_agent(capability, tools)
             if agent:
                 agents.add(agent)
         return sorted(agents)
-
-    @staticmethod
-    def _route_capability_to_agent(capability: str, tools: list) -> str:
-        """Resolve a capability to an agent using a preloaded tool list.
-
-        Mirrors :func:`capability_resolver.route_step` but takes the enabled
-        tools as an argument to avoid per-capability DB queries.
-        """
-        if capability in ("reason", "respond", "none"):
-            return "presenter"
-        if capability.startswith("knowledge."):
-            return "librarian"
-
-        matching = [t for t in tools if t.capability == capability]
-        if not matching:
-            return ""  # unroutable / unknown capability
-        if all(not t.requires_approval for t in matching):
-            return "perceiver"
-        return "operator"
 
     async def get_runtime_summary(self) -> dict:
         """Aggregate runtime summary for the workspace."""

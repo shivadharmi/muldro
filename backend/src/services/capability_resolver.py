@@ -97,15 +97,26 @@ class CapabilityResolver:
         return any(t.requires_approval for t in tools)
 
 
-async def route_step(step_capability: str, resolver: CapabilityResolver) -> str:
-    """Map a plan-step capability to the agent that should execute it.
+def classify_capability_agent(
+    step_capability: str,
+    tools: list[ToolDefinition],
+) -> str:
+    """Pure classifier: map a capability to its owning agent using a preloaded tool list.
+
+    This is the single source of truth for capability -> agent routing. Both
+    :func:`route_step` (which loads tools per call) and callers that already hold
+    an enabled-tools snapshot (e.g. ``RuntimeProjectionService.get_active_agents``)
+    delegate here so the rules never drift apart.
+
+    ``tools`` must already be filtered to the capability's candidate set — pass the
+    full enabled-tools list and this function selects the matches.
 
     Routing priority:
     1. ``"reason"`` / ``"respond"`` / ``"none"`` -> ``"presenter"``
     2. ``"knowledge.*"`` -> ``"librarian"``
     3. Known read capability (tools exist, none need approval) -> ``"perceiver"``
     4. Known write capability (any tool needs approval) -> ``"operator"``
-    5. Unknown capability (no tools found) -> ``"operator"`` (fallback)
+    5. Unknown capability (no tools found) -> ``""`` (unroutable, skipped by caller)
 
     ``"perceiver"`` handles information gathering (merged from Observer + Researcher).
     """
@@ -115,19 +126,27 @@ async def route_step(step_capability: str, resolver: CapabilityResolver) -> str:
     if step_capability.startswith("knowledge."):
         return "librarian"
 
-    # Check if any tools exist for this capability before read/write classification
-    tools = await resolver.resolve(step_capability)
-    if not tools:
+    matching = [t for t in tools if t.capability == step_capability]
+    if not matching:
         logger.warning(
             "No tools found for capability %s — cannot route step",
             step_capability,
         )
         return ""  # Empty string signals unroutable
 
-    if all(not t.requires_approval for t in tools):
+    if all(not t.requires_approval for t in matching):
         return "perceiver"
 
-    if any(t.requires_approval for t in tools):
-        return "operator"
-
     return "operator"
+
+
+async def route_step(step_capability: str, resolver: CapabilityResolver) -> str:
+    """Map a plan-step capability to the agent that should execute it.
+
+    Loads the workspace's enabled tools once, then delegates to
+    :func:`classify_capability_agent` for the actual routing decision.
+
+    See :func:`classify_capability_agent` for the routing priority.
+    """
+    tools = await resolver._list_enabled_tools()
+    return classify_capability_agent(step_capability, tools)
