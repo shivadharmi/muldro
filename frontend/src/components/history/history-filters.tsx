@@ -84,11 +84,11 @@ export function HistoryFilters() {
   }, [setFilters]);
 
   return (
-    <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-[#21262d]">
+    <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-b-secondary">
       {/* Search input */}
       <div className="relative flex-1 min-w-[200px] max-w-xs">
         <svg
-          className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#484f58] pointer-events-none"
+          className="absolute left-2.5 top-1/2 -translate-y-1/2 text-t-muted pointer-events-none"
           width="14"
           height="14"
           viewBox="0 0 24 24"
@@ -102,7 +102,7 @@ export function HistoryFilters() {
           value={filters.search}
           onChange={handleSearchChange}
           placeholder="Search runs, plans, steps..."
-          className="w-full bg-[#161b22] border border-[#21262d] rounded-md pl-8 pr-3 py-1.5 text-sm text-[#e6edf3] placeholder-[#484f58] focus:outline-none focus:border-[#58a6ff] transition-colors"
+          className="w-full bg-surface-1 border border-b-secondary rounded-[var(--radius-md)] pl-8 pr-3 py-1.5 text-sm text-t-primary placeholder-t-muted focus:outline-none focus:border-j-primary transition-colors"
         />
       </div>
 
@@ -110,9 +110,9 @@ export function HistoryFilters() {
       <select
         value={filters.status}
         onChange={handleStatusChange}
-        className="bg-[#161b22] border border-[#21262d] rounded-md px-2.5 py-1.5 text-sm text-[#e6edf3] focus:outline-none focus:border-[#58a6ff] transition-colors cursor-pointer appearance-none pr-7"
+        className="bg-surface-1 border border-b-secondary rounded-[var(--radius-md)] px-2.5 py-1.5 text-sm text-t-primary focus:outline-none focus:border-j-primary transition-colors cursor-pointer appearance-none pr-7"
         style={{
-          backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none'%3E%3Cpath d='M6 9l6 6 6-6' stroke='%238b949e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")`,
+          backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none'%3E%3Cpath d='M6 9l6 6 6-6' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")`,
           backgroundRepeat: "no-repeat",
           backgroundPosition: "right 8px center",
         }}
@@ -128,9 +128,9 @@ export function HistoryFilters() {
       <select
         value={filters.source}
         onChange={handleSourceChange}
-        className="bg-[#161b22] border border-[#21262d] rounded-md px-2.5 py-1.5 text-sm text-[#e6edf3] focus:outline-none focus:border-[#58a6ff] transition-colors cursor-pointer appearance-none pr-7"
+        className="bg-surface-1 border border-b-secondary rounded-[var(--radius-md)] px-2.5 py-1.5 text-sm text-t-primary focus:outline-none focus:border-j-primary transition-colors cursor-pointer appearance-none pr-7"
         style={{
-          backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none'%3E%3Cpath d='M6 9l6 6 6-6' stroke='%238b949e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")`,
+          backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none'%3E%3Cpath d='M6 9l6 6 6-6' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")`,
           backgroundRepeat: "no-repeat",
           backgroundPosition: "right 8px center",
         }}
@@ -149,10 +149,10 @@ export function HistoryFilters() {
             key={preset.label}
             type="button"
             onClick={() => handleDatePreset(preset.hours)}
-            className={`px-2.5 py-1.5 text-xs rounded-md border transition-colors cursor-pointer ${
+            className={`px-2.5 py-1.5 text-xs rounded-[var(--radius-md)] border transition-colors cursor-pointer ${
               activePresetHours === preset.hours
-                ? "bg-[#1f2d3d] border-[#58a6ff] text-[#58a6ff]"
-                : "bg-[#161b22] border-[#21262d] text-[#8b949e] hover:text-[#e6edf3] hover:border-[#30363d]"
+                ? "bg-j-primary-soft border-j-primary text-j-primary"
+                : "bg-surface-1 border-b-secondary text-t-tertiary hover:text-t-primary hover:border-b-primary"
             }`}
           >
             {preset.label}
@@ -162,7 +162,7 @@ export function HistoryFilters() {
           <button
             type="button"
             onClick={handleClearDate}
-            className="px-2 py-1.5 text-xs rounded-md border border-[#21262d] bg-[#161b22] text-[#484f58] hover:text-[#8b949e] transition-colors cursor-pointer"
+            className="px-2 py-1.5 text-xs rounded-[var(--radius-md)] border border-b-secondary bg-surface-1 text-t-muted hover:text-t-tertiary transition-colors cursor-pointer"
             title="Clear date filter"
           >
             ✕
