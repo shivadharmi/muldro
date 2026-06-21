@@ -457,6 +457,10 @@ class SurfaceUpdate(BaseModel):
     progress: str = ""
     approval: ApprovalContext | None = None
     results: ResultSummary | None = None
+    # Cost/usage rollup for execution cards (optional — populated on completion
+    # frames where the run's token/cost totals are known). Live frames may omit.
+    tokens: int | None = None
+    cost_usd: float | None = None
 
 
 # ── Capability-based planning contracts ─────────────────────────────

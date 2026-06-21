@@ -93,6 +93,24 @@ class TestBuildBriefingSurfaceFallback:
         assert surface.id == "briefing_brief_yesterday"
 
     @pytest.mark.asyncio
+    async def test_carries_priority_items(self):
+        """Briefing preview exposes top_priorities as items[] (capped at 5)."""
+        db = AsyncMock()
+        service = SurfaceService(db=db, workspace_id="ws_01")
+        briefing = _mock_briefing("brief_items")
+        briefing.top_priorities = [{"title": f"Priority {i}", "why": "x"} for i in range(7)]
+
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = briefing
+        db.execute = AsyncMock(return_value=result)
+
+        surface = await service._build_briefing_surface("usr_01")
+        assert surface is not None
+        items = surface.preview["items"]
+        assert len(items) == 5  # capped
+        assert items[0] == "Priority 0"
+
+    @pytest.mark.asyncio
     async def test_returns_none_when_no_briefings_exist(self):
         db = AsyncMock()
         service = SurfaceService(db=db, workspace_id="ws_01")

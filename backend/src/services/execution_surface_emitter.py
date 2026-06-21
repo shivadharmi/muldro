@@ -118,11 +118,16 @@ class SurfaceEmitter:
         approval: object | None = None,
         results: object | None = None,
         workspace_id: str | None = None,
+        tokens: int | None = None,
+        cost_usd: float | None = None,
     ) -> None:
         """Publish a SurfaceUpdate to Redis for live workspace streaming.
 
         Also persists the latest surface state to the DB as a durable fallback
         so reconnecting clients can recover missed updates.
+
+        ``tokens``/``cost_usd`` carry the run's usage rollup on terminal frames
+        (completed/failed); live frames may omit them.
 
         Best-effort — failures are logged but never raised.
         """
@@ -140,6 +145,8 @@ class SurfaceEmitter:
                 progress=progress,
                 approval=approval,
                 results=results,
+                tokens=tokens,
+                cost_usd=cost_usd,
             )
 
             channel = f"jarvis:a2ui:{user_id}"
@@ -181,6 +188,8 @@ class SurfaceEmitter:
                         progress=progress,
                         approval=approval,
                         results=results,
+                        tokens=tokens,
+                        cost_usd=cost_usd,
                     ).model_dump(mode="json")
 
                     if existing:
@@ -268,6 +277,9 @@ class SurfaceEmitter:
                 subtitle=(run.error or {}).get("message") if run.status != "completed" else None,
                 status=run.status if run.status in ("completed", "failed") else "completed",
                 metrics=metrics,
+                tokens=(input_tokens + output_tokens) or None,
+                cost_usd=cost_usd if cost_usd else None,
+                updated_at=getattr(run, "completed_at", None) or getattr(run, "updated_at", None),
             )
 
             # Summary surfaces reuse the 'run' detail tabs so the user can

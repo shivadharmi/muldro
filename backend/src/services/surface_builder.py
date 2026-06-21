@@ -7,7 +7,7 @@ the two-layer surface model. No legacy A2UISurface children.
 import logging
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.contracts import WorkspaceSurfacePush
@@ -46,6 +46,7 @@ class SurfaceService:
             surfaces.append(briefing)
 
         surfaces.extend(await self._build_insight_surfaces(user_id))
+        surfaces.extend(await self._build_alert_surfaces())
         surfaces.extend(await self._build_recommendation_surfaces())
         surfaces.extend(await self._load_persisted_surfaces(user_id))
 
@@ -103,6 +104,46 @@ class SurfaceService:
             "variant": "success" if level in ("trusted", "autonomous") else "default",
         }
 
+    async def _approval_risk_and_flags(self, run_id: str) -> tuple[str | None, list[str]]:
+        """Resolve risk level + flags for a run awaiting approval.
+
+        Looks up the most recent pending Approval for the run. ``risk`` comes
+        from the approval's risk_level (clamped to the SurfacePreview literal);
+        ``flags`` carries "Irreversible" when the action is not reversible plus
+        the capability's trust level uppercased (e.g. "LEARNING") when known.
+        """
+        from src.models.approvals import Approval
+
+        result = await self._db.execute(
+            select(Approval)
+            .where(
+                Approval.run_id == run_id,
+                Approval.workspace_id == self._workspace_id,
+                Approval.status == "pending",
+            )
+            .order_by(Approval.created_at.desc())
+            .limit(1)
+        )
+        approval = result.scalar_one_or_none()
+        if not approval:
+            return None, []
+
+        raw_risk = (approval.risk_level or "").lower()
+        risk_value = raw_risk if raw_risk in ("low", "medium", "high", "critical") else None
+
+        flags: list[str] = []
+        refs = approval.artifact_refs if isinstance(approval.artifact_refs, dict) else {}
+        if refs.get("reversible") is False:
+            flags.append("Irreversible")
+
+        trust_context = await self._get_trust_context(approval)
+        if trust_context:
+            level = trust_context.get("trust_level")
+            if level and level != "first_use":
+                flags.append(level.upper())
+
+        return risk_value, flags
+
     async def _build_briefing_surface(self, user_id: str) -> WorkspaceSurfacePush | None:
         # Prefer today's briefing; if it hasn't been generated yet, fall back to
         # the most recent briefing for this user/workspace so the grid card and
@@ -138,11 +179,12 @@ class SurfaceService:
         priorities = briefing.top_priorities or []
         actions = briefing.recommended_actions or []
 
-        # First priority title as subtitle for context
-        first_priority = ""
-        if priorities:
-            p = priorities[0]
-            first_priority = p.get("title", "") if isinstance(p, dict) else str(p)
+        # Priority titles → subtitle (first) + items[] (top 5) for the card.
+        def _priority_title(p) -> str:
+            return (p.get("title", "") if isinstance(p, dict) else str(p)).strip()
+
+        priority_titles = [t for t in (_priority_title(p) for p in priorities) if t]
+        first_priority = priority_titles[0] if priority_titles else ""
 
         preview = SurfacePreview(
             title=briefing.headline or "Daily Briefing",
@@ -151,6 +193,7 @@ class SurfaceService:
                 SurfaceMetric(label="Priorities", value=str(len(priorities))),
                 SurfaceMetric(label="Actions", value=str(len(actions))),
             ],
+            items=priority_titles[:5],
             tags=["briefing"],
         )
         detail_config = build_detail_config("briefing", surface_id)
@@ -234,6 +277,17 @@ class SurfaceService:
                     break
             title = first_step_name or "Run"
 
+            # Cost/usage rollup (denormalized on the run by GraphExecutor).
+            run_tokens = (run.input_tokens or 0) + (run.output_tokens or 0)
+            run_cost = run.cost_usd
+            run_updated = run.completed_at or run.updated_at
+
+            # Approval context (risk + flags) when the run is gated on a decision.
+            risk_value: str | None = None
+            flags: list[str] = []
+            if awaiting:
+                risk_value, flags = await self._approval_risk_and_flags(run.run_id)
+
             preview = SurfacePreview(
                 title=title,
                 subtitle=subtitle,
@@ -241,6 +295,11 @@ class SurfaceService:
                 priority=priority,
                 progress=completed / total if total > 0 else 0.0,
                 metrics=metrics,
+                tokens=run_tokens or None,
+                cost_usd=run_cost if run_cost else None,
+                updated_at=run_updated,
+                risk=risk_value,
+                flags=flags,
             )
             # When a run is gated on user decision, expose an Approval tab so the
             # persisted detail modal renders the actionable approval card, and
@@ -269,27 +328,68 @@ class SurfaceService:
 
         return surfaces
 
-    async def _build_recommendation_surfaces(self) -> list[WorkspaceSurfacePush]:
-        actions: list[dict] = []
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    async def _build_alert_surfaces(self) -> list[WorkspaceSurfacePush]:
+        """Build one ``alert`` surface per recently-failed TaskRun.
 
-        failed_result = await self._db.execute(
-            select(func.count(TaskRun.run_id)).where(
+        Failed runs are first-class alerts (status="failed", priority high) so the
+        alert detail builders (overview + diagnostics) are reachable, rather than
+        being folded into a single aggregate recommendation count.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        result = await self._db.execute(
+            select(TaskRun)
+            .where(
                 TaskRun.workspace_id == self._workspace_id,
                 TaskRun.status == "failed",
                 TaskRun.updated_at >= cutoff,
+                TaskRun.source != "user_message",
             )
+            .order_by(TaskRun.updated_at.desc())
+            .limit(10)
         )
-        failed_count = failed_result.scalar() or 0
-        if failed_count > 0:
-            actions.append(
-                {
-                    "title": f"Investigate {failed_count} failed"
-                    f" run{'s' if failed_count > 1 else ''}",
-                    "description": "Recent workflow failures may need your attention.",
-                    "priority": "medium",
-                }
+        runs = result.scalars().all()
+        surfaces: list[WorkspaceSurfacePush] = []
+
+        for run in runs:
+            surface_id = f"alert_{run.run_id}"
+
+            # Carry the run's error message into the subtitle when available.
+            reason = ""
+            if run.error and isinstance(run.error, dict):
+                reason = str(run.error.get("message") or run.error.get("error") or "")
+            subtitle = reason[:120] if reason else "Run failed — see diagnostics."
+
+            preview = SurfacePreview(
+                title="Run failed",
+                subtitle=subtitle,
+                status="failed",
+                priority="high",
+                updated_at=run.completed_at or run.updated_at,
+                tags=["alert"],
             )
+            detail_config = build_detail_config("alert", surface_id)
+
+            surfaces.append(
+                WorkspaceSurfacePush(
+                    id=surface_id,
+                    kind="alert",
+                    preview=preview.model_dump(mode="json"),
+                    detail_config=(
+                        detail_config.model_dump(mode="json") if detail_config else None
+                    ),
+                    source_run_id=run.run_id,
+                    created_at=(
+                        run.completed_at.isoformat()
+                        if run.completed_at
+                        else (run.updated_at.isoformat() if run.updated_at else "")
+                    ),
+                )
+            )
+
+        return surfaces
+
+    async def _build_recommendation_surfaces(self) -> list[WorkspaceSurfacePush]:
+        actions: list[dict] = []
 
         try:
             from src.models.perception_state import PerceptionState

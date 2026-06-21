@@ -13,6 +13,7 @@ Component Types (25+):
 """
 
 import logging
+from datetime import datetime
 from enum import Enum
 from typing import Literal
 
@@ -207,6 +208,17 @@ class SurfacePreview(BaseModel):
     progress: float | None = None
     timestamp: str | None = None
     tags: list[str] = []
+
+    # ── Per-kind first-class fields (all optional; preserve back-compat) ──
+    # Populated by the surface builders so the frontend design's per-kind
+    # cards have a typed home on the wire instead of overloading metrics[].
+    tokens: int | None = None  # run/execution: input+output tokens summed
+    cost_usd: float | None = None  # run/execution: USD cost rollup
+    risk: Literal["low", "medium", "high", "critical"] | None = None  # approval context
+    flags: list[str] = []  # e.g. ["Irreversible", "LEARNING"]
+    items: list[str] = []  # briefing priority strings (capped)
+    evidence: str | None = None  # e.g. "42 days observed"
+    updated_at: datetime | None = None  # run last-updated / completed timestamp
 
 
 class DetailTab(BaseModel):

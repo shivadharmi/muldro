@@ -120,6 +120,8 @@ class DagRunner:
                             progress=f"{len(_comp_steps)}/{len(_comp_steps)} steps",
                             results=ResultSummary(key_findings=_findings[:5]),
                             workspace_id=run.workspace_id,
+                            tokens=((run.input_tokens or 0) + (run.output_tokens or 0)) or None,
+                            cost_usd=run.cost_usd if run.cost_usd else None,
                         )
                         # Emit a lightweight summary card for the workspace
                         # feed and archive the run surface.
