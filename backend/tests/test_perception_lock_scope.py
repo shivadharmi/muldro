@@ -93,6 +93,16 @@ class _TickHarness:
         self.claim_db.__aenter__ = AsyncMock(return_value=self.claim_db)
         self.claim_db.__aexit__ = AsyncMock(return_value=False)
 
+        # _drop_tokenless_sources queries oauth_tokens on the claim db. Return a
+        # token row for every test source's provider so none are paused as
+        # tokenless (gmail/calendar → google, else the source name).
+        _pmap = {"gmail": "google", "calendar": "google"}
+        _token_rows = MagicMock()
+        _token_rows.all.return_value = [
+            (s.user_id, _pmap.get(s.source, s.source)) for s in states
+        ]
+        self.claim_db.execute = AsyncMock(return_value=_token_rows)
+
         # Phase 2 recording db(s) — one fresh context per source
         self.rec_dbs: list[MagicMock] = []
 
@@ -441,3 +451,43 @@ async def test_no_mid_cycle_signal_does_not_re_arm():
 
     assert state.pending_run is False
     assert state.next_run_at > datetime.now(timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# Token-presence gating: a source whose OAuth provider has no stored token must
+# be paused and never polled (stops orphaned auth-failure churn).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_tokenless_source_is_paused_and_not_run():
+    from src.services.scheduler import SchedulerLoop
+
+    s_ok = _make_state(state_id="pst_ok", source="gmail", user_id="usr_ok")
+    s_orphan = _make_state(state_id="pst_orphan", source="gmail", user_id="usr_orphan")
+    harness = _TickHarness([s_ok, s_orphan])
+    # Only usr_ok has a google token row.
+    rows = MagicMock()
+    rows.all.return_value = [("usr_ok", "google")]
+    harness.claim_db.execute = AsyncMock(return_value=rows)
+
+    cycles: list[str] = []
+
+    async def _cycle(source, *, user_id, workspace_id):
+        cycles.append(user_id)
+        return {"status": "completed", "events": 0}
+
+    orchestrator = MagicMock()
+    orchestrator._budget = _mock_budget()
+    orchestrator.run_perception_cycle = AsyncMock(side_effect=_cycle)
+
+    scheduler = SchedulerLoop(_mock_settings(), orchestrator=orchestrator)
+    with (
+        patch("src.services.perception_policy.PerceptionPolicyService", return_value=harness.svc),
+        patch.object(scheduler, "_resolve_workspace", new=AsyncMock(return_value="ws_test")),
+    ):
+        await scheduler._tick_perception(harness.factory)
+
+    assert s_orphan.mode == "paused"  # orphaned source deactivated
+    assert s_ok.mode != "paused"  # healthy source untouched
+    assert cycles == ["usr_ok"]  # only the token-backed source was polled

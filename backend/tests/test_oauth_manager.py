@@ -176,3 +176,97 @@ class TestOAuthManager:
         decrypted = f.decrypt(encrypted.encode()).decode()
         assert decrypted == original
         assert encrypted != original
+
+
+class TestGetValidTokenWithReason:
+    """Characterize the reason-aware token outcome so callers can distinguish
+    'never connected / unauthorized' (permanent) from a refresh blip (transient)."""
+
+    def _make_mock_db(self):
+        db = AsyncMock()
+        db.add = MagicMock()
+        db.commit = AsyncMock()
+        ctx = AsyncMock()
+        ctx.__aenter__ = AsyncMock(return_value=db)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        factory = MagicMock(return_value=ctx)
+        return factory, db
+
+    @patch.dict(os.environ, {"JARVIS_OAUTH_ENCRYPTION_KEY": TEST_KEY})
+    async def test_ok_returns_token_and_reason(self):
+        factory, db = self._make_mock_db()
+        f = Fernet(TEST_KEY.encode())
+        existing = MagicMock()
+        existing.access_token_encrypted = f.encrypt(b"live_token").decode()
+        existing.refresh_token_encrypted = None
+        existing.expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = existing
+        db.execute = AsyncMock(return_value=mock_result)
+
+        from src.services.oauth_manager import OAuthManager
+
+        manager = OAuthManager(factory)
+        res = await manager.get_valid_token_with_reason(TEST_USER_ID, "google")
+
+        assert res.token == "live_token"
+        assert res.reason == "ok"
+        # Back-compat wrapper still returns the bare token string.
+        assert await manager.get_valid_token(TEST_USER_ID, "google") == "live_token"
+
+    @patch.dict(os.environ, {"JARVIS_OAUTH_ENCRYPTION_KEY": TEST_KEY})
+    async def test_no_token_row_returns_no_token_reason(self):
+        factory, db = self._make_mock_db()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        db.execute = AsyncMock(return_value=mock_result)
+
+        from src.services.oauth_manager import OAuthManager
+
+        manager = OAuthManager(factory)
+        res = await manager.get_valid_token_with_reason(TEST_USER_ID, "google")
+
+        assert res.token is None
+        assert res.reason == "no_token"
+
+    @patch.dict(os.environ, {"JARVIS_OAUTH_ENCRYPTION_KEY": TEST_KEY})
+    async def test_expired_no_refresh_returns_no_refresh_token_reason(self):
+        factory, db = self._make_mock_db()
+        f = Fernet(TEST_KEY.encode())
+        existing = MagicMock()
+        existing.access_token_encrypted = f.encrypt(b"expired").decode()
+        existing.refresh_token_encrypted = None
+        existing.expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = existing
+        db.execute = AsyncMock(return_value=mock_result)
+
+        from src.services.oauth_manager import OAuthManager
+
+        manager = OAuthManager(factory)
+        res = await manager.get_valid_token_with_reason(TEST_USER_ID, "google")
+
+        assert res.token is None
+        assert res.reason == "no_refresh_token"
+
+    @patch.dict(os.environ, {"JARVIS_OAUTH_ENCRYPTION_KEY": TEST_KEY})
+    async def test_refresh_http_failure_returns_refresh_failed_reason(self):
+        factory, db = self._make_mock_db()
+        f = Fernet(TEST_KEY.encode())
+        existing = MagicMock()
+        existing.access_token_encrypted = f.encrypt(b"expired").decode()
+        existing.refresh_token_encrypted = f.encrypt(b"refresh_tok").decode()
+        existing.expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = existing
+        db.execute = AsyncMock(return_value=mock_result)
+
+        from src.services.oauth_manager import OAuthManager
+
+        manager = OAuthManager(factory)
+        # Refresh HTTP call fails (network/5xx) -> _refresh_token returns None.
+        with patch.object(manager, "_refresh_token", AsyncMock(return_value=None)):
+            res = await manager.get_valid_token_with_reason(TEST_USER_ID, "google")
+
+        assert res.token is None
+        assert res.reason == "refresh_failed"

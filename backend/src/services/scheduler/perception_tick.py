@@ -44,6 +44,19 @@ class PerceptionTickMixin:
                 if not due_states:
                     return
 
+                # Drop (and pause) sources whose OAuth provider has no stored
+                # token. A perception_state row can outlive its credential — the
+                # user never finished connecting, or revoked/deleted the token —
+                # and polling it just churns auth failures forever. Pausing stops
+                # it being due; reconnecting OAuth + a wake signal reactivates it
+                # via request_run. This also covers token deletion (the next tick
+                # pauses any now-orphaned source), so no separate delete hook is
+                # needed. The mutation commits with the claim transaction below.
+                due_states = await self._drop_tokenless_sources(db, due_states)
+                if not due_states:
+                    await db.commit()  # persist any pauses
+                    return
+
                 # Rate limit: cap perception cycles per tick to avoid
                 # API exhaustion when many sources are due simultaneously.
                 # Applied BEFORE leasing so deferred sources keep their current
@@ -202,6 +215,52 @@ class PerceptionTickMixin:
                         )
         except Exception:
             logger.warning("Perception tick error", exc_info=True)
+
+    @staticmethod
+    def _provider_for_source(source: str) -> str:
+        """Map a perception source to its OAuth provider (gmail/calendar share
+        the ``google`` provider). Mirrors connector_poller's mapping."""
+        return "google" if source in ("gmail", "calendar") else source
+
+    async def _drop_tokenless_sources(self, db, due_states):
+        """Pause + drop due sources whose OAuth provider has no stored token.
+
+        Checks token-row EXISTENCE (not validity) so a connected user mid
+        token-refresh is never paused — only genuinely credential-less sources
+        (never connected / revoked / deleted) are. Mutates ``mode`` on the
+        already-locked rows; the caller commits."""
+        from sqlalchemy import select
+
+        from src.models.oauth_token import OAuthToken
+
+        try:
+            user_ids = {s.user_id for s in due_states}
+            rows = await db.execute(
+                select(OAuthToken.user_id, OAuthToken.provider).where(
+                    OAuthToken.user_id.in_(user_ids)
+                )
+            )
+            have = {(r[0], r[1]) for r in rows.all()}
+        except Exception:
+            # Fail-open: only PAUSE on a positive "no token" confirmation. If the
+            # lookup itself fails, keep every source rather than risk pausing a
+            # legitimate one on a transient DB hiccup.
+            logger.debug("Token-presence check failed; keeping all due sources", exc_info=True)
+            return due_states
+
+        keep = []
+        for s in due_states:
+            if (s.user_id, self._provider_for_source(s.source)) in have:
+                keep.append(s)
+            else:
+                s.mode = "paused"
+                logger.info(
+                    "Pausing perception source %s/%s — no OAuth token for provider %s",
+                    s.user_id,
+                    s.source,
+                    self._provider_for_source(s.source),
+                )
+        return keep
 
     async def _record_outcome(
         self,

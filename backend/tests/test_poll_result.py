@@ -709,14 +709,17 @@ class TestErrorClassPropagation:
 # ---------------------------------------------------------------------------
 
 
-async def _run_poll_with_token(token, *, source="gmail"):
+async def _run_poll_with_token(token, *, source="gmail", reason=None):
     """Drive ConnectorPoller.poll with a stubbed connector + given OAuth token.
 
     The connector itself returns an ok-empty PollResult; the test controls
-    whether the *preflight* token check fails by choosing ``token``.
+    whether the *preflight* token check fails by choosing ``token`` (and the
+    ``reason`` the OAuth manager reports — defaults to ``ok`` when a token is
+    present, ``no_token`` otherwise).
     """
     from src.connectors.poll_result import PollResult
     from src.orchestrator.connector_poller import ConnectorPoller
+    from src.services.oauth_manager import TokenResult
 
     with patch("src.connectors.base.CONNECTOR_REGISTRY") as mock_registry:
         mock_connector_cls = MagicMock()
@@ -740,8 +743,12 @@ async def _run_poll_with_token(token, *, source="gmail"):
         poller._db_factory = MagicMock(return_value=mock_db)
 
         with patch("src.services.oauth_manager.OAuthManager") as mock_oauth_cls:
+            _reason = reason or ("ok" if token is not None else "no_token")
             mock_oauth = AsyncMock()
             mock_oauth.get_valid_token = AsyncMock(return_value=token)
+            mock_oauth.get_valid_token_with_reason = AsyncMock(
+                return_value=TokenResult(token=token, reason=_reason)
+            )
             mock_oauth_cls.return_value = mock_oauth
 
             return await ConnectorPoller.poll(poller, source, TEST_USER_ID, "ws_test")
@@ -749,18 +756,35 @@ async def _run_poll_with_token(token, *, source="gmail"):
 
 class TestPreflightErrorClassification:
     @pytest.mark.asyncio
-    async def test_no_valid_credentials_classifies_transient(self):
-        """A credential-acquisition failure must classify as transient (NOT unknown).
-
-        Observed bug: transient OAuth token-refresh blips opened the circuit
-        after 3 failures because the message bucketed as unknown. It must
-        instead be transient (threshold 6) so refresh blips tolerate more
-        failures, while a confirmed provider 401 (PollResult auth_failed) stays
-        permanent.
+    async def test_no_token_classifies_permanent(self):
+        """A confirmed "no usable credential" (never connected / revoked / no
+        refresh token) must classify as PERMANENT (circuit opens immediately at
+        threshold 1). Retrying forever can't conjure a credential — open fast and
+        surface re-auth rather than churning. (The poller emits the auth_failed
+        sentinel, which classify_error buckets permanent via its 401/unauthorized
+        patterns.)
         """
         from src.services.perception_policy import classify_error
 
-        events, new_cursor, poll_error, _ = await _run_poll_with_token(None)
+        for reason in ("no_token", "no_refresh_token", "revoked"):
+            events, _new_cursor, poll_error, _ = await _run_poll_with_token(
+                None, reason=reason
+            )
+            assert events == []
+            assert poll_error is not None
+            assert classify_error(poll_error) == "permanent", reason
+
+    @pytest.mark.asyncio
+    async def test_refresh_blip_classifies_transient(self):
+        """A genuine token-refresh HTTP failure (network/5xx) is the one truly
+        transient case — keep tolerating it (threshold 6) rather than opening the
+        circuit on a momentary blip.
+        """
+        from src.services.perception_policy import classify_error
+
+        events, _new_cursor, poll_error, _ = await _run_poll_with_token(
+            None, reason="refresh_failed"
+        )
 
         assert events == []
         assert poll_error is not None

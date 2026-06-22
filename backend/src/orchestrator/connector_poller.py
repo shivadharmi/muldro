@@ -101,23 +101,31 @@ class ConnectorPoller:
         )
         # Map source to OAuth provider (gmail/calendar share "google" provider)
         oauth_provider = "google" if source in ("gmail", "calendar") else source
-        access_token = await oauth_mgr.get_valid_token(user_id, oauth_provider)
-        if not access_token:
-            # Failure to *acquire* a local token is classified transient (NOT
-            # permanent): this layer cannot tell a momentary token-refresh blip
-            # from a real revocation, and the observed production case is a blip.
-            # Transient -> threshold 6, so refresh blips no longer open the
-            # circuit after 3. A confirmed provider 401/403 surfaces separately as
-            # PollResult.auth_failed (-> permanent), so real revocations still open
-            # fast.
-            from src.connectors.poll_result import CREDENTIAL_ACQUISITION_ERROR
+        token_result = await oauth_mgr.get_valid_token_with_reason(user_id, oauth_provider)
+        if token_result.token is None:
+            # Distinguish a genuine token-refresh blip (transient — retry) from a
+            # confirmed "no usable credential" (never connected / no refresh token /
+            # revoked). The latter cannot self-heal by retrying, so classify it
+            # auth_failed (-> permanent, threshold 1): the circuit opens fast and
+            # re-authorization can be surfaced, instead of looping forever on a
+            # source the user never connected. A live provider 401/403 still
+            # surfaces as PollResult.auth_failed on the connector return path.
+            from src.connectors.poll_result import (
+                CREDENTIAL_ACQUISITION_ERROR,
+                error_class_to_policy_error,
+            )
 
+            if token_result.reason == "refresh_failed":
+                err = CREDENTIAL_ACQUISITION_ERROR
+            else:  # no_token | no_refresh_token | revoked
+                err = error_class_to_policy_error("auth_failed")
             return (
                 [],
                 None,
-                f"No valid credentials for {source} — {CREDENTIAL_ACQUISITION_ERROR}",
+                f"No valid credentials for {source} — {err}",
                 cursor_type,
             )
+        access_token = token_result.token
 
         # Get current cursor
         cursor = None
