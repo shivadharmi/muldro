@@ -26,11 +26,14 @@ import time
 from datetime import datetime, timezone
 
 from src.contracts import ResultSummary, StepResult
+from src.integrations.mcp_errors import McpAuthRequiredError
+from src.integrations.provider_map import provider_for_server
 from src.models.task_graph import TaskRun, TaskStep
 from src.orchestrator.agent_loop import CancellationRequested
 from src.services.execution_state import transition_run, transition_step
 from src.services.execution_support import (
     _compute_retry_delay,
+    _detect_auth_required,
     _safe_error_fields,
     _step_to_state,
 )
@@ -56,6 +59,7 @@ class DagRunner:
         learner: OutcomeLearner,
         emitter: SurfaceEmitter,
         trust_engine_provider,
+        reauth_service_provider=None,
     ):
         self._db = db
         self._store = store
@@ -66,11 +70,23 @@ class DagRunner:
         # Resolved live via a provider so the coordinator stays the single source
         # of truth (tests reassign executor._trust_engine after construction).
         self._trust_engine_provider = trust_engine_provider
+        # ReauthService is resolved live via a provider for the same reason
+        # (tests reassign executor._reauth_service after construction). It may be
+        # absent (None) when re-auth wiring is unavailable — auth_required is then
+        # treated as a normal step failure rather than a deferral.
+        self._reauth_service_provider = reauth_service_provider
 
     @property
     def _trust_engine(self):
         """Resolve the current TrustEngine live via the provider."""
         return self._trust_engine_provider()
+
+    @property
+    def _reauth_service(self):
+        """Resolve the current ReauthService live via the provider (may be None)."""
+        if self._reauth_service_provider is None:
+            return None
+        return self._reauth_service_provider()
 
     async def execute_dag(
         self,
@@ -193,18 +209,30 @@ class DagRunner:
                     logger.error("Step %s raised unexpectedly", step.step_id, exc_info=True)
 
                 # Stop dispatching the rest of this ready batch the moment a step
-                # pauses the run (approval gate / awaiting input). transition_run
-                # mutates run.status in place, so this reflects the pause without a
-                # refresh. Without this, a second ready step in the same batch would
-                # call create_approval_and_pause while the run is already
-                # awaiting_approval → InvalidTransitionError. The remaining ready
-                # steps are re-evaluated on resume.
-                if run.status in ("paused", "awaiting_approval", "awaiting_input"):
+                # pauses OR defers the run (approval gate / awaiting input /
+                # awaiting_reauth). transition_run mutates run.status in place, so
+                # this reflects the pause without a refresh. Without including
+                # ``awaiting_reauth`` here, the step the defer left ``running``
+                # (which get_ready_steps still returns so resumed runs re-pick it)
+                # would be re-executed → re-deferred → invalid awaiting_reauth →
+                # awaiting_reauth transition (swallowed) → churn until the subtick
+                # timeout. The deferred step is re-evaluated when the run is
+                # re-queued after reconnect.
+                if run.status in (
+                    "paused",
+                    "awaiting_approval",
+                    "awaiting_input",
+                    "awaiting_reauth",
+                ):
                     break
 
-            # Check if run was paused by an approval gate
-            await self._db.refresh(run)
-            if run.status in ("paused", "awaiting_approval"):
+            # Check if run was paused by an approval gate or deferred for re-auth.
+            # NOTE: refresh would clobber the in-memory awaiting_reauth status from
+            # the DB (the defer is not committed yet on this coordinator session),
+            # so only refresh when the run is NOT already parked in-memory.
+            if run.status not in ("paused", "awaiting_approval", "awaiting_reauth"):
+                await self._db.refresh(run)
+            if run.status in ("paused", "awaiting_approval", "awaiting_reauth"):
                 break
 
         _dag_elapsed = time.monotonic() - _dag_start
@@ -329,9 +357,21 @@ class DagRunner:
                 step.completed_at = datetime.now(timezone.utc)
                 await self._db.flush()
                 raise
+            except McpAuthRequiredError as exc:
+                if await self._defer_for_reauth(run, step, exc, surface_id=surface_id):
+                    return
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+                await self.handle_step_failure(run, step, exc, elapsed_ms, surface_id=surface_id)
+                return
             except Exception as exc:
                 elapsed_ms = int((time.monotonic() - t0) * 1000)
                 await self.handle_step_failure(run, step, exc, elapsed_ms, surface_id=surface_id)
+                return
+
+            # A tool that hit a permanent OAuth failure surfaces an auth_required
+            # signal in the step output. Defer the whole run for re-authorization
+            # instead of failing it (it is re-queued on reconnect).
+            if await self._defer_for_reauth(run, step, output, surface_id=surface_id):
                 return
 
             if decision.decision == "auto_execute_notify":
@@ -386,12 +426,114 @@ class DagRunner:
             step.completed_at = datetime.now(timezone.utc)
             await self._db.flush()
             raise
+        except McpAuthRequiredError as exc:
+            if await self._defer_for_reauth(run, step, exc, surface_id=surface_id):
+                return
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            await self.handle_step_failure(run, step, exc, elapsed_ms, surface_id=surface_id)
+            return
         except Exception as exc:
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             await self.handle_step_failure(run, step, exc, elapsed_ms, surface_id=surface_id)
             return
 
+        if await self._defer_for_reauth(run, step, output, surface_id=surface_id):
+            return
+
         await self.finalize_step(run, step, output, elapsed_ms)
+
+    async def _defer_for_reauth(
+        self,
+        run: TaskRun,
+        step: TaskStep,
+        result,
+        surface_id: str | None = None,
+    ) -> bool:
+        """Park the run for OAuth re-authorization on an ``auth_required`` signal.
+
+        ``result`` is either a step-output dict (inspected for the structured
+        ``auth_required`` envelope) or a surfaced ``McpAuthRequiredError``. When
+        an auth requirement is detected and a ReauthService is wired:
+
+        - the run is transitioned to ``awaiting_reauth`` (via
+          ``ReauthService.defer_run`` → state machine) with the blocking
+          provider stored in ``run.checkpoint["awaiting_provider"]``;
+        - the integration is flagged ``needs_reauth`` and the provider's
+          perception sources are paused (``apply_needs_reauth``).
+
+        The deferred step is left ``running``; ``StepGraphStore.get_ready_steps``
+        re-picks running steps, so the step re-executes once the run is re-queued
+        after reconnect. (We deliberately do NOT reset it to ``ready`` — that is
+        not a valid step transition and the running→resume path already covers
+        re-execution.)
+
+        ATOMICITY (C4): every DB write — the run defer (run → awaiting_reauth),
+        the integration status flip, and the source pause — happens on the
+        COORDINATOR session ``self._db`` and is NOT committed here. The
+        graph_executor coordinator owns the single commit (``execute_run`` /
+        ``resume_run`` commit ``self._db`` after the DAG returns), so the
+        run-defer + status-flip + source-pause land in ONE transaction. A failure
+        of that commit rolls back all three together — no orphan where the
+        integration is flagged but the run was never deferred. ``notify_reauth``
+        is external (Redis dedup + Notifier), idempotent, and safe to fire here.
+
+        Returns ``True`` when the run was deferred (caller must stop and NOT
+        finalize/fail the step), ``False`` otherwise.
+        """
+        reauth = self._reauth_service
+        if reauth is None:
+            return False
+
+        provider = ""
+        if isinstance(result, McpAuthRequiredError):
+            provider = result.provider or provider_for_server(result.server or "")
+        else:
+            auth = _detect_auth_required(result)
+            if not auth:
+                return False
+            provider = auth.get("provider") or provider_for_server(auth.get("server", ""))
+
+        if not provider:
+            return False
+
+        # All defer writes on the COORDINATOR session — no separate session, no
+        # premature commit (see ATOMICITY above):
+        #   1. park the run (running → awaiting_reauth) + record the provider;
+        #   2. flag the integration needs_reauth + pause its perception sources.
+        await reauth.defer_run(self._db, run, provider)
+        await reauth.apply_needs_reauth(self._db, run.user_id, provider, "auth_required")
+        await self._db.flush()
+
+        # Notify the user (external: Redis dedup + Notifier). Idempotent and not a
+        # DB write on self._db, so it is safe to fire before the coordinator commit.
+        try:
+            await reauth.notify_reauth(
+                run.user_id,
+                provider,
+                "auth_required",
+                workspace_id=run.workspace_id or "",
+            )
+        except Exception:
+            logger.warning(
+                "notify_reauth failed for %s/%s (run deferred regardless)",
+                run.user_id,
+                provider,
+                exc_info=True,
+            )
+
+        await self._emitter.emit_event(
+            "run.awaiting_reauth",
+            run.user_id,
+            {"run_id": run.run_id, "step_id": step.step_id, "provider": provider},
+            workspace_id=run.workspace_id,
+        )
+        logger.info(
+            "Run %s deferred for re-auth (provider=%s, step=%s)",
+            run.run_id,
+            provider,
+            step.step_id,
+        )
+        return True
 
     async def handle_step_failure(
         self,

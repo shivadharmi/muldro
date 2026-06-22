@@ -78,12 +78,19 @@ class JarvisTrace:
     spans: list[AgentSpan] = field(default_factory=list)
     _active_spans: dict[str, AgentSpan] = field(default_factory=dict, repr=False)
 
-    def start_span(self, agent_name: str, parent_span_id: str | None = None) -> AgentSpan:
+    def start_span(
+        self,
+        agent_name: str,
+        parent_span_id: str | None = None,
+        *,
+        model: str = "unknown",
+    ) -> AgentSpan:
         span = AgentSpan(
             span_id=f"span_{ULID()}",
             agent_name=agent_name,
             parent_span_id=parent_span_id,
             started_at=datetime.now(timezone.utc),
+            model=model,
         )
         self.spans.append(span)
         self._active_spans[span.span_id] = span
@@ -98,7 +105,7 @@ class JarvisTrace:
         cache_creation_input_tokens: int = 0,
         cache_read_input_tokens: int = 0,
         thinking_tokens: int = 0,
-        model: str = "unknown",
+        model: str | None = None,
         cost_usd: float = 0.0,
         tools_called: list[str] | None = None,
         tool_call_details: list[SpanToolCall] | None = None,
@@ -116,7 +123,11 @@ class JarvisTrace:
         span.cache_creation_input_tokens = cache_creation_input_tokens
         span.cache_read_input_tokens = cache_read_input_tokens
         span.thinking_tokens = thinking_tokens
-        span.model = model
+        # Preserve the model set at start_span when the caller doesn't supply one
+        # (e.g. finish() force-closing an abandoned span), so a real model id is
+        # not clobbered back to the "unknown" sentinel.
+        if model is not None:
+            span.model = model
         span.cost_usd = cost_usd
         span.tools_called = tools_called or []
         span.tool_call_details = tool_call_details or []

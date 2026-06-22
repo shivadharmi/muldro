@@ -16,10 +16,65 @@ from typing import Any
 import anthropic
 
 from src.contracts import SpanToolCall
+from src.integrations.provider_map import provider_for_server
 from src.orchestrator.hooks import _sanitize_secrets, audit_post_tool_hook, governor_pre_tool_hook
 from src.services.tool_registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
+
+# Terminal steer appended to a tool_result when its MCP server is unavailable
+# (auth_required / bridge-not-initialized). Tells the model to stop retrying
+# that integration this turn and report back instead of burning more rounds.
+_UNAVAILABLE_STEER = (
+    " This integration needs re-authorization and cannot be used in this session. "
+    "Do not retry its tools; tell the user to reconnect it."
+)
+_BRIDGE_NOT_INIT_STEER = (
+    " This integration is unavailable in this session. "
+    "Do not retry its tools; tell the user to reconnect it."
+)
+
+
+def _unavailable_provider(result: Any) -> str | None:
+    """Return the provider key to mark unavailable, or None.
+
+    Detects the two "server is down for auth/unavailable reasons" shapes the
+    tool path can return — the structured ``auth_required`` envelope (carrying
+    ``provider``/``server``) and the legacy ``"MCP bridge not initialized"``
+    error. Resolution is pure string work (``provider_for_server`` is a
+    substring matcher) — no DB or I/O on the loop's hot path.
+    """
+    if not isinstance(result, dict):
+        return None
+    if result.get("error_code") == "auth_required":
+        provider = result.get("provider")
+        if provider:
+            return str(provider)
+        server = result.get("server")
+        if server:
+            return provider_for_server(str(server))
+    return None
+
+
+def _unavailable_server(result: Any) -> str | None:
+    """Return the MCP server name to mark unavailable, or None.
+
+    Pulled from the structured ``auth_required`` envelope's ``server`` field.
+    Tracking by the registered SERVER name (rather than only the provider
+    inferred from the tool NAME) is the C5 fix: a Google tool like
+    ``search_messages`` has no provider substring, so the provider-name
+    short-circuit never matched it. The envelope always carries the real server,
+    so keying the short-circuit on the server makes it robust to tool names that
+    don't embed their provider.
+    """
+    if not isinstance(result, dict):
+        return None
+    if result.get("error_code") == "auth_required":
+        server = result.get("server")
+        if server:
+            return str(server)
+    return None
+
 
 # The Governor's structured-output tool. Capability-scoped to the Governor, so
 # its presence in an agent's tool list is the discriminator for forcing
@@ -66,38 +121,56 @@ def _sanitize_for_span(value: Any) -> Any:
     return value
 
 
+async def _resolve_tool_scope_and_server(
+    tool_name: str,
+    agent,  # SubAgent
+    db_factory,
+    workspace_id: str,
+) -> tuple[bool, str | None]:
+    """Resolve a tool's (in_scope, server_name) in ONE registry lookup.
+
+    Combines capability-scope enforcement with server resolution so the loop's
+    hot path issues a single ``get_tool`` per tool instead of two. Returns:
+
+    - ``in_scope``: True only if the tool's registry capability is present in the
+      agent's ``capability_scope`` (fail-closed for capability=None / unresolved
+      / no-registry — mirrors ``_get_tools_for_agent``, which never offers such
+      tools);
+    - ``server``: the tool's registered MCP server name (or None) — used to key
+      the per-turn unavailable-server short-circuit (C5). A name like
+      ``search_messages`` carries no provider substring, so resolving its server
+      from the registry is the only reliable way to short-circuit it.
+    """
+    scope = getattr(agent, "capability_scope", None)
+    # Agents with no scope get no tools offered; nothing legitimate to allow.
+    if not scope:
+        return False, None
+    if db_factory is None:
+        return False, None
+    async with db_factory() as db:
+        registry = ToolRegistry(db, workspace_id=workspace_id or None)
+        tool = await registry.get_tool(tool_name)
+    if tool is None:
+        return False, None
+    server = getattr(tool, "server", None)
+    capability = getattr(tool, "capability", None)
+    if not capability:
+        return False, server
+    return capability in scope, server
+
+
 async def _capability_in_scope(
     tool_name: str,
     agent,  # SubAgent
     db_factory,
     workspace_id: str,
 ) -> bool:
-    """Capability-scope enforcement for tool execution (fail-closed for known caps).
-
-    Mirrors JarvisOrchestrator._get_tools_for_agent: a tool is permitted only if
-    its registry capability is present in the agent's capability_scope.
-
-    Policy for capability=None / unresolved tools: these are NEVER offered to any
-    agent by _get_tools_for_agent (it requires tool_def.capability and membership
-    in scope), so if such a call reaches here it was not legitimately offered —
-    reject it. If the registry cannot be consulted at all (no db_factory), we
-    cannot classify the tool, so we fail closed. No reachable write path calls
-    this with db_factory=None (GraphExecutor only invokes agent_loop when its
-    db_factory is set; the chat path always passes one), so this is
-    defense-in-depth, not a functional gate.
-    """
-    scope = getattr(agent, "capability_scope", None)
-    # Agents with no scope get no tools offered; nothing legitimate to allow.
-    if not scope:
-        return False
-    if db_factory is None:
-        return False
-    async with db_factory() as db:
-        registry = ToolRegistry(db, workspace_id=workspace_id or None)
-        tool = await registry.get_tool(tool_name)
-    if tool is None or not getattr(tool, "capability", None):
-        return False
-    return tool.capability in scope
+    """Backward-compatible capability-scope check (delegates to the combined
+    resolver). Retained for callers/tests that only need the in-scope verdict."""
+    in_scope, _server = await _resolve_tool_scope_and_server(
+        tool_name, agent, db_factory, workspace_id
+    )
+    return in_scope
 
 
 # ── Loop Event Types (internal, never serialized to SSE directly) ──
@@ -350,7 +423,7 @@ async def agent_loop(
     When stream=False, uses messages.create() (still yields same events).
     """
     agent_name = agent.name
-    span = trace.start_span(agent_name) if trace else None
+    span = trace.start_span(agent_name, model=model) if trace else None
 
     yield LoopAgentStart(agent=agent_name, model=model)
 
@@ -364,6 +437,20 @@ async def agent_loop(
     thinking_chunks: list[str] = []
     text = ""
     start_time = time.time()
+
+    # Per-invocation circuit breaker for MCP servers that returned an
+    # auth/unavailable error this turn. Resolved by OAuth provider so all of a
+    # provider's tools (e.g. every gmail/google-workspace tool) are skipped
+    # together. Reset every call — NOT module-global — so a later run is never
+    # poisoned by an earlier one. Analogous to AnthropicCircuitBreaker, but
+    # loop-scoped and per-provider.
+    unavailable_providers: set[str] = set()
+    # Companion set keyed by the MCP SERVER name (from the auth_required
+    # envelope's `server` field). The primary short-circuit key (C5): unlike the
+    # provider-from-tool-name heuristic, the server resolves reliably from the
+    # registry even for tool names that embed no provider substring
+    # (e.g. `search_messages` on google-workspace). Per-call, reset every loop.
+    unavailable_servers: set[str] = set()
 
     # Thinking config from agent
     thinking_config = getattr(agent, "thinking", None)
@@ -607,11 +694,15 @@ async def agent_loop(
                     )
                     continue
 
-                # Capability-scope enforcement (fail-closed). An agent that calls
-                # a tool outside its capability_scope is rejected before execution.
-                # Orthogonal to TrustEngine approval — purely "is this agent
-                # permitted to call this tool per its capability scope".
-                if not await _capability_in_scope(tool_name, agent, db_factory, workspace_id):
+                # Capability-scope enforcement (fail-closed) + server resolution
+                # in ONE registry lookup. An agent that calls a tool outside its
+                # capability_scope is rejected before execution (orthogonal to
+                # TrustEngine approval). The resolved `tool_server` is reused by
+                # the unavailable-server short-circuit below (C5).
+                in_scope, tool_server = await _resolve_tool_scope_and_server(
+                    tool_name, agent, db_factory, workspace_id
+                )
+                if not in_scope:
                     scope_msg = {
                         "error": (
                             f"Agent '{agent_name}' is not permitted to call "
@@ -650,6 +741,62 @@ async def agent_loop(
                     )
                     continue
 
+                # Short-circuit: an earlier tool this turn proved this tool's MCP
+                # server is unavailable (auth_required). Skip execute_tool_fn
+                # entirely — return the cached auth error + terminal steer so the
+                # model stops retrying instead of burning a round per tool.
+                #
+                # PRIMARY KEY = the registered SERVER name (C5): resolved from the
+                # registry above, so it matches even tool names that embed no
+                # provider substring (`search_messages` → google-workspace).
+                # FALLBACK = the provider inferred from the tool NAME — best-effort
+                # only; it catches the case where the server could not be resolved
+                # but the name happens to carry the provider (e.g. `search_gmail*`).
+                tool_provider = provider_for_server(tool_name)
+                server_down = tool_server is not None and tool_server in unavailable_servers
+                provider_down = tool_provider in unavailable_providers
+                if server_down or provider_down:
+                    _down_label = tool_server if server_down else tool_provider
+                    cached_msg = {
+                        "status": "error",
+                        "error_code": "auth_required",
+                        "error": (
+                            f"Integration '{_down_label}' is unavailable this "
+                            f"session (needs re-authorization)." + _UNAVAILABLE_STEER
+                        ),
+                    }
+                    logger.info(
+                        "[tool] %s SHORT-CIRCUIT %s — '%s' marked unavailable this turn",
+                        agent_name,
+                        tool_name,
+                        _down_label,
+                    )
+                    tool_results.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tool_block.id,
+                            "content": json.dumps(cached_msg),
+                            "is_error": True,
+                        }
+                    )
+                    tool_call_details.append(
+                        SpanToolCall(
+                            tool_name=tool_name,
+                            input_data=_sanitize_for_span(tool_input)
+                            if isinstance(tool_input, dict)
+                            else {},
+                            output_data=_sanitize_for_span(cached_msg),
+                            status="error",
+                            error=cached_msg["error"][:200],
+                        )
+                    )
+                    yield LoopToolResult(
+                        agent=agent_name,
+                        tool_name=tool_name,
+                        result=cached_msg,
+                    )
+                    continue
+
                 tool_start = time.time()
                 try:
                     result = await asyncio.wait_for(
@@ -683,6 +830,30 @@ async def agent_loop(
                     and result.get("status") not in ("ok", "success", "updated", "ingested")
                 )
 
+                # Server-unavailable detection: if this tool's MCP server is down
+                # for auth reasons, mark its provider so subsequent tools this
+                # turn short-circuit, and append a terminal steer telling the
+                # model to stop retrying. Handles both the structured
+                # auth_required envelope and the legacy bridge-not-init shape.
+                steer_suffix = ""
+                unavail_provider = _unavailable_provider(result)
+                unavail_server = _unavailable_server(result)
+                if unavail_provider is not None or unavail_server is not None:
+                    # Track BOTH keys: server (primary, C5) and provider
+                    # (best-effort fallback for name-based resolution).
+                    if unavail_server is not None:
+                        unavailable_servers.add(unavail_server)
+                    if unavail_provider is not None:
+                        unavailable_providers.add(unavail_provider)
+                    steer_suffix = _UNAVAILABLE_STEER
+                elif (
+                    isinstance(result, dict) and result.get("error") == "MCP bridge not initialized"
+                ):
+                    # Legacy shape carries no provider/server — cannot key the
+                    # short-circuit set, but the terminal steer still stops the
+                    # retry loop (the primary stop mechanism).
+                    steer_suffix = _BRIDGE_NOT_INIT_STEER
+
                 # Tool-call observability (never break the loop on metrics error).
                 try:
                     from src.services.metrics_service import MetricsService
@@ -693,12 +864,15 @@ async def agent_loop(
                 except Exception:
                     logger.debug("Failed to record tool-call metric", exc_info=True)
 
+                result_content = (
+                    json.dumps(result) if isinstance(result, dict) else str(result)
+                ) + steer_suffix
                 tool_results.append(
                     {
                         "type": "tool_result",
                         "tool_use_id": tool_block.id,
-                        "content": json.dumps(result) if isinstance(result, dict) else str(result),
-                        **({"is_error": True} if is_error else {}),
+                        "content": result_content,
+                        **({"is_error": True} if (is_error or steer_suffix) else {}),
                     }
                 )
 

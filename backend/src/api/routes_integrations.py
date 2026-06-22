@@ -89,6 +89,9 @@ class UnifiedIntegrationResponse(BaseModel):
     slug: str = ""
     # Coarse access level derived from `scopes`: subset of ["read", "write"].
     access_scopes: list[str] = []
+    # True when an OAuth integration is configured but its token is permanently
+    # unusable — the user must reconnect (gates the "Reconnect" UI affordance).
+    needs_reauth: bool = False
 
 
 # ── Endpoints ────────────────────────────────────────────────────────
@@ -146,6 +149,7 @@ async def list_unified_integrations(
             scopes=s.scopes,
             slug=s.slug,
             access_scopes=s.access_scopes,
+            needs_reauth=s.needs_reauth,
         )
         for s in statuses
     ]

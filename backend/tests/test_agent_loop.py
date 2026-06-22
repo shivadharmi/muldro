@@ -134,6 +134,16 @@ def make_tool_response(tool_name: str, tool_input: dict, tool_id: str = "tool_1"
     return FakeResponse([FakeToolUseBlock(tool_id, tool_name, tool_input)])
 
 
+def make_multi_tool_response(*tools: tuple[str, dict]) -> FakeResponse:
+    """Build a single assistant response containing multiple tool_use blocks."""
+    return FakeResponse(
+        [
+            FakeToolUseBlock(f"tool_{i}", name, tool_input)
+            for i, (name, tool_input) in enumerate(tools)
+        ]
+    )
+
+
 def _make_budget():
     budget = MagicMock()
     budget.record_usage = AsyncMock(return_value=MagicMock(cost_usd=0.001))
@@ -1305,3 +1315,364 @@ class TestThinkingFallback:
 
         assert any(isinstance(e, LoopError) for e in events)
         assert not any(isinstance(e, LoopDone) and e.text == "recovered" for e in events)
+
+
+class TestUnavailableServerShortCircuit:
+    """Per-loop resilience: once an MCP server returns auth_required (or the
+    legacy "bridge not initialized" shape), the loop must stop burning turns
+    calling that server's tools. Analogous to AnthropicCircuitBreaker, but
+    per-invocation and reset every call (no cross-run poisoning)."""
+
+    @pytest.fixture(autouse=True)
+    def _default_in_scope_registry(self):
+        from unittest.mock import patch as _patch
+
+        fake_tool = MagicMock()
+        fake_tool.capability = "test.cap"
+        registry = MagicMock()
+        registry.get_tool = AsyncMock(return_value=fake_tool)
+        with _patch("src.orchestrator.agent_loop.ToolRegistry", return_value=registry):
+            yield
+
+    @pytest.fixture
+    def trace(self):
+        t = MagicMock()
+        t.trace_id = "trace_test"
+        t.trigger = "test"
+        span = MagicMock()
+        span.span_id = "span_test"
+        t.start_span.return_value = span
+        return t
+
+    def _kwargs(self, client, tool_fn, tools, trace):
+        return dict(
+            client=client,
+            agent=FakeSubAgent(),
+            model="claude-sonnet-4-20250514",
+            system_blocks=[],
+            tools=tools,
+            message="go",
+            user_id="usr_test",
+            workspace_id="ws_test",
+            db_factory=_make_db_factory(),
+            services=MagicMock(),
+            budget=_make_budget(),
+            trace=trace,
+            execute_tool_fn=tool_fn,
+        )
+
+    async def test_auth_required_short_circuits_same_server_in_same_turn(self, trace):
+        """First gmail tool returns auth_required; the second gmail tool in the
+        SAME assistant turn is short-circuited — execute_tool_fn is NOT called
+        for it (the burn-3-turns case)."""
+        from src.orchestrator.agent_loop import LoopToolResult, agent_loop
+
+        # One assistant turn requesting two gmail tools, then a final text turn.
+        client = AsyncMock()
+        client.messages.create = AsyncMock(
+            side_effect=[
+                make_multi_tool_response(
+                    ("search_gmail_messages", {"q": "x"}),
+                    ("list_gmail_labels", {}),
+                ),
+                make_text_response("told the user to reconnect"),
+            ]
+        )
+
+        auth_err = {
+            "status": "error",
+            "error": "needs reconnect",
+            "error_code": "auth_required",
+            "provider": "google",
+            "server": "google-workspace",
+        }
+        tool_fn = AsyncMock(return_value=auth_err)
+
+        events = await _collect_events(
+            agent_loop(
+                **{
+                    **self._kwargs(client, tool_fn, None, trace),
+                    "tools": [
+                        {"name": "search_gmail_messages", "description": "S", "input_schema": {}},
+                        {"name": "list_gmail_labels", "description": "L", "input_schema": {}},
+                    ],
+                }
+            )
+        )
+
+        # execute_tool_fn called exactly once (the first gmail tool); the second
+        # was short-circuited.
+        assert tool_fn.call_count == 1
+        assert tool_fn.call_args_list[0].args[0] == "search_gmail_messages"
+
+        # Both tools still produce a tool_result event (the short-circuited one
+        # carries the cached auth error + terminal steer).
+        results = [e for e in events if isinstance(e, LoopToolResult)]
+        assert len(results) == 2
+        short_circuited = results[1]
+        assert short_circuited.tool_name == "list_gmail_labels"
+        assert "auth_required" in str(short_circuited.result.get("error_code"))
+
+        # The terminal steer message must reach the model as is_error on BOTH
+        # tool results sent back in the user turn.
+        second_call_messages = client.messages.create.call_args_list[1][1]["messages"]
+        tool_result_msg = second_call_messages[-1]
+        assert tool_result_msg["role"] == "user"
+        for block in tool_result_msg["content"]:
+            assert block.get("is_error") is True
+            assert "re-authoriz" in block["content"].lower()
+            assert "do not retry" in block["content"].lower()
+
+    async def test_legacy_bridge_not_initialized_yields_terminal_message(self, trace):
+        """The legacy {"error": "MCP bridge not initialized"} shape gets the same
+        terminal 'do not retry' steer appended to the tool result."""
+        from src.orchestrator.agent_loop import agent_loop
+
+        client = AsyncMock()
+        client.messages.create = AsyncMock(
+            side_effect=[
+                make_tool_response("search_gmail_messages", {"q": "x"}),
+                make_text_response("done"),
+            ]
+        )
+        tool_fn = AsyncMock(return_value={"status": "error", "error": "MCP bridge not initialized"})
+
+        await _collect_events(
+            agent_loop(
+                **{
+                    **self._kwargs(client, tool_fn, None, trace),
+                    "tools": [
+                        {"name": "search_gmail_messages", "description": "S", "input_schema": {}}
+                    ],
+                }
+            )
+        )
+
+        second_call_messages = client.messages.create.call_args_list[1][1]["messages"]
+        tool_result_msg = second_call_messages[-1]
+        block = tool_result_msg["content"][0]
+        assert block.get("is_error") is True
+        assert "do not retry" in block["content"].lower()
+        content_lower = block["content"].lower()
+        assert "unavailable" in content_lower or "re-authoriz" in content_lower
+
+    async def test_unavailable_set_resets_between_invocations(self, trace):
+        """A server marked unavailable in one agent_loop call must NOT poison a
+        later, separate invocation — the set is per-call, not module-global."""
+        from src.orchestrator.agent_loop import agent_loop
+
+        # ── Run 1: gmail returns auth_required, poisoning 'google' for this run.
+        client1 = AsyncMock()
+        client1.messages.create = AsyncMock(
+            side_effect=[
+                make_tool_response("search_gmail_messages", {"q": "x"}),
+                make_text_response("steered"),
+            ]
+        )
+        run1_fn = AsyncMock(
+            return_value={
+                "status": "error",
+                "error": "needs reconnect",
+                "error_code": "auth_required",
+                "provider": "google",
+                "server": "google-workspace",
+            }
+        )
+        await _collect_events(
+            agent_loop(
+                **{
+                    **self._kwargs(client1, run1_fn, None, trace),
+                    "tools": [
+                        {"name": "search_gmail_messages", "description": "S", "input_schema": {}}
+                    ],
+                }
+            )
+        )
+
+        # ── Run 2: a SEPARATE invocation calls a gmail tool. It must execute
+        # (server recovered / fresh run) — NOT be short-circuited.
+        client2 = AsyncMock()
+        client2.messages.create = AsyncMock(
+            side_effect=[
+                make_tool_response("list_gmail_labels", {}),
+                make_text_response("ok"),
+            ]
+        )
+        run2_fn = AsyncMock(return_value={"labels": ["INBOX"], "status": "ok"})
+        await _collect_events(
+            agent_loop(
+                **{
+                    **self._kwargs(client2, run2_fn, None, trace),
+                    "tools": [
+                        {"name": "list_gmail_labels", "description": "L", "input_schema": {}}
+                    ],
+                }
+            )
+        )
+
+        # Run 2's tool actually executed — no cross-run poisoning.
+        assert run2_fn.call_count == 1
+        assert run2_fn.call_args_list[0].args[0] == "list_gmail_labels"
+
+
+class TestUnavailableServerResolvedByRegistry:
+    """C5: the short-circuit must key off the tool's REGISTERED server name, not
+    a substring of the raw tool name.
+
+    A Google tool like ``search_messages`` does not contain "gmail"/"google" in
+    its name, so ``provider_for_server(tool_name)`` resolves it to itself and the
+    old provider-name short-circuit never fired — the tool was re-invoked against
+    dead auth (the exact budget burn this guard exists to prevent). With the
+    registry-server fix, the first tool's auth_required envelope marks its
+    *server* (``google-workspace``) unavailable, and the second tool — resolved
+    via the registry to the same server — is short-circuited even though its name
+    shares no substring with the provider.
+    """
+
+    @pytest.fixture
+    def trace(self):
+        t = MagicMock()
+        t.trace_id = "trace_test"
+        t.trigger = "test"
+        span = MagicMock()
+        span.span_id = "span_test"
+        t.start_span.return_value = span
+        return t
+
+    def _registry_for(self, server_by_tool: dict):
+        """A ToolRegistry double whose get_tool returns a tool def carrying the
+        tool's capability (in scope) AND its registered server name."""
+
+        async def _get_tool(name):
+            tool = MagicMock()
+            tool.capability = "test.cap"
+            tool.server = server_by_tool.get(name)
+            return tool
+
+        registry = MagicMock()
+        registry.get_tool = AsyncMock(side_effect=_get_tool)
+        return registry
+
+    def _kwargs(self, client, tool_fn, tools, trace):
+        return dict(
+            client=client,
+            agent=FakeSubAgent(),
+            model="claude-sonnet-4-20250514",
+            system_blocks=[],
+            tools=tools,
+            message="go",
+            user_id="usr_test",
+            workspace_id="ws_test",
+            db_factory=_make_db_factory(),
+            services=MagicMock(),
+            budget=_make_budget(),
+            trace=trace,
+            execute_tool_fn=tool_fn,
+        )
+
+    async def test_substringless_google_tool_short_circuits_via_server(self, trace):
+        from src.orchestrator.agent_loop import LoopToolResult, agent_loop
+
+        # Two Google tools whose NAMES contain no provider substring.
+        server_by_tool = {
+            "search_messages": "google-workspace",
+            "list_threads": "google-workspace",
+        }
+        registry = self._registry_for(server_by_tool)
+
+        client = AsyncMock()
+        client.messages.create = AsyncMock(
+            side_effect=[
+                make_multi_tool_response(
+                    ("search_messages", {"q": "x"}),
+                    ("list_threads", {}),
+                ),
+                make_text_response("told the user to reconnect"),
+            ]
+        )
+
+        auth_err = {
+            "status": "error",
+            "error": "needs reconnect",
+            "error_code": "auth_required",
+            "provider": "google",
+            "server": "google-workspace",
+        }
+        tool_fn = AsyncMock(return_value=auth_err)
+
+        with patch("src.orchestrator.agent_loop.ToolRegistry", return_value=registry):
+            events = await _collect_events(
+                agent_loop(
+                    **{
+                        **self._kwargs(client, tool_fn, None, trace),
+                        "tools": [
+                            {"name": "search_messages", "description": "S", "input_schema": {}},
+                            {"name": "list_threads", "description": "L", "input_schema": {}},
+                        ],
+                    }
+                )
+            )
+
+        # execute_tool_fn called exactly ONCE — the second Google tool (same
+        # server) was short-circuited despite its name lacking any provider
+        # substring. This is the C5 fix; pre-fix tool_fn.call_count == 2.
+        assert tool_fn.call_count == 1
+        assert tool_fn.call_args_list[0].args[0] == "search_messages"
+
+        results = [e for e in events if isinstance(e, LoopToolResult)]
+        assert len(results) == 2
+        short_circuited = results[1]
+        assert short_circuited.tool_name == "list_threads"
+        assert "auth_required" in str(short_circuited.result.get("error_code"))
+
+    async def test_unrelated_server_tool_still_executes(self, trace):
+        """A tool on a DIFFERENT server is not short-circuited by another
+        server's auth failure."""
+        from src.orchestrator.agent_loop import agent_loop
+
+        server_by_tool = {
+            "search_messages": "google-workspace",
+            "create_issue": "github",
+        }
+        registry = self._registry_for(server_by_tool)
+
+        client = AsyncMock()
+        client.messages.create = AsyncMock(
+            side_effect=[
+                make_multi_tool_response(
+                    ("search_messages", {"q": "x"}),
+                    ("create_issue", {"title": "t"}),
+                ),
+                make_text_response("done"),
+            ]
+        )
+
+        async def _tool(name, *a, **k):
+            if name == "search_messages":
+                return {
+                    "status": "error",
+                    "error_code": "auth_required",
+                    "provider": "google",
+                    "server": "google-workspace",
+                }
+            return {"status": "ok", "result": "created"}
+
+        tool_fn = AsyncMock(side_effect=_tool)
+
+        with patch("src.orchestrator.agent_loop.ToolRegistry", return_value=registry):
+            await _collect_events(
+                agent_loop(
+                    **{
+                        **self._kwargs(client, tool_fn, None, trace),
+                        "tools": [
+                            {"name": "search_messages", "description": "S", "input_schema": {}},
+                            {"name": "create_issue", "description": "C", "input_schema": {}},
+                        ],
+                    }
+                )
+            )
+
+        # Both tools executed — the github tool is on a different server.
+        assert tool_fn.call_count == 2
+        called = [c.args[0] for c in tool_fn.call_args_list]
+        assert "create_issue" in called

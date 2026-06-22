@@ -141,6 +141,12 @@ class SchedulerBase:
                 self._tick_stability_refresh(factory, daily_vector_store),
             )
 
+        # 4c-iii. Re-auth recovery — every 10th tick (~5 min). Self-healing
+        # backstop that un-pauses perception sources paused-for-reauth once their
+        # provider token is valid again (covers a missed OAuth-callback resume).
+        if self._tick_count % 10 == 0:
+            await self._run_subtick("reauth_recovery", self._tick_reauth_recovery(factory))
+
         # 4d. Stuck run health check — every tick (resume reaper lives here)
         await self._run_subtick("run_health_check", self._tick_run_health_check(factory))
 

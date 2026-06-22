@@ -36,6 +36,8 @@ async def test_slack_stdio_without_token_does_not_spawn_subprocess():
         patch("src.integrations.session_pool.Client", client_mock),
         patch.object(pool, "_register_discovered_tools", AsyncMock()),
     ):
+        # McpAuthRequiredError subclasses ConnectionError, so existing
+        # `except ConnectionError` boundaries still catch the refusal.
         with pytest.raises((ConnectionError, RuntimeError)) as exc_info:
             await pool.get_or_create_session("slack", user_id="u1", workspace_id="ws_1")
 
@@ -43,7 +45,7 @@ async def test_slack_stdio_without_token_does_not_spawn_subprocess():
     client_mock.assert_not_called()
     msg = str(exc_info.value).lower()
     assert "slack" in msg
-    assert "connect" in msg or "not connected" in msg
+    assert "re-authorization" in msg
 
 
 async def test_slack_stdio_with_token_spawns_client():

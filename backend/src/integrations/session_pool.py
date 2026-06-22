@@ -16,6 +16,8 @@ from fastmcp import Client
 from fastmcp.client.auth import BearerAuth
 
 from src.integrations.local_process_manager import get_local_process_manager
+from src.integrations.mcp_errors import McpAuthRequiredError
+from src.integrations.provider_map import provider_for_server
 from src.integrations.turn_scope import current_turn_scope
 from src.services.mcp_resilience import MCPCircuitBreaker
 
@@ -41,6 +43,10 @@ _STDIO_TOKEN_ENV_VARS: dict[str, str] = {
     "slack": "SLACK_MCP_XOXB_TOKEN",
     "notion": "NOTION_TOKEN",
 }
+
+# OAuthManager token-reason values that mean the credential is permanently
+# unusable and the user must reconnect (vs. "refresh_failed" which is transient).
+_PERMANENT_REAUTH_REASONS: frozenset[str] = frozenset({"no_token", "no_refresh_token", "revoked"})
 
 
 @dataclass
@@ -210,10 +216,13 @@ class UserMCPSessionPool:
                 # caller boundary (call_tool, discover_and_persist, OAuth
                 # callback) as a recorded failure — never a crash.
                 if _requires_stdio_token(server_name, config) and not _bearer_token(auth):
-                    raise ConnectionError(
-                        f"'{server_name}' is not connected for this user "
-                        f"(no auth token) — connect it in Integrations; "
-                        f"skipping spawn"
+                    # McpAuthRequiredError subclasses ConnectionError, so existing
+                    # `except ConnectionError` boundaries still catch it; the
+                    # provider/reason fields let the re-auth service react.
+                    raise McpAuthRequiredError(
+                        provider=_infer_provider(server_name),
+                        server=server_name,
+                        reason="no_token",
                     )
                 if auth and isinstance(auth, BearerAuth):
                     # BearerAuth wraps token in SecretStr; unwrap for env dict
@@ -363,6 +372,7 @@ class UserMCPSessionPool:
         from src.integrations.mcp_errors import (
             MCPErrorCode,
             classify_error,
+            is_insufficient_scope,
             is_transient,
             make_error_response,
         )
@@ -387,6 +397,23 @@ class UserMCPSessionPool:
                 user_id,
                 workspace_id,
             )
+        except McpAuthRequiredError as e:
+            # Permanent "needs reconnect" — never crash; return a structured
+            # auth_required envelope carrying provider/server so the caller can
+            # trigger the re-auth flow.
+            logger.warning(
+                "[mcp:session] auth required for %s/%s: %s",
+                server_name,
+                tool_name,
+                e,
+            )
+            return {
+                "status": "error",
+                "error": str(e),
+                "error_code": MCPErrorCode.AUTH_REQUIRED,
+                "provider": e.provider,
+                "server": e.server,
+            }
         except Exception as e:
             logger.warning(
                 "[mcp:session] session creation failed for %s/%s: %s",
@@ -413,6 +440,7 @@ class UserMCPSessionPool:
 
         call_start = _time.monotonic()
         last_error: Exception | None = None
+        scope_failure = False
         attempt = 0
         for attempt in range(max_retries):
             try:
@@ -450,6 +478,10 @@ class UserMCPSessionPool:
             except Exception as e:
                 last_error = e
                 error_code = classify_error(e)
+                # A permanent grant-scope failure: the user must re-consent with
+                # a broader scope set. Refreshing the bearer fetches the SAME
+                # narrow grant, so skip refresh and route to re-auth below.
+                scope_failure = is_insufficient_scope(e)
 
                 # Only retry transient errors
                 if not is_transient(error_code) or attempt >= max_retries - 1:
@@ -461,8 +493,9 @@ class UserMCPSessionPool:
                     # this, a revoked/expired token is resent repeatedly
                     # until the 5-min circuit cooldown elapses — at which
                     # point the same stale session is still cached.
-                    should_refresh = error_code == MCPErrorCode.AUTH_ERROR or self._is_oauth_server(
-                        server_name, workspace_id
+                    should_refresh = not scope_failure and (
+                        error_code == MCPErrorCode.AUTH_ERROR
+                        or self._is_oauth_server(server_name, workspace_id)
                     )
                     if should_refresh:
                         try:
@@ -490,6 +523,33 @@ class UserMCPSessionPool:
                     delay,
                 )
                 await asyncio.sleep(delay)
+
+        # Permanent grant-scope failure → emit the structured ``auth_required``
+        # envelope (carrying provider+server) instead of a generic ``auth_error``.
+        # This is the single signal the whole re-auth pipeline keys on: the
+        # agent loop marks the integration unavailable and stops retrying it
+        # (no runaway workaround loop), step_runner surfaces it into the step
+        # output, and dag_runner defers the run for re-authorization + notifies.
+        if scope_failure and last_error is not None:
+            provider = _infer_provider(server_name)
+            logger.warning(
+                "[mcp:session] %s on %s needs re-authorization (insufficient scope) — provider=%s",
+                tool_name,
+                server_name,
+                provider,
+            )
+            return {
+                "status": "error",
+                "error_code": MCPErrorCode.AUTH_REQUIRED,
+                "error": (
+                    f"Integration '{provider}' is missing the permissions this "
+                    "action needs. Ask the user to reconnect it (re-authorize) "
+                    "with the required scopes; do not retry."
+                ),
+                "provider": provider,
+                "server": server_name,
+                "reason": "insufficient_scope",
+            }
 
         logger.warning(
             "MCP tool '%s' on '%s' failed after %d attempt(s): %s",
@@ -730,12 +790,34 @@ class UserMCPSessionPool:
                 auth_provider if auth_provider != "oauth" else _infer_provider(server_name)
             )
             try:
-                token = await self._oauth_manager.get_valid_token(user_id, provider_name)
-                if token:
-                    return BearerAuth(token=token)
-                logger.warning("No OAuth token for user=%s provider=%s", user_id, provider_name)
+                result = await self._oauth_manager.get_valid_token_with_reason(
+                    user_id, provider_name
+                )
+            except McpAuthRequiredError:
+                raise
             except Exception as e:
+                # Treat an unexpected lookup failure as transient — return None
+                # so the caller skips (rather than escalating to re-auth on a
+                # DB/network blip).
                 logger.warning("OAuth token resolution failed: %s", e)
+                return None
+
+            if result.reason == "ok" and result.token:
+                return BearerAuth(token=result.token)
+            if result.reason in _PERMANENT_REAUTH_REASONS:
+                # User must reconnect — signal it explicitly.
+                raise McpAuthRequiredError(
+                    provider=provider_name,
+                    server=server_name,
+                    reason=result.reason,
+                )
+            # "refresh_failed" (or token-less "ok") — transient; skip this call.
+            logger.warning(
+                "No usable OAuth token for user=%s provider=%s (reason=%s)",
+                user_id,
+                provider_name,
+                result.reason,
+            )
 
         return None
 
@@ -788,19 +870,11 @@ def _bearer_token(auth: BearerAuth | str | None) -> str | None:
 
 
 def _infer_provider(server_name: str) -> str:
-    """Infer the OAuth provider from the MCP server name."""
-    name_lower = server_name.lower().replace("-", "_")
-    if "google" in name_lower or "gmail" in name_lower or "calendar" in name_lower:
-        return "google"
-    if "github" in name_lower:
-        return "github"
-    if "slack" in name_lower:
-        return "slack"
-    if "notion" in name_lower:
-        return "notion"
-    if "jira" in name_lower or "atlassian" in name_lower or "confluence" in name_lower:
-        return "atlassian"
-    return server_name
+    """Infer the OAuth provider from the MCP server name.
+
+    Delegates to :mod:`src.integrations.provider_map` (the canonical map).
+    """
+    return provider_for_server(server_name)
 
 
 def _inject_stdio_auth(config: dict, server_name: str, token: str) -> None:

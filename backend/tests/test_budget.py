@@ -1,5 +1,7 @@
 """Tests for BudgetTracker cost calculation with cache/thinking tokens."""
 
+import logging
+
 from src.orchestrator.budget import BudgetTracker
 
 
@@ -117,6 +119,79 @@ class TestCalculateCost:
             output_tokens=500,
         )
         assert cost == expected
+
+
+class TestUnknownModelWarning:
+    """The 'unknown model' warning must only fire when there are billable tokens.
+
+    A span that never made an API call legitimately has model='unknown' and
+    zero tokens — there is no cost to compute, so warning + Sonnet fallback is
+    a false alarm.
+    """
+
+    def setup_method(self):
+        self.tracker = BudgetTracker(daily_limit_usd=10.0)
+
+    def test_zero_token_unknown_model_no_warning_and_zero_cost(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="src.orchestrator.budget"):
+            cost = self.tracker.calculate_cost(
+                model="unknown",
+                input_tokens=0,
+                output_tokens=0,
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=0,
+                thinking_tokens=0,
+            )
+        assert cost == 0.0
+        assert not any("not in MODEL_PRICING" in r.message for r in caplog.records), (
+            "warning must not fire for a zero-token span"
+        )
+
+    def test_unknown_model_with_tokens_warns_and_falls_back_to_sonnet(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="src.orchestrator.budget"):
+            cost = self.tracker.calculate_cost(
+                model="brand-new-model-7",
+                input_tokens=1000,
+                output_tokens=500,
+            )
+        # Warning must still fire for a genuine unknown model with real usage.
+        assert any("not in MODEL_PRICING" in r.message for r in caplog.records)
+        # And it must fall back to Sonnet pricing.
+        expected = self.tracker.calculate_cost(
+            model="claude-sonnet-4-6",
+            input_tokens=1000,
+            output_tokens=500,
+        )
+        assert cost == expected
+
+    def test_known_model_zero_tokens_no_warning(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="src.orchestrator.budget"):
+            cost = self.tracker.calculate_cost(
+                model="claude-opus-4-8",
+                input_tokens=0,
+                output_tokens=0,
+            )
+        assert cost == 0.0
+        assert not any("not in MODEL_PRICING" in r.message for r in caplog.records)
+
+    def test_api_span_records_real_model_priced_as_opus(self, caplog):
+        """A span that made an API call carries its real model id; Opus is
+        priced as Opus, not silently downgraded to Sonnet."""
+        with caplog.at_level(logging.WARNING, logger="src.orchestrator.budget"):
+            cost = self.tracker.calculate_cost(
+                model="claude-opus-4-8",
+                input_tokens=1000,
+                output_tokens=500,
+            )
+        # Opus pricing: 1000/1M*15 + 500/1M*75 = 0.015 + 0.0375
+        assert abs(cost - 0.0525) < 1e-6
+        sonnet = self.tracker.calculate_cost(
+            model="claude-sonnet-4-6",
+            input_tokens=1000,
+            output_tokens=500,
+        )
+        assert cost != sonnet
+        assert not any("not in MODEL_PRICING" in r.message for r in caplog.records)
 
 
 class TestBudgetStatus:

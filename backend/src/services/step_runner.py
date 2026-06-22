@@ -198,6 +198,7 @@ class StepRunner:
             LoopDone,
             LoopError,
             LoopToolCall,
+            LoopToolResult,
             agent_loop,
         )
         from src.orchestrator.agents import AGENTS
@@ -262,6 +263,10 @@ class StepRunner:
         text = ""
         tools_called = []
         errors = []
+        # A tool that hit a permanent OAuth failure returns the structured
+        # auth_required envelope as its LoopToolResult. Capture it so the caller
+        # (DagRunner) can defer the run for re-authorization instead of failing.
+        auth_required: dict | None = None
 
         async for event in agent_loop(
             client=self._client,
@@ -288,15 +293,31 @@ class StepRunner:
                 tools_called = event.tools_called
             elif isinstance(event, LoopError):
                 errors.append(event.message)
+            elif isinstance(event, LoopToolResult):
+                result = event.result
+                if (
+                    auth_required is None
+                    and isinstance(result, dict)
+                    and result.get("error_code") == "auth_required"
+                ):
+                    auth_required = result
             elif isinstance(event, LoopToolCall):
                 pass  # Already tracked in LoopDone.tools_called
 
-        return {
+        output: dict = {
             "status": "completed",
             "result": text,
             "tools_called": tools_called,
             "errors": errors,
         }
+        if auth_required is not None:
+            # Surfaced so DagRunner._defer_for_reauth parks the run for re-auth.
+            output["status"] = "error"
+            output["error_code"] = "auth_required"
+            output["provider"] = auth_required.get("provider", "")
+            output["server"] = auth_required.get("server", "")
+            output["auth_required"] = auth_required
+        return output
 
     async def build_step_context(self, run: TaskRun, step: TaskStep) -> str:
         """Build context prompt for a step using ContextBuilder."""

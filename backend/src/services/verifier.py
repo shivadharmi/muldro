@@ -236,14 +236,27 @@ class Verifier:
                 max_tokens=256,
                 system=(
                     "You are a quality verification engine. "
-                    "Evaluate whether the run met the criteria."
+                    "Evaluate whether the run met the criteria. "
+                    'Respond with ONLY a JSON object: {"passed": true/false, "reason": "..."}'
                 ),
-                messages=[{"role": "user", "content": prompt}],
+                messages=[
+                    {"role": "user", "content": prompt},
+                    # Prefill the assistant turn with "{" so the model is forced
+                    # to continue a JSON object instead of prose — the canonical
+                    # fix for the judge returning "No JSON value found".
+                    {"role": "assistant", "content": "{"},
+                ],
             )
             from src.llm_utils import parse_llm_json
 
-            result = parse_llm_json(response.content[0].text)
-            return result.get("passed", False)
+            # Re-attach the prefilled "{" the model continued from.
+            text = "{" + (response.content[0].text or "")
+            # Advisory verification: a malformed/empty judge response must NOT
+            # raise (it is informational, not failing). Degrade to not-passed.
+            result = parse_llm_json(text, default={"passed": False, "reason": "unparseable"})
+            if result.get("reason") == "unparseable":
+                logger.info("LLM judge returned no parseable JSON — treating as not-passed")
+            return bool(result.get("passed", False))
         except Exception:
-            logger.warning("LLM judge verification failed", exc_info=True)
+            logger.warning("LLM judge verification call failed", exc_info=True)
             return False

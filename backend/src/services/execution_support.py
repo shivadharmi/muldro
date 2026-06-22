@@ -25,6 +25,27 @@ def _compute_retry_delay(retry_count: int) -> int:
     return min(2**retry_count, 30)
 
 
+def _detect_auth_required(output: dict | None) -> dict | None:
+    """Detect an OAuth ``auth_required`` signal in a step's tool output.
+
+    The external-MCP tool path returns, on a permanent OAuth failure, a
+    structured dict ``{"status":"error","error_code":"auth_required",
+    "provider":<p>,"server":<s>}``. The step runner may surface that either at
+    the top level of the step output (minimal/fallback path) OR nested under an
+    ``auth_required`` key (agent-loop path, which wraps the offending
+    ``LoopToolResult``). Returns the auth dict (with ``provider``/``server``)
+    when found, else ``None``.
+    """
+    if not isinstance(output, dict):
+        return None
+    nested = output.get("auth_required")
+    if isinstance(nested, dict) and nested.get("error_code") == "auth_required":
+        return nested
+    if output.get("error_code") == "auth_required":
+        return output
+    return None
+
+
 def _safe_error_fields(exc: BaseException) -> dict:
     """Build the client-safe error fields for run.error / step.error /
     step.output_data and any event payload that reaches a surface.

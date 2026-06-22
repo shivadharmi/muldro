@@ -39,6 +39,11 @@ SUPPORTED_PROVIDERS: dict[str, ProviderMeta] = {
         provider_type="builtin",
         default_scopes=[
             "https://mail.google.com/",
+            # Required for managing Gmail filters/labels (manage_gmail_filter).
+            # Listed explicitly so it appears on the consent screen and lands in
+            # the token's granted-scope set — a token consented before this was
+            # added gets a 403 "insufficient authentication scopes" on filters.
+            "https://www.googleapis.com/auth/gmail.settings.basic",
             "https://www.googleapis.com/auth/calendar",
             "https://www.googleapis.com/auth/drive",
             "https://www.googleapis.com/auth/documents",

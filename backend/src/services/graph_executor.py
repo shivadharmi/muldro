@@ -145,6 +145,21 @@ class GraphExecutor:
             store=self._store,
             emitter=self._surface_emitter,
         )
+        # OAuth re-auth coordination. When a step hits a permanent OAuth failure
+        # (auth_required), the DagRunner parks the run in awaiting_reauth and
+        # prompts the user via this service rather than failing the run. Built
+        # from existing collaborators (db_factory + notifier + redis); resolved
+        # live by the DagRunner via a provider so tests can reassign it.
+        self._reauth_service = None
+        if db_factory is not None and notifier is not None:
+            from src.services.reauth_service import ReauthService
+
+            self._reauth_service = ReauthService(
+                db_factory=db_factory,
+                notifier=notifier,
+                redis=redis,
+                settings=settings,
+            )
         # Post-run learning (memory writeback, entity/graph enrichment,
         # verification + trust penalty) lives in an injected collaborator.
         # Background spawning stays coordinator-owned (injected as a callable);
@@ -172,6 +187,7 @@ class GraphExecutor:
             learner=self._learner,
             emitter=self._surface_emitter,
             trust_engine_provider=lambda: self._trust_engine,
+            reauth_service_provider=lambda: self._reauth_service,
         )
 
     async def create_run(

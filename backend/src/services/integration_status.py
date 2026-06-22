@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.integrations.provider_map import provider_for_server
+
 logger = logging.getLogger(__name__)
 
 # Provider name -> settings attribute holding the OAuth client_id.
@@ -28,14 +30,13 @@ _PROVIDER_CLIENT_ID_ATTR: dict[str, str] = {
     "atlassian": "atlassian_oauth_client_id",
 }
 
-# Server auth_provider -> OAuth provider name for token lookup.
-_SERVER_TO_OAUTH_PROVIDER: dict[str, str] = {
-    "google": "google",
-    "github": "github",
-    "slack": "slack",
-    "notion": "notion",
-    "atlassian": "atlassian",
-}
+# Server auth_provider -> OAuth provider name for token lookup is resolved via
+# the canonical `src.integrations.provider_map` (provider_for_server). Kept here
+# only as documentation of which providers carry a client_id attr above.
+
+# OAuthManager token-reason values that mean the credential is permanently
+# unusable and the user must reconnect (vs. transient "refresh_failed").
+_PERMANENT_REAUTH_REASONS: frozenset[str] = frozenset({"no_token", "no_refresh_token", "revoked"})
 
 # Capability verb fragments that imply a write-level action.
 _WRITE_MARKERS: tuple[str, ...] = (
@@ -138,6 +139,10 @@ class IntegrationStatus:
     scopes: list[str]
     slug: str = ""
     access_scopes: list[str] = field(default_factory=list)
+    # True when an OAuth integration is configured but its token is permanently
+    # unusable (no_token / no_refresh_token / revoked) — the user must reconnect.
+    # Distinct from a transient "refresh_failed" blip, which leaves this False.
+    needs_reauth: bool = False
 
 
 async def get_integration_statuses(
@@ -185,23 +190,25 @@ async def get_integration_statuses(
         # Determine configured + connected.
         configured = True
         connected = True
+        needs_reauth = False
 
         if category == "oauth":
-            oauth_name = _SERVER_TO_OAUTH_PROVIDER.get(auth_provider, auth_provider)
+            oauth_name = provider_for_server(auth_provider)
             client_id_attr = _PROVIDER_CLIENT_ID_ATTR.get(oauth_name, "")
             configured = bool(getattr(settings, client_id_attr, "")) if client_id_attr else False
             connected = False
             if configured and oauth_mgr:
                 try:
-                    token = await oauth_mgr.get_valid_token(user_id, oauth_name)
-                    connected = token is not None
+                    result = await oauth_mgr.get_valid_token_with_reason(user_id, oauth_name)
+                    connected = result.reason == "ok" and result.token is not None
+                    needs_reauth = result.reason in _PERMANENT_REAUTH_REASONS
                 except Exception:
                     connected = False
 
         # Determine provider name for the frontend.
         provider_name: str | None = None
         if auth_provider and auth_provider not in ("token", "none"):
-            provider_name = _SERVER_TO_OAUTH_PROVIDER.get(auth_provider, auth_provider)
+            provider_name = provider_for_server(auth_provider)
 
         raw_scopes = inst.scopes_granted or []
         results.append(
@@ -218,6 +225,7 @@ async def get_integration_statuses(
                 scopes=raw_scopes,
                 slug=derive_slug(provider_name, inst.server_name),
                 access_scopes=coarsen_scopes(raw_scopes),
+                needs_reauth=needs_reauth,
             )
         )
 

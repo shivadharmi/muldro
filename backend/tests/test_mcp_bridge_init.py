@@ -98,6 +98,95 @@ class TestBridgeWire:
         assert not isinstance(result, asyncio.Task), "initialize_mcp_bridge must not return a Task"
 
 
+class TestIdempotency:
+    """``initialize_mcp_bridge`` must be a no-op when the pool is already wired."""
+
+    @pytest.mark.asyncio
+    async def test_init_is_idempotent(self, _reset_bridge_module):
+        """Second call must NOT re-create the pool or re-register configs:
+        the pool object identity is unchanged and the constructor runs once."""
+        from src.connectors import mcp_bridge
+
+        register_calls = 0
+
+        async def counting_registration(self):
+            nonlocal register_calls
+            register_calls += 1
+            return 0
+
+        with (
+            patch(
+                "src.integrations.mcp_pool.WorkspaceMCPPool.initialize_from_db",
+                new=counting_registration,
+            ),
+            patch(
+                "src.connectors.mcp_bridge.UserMCPSessionPool",
+                wraps=mcp_bridge.UserMCPSessionPool,
+            ) as mock_pool_cls,
+        ):
+            await mcp_bridge.initialize_mcp_bridge(oauth_manager=None)
+            first_pool = mcp_bridge.get_session_pool()
+            assert first_pool is not None
+
+            await mcp_bridge.initialize_mcp_bridge(oauth_manager=None)
+            second_pool = mcp_bridge.get_session_pool()
+
+        assert second_pool is first_pool, (
+            "Idempotent init must NOT replace the existing session pool"
+        )
+        assert mock_pool_cls.call_count == 1, (
+            "UserMCPSessionPool constructor must run exactly once across two init calls"
+        )
+        assert register_calls == 1, "Server configs must be registered only once"
+
+
+class TestEnsureWorkerBridge:
+    """``run._ensure_worker_mcp_bridge`` initializes only when needed."""
+
+    def test_inits_when_pool_none(self):
+        """When ``get_session_pool()`` is None, the helper calls
+        ``initialize_mcp_bridge`` on the provided loop."""
+        import run
+
+        loop = MagicMock()
+        logger = MagicMock()
+        settings = MagicMock()
+
+        # Use a non-async MagicMock for initialize_mcp_bridge: the real loop is
+        # mocked, so the returned coroutine would otherwise go unawaited.
+        with (
+            patch("src.connectors.mcp_bridge.get_session_pool", return_value=None),
+            patch(
+                "src.connectors.mcp_bridge.initialize_mcp_bridge",
+                new=MagicMock(),
+            ) as mock_init,
+            patch("src.services.oauth_manager.OAuthManager"),
+            patch("src.models.database.get_session_factory"),
+        ):
+            run._ensure_worker_mcp_bridge(loop, settings, logger)
+
+        loop.run_until_complete.assert_called_once()
+        mock_init.assert_called_once()
+
+    def test_skips_when_pool_present(self):
+        """When ``get_session_pool()`` is non-None, the helper does NOT
+        re-initialize (no loop work, no init call)."""
+        import run
+
+        loop = MagicMock()
+        logger = MagicMock()
+        settings = MagicMock()
+
+        with (
+            patch("src.connectors.mcp_bridge.get_session_pool", return_value=object()),
+            patch("src.connectors.mcp_bridge.initialize_mcp_bridge") as mock_init,
+        ):
+            run._ensure_worker_mcp_bridge(loop, settings, logger)
+
+        loop.run_until_complete.assert_not_called()
+        mock_init.assert_not_called()
+
+
 class TestRegistrationTimeout:
     """``timeout_seconds`` is a real bound on DB config registration."""
 

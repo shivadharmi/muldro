@@ -169,6 +169,38 @@ class TestAssessRelevance:
         assert result.notification_tier == "briefing"
 
     @pytest.mark.asyncio
+    async def test_parses_json_with_trailing_prose_not_silent(self):
+        # Regression: the LLM returns a valid JSON object then trailing prose.
+        # Previously json.loads raised "Extra data" and the assessment was lost
+        # to the silent fallback (a dropped perception signal). Now it parses.
+        from src.services.relevance_assessor import (
+            PerceptionSignal,
+            UserContext,
+            assess_relevance,
+        )
+
+        mock_client = AsyncMock()
+        response_text = (
+            '{"relevance_score": 0.8, "reasoning": "PR from key collaborator",'
+            ' "relates_to_goals": ["ship v2"], "urgency": "today",'
+            ' "suggested_actions": []}\n\nHere is why I scored it this way: the PR'
+            " touches the release-critical path and was opened by a teammate."
+        )
+        mock_client.messages.create.return_value = MagicMock(
+            content=[MagicMock(text=response_text)]
+        )
+        signal = PerceptionSignal(
+            source="github",
+            event_type="pr_review_requested",
+            summary="PR #42 review requested by Alice",
+        )
+        context = UserContext(goals=["ship v2 by Friday"])
+        result = await assess_relevance(signal, context, mock_client)
+        assert result.relevance_score == 0.8
+        assert result.notification_tier == "push"  # 0.8 + today = push, NOT silent
+        assert result.urgency == "today"
+
+    @pytest.mark.asyncio
     async def test_accepts_custom_model_parameter(self):
         from src.services.relevance_assessor import (
             PerceptionSignal,

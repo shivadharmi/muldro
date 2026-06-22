@@ -93,13 +93,12 @@ class _TickHarness:
         self.claim_db.__aenter__ = AsyncMock(return_value=self.claim_db)
         self.claim_db.__aexit__ = AsyncMock(return_value=False)
 
-        # _drop_tokenless_sources queries oauth_tokens on the claim db. Return a
-        # token row for every test source's provider so none are paused as
-        # tokenless (gmail/calendar → google, else the source name).
-        _pmap = {"gmail": "google", "calendar": "google"}
-        _token_rows = MagicMock()
-        _token_rows.all.return_value = [(s.user_id, _pmap.get(s.source, s.source)) for s in states]
-        self.claim_db.execute = AsyncMock(return_value=_token_rows)
+        # The validity gate (_drop_tokenless_sources) no longer queries the DB —
+        # it calls OAuthManager via _validity_gate_collaborators. With a MagicMock
+        # orchestrator (and no collaborator patch) the gate fail-opens and keeps
+        # every source, which is what these lock-scoping tests want. claim_db.execute
+        # remains stubbed only for any incidental ORM call during the claim phase.
+        self.claim_db.execute = AsyncMock(return_value=MagicMock())
 
         # Phase 2 recording db(s) — one fresh context per source
         self.rec_dbs: list[MagicMock] = []
@@ -452,22 +451,37 @@ async def test_no_mid_cycle_signal_does_not_re_arm():
 
 
 # ---------------------------------------------------------------------------
-# Token-presence gating: a source whose OAuth provider has no stored token must
-# be paused and never polled (stops orphaned auth-failure churn).
+# Validity gating: a source whose OAuth provider is permanently unusable
+# (no_token / revoked) must be dropped from the runnable list and never polled
+# (stops orphaned auth-failure churn). Detailed reason/notify behaviour lives in
+# test_perception_reauth_gate.py; here we assert the tick-level effect: the bad
+# source is not run, the good one is.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_tokenless_source_is_paused_and_not_run():
+async def test_invalid_token_source_is_dropped_and_not_run():
+    from src.services.oauth_manager import TokenResult
     from src.services.scheduler import SchedulerLoop
 
     s_ok = _make_state(state_id="pst_ok", source="gmail", user_id="usr_ok")
     s_orphan = _make_state(state_id="pst_orphan", source="gmail", user_id="usr_orphan")
     harness = _TickHarness([s_ok, s_orphan])
-    # Only usr_ok has a google token row.
-    rows = MagicMock()
-    rows.all.return_value = [("usr_ok", "google")]
-    harness.claim_db.execute = AsyncMock(return_value=rows)
+
+    # OAuthManager: usr_ok valid, usr_orphan revoked. ReauthService is a no-op
+    # stub (notify path covered in test_perception_reauth_gate.py).
+    async def _validity(user_id, provider):
+        if user_id == "usr_ok":
+            return TokenResult(token="tok", reason="ok")
+        return TokenResult(token=None, reason="revoked")
+
+    oauth = MagicMock()
+    oauth.get_valid_token_with_reason = AsyncMock(side_effect=_validity)
+    reauth = MagicMock()
+    # _drop_tokenless_sources applies the writes on the caller's locked session
+    # via apply_needs_reauth (commit/notify deferred to the tick), not the
+    # self-committing mark_needs_reauth convenience wrapper.
+    reauth.apply_needs_reauth = AsyncMock()
 
     cycles: list[str] = []
 
@@ -483,9 +497,9 @@ async def test_tokenless_source_is_paused_and_not_run():
     with (
         patch("src.services.perception_policy.PerceptionPolicyService", return_value=harness.svc),
         patch.object(scheduler, "_resolve_workspace", new=AsyncMock(return_value="ws_test")),
+        patch.object(scheduler, "_validity_gate_collaborators", return_value=(oauth, reauth)),
     ):
         await scheduler._tick_perception(harness.factory)
 
-    assert s_orphan.mode == "paused"  # orphaned source deactivated
-    assert s_ok.mode != "paused"  # healthy source untouched
-    assert cycles == ["usr_ok"]  # only the token-backed source was polled
+    assert cycles == ["usr_ok"]  # only the valid-token source was polled
+    reauth.apply_needs_reauth.assert_awaited_once()  # the revoked source surfaced re-auth

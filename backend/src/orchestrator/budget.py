@@ -76,6 +76,19 @@ class BudgetTracker:
         cache_read_input_tokens: int = 0,
         thinking_tokens: int = 0,
     ) -> float:
+        billable_tokens = (
+            input_tokens
+            + output_tokens
+            + cache_creation_input_tokens
+            + cache_read_input_tokens
+            + thinking_tokens
+        )
+        # A span with no billable tokens never made an API call, so cost is 0
+        # regardless of model. Skip the lookup (and the warning) — a missing
+        # model here is legitimate, not a propagation gap or a new model id.
+        if billable_tokens <= 0:
+            return 0.0
+
         pricing = MODEL_PRICING.get(model)
         if not pricing:
             logger.warning(

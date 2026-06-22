@@ -24,6 +24,58 @@ def get_component_health() -> dict:
     return dict(_component_health)
 
 
+def _ensure_worker_mcp_bridge(loop, settings, logger) -> None:
+    """Ensure the MCP bridge is initialized in the worker's own process/loop.
+
+    The session pool is a module-level global, shared across threads in ONE
+    process but NOT across processes. Under ``uvicorn --reload`` (debug) the
+    FastAPI lifespan runs in a forked CHILD process, so the global it sets is
+    invisible to the worker thread living in the PARENT — every MCP tool call
+    from the worker then fails with "MCP bridge not initialized".
+
+    This bridges that gap by initializing the bridge in the worker's process
+    when it has not already been wired:
+
+    - Non-debug (single process): the lifespan already set the global, so
+      ``get_session_pool()`` is non-None and we no-op (and ``initialize_mcp_bridge``
+      is idempotent even if called).
+    - Debug/reload: the parent global is None, so the worker wires its own pool.
+
+    Never raises — failures are logged and the worker proceeds.
+    """
+    try:
+        from src.connectors.mcp_bridge import get_session_pool, initialize_mcp_bridge
+
+        if get_session_pool() is not None:
+            return
+
+        # Mirror src/api/app.py: a lightweight OAuthManager for MCP token
+        # resolution. Failure leaves oauth_manager=None (bridge still wires).
+        oauth_manager = None
+        try:
+            from src.models.database import get_session_factory
+            from src.services.oauth_manager import OAuthManager
+
+            oauth_manager = OAuthManager(
+                db_factory=get_session_factory(),
+                settings=settings,
+                encryption_key=settings.oauth_encryption_key,
+            )
+        except Exception:
+            logger.warning("OAuthManager unavailable for worker MCP bridge", exc_info=True)
+
+        loop.run_until_complete(
+            initialize_mcp_bridge(oauth_manager=oauth_manager, timeout_seconds=30)
+        )
+        logger.info("Worker initialized MCP bridge in-process (debug/reload split)")
+    except Exception:
+        logger.error(
+            "Worker MCP bridge initialization FAILED — external MCP tool calls "
+            "(perception + operator) will fail until startup is retried",
+            exc_info=True,
+        )
+
+
 def main():
     parser = argparse.ArgumentParser(description="Jarvis Backend")
     parser.add_argument(
@@ -154,6 +206,11 @@ def main():
                 else:
                     logger.info("MCP bridge wired, worker proceeding")
 
+            # Ensure the bridge is wired in THIS process. No-op when the
+            # lifespan already set the global (single-process / non-debug);
+            # the actual fix when reload forks the lifespan into a child.
+            _ensure_worker_mcp_bridge(loop, settings, logger)
+
             logger.info("Worker thread starting (StreamConsumerManager + SchedulerLoop)")
             # Preserve the degraded marker if the orchestrator failed to build —
             # the worker still runs (perception/streams) but the resume path is
@@ -182,6 +239,11 @@ def main():
         host=settings.host,
         port=settings.port,
         reload=settings.debug,
+        # Use the modern (non-legacy) websockets implementation. The default
+        # "auto" selects websockets' legacy server, which emits a per-connection
+        # DeprecationWarning ("remove second argument of ws_handler") under
+        # websockets >=14. "websockets-sansio" (uvicorn >=0.31) avoids it.
+        ws="websockets-sansio",
     )
 
 

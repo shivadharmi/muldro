@@ -4,14 +4,13 @@ Evaluates whether a user should care about a signal right now,
 scoring relevance against their goals and routing to push/briefing/silent tiers.
 """
 
-import json
 import logging
-import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from src.config.models import get_haiku_model
+from src.llm_utils import parse_llm_json
 
 logger = logging.getLogger(__name__)
 
@@ -168,8 +167,7 @@ async def assess_relevance(
             messages=[{"role": "user", "content": prompt}],
         )
         text = response.content[0].text
-        text = re.sub(r"^```\w*\n?", "", text.strip()).rstrip("`").strip()
-        data = json.loads(text)
+        data = parse_llm_json(text)
         assessment = RelevanceAssessment.model_validate(data)
         adjusted_score = max(0.0, assessment.relevance_score - relevance_penalty)
         return assessment.model_copy(

@@ -136,6 +136,7 @@ class TestRunTransitions:
             "paused",
             "awaiting_approval",
             "awaiting_input",
+            "awaiting_reauth",
             "blocked",
             "partially_completed",
             "completed",
@@ -227,6 +228,8 @@ class TestStepTransitions:
         assert step.status == "pending"
 
     def test_all_step_statuses_have_transitions(self):
+        # awaiting_reauth is intentionally absent at the STEP level (M2): the
+        # defer path parks the RUN and resets the step to ``ready``.
         expected = {
             "pending",
             "ready",
@@ -318,3 +321,54 @@ class TestInvalidTransitionError:
         err = exc_info.value
         assert err.entity_type == "step"
         assert err.entity_id == "step_001"
+
+
+# ── awaiting_reauth (OAuth re-authorization gating) ─────────────────
+
+
+class TestAwaitingReauthTransitions:
+    def test_running_to_awaiting_reauth(self):
+        run = _mock_run("running")
+        transition_run(run, "awaiting_reauth")
+        assert run.status == "awaiting_reauth"
+
+    def test_awaiting_reauth_to_pending(self):
+        run = _mock_run("awaiting_reauth")
+        transition_run(run, "pending")
+        assert run.status == "pending"
+
+    def test_awaiting_reauth_to_running(self):
+        run = _mock_run("awaiting_reauth")
+        transition_run(run, "running")
+        assert run.status == "running"
+
+    def test_awaiting_reauth_to_cancelled(self):
+        run = _mock_run("awaiting_reauth")
+        transition_run(run, "cancelled")
+        assert run.status == "cancelled"
+
+    def test_awaiting_reauth_to_failed(self):
+        run = _mock_run("awaiting_reauth")
+        transition_run(run, "failed")
+        assert run.status == "failed"
+
+    def test_awaiting_reauth_invalid_target(self):
+        run = _mock_run("awaiting_reauth")
+        with pytest.raises(InvalidTransitionError):
+            transition_run(run, "completed")
+
+    def test_step_level_awaiting_reauth_is_unreachable(self):
+        """M2: no code transitions a STEP to awaiting_reauth — the defer path
+        resets the step to ``ready`` and parks the RUN. The step-level state
+        (and the running→awaiting_reauth edge) must NOT exist."""
+        assert "awaiting_reauth" not in STEP_TRANSITIONS
+        assert "awaiting_reauth" not in STEP_TRANSITIONS["running"]
+        step = _mock_step("running")
+        with pytest.raises(InvalidTransitionError):
+            transition_step(step, "awaiting_reauth")
+        assert step.status == "running"  # unchanged
+
+    def test_awaiting_reauth_present_in_run_map_only(self):
+        # awaiting_reauth is a RUN-level state (the run parks; the step resets).
+        assert "awaiting_reauth" in RUN_TRANSITIONS
+        assert "awaiting_reauth" not in STEP_TRANSITIONS

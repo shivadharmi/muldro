@@ -90,6 +90,74 @@ def _oauth_provider_name(provider: str) -> str:
     return provider
 
 
+async def _resume_after_reauth(db_factory, user_id: str, provider: str, workspace_id: str) -> None:
+    """Clear a provider's needs-reauth state after a successful reconnect.
+
+    Builds a ``ReauthService`` (db_factory + Notifier + redis + settings) and
+    calls ``clear_reauth`` — which restores the integration to active, resumes
+    the provider's paused perception sources, re-queues any runs deferred in
+    ``awaiting_reauth`` back to ``pending`` (the background-task scheduler tick
+    then picks them up), and clears the notify-dedup key.
+
+    Best-effort: a failure here must never fail the OAuth connect.
+    """
+    from src.config.settings import get_settings
+    from src.services.notifier import Notifier
+    from src.services.reauth_service import ReauthService
+    from src.services.surface_registry import SurfaceRegistry
+
+    settings = get_settings()
+
+    # H1: own the per-call Redis client and ALWAYS close it (try/finally) so each
+    # OAuth callback does not leak a connection. (We cannot reuse a shared app
+    # client here — this runs as a background task without request/app access.)
+    redis = None
+    try:
+        import redis.asyncio as aioredis
+
+        redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+    except Exception:
+        logger.debug("Redis unavailable for reauth resume", exc_info=True)
+
+    try:
+        # L1: ``clear_reauth`` opens its OWN session via ``db_factory`` for all DB
+        # work and does NOT notify, so the Notifier here is only a constructor
+        # dependency. Build it WITHOUT a session (db=None) rather than inside a
+        # ``async with db_factory()`` block whose session would already be closed
+        # by the time anything used it — the previous closed-session landmine.
+        notifier: Notifier | None = None
+        try:
+            notifier = Notifier(
+                surface_registry=SurfaceRegistry(redis=redis),
+                redis=redis,
+                db=None,
+            )
+        except Exception:
+            logger.debug("Notifier unavailable for reauth resume", exc_info=True)
+
+        reauth = ReauthService(
+            db_factory=db_factory,
+            notifier=notifier,
+            redis=redis,
+            settings=settings,
+        )
+        await reauth.clear_reauth(user_id, provider, workspace_id=workspace_id)
+        logger.info("Cleared needs-reauth state for %s/%s after reconnect", user_id, provider)
+    except Exception:
+        logger.warning(
+            "Reauth resume failed for %s/%s (connect succeeded regardless)",
+            user_id,
+            provider,
+            exc_info=True,
+        )
+    finally:
+        if redis is not None:
+            try:
+                await redis.aclose()
+            except Exception:
+                logger.debug("Failed to close reauth-resume Redis client", exc_info=True)
+
+
 @router.get("/v1/auth/{provider}/authorize", response_model=OAuthUrlResponse)
 @router.get("/v1/auth/oauth/{provider}/authorize", response_model=OAuthUrlResponse)
 async def oauth_authorize(
@@ -670,6 +738,17 @@ async def oauth_callback(
             )
     except Exception:
         logger.debug("MCP session refresh skipped", exc_info=True)
+
+    # Auto-resume: clear any needs-reauth state for this provider — un-pause its
+    # perception sources and re-queue runs parked in awaiting_reauth. Runs for
+    # ALL providers (google/github/slack/notion/atlassian), best-effort.
+    background_tasks.add_task(
+        _resume_after_reauth,
+        db_factory,
+        user_id,
+        provider,
+        workspace_id,
+    )
 
     # Redirect to frontend integrations page with success status
     frontend_url = settings.frontend_url.rstrip("/")

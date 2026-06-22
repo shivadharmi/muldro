@@ -12,6 +12,8 @@ import logging
 import re
 from typing import TYPE_CHECKING
 
+from src.llm_utils import parse_llm_json
+
 if TYPE_CHECKING:
     from src.contracts import PlanOutput, SurfaceDataPayload, SurfaceSpec
 
@@ -171,7 +173,7 @@ def extract_surface_spec(response_text: str) -> "SurfaceSpec | None":
         return None
 
     try:
-        data = json.loads(match.group(1))
+        data = parse_llm_json(match.group(1))
         if not isinstance(data, dict):
             logger.debug("SurfaceSpec block was not a JSON object; ignoring")
             return None
@@ -201,7 +203,7 @@ def extract_surface_data(response_text: str) -> "SurfaceDataPayload | None":
         return None
 
     try:
-        raw = json.loads(match.group(1))
+        raw = parse_llm_json(match.group(1))
     except json.JSONDecodeError:
         logger.debug("surface_data block is not valid JSON", exc_info=True)
         return None

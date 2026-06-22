@@ -59,6 +59,13 @@ async def initialize_mcp_bridge(
         logger.debug("MCP bridge skipped (test environment)")
         return None
 
+    # Idempotent: if the pool is already wired (e.g. lifespan ran in this same
+    # process, or the worker re-invoked us under the reload-split fix), return
+    # early WITHOUT re-creating the pool or re-registering server configs.
+    if _session_pool is not None:
+        logger.debug("MCP bridge already initialized")
+        return None
+
     from src.config.settings import get_settings
 
     _settings = get_settings()

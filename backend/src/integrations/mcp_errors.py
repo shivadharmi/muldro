@@ -19,6 +19,12 @@ class MCPErrorCode:
     """Standard error codes for MCP tool failures."""
 
     AUTH_ERROR = "auth_error"
+    # Distinct from AUTH_ERROR: AUTH_ERROR is a *runtime* 401/403 from an MCP
+    # call (stale token, mid-session expiry — often transiently recoverable by
+    # refreshing the bearer). AUTH_REQUIRED is a *permanent* "user must
+    # reconnect" state surfaced before/at session creation when no usable
+    # credential exists at all (no_token / no_refresh_token / revoked).
+    AUTH_REQUIRED = "auth_required"
     TIMEOUT = "timeout"
     RATE_LIMIT = "rate_limit"
     SERVER_ERROR = "server_error"
@@ -28,11 +34,62 @@ class MCPErrorCode:
     UNKNOWN = "unknown_error"
 
 
+class McpAuthRequiredError(ConnectionError):
+    """A server cannot run because the user must (re-)authorize the provider.
+
+    Raised before/at MCP session creation when the OAuth token is permanently
+    unusable (``reason in {"no_token", "no_refresh_token", "revoked"}``). Carries
+    the provider/server/reason so callers (the re-auth service) can pause the
+    right sources and prompt the user to reconnect.
+
+    Subclasses ``ConnectionError`` so existing ``except ConnectionError``
+    boundaries (which already treat "cannot connect this server" as a recorded,
+    non-crashing failure) continue to catch it.
+    """
+
+    def __init__(self, *, provider: str, server: str, reason: str):
+        self.provider = provider
+        self.server = server
+        self.reason = reason
+        super().__init__(f"{provider} needs re-authorization (reason={reason})")
+
+
+# Phrases that mark a *permanent grant-scope* failure (the token simply was
+# never consented for this capability) rather than a transient/stale-token 401.
+# Re-fetching the bearer cannot widen a grant — only a user re-consent can — so
+# these must route to the re-auth pipeline, never the generic retry/refresh path.
+_INSUFFICIENT_SCOPE_MARKERS: tuple[str, ...] = (
+    "insufficient authentication scope",
+    "insufficient permission",
+    "insufficientpermissions",
+    "insufficient_scope",
+    "request had insufficient",
+    "accessnotconfigured",
+)
+
+
+def is_insufficient_scope(error: Exception | str) -> bool:
+    """True when *error* is a permanent OAuth grant-scope failure.
+
+    Distinct from a generic 401/403 (which :func:`classify_error` keeps as the
+    transiently-refreshable ``AUTH_ERROR``): an insufficient-scope error means
+    the user must re-consent with a broader scope set, so callers should surface
+    it as ``AUTH_REQUIRED`` and trigger re-authorization.
+    """
+    error_str = (error if isinstance(error, str) else str(error)).lower()
+    return any(marker in error_str for marker in _INSUFFICIENT_SCOPE_MARKERS)
+
+
 def classify_error(error: Exception) -> str:
     """Classify an exception into a standard error code.
 
     Returns one of MCPErrorCode constants.
     """
+    # Permanent "needs reconnect" — checked before the generic "auth" substring
+    # branch so it is not collapsed into AUTH_ERROR.
+    if isinstance(error, McpAuthRequiredError):
+        return MCPErrorCode.AUTH_REQUIRED
+
     error_str = str(error).lower()
     error_type = type(error).__name__
 
