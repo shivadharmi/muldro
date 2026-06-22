@@ -89,6 +89,10 @@ async def test_knowledge_router_included_in_app():
     from src.api.app import create_app
 
     app = create_app()
-    all_paths = [r.path for r in app.routes]
+    # Use the OpenAPI path map: newer Starlette/FastAPI no longer flatten
+    # included routers into ``app.routes`` (leaving ``_IncludedRouter`` wrappers
+    # without ``.path``), so ``[r.path for r in app.routes]`` raises. OpenAPI
+    # resolves canonical full paths regardless of internal representation.
+    all_paths = set(app.openapi()["paths"].keys())
     assert "/v1/knowledge/graph" in all_paths
     assert "/v1/knowledge/stats" in all_paths

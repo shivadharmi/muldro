@@ -11,9 +11,13 @@ class TestWebSocketRoute:
         return create_app()
 
     def test_ws_route_exists(self):
+        from tests.conftest import iter_app_routes
+
         app = self._get_app()
-        # Check the route is registered
-        ws_routes = [r for r in app.routes if hasattr(r, "path") and "/ws/" in r.path]
+        # Recurse into included routers/mounts: newer Starlette/FastAPI no longer
+        # flatten them into ``app.routes`` (WS routes are not in the OpenAPI map,
+        # so introspection is the only way to assert registration).
+        ws_routes = [p for p, _ in iter_app_routes(app.routes) if "/ws/" in p]
         assert len(ws_routes) > 0
 
 

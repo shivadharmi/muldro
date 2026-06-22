@@ -75,8 +75,14 @@ def _has_rate_limit_dependency(route) -> bool:
 
 
 def _find_route(path: str, method: str):
-    for route in app.routes:
-        if getattr(route, "path", None) == path and method in getattr(route, "methods", set()):
+    # Recurse into included routers/mounts: newer Starlette/FastAPI no longer
+    # flatten them into ``app.routes``, so the protected endpoints live under
+    # wrapper objects with prefix-relative leaf paths. iter_app_routes
+    # reconstructs the full path in both representations.
+    from tests.conftest import iter_app_routes
+
+    for full_path, route in iter_app_routes(app.routes):
+        if full_path == path and method in getattr(route, "methods", set()):
             return route
     return None
 

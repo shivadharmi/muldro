@@ -86,12 +86,18 @@ class TestGoogleAuthRoutes:
             self._cleanup()
 
     def test_auth_route_exists(self):
-        routes = [r.path for r in app.routes]
-        assert "/v1/auth/oauth/{provider}/authorize" in routes
-        assert "/v1/auth/oauth/{provider}/callback" in routes
-        assert "/v1/auth/magic-link" in routes
-        assert "/v1/auth/me" in routes
-        assert "/v1/auth/refresh" in routes
+        # Assert via the OpenAPI path map rather than iterating ``app.routes``.
+        # Newer Starlette/FastAPI no longer flatten ``include_router`` into
+        # ``app.routes`` — they leave ``_IncludedRouter`` wrapper objects with
+        # no ``.path``, so ``[r.path for r in app.routes]`` raises
+        # AttributeError. ``app.openapi()["paths"]`` resolves the canonical full
+        # paths regardless of internal route representation.
+        paths = set(app.openapi()["paths"].keys())
+        assert "/v1/auth/oauth/{provider}/authorize" in paths
+        assert "/v1/auth/oauth/{provider}/callback" in paths
+        assert "/v1/auth/magic-link" in paths
+        assert "/v1/auth/me" in paths
+        assert "/v1/auth/refresh" in paths
 
 
 class TestAuthServiceRefresh:
