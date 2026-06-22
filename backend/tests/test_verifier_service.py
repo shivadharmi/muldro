@@ -277,9 +277,7 @@ class TestVerifyRunUntypedProseCriteria:
         # success_conditions as plan_store stores prose: {"criteria": "<prose>"}.
         conditions = {"criteria": "The user was emailed a summary of Q3 metrics."}
 
-        with patch.object(
-            verifier, "_llm_judge", new=AsyncMock(return_value=True)
-        ) as judge:
+        with patch.object(verifier, "_llm_judge", new=AsyncMock(return_value=True)) as judge:
             result = await verifier.verify_run("run_001", success_conditions=conditions)
 
         judge.assert_awaited_once()
@@ -318,9 +316,7 @@ class TestStatusEqualsDefaultValue:
     check hardcoded to ``completed`` would always fail."""
 
     @pytest.mark.asyncio
-    async def test_status_equals_default_passes_for_partially_completed(
-        self, verifier, mock_db
-    ):
+    async def test_status_equals_default_passes_for_partially_completed(self, verifier, mock_db):
         run = _make_run(status="partially_completed")
         steps = [_make_step(status="completed")]
 

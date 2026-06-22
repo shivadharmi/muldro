@@ -257,8 +257,7 @@ class RunHealthTickMixin:
                                 await db.commit()
                             except Exception:
                                 logger.warning(
-                                    "Resume reaper could not persist retry bump "
-                                    "for run %s",
+                                    "Resume reaper could not persist retry bump for run %s",
                                     run_id,
                                     exc_info=True,
                                 )

@@ -767,9 +767,7 @@ class TestPreflightErrorClassification:
         from src.services.perception_policy import classify_error
 
         for reason in ("no_token", "no_refresh_token", "revoked"):
-            events, _new_cursor, poll_error, _ = await _run_poll_with_token(
-                None, reason=reason
-            )
+            events, _new_cursor, poll_error, _ = await _run_poll_with_token(None, reason=reason)
             assert events == []
             assert poll_error is not None
             assert classify_error(poll_error) == "permanent", reason

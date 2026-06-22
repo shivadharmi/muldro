@@ -98,9 +98,7 @@ class _TickHarness:
         # tokenless (gmail/calendar → google, else the source name).
         _pmap = {"gmail": "google", "calendar": "google"}
         _token_rows = MagicMock()
-        _token_rows.all.return_value = [
-            (s.user_id, _pmap.get(s.source, s.source)) for s in states
-        ]
+        _token_rows.all.return_value = [(s.user_id, _pmap.get(s.source, s.source)) for s in states]
         self.claim_db.execute = AsyncMock(return_value=_token_rows)
 
         # Phase 2 recording db(s) — one fresh context per source

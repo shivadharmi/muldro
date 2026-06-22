@@ -188,9 +188,7 @@ class TestVerificationIsAdvisory:
         executor = self._make_executor("failed", ["completed"])
         run = self._make_run([{"capability": "email.send", "risk_level": "medium"}])
 
-        with patch(
-            "src.services.risk_assessor.record_approval_decision", new=AsyncMock()
-        ) as rec:
+        with patch("src.services.risk_assessor.record_approval_decision", new=AsyncMock()) as rec:
             await executor._run_verification(run)
 
         rec.assert_not_awaited()
