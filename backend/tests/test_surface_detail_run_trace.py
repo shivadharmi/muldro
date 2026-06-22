@@ -25,7 +25,7 @@ def _mock_run_surface(surface_id: str = "run_abc123"):
 
 def _make_run(*, status, input_tokens=0, output_tokens=0, cost_usd=0.0, trace_id=None):
     run = MagicMock()
-    run.run_id = "abc123"
+    run.run_id = "run_abc123"  # post-4893e16: run surface_id IS the run_id
     run.status = status
     run.trace_id = trace_id
     run.input_tokens = input_tokens

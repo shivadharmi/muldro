@@ -191,6 +191,7 @@ class SchedulerBase:
                 await db.commit()  # persist any repairs
                 return
 
+            fired = 0
             for sched in due:
                 try:
                     await self._fire(sched)
@@ -215,8 +216,16 @@ class SchedulerBase:
                     sched.enabled = False
                     sched.next_run_at = None
 
-            await db.commit()
-            logger.info("Scheduler tick: %d due, fired", len(due))
+                # Commit PER-SCHEDULE so an already-fired schedule's next_run_at
+                # advance is durable even if a LATER fire blows the sub-tick
+                # budget. _run_subtick wraps this coroutine in asyncio.wait_for;
+                # a timeout CANCELS it. A batch-wide commit-after-loop would lose
+                # every advance on cancellation, leaving all schedules perpetually
+                # "due" and re-firing every cycle (the per-minute briefing bug).
+                await db.commit()
+                fired += 1
+
+            logger.info("Scheduler tick: %d due, %d fired", len(due), fired)
 
     async def _get_observation_sources(self, user_id: str) -> list[str]:
         """Get observation sources that are both configured AND authorized."""

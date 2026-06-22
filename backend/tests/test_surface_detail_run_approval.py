@@ -40,7 +40,7 @@ def _mock_db_with_approvals(approvals: list[Approval]) -> AsyncMock:
 def _build_approval() -> Approval:
     apr = Approval()
     apr.approval_id = "apr_test1"
-    apr.run_id = "abc123"
+    apr.run_id = "run_abc123"  # post-4893e16: run surface_id IS the run_id
     apr.workspace_id = "ws_test"
     apr.status = "pending"
     apr.title = "Approve step: Send launch email"
@@ -100,10 +100,14 @@ async def test_approval_tab_empty_when_no_pending():
 
 @pytest.mark.asyncio
 async def test_approval_tab_resolves_summary_prefix():
-    """Summary surfaces (summary_{run_id}) resolve the run id like the siblings."""
+    """Summary surfaces (summary_{run_id}) resolve the run id like the siblings.
+
+    The realistic id is ``summary_run_<ULID>`` (summary OF a run surface), so
+    stripping only the outer ``summary_`` recovers the ``run_<ULID>`` run id.
+    """
     db = _mock_db_with_approvals([_build_approval()])
 
-    result = await build_run_approval_tab(db, _mock_run_surface("summary_abc123"))
+    result = await build_run_approval_tab(db, _mock_run_surface("summary_run_abc123"))
 
     assert result.tab_id == "approval"
     assert "approval.approve" in str(result.model_dump())

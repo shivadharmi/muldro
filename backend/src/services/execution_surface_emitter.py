@@ -192,9 +192,18 @@ class SurfaceEmitter:
                         cost_usd=cost_usd,
                     ).model_dump(mode="json")
 
+                    # The unified run surface id IS the run_id; persist it in the
+                    # payload so the detail builders' explicit-linkage path
+                    # (_extract_run_id) resolves the run without relying on
+                    # surface_id derivation. Self-describing rows.
+                    run_meta = {"run_id": surface_id}
                     if existing:
                         existing.payload = {
                             **(existing.payload or {}),
+                            "metadata": {
+                                **(existing.payload or {}).get("metadata", {}),
+                                **run_meta,
+                            },
                             "last_surface_update": surface_data,
                         }
                         # Normalize legacy "execution" kinds to "run" so the
@@ -208,7 +217,10 @@ class SurfaceEmitter:
                                 user_id=user_id,
                                 workspace_id=workspace_id,
                                 surface_type="run",
-                                payload={"last_surface_update": surface_data},
+                                payload={
+                                    "metadata": run_meta,
+                                    "last_surface_update": surface_data,
+                                },
                             )
                         )
                     await persist_db.commit()

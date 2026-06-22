@@ -214,8 +214,54 @@ class TestSchedulerTick:
             assert sched.enabled is False
             assert "agent down" in sched.last_error
 
+    @pytest.mark.asyncio
+    async def test_due_schedules_advance_durably_under_midbatch_cancellation(self, settings):
+        """A schedule's next_run_at advance must be committed per-schedule.
 
-class TestFireActions:
+        Root cause of the per-minute briefing re-fire: ``_process_due_schedules``
+        fired ALL due schedules then advanced next_run_at + committed ONCE after
+        the loop. ``_run_subtick`` wraps the coroutine in ``asyncio.wait_for``; a
+        slow batch (7 users' briefings) exceeds the 90s budget and the coroutine
+        is CANCELLED before the post-loop commit. The advance is lost, every
+        schedule stays "due", and it re-fires every cycle forever.
+
+        This simulates the cancellation: the SECOND fire raises CancelledError
+        (a BaseException, like wait_for's cancel — NOT caught by ``except
+        Exception``). The FIRST schedule must already have advanced AND committed.
+        """
+        import asyncio
+
+        now = datetime.now(timezone.utc)
+        past = now - timedelta(minutes=1)
+        sched1 = _make_schedule(schedule_id="sched_001", cron_expr="*/15 * * * *", next_run_at=past)
+        sched2 = _make_schedule(schedule_id="sched_002", cron_expr="*/15 * * * *", next_run_at=past)
+
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = [sched1, sched2]
+
+        mock_db = MagicMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+        mock_db.commit = AsyncMock()
+        mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_db.__aexit__ = AsyncMock(return_value=False)
+
+        mock_factory = MagicMock(return_value=mock_db)
+
+        scheduler = SchedulerLoop(settings)
+
+        with patch.object(
+            scheduler,
+            "_fire",
+            new_callable=AsyncMock,
+            side_effect=[None, asyncio.CancelledError()],
+        ):
+            with pytest.raises(asyncio.CancelledError):
+                await scheduler._process_due_schedules(mock_factory)
+
+        # The first schedule fired successfully — its advance must be durable.
+        assert sched1.next_run_at > now, "sched1 next_run_at was not advanced"
+        assert mock_db.commit.await_count >= 1, "sched1's advance was never committed"
+
     """Tests for SchedulerLoop._fire() action dispatch.
 
     Every test patches _resolve_workspace so _fire() doesn't hit the DB.

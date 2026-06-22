@@ -511,22 +511,34 @@ class JarvisOrchestrator:
         """
         trace = self._trace_manager.start_trace("scheduled_briefing")
         try:
-            # Per-day delivery idempotency: if a briefing row already exists for
-            # today, an earlier run already generated AND delivered it. A slow
-            # scheduler tick / worker restart must not re-notify or re-push.
-            # The (user_id, briefing_date) row is the idempotency key.
+            # Per-day idempotency, CHECK-BEFORE-GENERATE: if a briefing row
+            # already exists for today, an earlier run already generated AND
+            # delivered it. Short-circuit HERE — before get_briefing, the
+            # Presenter LLM reformat, and the Presenter agent's own
+            # push_ui_update (which ships the surface to the UI). Checking AFTER
+            # generation (the old bug) only suppressed the secondary notify/push;
+            # the user still saw the briefing regenerated and re-pushed every
+            # tick. The (user_id, briefing_date) row is the idempotency key.
             #
-            # INVARIANT: there is a wide check-to-write gap (this read happens at
-            # the start of the run, but the Briefing row is only written later,
-            # mid-run, by the get_briefing tool below). This is safe ONLY because
+            # INVARIANT: a wide check-to-write gap remains on the FIRST run of the
+            # day (this read sees no row; the Briefing row is only written later
+            # mid-run by the get_briefing tool below). This is safe ONLY because
             # the SchedulerLoop fires briefing schedules serially on a single
-            # instance, so no second tick can start the same briefing until this
-            # run commits. The briefings table has a NON-unique index on
+            # instance. The briefings table has a NON-unique index on
             # (user_id, briefing_date), so the DB will NOT stop a double-insert.
             # Before this can run multi-instance (or via skip_locked parallel
             # dispatch), add a UNIQUE constraint on briefings(user_id,
             # briefing_date) to enforce idempotency at the DB layer.
-            already_delivered = await self._briefing_already_exists(user_id, workspace_id)
+            if await self._briefing_already_exists(user_id, workspace_id):
+                logger.info(
+                    "Briefing already delivered today for %s — skipping regeneration",
+                    user_id,
+                )
+                return {
+                    "status": "skipped",
+                    "reason": "already_delivered",
+                    "trace_id": trace.trace_id,
+                }
 
             # Step 1: Gather raw briefing data from intelligence server
             raw_data = await self._execute_tool(
@@ -556,43 +568,37 @@ class JarvisOrchestrator:
             )
 
             # B3: Deliver briefing to user via notifications + workspace surface.
-            # Single owner of delivery (the Presenter no longer notifies). Skip
-            # delivery entirely if today's briefing was already delivered by an
-            # earlier run — exactly one notification + one surface per day.
-            if not already_delivered:
-                try:
-                    async with self._db_factory() as db:
-                        req = self._request_services(db)
-                        if req.notifier:
-                            await req.notifier.notify(
-                                user_id=user_id,
-                                notification_type="briefing",
-                                title="Daily Briefing",
-                                body=str(result)[:500],
-                                workspace_id=workspace_id,
+            # Single owner of delivery (the Presenter no longer notifies). The
+            # already-delivered case returned early above, so this is the
+            # first-of-day delivery: exactly one notification + one surface.
+            try:
+                async with self._db_factory() as db:
+                    req = self._request_services(db)
+                    if req.notifier:
+                        await req.notifier.notify(
+                            user_id=user_id,
+                            notification_type="briefing",
+                            title="Daily Briefing",
+                            body=str(result)[:500],
+                            workspace_id=workspace_id,
+                        )
+                await self._push_workspace_surface(
+                    PlanOutput(
+                        goal="Daily Briefing",
+                        reasoning=str(result)[:200],
+                        steps=[
+                            PlanStep(
+                                description="Briefing update",
+                                capability="system.add_to_brief",
                             )
-                    await self._push_workspace_surface(
-                        PlanOutput(
-                            goal="Daily Briefing",
-                            reasoning=str(result)[:200],
-                            steps=[
-                                PlanStep(
-                                    description="Briefing update",
-                                    capability="system.add_to_brief",
-                                )
-                            ],
-                        ),
-                        user_id=user_id,
-                        workspace_id=workspace_id,
-                        response_text=str(result)[:1000],
-                    )
-                except Exception:
-                    logger.debug("Briefing delivery failed", exc_info=True)
-            else:
-                logger.info(
-                    "Briefing already delivered today for %s — skipping re-delivery",
-                    user_id,
+                        ],
+                    ),
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    response_text=str(result)[:1000],
                 )
+            except Exception:
+                logger.debug("Briefing delivery failed", exc_info=True)
 
             return {"status": "completed", "trace_id": trace.trace_id, "briefing": result}
         except Exception as e:

@@ -28,9 +28,32 @@ def _get_payload(surface: Any) -> dict:
 
 
 def _extract_run_id(surface: Any) -> str | None:
+    """Resolve the run_id a run/summary surface points at.
+
+    Priority: explicit linkage in the payload (``source_run_id`` /
+    ``metadata.source_run_id`` / ``metadata.run_id``), then a fallback derived
+    from the surface_id itself. Post-``4893e16`` the unified ``run`` surface id
+    IS the run_id (``run_<ULID>``), so it is used VERBATIM — never stripped.
+    Cross-prefix ids (``summary_run_<ULID>``) strip only the outer ``summary_``
+    to recover the ``run_<ULID>`` underneath. This mirrors ``_resolve_ephemeral``
+    in routes_surface_detail so the persisted-surface path (whose payload may
+    lack explicit linkage, e.g. emit_surface_update's ``last_surface_update``)
+    and the ephemeral path resolve to the same run.
+    """
     payload = _get_payload(surface)
     meta = payload.get("metadata", {})
-    return payload.get("source_run_id") or meta.get("source_run_id") or meta.get("run_id")
+    explicit = payload.get("source_run_id") or meta.get("source_run_id") or meta.get("run_id")
+    if explicit:
+        return explicit
+
+    surface_id = getattr(surface, "surface_id", "") or ""
+    if surface_id.startswith("summary_"):
+        return surface_id.removeprefix("summary_")
+    if surface_id.startswith("run_"):
+        # The run surface id IS the run_id — do NOT strip the ``run_`` prefix,
+        # it is part of the id (stripping it was the "not found" bug).
+        return surface_id
+    return None
 
 
 def _extract_approval_id(surface: Any) -> str | None:

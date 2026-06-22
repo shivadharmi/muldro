@@ -39,7 +39,7 @@ def _mock_db(run: TaskRun, plan: Plan | None) -> AsyncMock:
 
 def _build_run(plan_id: str = "plan_xyz") -> TaskRun:
     run = TaskRun()
-    run.run_id = "abc123"
+    run.run_id = "run_abc123"  # post-4893e16: run surface_id IS the run_id
     run.plan_id = plan_id
     run.workspace_id = "ws_test"
     return run

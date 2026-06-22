@@ -84,3 +84,25 @@ async def test_scheduled_briefing_second_run_does_not_redeliver():
 
     assert notifier.notify.await_count == 0
     assert orch._push_workspace_surface.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_scheduled_briefing_second_run_skips_generation_entirely():
+    """A re-fire must short-circuit BEFORE get_briefing + the Presenter agent.
+
+    The duplicate-briefing bug was that the "already delivered" guard ran AFTER
+    get_briefing (the tool) and the Presenter agent — and the Presenter agent's
+    own push_ui_update had already shipped the surface to the UI before the guard
+    fired. The guard must check-before-generate: when today's briefing exists, no
+    get_briefing call, no Presenter LLM reformat, no push.
+    """
+    notifier = MagicMock()
+    notifier.notify = AsyncMock()
+
+    orch = _build_orchestrator(notifier, briefing_exists=True)
+    result = await orch.generate_briefing(user_id=TEST_USER_ID, workspace_id=WS)
+
+    # No regeneration: the tool and the Presenter agent must not run at all.
+    assert orch._execute_tool.await_count == 0
+    assert orch._call_agent.await_count == 0
+    assert result.get("status") == "skipped"

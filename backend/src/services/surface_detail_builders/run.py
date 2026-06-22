@@ -26,14 +26,6 @@ async def build_run_steps_tab(db: AsyncSession, surface: Any, **kwargs: Any) -> 
 
     run_id = _extract_run_id(surface)
     if not run_id:
-        # Run surfaces use id format run_{run_id}
-        surface_id = getattr(surface, "surface_id", "") or ""
-        if surface_id.startswith("run_"):
-            run_id = surface_id.removeprefix("run_")
-        elif surface_id.startswith("summary_"):
-            run_id = surface_id.removeprefix("summary_")
-
-    if not run_id:
         return _empty_tab("steps", "No linked run.")
 
     run = (await db.execute(select(TaskRun).where(TaskRun.run_id == run_id))).scalar_one_or_none()
@@ -90,13 +82,6 @@ async def build_run_plan_tab(db: AsyncSession, surface: Any, **kwargs: Any) -> D
 
     run_id = _extract_run_id(surface)
     if not run_id:
-        surface_id = getattr(surface, "surface_id", "") or ""
-        if surface_id.startswith("run_"):
-            run_id = surface_id.removeprefix("run_")
-        elif surface_id.startswith("summary_"):
-            run_id = surface_id.removeprefix("summary_")
-
-    if not run_id:
         return _empty_tab("plan", "No linked run.")
 
     run = (await db.execute(select(TaskRun).where(TaskRun.run_id == run_id))).scalar_one_or_none()
@@ -147,13 +132,6 @@ async def build_run_events_tab(db: AsyncSession, surface: Any, **kwargs: Any) ->
 
     run_id = _extract_run_id(surface)
     if not run_id:
-        surface_id = getattr(surface, "surface_id", "") or ""
-        if surface_id.startswith("run_"):
-            run_id = surface_id.removeprefix("run_")
-        elif surface_id.startswith("summary_"):
-            run_id = surface_id.removeprefix("summary_")
-
-    if not run_id:
         return _empty_tab("events", "No linked run.")
 
     events = list(
@@ -203,13 +181,6 @@ async def build_run_approval_tab(
     from src.ui import units
 
     run_id = _extract_run_id(surface)
-    if not run_id:
-        surface_id = getattr(surface, "surface_id", "") or ""
-        if surface_id.startswith("run_"):
-            run_id = surface_id.removeprefix("run_")
-        elif surface_id.startswith("summary_"):
-            run_id = surface_id.removeprefix("summary_")
-
     if not run_id:
         return _empty_tab("approval", "No linked run.")
 
@@ -264,13 +235,6 @@ async def build_run_trace_tab(db: AsyncSession, surface: Any, **kwargs: Any) -> 
     from src.ui import units
 
     run_id = _extract_run_id(surface)
-    if not run_id:
-        surface_id = getattr(surface, "surface_id", "") or ""
-        if surface_id.startswith("run_"):
-            run_id = surface_id.removeprefix("run_")
-        elif surface_id.startswith("summary_"):
-            run_id = surface_id.removeprefix("summary_")
-
     if not run_id:
         return _empty_tab("trace", "No linked run.")
 
