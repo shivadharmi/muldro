@@ -2,7 +2,7 @@
 
 import { create } from "zustand";
 
-import type { DetailConfig, SurfacePreview } from "@/lib/a2ui-types";
+import type { DetailConfig, InsightData, SurfaceDataPayload, SurfacePreview } from "@/lib/a2ui-types";
 import type { ExecutionPhase, StepState, ApprovalContext, ResultSummary, SurfaceUpdate } from "@/lib/a2ui-types";
 import type { SurfaceKind } from "@/lib/types/surfaces";
 
@@ -15,14 +15,18 @@ export interface WorkspaceSurface {
   response_preview: string | null;
   created_at: string;
   // Execution surface fields (populated by surface_update messages)
-  phase?: ExecutionPhase;
-  steps?: StepState[];
+  phase?: ExecutionPhase | null;
+  steps?: StepState[] | null;
   current_step?: string | null;
-  progress?: string;
+  progress?: string | null;
   approval?: ApprovalContext | null;
   results?: ResultSummary | null;
   // Insight surface fields
-  insight_data?: Record<string, unknown> | null;
+  insight_data?: InsightData | null;
+  // Trust context metadata for approval surfaces.
+  trust_context?: Record<string, string> | null;
+  // Presenter-authored typed rich content (renders via A2UIRenderer).
+  surface_data?: SurfaceDataPayload | null;
 }
 
 interface SurfaceState {
@@ -84,7 +88,7 @@ export const useSurfaceStore = create<SurfaceState>((set) => ({
       next[idx] = {
         ...prev,
         ...(update.phase !== undefined && { phase: update.phase }),
-        ...(update.steps && update.steps.length > 0 && { steps: update.steps }),
+        ...(update.steps !== undefined && { steps: update.steps }),
         ...(update.current_step !== undefined && { current_step: update.current_step }),
         ...(update.progress !== undefined && { progress: update.progress }),
         ...(update.approval !== undefined && { approval: update.approval }),

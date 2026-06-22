@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 
 from ulid import ULID
 
+from src.errors import classify
 from src.services.surface_registry import SurfaceRegistry
 
 logger = logging.getLogger(__name__)
@@ -49,8 +50,7 @@ def compute_priority_score(
 
 
 SURFACE_RATE_LIMITS: dict[str, int] = {
-    "telegram": 5,  # per hour
-    "web": 15,
+    "web": 15,  # per hour
     "slack": 8,
     "email": 3,
 }
@@ -63,13 +63,11 @@ class Notifier:
         self,
         surface_registry: SurfaceRegistry,
         redis=None,
-        telegram_sender=None,
         websocket_sender=None,
         db=None,
     ):
         self._registry = surface_registry
         self._redis = redis
-        self._telegram_sender = telegram_sender
         self._ws_sender = websocket_sender
         self._db = db
         # Track delivered notifications for dedup
@@ -135,7 +133,7 @@ class Notifier:
         # Resolve workspace_id from user_id if not provided
         if not workspace_id and self._db and user_id:
             try:
-                from src.api.deps import resolve_workspace_id
+                from src.services.workspace_resolver import resolve_workspace_id
 
                 workspace_id = await resolve_workspace_id(self._db, user_id)
             except Exception:
@@ -310,7 +308,7 @@ class Notifier:
     ) -> None:
         """When user acts on one surface, notify others to update.
 
-        E.g., user approves on Telegram -> web dashboard updates status.
+        E.g., user approves on Slack -> web dashboard updates status.
         """
         if self._redis:
             message = json.dumps(
@@ -334,9 +332,7 @@ class Notifier:
     async def _deliver(self, surface: str, notification: Notification) -> dict:
         """Deliver a notification to a specific surface."""
         try:
-            if surface == "telegram":
-                result = await self._deliver_telegram(notification)
-            elif surface == "web":
+            if surface == "web":
                 result = await self._deliver_web(notification)
             elif surface == "slack":
                 result = await self._deliver_slack(notification)
@@ -371,43 +367,10 @@ class Notifier:
                     "error": str(e),
                 },
             )
-            return {"status": "error", "error": str(e)}
-
-    async def _deliver_telegram(self, notification: Notification) -> dict:
-        """Format and send notification via Telegram."""
-        if not self._telegram_sender:
-            return {"status": "skipped", "reason": "no_telegram_sender"}
-
-        # Format message based on notification type
-        if notification.type == "approval_request":
-            approval_id = notification.data.get("approval_id", "")
-            risk = notification.data.get("risk_level", "medium")
-            text = f"*Approval Required* ({risk})\n\n*{notification.title}*\n{notification.body}"
-            markup = json.dumps(
-                {
-                    "inline_keyboard": [
-                        [
-                            {
-                                "text": "Approve",
-                                "callback_data": f"approve:{approval_id}",
-                            },
-                            {
-                                "text": "Reject",
-                                "callback_data": f"reject:{approval_id}",
-                            },
-                        ]
-                    ]
-                }
-            )
-            return await self._telegram_sender(
-                text=text, parse_mode="Markdown", reply_markup=markup
-            )
-        elif notification.type == "critical_alert":
-            text = f"*ALERT*\n\n*{notification.title}*\n{notification.body}"
-            return await self._telegram_sender(text=text, parse_mode="Markdown")
-        else:
-            text = f"*{notification.title}*\n{notification.body}"
-            return await self._telegram_sender(text=text, parse_mode="Markdown")
+            # The returned dict may be relayed to a surface — expose only the
+            # safe message + code, never the raw exception. Logs keep str(e).
+            code, message, _ = classify(e)
+            return {"status": "error", "error": message, "error_code": code}
 
     async def _deliver_slack(self, notification: Notification) -> dict:
         """Send notification via Slack using MCP bridge."""
@@ -432,7 +395,8 @@ class Notifier:
             return {"status": "sent", "slack_result": result}
         except Exception as e:
             logger.warning("Slack delivery failed: %s", e, exc_info=True)
-            return {"status": "error", "error": str(e)}
+            code, message, _ = classify(e)
+            return {"status": "error", "error": message, "error_code": code}
 
     async def _deliver_email(self, notification: Notification) -> dict:
         """Send notification via email using MCP bridge or SES fallback."""
@@ -472,7 +436,9 @@ class Notifier:
             )
             return {"status": "sent", "via": "ses"}
         except Exception as e:
-            return {"status": "error", "error": str(e)}
+            logger.warning("Email (SES) delivery failed: %s", e, exc_info=True)
+            code, message, _ = classify(e)
+            return {"status": "error", "error": message, "error_code": code}
 
     async def _deliver_web(self, notification: Notification) -> dict:
         """Push notification to web dashboard via WebSocket/Redis pub/sub."""
@@ -494,61 +460,10 @@ class Notifier:
                 )
                 await self._redis.publish(channel, message)
 
-                # Also push a typed surface for approval notifications so
-                # they appear on the workspace dashboard in real time.
-                if notification.type == "approval_request":
-                    try:
-                        from datetime import datetime, timezone
-
-                        from src.orchestrator.contracts import WorkspaceSurfacePush
-                        from src.ui.contracts import SurfaceMetric, SurfacePreview
-                        from src.ui.renderer import build_detail_config
-
-                        risk_level = (notification.data or {}).get("risk_level", "medium")
-                        risk_variant = (
-                            "warning" if risk_level in ("high", "critical") else "default"
-                        )
-
-                        # Use approval_{approval_id} format so the surface
-                        # detail endpoint can resolve the tab builders via
-                        # the "approval_" prefix in _PREFIX_MAP.  This also
-                        # deduplicates with the REST-polled surfaces built by
-                        # SurfaceService._build_approval_surfaces().
-                        approval_id = (notification.data or {}).get("approval_id", "")
-                        surface_id = (
-                            f"approval_{approval_id}" if approval_id else f"notif_surf_{ULID()}"
-                        )
-                        preview = SurfacePreview(
-                            title=notification.title,
-                            subtitle=(notification.body or "")[:120] or None,
-                            status="awaiting_approval",
-                            priority="high" if risk_level in ("high", "critical") else "medium",
-                            metrics=[
-                                SurfaceMetric(label="Risk", value=risk_level, variant=risk_variant),
-                            ],
-                        )
-                        detail_config = build_detail_config("approval", surface_id)
-
-                        surface = WorkspaceSurfacePush(
-                            id=surface_id,
-                            kind="approval",
-                            preview=preview.model_dump(mode="json"),
-                            detail_config=(
-                                detail_config.model_dump(mode="json") if detail_config else None
-                            ),
-                            decision="approval_requested",
-                            created_at=datetime.now(timezone.utc).isoformat(),
-                        )
-                        ws_msg = json.dumps(
-                            {"type": "surface", "surface": surface.model_dump(mode="json")}
-                        )
-                        await self._redis.publish(channel, ws_msg)
-                    except Exception:
-                        logger.debug(
-                            "Failed to push approval surface for %s",
-                            notification.notification_id,
-                            exc_info=True,
-                        )
+                # Note: approval notifications no longer emit a standalone
+                # workspace surface card. The run's unified surface (emitted
+                # by GraphExecutor with phase=approval_needed) already carries
+                # the inline approval block via units.approval_card.
 
                 return {"status": "published"}
             return {"status": "skipped", "reason": "no_ws_sender"}

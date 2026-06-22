@@ -60,6 +60,21 @@ def generate_id(prefix: str) -> str:
     return f"{prefix}_{ULID()}"
 
 
+def ensure_prefix(prefix: str, value: str) -> str:
+    """Return value with exactly one leading '{prefix}_'. Idempotent."""
+    return value if value.startswith(f"{prefix}_") else f"{prefix}_{value}"
+
+
+def strip_prefix(value: str) -> str:
+    """Remove a single leading ``<word>_`` segment from value.
+
+    ``run_01ABC`` -> ``01ABC``; ``summary_run_01`` -> ``run_01``. A value with no
+    underscore is returned unchanged. Used to build namespaced surface ids that
+    do not read as doubled (e.g. ``summary_<stripped run id>``)."""
+    head, sep, tail = value.partition("_")
+    return tail if sep else value
+
+
 def generate_user_id() -> str:
     return generate_id("usr")
 

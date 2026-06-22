@@ -392,8 +392,23 @@ def calendar_view(
 
 
 _TABS_BY_KIND: dict[str, list[tuple[str, str]]] = {
+    # Unified run surface: the detail modal shows steps / plan / events / trace
+    # which is the shape the user's screenshots revealed.
+    "run": [
+        ("steps", "Steps"),
+        ("plan", "Plan"),
+        ("events", "Events"),
+        ("trace", "Trace"),
+    ],
+    # Summary (completion card) reuses run tabs so the user can drill back
+    # into the archived run's detail.
+    "summary": [
+        ("steps", "Steps"),
+        ("plan", "Plan"),
+        ("events", "Events"),
+        ("trace", "Trace"),
+    ],
     "plan": [("overview", "Overview"), ("context", "Context"), ("execution", "Execution")],
-    "summary": [("overview", "Overview"), ("sources", "Sources"), ("context", "Context")],
     "briefing": [("priorities", "Priorities"), ("events", "Events"), ("actions", "Actions")],
     "approval": [("request", "Request"), ("risk", "Risk"), ("history", "History")],
     "recommendation": [("overview", "Overview"), ("evidence", "Evidence"), ("context", "Context")],
@@ -407,14 +422,26 @@ _TABS_BY_KIND: dict[str, list[tuple[str, str]]] = {
 }
 
 
-def build_detail_config(kind: str, surface_id: str) -> DetailConfig | None:
+def build_detail_config(
+    kind: str,
+    surface_id: str,
+    extra_tabs: list[tuple[str, str]] | None = None,
+    default_tab: str | None = None,
+) -> DetailConfig | None:
     """Build detail modal configuration for a surface kind.
 
     Returns None for kinds with no detail tabs (checklist, timeline, etc.).
+
+    ``extra_tabs`` appends conditional ``(tab_id, label)`` pairs to the resolved
+    tabs (e.g. an Approval tab when a run is awaiting approval). ``default_tab``
+    sets the tab the modal opens on; it is validated against the final tab ids.
     """
-    tab_defs = _TABS_BY_KIND.get(kind)
+    tab_defs = list(_TABS_BY_KIND.get(kind) or [])
+    if extra_tabs:
+        existing = {tid for tid, _ in tab_defs}
+        tab_defs += [(tid, label) for tid, label in extra_tabs if tid not in existing]
     if not tab_defs:
         return None
     base = f"/v1/surfaces/{surface_id}/detail"
     tabs = [DetailTab(id=tid, label=label, endpoint=f"{base}/{tid}") for tid, label in tab_defs]
-    return DetailConfig(tabs=tabs)
+    return DetailConfig(tabs=tabs, default_tab=default_tab)

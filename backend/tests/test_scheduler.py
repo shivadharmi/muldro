@@ -95,7 +95,7 @@ class TestSchedulerTick:
         scheduler = SchedulerLoop(settings)
 
         with (
-            patch("src.services.scheduler.get_session_factory", return_value=mock_factory),
+            patch("src.services.scheduler._base.get_session_factory", return_value=mock_factory),
             patch.object(scheduler, "_fire", new_callable=AsyncMock) as mock_fire,
         ):
             await scheduler._tick()
@@ -121,7 +121,7 @@ class TestSchedulerTick:
 
         scheduler = SchedulerLoop(settings)
 
-        with patch("src.services.scheduler.get_session_factory", return_value=mock_factory):
+        with patch("src.services.scheduler._base.get_session_factory", return_value=mock_factory):
             await scheduler._tick()
             # Commit is called at least once (to persist state), but no fire
             assert mock_db.commit.await_count >= 1
@@ -145,7 +145,7 @@ class TestSchedulerTick:
         scheduler = SchedulerLoop(settings)
 
         with (
-            patch("src.services.scheduler.get_session_factory", return_value=mock_factory),
+            patch("src.services.scheduler._base.get_session_factory", return_value=mock_factory),
             patch.object(scheduler, "_fire", new_callable=AsyncMock),
         ):
             await scheduler._tick()
@@ -176,7 +176,7 @@ class TestSchedulerTick:
         scheduler = SchedulerLoop(settings)
 
         with (
-            patch("src.services.scheduler.get_session_factory", return_value=mock_factory),
+            patch("src.services.scheduler._base.get_session_factory", return_value=mock_factory),
             patch.object(scheduler, "_fire", new_callable=AsyncMock),
         ):
             await scheduler._tick()
@@ -203,7 +203,7 @@ class TestSchedulerTick:
         scheduler = SchedulerLoop(settings)
 
         with (
-            patch("src.services.scheduler.get_session_factory", return_value=mock_factory),
+            patch("src.services.scheduler._base.get_session_factory", return_value=mock_factory),
             patch.object(
                 scheduler, "_fire", new_callable=AsyncMock, side_effect=Exception("agent down")
             ),
@@ -214,8 +214,54 @@ class TestSchedulerTick:
             assert sched.enabled is False
             assert "agent down" in sched.last_error
 
+    @pytest.mark.asyncio
+    async def test_due_schedules_advance_durably_under_midbatch_cancellation(self, settings):
+        """A schedule's next_run_at advance must be committed per-schedule.
 
-class TestFireActions:
+        Root cause of the per-minute briefing re-fire: ``_process_due_schedules``
+        fired ALL due schedules then advanced next_run_at + committed ONCE after
+        the loop. ``_run_subtick`` wraps the coroutine in ``asyncio.wait_for``; a
+        slow batch (7 users' briefings) exceeds the 90s budget and the coroutine
+        is CANCELLED before the post-loop commit. The advance is lost, every
+        schedule stays "due", and it re-fires every cycle forever.
+
+        This simulates the cancellation: the SECOND fire raises CancelledError
+        (a BaseException, like wait_for's cancel — NOT caught by ``except
+        Exception``). The FIRST schedule must already have advanced AND committed.
+        """
+        import asyncio
+
+        now = datetime.now(timezone.utc)
+        past = now - timedelta(minutes=1)
+        sched1 = _make_schedule(schedule_id="sched_001", cron_expr="*/15 * * * *", next_run_at=past)
+        sched2 = _make_schedule(schedule_id="sched_002", cron_expr="*/15 * * * *", next_run_at=past)
+
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = [sched1, sched2]
+
+        mock_db = MagicMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+        mock_db.commit = AsyncMock()
+        mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_db.__aexit__ = AsyncMock(return_value=False)
+
+        mock_factory = MagicMock(return_value=mock_db)
+
+        scheduler = SchedulerLoop(settings)
+
+        with patch.object(
+            scheduler,
+            "_fire",
+            new_callable=AsyncMock,
+            side_effect=[None, asyncio.CancelledError()],
+        ):
+            with pytest.raises(asyncio.CancelledError):
+                await scheduler._process_due_schedules(mock_factory)
+
+        # The first schedule fired successfully — its advance must be durable.
+        assert sched1.next_run_at > now, "sched1 next_run_at was not advanced"
+        assert mock_db.commit.await_count >= 1, "sched1's advance was never committed"
+
     """Tests for SchedulerLoop._fire() action dispatch.
 
     Every test patches _resolve_workspace so _fire() doesn't hit the DB.
@@ -337,8 +383,13 @@ class TestFireActions:
         scheduler = SchedulerLoop(settings)
 
         with (
-            patch("src.services.scheduler.get_session_factory", return_value=mock_factory),
-            patch("src.services.scheduler.HeartbeatService", return_value=mock_hb),
+            patch(
+                "src.services.scheduler.schedule_dispatch.get_session_factory",
+                return_value=mock_factory,
+            ),
+            patch(
+                "src.services.scheduler.schedule_dispatch.HeartbeatService", return_value=mock_hb
+            ),
         ):
             await scheduler._fire(sched)
 
@@ -554,3 +605,443 @@ class TestCrossSourceSynthesisTrigger:
         total_event_count = 2
         should_trigger = sources_with_events >= 2 and total_event_count >= 3
         assert should_trigger is False
+
+
+# ---------------------------------------------------------------------------
+# Cross-source synthesis tenant grouping (P3)
+# ---------------------------------------------------------------------------
+
+
+def _make_perception_state(
+    user_id: str,
+    workspace_id: str,
+    source: str,
+    **overrides,
+) -> MagicMock:
+    """Factory for mock PerceptionState objects used in perception tick tests."""
+    state = MagicMock()
+    state.state_id = overrides.get("state_id", f"pst_{user_id}_{source}")
+    state.user_id = user_id
+    state.workspace_id = workspace_id
+    state.source = source
+    state.pending_run = False
+    state.next_run_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+    for k, v in overrides.items():
+        setattr(state, k, v)
+    return state
+
+
+def _make_scheduler_for_tick(settings, orchestrator):
+    """Return a SchedulerLoop instance set up for _tick_perception testing."""
+    scheduler = SchedulerLoop(settings, orchestrator=orchestrator)
+    return scheduler
+
+
+def _build_tick_mocks(due_states: list, results: list):
+    """
+    Build the factory/db/svc mocks needed by _tick_perception.
+
+    ``results`` must be positionally aligned with ``due_states``.
+    Each element is either a (src_name, event_count) tuple or an exception.
+
+    The mock lookup is keyed on (user_id, source) to avoid collisions when two
+    tenants share a source name (e.g. both polling "gmail").
+    """
+    mock_db = MagicMock()
+    mock_db.flush = AsyncMock()
+    mock_db.commit = AsyncMock()
+    mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+    mock_db.__aexit__ = AsyncMock(return_value=False)
+
+    mock_svc = MagicMock()
+    mock_svc._db = mock_db
+    mock_svc.get_due_sources_all_users = AsyncMock(return_value=due_states)
+    mock_svc.record_success = AsyncMock()
+    mock_svc.record_failure = AsyncMock()
+
+    # Claim-and-release plumbing: use the real claim (applies the lease to the
+    # mock states) and re-fetch by id for per-source outcome recording.
+    from src.services.perception_policy import PerceptionPolicyService
+
+    async def _claim(sources, now=None):
+        return await PerceptionPolicyService.claim_due_sources(mock_svc, sources, now)
+
+    mock_svc.claim_due_sources = AsyncMock(side_effect=_claim)
+    _by_id = {s.state_id: s for s in due_states}
+    mock_svc.get_by_state_id = AsyncMock(side_effect=lambda sid: _by_id.get(sid))
+
+    mock_factory = MagicMock(return_value=mock_db)
+
+    # Keyed on (user_id, source) so two tenants that share a source name
+    # never silently overwrite each other's expected result.
+    result_by_user_source: dict[tuple[str, str], object] = {}
+    for state, res in zip(due_states, results):
+        composite_key = (state.user_id, state.source)
+        if isinstance(res, BaseException):
+            result_by_user_source[composite_key] = res
+        else:
+            _src, evt_count = res
+            result_by_user_source[composite_key] = {"status": "completed", "events": evt_count}
+
+    async def _fake_run_perception_cycle(source, *, user_id, workspace_id):
+        r = result_by_user_source.get((user_id, source), {"status": "completed", "events": 0})
+        if isinstance(r, BaseException):
+            raise r
+        return r
+
+    return mock_factory, mock_svc, _fake_run_perception_cycle
+
+
+class TestCrossSourceSynthesisTenantGrouping:
+    """Synthesis must be per-(user_id, workspace_id) group, never cross-tenant."""
+
+    # ------------------------------------------------------------------
+    # Case (a): two tenants both above threshold → two separate calls
+    # ------------------------------------------------------------------
+    @pytest.mark.asyncio
+    async def test_two_tenants_both_above_threshold_trigger_separate_calls(self, settings):
+        """Two tenants each having >=2 sources / >=3 events → synthesis fires once per tenant."""
+        user_a = "usr_aaa"
+        ws_a = "ws_aaa"
+        user_b = "usr_bbb"
+        ws_b = "ws_bbb"
+
+        due_states = [
+            _make_perception_state(user_a, ws_a, "gmail"),
+            _make_perception_state(user_a, ws_a, "slack"),
+            _make_perception_state(user_b, ws_b, "github"),
+            _make_perception_state(user_b, ws_b, "calendar"),
+        ]
+        # Each source returns 2 events → each tenant has 4 total / 2 sources → triggers
+        results = [
+            ("gmail", 2),
+            ("slack", 2),
+            ("github", 2),
+            ("calendar", 2),
+        ]
+
+        mock_factory, mock_svc, fake_cycle = _build_tick_mocks(due_states, results)
+
+        mock_orch = MagicMock()
+        mock_orch.run_cross_source_synthesis = AsyncMock()
+        mock_orch.run_perception_cycle = AsyncMock(side_effect=fake_cycle)
+        mock_orch._budget = MagicMock()
+        mock_orch._budget.get_budget_status = AsyncMock(return_value={"mode": "normal"})
+        mock_orch._budget.should_allow_perception = MagicMock(return_value=True)
+        mock_orch._budget.get_perception_interval_multiplier = MagicMock(return_value=1)
+
+        scheduler = _make_scheduler_for_tick(settings, mock_orch)
+
+        with (
+            patch(
+                "src.services.perception_policy.PerceptionPolicyService",
+                return_value=mock_svc,
+            ),
+            patch.object(
+                scheduler,
+                "_resolve_workspace",
+                new=AsyncMock(side_effect=lambda uid: ws_a if uid == user_a else ws_b),
+            ),
+        ):
+            await scheduler._tick_perception(mock_factory)
+
+        assert mock_orch.run_cross_source_synthesis.await_count == 2
+
+        calls = mock_orch.run_cross_source_synthesis.call_args_list
+        call_kwargs = {c.kwargs["user_id"]: c.kwargs for c in calls}
+
+        # Tenant A call
+        assert user_a in call_kwargs
+        assert call_kwargs[user_a]["workspace_id"] == ws_a
+        assert set(call_kwargs[user_a]["source_names"]) == {"gmail", "slack"}
+
+        # Tenant B call
+        assert user_b in call_kwargs
+        assert call_kwargs[user_b]["workspace_id"] == ws_b
+        assert set(call_kwargs[user_b]["source_names"]) == {"github", "calendar"}
+
+    # ------------------------------------------------------------------
+    # Case (b): one tenant below threshold, one above → only above fires
+    # ------------------------------------------------------------------
+    @pytest.mark.asyncio
+    async def test_only_above_threshold_tenant_triggers(self, settings):
+        """Tenant A below threshold must not trigger; Tenant B above threshold must trigger."""
+        user_a = "usr_aaa"
+        ws_a = "ws_aaa"
+        user_b = "usr_bbb"
+        ws_b = "ws_bbb"
+
+        due_states = [
+            # Tenant A: 1 source, 5 events — fails sources >= 2 check
+            _make_perception_state(user_a, ws_a, "gmail"),
+            # Tenant B: 2 sources, 3 events — passes
+            _make_perception_state(user_b, ws_b, "github"),
+            _make_perception_state(user_b, ws_b, "slack"),
+        ]
+        results = [
+            ("gmail", 5),
+            ("github", 1),
+            ("slack", 2),
+        ]
+
+        mock_factory, mock_svc, fake_cycle = _build_tick_mocks(due_states, results)
+
+        mock_orch = MagicMock()
+        mock_orch.run_cross_source_synthesis = AsyncMock()
+        mock_orch.run_perception_cycle = AsyncMock(side_effect=fake_cycle)
+        mock_orch._budget = MagicMock()
+        mock_orch._budget.get_budget_status = AsyncMock(return_value={"mode": "normal"})
+        mock_orch._budget.should_allow_perception = MagicMock(return_value=True)
+        mock_orch._budget.get_perception_interval_multiplier = MagicMock(return_value=1)
+
+        scheduler = _make_scheduler_for_tick(settings, mock_orch)
+
+        with (
+            patch(
+                "src.services.perception_policy.PerceptionPolicyService",
+                return_value=mock_svc,
+            ),
+            patch.object(
+                scheduler,
+                "_resolve_workspace",
+                new=AsyncMock(side_effect=lambda uid: ws_a if uid == user_a else ws_b),
+            ),
+        ):
+            await scheduler._tick_perception(mock_factory)
+
+        assert mock_orch.run_cross_source_synthesis.await_count == 1
+        call_kwargs = mock_orch.run_cross_source_synthesis.call_args.kwargs
+        assert call_kwargs["user_id"] == user_b
+        assert call_kwargs["workspace_id"] == ws_b
+        assert set(call_kwargs["source_names"]) == {"github", "slack"}
+
+    # ------------------------------------------------------------------
+    # Case (c): single tenant, multi-source — still triggers exactly once
+    # ------------------------------------------------------------------
+    @pytest.mark.asyncio
+    async def test_single_tenant_multi_source_triggers_once(self, settings):
+        """Single tenant with >=2 sources / >=3 events must still trigger exactly once."""
+        due_states = [
+            _make_perception_state(TEST_USER_ID, TEST_WORKSPACE_ID, "gmail"),
+            _make_perception_state(TEST_USER_ID, TEST_WORKSPACE_ID, "slack"),
+            _make_perception_state(TEST_USER_ID, TEST_WORKSPACE_ID, "github"),
+        ]
+        results = [
+            ("gmail", 2),
+            ("slack", 2),
+            ("github", 1),
+        ]
+
+        mock_factory, mock_svc, fake_cycle = _build_tick_mocks(due_states, results)
+
+        mock_orch = MagicMock()
+        mock_orch.run_cross_source_synthesis = AsyncMock()
+        mock_orch.run_perception_cycle = AsyncMock(side_effect=fake_cycle)
+        mock_orch._budget = MagicMock()
+        mock_orch._budget.get_budget_status = AsyncMock(return_value={"mode": "normal"})
+        mock_orch._budget.should_allow_perception = MagicMock(return_value=True)
+        mock_orch._budget.get_perception_interval_multiplier = MagicMock(return_value=1)
+
+        scheduler = _make_scheduler_for_tick(settings, mock_orch)
+
+        with (
+            patch(
+                "src.services.perception_policy.PerceptionPolicyService",
+                return_value=mock_svc,
+            ),
+            patch.object(
+                scheduler,
+                "_resolve_workspace",
+                new=AsyncMock(return_value=TEST_WORKSPACE_ID),
+            ),
+        ):
+            await scheduler._tick_perception(mock_factory)
+
+        assert mock_orch.run_cross_source_synthesis.await_count == 1
+        call_kwargs = mock_orch.run_cross_source_synthesis.call_args.kwargs
+        assert call_kwargs["user_id"] == TEST_USER_ID
+        assert call_kwargs["workspace_id"] == TEST_WORKSPACE_ID
+        assert set(call_kwargs["source_names"]) == {"gmail", "slack", "github"}
+
+    # ------------------------------------------------------------------
+    # Case (d): tenant with only 1 source or <3 events does NOT trigger
+    # ------------------------------------------------------------------
+    @pytest.mark.asyncio
+    async def test_single_source_tenant_does_not_trigger(self, settings):
+        """A tenant with only 1 source with events must not trigger synthesis."""
+        due_states = [
+            _make_perception_state(TEST_USER_ID, TEST_WORKSPACE_ID, "gmail"),
+        ]
+        results = [("gmail", 10)]
+
+        mock_factory, mock_svc, fake_cycle = _build_tick_mocks(due_states, results)
+
+        mock_orch = MagicMock()
+        mock_orch.run_cross_source_synthesis = AsyncMock()
+        mock_orch.run_perception_cycle = AsyncMock(side_effect=fake_cycle)
+        mock_orch._budget = MagicMock()
+        mock_orch._budget.get_budget_status = AsyncMock(return_value={"mode": "normal"})
+        mock_orch._budget.should_allow_perception = MagicMock(return_value=True)
+        mock_orch._budget.get_perception_interval_multiplier = MagicMock(return_value=1)
+
+        scheduler = _make_scheduler_for_tick(settings, mock_orch)
+
+        with (
+            patch(
+                "src.services.perception_policy.PerceptionPolicyService",
+                return_value=mock_svc,
+            ),
+            patch.object(
+                scheduler,
+                "_resolve_workspace",
+                new=AsyncMock(return_value=TEST_WORKSPACE_ID),
+            ),
+        ):
+            await scheduler._tick_perception(mock_factory)
+
+        mock_orch.run_cross_source_synthesis.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_two_sources_but_only_two_events_does_not_trigger(self, settings):
+        """Two sources but only 2 total events must not trigger synthesis."""
+        due_states = [
+            _make_perception_state(TEST_USER_ID, TEST_WORKSPACE_ID, "gmail"),
+            _make_perception_state(TEST_USER_ID, TEST_WORKSPACE_ID, "slack"),
+        ]
+        results = [("gmail", 1), ("slack", 1)]
+
+        mock_factory, mock_svc, fake_cycle = _build_tick_mocks(due_states, results)
+
+        mock_orch = MagicMock()
+        mock_orch.run_cross_source_synthesis = AsyncMock()
+        mock_orch.run_perception_cycle = AsyncMock(side_effect=fake_cycle)
+        mock_orch._budget = MagicMock()
+        mock_orch._budget.get_budget_status = AsyncMock(return_value={"mode": "normal"})
+        mock_orch._budget.should_allow_perception = MagicMock(return_value=True)
+        mock_orch._budget.get_perception_interval_multiplier = MagicMock(return_value=1)
+
+        scheduler = _make_scheduler_for_tick(settings, mock_orch)
+
+        with (
+            patch(
+                "src.services.perception_policy.PerceptionPolicyService",
+                return_value=mock_svc,
+            ),
+            patch.object(
+                scheduler,
+                "_resolve_workspace",
+                new=AsyncMock(return_value=TEST_WORKSPACE_ID),
+            ),
+        ):
+            await scheduler._tick_perception(mock_factory)
+
+        mock_orch.run_cross_source_synthesis.assert_not_awaited()
+
+    # ------------------------------------------------------------------
+    # Regression: cross-tenant isolation — user_id never bleeds across
+    # ------------------------------------------------------------------
+    @pytest.mark.asyncio
+    async def test_cross_tenant_isolation_user_id_never_bleeds(self, settings):
+        """Synthesis for Tenant A must never receive Tenant B's user_id or workspace_id."""
+        user_a = "usr_aaa"
+        ws_a = "ws_aaa"
+        user_b = "usr_bbb"
+        ws_b = "ws_bbb"
+
+        # Tenant A: 2 sources with enough events
+        # Tenant B: only 1 source — should NOT trigger
+        due_states = [
+            _make_perception_state(user_a, ws_a, "gmail"),
+            _make_perception_state(user_a, ws_a, "slack"),
+            _make_perception_state(user_b, ws_b, "github"),
+        ]
+        results = [
+            ("gmail", 2),
+            ("slack", 2),
+            ("github", 5),  # high event count but only 1 source for user_b
+        ]
+
+        mock_factory, mock_svc, fake_cycle = _build_tick_mocks(due_states, results)
+
+        mock_orch = MagicMock()
+        mock_orch.run_cross_source_synthesis = AsyncMock()
+        mock_orch.run_perception_cycle = AsyncMock(side_effect=fake_cycle)
+        mock_orch._budget = MagicMock()
+        mock_orch._budget.get_budget_status = AsyncMock(return_value={"mode": "normal"})
+        mock_orch._budget.should_allow_perception = MagicMock(return_value=True)
+        mock_orch._budget.get_perception_interval_multiplier = MagicMock(return_value=1)
+
+        scheduler = _make_scheduler_for_tick(settings, mock_orch)
+
+        with (
+            patch(
+                "src.services.perception_policy.PerceptionPolicyService",
+                return_value=mock_svc,
+            ),
+            patch.object(
+                scheduler,
+                "_resolve_workspace",
+                new=AsyncMock(side_effect=lambda uid: ws_a if uid == user_a else ws_b),
+            ),
+        ):
+            await scheduler._tick_perception(mock_factory)
+
+        # Only Tenant A triggers
+        assert mock_orch.run_cross_source_synthesis.await_count == 1
+        call_kwargs = mock_orch.run_cross_source_synthesis.call_args.kwargs
+
+        # Tenant A's call must only have Tenant A's identity
+        assert call_kwargs["user_id"] == user_a
+        assert call_kwargs["workspace_id"] == ws_a
+        assert user_b not in call_kwargs["user_id"]
+        assert ws_b not in call_kwargs["workspace_id"]
+        # Tenant B's source must NOT appear in Tenant A's synthesis
+        assert "github" not in call_kwargs["source_names"]
+
+    # ------------------------------------------------------------------
+    # Case (e): workspace_id is empty — exercises the _resolve_workspace fallback
+    # ------------------------------------------------------------------
+    @pytest.mark.asyncio
+    async def test_empty_workspace_id_triggers_resolve_workspace_fallback(self, settings):
+        """A tenant whose perception states have workspace_id='' must resolve via
+        _resolve_workspace and pass the resolved id to run_cross_source_synthesis."""
+        resolved_ws = "ws_resolved_001"
+
+        due_states = [
+            _make_perception_state(TEST_USER_ID, "", "gmail"),
+            _make_perception_state(TEST_USER_ID, "", "slack"),
+        ]
+        # 2 sources, 4 total events — above both thresholds
+        results = [("gmail", 2), ("slack", 2)]
+
+        mock_factory, mock_svc, fake_cycle = _build_tick_mocks(due_states, results)
+
+        mock_orch = MagicMock()
+        mock_orch.run_cross_source_synthesis = AsyncMock()
+        mock_orch.run_perception_cycle = AsyncMock(side_effect=fake_cycle)
+        mock_orch._budget = MagicMock()
+        mock_orch._budget.get_budget_status = AsyncMock(return_value={"mode": "normal"})
+        mock_orch._budget.should_allow_perception = MagicMock(return_value=True)
+        mock_orch._budget.get_perception_interval_multiplier = MagicMock(return_value=1)
+
+        scheduler = _make_scheduler_for_tick(settings, mock_orch)
+
+        mock_resolve = AsyncMock(return_value=resolved_ws)
+        with (
+            patch(
+                "src.services.perception_policy.PerceptionPolicyService",
+                return_value=mock_svc,
+            ),
+            patch.object(scheduler, "_resolve_workspace", new=mock_resolve),
+        ):
+            await scheduler._tick_perception(mock_factory)
+
+        # (a) _resolve_workspace must have been awaited for the synthesis fallback path
+        mock_resolve.assert_awaited()
+
+        # (b) synthesis must be called with the resolved workspace_id
+        mock_orch.run_cross_source_synthesis.assert_awaited_once()
+        call_kwargs = mock_orch.run_cross_source_synthesis.call_args.kwargs
+        assert call_kwargs["workspace_id"] == resolved_ws
+        assert call_kwargs["user_id"] == TEST_USER_ID
+        assert set(call_kwargs["source_names"]) == {"gmail", "slack"}

@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
@@ -55,12 +57,19 @@ def make_idempotency_key(raw: RawEvent) -> str:
     """Build a unique idempotency key for an event.
 
     Includes message_id when available (e.g., Gmail) for per-message
-    granularity within threads. Falls back to source:entity_id:event_type
-    for sources without message-level IDs.
+    granularity within threads. For Notion, includes last_edited_time so
+    repeat edits of the same page produce distinct events (the same page_id
+    edited twice would otherwise collapse into one). Falls back to
+    source:entity_id:event_type for sources without finer-grained IDs.
     """
-    message_id = (raw.raw_payload or {}).get("message_id", "")
+    payload = raw.raw_payload or {}
+    message_id = payload.get("message_id", "")
     if message_id:
         return f"{raw.source}:{raw.entity_id}:{message_id}:{raw.event_type}"
+    if raw.source == "notion":
+        last_edited_time = payload.get("last_edited_time", "")
+        if last_edited_time:
+            return f"{raw.source}:{raw.entity_id}:{last_edited_time}:{raw.event_type}"
     return f"{raw.source}:{raw.entity_id}:{raw.event_type}"
 
 
@@ -145,7 +154,20 @@ class EventProcessor:
         Gated by a semaphore to limit concurrent Claude API scoring calls.
         """
         async with self._semaphore:
-            return await self._process_inner(raw, user_id, workspace_id)
+            start = time.monotonic()
+            event_id = await self._process_inner(raw, user_id, workspace_id)
+            # Perception-throughput latency: only for events actually stored
+            # (skip duplicates, which return None without doing scoring work).
+            if event_id is not None:
+                try:
+                    from src.services.metrics_service import MetricsService
+
+                    MetricsService.record_event_processing(
+                        raw.source, (time.monotonic() - start) * 1000
+                    )
+                except Exception:
+                    logger.debug("Failed to record event-processing latency", exc_info=True)
+            return event_id
 
     async def _process_inner(
         self, raw: RawEvent, user_id: str, workspace_id: str = ""
@@ -155,7 +177,8 @@ class EventProcessor:
 
         existing = await self._db.execute(
             select(NormalizedEvent.event_id).where(
-                NormalizedEvent.idempotency_key == idempotency_key
+                NormalizedEvent.workspace_id == workspace_id,
+                NormalizedEvent.idempotency_key == idempotency_key,
             )
         )
         if existing.scalar_one_or_none():
@@ -188,8 +211,16 @@ class EventProcessor:
             status="processed",
         )
 
-        self._db.add(event)
-        await self._db.commit()
+        try:
+            self._db.add(event)
+            await self._db.commit()
+        except IntegrityError:
+            # Concurrent ingestion lost the race on the idempotency_key unique
+            # constraint. Another cycle already stored this event — treat it
+            # as a duplicate and skip downstream work.
+            await self._db.rollback()
+            logger.debug("Concurrent duplicate event skipped: %s", idempotency_key)
+            return None
 
         logger.info(
             "Event processed: %s importance=%.2f urgency=%.2f",
@@ -251,7 +282,7 @@ class EventProcessor:
         if self._event_bus:
             try:
                 await self._event_bus.publish(
-                    self._event_bus.event_stream(user_id),
+                    self._event_bus.event_stream(workspace_id),
                     "event_processed",
                     {
                         "event_id": event_id,
@@ -261,6 +292,7 @@ class EventProcessor:
                         "urgency_score": event.urgency_score or 0,
                     },
                     user_id=user_id,
+                    workspace_id=workspace_id,
                 )
             except Exception:
                 logger.warning("Failed to publish to event bus", exc_info=True)
@@ -277,6 +309,16 @@ class EventProcessor:
         self, event: NormalizedEvent, user_id: str, workspace_id: str = ""
     ) -> None:
         """Evaluate active triggers against a new event. Fire matching ones."""
+        # Fail-safe: never evaluate triggers without a concrete workspace —
+        # an empty workspace_id would scope the query to workspace "" and could
+        # match/fire triggers across tenant boundaries.
+        if not workspace_id:
+            logger.warning(
+                "Skipping trigger evaluation: empty workspace_id (user=%s, event=%s)",
+                user_id,
+                getattr(event, "event_id", "?"),
+            )
+            return
         try:
             from src.models.triggers import Trigger
 
@@ -284,6 +326,7 @@ class EventProcessor:
             result = await self._db.execute(
                 select(Trigger).where(
                     Trigger.user_id == user_id,
+                    Trigger.workspace_id == workspace_id,
                     Trigger.enabled.is_(True),
                 )
             )
@@ -326,7 +369,7 @@ class EventProcessor:
                     # Publish trigger fired event
                     if self._event_bus:
                         await self._event_bus.publish(
-                            self._event_bus.event_stream(user_id),
+                            self._event_bus.event_stream(workspace_id),
                             "trigger.fired",
                             {
                                 "trigger_id": trigger.trigger_id,
@@ -336,6 +379,7 @@ class EventProcessor:
                                 "action_config": trigger.action_config,
                             },
                             user_id=user_id,
+                            workspace_id=workspace_id,
                         )
                 else:
                     trigger.last_evaluated_at = now
@@ -410,7 +454,7 @@ class EventProcessor:
 
                 if self._event_bus:
                     await self._event_bus.publish(
-                        self._event_bus.event_stream(user_id),
+                        self._event_bus.event_stream(workspace_id),
                         "initiative.high_priority",
                         {
                             "event_id": event.event_id,
@@ -418,6 +462,7 @@ class EventProcessor:
                             "signals": result.signals,
                         },
                         user_id=user_id,
+                        workspace_id=workspace_id,
                     )
 
             elif result.should_notify and self._notifier:
@@ -564,7 +609,10 @@ class EventProcessor:
         # 1. Batch dedup check
         keys = [make_idempotency_key(r) for r in events]
         existing = await self._db.execute(
-            select(NormalizedEvent.idempotency_key).where(NormalizedEvent.idempotency_key.in_(keys))
+            select(NormalizedEvent.idempotency_key).where(
+                NormalizedEvent.workspace_id == workspace_id,
+                NormalizedEvent.idempotency_key.in_(keys),
+            )
         )
         existing_keys = {row[0] for row in existing.all()}
 
@@ -619,7 +667,10 @@ class EventProcessor:
             if key not in existing_keys:
                 try:
                     result_ = await self._db.execute(
-                        select(NormalizedEvent).where(NormalizedEvent.idempotency_key == key)
+                        select(NormalizedEvent).where(
+                            NormalizedEvent.workspace_id == workspace_id,
+                            NormalizedEvent.idempotency_key == key,
+                        )
                     )
                     ev = result_.scalar_one_or_none()
                     if ev:

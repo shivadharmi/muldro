@@ -3,7 +3,11 @@
 import type { WorkspaceSurface } from "@/stores/surface-store";
 import { StepListCompact } from "@/components/a2ui/components/step-list";
 import { InsightSurface } from "@/components/a2ui/components/insight-surface";
+import { A2UIRenderer } from "@/components/a2ui/renderer";
 import type { InsightData } from "@/lib/a2ui-types";
+import { InlineMarkdown } from "@/components/jarvis/markdown-renderer";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { riskLevelTextColor } from "@/lib/design-tokens";
 
 interface Props {
   surface: WorkspaceSurface;
@@ -11,13 +15,16 @@ interface Props {
 }
 
 const kindLabel: Record<string, string> = {
-  plan: "Plan",
-  approval: "Approval",
+  run: "Run",
+  summary: "Summary",
+  message: "Message",
   briefing: "Briefing",
   alert: "Alert",
-  summary: "Summary",
   recommendation: "Rec",
   proactive_insight: "Insight",
+  // Legacy
+  plan: "Plan",
+  approval: "Approval",
   execution: "Execution",
   checklist: "Checklist",
   comparison: "Compare",
@@ -27,35 +34,35 @@ const kindLabel: Record<string, string> = {
 };
 
 const kindColor: Record<string, string> = {
-  plan: "bg-j-info-soft text-j-info",
-  approval: "bg-j-warning-soft text-j-warning",
+  run: "bg-j-info-soft text-j-info",
+  summary: "bg-j-success-soft text-j-success",
+  message: "bg-j-secondary-soft text-j-secondary",
   briefing: "bg-j-success-soft text-j-success",
   alert: "bg-j-error-soft text-j-error",
-  summary: "bg-surface-3 text-t-secondary",
   recommendation: "bg-j-secondary-soft text-j-secondary",
   proactive_insight: "bg-j-secondary-soft text-j-secondary",
+  // Legacy
+  plan: "bg-j-info-soft text-j-info",
+  approval: "bg-j-warning-soft text-j-warning",
   execution: "bg-j-info-soft text-j-info",
 };
 
-const statusDotColor: Record<string, string> = {
-  pending: "bg-t-muted",
-  running: "bg-j-info animate-pulse-live",
-  completed: "bg-j-success",
-  failed: "bg-j-error",
-  awaiting_approval: "bg-j-warning animate-pulse-live",
-  cancelled: "bg-t-muted",
-  proposal: "bg-j-secondary animate-pulse-live",
+// Maps a live execution phase to the canonical status vocabulary so the
+// StatusBadge reads in the same words across phase-driven and status-driven cards.
+const phaseToStatus: Record<string, string> = {
+  planning: "running",
+  plan_ready: "pending",
+  executing: "executing",
+  approval_needed: "awaiting_approval",
+  completed: "completed",
+  failed: "failed",
+  partial: "completed",
+  proposal: "proposal",
 };
 
-const phaseDotColor: Record<string, string> = {
-  planning: "bg-j-info animate-pulse-live",
-  plan_ready: "bg-j-info",
-  executing: "bg-j-info animate-pulse-live",
-  approval_needed: "bg-j-warning animate-pulse-live",
-  completed: "bg-j-success",
-  failed: "bg-j-error",
-  partial: "bg-j-warning",
-  proposal: "bg-j-secondary animate-pulse-live",
+const phaseLabelOverride: Record<string, string> = {
+  plan_ready: "Plan ready",
+  partial: "Partial",
 };
 
 const priorityBadge: Record<string, string> = {
@@ -72,28 +79,79 @@ const metricVariantClass: Record<string, string> = {
   danger: "text-j-error",
 };
 
+// Cap how many sections are rendered inline on the card so oversized
+// Presenter payloads don't blow out the grid. Full content shows in the modal.
+const MAX_INLINE_SECTIONS = 3;
+
 export function SurfaceCard({ surface, onClick }: Props) {
   const { preview, kind } = surface;
+  const isInsight = kind === "proactive_insight" || kind === "recommendation";
+
+  // Status pill: live phase wins over the stored preview status so the card
+  // tracks execution in real time; both collapse to the canonical vocabulary.
+  const statusValue = surface.phase
+    ? phaseToStatus[surface.phase] ?? null
+    : preview.status;
+  const statusLabelText = surface.phase
+    ? phaseLabelOverride[surface.phase]
+    : undefined;
+
+  // Prefer the explicit last-updated timestamp over the creation timestamp.
+  const footerTimestamp = preview.updated_at ?? preview.timestamp;
+
+  // Evidence micro-line: explicit preview field wins, else the insight payload's.
+  const evidenceText =
+    preview.evidence ?? surface.insight_data?.evidence ?? null;
+
+  // Briefing/checklist bullet preview (cap visible lines, rest as "+N more").
+  const previewItems = preview.items ?? [];
+  const MAX_INLINE_ITEMS = 3;
+  const visibleItems = previewItems.slice(0, MAX_INLINE_ITEMS);
+  const hiddenItemCount = Math.max(0, previewItems.length - MAX_INLINE_ITEMS);
+
+  const inlineSections = (surface.surface_data?.sections ?? []).slice(
+    0,
+    MAX_INLINE_SECTIONS,
+  );
+  const hiddenSectionCount = Math.max(
+    0,
+    (surface.surface_data?.sections?.length ?? 0) - MAX_INLINE_SECTIONS,
+  );
+
+  // The card body renders nested interactive content (A2UIRenderer buttons/forms,
+  // InsightSurface controls), so the clickable root must be a div with a button role —
+  // a real <button> wrapping <button> is invalid DOM (hydration warnings, dropped
+  // clicks). The keydown guard only activates when the card itself is focused, leaving
+  // nested controls to handle their own Enter/Space.
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.target !== e.currentTarget) return;
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      onClick();
+    }
+  };
 
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={handleKeyDown}
       className="w-full text-left rounded-[var(--radius-lg)] border border-b-secondary bg-surface-1 p-4 surface-card cursor-pointer group"
     >
-      {/* Header: kind badge + priority */}
+      {/* Header: kind badge + status pill + priority */}
       <div className="flex items-center gap-2 mb-2.5">
         <span className={`text-[10px] font-medium px-2 py-0.5 rounded-[var(--radius-sm)] ${kindColor[kind] ?? "bg-surface-3 text-t-secondary"}`}>
           {kindLabel[kind] ?? kind}
         </span>
-        {(surface.phase || preview.status) && (
-          <span
-            className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-              surface.phase
-                ? phaseDotColor[surface.phase] ?? "bg-t-muted"
-                : statusDotColor[preview.status!] ?? "bg-t-muted"
-            }`}
-          />
+        {/* Insight/proposal cards always read as a "Proposal" pill; alerts as
+            "Failed". Otherwise derive the canonical status from phase-or-status. */}
+        {isInsight && <StatusBadge status="proposal" />}
+        {!isInsight && kind === "alert" && !statusValue && (
+          <StatusBadge status="failed" />
+        )}
+        {!isInsight && statusValue && (
+          <StatusBadge status={statusValue} label={statusLabelText} />
         )}
         <div className="flex-1" />
         {preview.priority && (
@@ -107,14 +165,57 @@ export function SurfaceCard({ surface, onClick }: Props) {
 
       {/* Title */}
       <h3 className="text-[13px] font-medium text-t-primary line-clamp-2 mb-1 leading-snug">
-        {preview.title}
+        <InlineMarkdown content={preview.title} />
       </h3>
 
       {/* Subtitle */}
       {preview.subtitle && (
         <p className="text-xs text-t-tertiary line-clamp-2 mb-2.5 leading-relaxed">
-          {preview.subtitle}
+          <InlineMarkdown content={preview.subtitle} />
         </p>
+      )}
+
+      {/* Risk + state flags (approval / alert cards) */}
+      {(preview.risk || (preview.flags?.length ?? 0) > 0) && (
+        <div className="flex flex-wrap items-center gap-1.5 mb-2.5">
+          {preview.risk && (
+            <span
+              className={`text-[10px] font-semibold tracking-wide uppercase px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-surface-2 ${riskLevelTextColor(preview.risk)}`}
+            >
+              {preview.risk} risk
+            </span>
+          )}
+          {preview.flags?.map((f) => (
+            <span
+              key={f}
+              className="text-[10px] px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-surface-2 text-t-muted"
+            >
+              {f}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Briefing/checklist item bullets */}
+      {visibleItems.length > 0 && (
+        <ul className="mb-2.5 space-y-1">
+          {visibleItems.map((it, i) => (
+            <li
+              key={i}
+              className="flex gap-1.5 text-[11px] text-t-secondary leading-snug"
+            >
+              <span className="text-t-muted shrink-0" aria-hidden="true">
+                ·
+              </span>
+              <span className="line-clamp-1">{it}</span>
+            </li>
+          ))}
+          {hiddenItemCount > 0 && (
+            <li className="text-[10px] text-t-muted pl-3">
+              +{hiddenItemCount} more
+            </li>
+          )}
+        </ul>
       )}
 
       {/* Insight surface content */}
@@ -125,6 +226,13 @@ export function SurfaceCard({ surface, onClick }: Props) {
             insightData={surface.insight_data as unknown as InsightData}
           />
         </div>
+      )}
+
+      {/* Evidence micro-line (why-this-matters) */}
+      {evidenceText && (
+        <p className="text-[10px] text-t-muted mb-2.5 leading-snug">
+          {evidenceText}
+        </p>
       )}
 
       {/* Execution step count */}
@@ -141,6 +249,22 @@ export function SurfaceCard({ surface, onClick }: Props) {
             className="h-full bg-j-primary rounded-full transition-all duration-300"
             style={{ width: `${Math.min(preview.progress * 100, 100)}%` }}
           />
+        </div>
+      )}
+
+      {/* Token / cost attribution (execution cards) */}
+      {(preview.tokens != null || preview.cost_usd != null) && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mb-2.5">
+          {preview.tokens != null && (
+            <span className="text-[11px] font-mono tabular-nums text-t-secondary">
+              {preview.tokens.toLocaleString()} tok
+            </span>
+          )}
+          {preview.cost_usd != null && (
+            <span className="text-[11px] font-mono tabular-nums text-j-success">
+              ${preview.cost_usd.toFixed(3)}
+            </span>
+          )}
         </div>
       )}
 
@@ -191,11 +315,34 @@ export function SurfaceCard({ surface, onClick }: Props) {
         </div>
       )}
 
+      {/* Inline surface_data preview — first few typed A2UI sections.
+          Clicks bubble to the card's open-modal handler; any action fired
+          by a nested interactive component routes to the modal so the full
+          view is shown rather than executing the action from a preview. */}
+      {inlineSections.length > 0 && (
+        <div className="mb-2.5 max-h-[280px] overflow-hidden rounded-[var(--radius-md)] border border-b-secondary/60 bg-surface-2/40 p-2.5">
+          <A2UIRenderer
+            surface={{
+              type: "surface",
+              id: `card-${surface.id}`,
+              children: inlineSections,
+              metadata: {},
+            }}
+            onAction={() => onClick()}
+          />
+          {hiddenSectionCount > 0 && (
+            <p className="mt-1.5 text-[10px] text-t-muted">
+              +{hiddenSectionCount} more section{hiddenSectionCount === 1 ? "" : "s"} — click to expand
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Footer: timestamp + arrow */}
       <div className="flex items-center justify-between mt-1 pt-2 border-t border-b-secondary">
-        {preview.timestamp ? (
+        {footerTimestamp ? (
           <span className="text-[10px] text-t-muted">
-            {formatRelativeTime(preview.timestamp)}
+            {formatRelativeTime(footerTimestamp)}
           </span>
         ) : <span />}
         <svg
@@ -214,7 +361,7 @@ export function SurfaceCard({ surface, onClick }: Props) {
           />
         </svg>
       </div>
-    </button>
+    </div>
   );
 }
 

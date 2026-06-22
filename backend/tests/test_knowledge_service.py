@@ -348,6 +348,71 @@ async def test_get_memories_paginated_clamps_params():
     assert result["pages"] == 1  # min 1
 
 
+async def test_get_memories_paginated_resolves_sources_batched():
+    """List items carry source slugs resolved from events in ONE batched query."""
+    from src.services.knowledge_service import KnowledgeService
+
+    mem1 = _make_memory(
+        memory_id="mem_001",
+        entity_ids=None,
+        source_event_ids=["evt_001"],
+    )
+    mem2 = _make_memory(
+        memory_id="mem_002",
+        entity_ids=None,
+        source_event_ids={"slack": "evt_002", "notion": "evt_003"},
+    )
+
+    src_row1 = MagicMock(event_id="evt_001", source="gmail")
+    src_row2 = MagicMock(event_id="evt_002", source="slack")
+    src_row3 = MagicMock(event_id="evt_003", source="notion")
+
+    # Neither memory has entity_ids, so the entity-name query short-circuits
+    # (no DB call). DB calls: count, memories, event-source resolution.
+    db = _mock_db_execute(
+        [
+            2,  # total count
+            [mem1, mem2],  # memories
+            [src_row1, src_row2, src_row3],  # event sources (ONE batched query)
+        ]
+    )
+
+    graph_engine = _make_graph_engine()
+    svc = KnowledgeService(make_mock_settings(), db, graph_engine)
+    result = await svc.get_memories_paginated(TEST_USER_ID, TEST_WORKSPACE_ID)
+
+    by_id = {item["memory_id"]: item for item in result["items"]}
+    assert by_id["mem_001"]["sources"] == ["gmail"]
+    assert by_id["mem_002"]["sources"] == ["slack", "notion"]
+    # Exactly one event-source query for the whole page (no N+1):
+    # count + memories + single batched event-source query.
+    assert db.execute.await_count == 3
+
+
+async def test_get_memories_paginated_sources_empty_when_no_events():
+    """Memories with no provenance yield empty sources and skip the event query."""
+    from src.services.knowledge_service import KnowledgeService
+
+    mem = _make_memory(memory_id="mem_001", entity_ids=None, source_event_ids=None)
+
+    # No entity_ids and no event IDs across the page -> neither the entity-name
+    # nor the event-source query is issued.
+    db = _mock_db_execute(
+        [
+            1,  # total count
+            [mem],  # memories
+        ]
+    )
+
+    graph_engine = _make_graph_engine()
+    svc = KnowledgeService(make_mock_settings(), db, graph_engine)
+    result = await svc.get_memories_paginated(TEST_USER_ID, TEST_WORKSPACE_ID)
+
+    assert result["items"][0]["sources"] == []
+    # count + memories only — no entity-name and no event-source query.
+    assert db.execute.await_count == 2
+
+
 # ── Tests: get_memory_detail ────────────────────────────────────────────
 
 
@@ -738,3 +803,107 @@ async def test_async_context_manager():
         assert isinstance(svc, KnowledgeService)
 
     graph_engine.close.assert_awaited_once()
+
+
+# ── Tests: get_knowledge_cards ──────────────────────────────────────────
+
+
+async def test_knowledge_cards_label_derivation():
+    """_derive_label truncates fact_text to first sentence within length cap."""
+    from src.services.knowledge_service import _derive_label
+
+    assert _derive_label("Alice is CFO. She joined in 2024.") == "Alice is CFO"
+    assert _derive_label("") == "Untitled"
+    assert _derive_label(None) == "Untitled"
+    long = "x" * 80
+    out = _derive_label(long)
+    assert len(out) <= 48
+    assert out.endswith("…")
+
+
+async def test_knowledge_cards_entity_kind_mapping():
+    """Entity person -> person, project/initiative -> project; others excluded."""
+    from src.services.knowledge_service import KnowledgeService
+
+    person = _make_entity(entity_id="ent_p", entity_type="person", canonical_name="Alice")
+    person.source_refs = [{"source": "gmail"}, {"source": "slack"}]
+    person.attributes = {"role": "CFO"}
+    project = _make_entity(entity_id="ent_pr", entity_type="project", canonical_name="Apollo")
+    project.source_refs = None
+    project.attributes = {}
+
+    graph_engine = _make_graph_engine()
+    # DB calls: entity query, memory query (empty)
+    db = _mock_db_execute([[person, project], []])
+
+    svc = KnowledgeService(make_mock_settings(), db, graph_engine)
+    cards = await svc.get_knowledge_cards(TEST_USER_ID, TEST_WORKSPACE_ID, limit=50)
+
+    by_id = {c["id"]: c for c in cards}
+    assert by_id["ent_p"]["kind"] == "person"
+    assert by_id["ent_p"]["label"] == "Alice"
+    assert by_id["ent_p"]["desc"] == "CFO"
+    assert by_id["ent_p"]["sources"] == ["gmail", "slack"]
+    assert by_id["ent_pr"]["kind"] == "project"
+    # No source_refs -> empty sources, desc falls back to entity_type
+    assert by_id["ent_pr"]["sources"] == []
+    assert by_id["ent_pr"]["desc"] == "project"
+
+
+async def test_knowledge_cards_memory_kind_and_sources():
+    """preference -> preference, semantic/relationship -> fact; sources resolved (batched)."""
+    from src.services.knowledge_service import KnowledgeService
+
+    pref = _make_memory(
+        memory_id="mem_pref",
+        memory_type="preference",
+        fact_text="Prefers concise morning briefings",
+        source_event_ids=["evt_001"],
+    )
+    fact = _make_memory(
+        memory_id="mem_fact",
+        memory_type="semantic",
+        fact_text="Acme raised a Series B. Led by Sequoia.",
+        source_event_ids=["evt_002", "evt_999_missing"],
+    )
+
+    ev1 = _make_event(event_id="evt_001", source="slack")
+    ev2 = _make_event(event_id="evt_002", source="notion")
+
+    graph_engine = _make_graph_engine()
+    # DB calls: entity query (empty), memory query, event-source resolution
+    db = _mock_db_execute([[], [pref, fact], [ev1, ev2]])
+
+    svc = KnowledgeService(make_mock_settings(), db, graph_engine)
+    cards = await svc.get_knowledge_cards(TEST_USER_ID, TEST_WORKSPACE_ID, limit=50)
+
+    by_id = {c["id"]: c for c in cards}
+    assert by_id["mem_pref"]["kind"] == "preference"
+    assert by_id["mem_pref"]["sources"] == ["slack"]
+    assert by_id["mem_fact"]["kind"] == "fact"
+    assert by_id["mem_fact"]["label"] == "Acme raised a Series B"
+    assert by_id["mem_fact"]["desc"] == "Acme raised a Series B. Led by Sequoia."
+    # Missing event resolves to nothing -> only the resolvable source remains
+    assert by_id["mem_fact"]["sources"] == ["notion"]
+
+
+async def test_knowledge_cards_unresolvable_sources_empty():
+    """Memory with no resolvable events yields empty sources rather than failing."""
+    from src.services.knowledge_service import KnowledgeService
+
+    fact = _make_memory(
+        memory_id="mem_x",
+        memory_type="relationship",
+        fact_text="Bob reports to Alice",
+        source_event_ids=None,
+    )
+    graph_engine = _make_graph_engine()
+    # DB calls: entity query (empty), memory query. No event query (no IDs).
+    db = _mock_db_execute([[], [fact]])
+
+    svc = KnowledgeService(make_mock_settings(), db, graph_engine)
+    cards = await svc.get_knowledge_cards(TEST_USER_ID, TEST_WORKSPACE_ID, limit=50)
+
+    assert len(cards) == 1
+    assert cards[0]["kind"] == "fact"
+    assert cards[0]["sources"] == []

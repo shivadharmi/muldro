@@ -4,9 +4,24 @@ import logging
 from datetime import datetime, timezone
 
 from src.connectors.base import BaseConnector, ConnectorHealth, register_connector
+from src.connectors.poll_result import PollResult, _classify_http_status
 from src.services.event_processor import RawEvent
 
 logger = logging.getLogger(__name__)
+
+# Max pages of messages.list to walk during an initial full sync. Bounds the
+# backfill so a brand-new connection cannot fan out unboundedly; when the bound
+# truncates, we log a warning so silent data loss is visible.
+MAX_BACKFILL_PAGES = 4
+
+# Max pages of history.list to walk during an incremental sync. Active mailboxes
+# can legitimately span many history pages, so this is set generous (much larger
+# than MAX_BACKFILL_PAGES) — it should never truncate a realistic mailbox. It is
+# purely a defensive cap: a buggy/abusive provider that always returns a
+# nextPageToken would otherwise loop forever (with N per-message detail GETs per
+# iteration). On hitting the cap we warn and advance the cursor to the last
+# fetched historyId, so the next poll resumes from there.
+MAX_HISTORY_PAGES = 50
 
 
 @register_connector("gmail")
@@ -24,34 +39,61 @@ class GmailConnector(BaseConnector):
         "mark_read",
     ]
 
-    async def poll(
-        self, user_id: str, cursor: str | None, credentials: dict
-    ) -> tuple[list[RawEvent], str | None]:
+    async def poll(self, user_id: str, cursor: str | None, credentials: dict) -> PollResult:
         """Poll Gmail for new messages since historyId cursor."""
         import httpx
 
         access_token = credentials.get("access_token", "")
         if not access_token:
             logger.warning("No access token for Gmail polling, user=%s", user_id)
-            return [], cursor
+            return PollResult(events=[], cursor=cursor, error_class="auth_failed")
 
-        events = []
+        events: list[RawEvent] = []
         seen_msg_ids: set[str] = set()
         new_cursor = cursor
 
         try:
             async with httpx.AsyncClient() as client:
                 if cursor:
-                    # Incremental: use history API
-                    resp = await client.get(
-                        "https://gmail.googleapis.com/gmail/v1/users/me/history",
-                        params={"startHistoryId": cursor, "historyTypes": "messageAdded"},
-                        headers={"Authorization": f"Bearer {access_token}"},
-                        timeout=15,
-                    )
-                    if resp.status_code == 200:
+                    # Incremental: use history API. Walk every page of nextPageToken
+                    # before advancing the cursor — page 2+ messagesAdded would be lost
+                    # forever otherwise (cursor jumps past data never fetched).
+                    final_history_id = cursor
+                    page_token: str | None = None
+                    pages_fetched = 0
+                    truncated = False
+                    while True:
+                        params = {
+                            "startHistoryId": cursor,
+                            "historyTypes": "messageAdded",
+                        }
+                        if page_token:
+                            params["pageToken"] = page_token
+                        resp = await client.get(
+                            "https://gmail.googleapis.com/gmail/v1/users/me/history",
+                            params=params,
+                            headers={"Authorization": f"Bearer {access_token}"},
+                            timeout=15,
+                        )
+                        if resp.status_code == 404:
+                            # historyId expired — recurse into full sync (cursor=None).
+                            # Mirrors calendar.py's 410 syncToken handling. The full-sync
+                            # path uses different endpoints (messages.list + profile, not
+                            # history.list), so this single re-entry cannot itself 404
+                            # here and recurse forever.
+                            return await self.poll(user_id, None, credentials)
+                        if resp.status_code != 200:
+                            error_class = _classify_http_status(resp.status_code)
+                            logger.warning(
+                                "Gmail history API returned %d for user %s",
+                                resp.status_code,
+                                user_id,
+                            )
+                            # Return unchanged incoming cursor on failure
+                            return PollResult(events=[], cursor=cursor, error_class=error_class)
+
                         data = resp.json()
-                        new_cursor = data.get("historyId", cursor)
+                        final_history_id = data.get("historyId", final_history_id)
                         for history in data.get("history", []):
                             for msg_added in history.get("messagesAdded", []):
                                 msg_id = msg_added["message"]["id"]
@@ -63,18 +105,56 @@ class GmailConnector(BaseConnector):
                                 )
                                 if event:
                                     events.append(event)
-                    elif resp.status_code == 404:
-                        # History expired, do full sync
-                        cursor = None
+
+                        pages_fetched += 1
+                        page_token = data.get("nextPageToken")
+                        if not page_token:
+                            break
+                        if pages_fetched >= MAX_HISTORY_PAGES:
+                            truncated = True
+                            break
+
+                    if truncated:
+                        logger.warning(
+                            "Gmail incremental sync truncated at %d pages for user %s; "
+                            "remaining history was not drained this poll — next poll "
+                            "resumes from historyId %s",
+                            MAX_HISTORY_PAGES,
+                            user_id,
+                            final_history_id,
+                        )
+
+                    # Only advance the cursor after all pages were consumed (or the
+                    # defensive page cap was hit). Advancing to the last fetched
+                    # historyId on truncation is consistent with normal completion;
+                    # the warning above surfaces that we may not have drained
+                    # everything, and the next poll continues from here.
+                    new_cursor = final_history_id
                 else:
-                    # Initial: list recent messages
-                    resp = await client.get(
-                        "https://gmail.googleapis.com/gmail/v1/users/me/messages",
-                        params={"maxResults": 25, "q": "is:inbox newer_than:3d"},
-                        headers={"Authorization": f"Bearer {access_token}"},
-                        timeout=15,
-                    )
-                    if resp.status_code == 200:
+                    # Initial: list recent messages, following nextPageToken up to a
+                    # bounded number of pages so the first sync cannot fan out forever.
+                    page_token: str | None = None
+                    pages_fetched = 0
+                    truncated = False
+                    while True:
+                        params = {"maxResults": 25, "q": "is:inbox newer_than:3d"}
+                        if page_token:
+                            params["pageToken"] = page_token
+                        resp = await client.get(
+                            "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+                            params=params,
+                            headers={"Authorization": f"Bearer {access_token}"},
+                            timeout=15,
+                        )
+                        if resp.status_code != 200:
+                            error_class = _classify_http_status(resp.status_code)
+                            logger.warning(
+                                "Gmail messages API returned %d for user %s",
+                                resp.status_code,
+                                user_id,
+                            )
+                            return PollResult(events=[], cursor=cursor, error_class=error_class)
+
                         data = resp.json()
                         for msg_meta in data.get("messages", []):
                             msg_id = msg_meta["id"]
@@ -87,7 +167,26 @@ class GmailConnector(BaseConnector):
                             if event:
                                 events.append(event)
 
-                    # Get current historyId for future incremental polling
+                        pages_fetched += 1
+                        page_token = data.get("nextPageToken")
+                        if not page_token:
+                            break
+                        if pages_fetched >= MAX_BACKFILL_PAGES:
+                            truncated = True
+                            break
+
+                    if truncated:
+                        logger.warning(
+                            "Gmail initial sync truncated at %d pages for user %s; "
+                            "older inbox messages were not backfilled",
+                            MAX_BACKFILL_PAGES,
+                            user_id,
+                        )
+
+                    # Get current historyId for future incremental polling.
+                    # A profile failure here leaves new_cursor unusable (None/stale),
+                    # so the poll is a transient failure — NOT a success with a null
+                    # cursor (which would re-trigger a full sync every poll).
                     profile = await client.get(
                         "https://gmail.googleapis.com/gmail/v1/users/me/profile",
                         headers={"Authorization": f"Bearer {access_token}"},
@@ -95,12 +194,21 @@ class GmailConnector(BaseConnector):
                     )
                     if profile.status_code == 200:
                         new_cursor = profile.json().get("historyId")
+                    else:
+                        logger.warning(
+                            "Gmail profile API returned %d for user %s after list; "
+                            "treating poll as transient",
+                            profile.status_code,
+                            user_id,
+                        )
+                        return PollResult(events=events, cursor=cursor, error_class="transient")
 
         except Exception:
             logger.warning("Gmail poll failed for user %s", user_id, exc_info=True)
+            return PollResult(events=[], cursor=cursor, error_class="transient")
 
         logger.info("Gmail poll: %d events, cursor %s -> %s", len(events), cursor, new_cursor)
-        return events, new_cursor
+        return PollResult(events=events, cursor=new_cursor)
 
     async def test(self, credentials: dict) -> ConnectorHealth:
         """Test Gmail connection."""

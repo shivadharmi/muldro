@@ -32,7 +32,7 @@ async def test_summarize_history_returns_summary():
         )
 
         lines = ["User: Hello", "Assistant: Hi there", "User: What's up?"]
-        summary = await orch._summarize_history(lines, conversation_id="conv_test123")
+        summary = await orch._context._summarize_history(lines, conversation_id="conv_test123")
 
         assert summary == "Summary of conversation."
 
@@ -57,6 +57,6 @@ async def test_summarize_history_without_conversation_id():
         )
 
         lines = ["User: Hello"]
-        summary = await orch._summarize_history(lines)
+        summary = await orch._context._summarize_history(lines)
 
         assert summary == "Summary."

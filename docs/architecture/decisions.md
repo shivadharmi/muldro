@@ -126,16 +126,37 @@
 
 **Trade-off:** Null checks required at call sites. Mitigated by consistent `if service is not None` patterns.
 
-## 10. Long-Lived DB Sessions for Services
+## 10. Per-Request DB Sessions for Services (supersedes "long-lived sessions")
 
-**Decision:** Services use long-lived database sessions (created once at orchestrator init) rather than per-request sessions.
+**Decision:** The API orchestrator holds only **session-free** singletons
+(`build_shared`); every **DB-bound** service is built per request against a
+fresh `AsyncSession` (`attach_session` / `request_services`). Background
+single-flow callers (scheduler, OAuth-callback tasks) may still pass a full
+container built with one session via `build()`.
+
+**History:** This reverses the original "long-lived DB sessions" decision. A
+single process-wide orchestrator (cached in `routes_chat`) shared one
+`AsyncSession` across every service. An `AsyncSession` is **not safe for
+concurrent use**, so two simultaneous chat requests touching a shared service
+(e.g. `memory_service`, `world_model`) could collide ("another operation is in
+progress") or interleave transactions. Several sites also mixed a fresh
+request session with stale long-lived-session services in the same logical
+operation.
 
 **Rationale:**
-- **Avoids rapid session churn** - Agents make many DB calls per orchestrator cycle
-- **Connection pool efficiency** - Fewer connection acquisitions
-- **Transaction grouping** - Related operations share a session
+- **Concurrency safety** - each request owns its session; none is shared.
+- **Transaction consistency** - one operation uses exactly one session.
+- **No churn for shared resources** - the Redis client, vector store, graph
+  engine, reranker, and OAuth manager remain process-wide singletons reused by
+  identity; only the cheap DB-bound service objects are rebuilt per request.
 
-**Trade-off:** Risk of stale connections. Mitigated by SQLAlchemy's connection pool with health checks and the startup recovery ensuring clean state.
+**Mechanism:** `build_shared(settings)` builds the singletons once;
+`request_services(base, settings, db)` reuses an already-wired container (tests
+/ single-flow) or calls `attach_session(base, settings, db)` for the shared
+container. Each caller exposes a thin `_request_services(db)` bridge.
+
+**Trade-off:** Per-request service construction, but these are lightweight
+wrappers over the shared singletons — negligible next to a Claude API call.
 
 ## 11. Claude Structured Output with Text Fallback
 
@@ -164,7 +185,7 @@
 
 ## 13. Full Workspace Isolation
 
-**Decision:** All 51 data tables are scoped by `workspace_id` (NOT NULL FK). Two resolution paths: API (session-based, zero queries) vs background (DB lookup via WorkspaceMember). Enables future multi-workspace support.
+**Decision:** All data tables are scoped by `workspace_id` (NOT NULL FK). Two resolution paths: API (session-based, zero queries) vs background (DB lookup via WorkspaceMember). Enables future multi-workspace support.
 
 **Rationale:**
 - **Security** - Data isolation is enforced at the schema level, not application logic
@@ -220,7 +241,7 @@
 - **Thinking visibility** - Opus thinking tokens are a major cost driver that was previously invisible
 - **Per-agent attribution** - Know which agents consume the most budget (Planner/Opus vs Persona/Haiku)
 
-**Trade-off:** Slightly more complex cost calculation. Mitigated by centralizing all cost logic in `BudgetTracker.calculate_cost()` with comprehensive tests (13 budget tests).
+**Trade-off:** Slightly more complex cost calculation. Mitigated by centralizing all cost logic in `BudgetTracker.calculate_cost()` with comprehensive tests.
 
 ## 18. Capability-Based Routing
 

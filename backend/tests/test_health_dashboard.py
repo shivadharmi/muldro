@@ -67,3 +67,52 @@ class TestHealthDashboard:
         result = await system_dashboard(user_id=TEST_USER_ID)
         assert result.budget["budget_mode"] == "paused"
         assert result.queues["plans_in_flight"] == 3
+
+
+class TestAgentInfoTokenAggregation:
+    """ORCH-P2-1: per-agent token totals must NOT double-count per-tool
+    attribution rows (trigger='tool:*'), which are a breakdown of the
+    authoritative loop-level row.
+    """
+
+    async def test_get_agent_info_excludes_per_tool_breakdown_rows(self):
+        from unittest.mock import MagicMock
+
+        from src.api.routes_health import _get_agent_info
+
+        captured = {}
+
+        class FakeDB:
+            async def execute(self, stmt):
+                captured["stmt"] = stmt
+                result = MagicMock()
+                result.all.return_value = []
+                return result
+
+        class FakeCM:
+            async def __aenter__(self):
+                return FakeDB()
+
+            async def __aexit__(self, *args):
+                return False
+
+        class FakeFactory:
+            def __call__(self):
+                return FakeCM()
+
+        with patch(
+            "src.models.database.get_session_factory",
+            return_value=FakeFactory(),
+        ):
+            await _get_agent_info("ws_test")
+
+        assert "stmt" in captured, "query was never executed"
+        sql = str(captured["stmt"].compile(compile_kwargs={"literal_binds": True}))
+        # The per-tool breakdown rows must be filtered out of the aggregate so a
+        # SUM over input/output tokens (and the call count) is not doubled.
+        # Assert the full rendered predicate (column + negation + pattern) so the
+        # test cannot pass on a wrong-but-similar filter (wrong column, or a
+        # non-negated LIKE).
+        assert "token_usage.trigger not like 'tool:%'" in sql.lower(), (
+            f"aggregate does not exclude tool:* breakdown rows on the trigger column: {sql}"
+        )

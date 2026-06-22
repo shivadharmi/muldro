@@ -63,6 +63,11 @@ def make_mock_settings(**overrides) -> MagicMock:
         event_processor_concurrency=5,
         max_perception_per_tick=5,
         webhook_lag_threshold=5000,
+        db_idle_in_transaction_timeout_ms=60_000,
+        db_statement_timeout_ms=120_000,
+        scheduler_subtick_timeout_s=90.0,
+        resume_reaper_stale_after_s=300.0,
+        resume_reaper_max_attempts=5,
     )
     defaults.update(overrides)
     for k, v in defaults.items():
@@ -97,3 +102,25 @@ def pytest_pyfunc_call(pyfuncitem):
     }
     asyncio.run(test_fn(**kwargs))
     return True
+
+
+def iter_app_routes(routes, _prefix=""):
+    """Yield ``(full_path, route)`` for every leaf route, recursing into
+    included routers / mounts.
+
+    Newer Starlette/FastAPI no longer flatten ``include_router`` into
+    ``app.routes`` — they leave Mount-style wrapper objects (e.g.
+    ``_IncludedRouter``) that carry the prefix and hold the real routes under
+    ``.routes`` with prefix-relative paths. Accumulating the wrapper prefix
+    reconstructs the full path in BOTH the flattened (older) and wrapped (newer)
+    representations, so route-introspection tests survive the version change.
+    """
+    for r in routes:
+        sub = getattr(r, "routes", None)
+        if sub:
+            wrapper_prefix = getattr(r, "path", "") or getattr(r, "prefix", "") or ""
+            yield from iter_app_routes(sub, _prefix + wrapper_prefix)
+            continue
+        path = getattr(r, "path", None)
+        if path is not None:
+            yield _prefix + path, r

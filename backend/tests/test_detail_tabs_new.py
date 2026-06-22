@@ -265,12 +265,13 @@ class TestRecommendationEvidence:
 
 
 class TestRegistryComplete:
-    def test_tab_builders_has_30_entries(self):
+    def test_tab_builders_has_40_entries(self):
         from src.services.surface_detail_builders import TAB_BUILDERS
 
-        assert len(TAB_BUILDERS) == 30
+        # 38 original + ("run","approval") + ("summary","approval") (A2UI Phase 1).
+        assert len(TAB_BUILDERS) == 40
 
-    def test_all_12_kinds_covered(self):
+    def test_all_13_kinds_covered(self):
         from src.services.surface_detail_builders import TAB_BUILDERS
 
         kinds = {k for k, _ in TAB_BUILDERS.keys()}
@@ -287,6 +288,7 @@ class TestRegistryComplete:
             "table",
             "activity",
             "proactive_insight",
+            "run",
         }
         assert kinds == expected
 
@@ -295,3 +297,62 @@ class TestRegistryComplete:
 
         for key, builder in TAB_BUILDERS.items():
             assert callable(builder), f"Builder for {key} is not callable"
+
+    def test_registry_exact_snapshot(self):
+        """Pin the exact (kind, tab_id) -> builder-name mapping.
+
+        Characterization snapshot for the package split (SVC-P2-2a): the
+        facade-assembled TAB_BUILDERS must map the identical keys to the
+        identically-named async builders, regardless of which submodule each
+        now lives in.
+        """
+        import inspect
+
+        from src.services.surface_detail_builders import TAB_BUILDERS
+
+        expected = {
+            ("run", "steps"): "build_run_steps_tab",
+            ("run", "plan"): "build_run_plan_tab",
+            ("run", "events"): "build_run_events_tab",
+            ("run", "trace"): "build_run_trace_tab",
+            ("run", "approval"): "build_run_approval_tab",
+            ("summary", "steps"): "build_run_steps_tab",
+            ("summary", "plan"): "build_run_plan_tab",
+            ("summary", "events"): "build_run_events_tab",
+            ("summary", "trace"): "build_run_trace_tab",
+            ("summary", "approval"): "build_run_approval_tab",
+            ("plan", "overview"): "build_plan_overview",
+            ("plan", "context"): "build_plan_context",
+            ("plan", "execution"): "build_plan_execution",
+            ("summary", "overview"): "build_summary_overview",
+            ("summary", "sources"): "build_summary_sources",
+            ("summary", "context"): "build_summary_context",
+            ("briefing", "priorities"): "build_briefing_priorities",
+            ("briefing", "events"): "build_briefing_events",
+            ("briefing", "actions"): "build_briefing_actions",
+            ("approval", "request"): "build_approval_request",
+            ("approval", "risk"): "build_approval_risk",
+            ("approval", "history"): "build_approval_history",
+            ("recommendation", "overview"): "build_recommendation_overview",
+            ("recommendation", "evidence"): "build_recommendation_evidence",
+            ("recommendation", "context"): "build_recommendation_context",
+            ("alert", "overview"): "build_alert_overview",
+            ("alert", "diagnostics"): "build_alert_diagnostics",
+            ("checklist", "items"): "build_checklist_items",
+            ("checklist", "context"): "build_checklist_context",
+            ("comparison", "options"): "build_comparison_options",
+            ("comparison", "criteria"): "build_comparison_criteria",
+            ("timeline", "events"): "build_timeline_events",
+            ("timeline", "context"): "build_timeline_context",
+            ("table", "data"): "build_table_data",
+            ("table", "sources"): "build_table_sources",
+            ("activity", "runs"): "build_activity_runs",
+            ("activity", "stats"): "build_activity_stats",
+            ("proactive_insight", "signal"): "build_insight_signal",
+            ("proactive_insight", "actions"): "build_insight_actions",
+            ("proactive_insight", "context"): "build_insight_context",
+        }
+        actual = {key: builder.__name__ for key, builder in TAB_BUILDERS.items()}
+        assert actual == expected
+        for key, builder in TAB_BUILDERS.items():
+            assert inspect.iscoroutinefunction(builder), f"{key} builder is not async"

@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
-from src.models.tool_definitions import ToolDefinition
+from src.models.tool_definitions import ToolBackend, ToolDefinition
 from src.tools.catalog import EXTERNAL_TOOL_SEEDS, INTERNAL_TOOLS
 
 logger = logging.getLogger(__name__)
@@ -66,7 +66,10 @@ class ToolRegistry:
                 continue
             seen.add(name)
 
-            backend = "internal_mcp"
+            # _special-server tools (report_governor_verdict) are inline-dispatched,
+            # not MCP calls — model that as a distinct backend so dispatch can match on
+            # it directly (mirrors the "_composite" server → "composite" backend below).
+            backend = ToolBackend.SPECIAL if tool.server == "_special" else ToolBackend.INTERNAL_MCP
             source = "internal"
             server = tool.server
             capability = tool.capability
@@ -74,6 +77,7 @@ class ToolRegistry:
             approval = tool.requires_approval
             verified = True  # Internal tools are always verified
             input_schema = _schema_for_claude(tool.input_model)
+            description = tool.description
 
             if name not in existing:
                 new_tool = ToolDefinition(
@@ -89,6 +93,7 @@ class ToolRegistry:
                     capability=capability,
                     verified=verified,
                     input_schema=input_schema,
+                    description=description,
                     enabled=True,
                 )
                 self._db.add(new_tool)
@@ -123,6 +128,9 @@ class ToolRegistry:
             if tool_def.input_schema != input_schema:
                 tool_def.input_schema = input_schema
                 needs_update = True
+            if tool_def.description != description:
+                tool_def.description = description
+                needs_update = True
 
             if needs_update:
                 changed += 1
@@ -134,7 +142,9 @@ class ToolRegistry:
                 continue
             seen.add(name)
 
-            backend = "composite" if seed.server == "_composite" else "external_mcp"
+            backend = (
+                ToolBackend.COMPOSITE if seed.server == "_composite" else ToolBackend.EXTERNAL_MCP
+            )
             source = "seed"
             server = seed.server
             capability = seed.capability
@@ -196,54 +206,6 @@ class ToolRegistry:
             logger.info("Seeded/updated %d tool definitions", changed)
         return changed
 
-    async def register_tool(
-        self,
-        name: str,
-        risk_level: str = "low",
-        requires_approval: bool = False,
-        connector_type: str | None = None,
-        description: str | None = None,
-        input_schema: dict | None = None,
-        output_schema: dict | None = None,
-        timeout_seconds: int = 30,
-        idempotent: bool = False,
-        workspace_id: str = "",
-    ) -> ToolDefinition:
-        # Scope lookup by workspace to avoid MultipleResultsFound
-        stmt = select(ToolDefinition).where(ToolDefinition.name == name)
-        if workspace_id:
-            stmt = stmt.where(ToolDefinition.workspace_id == workspace_id)
-        else:
-            stmt = stmt.where(ToolDefinition.workspace_id.is_(None))
-        existing = await self._db.execute(stmt)
-        tool = existing.scalar_one_or_none()
-        if tool:
-            tool.risk_level = risk_level
-            tool.requires_approval = requires_approval
-            tool.connector_type = connector_type
-            if description:
-                tool.description = description
-            await self._db.flush()
-            return tool
-
-        tool = ToolDefinition(
-            tool_id=f"tool_{ULID()}",
-            workspace_id=workspace_id,
-            name=name,
-            risk_level=risk_level,
-            requires_approval=requires_approval,
-            connector_type=connector_type,
-            description=description,
-            input_schema=input_schema,
-            output_schema=output_schema,
-            timeout_seconds=timeout_seconds,
-            idempotent=idempotent,
-        )
-        self._db.add(tool)
-        await self._db.flush()
-        self._cache[name] = tool
-        return tool
-
     async def get_tool(self, name: str) -> ToolDefinition | None:
         if name in self._cache:
             return self._cache[name]
@@ -280,24 +242,6 @@ class ToolRegistry:
         stmt = stmt.order_by(ToolDefinition.name)
         result = await self._db.execute(stmt)
         return list(result.scalars().all())
-
-    async def is_write_tool(self, name: str) -> bool:
-        tool = await self.get_tool(name)
-        if not tool:
-            return False
-        return tool.requires_approval
-
-    async def is_blocked_tool(self, name: str) -> bool:
-        tool = await self.get_tool(name)
-        if not tool:
-            return False
-        return not tool.enabled
-
-    async def classify_risk(self, name: str) -> str:
-        tool = await self.get_tool(name)
-        if not tool:
-            return "low"
-        return tool.risk_level
 
     async def list_for_task_type(self, task_type: str) -> list[ToolDefinition]:
         """List tools relevant for a given task type."""

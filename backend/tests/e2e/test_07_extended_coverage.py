@@ -11,32 +11,6 @@ import pytest
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio(loop_scope="session")]
 
 
-class TestGoalBriefing:
-    """GET /v1/briefings/goal/{goal_id}"""
-
-    async def test_goal_briefing(self, client: httpx.AsyncClient):
-        # Create a goal to get a briefing for
-        goal_resp = await client.post(
-            "/v1/goals", json={"title": "E2E Briefing Goal", "priority": "medium"}
-        )
-        assert goal_resp.status_code == 201
-        goal_id = goal_resp.json()["goal_id"]
-
-        try:
-            resp = await client.get(f"/v1/briefings/goal/{goal_id}")
-            assert resp.status_code == 200
-            data = resp.json()
-            assert data["goal_id"] == goal_id
-            assert data["title"] == "E2E Briefing Goal"
-            assert "progress" in data
-        finally:
-            await client.delete(f"/v1/goals/{goal_id}")
-
-    async def test_goal_briefing_not_found(self, client: httpx.AsyncClient):
-        resp = await client.get("/v1/briefings/goal/goal_nonexistent_99999")
-        assert resp.status_code == 404
-
-
 class TestPushSubscription:
     """POST/DELETE /v1/notifications/push/subscribe"""
 

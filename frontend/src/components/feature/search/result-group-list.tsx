@@ -1,7 +1,7 @@
 "use client";
 
 import type { SearchResult } from "@/lib/types";
-import { sourceDbStyle } from "@/lib/design-tokens";
+import { sourceDbBadge } from "@/lib/design-tokens";
 import { EmptyState } from "@/components/ui/empty-state";
 
 interface Props {
@@ -38,9 +38,10 @@ export function ResultGroupList({ groups, onSelect }: Props) {
                     </p>
                     {r.source_db && (
                       <span
-                        className={`shrink-0 px-1.5 py-0.5 text-[10px] font-medium rounded-[var(--radius-sm)] ${sourceDbStyle(r.source_db)}`}
+                        className={`shrink-0 px-1.5 py-0.5 text-[10px] font-medium rounded-[var(--radius-sm)] ${sourceDbBadge(r.source_db).style}`}
+                        title={r.why_matched ?? undefined}
                       >
-                        {r.source_db}
+                        {sourceDbBadge(r.source_db).label}
                       </span>
                     )}
                   </div>

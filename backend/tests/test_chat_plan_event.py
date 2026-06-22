@@ -1,6 +1,10 @@
 """Tests for chat SSE plan event (replaces decision event)."""
 
-from src.orchestrator.contracts import MessageMetadata, PlanOutput, PlanStep
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from src.contracts import MessageMetadata, PlanOutput, PlanStep
 
 
 class TestMessageMetadataUsePlanOutput:
@@ -51,3 +55,150 @@ class TestMessageMetadataUsePlanOutput:
         assert restored.decision is not None
         assert restored.decision.goal == "Draft email"
         assert restored.decision.steps[0].capability == "email.draft"
+
+
+# A secret-looking internal string that must never reach an SSE client frame.
+STREAM_SECRET = "postgres://svc:p@ss@db.internal:5432/jarvis"
+
+
+class TestProcessMessageStreamErrorIsSanitized:
+    """When the orchestrator stream raises mid-flight, the client-facing
+    `error` event must be the client-safe envelope (code/message/correlation_id)
+    and never contain the raw exception string."""
+
+    @pytest.mark.asyncio
+    async def test_stream_error_event_has_safe_shape_no_leak(self):
+        from src.orchestrator.chat_processor import ChatProcessor
+
+        chat = ChatProcessor.__new__(ChatProcessor)
+
+        # Minimal trace manager: start returns an object with trace_id; finish is a noop.
+        trace = MagicMock()
+        trace.trace_id = "trace_stream_err"
+        chat._trace_manager = MagicMock()
+        chat._trace_manager.start_trace = MagicMock(return_value=trace)
+        chat._trace_manager.finish_trace = AsyncMock()
+        chat._client = MagicMock()
+        chat._haiku_model = "claude-haiku"
+        chat._spawn_background = MagicMock()
+        context = MagicMock()
+        context.load_conversation_history = AsyncMock(return_value="")
+        chat._context = context
+        chat._events = MagicMock()
+        chat._events.emit_runtime_event = AsyncMock()
+
+        # classify_intent raises a leaky exception → caught by the stream's
+        # except block, which must emit a sanitized frame.
+        with patch(
+            "src.orchestrator.chat_processor.classify_intent",
+            new_callable=AsyncMock,
+            side_effect=ValueError(f"connection refused to {STREAM_SECRET}"),
+        ):
+            events = [
+                evt
+                async for evt in chat.process_message_stream(
+                    message="hello",
+                    user_id="usr_1",
+                    workspace_id="ws_1",
+                )
+            ]
+
+        error_events = [e for e in events if e.get("event") == "error"]
+        assert error_events, f"expected an error event, got: {events}"
+        err = error_events[-1]
+        assert err["code"] == "internal_error"
+        assert err["message"] == "Something went wrong. Please try again."
+        assert err["correlation_id"]
+        # No raw exception detail leaks into the client frame.
+        assert STREAM_SECRET not in str(err)
+        assert "connection refused" not in str(err)
+
+    @pytest.mark.asyncio
+    async def test_stream_validation_messages_are_controlled_and_safe(self):
+        """Early validation messages are author-controlled (not exception text),
+        so they are allowed to pass through verbatim."""
+        from src.orchestrator.chat_processor import ChatProcessor
+
+        chat = ChatProcessor.__new__(ChatProcessor)
+
+        empty_uid = [
+            evt
+            async for evt in chat.process_message_stream(
+                message="hi", user_id="", workspace_id="ws_1"
+            )
+        ]
+        assert empty_uid == [{"event": "error", "message": "user_id and workspace_id are required"}]
+
+
+class TestChatRouteUsesSafeErrorBoundary:
+    """Regression guard: the SSE route must build its error frame from the
+    central boundary, never from str(e)."""
+
+    def test_route_source_uses_safe_error_event_not_str_e(self):
+        import inspect
+
+        from src.api import routes_chat
+
+        src = inspect.getsource(routes_chat.chat_stream)
+        # The except branch builds the frame via the boundary helper.
+        assert "safe_error_event(e, get_correlation_id())" in src
+        # And does NOT re-introduce the raw-exception frame.
+        assert 'json.dumps({"event": "error", "message": str(e)})' not in src
+
+
+class TestCallAgentStreamLoopErrorSanitized:
+    """`_call_agent_stream` must sanitize LoopError frames — LoopError.message
+    can carry a raw upstream exception string (agent_loop yields
+    LoopError(message=str(e)))."""
+
+    @pytest.mark.asyncio
+    async def test_loop_error_frame_is_generic_no_leak(self):
+        from src.orchestrator.agent_invoker import AgentInvoker
+        from src.orchestrator.agent_loop import LoopError
+
+        leaky = f"anthropic 529 overloaded {STREAM_SECRET}"
+
+        async def fake_agent_loop(**kwargs):
+            yield LoopError(agent="presenter", message=leaky)
+
+        agent = MagicMock()
+        tool_executor = MagicMock()
+        tool_executor.apply_cache_control_to_tools = MagicMock(return_value=[])
+        tool_executor.get_tools_for_agent = AsyncMock(return_value=[])
+        context = MagicMock()
+        context.assemble_context = AsyncMock(return_value="")
+        settings = MagicMock()
+        settings.use_bedrock = False
+
+        invoker = AgentInvoker(
+            settings,
+            MagicMock(),  # client
+            MagicMock(),  # services
+            MagicMock(),  # budget
+            MagicMock(),  # circuit_breaker
+            lambda: MagicMock(),  # db_factory_provider
+            tool_executor,
+            context,
+            {"presenter": agent},
+        )
+        invoker.get_model_for_agent = MagicMock(return_value="claude-haiku")
+        invoker.build_system_prompt = MagicMock(return_value=[{"type": "text", "text": "x"}])
+
+        with patch("src.orchestrator.agent_invoker.agent_loop", side_effect=fake_agent_loop):
+            events = [
+                evt
+                async for evt in invoker.call_agent_stream(
+                    "presenter",
+                    message="go",
+                    user_id="u1",
+                    workspace_id="ws1",
+                )
+            ]
+
+        err = [e for e in events if e.get("event") == "error"][-1]
+        assert err["agent"] == "presenter"
+        assert err["code"] == "internal_error"
+        assert err["message"] == "Something went wrong. Please try again."
+        assert err["correlation_id"]
+        assert STREAM_SECRET not in str(err)
+        assert "overloaded" not in str(err)

@@ -38,11 +38,14 @@ class HistoryItemResponse(BaseModel):
     risk_level: str | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
+    updated_at: datetime | None = None
+    duration_ms: int | None = None
     error: dict | None = None
     retry_count: int = 0
     step_count: int = 0
     completed_step_count: int = 0
     cost_usd: float | None = None
+    agent: str | None = None
     steps: list[HistoryStepSummary] = []
     approval: HistoryApprovalContext | None = None
     live_phase: str | None = None
@@ -106,6 +109,20 @@ class HistoryPlanContext(BaseModel):
     priority: str | None = None
 
 
+class HistoryTraceStep(BaseModel):
+    """Per-step observability breakdown inside a Trace tab."""
+
+    step_id: str
+    step_name: str | None = None
+    agent: str | None = None
+    model: str | None = None
+    calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+    duration_ms: int = 0
+
+
 class HistoryTraceInfo(BaseModel):
     """Trace/cost info in detail view."""
 
@@ -116,6 +133,7 @@ class HistoryTraceInfo(BaseModel):
     duration_ms: int = 0
     agents_invoked: list[str] = []
     tools_called: list[str] = []
+    step_breakdown: list[HistoryTraceStep] = []
 
 
 class HistoryEventEntry(BaseModel):

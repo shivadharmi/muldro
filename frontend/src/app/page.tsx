@@ -3,17 +3,25 @@
 import { useCallback, useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
+  fetchRuntimeSummary,
   fetchSystemDashboard,
   fetchWorkspaceSurfaces,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { resolveFirstRunState } from "@/lib/first-run-state";
 import { useJarvisWs } from "@/hooks/use-jarvis-ws";
 import { useSurfaceStore } from "@/stores/surface-store";
 import type { WorkspaceSurface } from "@/stores/surface-store";
+import { normalizeSurfaceKind } from "@/lib/types/surfaces";
+import { sortSurfacesActiveFirst } from "@/lib/surface-merge";
 import { useWsActionStore } from "@/stores/ws-action-store";
+import { formatApiError, type ParsedApiError } from "@/lib/api-error";
+import { useToast } from "@/components/ui/toast";
 import { GreetingHero } from "@/components/dashboard/greeting-hero";
-import { WorkspaceStatusBar } from "@/components/workspace/workspace-status-bar";
+import { BriefingGatheringCard } from "@/components/dashboard/briefing-gathering-card";
+import { OnboardingCard } from "@/components/dashboard/onboarding-card";
 import { WorkspaceCanvas } from "@/components/workspace/workspace-canvas";
+import { WorkspaceStatusBar } from "@/components/workspace/workspace-status-bar";
 import { SurfaceDetailModal } from "@/components/workspace/surface-detail-modal";
 import type { WorkspaceSurfacePush, SurfaceUpdate } from "@/lib/a2ui-types";
 
@@ -27,10 +35,22 @@ export default function WorkspacePage() {
   const openDetailModal = useSurfaceStore((s) => s.openDetailModal);
   const closeDetailModal = useSurfaceStore((s) => s.closeDetailModal);
   const setGlobalSendAction = useWsActionStore((s) => s.setSendAction);
+  const { addToast } = useToast();
+
+  const handleWsError = useCallback(
+    (err: ParsedApiError) => addToast(formatApiError(err), "error"),
+    [addToast]
+  );
 
   const { data: system } = useQuery({
     queryKey: ["system-dashboard"],
     queryFn: fetchSystemDashboard,
+    refetchInterval: 30_000,
+  });
+
+  const { data: runtime } = useQuery({
+    queryKey: ["runtime-summary"],
+    queryFn: fetchRuntimeSummary,
     refetchInterval: 30_000,
   });
 
@@ -45,12 +65,13 @@ export default function WorkspacePage() {
     const raw = workspaceData?.surfaces ?? [];
     return raw.map((s) => ({
       id: s.id,
-      kind: s.kind || "summary",
+      kind: normalizeSurfaceKind(s.kind, s.id),
       preview: s.preview,
       detail_config: s.detail_config,
       source_run_id: s.source_run_id ?? null,
       response_preview: s.response_preview ?? null,
       created_at: s.created_at ?? new Date().toISOString(),
+      surface_data: s.surface_data ?? null,
       // Execution state from persisted last_surface_update
       ...(s.phase && { phase: s.phase }),
       ...(s.steps && { steps: s.steps }),
@@ -61,26 +82,12 @@ export default function WorkspacePage() {
     }));
   }, [workspaceData]);
 
-  // Merge REST + WS surfaces (WS wins on duplicate IDs)
+  // Merge REST + WS surfaces (WS wins on duplicate IDs), then order active-first.
   const allSurfaces = useMemo(() => {
     const map = new Map<string, WorkspaceSurface>();
     for (const s of restSurfaces) map.set(s.id, s);
     for (const s of wsSurfaces) map.set(s.id, s);
-    const merged = Array.from(map.values());
-
-    // Active executions first (executing or approval_needed), then by created_at desc
-    const isActive = (s: WorkspaceSurface) =>
-      s.phase === "executing" ||
-      s.phase === "approval_needed" ||
-      s.phase === "planning" ||
-      s.kind === "proactive_insight";
-    return merged.sort((a, b) => {
-      const aActive = isActive(a) ? 0 : 1;
-      const bActive = isActive(b) ? 0 : 1;
-      if (aActive !== bActive) return aActive - bActive;
-      const dateCompare = b.created_at.localeCompare(a.created_at);
-      return dateCompare !== 0 ? dateCompare : a.id.localeCompare(b.id);
-    });
+    return sortSurfacesActiveFirst(Array.from(map.values()));
   }, [restSurfaces, wsSurfaces]);
 
   const sourceCount = system?.observations
@@ -90,18 +97,22 @@ export default function WorkspacePage() {
   const approvalCount = allSurfaces.filter((s) => s.kind === "approval").length;
   const briefing = allSurfaces.find((s) => s.kind === "briefing");
   const headline = briefing?.preview.title ?? null;
+  // First-load state: onboarding (no source yet), gathering (source connected,
+  // briefing pending), or active (briefing exists). See resolveFirstRunState.
+  const firstRunState = resolveFirstRunState(sourceCount, Boolean(briefing));
 
   // WS push → store
   const handleSurfacePush = useCallback(
     (push: WorkspaceSurfacePush) => {
       addSurface({
         id: push.id,
-        kind: push.kind || "summary",
+        kind: normalizeSurfaceKind(push.kind, push.id),
         preview: push.preview,
         detail_config: push.detail_config,
         source_run_id: push.source_run_id,
         response_preview: push.response_preview,
         created_at: push.created_at || new Date().toISOString(),
+        surface_data: push.surface_data ?? null,
       });
     },
     [addSurface]
@@ -114,6 +125,7 @@ export default function WorkspacePage() {
       (update: SurfaceUpdate) => updateSurface(update.surface_id, update),
       [updateSurface]
     ),
+    onError: handleWsError,
     enabled: !!user,
   });
 
@@ -133,12 +145,20 @@ export default function WorkspacePage() {
         sourceCount={sourceCount}
       />
 
-      <WorkspaceStatusBar system={system} />
-
-      <WorkspaceCanvas
-        surfaces={allSurfaces}
-        onSurfaceClick={openDetailModal}
+      <WorkspaceStatusBar
+        system={system}
+        activeAgents={runtime?.active_agents ?? []}
       />
+
+      {firstRunState === "onboarding" && <OnboardingCard />}
+      {firstRunState === "gathering" && <BriefingGatheringCard />}
+
+      {allSurfaces.length > 0 && (
+        <WorkspaceCanvas
+          surfaces={allSurfaces}
+          onSurfaceClick={openDetailModal}
+        />
+      )}
 
       {activeSurface && (
         <SurfaceDetailModal

@@ -2,7 +2,7 @@
 
 ## User Chat to Response
 
-When a user sends a message (via Telegram or the web frontend), it flows through the following pipeline. Both `process_message()` and `process_message_stream()` require explicit `user_id` and `workspace_id` parameters (no default user):
+When a user sends a message (via the web frontend), it flows through the following pipeline. Both `process_message()` and `process_message_stream()` require explicit `user_id` and `workspace_id` parameters (no default user):
 
 ```mermaid
 sequenceDiagram
@@ -208,4 +208,4 @@ All inter-agent communication is validated through Pydantic contracts:
 - **AgentEnvelope** / **AgentResult** wrap every `_call_agent()` invocation
 - **PolicyDecision** returned by TrustEngine for plan evaluation (includes `auto_execute_notify` and `auto_execute_silent` modes)
 - **StepResult** / **ToolCallRequest** / **ToolCallResult** used in GraphExecutor execution
-- **SurfaceUpdate** tracks execution phases (plan_ready, executing, approval_needed, completed, failed) with 9 emission points in GraphExecutor
+- **SurfaceUpdate** tracks execution phases (plan_ready, executing, approval_needed, completed, failed) with emission points in GraphExecutor

@@ -7,15 +7,8 @@ import { useSurfaceStore } from "@/stores/surface-store";
 import { useWsActionStore } from "@/stores/ws-action-store";
 import { Tooltip } from "@/components/ui/tooltip";
 import { Modal } from "@/components/ui/modal";
-
-const sourceIcons: Record<string, string> = {
-  gmail: "\u2709\uFE0F",
-  github: "\uD83D\uDC19",
-  calendar: "\uD83D\uDCC5",
-  slack: "\uD83D\uDCAC",
-  notion: "\uD83D\uDCDD",
-  jira: "\uD83D\uDD37",
-};
+import { InlineMarkdown } from "@/components/jarvis/markdown-renderer";
+import { SourceIcon } from "@/components/integrations/source-icon";
 
 interface InsightSurfaceProps {
   surfaceId: string;
@@ -52,19 +45,17 @@ export function InsightSurface({ surfaceId, insightData }: InsightSurfaceProps) 
     [sendAction, surfaceId],
   );
 
-  const icon = sourceIcons[insightData.signal_source] ?? "\uD83D\uDD14";
-
   return (
     <>
       <div className="space-y-3">
         {/* 1. Signal summary */}
         <p className="text-sm text-t-primary font-semibold">
-          {insightData.signal_summary}
+          <InlineMarkdown content={insightData.signal_summary} />
         </p>
 
         {/* 2. Source + relevance */}
         <div className="flex items-center gap-1.5 text-xs text-t-muted">
-          <span>{icon}</span>
+          <SourceIcon source={insightData.signal_source} className="w-3.5 h-3.5" />
           <span>{insightData.signal_source}</span>
           {insightData.relevance_score >= 0.7 && (
             <>
@@ -77,7 +68,7 @@ export function InsightSurface({ surfaceId, insightData }: InsightSurfaceProps) 
         {/* 3. Relevance reasoning */}
         {insightData.relevance_reasoning && (
           <p className="text-xs text-t-tertiary">
-            {insightData.relevance_reasoning}
+            <InlineMarkdown content={insightData.relevance_reasoning} />
           </p>
         )}
 

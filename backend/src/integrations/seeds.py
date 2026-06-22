@@ -57,18 +57,6 @@ _DEFAULT_TRUST_RECORDS: list[dict] = [
     },
 ]
 
-# Server → connector type mapping for binding generation
-_SERVER_TO_CONNECTORS: dict[str, list[str]] = {
-    "intelligence-server": ["internal"],
-    "communication-server": ["telegram"],
-    "google-workspace": ["gmail", "calendar", "drive"],
-    "github": ["github"],
-    "slack": ["slack"],
-    "playwright": ["browser"],
-    "notion": ["notion"],
-    "atlassian": ["jira"],
-}
-
 
 async def seed_trust_records(db: AsyncSession, workspace_id: str) -> list[ServerTrustRecord]:
     """Seed or update default trust records. Returns created/updated records.

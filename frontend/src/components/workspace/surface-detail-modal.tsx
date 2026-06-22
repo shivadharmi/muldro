@@ -1,14 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { A2UIRenderer } from "@/components/a2ui/renderer";
 import { A2UIExecutionSurface } from "@/components/a2ui/components/execution-surface";
 import { handleA2UIAction } from "@/components/a2ui/action-handler";
+import { routeApprovalAction } from "@/components/a2ui/approval-actions";
 import { fetchSurfaceDetail } from "@/lib/api";
+import { useToast } from "@/components/ui/toast";
 import { useWsActionStore } from "@/stores/ws-action-store";
 import type { WorkspaceSurface } from "@/stores/surface-store";
 import type { DetailTabResponse, DetailTab } from "@/lib/a2ui-types";
+import { InlineMarkdown } from "@/components/jarvis/markdown-renderer";
 
 interface Props {
   surface: WorkspaceSurface;
@@ -25,8 +29,42 @@ const priorityBadge: Record<string, string> = {
 
 export function SurfaceDetailModal({ surface, open, onClose }: Props) {
   const sendAction = useWsActionStore((s) => s.sendAction);
-  const tabs = surface.detail_config?.tabs ?? [];
-  const defaultTabId = surface.detail_config?.default_tab ?? tabs[0]?.id ?? null;
+  const queryClient = useQueryClient();
+  const { addToast } = useToast();
+
+  // A2UI button clicks: approval.* actions go to REST (approveAction/rejectAction/
+  // editApproval) — the WS registry does not handle them. Everything else keeps
+  // going through the WS action handler. Only a *successful* approve/reject refreshes
+  // the workspace surfaces (the run leaves awaiting_approval; resume is scheduler-driven)
+  // and closes the modal — on a REST failure or an unsupported edit the modal stays open
+  // so the user can retry, with the reason shown via toast.
+  const handleAction = useCallback(
+    (action: string, payload: Record<string, unknown>) => {
+      const enriched = { ...payload, surface_id: surface.id };
+      void routeApprovalAction(
+        enriched,
+        (msg) => addToast(msg, "error"),
+        () => {
+          void queryClient.invalidateQueries({ queryKey: ["workspace-surfaces"] });
+          onClose();
+        },
+        (msg) => addToast(msg, "info"),
+      ).then((handled) => {
+        if (!handled) handleA2UIAction(sendAction, action, enriched);
+      });
+    },
+    [surface.id, queryClient, addToast, onClose, sendAction],
+  );
+  // Presenter-authored typed content takes precedence over on-demand tab fetches.
+  // When surface_data.sections exist, render them inline via A2UIRenderer and
+  // suppress the tab bar — those tabs only contain DB-derived detail for kinds
+  // like plan/approval that don't carry Presenter content.
+  const presenterSections = surface.surface_data?.sections ?? [];
+  const hasPresenterContent = presenterSections.length > 0;
+  const tabs = hasPresenterContent ? [] : (surface.detail_config?.tabs ?? []);
+  const defaultTabId = hasPresenterContent
+    ? null
+    : (surface.detail_config?.default_tab ?? tabs[0]?.id ?? null);
 
   const [activeTabId, setActiveTabId] = useState<string | null>(defaultTabId);
   const [tabCache, setTabCache] = useState<Record<string, DetailTabResponse>>({});
@@ -106,7 +144,7 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
         <div className="flex items-center justify-between px-6 py-4 border-b border-b-secondary">
           <div className="flex items-center gap-3 min-w-0">
             <h2 className="text-[15px] font-semibold text-t-primary truncate">
-              {surface.preview.title}
+              <InlineMarkdown content={surface.preview.title} />
             </h2>
             {surface.preview.priority && (
               <span
@@ -157,20 +195,32 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
 
         {/* Tab content */}
         <div className="flex-1 overflow-y-auto px-6 py-4">
-          {loading && (
+          {hasPresenterContent && (
+            <A2UIRenderer
+              surface={{
+                type: "surface",
+                id: `presenter-${surface.id}`,
+                children: presenterSections,
+                metadata: {},
+              }}
+              onAction={handleAction}
+            />
+          )}
+
+          {!hasPresenterContent && loading && (
             <div className="flex items-center justify-center py-8">
               <div className="w-5 h-5 border-2 border-accent-primary/30 border-t-accent-primary rounded-full animate-spin" />
               <span className="ml-2 text-sm text-t-tertiary">Loading {activeTab?.label}...</span>
             </div>
           )}
 
-          {error && !loading && (
+          {!hasPresenterContent && error && !loading && (
             <div className="rounded-[var(--radius-md)] bg-j-error-soft border border-j-error/20 p-4">
               <p className="text-sm text-j-error">{error}</p>
             </div>
           )}
 
-          {activeData && !loading && (
+          {!hasPresenterContent && activeData && !loading && (
             <div className="space-y-3">
               {activeData.sections.map((section) => (
                 <CollapsibleSection
@@ -185,12 +235,7 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
                       children: section.children,
                       metadata: {},
                     }}
-                    onAction={(action, payload) =>
-                      handleA2UIAction(sendAction, action, {
-                        ...payload,
-                        surface_id: surface.id,
-                      })
-                    }
+                    onAction={handleAction}
                   />
                 </CollapsibleSection>
               ))}
@@ -218,7 +263,7 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
             />
           )}
 
-          {!loading && !error && !activeData && tabs.length === 0 && (
+          {!hasPresenterContent && !loading && !error && !activeData && tabs.length === 0 && (
             <p className="text-sm text-t-tertiary text-center py-8">
               No detail tabs available for this surface.
             </p>
@@ -247,7 +292,7 @@ function CollapsibleSection({ title, defaultCollapsed, children }: SectionProps)
         onClick={() => setCollapsed((c) => !c)}
         className="w-full flex items-center justify-between py-2 text-xs font-semibold text-t-secondary uppercase tracking-wide hover:text-t-primary transition-colors"
       >
-        {title}
+        <InlineMarkdown content={title} />
         <svg
           width="12"
           height="12"

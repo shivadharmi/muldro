@@ -1,10 +1,27 @@
 """Tool definition model for the tool registry."""
 
+from enum import StrEnum
+
 from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.models.base import Base, TimestampMixin
+
+
+class ToolBackend(StrEnum):
+    """Dispatch discriminator: how a tool's call is actually executed.
+
+    Persisted as a plain string in ``ToolDefinition.backend`` (StrEnum members
+    ARE their string values, so the column stays ``String`` with no migration),
+    but modeled as a closed enum so dispatch can match on typed members instead
+    of bare string literals scattered across the registry and orchestrator.
+    """
+
+    INTERNAL_MCP = "internal_mcp"  # intelligence / communication FastMCP servers
+    EXTERNAL_MCP = "external_mcp"  # external MCP connectors (Google, GitHub, ...)
+    COMPOSITE = "composite"  # Jarvis-internal composite tools (e.g. web_search)
+    SPECIAL = "special"  # inline passthrough, no MCP call (report_governor_verdict)
 
 
 class ToolDefinition(Base, TimestampMixin):
@@ -30,7 +47,7 @@ class ToolDefinition(Base, TimestampMixin):
     capability: Mapped[str | None] = mapped_column(String(128))
     # Unified registry columns (Phase 8)
     server: Mapped[str | None] = mapped_column(String(64))
-    backend: Mapped[str] = mapped_column(String(32), default="external_mcp")
+    backend: Mapped[str] = mapped_column(String(32), default=ToolBackend.EXTERNAL_MCP)
     source: Mapped[str] = mapped_column(String(32), default="seed")
     verified: Mapped[bool] = mapped_column(Boolean, default=False)
 

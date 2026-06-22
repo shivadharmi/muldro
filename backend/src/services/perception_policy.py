@@ -15,6 +15,7 @@ Hard guardrails this service enforces:
 
 import logging
 import re
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
@@ -36,6 +37,20 @@ CIRCUIT_COOLDOWN_S = 300  # 5 min circuit breaker cooldown
 CIRCUIT_FAILURE_THRESHOLD = 3
 STARVATION_CEILING_S = 1800  # force run after 30 min silence
 BACKOFF_CAP = 8  # max backoff multiplier (2^3)
+
+# Provisional lease applied to a source when it is CLAIMED (pending_run cleared,
+# next_run_at pushed out) so the row lock can be released *before* the long
+# LLM/MCP perception cycle runs. The scheduler holds the FOR UPDATE lock only
+# for the claim transaction; once committed the lease — not a held lock — is
+# what prevents the next tick (or a peer worker) from double-picking the source.
+#
+# LEASE_TTL_S MUST exceed the scheduler sub-tick timeout (~90s): a perception
+# cycle is force-cancelled at the sub-tick timeout, so as long as the lease is
+# longer than that timeout a cycle can never outlive its own lease and cause a
+# double-pick. On crash/cancel/timeout (no outcome recorded) the source simply
+# becomes due again once the lease expires — preserving crash recovery without
+# relying on holding the row lock across the cycle.
+LEASE_TTL_S = 180
 
 DEFAULT_INTERVALS: dict[str, int] = {
     "gmail": 300,
@@ -77,7 +92,25 @@ _PERMANENT_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"not.?authorized", re.IGNORECASE),
     re.compile(r"permission.?denied", re.IGNORECASE),
     re.compile(r"scope.?not.?granted", re.IGNORECASE),
+    # Matches the sentinel produced by error_class_to_policy_error("permanent") so
+    # that connector-reported permanent errors (unrecoverable 4xx) open the circuit
+    # after 1 failure rather than falling through to the unknown threshold of 3.
+    re.compile(r"\bpermanent\b", re.IGNORECASE),
 ]
+
+
+@dataclass(frozen=True)
+class ClaimedSource:
+    """Detached, plain-data snapshot of a leased perception source.
+
+    Captured inside the short CLAIM transaction so phase 2 can run cycles after
+    the row lock has been released (no ORM instance held across the long cycle).
+    """
+
+    state_id: str
+    source: str
+    user_id: str
+    workspace_id: str
 
 
 def classify_error(error: str) -> ErrorClass:
@@ -119,7 +152,12 @@ class PerceptionPolicyService:
 
     def __init__(self, db: AsyncSession) -> None:
         self._db = db
-        self._wake_signals = {"user_intent", "webhook", "agent", "bootstrap", "manual_poll"}
+        # Signals that may RESUME a paused source. A ``webhook`` is intentionally
+        # NOT here: an inbound webhook is an untrusted external signal and must
+        # not resurrect a source that was deliberately paused (explicit/admin/
+        # user/lifecycle pause). It may only wake an already-active source (see
+        # request_run). The poll/lifecycle path is the sole resume route.
+        self._wake_signals = {"user_intent", "agent", "bootstrap", "manual_poll"}
 
     # ------------------------------------------------------------------
     # State management
@@ -156,9 +194,7 @@ class PerceptionPolicyService:
     # Due-source queries
     # ------------------------------------------------------------------
 
-    async def get_due_sources(
-        self, user_id: str, budget_multiplier: int = 1
-    ) -> list[PerceptionState]:
+    async def get_due_sources(self, user_id: str) -> list[PerceptionState]:
         """Return sources due for a single user."""
         now = datetime.now(timezone.utc)
         reopen_before = now - timedelta(seconds=CIRCUIT_COOLDOWN_S)
@@ -180,6 +216,10 @@ class PerceptionPolicyService:
                 )
             )
             .order_by(PerceptionState.next_run_at.asc().nullslast())
+            # Claim rows so two scheduler workers can't double-pick the same
+            # source (duplicate polls/ingest). Locks release when the caller's
+            # transaction commits/rolls back per tick.
+            .with_for_update(skip_locked=True)
         )
         result = await self._db.execute(stmt)
         states = list(result.scalars().all())
@@ -192,7 +232,7 @@ class PerceptionPolicyService:
 
         return [s for s in states if s.circuit_state != "open"]
 
-    async def get_due_sources_all_users(self, budget_multiplier: int = 1) -> list[PerceptionState]:
+    async def get_due_sources_all_users(self) -> list[PerceptionState]:
         """Return due sources across all users (used by scheduler)."""
         now = datetime.now(timezone.utc)
         reopen_before = now - timedelta(seconds=CIRCUIT_COOLDOWN_S)
@@ -213,6 +253,10 @@ class PerceptionPolicyService:
                 )
             )
             .order_by(PerceptionState.next_run_at.asc().nullslast())
+            # Claim rows so two scheduler workers can't double-pick the same
+            # source (duplicate polls/ingest). Locks release when the caller's
+            # transaction commits/rolls back per tick.
+            .with_for_update(skip_locked=True)
         )
         result = await self._db.execute(stmt)
         states = list(result.scalars().all())
@@ -222,6 +266,45 @@ class PerceptionPolicyService:
 
         return [s for s in states if s.circuit_state != "open"]
 
+    async def claim_due_sources(
+        self, sources: list[PerceptionState], now: datetime | None = None
+    ) -> list[ClaimedSource]:
+        """Lease the given due sources so the row lock can be released early.
+
+        For each source: clear ``pending_run`` (so the next tick won't re-pick it
+        on the pending flag) and push ``next_run_at`` out by ``LEASE_TTL_S`` (a
+        provisional lease, so the due-window query won't re-pick it either). The
+        caller is expected to ``commit`` immediately after this returns —
+        releasing the ``FOR UPDATE`` lock — and only THEN run the long cycles.
+
+        Returns plain, detached-safe snapshots so callers never touch the ORM
+        instances after the claim transaction is closed.
+        """
+        if now is None:
+            now = datetime.now(timezone.utc)
+        lease_until = now + timedelta(seconds=LEASE_TTL_S)
+
+        claimed: list[ClaimedSource] = []
+        for state in sources:
+            state.pending_run = False
+            state.next_run_at = lease_until
+            claimed.append(
+                ClaimedSource(
+                    state_id=state.state_id,
+                    source=state.source,
+                    user_id=state.user_id,
+                    workspace_id=state.workspace_id or "",
+                )
+            )
+        await self._db.flush()
+        return claimed
+
+    async def get_by_state_id(self, state_id: str) -> PerceptionState | None:
+        """Re-fetch a perception state by primary key (for per-source recording)."""
+        stmt = select(PerceptionState).where(PerceptionState.state_id == state_id)
+        result = await self._db.execute(stmt)
+        return result.scalar_one_or_none()
+
     # ------------------------------------------------------------------
     # Lifecycle: success / failure / signal
     # ------------------------------------------------------------------
@@ -230,8 +313,15 @@ class PerceptionPolicyService:
         self,
         state: PerceptionState,
         event_count: int,
+        budget_multiplier: int = 1,
     ) -> PerceptionState:
-        """After a successful perception cycle."""
+        """After a successful perception cycle.
+
+        ``budget_multiplier`` (>1 under budget pressure) stretches the next-run
+        interval so polling slows down when the token budget is tight. The
+        starvation ceiling in ``_compute_next_run`` still applies, so a stretched
+        source is never starved forever.
+        """
         now = datetime.now(timezone.utc)
         state.consecutive_failures = 0
         state.last_error = None
@@ -243,7 +333,7 @@ class PerceptionPolicyService:
         state.pending_run = False
 
         state.effective_interval_s = self._compute_effective_interval(state)
-        state.next_run_at = self._compute_next_run(state)
+        state.next_run_at = self._compute_next_run(state, budget_multiplier=budget_multiplier)
         await self._db.flush()
         return state
 
@@ -348,15 +438,15 @@ class PerceptionPolicyService:
     def _compute_next_run(self, state: PerceptionState, budget_multiplier: int = 1) -> datetime:
         """Compute next_run_at from effective interval."""
         now = datetime.now(timezone.utc)
-        interval = state.effective_interval_s * max(budget_multiplier, 1)
+        # Budget pressure stretches the interval, but never past the hard
+        # guardrail (clamp by construction, not by coincidence).
+        interval = min(state.effective_interval_s * max(budget_multiplier, 1), MAX_INTERVAL_S)
 
         # Starvation prevention: if last_run_at is very old, don't push further
         if state.last_run_at is not None:
             silence = (now - state.last_run_at).total_seconds()
             if silence >= STARVATION_CEILING_S:
                 return now  # run immediately
-
-        from datetime import timedelta
 
         return now + timedelta(seconds=interval)
 

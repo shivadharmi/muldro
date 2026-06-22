@@ -149,6 +149,7 @@ CAPABILITY_CATALOG: dict[str, CapabilityMeta] = {
     "internal.ingest_event": _cap(CapabilityFamily.INTERNAL, False),
     "internal.update_entity": _cap(CapabilityFamily.INTERNAL, False),
     "internal.evaluate_policy": _cap(CapabilityFamily.INTERNAL, False),
+    "internal.report_verdict": _cap(CapabilityFamily.INTERNAL, False),
     "internal.approve_action": _cap(CapabilityFamily.INTERNAL, False, "medium"),
     "internal.update_cursor": _cap(CapabilityFamily.INTERNAL, False),
     "internal.extract_preferences": _cap(CapabilityFamily.INTERNAL, False),
@@ -157,8 +158,6 @@ CAPABILITY_CATALOG: dict[str, CapabilityMeta] = {
     "internal.push_ui": _cap(CapabilityFamily.INTERNAL, False),
     "internal.store_memory": _cap(CapabilityFamily.INTERNAL, False),
     "internal.store_preference": _cap(CapabilityFamily.INTERNAL, False),
-    "internal.send_telegram": _cap(CapabilityFamily.MESSAGING, False, "medium"),
-    "internal.send_approval": _cap(CapabilityFamily.MESSAGING, False, "medium"),
     # Drive
     "doc.drive_list": _cap(CapabilityFamily.DOC, True),
     "doc.drive_search": _cap(CapabilityFamily.DOC, True),

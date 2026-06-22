@@ -8,6 +8,7 @@ import logging
 import uuid
 
 from src.config.settings import Settings
+from src.errors import classify
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +82,16 @@ class VectorStore:
                 "collections": len(collections.collections),
             }
         except Exception as exc:
-            return {"status": "unreachable", "configured": True, "error": str(exc)[:200]}
+            # /v1/health/stores is a PUBLIC endpoint — surface only the safe
+            # message + code, never the raw Qdrant exception (may carry the URL).
+            logger.warning("Qdrant health check failed: %s", exc, exc_info=True)
+            code, message, _ = classify(exc)
+            return {
+                "status": "unreachable",
+                "configured": True,
+                "error": message,
+                "error_code": code,
+            }
 
     def get_metrics(self) -> dict:
         return dict(self._metrics)

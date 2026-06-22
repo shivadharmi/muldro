@@ -12,6 +12,9 @@ from ulid import ULID
 from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
 from src.api.schemas import ApprovalDecisionRequest, ApprovalDetailResponse, ApprovalResponse
 from src.config.settings import Settings, get_settings
+from src.errors import classify, new_correlation_id
+from src.middleware.observability import get_correlation_id
+from src.middleware.security import RATE_LIMIT_APPROVAL_DECISION, per_endpoint_rate_limit
 from src.models.approvals import Approval
 from src.models.plans import Plan
 from src.models.task_graph import TaskRun, TaskStep
@@ -109,6 +112,7 @@ async def list_approvals(
 @router.post(
     "/v1/approvals/{approval_id}/approve",
     response_model=ApprovalResponse,
+    dependencies=[Depends(per_endpoint_rate_limit(RATE_LIMIT_APPROVAL_DECISION))],
 )
 async def approve_action(
     approval_id: str,
@@ -223,12 +227,13 @@ async def approve_action(
 
         redis = aioredis.from_url(settings.redis_url, decode_responses=True)
         bus = EventBus(redis)
-        stream = bus.agent_stream(user_id)
+        stream = bus.agent_stream(workspace_id)
         await bus.publish(
             stream,
             "approval.approved",
             {"approval_id": approval_id, "run_id": approval.execution_id},
             user_id,
+            workspace_id=workspace_id,
         )
         await redis.aclose()
     except Exception:
@@ -366,6 +371,7 @@ async def approve_action(
 @router.post(
     "/v1/approvals/{approval_id}/reject",
     response_model=ApprovalResponse,
+    dependencies=[Depends(per_endpoint_rate_limit(RATE_LIMIT_APPROVAL_DECISION))],
 )
 async def reject_action(
     approval_id: str,
@@ -496,12 +502,13 @@ async def reject_action(
 
         redis = aioredis.from_url(settings.redis_url, decode_responses=True)
         bus = EventBus(redis)
-        stream = bus.agent_stream(user_id)
+        stream = bus.agent_stream(workspace_id)
         await bus.publish(
             stream,
             "approval.rejected",
             {"approval_id": approval_id, "run_id": approval.execution_id},
             user_id,
+            workspace_id=workspace_id,
         )
         await redis.aclose()
     except Exception:
@@ -526,6 +533,7 @@ class ApprovalEditRequest(BaseModel):
 @router.post(
     "/v1/approvals/{approval_id}/edit",
     response_model=ApprovalResponse,
+    dependencies=[Depends(per_endpoint_rate_limit(RATE_LIMIT_APPROVAL_DECISION))],
 )
 async def edit_approval(
     approval_id: str,
@@ -611,7 +619,15 @@ async def _mark_run_failed_after_resume(db: AsyncSession, run_id: str, exc: Exce
         r = result.scalar_one_or_none()
         if r and r.status not in ("completed", "failed", "cancelled"):
             transition_run(r, "failed")
-            r.error = {"resume_failed": str(exc)[:500]}
+            # r.error is served verbatim by the history API — safe message + code
+            # only; raw str(exc) goes to logs.
+            code, message, _ = classify(exc)
+            r.error = {
+                "resume_failed": message,
+                "error_code": code,
+                "correlation_id": get_correlation_id() or new_correlation_id(),
+            }
+            logger.error("Approval resume failed for run %s: %s", run_id, exc, exc_info=True)
             r.completed_at = datetime.now(timezone.utc)
             await db.commit()
     except Exception:

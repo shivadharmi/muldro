@@ -6,7 +6,7 @@ the Unified Tool Registry migration (Phase 6).
 
 Tools are organized by server:
 - intelligence: 19 tools (search, ingest, policies, context, briefing, etc.)
-- communication: 3 tools (telegram, approval prompts, UI updates)
+- communication: 1 tool (UI updates)
 - _special: 1 tool (report_governor_verdict — inline-dispatched, not MCP)
 """
 
@@ -32,8 +32,6 @@ from src.tools.schemas import (
     ReportGovernorVerdictInput,
     ReportObservationInput,
     SearchInput,
-    SendApprovalPromptInput,
-    SendTelegramInput,
     StoreMemoryInput,
     StorePreferenceInput,
     UpdateEntityInput,
@@ -257,41 +255,21 @@ INTERNAL_TOOLS: list[InternalToolDef] = [
         description=_desc(DiscoverCapabilitiesInput),
         read_only=True,
     ),
-    # Special: inline-dispatched (not a real MCP tool).
-    # Shares capability with evaluate_policy — both are governor-domain tools.
-    # A dedicated capability would require modifying capabilities.py (out of scope
-    # for Phase 6). Phase 10 startup validation can revisit if needed.
+    # Special: inline-dispatched (not a real MCP tool). Has its own capability
+    # (internal.report_verdict) so the tool↔capability mapping stays 1:1 — distinct
+    # from evaluate_policy's internal.evaluate_policy. Both are governor-domain caps
+    # and both are in the governor's capability_scope (see orchestrator/agents.py).
     InternalToolDef(
         name="report_governor_verdict",
         input_model=ReportGovernorVerdictInput,
-        capability="internal.evaluate_policy",
+        capability="internal.report_verdict",
         risk_level="low",
         requires_approval=False,
         server="_special",
         description=_desc(ReportGovernorVerdictInput),
         read_only=False,
     ),
-    # Communication server tools (3 tools)
-    InternalToolDef(
-        name="send_telegram",
-        input_model=SendTelegramInput,
-        capability="internal.send_telegram",
-        risk_level="medium",
-        requires_approval=True,
-        server="communication",
-        description=_desc(SendTelegramInput),
-        read_only=False,
-    ),
-    InternalToolDef(
-        name="send_approval_prompt",
-        input_model=SendApprovalPromptInput,
-        capability="internal.send_approval",
-        risk_level="medium",
-        requires_approval=True,
-        server="communication",
-        description=_desc(SendApprovalPromptInput),
-        read_only=False,
-    ),
+    # Communication server tools (1 tool)
     InternalToolDef(
         name="push_ui_update",
         input_model=PushUiUpdateInput,

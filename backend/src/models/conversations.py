@@ -24,7 +24,7 @@ class Conversation(Base, TimestampMixin):
         String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
     )
     title: Mapped[str | None] = mapped_column(String(256), nullable=True)
-    surface: Mapped[str] = mapped_column(String(32), nullable=False)  # telegram, web, api
+    surface: Mapped[str] = mapped_column(String(32), nullable=False)  # web, api
     status: Mapped[str] = mapped_column(String(16), default="active")  # active, archived
     message_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     total_input_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
@@ -57,7 +57,7 @@ class Message(Base, TimestampMixin):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     # Typed via contracts.MessageMetadata — validated at write time, stored as JSONB
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB)
-    surface: Mapped[str] = mapped_column(String(32), nullable=False)  # telegram, web, api
+    surface: Mapped[str] = mapped_column(String(32), nullable=False)  # web, api
     trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)

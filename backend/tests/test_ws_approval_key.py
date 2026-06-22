@@ -16,7 +16,7 @@ async def test_handle_approve_uses_approval_id_key(mock_process):
 
     await _handle_approve("user_1", {"approval_id": "apr_001"}, app)
 
-    mock_process.assert_awaited_once_with("user_1", "apr_001", "approve", app)
+    mock_process.assert_awaited_once_with("user_1", "apr_001", "approve", app, "")
 
 
 @pytest.mark.asyncio
@@ -30,7 +30,7 @@ async def test_handle_approve_falls_back_to_id_key(mock_process):
 
     await _handle_approve("user_1", {"id": "apr_002"}, app)
 
-    mock_process.assert_awaited_once_with("user_1", "apr_002", "approve", app)
+    mock_process.assert_awaited_once_with("user_1", "apr_002", "approve", app, "")
 
 
 @pytest.mark.asyncio
@@ -44,4 +44,4 @@ async def test_handle_reject_uses_approval_id_key(mock_process):
 
     await _handle_reject("user_1", {"approval_id": "apr_003"}, app)
 
-    mock_process.assert_awaited_once_with("user_1", "apr_003", "reject", app)
+    mock_process.assert_awaited_once_with("user_1", "apr_003", "reject", app, "")

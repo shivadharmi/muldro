@@ -8,6 +8,10 @@ export function TopBar() {
   const { events, unreadCount, markAllRead } = useActivityStore();
   const latest = events[0];
 
+  const runningTool = latest?.payload?.tool_name
+    ? String(latest.payload.tool_name)
+    : null;
+
   return (
     <div className="h-12 border-b border-b-secondary bg-surface-0/80 backdrop-blur-md flex items-center px-4 gap-3">
       {/* Global command input — spotlight style */}
@@ -19,33 +23,53 @@ export function TopBar() {
           <circle cx="7" cy="7" r="4" stroke="currentColor" strokeWidth="1.4" />
           <path d="M10 10l3 3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
         </svg>
-        <span className="flex-1 truncate">Ask Jarvis anything...</span>
+        <span className="flex-1 truncate">Ask Jarvis anything…</span>
         <kbd className="text-[10px] text-t-muted font-mono bg-surface-2 px-1.5 py-0.5 rounded hidden sm:inline">
           ⌘K
         </kbd>
       </button>
 
-      {/* Activity indicator — integrated from ActivityStrip */}
-      {latest && (
-        <div className="hidden md:flex items-center gap-2 text-[11px] text-t-muted max-w-[240px]">
+      {/* Running-tool indicator — tool name in mono + queue-count pill */}
+      {runningTool ? (
+        <div className="hidden md:flex items-center gap-2 max-w-[260px]">
+          <span className="font-mono text-[11px] text-j-primary truncate">{runningTool}</span>
           {unreadCount > 0 && (
             <button
               onClick={markAllRead}
-              className="shrink-0 inline-flex items-center justify-center w-5 h-5 rounded-full bg-j-primary text-j-primary-fg text-[10px] font-semibold hover:bg-j-primary-hover transition-colors cursor-pointer"
-              title="Mark all read"
+              className="shrink-0 inline-flex items-center justify-center min-w-5 h-5 px-1 rounded-full bg-j-primary text-j-primary-fg text-[10px] font-semibold hover:bg-j-primary-hover transition-colors cursor-pointer"
+              title="Activity in queue — mark all read"
             >
               {unreadCount > 99 ? "99" : unreadCount}
             </button>
           )}
-          <span className="truncate">
-            {latest.event_type.replace(/_/g, " ")}
-            {latest.payload?.tool_name ? `: ${String(latest.payload.tool_name)}` : ""}
-          </span>
         </div>
+      ) : (
+        latest && (
+          <div className="hidden md:flex items-center gap-2 text-[11px] text-t-muted max-w-[240px]">
+            {unreadCount > 0 && (
+              <button
+                onClick={markAllRead}
+                className="shrink-0 inline-flex items-center justify-center w-5 h-5 rounded-full bg-j-primary text-j-primary-fg text-[10px] font-semibold hover:bg-j-primary-hover transition-colors cursor-pointer"
+                title="Mark all read"
+              >
+                {unreadCount > 99 ? "99" : unreadCount}
+              </button>
+            )}
+            <span className="truncate">{latest.event_type.replace(/_/g, " ")}</span>
+          </div>
+        )
       )}
 
       {/* Right side controls */}
-      <div className="ml-auto flex items-center gap-1">
+      <div className="ml-auto flex items-center gap-2">
+        {/* Live indicator — pulsing green dot */}
+        <div className="hidden sm:flex items-center gap-1.5 text-[11px] text-t-muted">
+          <span className="relative flex h-2 w-2">
+            <span className="absolute inline-flex h-full w-full rounded-full bg-j-success opacity-70 animate-pulse-live" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-j-success" />
+          </span>
+          <span className="uppercase tracking-wide text-[10px]">live</span>
+        </div>
         <button
           onClick={toggleRightSidebar}
           className={`p-2 rounded-[var(--radius-md)] transition-colors cursor-pointer ${

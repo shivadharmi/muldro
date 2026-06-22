@@ -1,6 +1,6 @@
 """Tests for PlanOutput contract (capability-based planning)."""
 
-from src.orchestrator.contracts import PlanOutput, PlanStep
+from src.contracts import PlanOutput, PlanStep
 
 
 def _valid_plan_data(**overrides) -> dict:

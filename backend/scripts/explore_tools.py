@@ -65,6 +65,26 @@ class ServerReport:
     error: str = ""
 
 
+# ── Unified tool catalog ──────────────────────────────────────────────
+
+
+def _load_catalog() -> tuple[list[Any], dict[str, str], set[str]]:
+    """Load the unified tool catalog (``src/tools/catalog.py``).
+
+    Returns ``(all_defs, tool_to_capability, internal_names)``: every
+    ``InternalToolDef`` + ``ExternalToolSeed``, a tool-name → capability map, and
+    the set of internal tool names. Replaces the removed ``_DEFAULT_TOOLS`` /
+    ``TOOL_TO_CAPABILITY`` / ``CANONICAL_ALIASES`` registries — capability now
+    lives as a field on each tool def, and tool-name normalization was dropped.
+    """
+    from src.tools.catalog import EXTERNAL_TOOL_SEEDS, INTERNAL_TOOLS
+
+    all_defs: list[Any] = [*INTERNAL_TOOLS, *EXTERNAL_TOOL_SEEDS]
+    tool_to_capability = {t.name: t.capability for t in all_defs if t.capability}
+    internal_names = {t.name for t in INTERNAL_TOOLS}
+    return all_defs, tool_to_capability, internal_names
+
+
 # ── Internal FastMCP servers ──────────────────────────────────────────
 
 
@@ -120,9 +140,7 @@ async def explore_internal_servers() -> list[ServerReport]:
     return reports
 
 
-async def _explore_fastmcp_server(
-    server: Any, name: str, standalone: bool
-) -> ServerReport:
+async def _explore_fastmcp_server(server: Any, name: str, standalone: bool) -> ServerReport:
     """Use fastmcp Client to connect to a FastMCP server and list_tools."""
     from fastmcp import Client
 
@@ -139,9 +157,7 @@ async def _explore_fastmcp_server(
 
             for t in raw_tools:
                 input_schema = (
-                    getattr(t, "inputSchema", None)
-                    or getattr(t, "input_schema", None)
-                    or {}
+                    getattr(t, "inputSchema", None) or getattr(t, "input_schema", None) or {}
                 )
                 # Convert to dict if it's a Pydantic model
                 if hasattr(input_schema, "model_dump"):
@@ -273,19 +289,17 @@ async def _explore_external_server(
                 raw_tools = await client.list_tools()
                 report.tool_count = len(raw_tools)
 
-                # Load capability mapping
-                from src.integrations.capabilities import TOOL_TO_CAPABILITY
+                # Load capability mapping from the unified catalog
+                _, tool_to_capability, _ = _load_catalog()
 
                 for t in raw_tools:
                     input_schema = (
-                        getattr(t, "inputSchema", None)
-                        or getattr(t, "input_schema", None)
-                        or {}
+                        getattr(t, "inputSchema", None) or getattr(t, "input_schema", None) or {}
                     )
                     if hasattr(input_schema, "model_dump"):
                         input_schema = input_schema.model_dump()
 
-                    capability = TOOL_TO_CAPABILITY.get(t.name, "")
+                    capability = tool_to_capability.get(t.name, "")
 
                     tool_info = ToolInfo(
                         name=t.name,
@@ -325,51 +339,49 @@ def cross_reference(reports: list[ServerReport]) -> dict:
     - Tools with capability mapping gaps
     - Tools with schema but no capability
     """
-    from src.integrations.capabilities import TOOL_TO_CAPABILITY
     from src.tools.schemas import TOOL_INPUT_MODELS
-    from src.services.tool_registry import _DEFAULT_TOOLS
+
+    all_defs, tool_to_capability, internal_names = _load_catalog()
+
+    # The composed jarvis-tools server namespaces tool names
+    # (intelligence_/communication_) while the catalog keys are bare, so strip
+    # the prefix before any catalog lookup.
+    def _bare(name: str) -> str:
+        for prefix in ("intelligence_", "communication_"):
+            if name.startswith(prefix):
+                return name[len(prefix) :]
+        return name
 
     # Collect all discovered tool names
     discovered: dict[str, str] = {}  # tool_name → server
     for report in reports:
         for tool in report.tools:
             discovered[tool.name] = report.server_name
-            if tool.canonical_name:
-                discovered[tool.canonical_name] = report.server_name
 
-    # Collect all registered tool names
-    registered = {t["name"] for t in _DEFAULT_TOOLS}
+    # Collect all registered tool names (the unified catalog)
+    registered = {t.name for t in all_defs}
 
-    # Tools discovered but not in registry
+    # Tools discovered but not in the catalog (namespace-stripped)
     discovered_not_registered = {
-        name: server
-        for name, server in discovered.items()
-        if name not in registered
-    }
-
-    # Tools in registry tagged "internal" that should match MCP tools
-    internal_registered = {
-        t["name"] for t in _DEFAULT_TOOLS if t.get("connector_type") == "internal"
+        name: server for name, server in discovered.items() if _bare(name) not in registered
     }
 
     # Check capability coverage
-    no_capability = [
-        name for name in discovered if name not in TOOL_TO_CAPABILITY
-    ]
+    no_capability = [name for name in discovered if _bare(name) not in tool_to_capability]
 
-    # Check schema coverage (only applies to internal tools)
+    # Check schema coverage (internal tools only). A few internal tools have no
+    # Pydantic input model by design (no-arg / special tools).
+    schemaless_ok = {"push_ui_update", "get_goal_memories"}
     no_schema = [
         name
-        for name in internal_registered
-        if name not in TOOL_INPUT_MODELS
-        and name not in ("push_ui_update", "send_telegram", "send_approval_prompt",
-                         "get_goal_memories")
+        for name in internal_names
+        if name not in TOOL_INPUT_MODELS and name not in schemaless_ok
     ]
 
     return {
         "total_discovered": len(discovered),
         "total_registered": len(registered),
-        "total_capabilities": len(TOOL_TO_CAPABILITY),
+        "total_capabilities": len(tool_to_capability),
         "total_schemas": len(TOOL_INPUT_MODELS),
         "discovered_not_registered": discovered_not_registered,
         "no_capability_mapping": no_capability,
@@ -417,7 +429,9 @@ def print_report(reports: list[ServerReport], xref: dict, as_json: bool = False)
                 if ns != "(root)":
                     print(f"   📁 Namespace: {ns}")
                 for t in sorted(tools, key=lambda x: x.name):
-                    desc_short = t.description[:80] + "..." if len(t.description) > 80 else t.description
+                    desc_short = (
+                        t.description[:80] + "..." if len(t.description) > 80 else t.description
+                    )
                     print(f"      • {t.name}")
                     if desc_short:
                         print(f"        desc: {desc_short}")
@@ -476,12 +490,12 @@ def print_report(reports: list[ServerReport], xref: dict, as_json: bool = False)
     print(f"\n{sep}\n")
 
 
-# ── Also explore the tool_schemas (Pydantic → Claude API format) ─────
+# ── Also explore the tool schemas (Pydantic → Claude API format) ─────
 
 
 def explore_tool_schemas() -> ServerReport:
-    """Load tool schemas from tool_schemas.py and report what Claude sees."""
-    from src.tools.schemas import TOOL_INPUT_MODELS, build_tool_definitions
+    """Load tool schemas from schemas.py and report what Claude sees."""
+    from src.tools.schemas import build_tool_definitions
 
     report = ServerReport(
         server_name="tool-schemas (Claude API format)",
@@ -496,7 +510,7 @@ def explore_tool_schemas() -> ServerReport:
         tool_info = ToolInfo(
             name=td["name"],
             description=(td.get("description", ""))[:200],
-            server="tool_schemas.py",
+            server="schemas.py",
             input_schema=td.get("input_schema", {}),
         )
         report.tools.append(tool_info)
@@ -508,30 +522,27 @@ def explore_tool_schemas() -> ServerReport:
 
 
 def explore_tool_registry() -> ServerReport:
-    """Load the static _DEFAULT_TOOLS from tool_registry.py."""
-    from src.integrations.capabilities import TOOL_TO_CAPABILITY
-    from src.services.tool_registry import CANONICAL_ALIASES, _DEFAULT_TOOLS
+    """Load the unified tool catalog (INTERNAL_TOOLS + EXTERNAL_TOOL_SEEDS)."""
+    all_defs, _, _ = _load_catalog()
 
     report = ServerReport(
-        server_name="tool-registry (_DEFAULT_TOOLS)",
+        server_name="tool-catalog (INTERNAL_TOOLS + EXTERNAL_TOOL_SEEDS)",
         server_type="db_seed_registry",
         transport="static",
     )
 
     seen: set[str] = set()
-    for t in _DEFAULT_TOOLS:
-        name = t["name"]
-        if name in seen:
+    for t in all_defs:
+        if t.name in seen:
             continue
-        seen.add(name)
+        seen.add(t.name)
 
         tool_info = ToolInfo(
-            name=name,
-            server="tool_registry.py",
-            risk_level=t.get("risk_level", "low"),
-            requires_approval=t.get("requires_approval", False),
-            canonical_name=t.get("canonical_name") or CANONICAL_ALIASES.get(name, ""),
-            capability=TOOL_TO_CAPABILITY.get(name, ""),
+            name=t.name,
+            server="catalog.py",
+            risk_level=getattr(t, "risk_level", "low"),
+            requires_approval=getattr(t, "requires_approval", False),
+            capability=t.capability,
         )
         report.tools.append(tool_info)
 
@@ -543,22 +554,17 @@ def explore_tool_registry() -> ServerReport:
 
 
 def explore_capabilities() -> ServerReport:
-    """Report the TOOL_TO_CAPABILITY mapping."""
-    from src.integrations.capabilities import TOOL_TO_CAPABILITY
+    """Report the tool → capability mapping from the unified catalog."""
+    _, tool_to_capability, _ = _load_catalog()
 
     report = ServerReport(
-        server_name="capabilities (TOOL_TO_CAPABILITY)",
+        server_name="capabilities (tool → capability)",
         server_type="capability_mapping",
         transport="static",
     )
 
-    for tool_name, capability in sorted(TOOL_TO_CAPABILITY.items()):
-        tool_info = ToolInfo(
-            name=tool_name,
-            capability=capability,
-            server="capabilities.py",
-        )
-        report.tools.append(tool_info)
+    for tool_name, capability in sorted(tool_to_capability.items()):
+        report.tools.append(ToolInfo(name=tool_name, capability=capability, server="catalog.py"))
 
     report.tool_count = len(report.tools)
     return report
@@ -579,8 +585,8 @@ def explore_agent_scopes() -> dict[str, list[str]]:
 
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Explore Jarvis MCP tool inventory")
-    parser.add_argument("--internal-only", action="store_true", help="Only explore internal FastMCP")
-    parser.add_argument("--external-only", action="store_true", help="Only explore external MCP")
+    parser.add_argument("--internal-only", action="store_true", help="Only internal FastMCP")
+    parser.add_argument("--external-only", action="store_true", help="Only external MCP")
     parser.add_argument("--json", action="store_true", help="JSON output")
     parser.add_argument("--with-schemas", action="store_true", help="Include full input schemas")
     parser.add_argument("--agents", action="store_true", help="Show agent capability scopes")
@@ -597,10 +603,10 @@ async def main() -> None:
         log("📦 Loading tool schemas (Pydantic → Claude API)...")
         reports.append(explore_tool_schemas())
 
-    log("📦 Loading tool registry (_DEFAULT_TOOLS)...")
+    log("📦 Loading tool catalog (INTERNAL_TOOLS + EXTERNAL_TOOL_SEEDS)...")
     reports.append(explore_tool_registry())
 
-    log("📦 Loading capability catalog (TOOL_TO_CAPABILITY)...")
+    log("📦 Loading capability catalog (tool → capability)...")
     reports.append(explore_capabilities())
 
     # Internal FastMCP servers

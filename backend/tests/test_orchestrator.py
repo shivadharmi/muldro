@@ -384,7 +384,6 @@ class TestOrchestrator:
         settings = make_mock_settings(
             daily_token_budget_usd=5.0,
             use_bedrock=False,
-            telegram_bot_token="",
         )
 
         # Build a mock db session where sync methods (add) are MagicMock
@@ -410,6 +409,13 @@ class TestOrchestrator:
         from unittest.mock import AsyncMock
 
         orchestrator._get_tools_for_agent = AsyncMock(return_value=[])
+
+        # Batch folds from the streaming core; drive _call_agent_stream so the
+        # test exercises the agent path without a real streaming API client.
+        async def mock_call_agent_stream(agent_name, **kwargs):
+            yield {"event": "agent_done", "agent": agent_name, "text": "Focus on shipping."}
+
+        orchestrator._call_agent_stream = mock_call_agent_stream
 
         result = await orchestrator.process_message(
             "What should I focus on?",

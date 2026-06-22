@@ -13,9 +13,9 @@ PERSONA_CASES = [
     {
         "name": "detects_brevity_preference",
         "interactions": [
-            {"message": "brief", "surface": "telegram"},
-            {"message": "just the priorities", "surface": "telegram"},
-            {"message": "tldr", "surface": "telegram"},
+            {"message": "brief", "surface": "web"},
+            {"message": "just the priorities", "surface": "web"},
+            {"message": "tldr", "surface": "web"},
         ],
         "expected_categories": ["communication"],
         "expected_signals": ["concise", "brief", "short"],
@@ -23,8 +23,8 @@ PERSONA_CASES = [
     {
         "name": "detects_morning_activity",
         "interactions": [
-            {"message": "what's on today?", "surface": "telegram", "time": "07:00"},
-            {"message": "morning brief", "surface": "telegram", "time": "07:30"},
+            {"message": "what's on today?", "surface": "web", "time": "07:00"},
+            {"message": "morning brief", "surface": "web", "time": "07:30"},
         ],
         "expected_categories": ["schedule"],
         "expected_signals": ["morning"],

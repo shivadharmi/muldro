@@ -13,6 +13,7 @@ Component Types (25+):
 """
 
 import logging
+from datetime import datetime
 from enum import Enum
 from typing import Literal
 
@@ -23,19 +24,52 @@ logger = logging.getLogger(__name__)
 # ── Surface kind taxonomy ───────────────────────────────────────
 
 SurfaceKind = Literal[
-    "summary",
+    # System-managed (detail API exposed)
+    "run",  # unified execution run surface (replaces execution/plan/approval trio)
+    "summary",  # lightweight completion card emitted when a run finishes
     "briefing",
+    "alert",
+    "recommendation",
+    "proactive_insight",
+    # Agent-managed (inline children, no detail API)
+    "message",  # Presenter-authored rich response promoted to workspace feed
+    # Legacy kinds retained for backward compatibility with existing persisted surfaces
+    # and REST-polled fallbacks; new code SHOULD NOT create these.
     "plan",
     "checklist",
     "approval",
     "comparison",
-    "alert",
     "timeline",
     "table",
-    "recommendation",
     "activity",
-    "proactive_insight",
 ]
+
+
+SYSTEM_SURFACE_KINDS = frozenset(
+    {
+        "run",
+        "summary",
+        "briefing",
+        "alert",
+        "recommendation",
+        "proactive_insight",
+    }
+)
+"""Surface kinds owned by backend services. These expose detail APIs."""
+
+
+AGENT_SURFACE_KINDS = frozenset({"message"})
+"""Surface kinds authored inline by the Presenter. No detail API — children carry all content."""
+
+
+def is_system_surface(kind: str) -> bool:
+    """Return True if the kind is a system-managed surface (has detail API)."""
+    return kind in SYSTEM_SURFACE_KINDS
+
+
+def is_agent_surface(kind: str) -> bool:
+    """Return True if the kind is an agent-authored surface (inline children only)."""
+    return kind in AGENT_SURFACE_KINDS
 
 
 class ComponentType(str, Enum):
@@ -174,6 +208,17 @@ class SurfacePreview(BaseModel):
     progress: float | None = None
     timestamp: str | None = None
     tags: list[str] = []
+
+    # ── Per-kind first-class fields (all optional; preserve back-compat) ──
+    # Populated by the surface builders so the frontend design's per-kind
+    # cards have a typed home on the wire instead of overloading metrics[].
+    tokens: int | None = None  # run/execution: input+output tokens summed
+    cost_usd: float | None = None  # run/execution: USD cost rollup
+    risk: Literal["low", "medium", "high", "critical"] | None = None  # approval context
+    flags: list[str] = []  # e.g. ["Irreversible", "LEARNING"]
+    items: list[str] = []  # briefing priority strings (capped)
+    evidence: str | None = None  # e.g. "42 days observed"
+    updated_at: datetime | None = None  # run last-updated / completed timestamp
 
 
 class DetailTab(BaseModel):

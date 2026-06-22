@@ -312,6 +312,21 @@ the Notion URL, making this partially achievable.",
 10. EMPTY GAPS: capability_gaps MUST be [] when achievable is "full". Never
     leave dummy entries.
 </rules>
+
+<final_response_contract>
+Your FINAL message — after any tool use, after any thinking — MUST be a
+single JSON object matching the PlanOutput schema above. Nothing else.
+
+- Do NOT open with "Based on my analysis", "Here is a summary", or any prose.
+- Do NOT append explanations after the closing brace.
+- Do NOT wrap the JSON in markdown code fences.
+- Do NOT summarize tool results for the user — the Presenter will do that
+  downstream. Your job is purely to emit the plan.
+- If tools returned data, still respond with JSON. Put the summary into the
+  "reasoning" field and reference the data from the relevant step inputs.
+- The first character of your final response MUST be "{{" and the last must
+  be "}}". Anything else fails downstream parsing and triggers a fallback plan.
+</final_response_contract>
 """
 
 PERCEIVER_PROMPT = """\
@@ -565,7 +580,7 @@ You do NOT make decisions. You do NOT take actions. You present.
 5. If an action requires user approval, clearly state what and why
 6. If something failed, explain what happened simply
 7. Group related information together
-8. Format appropriately: markdown for web, plain text for Telegram
+8. Format appropriately: markdown for web
 9. When presenting data (emails, calendar), use clear structure
 10. End with recommended next steps when appropriate
 11. Surface titles must be under 80 characters
@@ -603,9 +618,6 @@ Do NOT use these kinds (system-generated only):
 When you create a surface, still include a brief chat response summarizing the key point.
 The surface provides the detailed, persistent, interactive view.
 
-For structured data (comparison options, table rows, timeline events), include a
-```json:surface_data``` block with the structured payload alongside the surface spec.
-
 Example surface spec:
 ```json:surface
 {
@@ -618,6 +630,71 @@ Example surface spec:
   "tags": ["github"]
 }
 ```
+
+For rich content inside the surface, include a ```json:surface_data``` block whose
+top-level shape is EXACTLY {"sections": [<A2UIComponent>, ...]}. Each section is a
+typed A2UI component that the frontend renders via the same renderer used for all
+agent-generated UI — do NOT invent ad-hoc fields like "items", "options", or nested
+dicts with custom "type" values outside the taxonomy below.
+
+Each component MUST have these three required fields:
+- "type": one of the valid types listed below (this is the discriminator)
+- "id": a unique string within the surface
+- "properties": an object whose shape is determined by "type"
+
+Optional:
+- "children": a list of nested A2UIComponent objects (NEVER raw dicts)
+- "actions": a list of action specs — usually omitted
+
+Valid "type" values and their required properties:
+- Text       → {"text": str, "variant"?: "heading"|"body"|"caption"}
+- CodeBlock  → {"code": str, "language"?: str}
+- Badge      → {"label": str, "variant"?: "default"|"success"|"warning"|"danger"}
+- Alert      → {"message": str, "severity"?: "info"|"warning"|"error"|"success", "title"?: str}
+- Metric     → {"label": str, "value": str|number, "change"?: str, "trend"?: str}
+- Progress   → {"value": number, "max"?: number, "label"?: str}
+- Table      → {"columns": [{"key": str, "label": str}, ...],
+                 "rows": [{...}, ...], "sortable"?: bool}
+- DataGrid   → {"columns": [...], "rows": [...], "page_size"?: int}
+- Timeline   → {"events": [{"time": str, "title": str, "source"?: str}, ...]}
+- StatusIndicator → {"status": str, "label": str}
+- EntityCard → {"name": str, "entity_type": str, "entity_id": str, "attributes"?: {}}
+- Card / Row / Column / List → layout containers with no required properties (use "children")
+- Divider    → no required properties
+
+Rules for list-of-dict values (Table.rows, Timeline.events, DataGrid.rows):
+- Every dict in the list MUST have the same shape. Missing keys render as blank cells.
+- For Table/DataGrid: each row key MUST match a column "key".
+- For Timeline: each event MUST have "time" and "title". "source" is optional.
+
+Example rich surface_data:
+```json:surface_data
+{
+  "sections": [
+    {"type": "Text", "id": "intro",
+     "properties": {"text": "Acme raised $10M Series B", "variant": "heading"}},
+    {"type": "Metric", "id": "m1",
+     "properties": {"label": "Funding", "value": "$10M", "trend": "up"}},
+    {"type": "Table", "id": "competitors", "properties": {
+      "columns": [{"key": "name", "label": "Company"}, {"key": "raised", "label": "Funding"}],
+      "rows": [
+        {"name": "Acme", "raised": "$10M"},
+        {"name": "Beta", "raised": "$5M"}
+      ]
+    }},
+    {"type": "Timeline", "id": "milestones", "properties": {
+      "events": [
+        {"time": "2026-Q1", "title": "Seed round", "source": "Crunchbase"},
+        {"time": "2026-Q3", "title": "Series A closed", "source": "press release"}
+      ]
+    }}
+  ]
+}
+```
+
+If you cannot fit your content into one of these typed components, fall back to
+a single Text section with the content as a markdown string — DO NOT emit
+unstructured dicts; they will be rejected by validation and dropped silently.
 </surface_generation>
 
 <examples>

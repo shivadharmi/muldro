@@ -4,9 +4,17 @@ import logging
 from datetime import datetime, timezone
 
 from src.connectors.base import BaseConnector, ConnectorHealth, register_connector
+from src.connectors.poll_result import PollResult, _classify_http_status
 from src.services.event_processor import RawEvent
 
 logger = logging.getLogger(__name__)
+
+# Defensive page cap for a single incremental/initial sync. Google Calendar
+# returns nextSyncToken only on the final page; intermediate pages carry
+# nextPageToken. A misbehaving provider that always returns a nextPageToken
+# would otherwise loop forever. On truncation we log a warning so silent data
+# loss is visible, consistent with the gmail connector's MAX_HISTORY_PAGES.
+MAX_PAGES = 50
 
 
 @register_connector("calendar")
@@ -15,54 +23,91 @@ class CalendarConnector(BaseConnector):
 
     cursor_type: str = "sync_token"
 
-    async def poll(
-        self, user_id: str, cursor: str | None, credentials: dict
-    ) -> tuple[list[RawEvent], str | None]:
+    async def poll(self, user_id: str, cursor: str | None, credentials: dict) -> PollResult:
         """Poll Calendar for event changes since syncToken cursor."""
         import httpx
 
         access_token = credentials.get("access_token", "")
         if not access_token:
-            return [], cursor
+            return PollResult(events=[], cursor=cursor, error_class="auth_failed")
 
-        events = []
+        events: list[RawEvent] = []
         new_cursor = cursor
 
         try:
             async with httpx.AsyncClient() as client:
-                params = {"singleEvents": "true", "maxResults": 50}
-                if cursor:
-                    params["syncToken"] = cursor
-                else:
-                    # Initial sync: get events from now to 7 days out
-                    now = datetime.now(timezone.utc).isoformat()
-                    params["timeMin"] = now
+                # Walk every page before advancing the cursor. Google returns
+                # nextSyncToken ONLY on the final page; intermediate pages carry
+                # nextPageToken. The first request of a sync carries syncToken
+                # (incremental) or timeMin (first sync) — subsequent requests carry
+                # ONLY pageToken, since the API rejects combining a pageToken with
+                # syncToken/timeMin.
+                page_token: str | None = None
+                pages_fetched = 0
+                truncated = False
+                while True:
+                    params: dict = {"singleEvents": "true", "maxResults": 50}
+                    if page_token:
+                        params["pageToken"] = page_token
+                    elif cursor:
+                        params["syncToken"] = cursor
+                    else:
+                        # Initial sync: get events from now onward.
+                        params["timeMin"] = datetime.now(timezone.utc).isoformat()
 
-                resp = await client.get(
-                    "https://www.googleapis.com/calendar/v3/calendars/primary/events",
-                    params=params,
-                    headers={"Authorization": f"Bearer {access_token}"},
-                    timeout=15,
-                )
+                    resp = await client.get(
+                        "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+                        params=params,
+                        headers={"Authorization": f"Bearer {access_token}"},
+                        timeout=15,
+                    )
 
-                if resp.status_code == 410:
-                    # Sync token expired, full sync
-                    return await self.poll(user_id, None, credentials)
+                    if resp.status_code == 410:
+                        # Sync token expired — full sync (cursor=None, not a failure)
+                        return await self.poll(user_id, None, credentials)
 
-                if resp.status_code == 200:
+                    if resp.status_code != 200:
+                        error_class = _classify_http_status(resp.status_code)
+                        logger.warning(
+                            "Calendar API returned %d for user %s", resp.status_code, user_id
+                        )
+                        # Return unchanged incoming cursor on failure
+                        return PollResult(events=[], cursor=cursor, error_class=error_class)
+
                     data = resp.json()
-                    new_cursor = data.get("nextSyncToken", cursor)
-
                     for item in data.get("items", []):
                         event = self._normalize_event(item, user_id)
                         if event:
                             events.append(event)
 
+                    # nextSyncToken only appears on the final page; keep the last
+                    # seen value so the cursor advances correctly after the loop.
+                    sync_token = data.get("nextSyncToken")
+                    if sync_token:
+                        new_cursor = sync_token
+
+                    pages_fetched += 1
+                    page_token = data.get("nextPageToken")
+                    if not page_token:
+                        break
+                    if pages_fetched >= MAX_PAGES:
+                        truncated = True
+                        break
+
+                if truncated:
+                    logger.warning(
+                        "Calendar sync truncated at %d pages for user %s; remaining "
+                        "events were not drained this poll",
+                        MAX_PAGES,
+                        user_id,
+                    )
+
         except Exception:
             logger.warning("Calendar poll failed for user %s", user_id, exc_info=True)
+            return PollResult(events=[], cursor=cursor, error_class="transient")
 
         logger.info("Calendar poll: %d events", len(events))
-        return events, new_cursor
+        return PollResult(events=events, cursor=new_cursor)
 
     async def test(self, credentials: dict) -> ConnectorHealth:
         """Test Calendar connection."""
@@ -196,6 +241,13 @@ class CalendarConnector(BaseConnector):
         if start_time:
             try:
                 occurred_at = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
+                # All-day events expose start.date ("2026-06-25") with no time or
+                # offset, so fromisoformat yields a NAIVE datetime, whereas timed
+                # events (start.dateTime with offset) yield tz-aware. Normalize the
+                # naive date-midnight to UTC-aware so occurred_at is uniformly aware
+                # and downstream comparisons never raise on mixed naive/aware values.
+                if occurred_at.tzinfo is None:
+                    occurred_at = occurred_at.replace(tzinfo=timezone.utc)
             except ValueError:
                 pass
 

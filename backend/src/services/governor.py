@@ -28,9 +28,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from ulid import ULID
 
+from src.contracts import PolicyDecision
 from src.models.plans import Plan
 from src.models.task_graph import TaskRun
-from src.orchestrator.contracts import PolicyDecision
 from src.services.audit import AuditService
 
 if TYPE_CHECKING:
@@ -166,6 +166,7 @@ class Governor:
                 "run_id": run_id,
                 "policy_decision": policy_decision,
             },
+            workspace_id=workspace_id,
         )
 
         logger.info(
@@ -310,12 +311,16 @@ class Governor:
             return False
         return tool.risk_level == "low" and not tool.requires_approval
 
-    async def _emit_event(self, event_type: str, user_id: str, payload: dict) -> None:
+    async def _emit_event(
+        self, event_type: str, user_id: str, payload: dict, workspace_id: str = ""
+    ) -> None:
         """Publish a domain event (best-effort)."""
         if not self._event_bus:
             return
         try:
-            stream = self._event_bus.agent_stream(user_id)
-            await self._event_bus.publish(stream, event_type, payload, user_id)
+            stream = self._event_bus.agent_stream(workspace_id)
+            await self._event_bus.publish(
+                stream, event_type, payload, user_id, workspace_id=workspace_id
+            )
         except Exception:
             logger.debug("Failed to emit %s event", event_type, exc_info=True)

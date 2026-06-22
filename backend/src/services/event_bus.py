@@ -4,10 +4,10 @@ Every system event flows through here. Replaces the callback-based
 pattern in EventProcessor with decoupled consumer groups.
 
 Streams:
-  jarvis:events:{user_id}       — Normalized events from connectors
-  jarvis:agent_events:{user_id} — Agent action events
-  jarvis:system_events          — System-level events (health, budget)
-  jarvis:notifications          — Notification delivery events
+  jarvis:events:{workspace_id}       — Normalized events from connectors
+  jarvis:agent_events:{workspace_id} — Agent action events
+  jarvis:system_events               — System-level events (health, budget)
+  jarvis:notifications               — Notification delivery events
 
 Consumer groups per downstream processor:
   entity_extractor, memory_extractor, planner, notifier, briefing_collector
@@ -32,9 +32,32 @@ class BusEvent:
     stream: str
     event_type: str
     user_id: str
-    payload: dict
+    workspace_id: str = ""
+    payload: dict = field(default_factory=dict)
     metadata: dict = field(default_factory=dict)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass
+class DeadLetterContext:
+    """Passed to a subscriber's ``on_dead_letter`` callback when a message is
+    abandoned after ``DLQ_MAX_DELIVERIES`` failed deliveries.
+
+    ``data`` is the raw stream entry (so the callback works even when parsing
+    was the cause of failure); ``error`` is the last handler/parse exception.
+    """
+
+    stream: str
+    group: str
+    msg_id: str
+    data: dict
+    delivery_count: int
+    error: BaseException | None = None
+
+
+# Async callback invoked once per dead-lettered message. Kept storage-agnostic
+# so EventBus has no DB dependency; the worker wires this to DeadLetterService.
+DeadLetterHandler = Callable[["DeadLetterContext"], Awaitable[None]]
 
 
 class EventBus:
@@ -51,6 +74,7 @@ class EventBus:
         event_type: str,
         payload: dict,
         user_id: str = "",
+        workspace_id: str = "",
         metadata: dict | None = None,
     ) -> str:
         """Publish an event to a stream. Returns the event_id.
@@ -65,6 +89,7 @@ class EventBus:
             "event_id": event_id,
             "event_type": event_type,
             "user_id": user_id,
+            "workspace_id": workspace_id,
             "payload": json.dumps(payload),
             "metadata": json.dumps(metadata or {}),
             "created_at": created_at,
@@ -74,7 +99,7 @@ class EventBus:
 
         # Dual-publish to Pub/Sub for real-time SSE subscribers
         try:
-            from src.orchestrator.contracts import RealtimeEventPayload
+            from src.contracts import RealtimeEventPayload
 
             rt = RealtimeEventPayload(
                 event_id=event_id,
@@ -108,6 +133,9 @@ class EventBus:
                 raise
 
     DLQ_MAX_DELIVERIES = 3
+    # Only reclaim pending messages that have been idle this long. Acts as the
+    # retry backoff between delivery attempts for a failing message.
+    RECLAIM_MIN_IDLE_MS = 30_000
 
     async def subscribe(
         self,
@@ -117,45 +145,142 @@ class EventBus:
         handler: Callable[[BusEvent], Awaitable[None]],
         count: int = 10,
         block_ms: int = 5000,
+        on_dead_letter: DeadLetterHandler | None = None,
     ) -> int:
-        """Read and process messages from a stream. Returns count processed.
+        """Read and process messages from a stream. Returns count handled (acked).
 
-        Messages that fail DLQ_MAX_DELIVERIES times are acked and logged
-        as dead-lettered to prevent infinite retry loops.
+        Two phases per call:
+          1. **Reclaim** stale pending entries via ``XAUTOCLAIM`` so messages
+             that failed on a previous delivery are re-tried (and their
+             delivery count incremented). Without this, a single looping
+             consumer reading ``">"`` never re-sees its own failed messages and
+             the dead-letter branch is unreachable.
+          2. **Read** new messages with ``">"``.
+
+        A message that fails ``DLQ_MAX_DELIVERIES`` times is acked (to stop
+        redelivery) and handed to ``on_dead_letter`` for durable capture.
         """
+        processed = await self._reclaim_pending(
+            stream, group, consumer, handler, count, on_dead_letter
+        )
+
         results = await self._redis.xreadgroup(
             group, consumer, {stream: ">"}, count=count, block=block_ms
         )
-
-        processed = 0
         if results:
             for _stream_name, messages in results:
                 for msg_id, data in messages:
-                    try:
-                        event = self._parse_event(stream, data)
-                        await handler(event)
-                        await self._redis.xack(stream, group, msg_id)
+                    if await self._handle_message(
+                        stream, group, msg_id, data, handler, on_dead_letter
+                    ):
                         processed += 1
-                    except Exception:
-                        delivery_count = await self._get_delivery_count(stream, group, msg_id)
-                        if delivery_count >= self.DLQ_MAX_DELIVERIES:
-                            await self._redis.xack(stream, group, msg_id)
-                            logger.warning(
-                                "Message %s dead-lettered after %d attempts on %s/%s",
-                                msg_id,
-                                delivery_count,
-                                stream,
-                                group,
-                            )
-                        else:
-                            logger.warning(
-                                "Failed to process %s from %s (attempt %d)",
-                                msg_id,
-                                stream,
-                                delivery_count,
-                                exc_info=True,
-                            )
         return processed
+
+    async def _reclaim_pending(
+        self,
+        stream: str,
+        group: str,
+        consumer: str,
+        handler: Callable[[BusEvent], Awaitable[None]],
+        count: int,
+        on_dead_letter: DeadLetterHandler | None,
+    ) -> int:
+        """Claim and re-process stale pending messages. Returns count handled.
+
+        Degrades to a no-op if ``XAUTOCLAIM`` is unavailable (Redis < 6.2) so
+        the consumer keeps draining new messages either way.
+        """
+        try:
+            result = await self._redis.xautoclaim(
+                stream,
+                group,
+                consumer,
+                min_idle_time=self.RECLAIM_MIN_IDLE_MS,
+                start_id="0-0",
+                count=count,
+            )
+        except Exception:
+            logger.debug("xautoclaim unavailable on %s/%s", stream, group, exc_info=True)
+            return 0
+
+        # redis-py returns (next_cursor, claimed_messages[, deleted_ids]).
+        messages = result[1] if result and len(result) >= 2 else []
+        processed = 0
+        for msg_id, data in messages:
+            if data is None:
+                # Entry was trimmed/deleted from the stream — clear it from PEL.
+                await self._redis.xack(stream, group, msg_id)
+                continue
+            if await self._handle_message(stream, group, msg_id, data, handler, on_dead_letter):
+                processed += 1
+        return processed
+
+    async def _handle_message(
+        self,
+        stream: str,
+        group: str,
+        msg_id: str,
+        data: dict,
+        handler: Callable[[BusEvent], Awaitable[None]],
+        on_dead_letter: DeadLetterHandler | None,
+    ) -> bool:
+        """Process one message. Returns True if it was acked (success or
+        dead-lettered), False if left pending for a future retry."""
+        try:
+            event = self._parse_event(stream, data)
+            await handler(event)
+            await self._redis.xack(stream, group, msg_id)
+            return True
+        except Exception as exc:
+            delivery_count = await self._get_delivery_count(stream, group, msg_id)
+            if delivery_count >= self.DLQ_MAX_DELIVERIES:
+                await self._dead_letter(
+                    stream, group, msg_id, data, delivery_count, exc, on_dead_letter
+                )
+                await self._redis.xack(stream, group, msg_id)
+                return True
+            logger.warning(
+                "Failed to process %s from %s (attempt %d)",
+                msg_id,
+                stream,
+                delivery_count,
+                exc_info=True,
+            )
+            return False
+
+    async def _dead_letter(
+        self,
+        stream: str,
+        group: str,
+        msg_id: str,
+        data: dict,
+        delivery_count: int,
+        error: BaseException,
+        on_dead_letter: DeadLetterHandler | None,
+    ) -> None:
+        """Hand an exhausted message to the dead-letter callback and log it."""
+        logger.warning(
+            "Message %s dead-lettered after %d attempts on %s/%s",
+            msg_id,
+            delivery_count,
+            stream,
+            group,
+        )
+        if on_dead_letter is None:
+            return
+        try:
+            await on_dead_letter(
+                DeadLetterContext(
+                    stream=stream,
+                    group=group,
+                    msg_id=msg_id,
+                    data=dict(data),
+                    delivery_count=delivery_count,
+                    error=error,
+                )
+            )
+        except Exception:
+            logger.error("on_dead_letter callback failed for %s", msg_id, exc_info=True)
 
     async def _get_delivery_count(self, stream: str, group: str, msg_id: str) -> int:
         """Get the number of times a message has been delivered."""
@@ -213,13 +338,13 @@ class EventBus:
         except Exception:
             return 0
 
-    def event_stream(self, user_id: str) -> str:
-        """Get the events stream name for a user."""
-        return f"jarvis:events:{user_id}"
+    def event_stream(self, workspace_id: str) -> str:
+        """Get the events stream name for a workspace."""
+        return f"jarvis:events:{workspace_id}"
 
-    def agent_stream(self, user_id: str) -> str:
-        """Get the agent events stream name for a user."""
-        return f"jarvis:agent_events:{user_id}"
+    def agent_stream(self, workspace_id: str) -> str:
+        """Get the agent events stream name for a workspace."""
+        return f"jarvis:agent_events:{workspace_id}"
 
     @staticmethod
     def _parse_event(stream: str, data: dict) -> BusEvent:
@@ -228,6 +353,7 @@ class EventBus:
             stream=stream,
             event_type=data.get("event_type", ""),
             user_id=data.get("user_id", ""),
+            workspace_id=data.get("workspace_id", ""),
             payload=json.loads(data.get("payload", "{}")),
             metadata=json.loads(data.get("metadata", "{}")),
             created_at=datetime.fromisoformat(data["created_at"])

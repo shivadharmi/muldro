@@ -109,9 +109,22 @@ export function MarkdownRenderer({ content }: { content: string }) {
   );
 }
 
+// InlineMarkdown is used inside heading/span contexts (e.g. surface card <h3>,
+// modal <h2>). Block-level tags (headings, lists, blockquotes) would produce
+// invalid HTML when nested inside inline parents, so override them to <span>.
 const inlineComponents: Components = {
   ...components,
   p: ({ children }) => <span>{children}</span>,
+  h1: ({ children }) => <span className="font-semibold">{children}</span>,
+  h2: ({ children }) => <span className="font-semibold">{children}</span>,
+  h3: ({ children }) => <span className="font-semibold">{children}</span>,
+  h4: ({ children }) => <span className="font-semibold">{children}</span>,
+  ul: ({ children }) => <span>{children}</span>,
+  ol: ({ children }) => <span>{children}</span>,
+  li: ({ children }) => <span>{children} </span>,
+  blockquote: ({ children }) => <span className="italic">{children}</span>,
+  hr: () => <span> · </span>,
+  pre: ({ children }) => <>{children}</>,
 };
 
 /** Compact markdown for short text (summaries, descriptions). No block-level spacing. */

@@ -21,9 +21,10 @@ def validate_registry(
     1. Tool capabilities reference known capabilities
     2. Agent scope capabilities exist in catalog
     3. Internal tools have non-null capabilities
-    4. Critical-risk tools require approval
+    4. High-risk (and critical) tools require approval
     5. Internal tools have schemas
     6. Read-only internal tools are low-risk
+    7. Tool names are globally unique across internal + external catalogs
     """
     # Default to module-level constants if not provided
     if internal_tools is None:
@@ -69,14 +70,24 @@ def validate_registry(
         if not tool.capability:
             errors.append(f"Internal tool '{tool.name}' has no capability mapping")
 
-    # Check 4: Critical-risk tools require approval
+    # Check 4: High-risk (and critical) tools require approval.
+    # No tool is ever 'critical' today, so a critical-only check was dead. High-risk
+    # tools are always writes (Check 6 pins read-only tools to none/low), so this
+    # catches a dangerous write tool that forgot to declare requires_approval. Medium
+    # is intentionally excluded — interactive browser_* tools are medium-without-approval
+    # by design.
+    high_risk_levels = ("high", "critical")
     for tool in internal_tools:
-        if tool.risk_level == "critical" and not tool.requires_approval:
-            errors.append(f"Critical tool '{tool.name}' does not require approval")
+        if tool.risk_level in high_risk_levels and not tool.requires_approval:
+            errors.append(
+                f"High-risk tool '{tool.name}' (risk={tool.risk_level}) does not require approval"
+            )
 
     for seed in external_seeds:
-        if seed.risk_level == "critical" and not seed.requires_approval:
-            errors.append(f"Critical tool '{seed.name}' does not require approval")
+        if seed.risk_level in high_risk_levels and not seed.requires_approval:
+            errors.append(
+                f"High-risk tool '{seed.name}' (risk={seed.risk_level}) does not require approval"
+            )
 
     # Check 5: Internal tools have schemas
     for tool in internal_tools:
@@ -93,5 +104,24 @@ def validate_registry(
                 )
             if tool.requires_approval:
                 errors.append(f"Read-only tool '{tool.name}' requires approval")
+
+    # Check 7: Tool names are globally unique across internal + external catalogs.
+    # seed_defaults skips duplicates via a `seen` set without complaint, so a
+    # collision would silently drop one tool's definition. Fail fast instead.
+    seen_names: dict[str, str] = {}
+    for tool in internal_tools:
+        if tool.name in seen_names:
+            errors.append(
+                f"Duplicate tool name '{tool.name}' (in {seen_names[tool.name]} and internal)"
+            )
+        else:
+            seen_names[tool.name] = "internal"
+    for seed in external_seeds:
+        if seed.name in seen_names:
+            errors.append(
+                f"Duplicate tool name '{seed.name}' (in {seen_names[seed.name]} and external)"
+            )
+        else:
+            seen_names[seed.name] = "external"
 
     return errors

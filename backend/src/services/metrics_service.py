@@ -72,6 +72,11 @@ ACTIVE_CONNECTORS = Gauge(
     "Active connectors",
     ["provider"],
 )
+STUCK_RESUME_RUNS = Gauge(
+    "jarvis_stuck_resume_runs",
+    "Runs approved by the user but stuck awaiting scheduler resume past the "
+    "stale threshold (approval_resume recovery backlog)",
+)
 
 # Histograms
 EVENT_PROCESSING_LATENCY = Histogram(
@@ -128,6 +133,10 @@ class MetricsService:
     @staticmethod
     def set_pending_approvals(count: int) -> None:
         PENDING_APPROVALS.set(count)
+
+    @staticmethod
+    def set_stuck_resume_runs(count: int) -> None:
+        STUCK_RESUME_RUNS.set(count)
 
     @staticmethod
     def set_budget_remaining(user_id: str, amount: float) -> None:

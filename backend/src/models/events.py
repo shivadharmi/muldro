@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, String, Text, func
+from sqlalchemy import DateTime, Float, ForeignKey, Index, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -34,7 +34,12 @@ class NormalizedEvent(Base, TimestampMixin):
     raw_ref: Mapped[str | None] = mapped_column(String(512))
     correlation_id: Mapped[str | None] = mapped_column(String(128))
     causation_id: Mapped[str | None] = mapped_column(String(128))
-    idempotency_key: Mapped[str] = mapped_column(String(256), unique=True, nullable=False)
+    # Uniqueness is per-workspace, NOT global: make_idempotency_key carries no
+    # workspace/user component, so two workspaces connecting the same external
+    # account mint identical keys. A global unique constraint would reject the
+    # second workspace's event as a cross-tenant duplicate — the composite
+    # constraint below (uq_norm_events_ws_idem) isolates them.
+    idempotency_key: Mapped[str] = mapped_column(String(256), nullable=False)
     status: Mapped[str] = mapped_column(
         String(32), default="pending"
     )  # pending, processed, ignored
@@ -43,4 +48,5 @@ class NormalizedEvent(Base, TimestampMixin):
     __table_args__ = (
         Index("ix_events_user_occurred", "user_id", "occurred_at"),
         Index("ix_events_user_source_entity", "user_id", "source", "entity_id"),
+        UniqueConstraint("workspace_id", "idempotency_key", name="uq_norm_events_ws_idem"),
     )

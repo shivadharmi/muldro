@@ -96,6 +96,7 @@ class TestBackgroundTaskFailure:
             return mock_step_result  # Step check
 
         mock_db.execute = mock_execute
+        mock_db.get = AsyncMock(return_value=run)  # re-fetch after rollback
 
         scheduler = SchedulerLoop(MagicMock(), orchestrator=MagicMock())
 
@@ -137,6 +138,8 @@ class TestBackgroundTaskFailure:
             return mock_step_result
 
         mock_db.execute = mock_execute
+        # After rollback the tick re-fetches the run; return the same row.
+        mock_db.get = AsyncMock(return_value=run)
 
         mock_executor = AsyncMock()
         mock_executor.execute_run = AsyncMock(side_effect=RuntimeError("Timeout"))
@@ -152,6 +155,51 @@ class TestBackgroundTaskFailure:
         assert run.retry_count == 1
         # Should stay pending for retry (not yet exhausted)
         assert run.status == "pending"
+
+    @patch("src.services.scheduler.get_session_factory")
+    async def test_retry_refetches_run_after_rollback(self, mock_factory_fn):
+        """After rollback (which expires ORM instances), the failure path must
+        re-fetch the run before mutating it. Reading an expired attribute on the
+        stale instance would raise MissingGreenlet in async SQLAlchemy and
+        silently drop the retry bookkeeping."""
+        from src.services.scheduler import SchedulerLoop
+
+        factory, mock_db = _mock_factory()
+        mock_factory_fn.return_value = factory
+
+        stale_run = _make_task_run(retry_count=0, max_retries=3)
+        fresh_run = _make_task_run(retry_count=0, max_retries=3)
+
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = [stale_run]
+        mock_step_result = MagicMock()
+        mock_step_result.scalar_one_or_none.return_value = "step_001"
+
+        call_count = 0
+
+        async def mock_execute(stmt):
+            nonlocal call_count
+            call_count += 1
+            return mock_result if call_count == 1 else mock_step_result
+
+        mock_db.execute = mock_execute
+        # Re-fetch returns a FRESH, attached instance (distinct from the stale one).
+        mock_db.get = AsyncMock(return_value=fresh_run)
+
+        mock_executor = AsyncMock()
+        mock_executor.execute_run = AsyncMock(side_effect=RuntimeError("Timeout"))
+
+        scheduler = SchedulerLoop(MagicMock(), orchestrator=MagicMock())
+        with patch(
+            "src.services.graph_executor.create_graph_executor",
+            new=AsyncMock(return_value=mock_executor),
+        ):
+            await scheduler._tick_background_tasks(factory)
+
+        # The fresh (re-fetched) run is mutated/persisted, not the stale one.
+        mock_db.get.assert_awaited()
+        assert fresh_run.retry_count == 1
+        assert stale_run.retry_count == 0
 
 
 class TestBackgroundTaskDLQ:
@@ -184,6 +232,7 @@ class TestBackgroundTaskDLQ:
             return mock_step_result
 
         mock_db.execute = mock_execute
+        mock_db.get = AsyncMock(return_value=run)  # re-fetch after rollback
 
         mock_executor = AsyncMock()
         mock_executor.execute_run = AsyncMock(side_effect=RuntimeError("Fatal"))
@@ -223,3 +272,76 @@ class TestApprovalResumeSource:
         source = inspect.getsource(SchedulerLoop._tick_background_tasks)
         assert "approval_resume" in source
         assert "background" in source
+
+
+class TestRequeuedPlanRunIsTickVisible:
+    @pytest.mark.asyncio
+    @patch("src.services.scheduler.get_session_factory")
+    async def test_requeued_plan_run_selected_and_executed_by_tick(self, mock_factory_fn):
+        """A deferred source='plan' run, once requeued (→ background), must be
+        picked up + executed by the background tick (not orphaned)."""
+        from src.services.reauth_service import ReauthService
+        from src.services.scheduler import SchedulerLoop
+
+        factory, mock_db = _mock_factory()
+        mock_factory_fn.return_value = factory
+
+        # A deferred autonomous run from the Governor (source='plan').
+        run = _make_task_run(
+            run_id="run_plan_001",
+            status="awaiting_reauth",
+            source="plan",
+            checkpoint={"awaiting_provider": "notion"},
+        )
+
+        # 1) Requeue via ReauthService — must flip source to a tick-visible value.
+        requeue_result = MagicMock()
+        requeue_scalars = MagicMock()
+        requeue_scalars.all.return_value = [run]
+        requeue_result.scalars.return_value = requeue_scalars
+        mock_db.execute = AsyncMock(return_value=requeue_result)
+
+        reauth = ReauthService(
+            db_factory=MagicMock(),
+            notifier=MagicMock(),
+            redis=None,
+            settings=MagicMock(),
+        )
+        await reauth.requeue_deferred_runs(mock_db, run.user_id, "notion")
+        assert run.status == "pending"
+        assert run.source in ("background", "approval_resume")
+
+        # 2) Now the background tick must SELECT and execute it. Re-arm mocks.
+        run_query = MagicMock()
+        run_scalars = MagicMock()
+        run_scalars.all.return_value = [run]
+        run_query.scalars.return_value = run_scalars
+
+        step_query = MagicMock()
+        step_query.scalar_one_or_none.return_value = "step_x"  # steps already exist
+
+        call_count = 0
+
+        async def mock_execute(stmt):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return run_query  # TaskRun selection
+            return step_query
+
+        mock_db.execute = mock_execute
+
+        mock_executor = AsyncMock()
+        mock_executor.execute_run = AsyncMock(return_value=MagicMock(status="completed"))
+
+        scheduler = SchedulerLoop(MagicMock(), orchestrator=MagicMock())
+        with patch(
+            "src.services.graph_executor.create_graph_executor",
+            new=AsyncMock(return_value=mock_executor),
+        ):
+            await scheduler._tick_background_tasks(factory)
+
+        # The requeued run was actually executed (would be orphaned if the
+        # source stayed 'plan').
+        mock_executor.execute_run.assert_awaited_once()
+        assert mock_executor.execute_run.await_args.args[0] == "run_plan_001"

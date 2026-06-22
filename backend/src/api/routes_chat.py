@@ -15,11 +15,24 @@ from pydantic import BaseModel
 
 from src.api.deps import get_current_user_id, get_current_workspace_id
 from src.config.settings import Settings, get_settings
-from src.orchestrator.contracts import (
+from src.contracts import (
     MessageAgentStep,
     MessageMetadata,
     MessageToolCall,
     PlanOutput,
+)
+from src.errors import safe_error_event
+from src.middleware.observability import get_correlation_id
+from src.orchestrator.core_events import (
+    AgentDone,
+    AgentStarted,
+    AgentThinking,
+    AgentToolCall,
+    AgentToolResult,
+    PlanReady,
+    Presentation,
+    TraceStarted,
+    core_event_to_sse,
 )
 
 logger = logging.getLogger(__name__)
@@ -36,22 +49,27 @@ class ChatRequest(BaseModel):
 
 
 def _build_orchestrator(settings: Settings):
-    """Build orchestrator with all services for the API process."""
+    """Build the process-wide orchestrator with session-free shared services.
+
+    The orchestrator holds only the shared singletons (``build_shared``); every
+    DB-bound service is built per request against a fresh ``AsyncSession`` via
+    ``JarvisOrchestrator._request_services``. This avoids sharing one
+    long-lived session across concurrent chat requests (P2 #4).
+    """
     from src.models.database import get_session_factory
     from src.orchestrator.jarvis import JarvisOrchestrator
-    from src.runtime import build as build_runtime
-    from src.tools import intelligence_server
+    from src.runtime import build_shared
+    from src.tools import configure_tool_servers
 
     db_factory = get_session_factory()
+    svc = build_shared(settings)
+    configure_tool_servers(db_factory, settings, svc)
 
-    # Long-lived session for services that hold a db reference.
-    # These persist for the orchestrator lifetime (one per API process).
-    # Stored as module-level so it can be closed during app shutdown.
-    svc_db = db_factory()
-    _module_svc_db_ref.append(svc_db)
-
-    svc = build_runtime(settings, svc_db)
-    intelligence_server.configure(db_factory, settings, svc)
+    # Track the shared Redis client for shutdown cleanup (build_shared opens one
+    # process-wide client reused by the orchestrator + per-request services).
+    shared_redis = svc.extras.get("redis")
+    if shared_redis is not None:
+        _module_shared_redis.append(shared_redis)
 
     return JarvisOrchestrator(
         settings=settings,
@@ -62,7 +80,7 @@ def _build_orchestrator(settings: Settings):
 
 # Lazy singleton — created on first request
 _orchestrator = None
-_module_svc_db_ref: list = []  # holds the long-lived session for shutdown cleanup
+_module_shared_redis: list = []  # shared Redis client(s) to close at shutdown
 
 
 async def _get_orchestrator(settings: Settings):
@@ -71,6 +89,27 @@ async def _get_orchestrator(settings: Settings):
         _orchestrator = _build_orchestrator(settings)
         await _orchestrator.load_agents_from_db()
     return _orchestrator
+
+
+async def shutdown_orchestrator() -> None:
+    """Release process-wide orchestrator resources at app shutdown.
+
+    Awaits the orchestrator's background tasks and closes the shared Redis
+    client opened by ``build_shared`` (P2 #4 polish — previously leaked).
+    """
+    global _orchestrator
+    if _orchestrator is not None:
+        try:
+            await _orchestrator.shutdown()
+        except Exception:
+            logger.debug("orchestrator.shutdown failed", exc_info=True)
+        _orchestrator = None
+    for redis in _module_shared_redis:
+        try:
+            await redis.aclose()
+        except Exception:
+            logger.debug("shared Redis aclose failed", exc_info=True)
+    _module_shared_redis.clear()
 
 
 @router.post("/v1/jarvis/chat")
@@ -92,7 +131,7 @@ async def chat_stream(
       - decision: {decision}
       - agent_done: {agent, text, input_tokens, output_tokens, latency_ms}
       - response: {text}  — the final user-facing response
-      - error: {message}
+      - error: {code, message, correlation_id}  — client-safe (no raw exception)
       - done: {trace_id}
     """
     orchestrator = await _get_orchestrator(settings)
@@ -168,7 +207,10 @@ async def chat_stream(
             mid_data = json.dumps({"event": "message_id", "message_id": assistant_message_id})
             yield f"event: message_id\ndata: {mid_data}\n\n"
 
-            async for event in orchestrator.process_message_stream(
+            # Consume typed CoreEvents: fold them into the persisted-message
+            # metadata via type matching (no bare dict["event"] sniffing), then
+            # serialize each to its SSE frame for the browser.
+            async for event in orchestrator.process_message_events(
                 message=req.message,
                 user_id=user_id,
                 workspace_id=workspace_id,
@@ -181,93 +223,84 @@ async def chat_stream(
                 if await request.is_disconnected():
                     break
 
-                event_type = event.get("event", "message")
-
-                if event_type == "response":
-                    final_response_text = event.get("text", "")
-                if event_type == "trace":
-                    final_trace_id = event.get("trace_id")
-                if event_type == "plan":
-                    raw = event.get("plan")
-                    if isinstance(raw, dict):
-                        final_decision = PlanOutput.model_validate(raw)
-
-                # Collect agent step data using Pydantic models
-                if event_type == "agent_start":
-                    agent_steps.append(
-                        MessageAgentStep(
-                            agent=event.get("agent", "unknown"),
-                            model=event.get("model"),
-                        )
-                    )
-                elif event_type == "agent_done" and agent_steps:
-                    agent_name = event.get("agent")
-                    for step in agent_steps:
-                        if step.agent == agent_name:
-                            step.response_text = event.get("text", "")
-                            step.input_tokens = event.get("input_tokens")
-                            step.output_tokens = event.get("output_tokens")
-                            step.cache_creation_tokens = event.get("cache_creation_tokens")
-                            step.cache_read_tokens = event.get("cache_read_tokens")
-                            step.cost_usd = event.get("cost_usd")
-                            step.latency_ms = event.get("latency_ms")
-                            step.status = "done"
-                            break
-                elif event_type == "thinking" and agent_steps:
-                    agent_name = event.get("agent")
-                    is_thinking = event.get("is_thinking", False)
-                    text = event.get("text", "")
-                    for step in reversed(agent_steps):
-                        if step.agent == agent_name:
+                match event:
+                    case Presentation(text=text):
+                        final_response_text = text
+                    case TraceStarted(trace_id=trace_id):
+                        final_trace_id = trace_id
+                    case PlanReady(plan=plan):
+                        if isinstance(plan, dict):
+                            final_decision = PlanOutput.model_validate(plan)
+                    case AgentStarted(agent=agent, model=model):
+                        agent_steps.append(MessageAgentStep(agent=agent, model=model))
+                    case AgentDone(agent=agent):
+                        for step in agent_steps:
+                            if step.agent == agent:
+                                step.response_text = event.text
+                                step.input_tokens = event.input_tokens
+                                step.output_tokens = event.output_tokens
+                                step.cache_creation_tokens = event.cache_creation_tokens
+                                step.cache_read_tokens = event.cache_read_tokens
+                                step.cost_usd = event.cost_usd
+                                step.latency_ms = event.latency_ms
+                                step.status = "done"
+                                break
+                    case AgentThinking(agent=agent, text=text, is_thinking=is_thinking):
+                        for step in reversed(agent_steps):
+                            if step.agent != agent:
+                                continue
                             if is_thinking:
-                                # Extended thinking — accumulate preview
+                                # Extended thinking — accumulate preview (cap 2000)
                                 if not step.thinking_preview:
                                     step.thinking_preview = ""
                                 if len(step.thinking_preview) < 2000:
-                                    step.thinking_preview += text
-                                    if len(step.thinking_preview) > 2000:
-                                        step.thinking_preview = step.thinking_preview[:2000]
+                                    step.thinking_preview = (step.thinking_preview + text)[:2000]
                             else:
-                                # Agent reasoning text — accumulate
+                                # Agent reasoning text — accumulate (cap 2000)
                                 if not step.reasoning_text:
                                     step.reasoning_text = ""
                                 if len(step.reasoning_text) < 2000:
-                                    step.reasoning_text += text
-                                    if len(step.reasoning_text) > 2000:
-                                        step.reasoning_text = step.reasoning_text[:2000]
+                                    step.reasoning_text = (step.reasoning_text + text)[:2000]
                             break
-                elif event_type == "tool_call" and agent_steps:
-                    agent_name = event.get("agent")
-                    for step in reversed(agent_steps):
-                        if step.agent == agent_name:
-                            step.tool_calls.append(
-                                MessageToolCall(
-                                    tool_name=event.get("tool", ""),
-                                    tool_input=event.get("input", {}),
-                                    status="success",
+                    case AgentToolCall(agent=agent, tool=tool, input=tool_input):
+                        for step in reversed(agent_steps):
+                            if step.agent == agent:
+                                step.tool_calls.append(
+                                    MessageToolCall(
+                                        tool_name=tool,
+                                        tool_input=tool_input,
+                                        status="success",
+                                    )
                                 )
-                            )
-                            break
-                elif event_type == "tool_result" and agent_steps:
-                    agent_name = event.get("agent")
-                    for step in reversed(agent_steps):
-                        if step.agent == agent_name and step.tool_calls:
-                            tc = step.tool_calls[-1]
-                            if event.get("blocked", False):
-                                tc.status = "blocked"
-                            tc.duration_ms = event.get("latency_ms", 0)
-                            # Store result preview (truncated)
-                            raw_result = event.get("result")
-                            if raw_result is not None:
-                                preview = json.dumps(raw_result, default=str)
-                                tc.result_preview = preview[:500] if len(preview) > 500 else preview
-                            break
+                                break
+                    case AgentToolResult(
+                        agent=agent, blocked=blocked, latency_ms=latency_ms, result=tool_result
+                    ):
+                        for step in reversed(agent_steps):
+                            if step.agent == agent and step.tool_calls:
+                                tc = step.tool_calls[-1]
+                                if blocked:
+                                    tc.status = "blocked"
+                                tc.duration_ms = latency_ms
+                                if tool_result is not None:
+                                    preview = json.dumps(tool_result, default=str)
+                                    tc.result_preview = (
+                                        preview[:500] if len(preview) > 500 else preview
+                                    )
+                                break
+                    case _:
+                        pass
 
-                data = json.dumps(event, default=str)
+                # Serialize for the SSE client (batch-only events map to None).
+                sse = core_event_to_sse(event)
+                if sse is None:
+                    continue
+                event_type = sse.get("event", "message")
+                data = json.dumps(sse, default=str)
                 yield f"event: {event_type}\ndata: {data}\n\n"
         except Exception as e:
             logger.error("Chat stream error: %s", e, exc_info=True)
-            error_data = json.dumps({"event": "error", "message": str(e)})
+            error_data = json.dumps(safe_error_event(e, get_correlation_id()))
             yield f"event: error\ndata: {error_data}\n\n"
         finally:
             # Save assistant response and update conversation aggregates

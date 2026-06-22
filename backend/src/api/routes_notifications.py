@@ -151,30 +151,30 @@ async def subscribe_push(
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_session),
 ):
-    """Register a Web Push subscription for the user."""
+    """Register a Web Push subscription for the user.
+
+    Atomic upsert — concurrent devices / tabs subscribing at the same time
+    cannot both INSERT and collide on ``ix_user_settings_unique``.
+    """
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
     from src.models.users import UserSettings
 
-    result = await db.execute(
-        select(UserSettings).where(
-            UserSettings.user_id == user_id,
-            UserSettings.category == "notification",
-            UserSettings.key == "push_subscription",
-        )
-    )
-    existing = result.scalar_one_or_none()
     subscription_data = {"endpoint": req.endpoint, "keys": req.keys}
-
-    if existing:
-        existing.value = subscription_data
-    else:
-        setting = UserSettings(
+    stmt = (
+        pg_insert(UserSettings)
+        .values(
             user_id=user_id,
             category="notification",
             key="push_subscription",
             value=subscription_data,
         )
-        db.add(setting)
-
+        .on_conflict_do_update(
+            index_elements=["user_id", "category", "key"],
+            set_={"value": subscription_data},
+        )
+    )
+    await db.execute(stmt)
     await db.commit()
     return {"status": "subscribed"}
 

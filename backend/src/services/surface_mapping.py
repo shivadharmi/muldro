@@ -12,8 +12,10 @@ import logging
 import re
 from typing import TYPE_CHECKING
 
+from src.llm_utils import parse_llm_json
+
 if TYPE_CHECKING:
-    from src.orchestrator.contracts import PlanOutput, SurfaceSpec
+    from src.contracts import PlanOutput, SurfaceDataPayload, SurfaceSpec
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +137,25 @@ def apply_surface_cap(surfaces: list) -> list:
 
 _SURFACE_SPEC_RE = re.compile(r"```json:surface\s*\n(.*?)\n```", re.DOTALL)
 _SURFACE_DATA_RE = re.compile(r"```json:surface_data\s*\n(.*?)\n```", re.DOTALL)
+_ALL_SURFACE_BLOCKS_RE = re.compile(
+    r"```json:(?:surface|surface_data)\s*\n.*?\n```\s*",
+    re.DOTALL,
+)
+_COLLAPSE_BLANK_LINES_RE = re.compile(r"\n{3,}")
+
+
+def strip_surface_blocks(text: str) -> str:
+    """Remove ``` ```json:surface``` `` and ``` ```json:surface_data``` `` fenced blocks.
+
+    Used to scrub the Presenter response before it is delivered to the user so the
+    machine-readable surface specification / payload does not leak into chat.
+    Collapses runs of three or more newlines left by the removed blocks.
+    """
+    if not text:
+        return text
+    stripped = _ALL_SURFACE_BLOCKS_RE.sub("", text)
+    stripped = _COLLAPSE_BLANK_LINES_RE.sub("\n\n", stripped)
+    return stripped.strip()
 
 
 def extract_surface_spec(response_text: str) -> "SurfaceSpec | None":
@@ -143,31 +164,56 @@ def extract_surface_spec(response_text: str) -> "SurfaceSpec | None":
     Returns SurfaceSpec on success, None if not found or invalid.
     Best-effort — degrades to chat-only on failure.
     """
-    from src.orchestrator.contracts import SurfaceSpec
+    from pydantic import ValidationError
+
+    from src.contracts import SurfaceSpec
 
     match = _SURFACE_SPEC_RE.search(response_text)
     if not match:
         return None
 
     try:
-        data = json.loads(match.group(1))
+        data = parse_llm_json(match.group(1))
+        if not isinstance(data, dict):
+            logger.debug("SurfaceSpec block was not a JSON object; ignoring")
+            return None
         return SurfaceSpec(**data)
-    except (json.JSONDecodeError, Exception):
+    except (json.JSONDecodeError, ValidationError):
+        # Malformed JSON or schema mismatch from the LLM → degrade to chat-only.
+        # Unexpected exceptions are NOT swallowed here — let them surface.
         logger.debug("Failed to parse SurfaceSpec from response", exc_info=True)
         return None
 
 
-def extract_surface_data(response_text: str) -> dict | None:
-    """Extract structured data from ```json:surface_data``` block.
+def extract_surface_data(response_text: str) -> "SurfaceDataPayload | None":
+    """Extract and validate structured surface content from ``` ```json:surface_data``` ``.
 
-    Used by detail tab builders for comparison, table, timeline, checklist kinds.
+    Returns a typed :class:`SurfaceDataPayload` whose ``sections`` are full
+    :class:`A2UIComponent` trees. Returns ``None`` if the block is missing,
+    not valid JSON, or if any section fails A2UI component validation (invalid
+    ``type``, missing ``id``, or properties that don't match the registered
+    Pydantic property model for that type).
     """
+    from pydantic import ValidationError
+
+    from src.contracts import SurfaceDataPayload
+
     match = _SURFACE_DATA_RE.search(response_text)
     if not match:
         return None
 
     try:
-        return json.loads(match.group(1))
+        raw = parse_llm_json(match.group(1))
     except json.JSONDecodeError:
-        logger.debug("Failed to parse surface_data from response", exc_info=True)
+        logger.debug("surface_data block is not valid JSON", exc_info=True)
+        return None
+
+    if not isinstance(raw, dict):
+        logger.debug("surface_data block was not a JSON object; ignoring")
+        return None
+
+    try:
+        return SurfaceDataPayload(**raw)
+    except ValidationError:
+        logger.warning("surface_data failed A2UI component validation", exc_info=True)
         return None

@@ -125,19 +125,22 @@ class TestMinIO:
                 pytest.skip("MinIO not running")
 
 
-class TestSeedData:
-    async def test_seed_data_present(self, client: httpx.AsyncClient):
-        """Seeded agents and routes exist (global tables)."""
-        agents_resp = await client.get("/v1/agents")
-        assert agents_resp.status_code == 200
-        agents = agents_resp.json()
-        assert len(agents) >= 8, f"Expected >=8 seeded agents, got {len(agents)}"
+class TestWorkspaceProvisioning:
+    async def test_new_user_has_workspace_and_settings(self, client: httpx.AsyncClient):
+        """A provisioned user resolves to a workspace and has policy/budget settings.
 
-        routes_resp = await client.get("/v1/routes")
-        assert routes_resp.status_code == 200
-        routes = routes_resp.json()
-        assert len(routes) >= 8, f"Expected >=8 seeded routes, got {len(routes)}"
+        Replaces the old agents/routes seed check — those global tables are no
+        longer API-exposed after capability-based routing replaced agent_routes.
+        Workspace provisioning (provision_workspace) is the surviving seed path.
+        """
+        me = await client.get("/v1/auth/me")
+        assert me.status_code == 200
+        assert me.json()["user_id"].startswith("usr_")
 
-        # Schedules are workspace-scoped — new test user may have none
-        schedules_resp = await client.get("/v1/schedules")
-        assert schedules_resp.status_code == 200
+        policy = await client.get("/v1/settings/policy")
+        assert policy.status_code == 200
+        assert "mode" in policy.json()
+
+        budget = await client.get("/v1/settings/budget")
+        assert budget.status_code == 200
+        assert "daily_limit_usd" in budget.json()

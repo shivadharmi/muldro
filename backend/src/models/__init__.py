@@ -35,7 +35,6 @@ from src.models.trust_state import TrustCeiling, TrustState
 from src.models.ui_state import UISurface
 from src.models.users import (
     MagicLink,
-    OAuthConnection,
     Session,
     User,
     UserSettings,
@@ -73,7 +72,6 @@ __all__ = [
     "WorkspaceMember",
     "MagicLink",
     "Session",
-    "OAuthConnection",
     "UserSettings",
     # Task graph
     "TaskRun",

@@ -19,6 +19,13 @@ logger = logging.getLogger(__name__)
 # Maximum request body size (1MB)
 MAX_REQUEST_BODY_BYTES = 1_048_576
 
+# Per-endpoint rate-limit tiers (requests/min/IP). The global RateLimitMiddleware
+# (rate_limit_rpm, default 120) covers reads cheaply; these tighten caps on
+# endpoints that are brute-forceable or that trigger (re-)execution.
+RATE_LIMIT_AUTH_VERIFY = 10  # magic-link token verification — brute-force protection
+RATE_LIMIT_APPROVAL_DECISION = 30  # approve/reject/edit — each triggers execution
+RATE_LIMIT_RUN_ACTION = 20  # retry/cancel/resume — each can trigger re-execution
+
 
 class _RequestTooLargeError(Exception):
     """Raised by counting receive() when chunked body exceeds size limit."""

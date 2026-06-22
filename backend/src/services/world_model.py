@@ -13,6 +13,7 @@ Responsibilities:
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 
 from sqlalchemy import or_, select
@@ -54,6 +55,9 @@ ENTITY_TYPES = frozenset(
         "recipe",
         "course",
         "contact_group",
+        # Financial / money-movement domain
+        "financial_transaction",
+        "merchant",
     }
 )
 
@@ -85,6 +89,9 @@ RELATION_TYPES = frozenset(
         "subscribes_to",
         "shares_with",
         "cares_for",
+        # Financial / money-movement domain
+        "paid_to",
+        "charged_to",
     }
 )
 
@@ -115,22 +122,68 @@ You MUST respond with valid JSON matching this schema:
 Entity types: person, organization, project, meeting, goal, task, document, \
 message_thread, repository, channel, product, investment, website, tool, watcher, \
 location, health_record, hobby, family_member, financial_account, media_item, \
-recipe, course, contact_group
+recipe, course, contact_group, financial_transaction, merchant
 
 Relation types: works_on, related_to, scheduled_with, reports_to, owns, \
 member_of, assigned_to, mentioned_in, depends_on, attends, authored, invested_in, \
 blocked_by, sent_by, attached_to, derived_from, monitors, lives_at, prescribed_by, \
-enrolled_in, follows, subscribes_to, shares_with, cares_for
+enrolled_in, follows, subscribes_to, shares_with, cares_for, paid_to, charged_to
 
 Rules:
 - Always extract the sender/actor as a person entity
-- Include email addresses as aliases
-- If you cannot determine a canonical name, use the email address
+- Include email addresses as aliases, NOT as the canonical_name
+- Privacy: canonical_name MUST be a human display name. If you cannot determine \
+one, use a descriptive label such as "Sender (example.com)" derived from the \
+domain, and keep the raw email address only in aliases. NEVER use a bare email \
+address as canonical_name.
+- For spend/charge/payment/transaction events (e.g. a card was charged, money was \
+sent or received), extract a `financial_transaction` entity. Put structured detail \
+in its `attributes` dict: amount (number), currency (ISO code like "INR"/"USD"), \
+merchant (name), account_last4 (last 4 digits of the card/account), and direction \
+("debit" for money out, "credit" for money in). Use a concise canonical_name like \
+"INR 1087 at <merchant>" or "Card charge INR 1087". Also extract the `merchant` as \
+its own entity when named, and link the transaction with `paid_to` (merchant) and \
+`charged_to` (the financial_account / card).
 - Only extract relationships you are reasonably confident about
 - Set importance: 1.0 for key people/active projects, 0.5 for mentioned entities, \
 0.2 for incidental references
 - Extract document/repo/channel entities when they are directly referenced
 """
+
+
+# Simple, deterministic check for a bare email address used as a display name.
+_EMAIL_RE = re.compile(r"^\s*[^@\s]+@[^@\s]+\.[^@\s]+\s*$")
+
+
+def sanitize_canonical_name(
+    canonical_name: str, aliases: list[str] | None
+) -> tuple[str, list[str]]:
+    """Privacy guard: never store a bare email address as an entity's canonical name.
+
+    If ``canonical_name`` is a bare email address (PII), derive a privacy-preserving
+    display label and push the raw email into ``aliases`` instead. A normal display
+    name is returned unchanged.
+
+    Returns a ``(canonical_name, aliases)`` tuple with a new aliases list (the input
+    is never mutated). The raw email is preserved in aliases so lookups still work.
+    """
+    name = (canonical_name or "").strip()
+    out_aliases = list(aliases or [])
+    if not name or not _EMAIL_RE.match(name):
+        return (name or "Unknown", out_aliases)
+
+    email = name
+    if email not in out_aliases:
+        out_aliases.append(email)
+
+    local, _, domain = email.partition("@")
+    # Prefer a human-ish label from the local part; fall back to the domain.
+    cleaned = re.sub(r"[._-]+", " ", local).strip()
+    if cleaned and not cleaned.isdigit():
+        label = cleaned.title()
+    else:
+        label = f"Sender ({domain})"
+    return (label, out_aliases)
 
 
 class WorldModel:
@@ -236,6 +289,8 @@ class WorldModel:
     ) -> str:
         """Create or update an entity. Returns entity_id."""
         now = datetime.now(timezone.utc)
+        # Privacy guard: never persist a bare email address as the canonical name.
+        canonical_name, aliases = sanitize_canonical_name(canonical_name, aliases)
         existing = await self._find_by_name_or_alias(
             user_id, canonical_name, aliases, workspace_id=workspace_id
         )
@@ -251,7 +306,12 @@ class WorldModel:
             if importance is not None:
                 existing.importance_score = max(existing.importance_score or 0.0, importance)
             await self._db.commit()
-            await self._emit_event("entity.updated", user_id, {"entity_id": existing.entity_id})
+            await self._emit_event(
+                "entity.updated",
+                user_id,
+                {"entity_id": existing.entity_id},
+                workspace_id=workspace_id,
+            )
             return existing.entity_id
 
         entity_id = f"ent_{ULID()}"
@@ -337,7 +397,9 @@ class WorldModel:
             entity_type,
             canonical_name,
         )
-        await self._emit_event("entity.created", user_id, {"entity_id": entity_id})
+        await self._emit_event(
+            "entity.created", user_id, {"entity_id": entity_id}, workspace_id=workspace_id
+        )
         return entity_id
 
     async def add_relationship(
@@ -376,6 +438,7 @@ class WorldModel:
             "relationship.created",
             user_id,
             {"relation_id": relation_id, "relationship_id": relation_id},
+            workspace_id=workspace_id,
         )
         return relation_id
 
@@ -596,12 +659,16 @@ class WorldModel:
             return "email"
         return "name"
 
-    async def _emit_event(self, event_type: str, user_id: str, payload: dict) -> None:
+    async def _emit_event(
+        self, event_type: str, user_id: str, payload: dict, workspace_id: str = ""
+    ) -> None:
         """Publish a domain event (best-effort)."""
         if not self._event_bus:
             return
         try:
-            stream = self._event_bus.agent_stream(user_id)
-            await self._event_bus.publish(stream, event_type, payload, user_id)
+            stream = self._event_bus.agent_stream(workspace_id)
+            await self._event_bus.publish(
+                stream, event_type, payload, user_id, workspace_id=workspace_id
+            )
         except Exception:
             logger.debug("Failed to emit %s event", event_type, exc_info=True)

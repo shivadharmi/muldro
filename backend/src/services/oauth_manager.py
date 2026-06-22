@@ -6,7 +6,9 @@ Tokens are encrypted at rest using Fernet symmetric encryption.
 
 import logging
 import os
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Literal
 
 from cryptography.fernet import Fernet
 from sqlalchemy import select
@@ -15,6 +17,27 @@ from ulid import ULID
 from src.models.oauth_token import OAuthToken
 
 logger = logging.getLogger(__name__)
+
+# Reason for a token-acquisition outcome. Lets callers distinguish a confirmed
+# "no usable credential" state (never connected / no refresh token / revoked) —
+# which is PERMANENT and should surface re-auth — from a transient refresh blip
+# (the provider's token endpoint failed on a network/5xx) which is worth retrying.
+TokenReason = Literal["ok", "no_token", "refresh_failed", "no_refresh_token", "revoked"]
+
+
+@dataclass(frozen=True)
+class TokenResult:
+    """Immutable outcome of a token-acquisition attempt.
+
+    ``token`` is the decrypted access token on success (``reason == "ok"``) and
+    ``None`` for every failure reason. Callers that only need the token string can
+    use :meth:`OAuthManager.get_valid_token` (a thin ``.token`` wrapper); callers
+    that must classify the failure (e.g. the perception circuit breaker) use
+    :meth:`OAuthManager.get_valid_token_with_reason`.
+    """
+
+    token: str | None
+    reason: TokenReason
 
 
 def _get_fernet(key: str = "") -> Fernet:
@@ -91,7 +114,26 @@ class OAuthManager:
     async def get_valid_token(self, user_id: str, provider: str) -> str | None:
         """Get a valid access token, refreshing if needed.
 
-        Returns the decrypted access token or None if not found.
+        Returns the decrypted access token or ``None`` if no usable token could
+        be acquired. Thin back-compat wrapper over
+        :meth:`get_valid_token_with_reason` for callers that only need the token
+        string (most of them); callers that must classify *why* there is no token
+        (e.g. the perception circuit breaker) should use the reason-aware method.
+        """
+        return (await self.get_valid_token_with_reason(user_id, provider)).token
+
+    async def get_valid_token_with_reason(self, user_id: str, provider: str) -> TokenResult:
+        """Get a valid access token along with a classification of the outcome.
+
+        Returns a :class:`TokenResult`:
+        - ``reason="ok"``              — token present and valid (refreshed if needed)
+        - ``reason="no_token"``        — no token row at all (never connected / revoked)
+        - ``reason="no_refresh_token"``— expired and no refresh token to renew it
+        - ``reason="refresh_failed"``  — refresh HTTP call failed (network/5xx blip)
+
+        Only ``refresh_failed`` is a genuinely transient condition; the others are
+        confirmed "no usable credential" states that should surface re-authorization
+        rather than being retried forever.
         """
         f = _get_fernet(self._encryption_key)
         async with self._db_factory() as db:
@@ -103,7 +145,7 @@ class OAuthManager:
             )
             token = result.scalar_one_or_none()
             if not token:
-                return None
+                return TokenResult(token=None, reason="no_token")
 
             # Check if token needs refresh (5-minute buffer)
             if token.expires_at and token.expires_at < datetime.now(timezone.utc) + timedelta(
@@ -131,21 +173,24 @@ class OAuthManager:
                             "oauth_token_refreshed",
                             extra={"user_id": user_id, "provider": provider},
                         )
-                        return refreshed["access_token"]
+                        return TokenResult(token=refreshed["access_token"], reason="ok")
                     else:
                         logger.warning(
                             "oauth_token_refresh_failed",
                             extra={"user_id": user_id, "provider": provider},
                         )
-                        return None
+                        return TokenResult(token=None, reason="refresh_failed")
                 else:
                     logger.warning(
                         "oauth_token_expired_no_refresh",
                         extra={"user_id": user_id, "provider": provider},
                     )
-                    return None
+                    return TokenResult(token=None, reason="no_refresh_token")
 
-            return f.decrypt(token.access_token_encrypted.encode()).decode()
+            return TokenResult(
+                token=f.decrypt(token.access_token_encrypted.encode()).decode(),
+                reason="ok",
+            )
 
     async def delete_token(self, user_id: str, provider: str) -> bool:
         """Delete a stored OAuth token."""
@@ -173,7 +218,7 @@ class OAuthManager:
             "google": ("google_oauth_client_id", "google_oauth_client_secret"),
             "github": ("github_oauth_client_id", "github_oauth_client_secret"),
             "notion": ("notion_oauth_client_id", "notion_oauth_client_secret"),
-            "jira": ("jira_oauth_client_id", "jira_oauth_client_secret"),
+            "atlassian": ("atlassian_oauth_client_id", "atlassian_oauth_client_secret"),
         }
 
         if self._settings and provider in settings_map:
@@ -196,7 +241,7 @@ class OAuthManager:
             "google": "https://oauth2.googleapis.com/token",
             "github": "https://github.com/login/oauth/access_token",
             "slack": "https://slack.com/api/oauth.v2.access",
-            "jira": "https://auth.atlassian.com/oauth/token",
+            "atlassian": "https://auth.atlassian.com/oauth/token",
         }
         endpoint = endpoints.get(provider)
         if not endpoint:

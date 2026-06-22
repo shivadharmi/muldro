@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from src.orchestrator.contracts import (
+from src.contracts import (
     AgentEnvelope,
     AgentResult,
     DomainEvent,
@@ -170,3 +170,49 @@ class TestStepState:
         )
         assert s.error["message"] == "SMTP timeout"
         assert s.retry_count == 3
+
+
+class TestContractImmutability:
+    """ORCH-P2-2: boundary contracts are frozen; the incrementally-assembled
+    message-building contracts are intentionally left mutable."""
+
+    def test_boundary_contracts_are_frozen(self):
+        from src.contracts import (
+            PlanOutput,
+            PlanStep,
+            PolicyDecision,
+            StepResult,
+            SurfaceUpdate,
+        )
+
+        step = PlanStep(description="x", capability="reason")
+        with pytest.raises(ValidationError):
+            step.capability = "email.send"
+
+        plan = PlanOutput(goal="g")
+        with pytest.raises(ValidationError):
+            plan.plan_id = "plan_x"
+
+        decision = PolicyDecision(decision="approval_required")
+        with pytest.raises(ValidationError):
+            decision.decision = "auto_execute"
+
+        result = StepResult(step_id="s1", status="completed")
+        with pytest.raises(ValidationError):
+            result.status = "failed"
+
+        update = SurfaceUpdate(surface_id="srf_1", phase="executing")
+        with pytest.raises(ValidationError):
+            update.progress = "done"
+
+    def test_message_building_contracts_stay_mutable(self):
+        """These are filled in field-by-field during chat streaming (routes_chat)."""
+        from src.contracts import MessageAgentStep, MessageToolCall
+
+        step = MessageAgentStep(agent="presenter")
+        step.response_text = "hello"  # must not raise
+        assert step.response_text == "hello"
+
+        tc = MessageToolCall(tool_name="search")
+        tc.status = "blocked"  # must not raise
+        assert tc.status == "blocked"

@@ -5,7 +5,7 @@ from pydantic import ValidationError
 
 from src.api.routes_trust import TimePolicyRule
 from src.api.schemas import BriefingFeedbackRequest, ScheduleCreateRequest, ScheduleUpdateRequest
-from src.orchestrator.contracts import PerceptionDecision
+from src.contracts import PerceptionDecision
 from src.ui.contracts import DetailConfig, DetailTab
 
 # ── BriefingFeedbackRequest ──────────────────────────────────────

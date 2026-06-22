@@ -7,6 +7,7 @@ _call_agent_stream() into a single async generator that yields typed events.
 import asyncio
 import json
 import logging
+import re
 import time
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
@@ -14,10 +15,162 @@ from typing import Any
 
 import anthropic
 
-from src.orchestrator.contracts import SpanToolCall
-from src.orchestrator.hooks import audit_post_tool_hook, governor_pre_tool_hook
+from src.contracts import SpanToolCall
+from src.integrations.provider_map import provider_for_server
+from src.orchestrator.hooks import _sanitize_secrets, audit_post_tool_hook, governor_pre_tool_hook
+from src.services.tool_registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
+
+# Terminal steer appended to a tool_result when its MCP server is unavailable
+# (auth_required / bridge-not-initialized). Tells the model to stop retrying
+# that integration this turn and report back instead of burning more rounds.
+_UNAVAILABLE_STEER = (
+    " This integration needs re-authorization and cannot be used in this session. "
+    "Do not retry its tools; tell the user to reconnect it."
+)
+_BRIDGE_NOT_INIT_STEER = (
+    " This integration is unavailable in this session. "
+    "Do not retry its tools; tell the user to reconnect it."
+)
+
+
+def _unavailable_provider(result: Any) -> str | None:
+    """Return the provider key to mark unavailable, or None.
+
+    Detects the two "server is down for auth/unavailable reasons" shapes the
+    tool path can return — the structured ``auth_required`` envelope (carrying
+    ``provider``/``server``) and the legacy ``"MCP bridge not initialized"``
+    error. Resolution is pure string work (``provider_for_server`` is a
+    substring matcher) — no DB or I/O on the loop's hot path.
+    """
+    if not isinstance(result, dict):
+        return None
+    if result.get("error_code") == "auth_required":
+        provider = result.get("provider")
+        if provider:
+            return str(provider)
+        server = result.get("server")
+        if server:
+            return provider_for_server(str(server))
+    return None
+
+
+def _unavailable_server(result: Any) -> str | None:
+    """Return the MCP server name to mark unavailable, or None.
+
+    Pulled from the structured ``auth_required`` envelope's ``server`` field.
+    Tracking by the registered SERVER name (rather than only the provider
+    inferred from the tool NAME) is the C5 fix: a Google tool like
+    ``search_messages`` has no provider substring, so the provider-name
+    short-circuit never matched it. The envelope always carries the real server,
+    so keying the short-circuit on the server makes it robust to tool names that
+    don't embed their provider.
+    """
+    if not isinstance(result, dict):
+        return None
+    if result.get("error_code") == "auth_required":
+        server = result.get("server")
+        if server:
+            return str(server)
+    return None
+
+
+# The Governor's structured-output tool. Capability-scoped to the Governor, so
+# its presence in an agent's tool list is the discriminator for forcing
+# tool_choice (no agent-name sniffing).
+GOVERNOR_VERDICT_TOOL = "report_governor_verdict"
+
+# Max chars persisted per span field after serialization. Live tool results are
+# unaffected — this only caps/redacts what gets written into trace spans.
+_MAX_SPAN_FIELD_CHARS = 20_000
+
+# Keys whose values are redacted wholesale during structure-preserving sanitization.
+_SECRET_KEY_RE = re.compile(
+    r"(api[_-]?key|token|password|secret|authorization|access_token"
+    r"|refresh_token|client_secret)",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_for_span(value: Any) -> Any:
+    """Redact secrets and truncate large values before persisting to a trace span.
+
+    Structure-preserving: dicts/lists keep their shape so trace replay stays
+    useful; secret-like keys are redacted wholesale and string values are
+    pattern-scrubbed. Does NOT alter the live result returned to the agent loop
+    — only the copy written into SpanToolCall.input_data / output_data.
+    """
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for k, v in value.items():
+            if isinstance(k, str) and _SECRET_KEY_RE.search(k):
+                out[k] = "***REDACTED***"
+            else:
+                out[k] = _sanitize_for_span(v)
+        return out
+    if isinstance(value, list):
+        return [_sanitize_for_span(v) for v in value]
+    if isinstance(value, str):
+        redacted = _sanitize_secrets(value)
+        if len(redacted) > _MAX_SPAN_FIELD_CHARS:
+            redacted = redacted[:_MAX_SPAN_FIELD_CHARS] + "...[truncated]"
+        return redacted
+    return value
+
+
+async def _resolve_tool_scope_and_server(
+    tool_name: str,
+    agent,  # SubAgent
+    db_factory,
+    workspace_id: str,
+) -> tuple[bool, str | None]:
+    """Resolve a tool's (in_scope, server_name) in ONE registry lookup.
+
+    Combines capability-scope enforcement with server resolution so the loop's
+    hot path issues a single ``get_tool`` per tool instead of two. Returns:
+
+    - ``in_scope``: True only if the tool's registry capability is present in the
+      agent's ``capability_scope`` (fail-closed for capability=None / unresolved
+      / no-registry — mirrors ``_get_tools_for_agent``, which never offers such
+      tools);
+    - ``server``: the tool's registered MCP server name (or None) — used to key
+      the per-turn unavailable-server short-circuit (C5). A name like
+      ``search_messages`` carries no provider substring, so resolving its server
+      from the registry is the only reliable way to short-circuit it.
+    """
+    scope = getattr(agent, "capability_scope", None)
+    # Agents with no scope get no tools offered; nothing legitimate to allow.
+    if not scope:
+        return False, None
+    if db_factory is None:
+        return False, None
+    async with db_factory() as db:
+        registry = ToolRegistry(db, workspace_id=workspace_id or None)
+        tool = await registry.get_tool(tool_name)
+    if tool is None:
+        return False, None
+    server = getattr(tool, "server", None)
+    capability = getattr(tool, "capability", None)
+    if not capability:
+        return False, server
+    return capability in scope, server
+
+
+async def _capability_in_scope(
+    tool_name: str,
+    agent,  # SubAgent
+    db_factory,
+    workspace_id: str,
+) -> bool:
+    """Backward-compatible capability-scope check (delegates to the combined
+    resolver). Retained for callers/tests that only need the in-scope verdict."""
+    in_scope, _server = await _resolve_tool_scope_and_server(
+        tool_name, agent, db_factory, workspace_id
+    )
+    return in_scope
 
 
 # ── Loop Event Types (internal, never serialized to SSE directly) ──
@@ -125,6 +278,11 @@ async def _api_call_with_retry(client, api_kwargs: dict, agent_name: str):
             else:
                 raise
 
+    # Unreachable in practice (the loop either returns or re-raises), but make the
+    # contract explicit so callers never silently receive None on a misconfigured
+    # _MAX_API_RETRIES (e.g. 0).
+    raise RuntimeError(f"API retry loop exhausted for {agent_name} without a response")
+
 
 def _sanitize_content_blocks(content) -> list[dict]:
     """Convert SDK response content blocks to plain dicts for re-submission.
@@ -145,6 +303,86 @@ def _is_thinking_error(err: Exception) -> bool:
     return "thinking" in msg and (
         "disabled" in msg or "not supported" in msg or "cannot contain" in msg
     )
+
+
+# Models whose API rejects `temperature`/`top_p`/`top_k` and the legacy
+# `thinking:{type:"enabled", budget_tokens}` shape — they require adaptive
+# thinking + output_config.effort (Opus 4.7/4.8, Fable 5, Mythos 5). Matched as
+# substrings so Bedrock inference-profile IDs (us.anthropic.claude-opus-4-8)
+# are covered too.
+# MAINTENANCE: every new adaptive-only model (e.g. a future Opus 4.9) MUST be
+# added here. A model not listed falls through to the legacy temperature+enabled
+# path and 400s on every call (the exact outage this list was added to fix).
+_ADAPTIVE_THINKING_MARKERS = (
+    "opus-4-8",
+    "opus-4-7",
+    "fable-5",
+    "mythos-5",
+    "mythos-preview",
+)
+
+
+def _requires_adaptive_thinking(model: str) -> bool:
+    """True when *model* rejects temperature + enabled-thinking (adaptive only)."""
+    m = (model or "").lower()
+    return any(marker in m for marker in _ADAPTIVE_THINKING_MARKERS)
+
+
+def _effort_for_budget(budget_tokens: int | None) -> str:
+    """Map a legacy per-agent thinking budget to an effort tier.
+
+    Preserves the relative intent (Planner=8192 thinks hardest) without sending
+    the now-rejected token budget. Default high — the recommended floor for
+    intelligence-sensitive work on Opus 4.7/4.8."""
+    if not budget_tokens or budget_tokens >= 8192:
+        return "high"
+    if budget_tokens >= 4096:
+        return "medium"
+    return "low"
+
+
+def build_thinking_params(
+    model: str,
+    *,
+    thinking_enabled: bool,
+    budget_tokens: int | None,
+    temperature: float,
+) -> dict:
+    """Return model-aware thinking/sampling kwargs for ``messages.create``.
+
+    Adaptive-only models (Opus 4.7/4.8, Fable/Mythos 5) reject ``temperature``
+    and ``thinking:{type:"enabled"}`` — use ``thinking:{type:"adaptive"}`` +
+    ``output_config.effort`` and omit sampling params entirely. Legacy models
+    keep the enabled-thinking + temperature surface they still accept."""
+    if _requires_adaptive_thinking(model):
+        if thinking_enabled:
+            return {
+                "thinking": {"type": "adaptive", "display": "summarized"},
+                "output_config": {"effort": _effort_for_budget(budget_tokens)},
+            }
+        # No thinking and no sampling params — both 400 on these models.
+        return {}
+    if thinking_enabled:
+        return {
+            "temperature": 1,  # required when enabled-thinking is on
+            "thinking": {"type": "enabled", "budget_tokens": budget_tokens},
+        }
+    return {"temperature": temperature}
+
+
+def _disable_thinking_in_kwargs(api_kwargs: dict, model: str, agent_temperature: float) -> None:
+    """Disable thinking mid-loop after a thinking-incompatibility error.
+
+    Drops the thinking block (and its paired effort), strips thinking blocks
+    from history, and restores ``temperature`` only on models that accept it —
+    adaptive-only models 400 on any sampling param."""
+    api_kwargs.pop("thinking", None)
+    api_kwargs.pop("output_config", None)
+    if _requires_adaptive_thinking(model):
+        api_kwargs.pop("temperature", None)
+    else:
+        api_kwargs["temperature"] = agent_temperature
+    _strip_thinking_from_messages(api_kwargs.get("messages", []))
 
 
 def _strip_thinking_from_messages(messages: list[dict]) -> None:
@@ -185,7 +423,7 @@ async def agent_loop(
     When stream=False, uses messages.create() (still yields same events).
     """
     agent_name = agent.name
-    span = trace.start_span(agent_name) if trace else None
+    span = trace.start_span(agent_name, model=model) if trace else None
 
     yield LoopAgentStart(agent=agent_name, model=model)
 
@@ -199,6 +437,20 @@ async def agent_loop(
     thinking_chunks: list[str] = []
     text = ""
     start_time = time.time()
+
+    # Per-invocation circuit breaker for MCP servers that returned an
+    # auth/unavailable error this turn. Resolved by OAuth provider so all of a
+    # provider's tools (e.g. every gmail/google-workspace tool) are skipped
+    # together. Reset every call — NOT module-global — so a later run is never
+    # poisoned by an earlier one. Analogous to AnthropicCircuitBreaker, but
+    # loop-scoped and per-provider.
+    unavailable_providers: set[str] = set()
+    # Companion set keyed by the MCP SERVER name (from the auth_required
+    # envelope's `server` field). The primary short-circuit key (C5): unlike the
+    # provider-from-tool-name heuristic, the server resolves reliably from the
+    # registry even for tool names that embed no provider substring
+    # (e.g. `search_messages` on google-workspace). Per-call, reset every loop.
+    unavailable_servers: set[str] = set()
 
     # Thinking config from agent
     thinking_config = getattr(agent, "thinking", None)
@@ -229,34 +481,41 @@ async def agent_loop(
                 "messages": messages,
             }
 
-            if thinking_enabled:
-                api_kwargs["temperature"] = 1  # required when thinking is enabled
-                api_kwargs["thinking"] = {
-                    "type": "enabled",
-                    "budget_tokens": thinking_budget_tokens,
-                }
-            else:
-                api_kwargs["temperature"] = agent.temperature
+            api_kwargs.update(
+                build_thinking_params(
+                    model,
+                    thinking_enabled=thinking_enabled,
+                    budget_tokens=thinking_budget_tokens,
+                    temperature=agent.temperature,
+                )
+            )
 
             if tools:
                 api_kwargs["tools"] = tools
 
-            # Governor structured output: force tool_choice for governor.
+            # Structured output: when the Governor's verdict tool is available,
+            # force tool_choice to it so the model returns the verdict as a tool
+            # call. The tool is capability-scoped to the Governor, so its presence
+            # in `tools` is the discriminator — no agent-name sniffing needed.
             # Forced tool_choice is incompatible with thinking — disable it.
-            if agent_name == "governor" and tools:
-                governor_tool = next(
-                    (t for t in tools if t["name"] == "report_governor_verdict"), None
-                )
-                if governor_tool:
-                    api_kwargs["tool_choice"] = {
-                        "type": "tool",
-                        "name": "report_governor_verdict",
-                    }
-                    api_kwargs.pop("thinking", None)
-                    if "temperature" not in api_kwargs:
-                        api_kwargs["temperature"] = agent.temperature
+            verdict_tool = (
+                next((t for t in tools if t["name"] == GOVERNOR_VERDICT_TOOL), None)
+                if tools
+                else None
+            )
+            if verdict_tool:
+                api_kwargs["tool_choice"] = {"type": "tool", "name": GOVERNOR_VERDICT_TOOL}
+                # Forced tool_choice is incompatible with thinking; effort rides
+                # with thinking, so drop both.
+                api_kwargs.pop("thinking", None)
+                api_kwargs.pop("output_config", None)
+                # Re-add temperature only for models that accept it (adaptive-only
+                # models 400 on any sampling param).
+                if not _requires_adaptive_thinking(model) and "temperature" not in api_kwargs:
+                    api_kwargs["temperature"] = agent.temperature
 
             response = None
+            _api_start = time.time()
 
             if stream:
                 try:
@@ -282,9 +541,7 @@ async def agent_loop(
                         # Only disable thinking if the error is specifically about
                         # thinking blocks — not for transient network/Bedrock errors.
                         if thinking_enabled and _is_thinking_error(stream_err):
-                            api_kwargs["temperature"] = agent.temperature
-                            api_kwargs.pop("thinking", None)
-                            _strip_thinking_from_messages(api_kwargs.get("messages", []))
+                            _disable_thinking_in_kwargs(api_kwargs, model, agent.temperature)
                             thinking_enabled = False
                         try:
                             response = await _api_call_with_retry(client, api_kwargs, agent_name)
@@ -297,9 +554,7 @@ async def agent_loop(
                                     agent_name,
                                     fallback_err,
                                 )
-                                api_kwargs["temperature"] = agent.temperature
-                                api_kwargs.pop("thinking", None)
-                                _strip_thinking_from_messages(api_kwargs.get("messages", []))
+                                _disable_thinking_in_kwargs(api_kwargs, model, agent.temperature)
                                 thinking_enabled = False
                                 response = await _api_call_with_retry(
                                     client, api_kwargs, agent_name
@@ -316,9 +571,7 @@ async def agent_loop(
                             agent_name,
                             think_err,
                         )
-                        api_kwargs["temperature"] = agent.temperature
-                        api_kwargs.pop("thinking", None)
-                        _strip_thinking_from_messages(api_kwargs.get("messages", []))
+                        _disable_thinking_in_kwargs(api_kwargs, model, agent.temperature)
                         thinking_enabled = False
                         response = await _api_call_with_retry(client, api_kwargs, agent_name)
                     else:
@@ -332,6 +585,16 @@ async def agent_loop(
             # Record success for circuit breaker
             if circuit_breaker:
                 circuit_breaker.record_success(model)
+
+            # Agent-call observability (never break the loop on metrics error).
+            try:
+                from src.services.metrics_service import MetricsService
+
+                MetricsService.record_agent_call(
+                    agent_name, model, (time.time() - _api_start) * 1000
+                )
+            except Exception:
+                logger.debug("Failed to record agent-call metric", exc_info=True)
 
             # Capture thinking from final message
             for block in response.content:
@@ -431,6 +694,109 @@ async def agent_loop(
                     )
                     continue
 
+                # Capability-scope enforcement (fail-closed) + server resolution
+                # in ONE registry lookup. An agent that calls a tool outside its
+                # capability_scope is rejected before execution (orthogonal to
+                # TrustEngine approval). The resolved `tool_server` is reused by
+                # the unavailable-server short-circuit below (C5).
+                in_scope, tool_server = await _resolve_tool_scope_and_server(
+                    tool_name, agent, db_factory, workspace_id
+                )
+                if not in_scope:
+                    scope_msg = {
+                        "error": (
+                            f"Agent '{agent_name}' is not permitted to call "
+                            f"'{tool_name}' — capability is outside its scope."
+                        ),
+                    }
+                    logger.warning(
+                        "[tool] %s DENIED %s — out of capability scope",
+                        agent_name,
+                        tool_name,
+                    )
+                    tool_results.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tool_block.id,
+                            "content": json.dumps(scope_msg),
+                            "is_error": True,
+                        }
+                    )
+                    tool_call_details.append(
+                        SpanToolCall(
+                            tool_name=tool_name,
+                            input_data=_sanitize_for_span(tool_input)
+                            if isinstance(tool_input, dict)
+                            else {},
+                            output_data=_sanitize_for_span(scope_msg),
+                            status="blocked",
+                            error=scope_msg["error"][:200],
+                        )
+                    )
+                    yield LoopToolResult(
+                        agent=agent_name,
+                        tool_name=tool_name,
+                        result=scope_msg,
+                        blocked=True,
+                    )
+                    continue
+
+                # Short-circuit: an earlier tool this turn proved this tool's MCP
+                # server is unavailable (auth_required). Skip execute_tool_fn
+                # entirely — return the cached auth error + terminal steer so the
+                # model stops retrying instead of burning a round per tool.
+                #
+                # PRIMARY KEY = the registered SERVER name (C5): resolved from the
+                # registry above, so it matches even tool names that embed no
+                # provider substring (`search_messages` → google-workspace).
+                # FALLBACK = the provider inferred from the tool NAME — best-effort
+                # only; it catches the case where the server could not be resolved
+                # but the name happens to carry the provider (e.g. `search_gmail*`).
+                tool_provider = provider_for_server(tool_name)
+                server_down = tool_server is not None and tool_server in unavailable_servers
+                provider_down = tool_provider in unavailable_providers
+                if server_down or provider_down:
+                    _down_label = tool_server if server_down else tool_provider
+                    cached_msg = {
+                        "status": "error",
+                        "error_code": "auth_required",
+                        "error": (
+                            f"Integration '{_down_label}' is unavailable this "
+                            f"session (needs re-authorization)." + _UNAVAILABLE_STEER
+                        ),
+                    }
+                    logger.info(
+                        "[tool] %s SHORT-CIRCUIT %s — '%s' marked unavailable this turn",
+                        agent_name,
+                        tool_name,
+                        _down_label,
+                    )
+                    tool_results.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tool_block.id,
+                            "content": json.dumps(cached_msg),
+                            "is_error": True,
+                        }
+                    )
+                    tool_call_details.append(
+                        SpanToolCall(
+                            tool_name=tool_name,
+                            input_data=_sanitize_for_span(tool_input)
+                            if isinstance(tool_input, dict)
+                            else {},
+                            output_data=_sanitize_for_span(cached_msg),
+                            status="error",
+                            error=cached_msg["error"][:200],
+                        )
+                    )
+                    yield LoopToolResult(
+                        agent=agent_name,
+                        tool_name=tool_name,
+                        result=cached_msg,
+                    )
+                    continue
+
                 tool_start = time.time()
                 try:
                     result = await asyncio.wait_for(
@@ -464,21 +830,63 @@ async def agent_loop(
                     and result.get("status") not in ("ok", "success", "updated", "ingested")
                 )
 
+                # Server-unavailable detection: if this tool's MCP server is down
+                # for auth reasons, mark its provider so subsequent tools this
+                # turn short-circuit, and append a terminal steer telling the
+                # model to stop retrying. Handles both the structured
+                # auth_required envelope and the legacy bridge-not-init shape.
+                steer_suffix = ""
+                unavail_provider = _unavailable_provider(result)
+                unavail_server = _unavailable_server(result)
+                if unavail_provider is not None or unavail_server is not None:
+                    # Track BOTH keys: server (primary, C5) and provider
+                    # (best-effort fallback for name-based resolution).
+                    if unavail_server is not None:
+                        unavailable_servers.add(unavail_server)
+                    if unavail_provider is not None:
+                        unavailable_providers.add(unavail_provider)
+                    steer_suffix = _UNAVAILABLE_STEER
+                elif (
+                    isinstance(result, dict) and result.get("error") == "MCP bridge not initialized"
+                ):
+                    # Legacy shape carries no provider/server — cannot key the
+                    # short-circuit set, but the terminal steer still stops the
+                    # retry loop (the primary stop mechanism).
+                    steer_suffix = _BRIDGE_NOT_INIT_STEER
+
+                # Tool-call observability (never break the loop on metrics error).
+                try:
+                    from src.services.metrics_service import MetricsService
+
+                    MetricsService.record_tool_call(
+                        tool_name, status="error" if is_error else "success"
+                    )
+                except Exception:
+                    logger.debug("Failed to record tool-call metric", exc_info=True)
+
+                result_content = (
+                    json.dumps(result) if isinstance(result, dict) else str(result)
+                ) + steer_suffix
                 tool_results.append(
                     {
                         "type": "tool_result",
                         "tool_use_id": tool_block.id,
-                        "content": json.dumps(result) if isinstance(result, dict) else str(result),
-                        **({"is_error": True} if is_error else {}),
+                        "content": result_content,
+                        **({"is_error": True} if (is_error or steer_suffix) else {}),
                     }
                 )
 
-                persisted_output: Any = result
+                # Redact secrets + truncate before persisting to the trace span.
+                # Does NOT affect the live result returned to the loop (above).
+                persisted_output: Any = _sanitize_for_span(result)
+                persisted_input: Any = (
+                    _sanitize_for_span(tool_input) if isinstance(tool_input, dict) else {}
+                )
 
                 tool_call_details.append(
                     SpanToolCall(
                         tool_name=tool_name,
-                        input_data=tool_input if isinstance(tool_input, dict) else {},
+                        input_data=persisted_input,
                         output_data=persisted_output,
                         status="error" if is_error else "success",
                         error=result.get("error", "")[:200] if is_error else None,
@@ -500,6 +908,7 @@ async def agent_loop(
                     agent_name,
                     trace_id=trace.trace_id if trace else None,
                     span_id=span.span_id if span else None,
+                    tokens_used=_resp_input + _resp_output,
                     latency_ms=tool_latency,
                     db_factory=db_factory,
                     workspace_id=workspace_id,

@@ -53,6 +53,28 @@ def _mock_db():
     return db
 
 
+def _make_tick_svc(states, db):
+    """Mock PerceptionPolicyService for the claim-and-release _tick_perception.
+
+    Uses the real ``claim_due_sources`` so the lease (pending_run + next_run_at)
+    is applied to the states; ``get_by_state_id`` re-fetches by id for the
+    per-source recording transaction.
+    """
+    from src.services.perception_policy import PerceptionPolicyService
+
+    svc = AsyncMock()
+    svc._db = db
+    svc.get_due_sources_all_users = AsyncMock(return_value=list(states))
+
+    async def _claim(sources, now=None):
+        return await PerceptionPolicyService.claim_due_sources(svc, sources, now)
+
+    svc.claim_due_sources = AsyncMock(side_effect=_claim)
+    by_id = {s.state_id: s for s in states}
+    svc.get_by_state_id = AsyncMock(side_effect=lambda sid: by_id.get(sid))
+    return svc
+
+
 # ---------------------------------------------------------------------------
 # Coordinator: workspace passthrough
 # ---------------------------------------------------------------------------
@@ -226,9 +248,7 @@ class TestSchedulerPerceptionTick:
         mock_settings.max_perception_per_tick = 5
         scheduler = SchedulerLoop(mock_settings, orchestrator=orchestrator)
 
-        mock_svc_instance = AsyncMock()
-        mock_svc_instance.get_due_sources_all_users = AsyncMock(return_value=[state])
-        mock_svc_instance.record_success = AsyncMock(return_value=state)
+        mock_svc_instance = _make_tick_svc([state], mock_db)
 
         with (
             patch(
@@ -252,6 +272,116 @@ class TestSchedulerPerceptionTick:
         # Should not raise
         await scheduler._tick_perception(MagicMock())
 
+    @pytest.mark.asyncio
+    @patch("src.services.scheduler.get_session_factory")
+    async def test_generic_cycle_exception_is_transient(self, mock_factory):
+        """A bare exception escaping run_perception_cycle must fail-safe to transient.
+
+        An uncategorized cycle failure should route through the transient sentinel
+        (circuit threshold 6), not classify as unknown (the meaningless middle
+        threshold of 3). Asserts via the classification of the error string the
+        scheduler tick passes to record_failure.
+        """
+        from src.services.perception_policy import classify_error
+        from src.services.scheduler import SchedulerLoop
+
+        state = _make_state(
+            pending_run=True,
+            next_run_at=datetime.now(timezone.utc) - timedelta(seconds=10),
+        )
+
+        orchestrator = MagicMock()
+        orchestrator.run_perception_cycle = AsyncMock(side_effect=RuntimeError("boom"))
+        orchestrator._budget = MagicMock()
+        orchestrator._budget.get_budget_status = AsyncMock(return_value={"mode": "normal"})
+        orchestrator._budget.should_allow_perception = MagicMock(return_value=True)
+        orchestrator._budget.get_perception_interval_multiplier = MagicMock(return_value=1)
+
+        mock_db = _mock_db()
+        mock_cm = AsyncMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_factory.return_value = MagicMock(return_value=mock_cm)
+
+        mock_settings = MagicMock()
+        mock_settings.max_perception_per_tick = 5
+        mock_settings.perception_concurrency = 1
+        scheduler = SchedulerLoop(mock_settings, orchestrator=orchestrator)
+
+        recorded: list[str] = []
+
+        async def _capture_failure(_state, error):
+            recorded.append(error)
+            return _state
+
+        mock_svc_instance = _make_tick_svc([state], mock_db)
+        mock_svc_instance.record_failure = AsyncMock(side_effect=_capture_failure)
+
+        with (
+            patch(
+                "src.services.perception_policy.PerceptionPolicyService",
+                return_value=mock_svc_instance,
+            ),
+            patch.object(scheduler, "_resolve_workspace", new=AsyncMock(return_value="ws_test")),
+        ):
+            await scheduler._tick_perception(mock_factory.return_value)
+
+        assert recorded, "record_failure should have been called for the escaped exception"
+        assert classify_error(recorded[0]) == "transient"
+
+
+# ---------------------------------------------------------------------------
+# Coordinator: generic cycle exception fail-safe
+# ---------------------------------------------------------------------------
+
+
+class TestCoordinatorGenericException:
+    @pytest.mark.asyncio
+    async def test_generic_cycle_exception_is_transient(self):
+        """A bare exception escaping run_perception_cycle in run_due_cycles fails safe.
+
+        The PerceptionCoordinator outer handler must route an uncategorized error
+        through the transient sentinel (threshold 6), not unknown (threshold 3).
+        """
+        from src.services.perception_policy import classify_error
+
+        orch = MagicMock()
+        orch.run_perception_cycle = AsyncMock(side_effect=RuntimeError("boom"))
+        orch._publish_event = AsyncMock()
+
+        state = _make_state(
+            next_run_at=datetime.now(timezone.utc) - timedelta(seconds=10),
+        )
+
+        recorded: list[str] = []
+
+        async def _capture_failure(_state, error):
+            recorded.append(error)
+            return _state
+
+        mock_db = _mock_db()
+        mock_svc = AsyncMock(spec=PerceptionPolicyService)
+        mock_svc.get_due_sources = AsyncMock(return_value=[state])
+        mock_svc.record_failure = AsyncMock(side_effect=_capture_failure)
+
+        mock_cm = AsyncMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_factory_fn = MagicMock(return_value=mock_cm)
+
+        with (
+            patch("src.models.database.get_session_factory", return_value=mock_factory_fn),
+            patch(
+                "src.services.perception_policy.PerceptionPolicyService",
+                return_value=mock_svc,
+            ),
+        ):
+            coord = PerceptionCoordinator(orch, user_id="usr_test", workspace_id="ws_test")
+            await coord.run_due_cycles()
+
+        assert recorded, "record_failure should have been called for the escaped exception"
+        assert classify_error(recorded[0]) == "transient"
+
 
 # ---------------------------------------------------------------------------
 # observe_source schedule skips when perception_state manages
@@ -260,7 +390,7 @@ class TestSchedulerPerceptionTick:
 
 class TestObserveSourceSkip:
     @pytest.mark.asyncio
-    @patch("src.services.scheduler.get_session_factory")
+    @patch("src.services.scheduler.schedule_dispatch.get_session_factory")
     async def test_observe_source_skips_when_managed(self, mock_factory):
         """observe_source should skip when perception_state row is active."""
         from src.services.scheduler import SchedulerLoop
@@ -391,9 +521,9 @@ class TestPerceptionCycleDLQ:
         """run_perception_cycle's except block should enqueue to DLQ."""
         import inspect
 
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.orchestrator.perception_runner import PerceptionRunner
 
-        source = inspect.getsource(JarvisOrchestrator.run_perception_cycle)
+        source = inspect.getsource(PerceptionRunner.run_perception_cycle)
         assert "DeadLetterService" in source
         assert "dlq.enqueue" in source
 
@@ -452,7 +582,10 @@ class TestPerceptionRelevanceAssessment:
                 services=ServiceContainer(),
             )
 
-            orch._poll_connector = AsyncMock(
+            # Perception now lives on PerceptionRunner; connector I/O on its
+            # ConnectorPoller — retarget mocks accordingly.
+            pr = orch._perception
+            pr._poller.poll = AsyncMock(
                 return_value=(
                     [MagicMock(entity_id=None)],
                     "cursor_123",
@@ -460,18 +593,18 @@ class TestPerceptionRelevanceAssessment:
                     "opaque",
                 )
             )
-            orch._ingest_raw_events = AsyncMock(return_value=["New PR opened"])
-            orch._update_cursor = AsyncMock()
-            orch._call_agent = AsyncMock(return_value="extracted entities")
-            orch._apply_perception_policy_from_planner = AsyncMock()
-            orch._queue_perception_plan = AsyncMock(return_value=None)
-            orch._publish_event = AsyncMock()
-            orch._trace_manager = MagicMock()
-            orch._trace_manager.start_trace.return_value = MagicMock(trace_id="trace_1")
-            orch._trace_manager.finish_trace = AsyncMock()
-            orch._budget = MagicMock()
-            orch._budget.get_budget_status = AsyncMock(return_value=MagicMock())
-            orch._budget.should_allow_perception.return_value = True
+            pr._poller.ingest_raw_events = AsyncMock(return_value=["New PR opened"])
+            pr._poller.update_cursor = AsyncMock()
+            pr._invoker.call_agent = AsyncMock(return_value="extracted entities")
+            pr._apply_perception_policy_from_planner = AsyncMock()
+            pr._queue_perception_plan = AsyncMock(return_value=None)
+            pr._events.publish_event = AsyncMock()
+            pr._trace_manager = MagicMock()
+            pr._trace_manager.start_trace.return_value = MagicMock(trace_id="trace_1")
+            pr._trace_manager.finish_trace = AsyncMock()
+            pr._budget = MagicMock()
+            pr._budget.get_budget_status = AsyncMock(return_value=MagicMock())
+            pr._budget.should_allow_perception.return_value = True
 
             result = await orch.run_perception_cycle(
                 source="github",
@@ -481,3 +614,312 @@ class TestPerceptionRelevanceAssessment:
 
             assert result["status"] == "completed"
             mock_assess.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_perception_cycle_threads_engagement_penalty(self):
+        """The deterministic dismissal penalty must reach assess_relevance."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID, make_mock_settings
+
+        settings = make_mock_settings()
+
+        with (
+            patch("src.orchestrator.jarvis.get_anthropic_client") as mock_get_client,
+            patch("src.services.relevance_assessor.assess_relevance") as mock_assess,
+            patch(
+                "src.services.engagement_service.EngagementService.is_suppressed",
+                new=AsyncMock(return_value=False),
+            ),
+            patch(
+                "src.services.engagement_service.EngagementService.get_relevance_penalty",
+                new=AsyncMock(return_value=0.2),
+            ),
+        ):
+            mock_get_client.return_value = AsyncMock()
+
+            from src.services.relevance_assessor import RelevanceAssessment
+
+            mock_assess.return_value = RelevanceAssessment(
+                relevance_score=0.5, urgency="today", notification_tier="briefing"
+            )
+
+            from src.orchestrator.jarvis import JarvisOrchestrator
+            from src.orchestrator.services import ServiceContainer
+
+            mock_db = AsyncMock()
+            mock_db.commit = AsyncMock()
+            mock_exec_result = MagicMock()
+            mock_exec_result.scalar_one_or_none.return_value = None
+            mock_exec_result.scalars.return_value.all.return_value = []
+            mock_db.execute.return_value = mock_exec_result
+            db_ctx = AsyncMock()
+            db_ctx.__aenter__ = AsyncMock(return_value=mock_db)
+            db_ctx.__aexit__ = AsyncMock(return_value=False)
+            db_factory = MagicMock(return_value=db_ctx)
+
+            orch = JarvisOrchestrator(
+                settings=settings, db_factory=db_factory, services=ServiceContainer()
+            )
+            # Perception now lives on PerceptionRunner; connector I/O on its
+            # ConnectorPoller — retarget mocks accordingly.
+            pr = orch._perception
+            pr._poller.poll = AsyncMock(
+                return_value=([MagicMock(entity_id=None)], "c", None, "opaque")
+            )
+            pr._poller.ingest_raw_events = AsyncMock(return_value=["New PR opened"])
+            pr._poller.update_cursor = AsyncMock()
+            pr._invoker.call_agent = AsyncMock(return_value="extracted entities")
+            pr._apply_perception_policy_from_planner = AsyncMock()
+            pr._queue_perception_plan = AsyncMock(return_value=None)
+            pr._events.publish_event = AsyncMock()
+            pr._trace_manager = MagicMock()
+            pr._trace_manager.start_trace.return_value = MagicMock(trace_id="t1")
+            pr._trace_manager.finish_trace = AsyncMock()
+            pr._budget = MagicMock()
+            pr._budget.get_budget_status = AsyncMock(return_value=MagicMock())
+            pr._budget.should_allow_perception.return_value = True
+
+            await orch.run_perception_cycle(
+                source="github",
+                user_id=TEST_USER_ID,
+                workspace_id=TEST_WORKSPACE_ID,
+            )
+
+            mock_assess.assert_called_once()
+            assert mock_assess.call_args.kwargs.get("relevance_penalty") == 0.2
+
+
+class TestNonActionableSynthesisSurfacing:
+    """A perception/synthesis plan with no actionable steps must still surface
+    its insight (as a briefing item) instead of being silently dropped."""
+
+    @pytest.mark.asyncio
+    async def test_non_actionable_plan_stored_as_briefing(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from src.contracts import PlanOutput, PlanStep
+        from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID, make_mock_settings
+
+        settings = make_mock_settings()
+        plan = PlanOutput(
+            goal="Investor interest is rising across 3 sources",
+            reasoning="Emails, calendar and Slack all point to fundraising momentum",
+            steps=[PlanStep(description="note it", capability="respond", risk="none")],
+        )
+
+        with (
+            patch("src.orchestrator.jarvis.get_anthropic_client"),
+            patch("src.orchestrator.perception_runner.extract_plan", return_value=plan),
+            patch("src.services.memory_service.MemoryService") as mock_mem,
+        ):
+            mem = AsyncMock()
+            mock_mem.return_value = mem
+
+            mock_db = AsyncMock()
+            mock_db.commit = AsyncMock()
+            db_ctx = AsyncMock()
+            db_ctx.__aenter__ = AsyncMock(return_value=mock_db)
+            db_ctx.__aexit__ = AsyncMock(return_value=False)
+            db_factory = MagicMock(return_value=db_ctx)
+
+            from src.orchestrator.jarvis import JarvisOrchestrator
+            from src.orchestrator.services import ServiceContainer
+
+            orch = JarvisOrchestrator(
+                settings=settings, db_factory=db_factory, services=ServiceContainer()
+            )
+
+            await orch._queue_perception_plan(
+                "ignored", "synthesis", TEST_USER_ID, TEST_WORKSPACE_ID, "trace_1"
+            )
+
+            mem.store_briefing_memory.assert_awaited_once()
+            text = mem.store_briefing_memory.call_args.kwargs.get("text", "")
+            assert "Investor interest" in text
+
+    @pytest.mark.asyncio
+    async def test_empty_goal_plan_not_stored(self):
+        """A truly empty plan (no goal) should not create a briefing item."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from src.contracts import PlanOutput
+        from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID, make_mock_settings
+
+        settings = make_mock_settings()
+        plan = PlanOutput(goal="", reasoning="", steps=[])
+
+        with (
+            patch("src.orchestrator.jarvis.get_anthropic_client"),
+            patch("src.orchestrator.perception_runner.extract_plan", return_value=plan),
+            patch("src.services.memory_service.MemoryService") as mock_mem,
+        ):
+            mem = AsyncMock()
+            mock_mem.return_value = mem
+            mock_db = AsyncMock()
+            db_ctx = AsyncMock()
+            db_ctx.__aenter__ = AsyncMock(return_value=mock_db)
+            db_ctx.__aexit__ = AsyncMock(return_value=False)
+            db_factory = MagicMock(return_value=db_ctx)
+
+            from src.orchestrator.jarvis import JarvisOrchestrator
+            from src.orchestrator.services import ServiceContainer
+
+            orch = JarvisOrchestrator(
+                settings=settings, db_factory=db_factory, services=ServiceContainer()
+            )
+            await orch._queue_perception_plan(
+                "ignored", "synthesis", TEST_USER_ID, TEST_WORKSPACE_ID, "trace_1"
+            )
+            mem.store_briefing_memory.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Cursor non-advance on poll_error (Task 5.4)
+# ---------------------------------------------------------------------------
+
+
+class TestCursorNonAdvanceOnPollError:
+    """A failing poll must NOT advance the cursor.
+
+    ``run_perception_cycle`` short-circuits when the poller returns a truthy
+    ``poll_error`` — it returns ``{"status": "error"}`` BEFORE either ingesting
+    events or upserting the cursor. Advancing the cursor on a failed poll would
+    silently skip events that the next (successful) poll should have picked up.
+    These tests assert no cursor write happens on the failure path, contrasted
+    with the success-empty path which DOES persist the cursor.
+    """
+
+    @pytest.mark.asyncio
+    async def test_poll_error_does_not_advance_cursor(self):
+        from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID, make_mock_settings
+
+        settings = make_mock_settings()
+
+        with patch("src.orchestrator.jarvis.get_anthropic_client"):
+            mock_db = AsyncMock()
+            mock_db.commit = AsyncMock()
+            db_ctx = AsyncMock()
+            db_ctx.__aenter__ = AsyncMock(return_value=mock_db)
+            db_ctx.__aexit__ = AsyncMock(return_value=False)
+            db_factory = MagicMock(return_value=db_ctx)
+
+            from src.orchestrator.jarvis import JarvisOrchestrator
+            from src.orchestrator.services import ServiceContainer
+
+            orch = JarvisOrchestrator(
+                settings=settings, db_factory=db_factory, services=ServiceContainer()
+            )
+
+            pr = orch._perception
+            # Poll returns a FAILING result: empty events, unchanged cursor,
+            # and a truthy poll_error string (the 4-tuple seam used by the runner).
+            pr._poller.poll = AsyncMock(
+                return_value=(
+                    [],
+                    "old_cursor",
+                    "auth_failed connector error (401 unauthorized)",
+                    "opaque",
+                )
+            )
+            pr._poller.ingest_raw_events = AsyncMock()
+            pr._poller.update_cursor = AsyncMock()
+            pr._invoker.call_agent = AsyncMock()
+            pr._events.publish_event = AsyncMock()
+            pr._trace_manager = MagicMock()
+            pr._trace_manager.start_trace.return_value = MagicMock(trace_id="t1")
+            pr._trace_manager.finish_trace = AsyncMock()
+            pr._budget = MagicMock()
+            pr._budget.get_budget_status = AsyncMock(return_value=MagicMock())
+            pr._budget.should_allow_perception.return_value = True
+
+            result = await orch.run_perception_cycle(
+                source="gmail",
+                user_id=TEST_USER_ID,
+                workspace_id=TEST_WORKSPACE_ID,
+            )
+
+            assert result["status"] == "error"
+            # The cursor must NOT be persisted on a failed poll.
+            pr._poller.update_cursor.assert_not_awaited()
+            # No events were ingested either (the cursor-fold ingest path).
+            pr._poller.ingest_raw_events.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_successful_empty_poll_does_advance_cursor(self):
+        """Control: a successful (no error) empty poll DOES persist the cursor,
+        proving the non-advance above is specifically the failure-path behaviour."""
+        from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID, make_mock_settings
+
+        settings = make_mock_settings()
+
+        with patch("src.orchestrator.jarvis.get_anthropic_client"):
+            mock_db = AsyncMock()
+            mock_db.commit = AsyncMock()
+            db_ctx = AsyncMock()
+            db_ctx.__aenter__ = AsyncMock(return_value=mock_db)
+            db_ctx.__aexit__ = AsyncMock(return_value=False)
+            db_factory = MagicMock(return_value=db_ctx)
+
+            from src.orchestrator.jarvis import JarvisOrchestrator
+            from src.orchestrator.services import ServiceContainer
+
+            orch = JarvisOrchestrator(
+                settings=settings, db_factory=db_factory, services=ServiceContainer()
+            )
+
+            pr = orch._perception
+            pr._poller.poll = AsyncMock(return_value=([], "new_cursor", None, "opaque"))
+            pr._poller.ingest_raw_events = AsyncMock()
+            pr._poller.update_cursor = AsyncMock()
+            pr._invoker.call_agent = AsyncMock()
+            pr._events.publish_event = AsyncMock()
+            pr._trace_manager = MagicMock()
+            pr._trace_manager.start_trace.return_value = MagicMock(trace_id="t1")
+            pr._trace_manager.finish_trace = AsyncMock()
+            pr._budget = MagicMock()
+            pr._budget.get_budget_status = AsyncMock(return_value=MagicMock())
+            pr._budget.should_allow_perception.return_value = True
+
+            result = await orch.run_perception_cycle(
+                source="gmail",
+                user_id=TEST_USER_ID,
+                workspace_id=TEST_WORKSPACE_ID,
+            )
+
+            assert result["status"] == "completed"
+            assert result["events"] == 0
+            pr._poller.update_cursor.assert_awaited_once()
+            # Empty success path saves the cursor but does NOT ingest events.
+            pr._poller.ingest_raw_events.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Connector registry guards (Task 5.4 — post-removal of web_search/whatsapp)
+# ---------------------------------------------------------------------------
+
+
+class TestConnectorRegistryGuards:
+    """web_search and whatsapp were removed as pollable connectors. Guard against
+    their reintroduction, and confirm the canonical poll sources remain present."""
+
+    def test_removed_sources_absent(self):
+        # Import the connectors package so all @register_connector decorators fire.
+        import src.connectors  # noqa: F401
+        from src.connectors.base import CONNECTOR_REGISTRY
+
+        assert "web_search" not in CONNECTOR_REGISTRY
+        assert "whatsapp" not in CONNECTOR_REGISTRY
+
+    def test_canonical_sources_present(self):
+        import src.connectors  # noqa: F401
+        from src.connectors.base import CONNECTOR_REGISTRY
+
+        for source in ("gmail", "calendar", "slack", "github"):
+            assert source in CONNECTOR_REGISTRY, f"{source} missing from CONNECTOR_REGISTRY"
+
+    def test_removed_sources_not_valid_perception_sources(self):
+        from src.orchestrator.intent_classifier import VALID_PERCEPTION_SOURCES
+
+        assert "web_search" not in VALID_PERCEPTION_SOURCES
+        assert "whatsapp" not in VALID_PERCEPTION_SOURCES

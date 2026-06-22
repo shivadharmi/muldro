@@ -4,7 +4,7 @@ import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
@@ -23,6 +23,7 @@ from src.api.schemas_history import (
     RunActionResponse,
 )
 from src.config.settings import Settings, get_settings
+from src.middleware.security import RATE_LIMIT_RUN_ACTION, per_endpoint_rate_limit
 from src.models.approvals import Approval
 from src.models.plans import Plan
 from src.models.runtime_event import RuntimeEvent
@@ -108,6 +109,14 @@ async def list_history(
     runs: list[TaskRun] = runs_result.scalars().all()
 
     # ------------------------------------------------------------------ #
+    # Batch-resolve primary agent for this page of runs in a single query.
+    # Mirrors the detail path's agent attribution (Trace.agents_invoked),
+    # resolving by trace_id first and the reverse index (Trace.run_id) as a
+    # fallback — but for the whole page at once to avoid an N+1.
+    # ------------------------------------------------------------------ #
+    agent_by_run = await _resolve_agents_for_runs(db, workspace_id, runs)
+
+    # ------------------------------------------------------------------ #
     # Enrich each run
     # ------------------------------------------------------------------ #
     items: list[HistoryItemResponse] = []
@@ -148,12 +157,18 @@ async def list_history(
         approval_ctx: HistoryApprovalContext | None = None
         if run.status == "awaiting_approval":
             appr_result = await db.execute(
-                select(Approval).where(
+                select(Approval)
+                .where(
                     Approval.run_id == run.run_id,
                     Approval.status == "pending",
                 )
+                .order_by(Approval.created_at.desc())
+                .limit(1)
             )
-            appr = appr_result.scalar_one_or_none()
+            # A run may have multiple pending approvals (multi-step plans or
+            # historical data); pick the most recent. .scalars().first() is
+            # 0/1/many-safe and never raises MultipleResultsFound.
+            appr = appr_result.scalars().first()
             if appr:
                 approval_ctx = HistoryApprovalContext(
                     approval_id=appr.approval_id,
@@ -185,6 +200,17 @@ async def list_history(
         except Exception:
             pass
 
+        # Duration from run timestamps (None while still running)
+        duration_ms: int | None = None
+        if run.started_at and run.completed_at:
+            delta = run.completed_at - run.started_at
+            duration_ms = int(delta.total_seconds() * 1000)
+
+        # Cost from the denormalized rollup column on the run (same source the
+        # detail path uses as its secondary fallback). Expose None when no cost
+        # was recorded so the UI can render an em-dash rather than "$0.00".
+        cost_usd = float(run.cost_usd) if run.cost_usd else None
+
         items.append(
             HistoryItemResponse(
                 run_id=run.run_id,
@@ -196,10 +222,14 @@ async def list_history(
                 risk_level=risk_level,
                 started_at=run.started_at,
                 completed_at=run.completed_at,
+                updated_at=run.updated_at,
+                duration_ms=duration_ms,
                 error=run.error,
                 retry_count=run.retry_count,
                 step_count=len(steps),
                 completed_step_count=completed_step_count,
+                cost_usd=cost_usd,
+                agent=agent_by_run.get(run.run_id),
                 steps=step_summaries,
                 approval=approval_ctx,
                 live_phase=live_phase,
@@ -349,39 +379,89 @@ async def get_history_detail(
     ]
 
     # ------------------------------------------------------------------ #
-    # 7. Trace info — query Trace model if trace_id exists, else compute
+    # 7. Trace info — resolve Trace via run.trace_id, fall back to the
+    #    reverse index (traces.run_id) for legacy runs, finally fall back
+    #    to the run.cost_usd / run.input_tokens rollup cached on the
+    #    TaskRun row itself.
     # ------------------------------------------------------------------ #
+    from src.api.schemas_history import HistoryTraceStep
+    from src.models.traces import ModelCall
+    from src.models.traces import Trace as TraceModel
+
     trace: HistoryTraceInfo | None = None
     run_duration_ms = 0
     if run.started_at and run.completed_at:
         delta = run.completed_at - run.started_at
         run_duration_ms = int(delta.total_seconds() * 1000)
 
+    trace_row = None
     if run.trace_id:
-        try:
-            from src.models.traces import Trace as TraceModel
+        trace_row = (
+            await db.execute(select(TraceModel).where(TraceModel.trace_id == run.trace_id))
+        ).scalar_one_or_none()
+    if trace_row is None:
+        # Defensive fallback: resolve by the reverse index
+        trace_row = (
+            await db.execute(select(TraceModel).where(TraceModel.run_id == run.run_id))
+        ).scalar_one_or_none()
 
-            trace_result = await db.execute(
-                select(TraceModel).where(TraceModel.trace_id == run.trace_id)
-            )
-            trace_row = trace_result.scalar_one_or_none()
-            if trace_row:
-                trace = HistoryTraceInfo(
-                    trace_id=trace_row.trace_id,
-                    input_tokens=trace_row.total_input_tokens or 0,
-                    output_tokens=trace_row.total_output_tokens or 0,
-                    cost_usd=trace_row.total_cost_usd or 0.0,
-                    duration_ms=trace_row.duration_ms or run_duration_ms,
-                    agents_invoked=trace_row.agents_invoked or [],
-                    tools_called=trace_row.tools_called or [],
-                )
-        except Exception:
-            logger.debug("Failed to fetch trace for run %s", run.run_id, exc_info=True)
+    step_breakdown: list[HistoryTraceStep] = []
+    if trace_row is not None:
+        # Per-step breakdown: ModelCall entries grouped by the span's
+        # associated step_id (stored via decision field or in metadata).
+        # ModelCall rows don't natively carry step_id, so we group by
+        # agent_name as a reasonable proxy — this still gives the user
+        # visibility into which agents consumed the tokens.
+        calls = (
+            (await db.execute(select(ModelCall).where(ModelCall.trace_id == trace_row.trace_id)))
+            .scalars()
+            .all()
+        )
 
-    # Fallback: compute basic trace from run duration even without trace_id
-    if not trace and run_duration_ms:
+        by_agent: dict[str, HistoryTraceStep] = {}
+        for c in calls:
+            key = c.agent_name or "unknown"
+            entry = by_agent.get(key)
+            if entry is None:
+                entry = HistoryTraceStep(step_id=key, agent=key, model=c.model)
+                by_agent[key] = entry
+            entry.calls += 1
+            entry.input_tokens += c.input_tokens or 0
+            entry.output_tokens += c.output_tokens or 0
+            entry.cost_usd = round(entry.cost_usd + float(c.cost_usd or 0), 6)
+            entry.duration_ms += c.duration_ms or 0
+        step_breakdown = list(by_agent.values())
+
         trace = HistoryTraceInfo(
-            trace_id=None,
+            trace_id=trace_row.trace_id,
+            input_tokens=trace_row.total_input_tokens or 0,
+            output_tokens=trace_row.total_output_tokens or 0,
+            cost_usd=float(trace_row.total_cost_usd or 0.0),
+            duration_ms=trace_row.duration_ms or run_duration_ms,
+            agents_invoked=trace_row.agents_invoked or [],
+            tools_called=trace_row.tools_called or [],
+            step_breakdown=step_breakdown,
+        )
+
+    # Secondary fallback: rollup columns on the TaskRun. Populated by
+    # GraphExecutor._finalize_trace even when the Trace row persist step
+    # fails, so the UI always has a non-zero result for a completed run
+    # that made real API calls.
+    if trace is None and (
+        (run.input_tokens or 0) or (run.output_tokens or 0) or (run.cost_usd or 0)
+    ):
+        trace = HistoryTraceInfo(
+            trace_id=run.trace_id,
+            input_tokens=int(run.input_tokens or 0),
+            output_tokens=int(run.output_tokens or 0),
+            cost_usd=float(run.cost_usd or 0.0),
+            duration_ms=run_duration_ms,
+        )
+
+    # Final fallback: duration-only from run timestamps
+    if trace is None and run_duration_ms:
+        trace = HistoryTraceInfo(
+            trace_id=run.trace_id,
             duration_ms=run_duration_ms,
         )
 
@@ -398,6 +478,65 @@ async def get_history_detail(
         trace=trace,
         events=event_entries,
     )
+
+
+async def _resolve_agents_for_runs(
+    db: AsyncSession,
+    workspace_id: str,
+    runs: list[TaskRun],
+) -> dict[str, str]:
+    """Resolve the primary (last-invoked) agent for a page of runs in one query.
+
+    Mirrors the detail path's attribution source (Trace.agents_invoked) but
+    batches the lookup across the whole page to avoid an N+1. Traces are matched
+    either by the run's stamped trace_id or by the reverse index (Trace.run_id),
+    same as the detail endpoint's resolution order. The last entry in
+    agents_invoked is treated as the most representative agent for the row.
+    """
+    if not runs:
+        return {}
+
+    from src.models.traces import Trace as TraceModel
+
+    run_ids = [r.run_id for r in runs]
+    trace_ids = [r.trace_id for r in runs if r.trace_id]
+
+    conditions = [TraceModel.run_id.in_(run_ids)]
+    if trace_ids:
+        conditions.append(TraceModel.trace_id.in_(trace_ids))
+
+    trace_rows = (
+        (
+            await db.execute(
+                select(TraceModel).where(
+                    TraceModel.workspace_id == workspace_id,
+                    or_(*conditions),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    # Index traces by both keys so either resolution path finds them.
+    by_trace_id: dict[str, TraceModel] = {}
+    by_run_id: dict[str, TraceModel] = {}
+    for t in trace_rows:
+        if t.trace_id:
+            by_trace_id[t.trace_id] = t
+        if t.run_id:
+            by_run_id[t.run_id] = t
+
+    agent_by_run: dict[str, str] = {}
+    for run in runs:
+        trace = None
+        if run.trace_id:
+            trace = by_trace_id.get(run.trace_id)
+        if trace is None:
+            trace = by_run_id.get(run.run_id)
+        if trace and trace.agents_invoked:
+            agent_by_run[run.run_id] = trace.agents_invoked[-1]
+    return agent_by_run
 
 
 def _capability_from_step(step: TaskStep) -> str | None:
@@ -428,7 +567,11 @@ def _name_from_step(step: TaskStep) -> str | None:
 _TERMINAL_STATUSES = {"completed", "failed", "cancelled", "archived", "timed_out"}
 
 
-@router.post("/v1/history/{run_id}/retry", response_model=RunActionResponse)
+@router.post(
+    "/v1/history/{run_id}/retry",
+    response_model=RunActionResponse,
+    dependencies=[Depends(per_endpoint_rate_limit(RATE_LIMIT_RUN_ACTION))],
+)
 async def retry_run(
     run_id: str,
     user_id: str = Depends(get_current_user_id),
@@ -463,7 +606,11 @@ async def retry_run(
     return RunActionResponse(run_id=run.run_id, status=run.status, message="Run queued for retry.")
 
 
-@router.post("/v1/runs/{run_id}/cancel", response_model=RunActionResponse)
+@router.post(
+    "/v1/runs/{run_id}/cancel",
+    response_model=RunActionResponse,
+    dependencies=[Depends(per_endpoint_rate_limit(RATE_LIMIT_RUN_ACTION))],
+)
 async def cancel_run(
     run_id: str,
     user_id: str = Depends(get_current_user_id),
@@ -503,7 +650,11 @@ async def cancel_run(
     return RunActionResponse(run_id=run_id, status=run.status, message="Run cancelled.")
 
 
-@router.post("/v1/runs/{run_id}/resume", response_model=RunActionResponse)
+@router.post(
+    "/v1/runs/{run_id}/resume",
+    response_model=RunActionResponse,
+    dependencies=[Depends(per_endpoint_rate_limit(RATE_LIMIT_RUN_ACTION))],
+)
 async def resume_run(
     run_id: str,
     user_id: str = Depends(get_current_user_id),

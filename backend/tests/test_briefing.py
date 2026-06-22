@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.services.integration_status import IntegrationStatus
 from src.services.presenter import Presenter
 from tests.conftest import TEST_USER_ID, make_mock_settings
 
@@ -138,3 +139,118 @@ def test_briefing_endpoint_returns_response():
     data = response.json()
     assert data["briefing_id"] == "brief_test"
     assert data["headline"] == "Test headline"
+
+
+# ── Bug A: connection-aware briefing ────────────────────────────────────
+
+
+def _connected(server_name: str, display_name: str, connected: bool) -> IntegrationStatus:
+    return IntegrationStatus(
+        server_name=server_name,
+        display_name=display_name,
+        provider="google",
+        category="oauth",
+        configured=True,
+        connected=connected,
+        health_status="healthy",
+        enabled=True,
+        install_id=f"inst_{server_name}",
+        scopes=[],
+    )
+
+
+@patch("src.services.presenter.get_integration_statuses")
+@patch("src.services.presenter.get_anthropic_client")
+@pytest.mark.asyncio
+async def test_briefing_context_includes_connected_when_zero_events(
+    mock_get_client, mock_statuses, settings, mock_db
+):
+    """Bug A: when integrations are connected but events=0, the LLM context must
+    carry a 'connected' signal so the model does not free-associate disconnection.
+    """
+    mock_statuses.return_value = [
+        _connected("google-workspace", "Gmail", connected=True),
+        _connected("google-calendar", "Calendar", connected=True),
+    ]
+    mock_get_client.return_value = MagicMock()
+
+    presenter = Presenter(settings=settings, db=mock_db)
+    # mock_db default returns no events / plans / approvals → quiet day
+    context = await presenter._gather_briefing_data(
+        TEST_USER_ID, date(2026, 3, 13), workspace_id="ws_test"
+    )
+
+    assert "Connected Integrations" in context
+    assert "Gmail" in context
+    assert "connected" in context.lower()
+    # No events, but the context must make clear it's a quiet (not disconnected) day.
+    assert "No events" in context
+
+
+@patch("src.services.presenter.get_integration_statuses")
+@patch("src.services.presenter.get_anthropic_client")
+@pytest.mark.asyncio
+async def test_briefing_context_flags_disconnected_integration(
+    mock_get_client, mock_statuses, settings, mock_db
+):
+    """A genuinely disconnected integration should be surfaced as not connected
+    so a 'verify integrations' suggestion is appropriate.
+    """
+    mock_statuses.return_value = [
+        _connected("google-workspace", "Gmail", connected=True),
+        _connected("slack", "Slack", connected=False),
+    ]
+    mock_get_client.return_value = MagicMock()
+
+    presenter = Presenter(settings=settings, db=mock_db)
+    context = await presenter._gather_briefing_data(
+        TEST_USER_ID, date(2026, 3, 13), workspace_id="ws_test"
+    )
+
+    assert "Not Connected" in context or "not connected" in context.lower()
+    assert "Slack" in context
+
+
+def test_briefing_prompt_scopes_verify_suggestion_to_disconnection():
+    """Bug A: the schema prompt must NOT instruct the model to infer
+    disconnection from a quiet day — verify-integrations is only for actually
+    disconnected sources.
+    """
+    from src.services.presenter import BRIEFING_JSON_SCHEMA
+
+    lowered = BRIEFING_JSON_SCHEMA.lower()
+    # The prompt must reference connection status to anchor the model.
+    assert "connected integrations" in lowered or "disconnected" in lowered
+
+
+# ── Bug B: presenter no longer owns delivery ────────────────────────────
+
+
+@patch("src.services.presenter.get_integration_statuses")
+@patch("src.services.presenter.get_anthropic_client")
+@pytest.mark.asyncio
+async def test_presenter_does_not_notify(mock_get_client, mock_statuses, settings, mock_db):
+    """Bug B: presenter.generate_briefing must NOT notify — delivery is owned by
+    the orchestrator path. The presenter only builds + caches the Briefing.
+    """
+    mock_statuses.return_value = []
+    briefing_content = {
+        "headline": "quiet day",
+        "top_priorities": [],
+        "changes_since_last": [],
+        "recommended_actions": [],
+        "full_text": "Nothing urgent today.",
+    }
+    mock_client = MagicMock()
+    response = MagicMock()
+    response.content = [MagicMock(text=json.dumps(briefing_content))]
+    mock_client.messages.create = AsyncMock(return_value=response)
+    mock_get_client.return_value = mock_client
+
+    notifier = MagicMock()
+    notifier.notify = AsyncMock()
+
+    presenter = Presenter(settings=settings, db=mock_db, notifier=notifier)
+    await presenter.generate_briefing(TEST_USER_ID, date(2026, 3, 13), workspace_id="ws_test")
+
+    notifier.notify.assert_not_called()

@@ -17,6 +17,7 @@ RUN_TRANSITIONS: dict[str, set[str]] = {
         "paused",
         "awaiting_approval",
         "awaiting_input",
+        "awaiting_reauth",
         "completed",
         "failed",
         "cancelled",
@@ -25,6 +26,9 @@ RUN_TRANSITIONS: dict[str, set[str]] = {
     "paused": {"running", "cancelled"},
     "awaiting_approval": {"running", "cancelled", "failed"},
     "awaiting_input": {"running", "cancelled", "failed"},
+    # Run blocked on an OAuth provider the user must reconnect. Requeued to
+    # pending (then re-run) once the credential is restored.
+    "awaiting_reauth": {"pending", "running", "cancelled", "failed"},
     "blocked": {"pending", "cancelled"},
     "partially_completed": {"running", "completed", "failed", "cancelled"},
     "completed": {"archived"},
@@ -49,6 +53,10 @@ STEP_TRANSITIONS: dict[str, set[str]] = {
     },
     "waiting_approval": {"running", "skipped"},
     "awaiting_input": {"running", "skipped", "cancelled"},
+    # NOTE: there is no step-level ``awaiting_reauth`` state. OAuth re-auth
+    # deferral is a RUN-level concern (see RUN_TRANSITIONS): the defer path
+    # resets the blocked step to ``ready`` and parks the *run* in
+    # ``awaiting_reauth``. A step never enters awaiting_reauth (M2).
     "blocked": {"pending", "skipped"},
     "completed": set(),
     "failed": {"pending"},  # Retry: failed → pending

@@ -8,6 +8,51 @@ interface Props {
   disabled?: boolean;
 }
 
+// Inline stroke-SVG icons (no icon library in this app) — viewBox 16,
+// currentColor stroke, matching the Jarvis design primitives.
+function IconBase({ size = 16, children }: { size?: number; children: React.ReactNode }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.4}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {children}
+    </svg>
+  );
+}
+
+function IconSend() {
+  return (
+    <IconBase size={14}>
+      <path d="M2 14L14.5 8 2 2l2 5h6l-6 1z" />
+    </IconBase>
+  );
+}
+
+function IconMic() {
+  return (
+    <IconBase>
+      <rect x="6" y="2" width="4" height="8" rx="2" />
+      <path d="M13 7v1a5 5 0 01-10 0V7M8 13v2" />
+    </IconBase>
+  );
+}
+
+function IconSparkle() {
+  return (
+    <IconBase size={12}>
+      <path d="M8 2l1.4 3.6L13 7l-3.6 1.4L8 12l-1.4-3.6L3 7l3.6-1.4L8 2z" />
+    </IconBase>
+  );
+}
+
 const COMMANDS = [
   { name: "/brief", description: "Today's briefing" },
   { name: "/status", description: "System health", endpoint: "/v1/health" },
@@ -22,7 +67,20 @@ export function CommandInput({ onSubmit, disabled }: Props) {
   const [cmdKOpen, setCmdKOpen] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
+
+  // Auto-grow the composer textarea up to a few rows, then scroll.
+  const autoGrow = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, []);
+
+  useEffect(() => {
+    autoGrow();
+  }, [value, autoGrow]);
 
   const filtered = (cmdKOpen || value.startsWith("/"))
     ? COMMANDS.filter((c) => {
@@ -99,7 +157,7 @@ export function CommandInput({ onSubmit, disabled }: Props) {
         setValue(cmd.name + " ");
         setPaletteHidden(true);
         setCmdKOpen(false);
-        inputRef.current?.focus();
+        textareaRef.current?.focus();
         return;
       }
 
@@ -134,6 +192,23 @@ export function CommandInput({ onSubmit, disabled }: Props) {
       onSubmit(value.trim());
       setValue("");
       setCmdKOpen(false);
+    }
+  };
+
+  // Textarea: Enter sends, Shift+Enter inserts a newline. Palette navigation
+  // takes precedence while the command palette is open.
+  const handleTextareaKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (showPalette) {
+      handleKeyDown(e);
+      return;
+    }
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      if (value.trim() && !disabled) {
+        onSubmit(value.trim());
+        setValue("");
+        setCmdKOpen(false);
+      }
     }
   };
 
@@ -189,24 +264,53 @@ export function CommandInput({ onSubmit, disabled }: Props) {
           </div>
         </div>
       )}
-      <form ref={formRef} onSubmit={handleSubmit} className="flex gap-2">
-        <input
-          ref={cmdKOpen ? undefined : inputRef}
-          type="text"
+      <form
+        ref={formRef}
+        onSubmit={handleSubmit}
+        className="rounded-[var(--radius-lg)] bg-surface-2 border border-b-primary focus-within:ring-2 focus-within:ring-j-ring transition-shadow"
+      >
+        <textarea
+          ref={textareaRef}
+          rows={2}
           value={cmdKOpen ? "" : value}
           onChange={(e) => { if (!cmdKOpen) { setValue(e.target.value); setPaletteHidden(false); } }}
-          onKeyDown={cmdKOpen ? undefined : handleKeyDown}
-          placeholder="Ask Jarvis anything... (⌘K for commands, / for slash)"
+          onKeyDown={cmdKOpen ? undefined : handleTextareaKeyDown}
+          placeholder="Ask Jarvis, or give it a task. It will plan, ask for approval, then execute."
           disabled={disabled}
-          className="flex-1 rounded-[var(--radius-lg)] bg-surface-2 border border-b-primary px-4 py-3 text-sm text-t-primary placeholder-t-tertiary focus:outline-none focus:ring-2 focus:ring-j-ring disabled:opacity-50"
+          className="w-full resize-none bg-transparent px-4 pt-3 pb-1 text-sm text-t-primary placeholder-t-tertiary focus:outline-none disabled:opacity-50"
         />
-        <button
-          type="submit"
-          disabled={disabled || !value.trim() || cmdKOpen}
-          className="rounded-[var(--radius-lg)] bg-j-primary px-4 py-3 text-sm font-medium text-j-primary-fg hover:bg-j-primary-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-        >
-          Send
-        </button>
+        <div className="flex items-center justify-between gap-2 px-3 pb-2.5 pt-1">
+          {/* Agent / context chips — mode lives in the chat header bar. */}
+          <div className="flex items-center gap-1.5">
+            <span className="inline-flex items-center gap-1 rounded-[var(--radius-md)] bg-surface-3 border border-b-secondary px-2 py-1 text-[11px] text-t-tertiary">
+              <IconSparkle />
+              planner
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-[var(--radius-md)] bg-surface-3 border border-b-secondary px-2 py-1 text-[11px] text-t-tertiary">
+              + context
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              disabled
+              title="Voice input (coming soon)"
+              aria-label="Voice input"
+              className="rounded-[var(--radius-md)] p-2 text-t-tertiary disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <IconMic />
+            </button>
+            <button
+              type="submit"
+              disabled={disabled || !value.trim() || cmdKOpen}
+              title="Send"
+              aria-label="Send"
+              className="rounded-[var(--radius-md)] bg-j-primary p-2 text-j-primary-fg hover:bg-j-primary-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+            >
+              <IconSend />
+            </button>
+          </div>
+        </div>
       </form>
     </div>
   );

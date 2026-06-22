@@ -11,12 +11,9 @@ class TestToolInputModels:
         assert present == set(), f"Orphan tools still in TOOL_INPUT_MODELS: {present}"
 
     def test_tool_count_is_21(self):
-        """After adding store_memory, store_preference, and discover_capabilities.
-
-        Exactly 23 tools should remain.
-        """
-        assert len(TOOL_INPUT_MODELS) == 23, (
-            f"Expected 23 tools, got {len(TOOL_INPUT_MODELS)}: {sorted(TOOL_INPUT_MODELS.keys())}"
+        """TOOL_INPUT_MODELS holds exactly the 21 internal tools with Pydantic schemas."""
+        assert len(TOOL_INPUT_MODELS) == 21, (
+            f"Expected 21 tools, got {len(TOOL_INPUT_MODELS)}: {sorted(TOOL_INPUT_MODELS.keys())}"
         )
 
     def test_all_models_have_docstrings(self):
@@ -63,8 +60,6 @@ class TestToolInputModels:
             "discover_capabilities",
             "report_governor_verdict",
             "get_goal_memories",
-            "send_telegram",
-            "send_approval_prompt",
             "push_ui_update",
         }
         actual = set(TOOL_INPUT_MODELS.keys())

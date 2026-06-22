@@ -11,6 +11,7 @@ import time
 from datetime import datetime, timezone
 
 from src.config.settings import Settings
+from src.errors import classify
 from src.services.world_model import RELATION_TYPES
 
 logger = logging.getLogger(__name__)
@@ -70,11 +71,20 @@ class GraphEngine:
             if not self._settings.neo4j_url:
                 logger.warning("Neo4j not configured, graph engine is no-op")
                 return None
-            from neo4j import AsyncGraphDatabase
+            from neo4j import AsyncGraphDatabase, NotificationDisabledClassification
 
             self._driver = AsyncGraphDatabase.driver(
                 self._settings.neo4j_url,
                 auth=(self._settings.neo4j_user, self._settings.neo4j_password),
+                # Several traversal/temporal queries intentionally reference
+                # optional relationship properties (e.g. ``r.start_date IS NULL
+                # OR ...``). Neo4j emits a benign 01N52 "property key does not
+                # exist" notification (classification UNRECOGNIZED) for each,
+                # which floods the logs. The IS NULL branch handles absent
+                # properties correctly, so suppress just that classification.
+                notifications_disabled_classifications=[
+                    NotificationDisabledClassification.UNRECOGNIZED
+                ],
             )
         return self._driver
 
@@ -94,7 +104,16 @@ class GraphEngine:
                 "circuit_state": self._circuit._state,
             }
         except Exception as exc:
-            return {"status": "unreachable", "configured": True, "error": str(exc)[:200]}
+            # /v1/health/stores is a PUBLIC endpoint — surface only the safe
+            # message + code, never the raw Neo4j exception (may carry the URL).
+            logger.warning("Neo4j health check failed: %s", exc, exc_info=True)
+            code, message, _ = classify(exc)
+            return {
+                "status": "unreachable",
+                "configured": True,
+                "error": message,
+                "error_code": code,
+            }
 
     def get_metrics(self) -> dict:
         return {**self._metrics, "circuit_state": self._circuit._state}

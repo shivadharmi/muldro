@@ -62,7 +62,7 @@ class TestStepTimeout:
 
 class TestRetryBackoff:
     def test_backoff_delay_increases(self):
-        from src.services.graph_executor import _compute_retry_delay
+        from src.services.execution_support import _compute_retry_delay
 
         assert _compute_retry_delay(0) == 1
         assert _compute_retry_delay(1) == 2
@@ -70,7 +70,7 @@ class TestRetryBackoff:
         assert _compute_retry_delay(3) == 8
 
     def test_backoff_capped_at_30(self):
-        from src.services.graph_executor import _compute_retry_delay
+        from src.services.execution_support import _compute_retry_delay
 
         assert _compute_retry_delay(5) == 30
         assert _compute_retry_delay(10) == 30
@@ -95,12 +95,16 @@ class TestVerificationState:
         assert "failed" in RUN_TRANSITIONS["partially_completed"]
 
     def test_verification_promotes_to_completed(self):
-        """_run_verification should promote partially_completed to completed on pass."""
+        """run_verification should promote partially_completed to completed on pass.
+
+        The verification logic was extracted to OutcomeLearner (2026-06-20);
+        GraphExecutor._run_verification is now a thin facade over it.
+        """
         import inspect
 
-        from src.services.graph_executor import GraphExecutor
+        from src.services.outcome_learner import OutcomeLearner
 
-        source = inspect.getsource(GraphExecutor._run_verification)
+        source = inspect.getsource(OutcomeLearner.run_verification)
         assert "partially_completed" in source
         assert 'transition_run(run, "completed")' in source
 
@@ -110,6 +114,76 @@ class TestStuckRunDetection:
         from src.services.scheduler import SchedulerLoop
 
         assert hasattr(SchedulerLoop, "_tick_run_health_check")
+
+
+class TestLoopGauges:
+    async def test_update_loop_gauges_sets_metrics(self):
+        """The health tick refreshes global loop gauges for /metrics."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from src.services.scheduler import SchedulerLoop
+
+        running = MagicMock()
+        running.scalar.return_value = 4
+        pending = MagicMock()
+        pending.scalar.return_value = 2
+        db = AsyncMock()
+        db.execute = AsyncMock(side_effect=[running, pending])
+
+        sched = SchedulerLoop(MagicMock(), orchestrator=MagicMock())
+        with patch("src.services.metrics_service.MetricsService") as mock_metrics:
+            await sched._update_loop_gauges(db)
+
+        mock_metrics.set_active_runs.assert_called_once_with(4)
+        mock_metrics.set_pending_approvals.assert_called_once_with(2)
+
+
+class TestBudgetGauges:
+    async def test_update_budget_gauges_sets_per_user_remaining(self):
+        """The health tick emits a per-user budget-remaining gauge."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from src.orchestrator.budget import BudgetStatus
+        from src.services.scheduler import SchedulerLoop
+
+        status = BudgetStatus(
+            daily_spend_usd=2.0,
+            daily_limit_usd=5.0,
+            budget_mode="normal",
+            remaining_usd=3.0,
+            percent_used=40.0,
+        )
+        orchestrator = MagicMock()
+        orchestrator._budget.get_budget_status = AsyncMock(return_value=status)
+
+        sched = SchedulerLoop(MagicMock(), orchestrator=orchestrator, user_ids=["user_x"])
+        db = AsyncMock()
+
+        with (
+            patch(
+                "src.services.workspace_resolver.resolve_workspace_id",
+                AsyncMock(return_value="ws_1"),
+            ),
+            patch("src.services.metrics_service.MetricsService") as mock_metrics,
+        ):
+            await sched._update_budget_gauges(db)
+
+        orchestrator._budget.get_budget_status.assert_awaited_once_with(db, workspace_id="ws_1")
+        mock_metrics.set_budget_remaining.assert_called_once_with("user_x", 3.0)
+
+    async def test_update_budget_gauges_noop_without_users(self):
+        """No users configured → no budget gauge emitted, no error."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from src.services.scheduler import SchedulerLoop
+
+        sched = SchedulerLoop(MagicMock(), orchestrator=MagicMock(), user_ids=[])
+        db = AsyncMock()
+
+        with patch("src.services.metrics_service.MetricsService") as mock_metrics:
+            await sched._update_budget_gauges(db)
+
+        mock_metrics.set_budget_remaining.assert_not_called()
 
 
 class TestDurableSurfaceUpdates:
@@ -135,11 +209,15 @@ class TestDurableSurfaceUpdates:
         assert "workspace_id" in sig.parameters
 
     def test_emit_surface_update_persists_to_db(self):
-        """_emit_surface_update source contains DB persistence logic."""
+        """SurfaceEmitter.emit_surface_update source contains DB persistence logic.
+
+        The emission cluster was extracted to the SurfaceEmitter collaborator
+        (SVC-P1-3); the persistence logic now lives there.
+        """
         import inspect
 
-        from src.services.graph_executor import GraphExecutor
+        from src.services.execution_surface_emitter import SurfaceEmitter
 
-        source = inspect.getsource(GraphExecutor._emit_surface_update)
+        source = inspect.getsource(SurfaceEmitter.emit_surface_update)
         assert "last_surface_update" in source
         assert "persist_db" in source

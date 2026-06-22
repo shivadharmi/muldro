@@ -77,7 +77,7 @@ class TestSeedDefaults:
         # Add internal tools
         for tool in INTERNAL_TOOLS:
             t = _make_tool_def(name=tool.name)
-            t.backend = "internal_mcp"
+            t.backend = "special" if tool.server == "_special" else "internal_mcp"
             t.source = "internal"
             t.server = tool.server
             t.capability = tool.capability
@@ -85,6 +85,7 @@ class TestSeedDefaults:
             t.requires_approval = tool.requires_approval
             t.verified = True
             t.input_schema = _schema_for_claude(tool.input_model)
+            t.description = tool.description
             existing_tools.append(t)
 
         # Add external seeds
@@ -129,38 +130,74 @@ class TestSeedDefaults:
 
         pytest.fail("web_search tool was not seeded")
 
-
-class TestRegisterTool:
     @pytest.mark.asyncio
-    async def test_register_new_tool(self, registry, mock_db):
+    async def test_seed_defaults_special_backend(self, registry, mock_db):
+        """report_governor_verdict (_special server) gets backend='special' (TOOL-P3-1)."""
         result_mock = MagicMock()
-        result_mock.scalar_one_or_none.return_value = None
+        result_mock.scalars.return_value = result_mock
+        result_mock.all.return_value = []
         mock_db.execute = AsyncMock(return_value=result_mock)
 
-        tool = await registry.register_tool(
-            name="custom_tool",
-            risk_level="medium",
-            requires_approval=True,
-            connector_type="custom",
-        )
-        mock_db.add.assert_called_once()
-        mock_db.flush.assert_called_once()
-        assert tool.name == "custom_tool"
+        await registry.seed_defaults()
+
+        for call in mock_db.add.call_args_list:
+            tool_def = call[0][0]
+            if tool_def.name == "report_governor_verdict":
+                assert tool_def.backend == "special", (
+                    f"report_governor_verdict should have backend='special', "
+                    f"got '{tool_def.backend}'"
+                )
+                assert tool_def.server == "_special"
+                return
+
+        pytest.fail("report_governor_verdict tool was not seeded")
 
     @pytest.mark.asyncio
-    async def test_register_updates_existing(self, registry, mock_db):
-        existing = _make_tool_def(name="gmail_send", risk_level="high")
+    async def test_seed_defaults_writes_internal_description(self, registry, mock_db):
+        """Internal tools are inserted with their catalog description (TOOL-P1-2)."""
         result_mock = MagicMock()
-        result_mock.scalar_one_or_none.return_value = existing
+        result_mock.scalars.return_value = result_mock
+        result_mock.all.return_value = []
         mock_db.execute = AsyncMock(return_value=result_mock)
 
-        tool = await registry.register_tool(
-            name="gmail_send",
-            risk_level="critical",
-            requires_approval=True,
-        )
-        assert tool.risk_level == "critical"
-        mock_db.add.assert_not_called()
+        await registry.seed_defaults()
+
+        catalog = {tool.name: tool for tool in INTERNAL_TOOLS}
+        seeded = {
+            call[0][0].name: call[0][0]
+            for call in mock_db.add.call_args_list
+            if call[0][0].name in catalog
+        }
+        # Every internal tool seeded carries its catalog description (not NULL).
+        for name, tool_def in seeded.items():
+            assert tool_def.description == catalog[name].description
+
+    @pytest.mark.asyncio
+    async def test_seed_defaults_syncs_diverged_description(self, registry, mock_db):
+        """A drifted description on an existing row is re-synced (TOOL-P1-2)."""
+        from src.services.tool_registry import _schema_for_claude
+
+        sample = INTERNAL_TOOLS[0]
+        existing = _make_tool_def(name=sample.name)
+        existing.backend = "internal_mcp"
+        existing.source = "internal"
+        existing.server = sample.server
+        existing.capability = sample.capability
+        existing.risk_level = sample.risk_level
+        existing.requires_approval = sample.requires_approval
+        existing.verified = True
+        existing.input_schema = _schema_for_claude(sample.input_model)
+        existing.description = "STALE DESCRIPTION"  # only this field diverges
+
+        result_mock = MagicMock()
+        result_mock.scalars.return_value = result_mock
+        result_mock.all.return_value = [existing]
+        mock_db.execute = AsyncMock(return_value=result_mock)
+
+        changed = await registry.seed_defaults()
+
+        assert changed >= 1
+        assert existing.description == sample.description
 
 
 class TestGetToolCaching:
@@ -196,81 +233,6 @@ class TestGetToolCaching:
 
         tool = await registry.get_tool("nonexistent")
         assert tool is None
-
-
-class TestIsWriteTool:
-    @pytest.mark.asyncio
-    async def test_is_write_tool(self, registry, mock_db):
-        tool_def = _make_tool_def(name="gmail_send", requires_approval=True)
-        result_mock = MagicMock()
-        result_mock.scalar_one_or_none.return_value = tool_def
-        mock_db.execute = AsyncMock(return_value=result_mock)
-
-        assert await registry.is_write_tool("gmail_send") is True
-
-    @pytest.mark.asyncio
-    async def test_is_write_tool_read_only(self, registry, mock_db):
-        tool_def = _make_tool_def(name="gmail_list", requires_approval=False)
-        result_mock = MagicMock()
-        result_mock.scalar_one_or_none.return_value = tool_def
-        mock_db.execute = AsyncMock(return_value=result_mock)
-
-        assert await registry.is_write_tool("gmail_list") is False
-
-    @pytest.mark.asyncio
-    async def test_is_write_tool_unknown(self, registry, mock_db):
-        result_mock = MagicMock()
-        result_mock.scalar_one_or_none.return_value = None
-        mock_db.execute = AsyncMock(return_value=result_mock)
-
-        assert await registry.is_write_tool("unknown") is False
-
-
-class TestIsBlockedTool:
-    @pytest.mark.asyncio
-    async def test_is_blocked_tool(self, registry, mock_db):
-        tool_def = _make_tool_def(name="gmail_delete", enabled=False)
-        result_mock = MagicMock()
-        result_mock.scalar_one_or_none.return_value = tool_def
-        mock_db.execute = AsyncMock(return_value=result_mock)
-
-        assert await registry.is_blocked_tool("gmail_delete") is True
-
-    @pytest.mark.asyncio
-    async def test_is_not_blocked(self, registry, mock_db):
-        tool_def = _make_tool_def(name="gmail_send", enabled=True)
-        result_mock = MagicMock()
-        result_mock.scalar_one_or_none.return_value = tool_def
-        mock_db.execute = AsyncMock(return_value=result_mock)
-
-        assert await registry.is_blocked_tool("gmail_send") is False
-
-    @pytest.mark.asyncio
-    async def test_is_blocked_unknown(self, registry, mock_db):
-        result_mock = MagicMock()
-        result_mock.scalar_one_or_none.return_value = None
-        mock_db.execute = AsyncMock(return_value=result_mock)
-
-        assert await registry.is_blocked_tool("unknown") is False
-
-
-class TestClassifyRisk:
-    @pytest.mark.asyncio
-    async def test_classify_risk(self, registry, mock_db):
-        tool_def = _make_tool_def(name="gmail_send", risk_level="high")
-        result_mock = MagicMock()
-        result_mock.scalar_one_or_none.return_value = tool_def
-        mock_db.execute = AsyncMock(return_value=result_mock)
-
-        assert await registry.classify_risk("gmail_send") == "high"
-
-    @pytest.mark.asyncio
-    async def test_classify_risk_unknown(self, registry, mock_db):
-        result_mock = MagicMock()
-        result_mock.scalar_one_or_none.return_value = None
-        mock_db.execute = AsyncMock(return_value=result_mock)
-
-        assert await registry.classify_risk("unknown") == "low"
 
 
 class TestListForTaskType:

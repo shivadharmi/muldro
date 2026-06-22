@@ -46,6 +46,19 @@ export interface SurfacePreview {
   progress: number | null;
   timestamp: string | null;
   tags: string[];
+  // Cost/usage attribution for the run behind this surface.
+  tokens?: number | null;
+  cost_usd?: number | null;
+  // Risk badge for the surface (e.g. alert/approval cards).
+  risk?: "low" | "medium" | "high" | "critical" | null;
+  // Short status/state flags rendered as chips.
+  flags?: string[];
+  // Bullet-style preview lines (e.g. key items in a briefing/checklist).
+  items?: string[];
+  // One-line evidence/why-this-matters string.
+  evidence?: string | null;
+  // Last-updated timestamp, distinct from creation `timestamp`.
+  updated_at?: string | null;
 }
 
 export interface DetailTab {
@@ -73,7 +86,13 @@ export interface DetailTabResponse {
   sections: DetailSection[];
 }
 
-/** New two-layer surface push from backend (preview + detail_config). */
+/** Presenter-authored rich content for a surface's detail view.
+ *  Each section is a full A2UIComponent tree rendered by the A2UIRenderer. */
+export interface SurfaceDataPayload {
+  sections: A2UIComponent[];
+}
+
+/** New two-layer surface push from backend (preview + detail_config + optional surface_data). */
 export interface WorkspaceSurfacePush {
   type: "surface";
   id: string;
@@ -84,6 +103,23 @@ export interface WorkspaceSurfacePush {
   response_preview: string | null;
   created_at: string;
   ttl_hours: number;
+  surface_data: SurfaceDataPayload | null;
+  // Payload for proactive_insight surfaces — carries signal summary,
+  // relevance reasoning, goals, and suggested actions. When present the
+  // frontend dispatches to insight-surface.tsx rather than the generic
+  // card. Previously missing from the type: the backend sent this but
+  // the WS handler dropped it as an unknown field.
+  insight_data: InsightData | null;
+  // Live execution fields merged in so the run card can render its
+  // inline phase badge and step summary without a separate
+  // SurfaceUpdate message.
+  phase: ExecutionPhase | null;
+  steps: StepState[] | null;
+  current_step: string | null;
+  progress: string | null;
+  approval: ApprovalContext | null;
+  results: ResultSummary | null;
+  trust_context: Record<string, string> | null;
 }
 
 // ── Insight surface types ────────────────────────────────────
@@ -104,6 +140,8 @@ export interface InsightData {
   related_goals: string[];
   suggested_actions: SuggestedActionRef[];
   dismiss_available: boolean;
+  // One-line supporting evidence for why this insight surfaced.
+  evidence?: string | null;
 }
 
 // ── Action result ──────────────────────────────────────────────
@@ -112,7 +150,10 @@ export interface ActionResult {
   action: string;
   status: "success" | "error";
   result?: Record<string, unknown>;
-  error?: string;
+  /** Client-safe error message (from the standardized envelope). */
+  message?: string;
+  code?: string;
+  correlationId?: string | null;
 }
 
 // ── Execution surface types ───────────────────────────────────
@@ -174,6 +215,9 @@ export interface SurfaceUpdate {
   progress: string;
   approval: ApprovalContext | null;
   results: ResultSummary | null;
+  // Cumulative cost/usage for the run, streamed with each live frame.
+  tokens?: number | null;
+  cost_usd?: number | null;
 }
 
 /** WebSocket message types from Jarvis backend */
@@ -188,8 +232,10 @@ export type JarvisMessage =
       data: Record<string, unknown>;
     }
   | { type: "notification_resolved"; notification_id: string; resolved_on: string }
-  | { type: "action_result"; action: string; status: string; result?: Record<string, unknown>; error?: string }
-  | { type: "surface_update"; surface_id: string; phase: ExecutionPhase; steps: StepState[]; current_step: string | null; progress: string; approval: ApprovalContext | null; results: ResultSummary | null }
+  | { type: "action_result"; action: string; status: string; result?: Record<string, unknown>; code?: string; message?: string; correlation_id?: string }
+  | { type: "surface_update"; surface_id: string; phase: ExecutionPhase; steps: StepState[]; current_step: string | null; progress: string; approval: ApprovalContext | null; results: ResultSummary | null; tokens?: number | null; cost_usd?: number | null }
   | { type: "heartbeat" }
   | { type: "auth_ok" }
-  | { type: "auth_error"; message: string };
+  | { type: "auth_error"; message: string }
+  // Standardized WS error frame: { status: "error", code, message, correlation_id }
+  | { status: "error"; code?: string; message?: string; correlation_id?: string };

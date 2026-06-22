@@ -2,7 +2,7 @@
 
 import json
 
-from src.orchestrator.contracts import (
+from src.contracts import (
     ApprovalContext,
     ResultSummary,
     StepState,

@@ -3,6 +3,8 @@
 import { useCallback } from "react";
 import type { HistoryItem, HistoryStepSummary } from "@/stores/history-store";
 import { useHistoryStore } from "@/stores/history-store";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { stepStatusIcon, formatDuration } from "@/components/a2ui/components/step-presentation";
 
 // ── Props ────────────────────────────────────────────────────────────────────
 
@@ -26,11 +28,10 @@ function formatRelativeTime(iso: string | null): string {
   return new Date(iso).toLocaleDateString();
 }
 
-function formatDuration(start: string | null, end: string | null): string {
-  if (!start || !end) return "";
-  const ms = new Date(end).getTime() - new Date(start).getTime();
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
+/** Duration in ms between two ISO timestamps, or null when either is missing. */
+function durationBetween(start: string | null, end: string | null): number | null {
+  if (!start || !end) return null;
+  return new Date(end).getTime() - new Date(start).getTime();
 }
 
 // ── Status helpers ───────────────────────────────────────────────────────────
@@ -42,69 +43,6 @@ function getStatusLabel(status: string): string {
   return status.replace("_", " ");
 }
 
-function getRunDotClass(status: string): string {
-  switch (status) {
-    case "running":
-    case "pending":
-      return "bg-blue-400 animate-pulse shadow-[0_0_6px_rgba(96,165,250,0.6)]";
-    case "completed":
-      return "bg-green-400";
-    case "failed":
-      return "bg-red-400";
-    case "awaiting_approval":
-      return "bg-yellow-400";
-    case "timed_out":
-      return "bg-orange-400";
-    case "cancelled":
-    default:
-      return "bg-gray-500";
-  }
-}
-
-function getRunBadgeClass(status: string): string {
-  switch (status) {
-    case "running":
-    case "pending":
-      return "bg-blue-900/40 text-blue-400";
-    case "completed":
-      return "bg-green-900/40 text-green-400";
-    case "failed":
-      return "bg-red-900/40 text-red-400";
-    case "awaiting_approval":
-      return "bg-yellow-900/40 text-yellow-400";
-    case "timed_out":
-      return "bg-orange-900/40 text-orange-400";
-    case "cancelled":
-    default:
-      return "bg-gray-800 text-gray-400";
-  }
-}
-
-function getStepIcon(status: string | null): { icon: string; className: string } {
-  switch (status) {
-    case "pending":
-      return { icon: "\u25CB", className: "text-gray-500 opacity-50" };
-    case "ready":
-      return { icon: "\u25CB", className: "text-gray-500" };
-    case "running":
-      return { icon: "\u25C9", className: "text-blue-400 animate-pulse" };
-    case "completed":
-      return { icon: "\u2713", className: "text-green-400" };
-    case "failed":
-      return { icon: "\u2717", className: "text-red-400" };
-    case "waiting_approval":
-      return { icon: "\u25A0", className: "text-yellow-400" };
-    case "skipped":
-      return { icon: "\u2014", className: "text-gray-500" };
-    case "timed_out":
-      return { icon: "\u23F1", className: "text-orange-400" };
-    case "cancelled":
-      return { icon: "\u2298", className: "text-gray-500" };
-    default:
-      return { icon: "\u25CB", className: "text-gray-500 opacity-50" };
-  }
-}
-
 // ── Sub-components ───────────────────────────────────────────────────────────
 
 interface StepRowProps {
@@ -113,15 +51,16 @@ interface StepRowProps {
 }
 
 function StepRow({ step, isCurrentStep }: StepRowProps) {
-  const { icon, className: iconClass } = getStepIcon(step.status);
+  const { icon, className: iconClass } = stepStatusIcon(step.status ?? "pending");
   const isPending = step.status === "pending" || step.status === "ready";
-  const duration = formatDuration(step.started_at, step.completed_at);
+  const ms = durationBetween(step.started_at, step.completed_at);
+  const duration = ms != null ? formatDuration(ms) : "";
 
   return (
     <div
-      className={`flex items-center gap-2.5 px-3 py-2 rounded ${
+      className={`flex items-center gap-2.5 px-3 py-2 rounded-[var(--radius-md)] ${
         isCurrentStep
-          ? "border-l-2 border-blue-400 bg-blue-900/10"
+          ? "border-l-2 border-j-info bg-j-info-soft"
           : isPending
             ? "opacity-40"
             : ""
@@ -130,16 +69,16 @@ function StepRow({ step, isCurrentStep }: StepRowProps) {
       <span className={`text-sm w-4 shrink-0 text-center leading-none ${iconClass}`}>
         {icon}
       </span>
-      <span className="text-xs text-[#e6edf3] truncate flex-1">
+      <span className="text-xs text-t-primary truncate flex-1">
         {step.name ?? step.capability ?? step.step_id}
       </span>
       {step.capability && (
-        <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#21262d] text-[#8b949e] shrink-0">
+        <span className="text-[10px] px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-surface-3 text-t-tertiary shrink-0">
           {step.capability}
         </span>
       )}
       {duration && (
-        <span className="text-[10px] text-[#8b949e] shrink-0 tabular-nums">{duration}</span>
+        <span className="text-[10px] text-t-muted shrink-0 tabular-nums">{duration}</span>
       )}
     </div>
   );
@@ -178,30 +117,23 @@ function RunApprovalCard({
     [approvalId, onReject],
   );
 
-  const riskClass =
-    riskLevel === "high"
-      ? "border-red-500/30 bg-red-950/20"
-      : "border-yellow-500/30 bg-yellow-950/20";
-
   return (
-    <div className={`rounded-lg border ${riskClass} bg-[#1c1e24] border-[#30363d] p-3 space-y-2.5`}>
+    <div className="rounded-[var(--radius-lg)] border border-j-warning/20 bg-j-warning-soft p-3 space-y-2.5">
       <div className="flex items-center gap-2">
-        <span className="text-yellow-400 text-sm">&#9888;</span>
-        <span className="text-xs font-medium text-[#e6edf3]">Approval Required</span>
+        <span className="text-j-warning text-sm">&#9888;</span>
+        <span className="text-xs font-medium text-t-primary">Approval Required</span>
       </div>
 
-      {stepDescription && (
-        <p className="text-xs text-[#8b949e]">{stepDescription}</p>
-      )}
+      {stepDescription && <p className="text-xs text-t-tertiary">{stepDescription}</p>}
 
       <div className="flex flex-wrap gap-1.5">
         {riskLevel && (
-          <span className="text-[10px] px-2 py-0.5 rounded bg-yellow-900/40 text-yellow-400 font-semibold uppercase tracking-wider">
+          <span className="text-[10px] px-2 py-0.5 rounded-[var(--radius-sm)] bg-j-warning-soft text-j-warning font-semibold uppercase tracking-wider">
             {riskLevel} risk
           </span>
         )}
         {trustLevel && (
-          <span className="text-[10px] px-2 py-0.5 rounded bg-[#21262d] text-[#8b949e]">
+          <span className="text-[10px] px-2 py-0.5 rounded-[var(--radius-sm)] bg-surface-3 text-t-tertiary">
             {trustLevel.replace("_", " ")}
           </span>
         )}
@@ -211,14 +143,14 @@ function RunApprovalCard({
         <button
           type="button"
           onClick={handleApprove}
-          className="px-3 py-1.5 text-xs font-medium rounded bg-green-700 text-white hover:bg-green-600 transition-colors cursor-pointer"
+          className="px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] bg-j-success text-surface-0 hover:opacity-90 transition-opacity cursor-pointer"
         >
           Approve
         </button>
         <button
           type="button"
           onClick={handleReject}
-          className="px-3 py-1.5 text-xs font-medium rounded bg-[#1c1e24] text-red-400 border border-red-500/20 hover:bg-red-950/30 transition-colors cursor-pointer"
+          className="px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] bg-surface-2 text-j-error border border-j-error/20 hover:bg-j-error-soft transition-colors cursor-pointer"
         >
           Reject
         </button>
@@ -254,7 +186,8 @@ export function RunRow({ item, onRetry, onApprove, onReject }: RunRowProps) {
   const currentStepId =
     item.steps.find((s) => s.status === "running")?.step_id ?? null;
 
-  // Build subtitle: trigger · time · steps · duration · cost
+  // Build subtitle: trigger · time · steps. Cost/agent/duration get their own
+  // dedicated, typed cells on the right so they read consistently.
   const subtitleParts: string[] = [];
   if (item.trigger_type) subtitleParts.push(item.trigger_type);
   else if (item.source) subtitleParts.push(item.source);
@@ -262,18 +195,18 @@ export function RunRow({ item, onRetry, onApprove, onReject }: RunRowProps) {
   if (item.step_count > 0) {
     subtitleParts.push(`${item.completed_step_count}/${item.step_count} steps`);
   }
-  const dur = formatDuration(item.started_at, item.completed_at);
-  if (dur) subtitleParts.push(dur);
-  if (item.cost_usd != null && item.cost_usd > 0) {
-    subtitleParts.push(`$${item.cost_usd.toFixed(3)}`);
-  }
+
+  // Prefer the explicit run duration; fall back to start/complete delta.
+  const durationMs =
+    item.duration_ms ?? durationBetween(item.started_at, item.completed_at);
+  const durationText = durationMs != null ? formatDuration(durationMs) : null;
 
   const goal = item.goal ?? `Run ${item.run_id.slice(0, 16)}`;
   const statusLabel = getStatusLabel(item.status);
 
   return (
     <div
-      className="border-b border-[#21262d] hover:bg-[#161b22]/50 transition-colors cursor-pointer"
+      className="border-b border-b-secondary hover:bg-surface-1/50 transition-colors cursor-pointer"
       onClick={handleRowClick}
       role="button"
       tabIndex={0}
@@ -287,27 +220,38 @@ export function RunRow({ item, onRetry, onApprove, onReject }: RunRowProps) {
     >
       {/* Header row */}
       <div className="flex items-center gap-3 px-4 py-3">
-        {/* Status dot */}
-        <span
-          className={`w-2 h-2 rounded-full shrink-0 ${getRunDotClass(item.status)}`}
-          aria-hidden="true"
-        />
-
         {/* Goal text */}
-        <span className="text-sm text-[#e6edf3] truncate flex-1 min-w-0">{goal}</span>
+        <span className="text-sm text-t-primary truncate flex-1 min-w-0">{goal}</span>
 
         {/* Subtitle (hidden when expanded active, shown when collapsed) */}
         {!isExpanded && subtitleParts.length > 0 && (
-          <span className="text-xs text-[#8b949e] shrink-0 hidden sm:block truncate max-w-[300px]">
+          <span className="text-xs text-t-tertiary shrink-0 hidden sm:block truncate max-w-[260px]">
             {subtitleParts.join(" · ")}
           </span>
         )}
 
+        {/* Agent attribution */}
+        {item.agent && (
+          <span className="text-[10px] text-t-muted font-mono shrink-0 hidden md:block">
+            {item.agent.toLowerCase()}
+          </span>
+        )}
+
+        {/* Duration */}
+        {durationText && (
+          <span className="text-[11px] text-t-tertiary shrink-0 tabular-nums hidden sm:block">
+            {durationText}
+          </span>
+        )}
+
+        {/* Cost */}
+        <span className="text-[11px] text-j-success shrink-0 tabular-nums w-[60px] text-right">
+          {item.cost_usd != null ? `$${item.cost_usd.toFixed(3)}` : "—"}
+        </span>
+
         {/* Status badge */}
-        <span
-          className={`text-[11px] px-2 py-0.5 rounded shrink-0 capitalize ${getRunBadgeClass(item.status)}`}
-        >
-          {statusLabel}
+        <span className="shrink-0">
+          <StatusBadge status={item.status} label={statusLabel} />
         </span>
 
         {/* Retry button for failed runs */}
@@ -315,7 +259,7 @@ export function RunRow({ item, onRetry, onApprove, onReject }: RunRowProps) {
           <button
             type="button"
             onClick={handleRetry}
-            className="text-[11px] px-2.5 py-1 rounded bg-[#21262d] text-[#8b949e] hover:text-[#e6edf3] hover:bg-[#30363d] border border-[#30363d] transition-colors cursor-pointer shrink-0"
+            className="text-[11px] px-2.5 py-1 rounded-[var(--radius-md)] bg-surface-2 text-t-tertiary hover:text-t-primary hover:bg-surface-3 border border-b-primary transition-colors cursor-pointer shrink-0"
           >
             Retry
           </button>
@@ -325,14 +269,14 @@ export function RunRow({ item, onRetry, onApprove, onReject }: RunRowProps) {
       {/* Expanded section: steps + approval */}
       {isExpanded && (
         <div
-          className="mx-4 mb-3 rounded-lg bg-[#161b22] overflow-hidden"
+          className="mx-4 mb-3 rounded-[var(--radius-lg)] bg-surface-1 overflow-hidden"
           onClick={(e) => e.stopPropagation()}
           role="presentation"
         >
           {/* Subtitle shown below header when expanded */}
           {subtitleParts.length > 0 && (
             <div className="px-3 pt-2 pb-1">
-              <span className="text-[11px] text-[#8b949e]">
+              <span className="text-[11px] text-t-tertiary">
                 {subtitleParts.join(" · ")}
               </span>
             </div>

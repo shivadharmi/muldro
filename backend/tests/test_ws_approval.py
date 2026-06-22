@@ -1,5 +1,6 @@
 """Tests for WebSocket approval action handlers."""
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,7 +22,7 @@ class TestHandleApprove:
             mock_process.return_value = {"status": "success"}
             await _handle_approve("usr_01TEST", payload, mock_app)
             mock_process.assert_called_once_with(
-                "usr_01TEST", "apr_01TEST000000000000000000", "approve", mock_app
+                "usr_01TEST", "apr_01TEST000000000000000000", "approve", mock_app, ""
             )
 
     @pytest.mark.asyncio
@@ -35,7 +36,7 @@ class TestHandleApprove:
         ) as mock_process:
             mock_process.return_value = {"status": "error"}
             await _handle_approve("usr_01TEST", {}, mock_app)
-            mock_process.assert_called_once_with("usr_01TEST", "", "approve", mock_app)
+            mock_process.assert_called_once_with("usr_01TEST", "", "approve", mock_app, "")
 
 
 class TestHandleReject:
@@ -52,7 +53,7 @@ class TestHandleReject:
             mock_process.return_value = {"status": "success"}
             await _handle_reject("usr_01TEST", payload, mock_app)
             mock_process.assert_called_once_with(
-                "usr_01TEST", "apr_01TEST000000000000000000", "reject", mock_app
+                "usr_01TEST", "apr_01TEST000000000000000000", "reject", mock_app, ""
             )
 
 
@@ -75,8 +76,97 @@ class TestHandleEditBeforeApprove:
         ) as mock_edit:
             mock_edit.return_value = {"status": "success"}
             result = await _handle_edit_before_approve("usr_01TEST", payload, mock_app)
-            mock_edit.assert_called_once_with("usr_01TEST", payload, mock_app)
+            mock_edit.assert_called_once_with("usr_01TEST", payload, mock_app, "")
             assert result["status"] == "success"
+
+
+# A secret-looking internal string that must never reach a WS client frame.
+WS_SECRET = "redis://:s3cr3t@cache.internal:6379/0"
+
+
+class TestWsErrorFramesAreSanitized:
+    """WS handlers must never return a raw exception string to the client.
+
+    They use safe_error_event(...) which yields the WS-shaped envelope
+    {status,code,message,correlation_id} and reuses the per-connection cid.
+    """
+
+    @pytest.mark.asyncio
+    async def test_orchestrator_action_error_is_sanitized(self):
+        from src.api.routes_ws import _handle_orchestrator_action
+
+        mock_app = MagicMock()
+        # Orchestrator present but process_message raises a leaky exception.
+        orch = MagicMock()
+        orch.process_message = AsyncMock(side_effect=ValueError(f"boom {WS_SECRET}"))
+        mock_app.state.orchestrator = orch
+
+        with patch("src.api.deps.resolve_workspace_id", new_callable=AsyncMock) as rw:
+            rw.return_value = "ws_01TEST"
+            with patch("src.models.database.get_session_factory") as gsf:
+                gsf.return_value.return_value.__aenter__ = AsyncMock(return_value=MagicMock())
+                gsf.return_value.return_value.__aexit__ = AsyncMock(return_value=False)
+                result = await _handle_orchestrator_action(
+                    "usr_01TEST", "do_thing", {}, mock_app, "ws_fixedcid"
+                )
+
+        assert result["status"] == "error"
+        assert result["code"] == "internal_error"
+        assert result["message"] == "Something went wrong. Please try again."
+        assert result["correlation_id"] == "ws_fixedcid"
+        # No leak of the raw exception text anywhere in the frame.
+        assert WS_SECRET not in str(result)
+        assert "boom" not in str(result)
+
+    @pytest.mark.asyncio
+    async def test_dispatch_catch_all_error_is_sanitized(self):
+        """If a handler itself raises, the client frame is still sanitized."""
+        from src.api.routes_ws import _handle_client_message
+
+        raw = json.dumps({"type": "action", "payload": {"action": "approve"}})
+
+        captured: list = []
+
+        async def fake_broadcast(user_id, message):
+            captured.append(message)
+
+        with (
+            patch(
+                "src.api.routes_ws._dispatch_action",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError(f"kaboom {WS_SECRET}"),
+            ),
+            patch("src.api.routes_ws._broadcast", side_effect=fake_broadcast),
+        ):
+            await _handle_client_message("usr_01TEST", raw, MagicMock(), "ws_conn123")
+
+        assert captured, "expected an action_result broadcast"
+        msg = captured[-1]
+        assert msg["status"] == "error"
+        assert msg["code"] == "internal_error"
+        # The action_result frame carries the safe message under "error".
+        assert msg["error"] == "Something went wrong. Please try again."
+        assert msg["correlation_id"] == "ws_conn123"
+        assert WS_SECRET not in str(msg)
+        assert "kaboom" not in str(msg)
+
+    def test_handlers_accept_cid_argument(self):
+        """All registered action handlers + dispatch accept a cid parameter so
+        the per-connection correlation id can be threaded through."""
+        import inspect
+
+        from src.api.routes_ws import (
+            ACTION_HANDLERS,
+            _dispatch_action,
+            _handle_client_message,
+            _handle_orchestrator_action,
+        )
+
+        for name, handler in ACTION_HANDLERS.items():
+            assert "cid" in inspect.signature(handler).parameters, name
+        assert "cid" in inspect.signature(_dispatch_action).parameters
+        assert "cid" in inspect.signature(_handle_orchestrator_action).parameters
+        assert "cid" in inspect.signature(_handle_client_message).parameters
 
 
 class TestApprovalHardening:
@@ -299,3 +389,35 @@ class TestWebSocketReconnect:
 
         source = inspect.getsource(routes_ws)
         assert "last_surface_update" in source or "backfill" in source.lower()
+
+    def test_execution_surface_replays_as_surface_update(self):
+        from src.api.routes_ws import _backfill_message_for_surface
+
+        s = MagicMock(
+            surface_type="execution",
+            payload={"last_surface_update": {"surface_id": "x", "phase": "executing"}},
+        )
+        msg = _backfill_message_for_surface(s)
+        assert msg == {"type": "surface_update", "surface_id": "x", "phase": "executing"}
+
+    def test_insight_surface_replays_as_surface_push(self):
+        """proactive_insight surfaces must replay in the live push format so the
+        client renders insights missed while offline (previously dropped)."""
+        from src.api.routes_ws import _backfill_message_for_surface
+
+        payload = {"surface_id": "surf_1", "kind": "proactive_insight"}
+        s = MagicMock(surface_type="proactive_insight", payload=payload)
+        msg = _backfill_message_for_surface(s)
+        assert msg == {"type": "surface", "surface": payload}
+
+    def test_empty_payload_returns_none(self):
+        from src.api.routes_ws import _backfill_message_for_surface
+
+        s = MagicMock(surface_type="proactive_insight", payload=None)
+        assert _backfill_message_for_surface(s) is None
+
+    def test_execution_surface_without_last_update_returns_none(self):
+        from src.api.routes_ws import _backfill_message_for_surface
+
+        s = MagicMock(surface_type="execution", payload={})
+        assert _backfill_message_for_surface(s) is None

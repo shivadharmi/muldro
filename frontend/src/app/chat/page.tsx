@@ -9,12 +9,14 @@ import { SurfaceDetailModal } from "@/components/workspace/surface-detail-modal"
 import { useAuth } from "@/lib/auth";
 import { useJarvisWs } from "@/hooks/use-jarvis-ws";
 import { useSurfaceStore } from "@/stores/surface-store";
-import type { WorkspaceSurface } from "@/stores/surface-store";
 import { useCommandStore } from "@/stores/command-store";
 import { useWsActionStore } from "@/stores/ws-action-store";
 import { fetchConversationMessages, type ConversationMessage } from "@/lib/api";
+import { formatApiError, type ParsedApiError } from "@/lib/api-error";
+import { useToast } from "@/components/ui/toast";
 import type { WorkspaceSurfacePush, SurfacePreview, SurfaceUpdate } from "@/lib/a2ui-types";
-import type { SurfaceKind } from "@/lib/types/surfaces";
+import { normalizeSurfaceKind } from "@/lib/types/surfaces";
+import { sortSurfacesActiveFirst } from "@/lib/surface-merge";
 
 export default function ChatPage() {
   const { user } = useAuth();
@@ -30,17 +32,39 @@ export default function ChatPage() {
 
   const { mode, setMode } = useCommandStore();
   const setGlobalSendAction = useWsActionStore((s) => s.setSendAction);
+  const { addToast } = useToast();
+
+  const handleWsError = useCallback(
+    (err: ParsedApiError) => addToast(formatApiError(err), "error"),
+    [addToast]
+  );
 
   const handleSurfacePush = useCallback(
     (push: WorkspaceSurfacePush) => {
       addSurface({
         id: push.id,
-        kind: push.kind || "summary",
+        kind: normalizeSurfaceKind(push.kind, push.id),
         preview: push.preview,
         detail_config: push.detail_config,
         source_run_id: push.source_run_id,
         response_preview: push.response_preview,
         created_at: push.created_at || new Date().toISOString(),
+        surface_data: push.surface_data ?? null,
+        // Forward the insight payload — previously dropped here because
+        // the WorkspaceSurfacePush type omitted the field, so insight
+        // surfaces rendered with empty details even though the backend
+        // sent the data.
+        insight_data: push.insight_data ?? null,
+        // Live execution fields: when the run surface is pushed (REST or
+        // WS), these let the run renderer show the current phase/steps
+        // without waiting for a separate surface_update message.
+        phase: push.phase ?? null,
+        steps: push.steps ?? null,
+        current_step: push.current_step ?? null,
+        progress: push.progress ?? null,
+        approval: push.approval ?? null,
+        results: push.results ?? null,
+        trust_context: push.trust_context ?? null,
       });
     },
     [addSurface]
@@ -60,6 +84,7 @@ export default function ChatPage() {
       (update: SurfaceUpdate) => updateSurface(update.surface_id, update),
       [updateSurface]
     ),
+    onError: handleWsError,
     enabled: !!user,
   });
 
@@ -113,7 +138,7 @@ export default function ChatPage() {
       };
       addSurface({
         id: surface.id,
-        kind: (meta.kind as SurfaceKind) || "summary",
+        kind: normalizeSurfaceKind(meta.kind as string | undefined, surface.id),
         preview,
         detail_config: null,
         source_run_id: (meta.source_run_id as string) ?? null,
@@ -211,15 +236,7 @@ export default function ChatPage() {
                 </span>
               </div>
 
-              {[...surfaces]
-                .sort((a, b) => {
-                  const isActive = (s: WorkspaceSurface) =>
-                    s.phase === "executing" || s.phase === "approval_needed" || s.phase === "planning";
-                  const aActive = isActive(a) ? 0 : 1;
-                  const bActive = isActive(b) ? 0 : 1;
-                  if (aActive !== bActive) return aActive - bActive;
-                  return b.created_at.localeCompare(a.created_at);
-                })
+              {sortSurfacesActiveFirst(surfaces)
                 .map((surface) => (
                   <SurfaceCard
                     key={surface.id}

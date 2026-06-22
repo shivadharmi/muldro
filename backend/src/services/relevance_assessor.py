@@ -4,34 +4,15 @@ Evaluates whether a user should care about a signal right now,
 scoring relevance against their goals and routing to push/briefing/silent tiers.
 """
 
-import json
 import logging
-import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from src.config.models import get_haiku_model
+from src.llm_utils import parse_llm_json
+
 logger = logging.getLogger(__name__)
-
-_HAIKU_MODEL_FALLBACK = "claude-haiku-4-5-20251001"
-
-
-def _get_haiku_model() -> str:
-    """Resolve Haiku model ID from settings, avoiding circular imports."""
-    try:
-        from src.config.settings import get_settings
-
-        settings = get_settings()
-        if settings.use_bedrock:
-            from src.orchestrator.jarvis import BEDROCK_MODEL_TIERS
-
-            return BEDROCK_MODEL_TIERS["haiku"]
-        else:
-            from src.orchestrator.jarvis import MODEL_TIERS
-
-            return MODEL_TIERS["haiku"]
-    except Exception:
-        return _HAIKU_MODEL_FALLBACK
 
 
 class SuggestedAction(BaseModel):
@@ -53,6 +34,12 @@ class RelevanceAssessment(BaseModel):
     urgency: Literal["immediate", "today", "this_week", "whenever"] = "whenever"
     suggested_actions: list[SuggestedAction] = Field(default_factory=list)
     notification_tier: Literal["push", "briefing", "silent"] = "silent"
+    # Number of supporting observations behind this signal (e.g. recurrences,
+    # days observed). Surfaced as human-readable evidence on the insight card.
+    evidence_count: int | None = None
+    # Unit for evidence_count, used to phrase the evidence string (e.g.
+    # "recurrences", "days observed"). Defaults to a generic noun.
+    evidence_unit: str | None = None
 
     @field_validator("suggested_actions", mode="before")
     @classmethod
@@ -86,6 +73,22 @@ class UserContext(BaseModel):
     preferences: list[str] = Field(default_factory=list)
 
 
+def format_evidence(count: int | None, unit: str | None) -> str | None:
+    """Format a supporting-observation count into a human-readable evidence string.
+
+    Returns ``None`` when there is no usable count (so the insight card simply
+    omits the evidence line). Examples::
+
+        format_evidence(4, "recurrences")   -> "4 recurrences"
+        format_evidence(42, "days observed") -> "42 days observed"
+        format_evidence(3, None)             -> "3 observed"
+    """
+    if count is None or count <= 0:
+        return None
+    label = (unit or "").strip() or "observed"
+    return f"{count} {label}"
+
+
 def _determine_tier(
     relevance_score: float,
     urgency: Literal["immediate", "today", "this_week", "whenever"],
@@ -115,7 +118,9 @@ Respond with a JSON object (no markdown fences):
   "reasoning": "<why this matters or doesn't>",
   "relates_to_goals": ["<goal text if relevant>"],
   "urgency": "<immediate|today|this_week|whenever>",
-  "suggested_actions": [{{"description": "<what to do>", "capability": "<capability.name>"}}]
+  "suggested_actions": [{{"description": "<what to do>", "capability": "<capability.name>"}}],
+  "evidence_count": <integer count of supporting observations, or null>,
+  "evidence_unit": "<unit for evidence_count, e.g. recurrences or days observed, or null>"
 }}
 
 User goals: {goals}
@@ -134,10 +139,17 @@ async def assess_relevance(
     client: Any,
     model: str | None = None,
     engagement_context: str = "",
+    relevance_penalty: float = 0.0,
 ) -> RelevanceAssessment:
-    """Call Haiku to assess signal relevance. Returns silent assessment on failure."""
+    """Call Haiku to assess signal relevance. Returns silent assessment on failure.
+
+    ``relevance_penalty`` (0.0-1.0) is a deterministic downgrade derived from the
+    user's dismissal history (see EngagementService.get_relevance_penalty). It is
+    subtracted from the LLM's score before the tier is determined, so repeatedly
+    dismissed signal types are demoted even when the LLM rates them highly.
+    """
     if model is None:
-        model = _get_haiku_model()
+        model = get_haiku_model()
     try:
         prompt = _RELEVANCE_PROMPT.format(
             goals=", ".join(user_context.goals) or "none specified",
@@ -155,12 +167,13 @@ async def assess_relevance(
             messages=[{"role": "user", "content": prompt}],
         )
         text = response.content[0].text
-        text = re.sub(r"^```\w*\n?", "", text.strip()).rstrip("`").strip()
-        data = json.loads(text)
+        data = parse_llm_json(text)
         assessment = RelevanceAssessment.model_validate(data)
+        adjusted_score = max(0.0, assessment.relevance_score - relevance_penalty)
         return assessment.model_copy(
             update={
-                "notification_tier": _determine_tier(assessment.relevance_score, assessment.urgency)
+                "relevance_score": adjusted_score,
+                "notification_tier": _determine_tier(adjusted_score, assessment.urgency),
             }
         )
     except Exception:

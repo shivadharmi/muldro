@@ -177,6 +177,28 @@ export function riskLevelTextColor(level: string): string {
   }
 }
 
+/** Canonical, Title-case display labels for execution/task statuses */
+export const STATUS_LABELS: Record<string, string> = {
+  pending: "Pending",
+  running: "Running",
+  executing: "Executing",
+  in_progress: "In progress",
+  completed: "Completed",
+  approved: "Approved",
+  awaiting_approval: "Awaiting approval",
+  pending_approval: "Awaiting approval",
+  failed: "Failed",
+  rejected: "Rejected",
+  cancelled: "Cancelled",
+  paused: "Paused",
+  proposal: "Proposal",
+};
+
+/** Title-case display label for a status, falling back to the raw value */
+export function statusLabel(status: string): string {
+  return STATUS_LABELS[status] ?? status;
+}
+
 /** Maps surface kind to badge styling (bg + text classes) */
 export function kindStyle(kind: string): { bg: string; text: string } {
   switch (kind) {
@@ -226,6 +248,31 @@ export function sourceDbStyle(db: string): string {
     default:
       return "bg-surface-2 text-t-tertiary";
   }
+}
+
+/** Maps search source DB slug to a friendly label */
+export function sourceDbLabel(db: string): string {
+  switch (db) {
+    case "qdrant":
+      return "Vector";
+    case "postgres_fts":
+      return "Keyword";
+    case "neo4j":
+      return "Graph";
+    default:
+      return db;
+  }
+}
+
+/** Canonical source-db badge descriptor: friendly label + token style classes */
+export interface SourceDbBadge {
+  label: string;
+  style: string;
+}
+
+/** Single source of truth for rendering a search result's source-db badge */
+export function sourceDbBadge(db: string): SourceDbBadge {
+  return { label: sourceDbLabel(db), style: sourceDbStyle(db) };
 }
 
 /** Human-readable labels for trust levels */

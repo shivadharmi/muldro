@@ -6,6 +6,7 @@ workspace-scoped DB rows managed by the IntegrationControlPlane.
 
 import logging
 import os
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +16,17 @@ from src.models.integration_installation import IntegrationInstallation
 from src.models.server_trust import ServerTrustRecord
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_FILESYSTEM_ROOT = str(Path.home() / "jarvis-workspace")
+
+
+def _filesystem_mcp_root() -> str:
+    """Root directory exposed to the filesystem MCP server.
+
+    Configurable via JARVIS_FILESYSTEM_MCP_ROOT; defaults to ~/jarvis-workspace
+    (persists across reboots, unlike /tmp on many systems).
+    """
+    return os.environ.get("JARVIS_FILESYSTEM_MCP_ROOT", "") or _DEFAULT_FILESYSTEM_ROOT
 
 
 async def _clear_stale_tool_schemas(db: AsyncSession, server_name: str, workspace_id: str) -> None:
@@ -44,9 +56,8 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
         "server_name": "google-workspace",
         "display_name": "Google Workspace",
         "transport": "streamable-http",
-        "remote_url": os.environ.get(
-            "JARVIS_GOOGLE_WORKSPACE_MCP_URL", "http://localhost:8001/mcp"
-        ),
+        "remote_url": None,
+        "managed_local": True,
         "command": None,
         "args": None,
         "env_template": {},
@@ -69,19 +80,11 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
     {
         "server_name": "github",
         "display_name": "GitHub",
-        "transport": "stdio",
-        "command": "docker",
-        "args": [
-            "run",
-            "-i",
-            "--rm",
-            "-e",
-            "GITHUB_PERSONAL_ACCESS_TOKEN",
-            "ghcr.io/github/github-mcp-server",
-        ],
-        "env_template": {
-            "GITHUB_PERSONAL_ACCESS_TOKEN": "GitHub personal access token",
-        },
+        "transport": "streamable-http",
+        "remote_url": "https://api.githubcopilot.com/mcp/",
+        "command": None,
+        "args": None,
+        "env_template": {},
         "auth_provider": "github",
         "scopes_granted": [
             "issue.create",
@@ -100,7 +103,7 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
         "display_name": "Slack",
         "transport": "stdio",
         "command": "npx",
-        "args": ["-y", "slack-mcp-server"],
+        "args": ["-y", "slack-mcp-server@1.3.0"],
         "env_template": {
             "SLACK_MCP_XOXP_TOKEN": "Slack user OAuth token (xoxp-...)",
             "SLACK_MCP_XOXB_TOKEN": "Slack bot OAuth token (xoxb-...)",
@@ -120,7 +123,7 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
         "display_name": "Playwright Browser",
         "transport": "stdio",
         "command": "npx",
-        "args": ["-y", "@playwright/mcp", "--headless"],
+        "args": ["-y", "@playwright/mcp@0.0.76", "--headless"],
         "env_template": {},
         "auth_provider": None,
         "scopes_granted": [
@@ -138,7 +141,7 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
         "display_name": "Filesystem",
         "transport": "stdio",
         "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp/jarvis-workspace"],
+        "args": ["-y", "@modelcontextprotocol/server-filesystem@2026.1.14", _filesystem_mcp_root()],
         "env_template": {},
         "auth_provider": None,
         "scopes_granted": [],
@@ -148,7 +151,7 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
         "display_name": "Notion",
         "transport": "stdio",
         "command": "npx",
-        "args": ["-y", "@notionhq/notion-mcp-server"],
+        "args": ["-y", "@notionhq/notion-mcp-server@2.4.0"],
         "env_template": {
             "NOTION_TOKEN": "Notion integration token",
         },
@@ -165,19 +168,26 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
     {
         "server_name": "atlassian",
         "display_name": "Atlassian (Jira + Confluence)",
-        "transport": "stdio",
-        "command": "npx",
-        "args": ["-y", "mcp-remote@latest", "https://mcp.atlassian.com/v1/mcp"],
-        "env_template": {
-            "JARVIS_ATLASSIAN_MCP_ENABLED": "Set to 'true' to enable",
-        },
-        "auth_provider": "oauth",
+        "transport": "streamable-http",
+        "remote_url": "https://mcp.atlassian.com/v1/mcp",
+        "command": None,
+        "args": None,
+        "env_template": {},
+        "auth_provider": "atlassian",
         "scopes_granted": [
+            # Jira
             "issue.create",
             "issue.update",
             "issue.search",
             "issue.comment",
             "issue.transition",
+            # Confluence
+            "doc.create",
+            "doc.update",
+            "doc.get",
+            "doc.search",
+            "doc.comment",
+            "doc.list",
         ],
     },
 ]
@@ -225,6 +235,7 @@ async def seed_installations(db: AsyncSession, workspace_id: str, user_id: str) 
                 trust_id=trust_by_name.get(server_name),
                 auth_provider=inst_data.get("auth_provider"),
                 scopes_granted=inst_data.get("scopes_granted"),
+                config=({"managed_local": True} if inst_data.get("managed_local") else None),
             )
             db.add(installation)
             changed += 1
@@ -235,14 +246,12 @@ async def seed_installations(db: AsyncSession, workspace_id: str, user_id: str) 
         needs_update = False
 
         if inst.transport != inst_data.get("transport", "stdio"):
+            # Transport changed — tool schemas may differ between modes, so
+            # clear them once. Steady-state restarts no longer clear schemas,
+            # making the DB the durable source of truth for tool exposure.
+            await _clear_stale_tool_schemas(db, server_name=server_name, workspace_id=workspace_id)
             inst.transport = inst_data.get("transport", "stdio")
             needs_update = True
-
-        # HTTP servers get schemas from live discovery — always clear stale
-        # DB schemas so they don't override live ones.  This handles both
-        # transport changes and schema drift (e.g., OAuth 2.1 mode changes).
-        if inst_data.get("transport", "stdio") in ("sse", "streamable-http"):
-            await _clear_stale_tool_schemas(db, server_name, workspace_id)
         if inst.remote_url != inst_data.get("remote_url"):
             inst.remote_url = inst_data.get("remote_url")
             needs_update = True
@@ -266,6 +275,29 @@ async def seed_installations(db: AsyncSession, workspace_id: str, user_id: str) 
         if expected_trust and inst.trust_id != expected_trust:
             inst.trust_id = expected_trust
             needs_update = True
+
+        # Backfill tool_defaults for Atlassian installations connected before
+        # auto-injection existed. If the OAuth callback already stored
+        # cloud_id but no tool_defaults, we can derive the map now so every
+        # future MCP call gets it auto-injected without re-linking.
+        if server_name == "atlassian" and isinstance(inst.config, dict):
+            stored_cloud = inst.config.get("cloud_id")
+            existing_defaults = inst.config.get("tool_defaults") or {}
+            if stored_cloud and existing_defaults.get("cloudId") != stored_cloud:
+                new_cfg = dict(inst.config)
+                new_cfg["tool_defaults"] = {
+                    **existing_defaults,
+                    "cloudId": stored_cloud,
+                }
+                inst.config = new_cfg
+                needs_update = True
+
+        # Sync managed_local flag into JSONB config for managed servers.
+        if inst_data.get("managed_local"):
+            current_cfg = inst.config if isinstance(inst.config, dict) else {}
+            if not current_cfg.get("managed_local"):
+                inst.config = {**current_cfg, "managed_local": True}
+                needs_update = True
 
         if needs_update:
             changed += 1

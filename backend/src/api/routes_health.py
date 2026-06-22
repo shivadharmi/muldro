@@ -20,6 +20,61 @@ from src.models.database import get_db
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+# Loop-health thresholds
+_FAILURE_RATE_THRESHOLD = 0.5
+_FAILURE_VOLUME_THRESHOLD = 3
+
+
+def derive_loop_health(
+    observations: dict,
+    queues: dict,
+    runs: dict,
+    budget: dict,
+) -> tuple[str, list[str]]:
+    """Map perception/execution component states to one loop-health verdict.
+
+    Pure function (no IO) so it is unit-testable and reusable. Returns a
+    ``(status, reasons)`` tuple where status is ``healthy``/``degraded``/
+    ``unhealthy``. ``unhealthy`` (the loop cannot reliably act on its own)
+    always wins over ``degraded`` (working but impaired).
+    """
+    unhealthy: list[str] = []
+    degraded: list[str] = []
+
+    # Budget — paused means no autonomous spend is permitted at all.
+    mode = (budget or {}).get("budget_mode")
+    if mode == "paused":
+        unhealthy.append("budget paused — autonomous execution halted")
+    elif mode == "degraded":
+        degraded.append("budget degraded — approaching daily limit")
+
+    # Perception sources — open circuit = source down; failures = transient.
+    for source, info in (observations or {}).items():
+        if info.get("circuit_state") == "open":
+            unhealthy.append(f"perception source '{source}' circuit open")
+        elif (info.get("consecutive_failures") or 0) > 0:
+            degraded.append(
+                f"perception source '{source}' failing ({info['consecutive_failures']} consecutive)"
+            )
+
+    # Queues — exhausted DLQ entries need human intervention; pending = retrying.
+    if (queues or {}).get("dlq_exhausted", 0) > 0:
+        unhealthy.append(f"{queues['dlq_exhausted']} dead-lettered operations exhausted")
+    elif (queues or {}).get("dlq_pending", 0) > 0:
+        degraded.append(f"{queues['dlq_pending']} operations pending DLQ retry")
+
+    # Runs — only flag failure rate with meaningful volume (avoid 1/1 noise).
+    total = (runs or {}).get("total_runs_today", 0)
+    failure_rate = (runs or {}).get("failure_rate", 0.0)
+    if total >= _FAILURE_VOLUME_THRESHOLD and failure_rate > _FAILURE_RATE_THRESHOLD:
+        degraded.append(f"run failure rate {failure_rate:.0%} over {total} runs today")
+
+    if unhealthy:
+        return "unhealthy", unhealthy + degraded
+    if degraded:
+        return "degraded", degraded
+    return "healthy", []
+
 
 class HealthDashboardResponse(BaseModel):
     status: str = "ok"
@@ -75,6 +130,48 @@ async def system_dashboard(
         runs=run_info,
         components=components,
         mcp=mcp_health,
+    )
+
+
+class LoopHealthResponse(BaseModel):
+    """Single roll-up of perception/autonomous-loop health."""
+
+    status: str  # healthy | degraded | unhealthy
+    reasons: list[str] = []
+    perception: dict = {}
+    queues: dict = {}
+    runs: dict = {}
+    budget: dict = {}
+    checked_at: str = ""
+
+
+@router.get("/v1/health/loop", response_model=LoopHealthResponse)
+async def loop_health(
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+):
+    """Unified perception/autonomous-loop health signal.
+
+    Aggregates perception circuit state, DLQ depth/exhaustion, run failure
+    rate, and budget mode into one healthy/degraded/unhealthy verdict with
+    human-readable reasons — the single signal an operator (or alert) can poll
+    to answer "is the loop able to act on its own right now?".
+    """
+    observations = await _get_observation_info(user_id, workspace_id)
+    queues = await _get_queue_info(workspace_id)
+    runs = await _get_run_metrics(workspace_id)
+    budget = await _get_budget_info(workspace_id)
+
+    status, reasons = derive_loop_health(observations, queues, runs, budget)
+
+    return LoopHealthResponse(
+        status=status,
+        reasons=reasons,
+        perception=observations,
+        queues=queues,
+        runs=runs,
+        budget=budget,
+        checked_at=datetime.now(timezone.utc).isoformat(),
     )
 
 
@@ -149,6 +246,16 @@ async def _get_queue_info(workspace_id: str) -> dict:
             )
             dlq_pending = dlq_result.scalar() or 0
 
+            dlq_exhausted_result = await db.execute(
+                select(func.count())
+                .select_from(DeadLetterEntry)
+                .where(
+                    DeadLetterEntry.status == "exhausted",
+                    DeadLetterEntry.workspace_id == workspace_id,
+                )
+            )
+            dlq_exhausted = dlq_exhausted_result.scalar() or 0
+
             approvals_result = await db.execute(
                 select(func.count())
                 .select_from(Approval)
@@ -168,12 +275,18 @@ async def _get_queue_info(workspace_id: str) -> dict:
 
             return {
                 "dlq_pending": dlq_pending,
+                "dlq_exhausted": dlq_exhausted,
                 "approvals_pending": approvals_pending,
                 "plans_in_flight": plans_in_flight,
             }
     except Exception as e:
         logger.error("Failed to get queue info: %s", e)
-        return {"dlq_pending": 0, "approvals_pending": 0, "plans_in_flight": 0}
+        return {
+            "dlq_pending": 0,
+            "dlq_exhausted": 0,
+            "approvals_pending": 0,
+            "plans_in_flight": 0,
+        }
 
 
 async def _get_observation_info(user_id: str, workspace_id: str) -> dict:
@@ -225,6 +338,12 @@ async def _get_agent_info(workspace_id: str) -> dict:
                 .where(
                     TokenUsage.created_at >= start_of_day,
                     TokenUsage.workspace_id == workspace_id,
+                    # Exclude per-tool attribution rows (trigger='tool:*'): they
+                    # are a breakdown of the authoritative loop-level row, so
+                    # summing them alongside it double-counts tokens and inflates
+                    # the call count (ORCH-P2-1). cost is unaffected (these rows
+                    # carry cost_usd=0.0) but tokens/counts must exclude them.
+                    ~TokenUsage.trigger.like("tool:%"),
                 )
                 .group_by(TokenUsage.agent_name)
             )

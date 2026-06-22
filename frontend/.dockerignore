@@ -1,0 +1,9 @@
+# Keep the build context small; let the image build its own deps and bundle.
+node_modules/
+.next/
+out/
+.git/
+*.log
+.env
+.env.*
+.DS_Store

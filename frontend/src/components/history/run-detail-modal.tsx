@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchHistoryDetail } from "@/lib/api";
 import { useHistoryStore } from "@/stores/history-store";
+import { stepStatusIcon, formatDuration } from "@/components/a2ui/components/step-presentation";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -86,46 +87,19 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "trace", label: "Trace" },
 ];
 
+// Maps event types to a semantic token text-color so timeline dots/labels match
+// the rest of the design system (no hardcoded tailwind palette colors).
 const EVENT_COLORS: Record<string, string> = {
-  run_started: "text-blue-400",
-  step_started: "text-blue-400",
-  step_completed: "text-green-400",
-  run_completed: "text-green-400",
-  tool_call_started: "text-purple-400",
-  approval_requested: "text-yellow-400",
-  approval_resolved: "text-green-400",
+  run_started: "text-j-info",
+  step_started: "text-j-info",
+  step_completed: "text-j-success",
+  run_completed: "text-j-success",
+  tool_call_started: "text-j-secondary",
+  approval_requested: "text-j-warning",
+  approval_resolved: "text-j-success",
 };
 
 // ── Helper functions ─────────────────────────────────────────────────────────
-
-function getStepIcon(status: string): { icon: string; className: string } {
-  switch (status) {
-    case "pending":
-      return { icon: "\u25CB", className: "text-gray-500 opacity-50" };
-    case "ready":
-      return { icon: "\u25CB", className: "text-gray-500" };
-    case "running":
-      return { icon: "\u25C9", className: "text-blue-400 animate-pulse" };
-    case "completed":
-      return { icon: "\u2713", className: "text-green-400" };
-    case "failed":
-      return { icon: "\u2717", className: "text-red-400" };
-    case "waiting_approval":
-      return { icon: "\u25A0", className: "text-yellow-400" };
-    case "skipped":
-      return { icon: "\u2014", className: "text-gray-500" };
-    case "timed_out":
-      return { icon: "\u23F1", className: "text-orange-400" };
-    default:
-      return { icon: "\u25CB", className: "text-gray-500 opacity-50" };
-  }
-}
-
-function formatDurationMs(ms: number | null): string {
-  if (ms == null) return "";
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
 
 function formatTimestamp(iso: string): string {
   const d = new Date(iso);
@@ -140,6 +114,12 @@ function getOutputText(step: DetailStep): string | null {
   return JSON.stringify(step.output_data, null, 2);
 }
 
+// ── Shared empty state ───────────────────────────────────────────────────────
+
+function EmptyState({ label }: { label: string }) {
+  return <p className="text-sm text-t-tertiary text-center py-8">{label}</p>;
+}
+
 // ── Tab: Steps ───────────────────────────────────────────────────────────────
 
 function StepsTab({ detail }: { detail: RunDetail }) {
@@ -149,51 +129,54 @@ function StepsTab({ detail }: { detail: RunDetail }) {
   }
 
   if (detail.steps.length === 0) {
-    return <p className="text-sm text-[#8b949e] text-center py-8">No steps recorded.</p>;
+    return <EmptyState label="No steps recorded." />;
   }
 
   return (
     <div className="space-y-2">
       {detail.steps.map((step) => {
-        const { icon, className: iconClass } = getStepIcon(step.status);
-        const duration = formatDurationMs(step.duration_ms);
+        const { icon, className: iconClass } = stepStatusIcon(step.status);
+        const duration = step.duration_ms != null ? formatDuration(step.duration_ms) : "";
         const outputText = getOutputText(step);
         const approval = approvalByStep[step.step_id];
 
         return (
-          <div key={step.step_id} className="bg-[#161b22] border border-[#21262d] rounded-lg overflow-hidden">
+          <div
+            key={step.step_id}
+            className="bg-surface-2 border border-b-secondary rounded-[var(--radius-lg)] overflow-hidden"
+          >
             {/* Step header */}
             <div className="flex items-center gap-2.5 px-3 py-2.5">
               <span className={`text-sm w-4 shrink-0 text-center leading-none ${iconClass}`}>
                 {icon}
               </span>
-              <span className="text-sm text-[#e6edf3] truncate flex-1 min-w-0">
+              <span className="text-sm text-t-primary truncate flex-1 min-w-0">
                 {step.name ?? step.capability ?? step.step_id}
               </span>
               {step.capability && (
-                <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#21262d] text-[#8b949e] shrink-0">
+                <span className="text-[10px] px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-surface-3 text-t-tertiary shrink-0">
                   {step.capability}
                 </span>
               )}
               {duration && (
-                <span className="text-[10px] text-[#484f58] shrink-0 tabular-nums">{duration}</span>
+                <span className="text-[10px] text-t-muted shrink-0 tabular-nums">{duration}</span>
               )}
             </div>
 
             {/* Step body */}
             {(outputText || step.error || step.artifacts.length > 0 || approval) && (
-              <div className="border-t border-[#21262d] px-3 pb-3 pt-2 space-y-2">
+              <div className="border-t border-b-secondary px-3 pb-3 pt-2 space-y-2">
                 {/* Output text */}
                 {outputText && (
-                  <p className="text-xs text-[#8b949e] whitespace-pre-wrap break-words line-clamp-4">
+                  <p className="text-xs text-t-tertiary whitespace-pre-wrap break-words line-clamp-4">
                     {outputText}
                   </p>
                 )}
 
                 {/* Error */}
                 {step.error && (
-                  <p className="text-xs text-red-400 break-words">
-                    {String(step.error.message ?? step.error.detail ?? JSON.stringify(step.error))}
+                  <p className="text-xs text-j-error break-words">
+                    {String(step.error.message ?? "An error occurred.")}
                   </p>
                 )}
 
@@ -203,7 +186,7 @@ function StepsTab({ detail }: { detail: RunDetail }) {
                     {step.artifacts.map((a, i) => (
                       <span
                         key={a.artifact_id ?? i}
-                        className="text-[10px] px-2 py-0.5 rounded-full bg-[#21262d] text-[#c9d1d9] border border-[#30363d]"
+                        className="text-[10px] px-2 py-0.5 rounded-full bg-surface-3 text-t-secondary border border-b-primary"
                       >
                         {a.name ?? a.artifact_type ?? "artifact"}
                       </span>
@@ -214,18 +197,20 @@ function StepsTab({ detail }: { detail: RunDetail }) {
                 {/* Approval record */}
                 {approval && (
                   <div className="flex items-center gap-2 pt-0.5">
-                    <span className="text-[10px] text-[#8b949e]">Approval:</span>
+                    <span className="text-[10px] text-t-tertiary">Approval:</span>
                     <span
-                      className={`text-[10px] px-2 py-0.5 rounded font-medium ${
+                      className={`text-[10px] px-2 py-0.5 rounded-[var(--radius-sm)] font-medium ${
                         approval.status === "approved"
-                          ? "bg-green-900/40 text-green-400"
-                          : "bg-red-900/40 text-red-400"
+                          ? "bg-j-success-soft text-j-success"
+                          : "bg-j-error-soft text-j-error"
                       }`}
                     >
                       {approval.status === "approved" ? "Approved" : "Rejected"}
                     </span>
                     {approval.decision_reason && (
-                      <span className="text-[10px] text-[#484f58] truncate">{approval.decision_reason}</span>
+                      <span className="text-[10px] text-t-muted truncate">
+                        {approval.decision_reason}
+                      </span>
                     )}
                   </div>
                 )}
@@ -242,7 +227,7 @@ function StepsTab({ detail }: { detail: RunDetail }) {
 
 function PlanTab({ plan }: { plan: PlanContext | null }) {
   if (!plan) {
-    return <p className="text-sm text-[#8b949e] text-center py-8">No plan context available.</p>;
+    return <EmptyState label="No plan context available." />;
   }
 
   const rows: { label: string; value: React.ReactNode }[] = [
@@ -254,7 +239,7 @@ function PlanTab({ plan }: { plan: PlanContext | null }) {
         plan.success_conditions && plan.success_conditions.length > 0 ? (
           <ul className="list-disc list-inside space-y-0.5">
             {plan.success_conditions.map((c, i) => (
-              <li key={i} className="text-[#8b949e]">
+              <li key={i} className="text-t-tertiary">
                 {String(c)}
               </li>
             ))}
@@ -270,11 +255,14 @@ function PlanTab({ plan }: { plan: PlanContext | null }) {
   return (
     <div className="space-y-3">
       {rows.map((row) => (
-        <div key={row.label} className="bg-[#161b22] border border-[#21262d] rounded-lg px-4 py-3">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-[#484f58] mb-1">
+        <div
+          key={row.label}
+          className="bg-surface-2 border border-b-secondary rounded-[var(--radius-lg)] px-4 py-3"
+        >
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-t-muted mb-1">
             {row.label}
           </p>
-          <div className="text-sm text-[#e6edf3]">{row.value}</div>
+          <div className="text-sm text-t-primary">{row.value}</div>
         </div>
       ))}
     </div>
@@ -285,31 +273,33 @@ function PlanTab({ plan }: { plan: PlanContext | null }) {
 
 function EventsTab({ events }: { events: EventEntry[] }) {
   if (events.length === 0) {
-    return <p className="text-sm text-[#8b949e] text-center py-8">No events recorded.</p>;
+    return <EmptyState label="No events recorded." />;
   }
 
   return (
     <div className="relative">
       {/* Vertical line */}
-      <div className="absolute left-[7px] top-2 bottom-2 w-px bg-[#21262d]" />
+      <div className="absolute left-[7px] top-2 bottom-2 w-px bg-surface-3" />
 
       <div className="space-y-3 pl-6">
         {events.map((evt, i) => {
-          const colorClass = EVENT_COLORS[evt.event_type] ?? "text-[#8b949e]";
+          const colorClass = EVENT_COLORS[evt.event_type] ?? "text-t-tertiary";
           return (
             <div key={i} className="relative">
               {/* Dot */}
-              <div className="absolute -left-6 top-1 w-3.5 h-3.5 rounded-full bg-[#0d1117] border-2 border-[#30363d] flex items-center justify-center">
+              <div className="absolute -left-6 top-1 w-3.5 h-3.5 rounded-full bg-surface-0 border-2 border-b-primary flex items-center justify-center">
                 <div className={`w-1.5 h-1.5 rounded-full ${colorClass.replace("text-", "bg-")}`} />
               </div>
 
               <div className="flex flex-wrap items-baseline gap-2">
-                <span className="text-[10px] text-[#484f58] tabular-nums shrink-0">
+                <span className="text-[10px] text-t-muted tabular-nums shrink-0">
                   {formatTimestamp(evt.occurred_at)}
                 </span>
                 <span className={`text-xs font-medium ${colorClass}`}>{evt.event_type}</span>
                 {evt.step_id && (
-                  <span className="text-[10px] text-[#484f58] font-mono">{evt.step_id.slice(0, 12)}…</span>
+                  <span className="text-[10px] text-t-muted font-mono">
+                    {evt.step_id.slice(0, 12)}…
+                  </span>
                 )}
               </div>
             </div>
@@ -324,14 +314,14 @@ function EventsTab({ events }: { events: EventEntry[] }) {
 
 function TraceTab({ trace }: { trace: TraceInfo | null }) {
   if (!trace) {
-    return <p className="text-sm text-[#8b949e] text-center py-8">No trace data available.</p>;
+    return <EmptyState label="No trace data available." />;
   }
 
   const metrics = [
     { label: "Input Tokens", value: trace.input_tokens.toLocaleString() },
     { label: "Output Tokens", value: trace.output_tokens.toLocaleString() },
     { label: "Cost ($)", value: `$${trace.cost_usd.toFixed(5)}` },
-    { label: "Duration", value: formatDurationMs(trace.duration_ms) || "—" },
+    { label: "Duration", value: trace.duration_ms > 0 ? formatDuration(trace.duration_ms) : "—" },
   ];
 
   return (
@@ -339,11 +329,14 @@ function TraceTab({ trace }: { trace: TraceInfo | null }) {
       {/* Metric cards */}
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         {metrics.map((m) => (
-          <div key={m.label} className="bg-[#161b22] border border-[#21262d] rounded-lg px-3 py-3">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-[#484f58] mb-1">
+          <div
+            key={m.label}
+            className="bg-surface-2 border border-b-secondary rounded-[var(--radius-lg)] px-3 py-3"
+          >
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-t-muted mb-1">
               {m.label}
             </p>
-            <p className="text-lg font-semibold text-[#f0f6fc] tabular-nums">{m.value}</p>
+            <p className="text-lg font-semibold text-t-primary tabular-nums">{m.value}</p>
           </div>
         ))}
       </div>
@@ -351,14 +344,14 @@ function TraceTab({ trace }: { trace: TraceInfo | null }) {
       {/* Agents invoked */}
       {trace.agents_invoked.length > 0 && (
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-[#484f58] mb-2">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-t-muted mb-2">
             Agents Invoked
           </p>
           <div className="flex flex-wrap gap-1.5">
             {trace.agents_invoked.map((agent) => (
               <span
                 key={agent}
-                className="text-xs px-2.5 py-1 rounded-full bg-blue-900/40 text-blue-400"
+                className="text-xs px-2.5 py-1 rounded-full bg-j-info-soft text-j-info"
               >
                 {agent}
               </span>
@@ -370,14 +363,14 @@ function TraceTab({ trace }: { trace: TraceInfo | null }) {
       {/* Tools called */}
       {trace.tools_called.length > 0 && (
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-[#484f58] mb-2">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-t-muted mb-2">
             Tools Called
           </p>
           <div className="flex flex-wrap gap-1.5">
             {trace.tools_called.map((tool, i) => (
               <span
                 key={`${tool}-${i}`}
-                className="text-xs px-2.5 py-1 rounded-full bg-[#21262d] text-[#c9d1d9]"
+                className="text-xs px-2.5 py-1 rounded-full bg-surface-3 text-t-secondary"
               >
                 {tool}
               </span>
@@ -472,17 +465,17 @@ export function RunDetailModal() {
       onClick={handleBackdropClick}
       className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center px-4"
     >
-      <div className="bg-[#0d1117] border border-[#30363d] rounded-xl w-full max-w-3xl max-h-[85vh] overflow-hidden flex flex-col shadow-2xl">
+      <div className="bg-surface-0 border border-b-primary rounded-[var(--radius-xl)] w-full max-w-3xl max-h-[85vh] overflow-hidden flex flex-col shadow-[var(--shadow-lg)]">
         {/* Header */}
-        <div className="flex items-start justify-between px-5 pt-5 pb-3 border-b border-[#21262d]">
+        <div className="flex items-start justify-between px-5 pt-5 pb-3 border-b border-b-secondary">
           <div className="min-w-0">
-            <h2 className="text-[15px] font-semibold text-[#f0f6fc] truncate pr-2">{title}</h2>
-            <p className="text-[11px] text-[#8b949e] mt-0.5 font-mono truncate">{subtitle}</p>
+            <h2 className="text-[15px] font-semibold text-t-primary truncate pr-2">{title}</h2>
+            <p className="text-[11px] text-t-tertiary mt-0.5 font-mono truncate">{subtitle}</p>
           </div>
           <button
             type="button"
             onClick={closeDetail}
-            className="p-1.5 rounded-md hover:bg-[#161b22] transition-colors text-[#8b949e] hover:text-[#e6edf3] cursor-pointer shrink-0 mt-0.5"
+            className="p-1.5 rounded-[var(--radius-md)] hover:bg-surface-2 transition-colors text-t-tertiary hover:text-t-primary cursor-pointer shrink-0 mt-0.5"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
               <path
@@ -496,7 +489,7 @@ export function RunDetailModal() {
         </div>
 
         {/* Tab bar */}
-        <div className="flex border-b border-[#21262d] px-5">
+        <div className="flex border-b border-b-secondary px-5">
           {TABS.map((tab) => (
             <button
               key={tab.id}
@@ -504,8 +497,8 @@ export function RunDetailModal() {
               onClick={() => setActiveTab(tab.id)}
               className={`px-3 py-2.5 text-[13px] font-medium border-b-2 transition-colors cursor-pointer ${
                 activeTab === tab.id
-                  ? "border-[#58a6ff] text-[#f0f6fc]"
-                  : "border-transparent text-[#8b949e] hover:text-[#e6edf3]"
+                  ? "border-j-primary text-j-primary"
+                  : "border-transparent text-t-tertiary hover:text-t-secondary"
               }`}
             >
               {tab.label}
@@ -517,14 +510,14 @@ export function RunDetailModal() {
         <div className="flex-1 overflow-y-auto px-5 py-4">
           {loading && (
             <div className="flex items-center justify-center py-12">
-              <div className="w-5 h-5 border-2 border-[#58a6ff]/30 border-t-[#58a6ff] rounded-full animate-spin" />
-              <span className="ml-2.5 text-sm text-[#8b949e]">Loading...</span>
+              <div className="w-5 h-5 border-2 border-j-primary/30 border-t-j-primary rounded-full animate-spin" />
+              <span className="ml-2.5 text-sm text-t-tertiary">Loading...</span>
             </div>
           )}
 
           {fetchError && !loading && (
-            <div className="rounded-lg bg-red-950/20 border border-red-500/20 p-4">
-              <p className="text-sm text-red-400">Failed to load: {fetchError}</p>
+            <div className="rounded-[var(--radius-lg)] bg-j-error-soft border border-j-error/20 p-4">
+              <p className="text-sm text-j-error">Failed to load: {fetchError}</p>
             </div>
           )}
 

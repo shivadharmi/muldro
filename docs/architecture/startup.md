@@ -6,7 +6,6 @@
 sequenceDiagram
     participant R as run.py
     participant W as Worker Thread
-    participant B as Bot Thread
     participant UV as Uvicorn
     participant APP as FastAPI Lifespan
     participant DB as Postgres
@@ -14,7 +13,7 @@ sequenceDiagram
     participant MCP as MCP Bridge
     participant REC as Recovery
 
-    R->>R: Parse args (--worker, --bot)
+    R->>R: Parse args (--worker)
     R->>DB: Query user IDs from DB
 
     opt --worker flag
@@ -24,13 +23,6 @@ sequenceDiagram
         Note over W: All run via asyncio.gather()
     end
 
-    opt --bot flag
-        R->>B: Spawn daemon thread
-        B->>B: TelegramInterface
-        B->>B: SurfaceRegistry
-        B->>B: Notifier
-    end
-
     R->>UV: Start uvicorn (host:port)
     UV->>APP: FastAPI lifespan startup
 
@@ -38,19 +30,18 @@ sequenceDiagram
     APP->>APP: Initialize SurfaceRegistry
 
     Note over APP,DB: Seed Configuration
-    APP->>DB: ToolRegistry.seed_defaults() (163 tools from catalog.py)
+    APP->>DB: ToolRegistry.seed_defaults() (tools from catalog.py)
     APP->>DB: AgentRegistry.seed_defaults() (7 agents)
 
     Note over APP,DB: Validate Registry
     APP->>APP: validate_registry() (6 cross-checks)
     Note over APP: Capabilities known, scopes valid, schemas present
 
-    Note over APP,MCP: Connect External Tools
-    APP->>MCP: initialize_mcp_bridge()
-    MCP->>MCP: Connect to configured MCP servers
-    MCP->>MCP: list_tools() on each server
-    MCP->>DB: Register discovered unknown tools (capability=None)
-    MCP-->>APP: Tools discovered
+    Note over APP,MCP: Register External Tool Configs (no eager connect)
+    APP->>MCP: initialize_mcp_bridge() — registers server configs only
+    APP->>APP: runtime_preflight() — warn if uvx/npx missing
+    Note over MCP: Tool schemas durable in DB (ToolDefinition.input_schema)
+    Note over MCP: Per-server connect + list_tools() deferred to first agent build
 
     Note over APP,REC: Recover In-Flight State
     APP->>REC: run_startup_recovery()
@@ -67,16 +58,12 @@ sequenceDiagram
 ```
 python run.py                # API only
 python run.py --worker       # API + background workers
-python run.py --bot          # API + Telegram bot
-python run.py --worker --bot # Full system
 ```
 
 | Flag | Components Started |
 |------|-------------------|
 | (none) | FastAPI/Uvicorn only |
 | `--worker` | + StreamConsumerManager + SchedulerLoop (requires user_ids from DB) |
-| `--bot` | + TelegramInterface + Notifier + SurfaceRegistry |
-| `--worker --bot` | All components |
 
 ## Scheduling System
 
@@ -229,7 +216,6 @@ This avoids startup overhead when only serving health checks or API endpoints th
 | **Neo4j** | 5 Community | No | No graph traversal; Postgres entity tables still provide flat queries |
 | **MinIO / S3** | - | No | No artifact file storage (metadata still tracked in Postgres) |
 | **MCP servers** | - | No | External tools unavailable; internal tools still work |
-| **Telegram** | - | No | Web-only operation |
 
 *Redis is technically optional but strongly recommended. Without it, event streaming, distributed locking, task queuing, and real-time features are degraded or disabled.
 

@@ -86,12 +86,18 @@ class TestGoogleAuthRoutes:
             self._cleanup()
 
     def test_auth_route_exists(self):
-        routes = [r.path for r in app.routes]
-        assert "/v1/auth/oauth/{provider}/authorize" in routes
-        assert "/v1/auth/oauth/{provider}/callback" in routes
-        assert "/v1/auth/magic-link" in routes
-        assert "/v1/auth/me" in routes
-        assert "/v1/auth/refresh" in routes
+        # Assert via the OpenAPI path map rather than iterating ``app.routes``.
+        # Newer Starlette/FastAPI no longer flatten ``include_router`` into
+        # ``app.routes`` — they leave ``_IncludedRouter`` wrapper objects with
+        # no ``.path``, so ``[r.path for r in app.routes]`` raises
+        # AttributeError. ``app.openapi()["paths"]`` resolves the canonical full
+        # paths regardless of internal route representation.
+        paths = set(app.openapi()["paths"].keys())
+        assert "/v1/auth/oauth/{provider}/authorize" in paths
+        assert "/v1/auth/oauth/{provider}/callback" in paths
+        assert "/v1/auth/magic-link" in paths
+        assert "/v1/auth/me" in paths
+        assert "/v1/auth/refresh" in paths
 
 
 class TestAuthServiceRefresh:
@@ -114,3 +120,53 @@ class TestAuthServiceRefresh:
         svc, _ = self._make_service()
         assert hasattr(svc, "refresh_session")
         assert callable(svc.refresh_session)
+
+
+# Raw exception text that must never reach the client. If any of these strings
+# show up in a response body, an internal detail has leaked.
+_LEAKY_DETAIL = "token sig mismatch for hash a1b2c3 (secret pepper rotated)"
+
+
+class TestAuthErrorEnvelopeNoLeak:
+    """The verify/refresh routes must surface the standard error envelope and
+    must NOT leak the raw exception string (str(e)) to the client."""
+
+    def test_verify_does_not_leak_raw_exception(self):
+        from unittest.mock import AsyncMock, patch
+
+        with patch("src.api.routes_auth_magic_link.AuthService") as mock_auth:
+            mock_auth.return_value.verify_magic_link = AsyncMock(
+                side_effect=ValueError(_LEAKY_DETAIL)
+            )
+            client = TestClient(app, raise_server_exceptions=False)
+            resp = client.post("/v1/auth/verify", json={"token": "bad-token"})
+
+        assert resp.status_code == 400
+        body = resp.json()
+        # Envelope shape, not legacy {"detail": ...}
+        assert "error" in body
+        assert "detail" not in body
+        assert body["error"]["code"] == "validation_error"
+        assert body["error"]["correlation_id"]
+        # The raw exception text must not appear anywhere in the response.
+        assert _LEAKY_DETAIL not in resp.text
+        assert "secret pepper" not in resp.text
+
+    def test_refresh_does_not_leak_raw_exception(self):
+        from unittest.mock import AsyncMock, patch
+
+        with patch("src.api.routes_auth_session.AuthService") as mock_auth:
+            mock_auth.return_value.refresh_session = AsyncMock(
+                side_effect=ValueError(_LEAKY_DETAIL)
+            )
+            client = TestClient(app, raise_server_exceptions=False)
+            resp = client.post("/v1/auth/refresh", json={"refresh_token": "bad-token"})
+
+        assert resp.status_code == 401
+        body = resp.json()
+        assert "error" in body
+        assert "detail" not in body
+        assert body["error"]["code"] == "unauthorized"
+        assert body["error"]["correlation_id"]
+        assert _LEAKY_DETAIL not in resp.text
+        assert "secret pepper" not in resp.text

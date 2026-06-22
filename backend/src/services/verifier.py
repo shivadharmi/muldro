@@ -65,7 +65,7 @@ class Verifier:
             conditions = [success_conditions]
 
         for condition in conditions:
-            cond_type = condition.get("type", "status_equals")
+            cond_type = self._resolve_cond_type(condition)
             passed = await self._check_condition(condition, cond_type, run, steps)
             label = condition.get("label", cond_type)
             if passed:
@@ -90,6 +90,25 @@ class Verifier:
             checks_passed=checks_passed,
             checks_failed=checks_failed,
         )
+
+    @staticmethod
+    def _resolve_cond_type(condition: dict) -> str:
+        """Resolve a condition's check type.
+
+        An explicit ``type`` always wins. Otherwise, an untyped condition that
+        carries a free-text ``criteria`` key (how ``plan_store`` stores the
+        Planner's prose ``success_criteria``) is routed to the LLM judge so the
+        prose is actually evaluated — without this it falls through to
+        ``status_equals``, which never reads the prose and produces a meaningless
+        verdict. Untyped conditions with no ``criteria`` keep the historical
+        ``status_equals`` default.
+        """
+        explicit = condition.get("type")
+        if explicit:
+            return explicit
+        if "criteria" in condition:
+            return "llm_judge"
+        return "status_equals"
 
     async def verify_step(
         self,
@@ -161,7 +180,13 @@ class Verifier:
         steps: list[TaskStep],
     ) -> bool:
         if cond_type == "status_equals":
-            return run.status == condition.get("value", "completed")
+            expected = condition.get("value")
+            if expected is None:
+                # No explicit target: accept the post-completion states. dag_runner
+                # sets the run to ``partially_completed`` *before* verification, so
+                # a default hardcoded to ``completed`` would always fail here.
+                return run.status in ("completed", "partially_completed")
+            return run.status == expected
 
         if cond_type == "all_steps_completed":
             return all(s.status == "completed" for s in steps)
@@ -211,14 +236,27 @@ class Verifier:
                 max_tokens=256,
                 system=(
                     "You are a quality verification engine. "
-                    "Evaluate whether the run met the criteria."
+                    "Evaluate whether the run met the criteria. "
+                    'Respond with ONLY a JSON object: {"passed": true/false, "reason": "..."}'
                 ),
-                messages=[{"role": "user", "content": prompt}],
+                messages=[
+                    {"role": "user", "content": prompt},
+                    # Prefill the assistant turn with "{" so the model is forced
+                    # to continue a JSON object instead of prose — the canonical
+                    # fix for the judge returning "No JSON value found".
+                    {"role": "assistant", "content": "{"},
+                ],
             )
             from src.llm_utils import parse_llm_json
 
-            result = parse_llm_json(response.content[0].text)
-            return result.get("passed", False)
+            # Re-attach the prefilled "{" the model continued from.
+            text = "{" + (response.content[0].text or "")
+            # Advisory verification: a malformed/empty judge response must NOT
+            # raise (it is informational, not failing). Degrade to not-passed.
+            result = parse_llm_json(text, default={"passed": False, "reason": "unparseable"})
+            if result.get("reason") == "unparseable":
+                logger.info("LLM judge returned no parseable JSON — treating as not-passed")
+            return bool(result.get("passed", False))
         except Exception:
-            logger.warning("LLM judge verification failed", exc_info=True)
+            logger.warning("LLM judge verification call failed", exc_info=True)
             return False

@@ -83,7 +83,6 @@ The `Notifier` (`src/services/notifier.py`) enforces per-surface rate limits to 
 
 | Surface | Limit (per hour) |
 |---------|-----------------|
-| Telegram | 5 |
 | Web | 15 |
 | Slack | 8 |
 | Email | 3 |

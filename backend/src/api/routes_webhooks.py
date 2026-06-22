@@ -2,14 +2,12 @@
 
 Includes:
 - /v1/webhooks/generic — backwards-compatible generic passthrough
-- /v1/webhooks/whatsapp — Meta WhatsApp Business API webhooks
+- /v1/webhooks/{provider}/{subscription_id} — provider wake-signal callbacks
 """
 
-import hashlib
-import hmac
 import logging
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import get_current_user_id, get_current_workspace_id, get_session
@@ -25,13 +23,13 @@ router = APIRouter()
 
 async def _check_backpressure(
     request: Request,
-    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
     settings: Settings = Depends(get_settings),
 ):
-    """Reject webhooks when the current user's event stream lag is too high.
+    """Reject webhooks when the current workspace's event stream lag is too high.
 
-    Scoped to the requesting user's stream to avoid throttling healthy tenants
-    because another tenant is backlogged.
+    Scoped to the requesting workspace's stream to avoid throttling healthy
+    tenants because another tenant is backlogged.
     """
     redis = getattr(request.app.state, "redis", None)
     if redis and settings.webhook_lag_threshold > 0:
@@ -39,7 +37,7 @@ async def _check_backpressure(
 
         bus = EventBus(redis)
         try:
-            stream = bus.event_stream(user_id)
+            stream = bus.event_stream(workspace_id)
             lag = await bus.get_stream_lag(stream)
             if lag > settings.webhook_lag_threshold:
                 raise HTTPException(
@@ -90,50 +88,90 @@ async def generic_webhook(
     return EventIngestResponse(event_id=event_id, status="processed", importance_score=None)
 
 
-# ── WhatsApp Webhooks (Meta Business API) ────────────────────
+# ── Provider callback webhooks (wake-signal) ─────────────────
 
 
-@router.get("/v1/webhooks/whatsapp")
-async def whatsapp_verify(
-    hub_mode: str = Query("", alias="hub.mode"),
-    hub_challenge: str = Query("", alias="hub.challenge"),
-    hub_verify_token: str = Query("", alias="hub.verify_token"),
-    settings: Settings = Depends(get_settings),
-):
-    """Meta webhook verification challenge (GET)."""
-    expected_token = getattr(settings, "whatsapp_verify_token", "")
-    if hub_mode == "subscribe" and hub_verify_token == expected_token:
-        return Response(content=hub_challenge, media_type="text/plain")
-    raise HTTPException(status_code=403, detail="Verification failed")
+def _extract_signature(request: Request) -> str | None:
+    """Pull the provider signature header (varies by provider)."""
+    headers = request.headers
+    return (
+        headers.get("X-Hub-Signature-256")  # GitHub, Meta
+        or headers.get("X-Slack-Signature")  # Slack
+        or headers.get("X-Signature-256")
+        or headers.get("X-Signature")
+    )
 
 
-@router.post("/v1/webhooks/whatsapp")
-async def whatsapp_webhook(
+@router.post("/v1/webhooks/{provider}/{subscription_id}")
+async def provider_webhook(
+    provider: str,
+    subscription_id: str,
     request: Request,
-    x_hub_signature_256: str = Header("", alias="X-Hub-Signature-256"),
+    db: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ):
-    """Receive WhatsApp incoming messages via Meta webhook."""
+    """Receive a provider webhook delivery and signal perception.
+
+    This is the callback URL WebhookManager registers with external providers.
+    The delivery is a wake-signal only: PushReceiver verifies the provider proof
+    of origin and sets ``pending_run`` on the matching PerceptionState so the
+    scheduler polls the source through the real connector → EventProcessor
+    funnel on its next tick. No NormalizedEvent is created here.
+
+    Unauthenticated by design (providers cannot carry a user session); the
+    provider-specific signature/token on the subscription is the security
+    boundary. Verification is fail-closed in PushReceiver.
+
+    Backpressure is enforced INSIDE PushReceiver (not as a route dependency):
+    the provider route carries no user session, so the workspace is unknown
+    until the subscription row resolves. PushReceiver checks the real
+    per-workspace event-stream lag (``jarvis:events:{workspace_id}``) AFTER
+    verifying origin and BEFORE scheduling a poll, returning ``backpressure``
+    (→ 429) when the workspace stream is backlogged. (The previous coarse
+    ``_global`` stream check was inert: nothing produces to ``_global``.)
+    """
+    # PushReceiver authoritatively resolves workspace/user from the subscription
+    # row; the constructor's workspace_id/callback_base_url are unused on the
+    # inbound delivery path (record_delivery/record_failure key on sub id alone).
+    from src.integrations.sync.push_receiver import PushReceiver
+
     raw_body = await request.body()
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
 
-    # Verify signature
-    whatsapp_secret = getattr(settings, "whatsapp_app_secret", "")
-    if whatsapp_secret:
-        expected = (
-            "sha256=" + hmac.new(whatsapp_secret.encode(), raw_body, hashlib.sha256).hexdigest()
-        )
-        if not hmac.compare_digest(expected, x_hub_signature_256):
-            raise HTTPException(status_code=403, detail="Invalid signature")
+    redis = getattr(request.app.state, "redis", None)
+    receiver = PushReceiver(
+        db,
+        workspace_id="",
+        callback_base_url="",
+        redis=redis,
+        lag_threshold=settings.webhook_lag_threshold,
+    )
+    result = await receiver.handle_delivery(
+        provider=provider,
+        subscription_id=subscription_id,
+        payload=payload,
+        signature=_extract_signature(request),
+        raw_body=raw_body,
+        headers=dict(request.headers),
+    )
 
-    body = await request.json()
+    if not result.accepted:
+        if result.error == "unknown_subscription":
+            raise HTTPException(status_code=404, detail=result.error)
+        if result.error == "signature_mismatch":
+            raise HTTPException(status_code=403, detail=result.error)
+        if result.error == "duplicate_delivery":
+            # Idempotent ACK: already processed, nothing more to do.
+            return {"status": "duplicate", "subscription_id": subscription_id}
+        if result.error == "backpressure":
+            raise HTTPException(
+                status_code=429,
+                detail="Event queue backlogged, retry later",
+            )
+        raise HTTPException(status_code=400, detail=result.error or "rejected")
 
-    # Forward to WhatsApp connector's handle_webhook if registered
-    from src.connectors.base import CONNECTOR_REGISTRY
-
-    connector_cls = CONNECTOR_REGISTRY.get("whatsapp")
-    if connector_cls:
-        instance = connector_cls(settings=settings)
-        events = await instance.handle_webhook(body)
-        return {"status": "ok", "events": len(events)}
-
-    return {"status": "ok", "events": 0}
+    await db.commit()
+    return {"status": "accepted", "subscription_id": subscription_id}

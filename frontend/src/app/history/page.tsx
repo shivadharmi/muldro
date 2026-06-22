@@ -97,31 +97,31 @@ export default function HistoryPage() {
   const dailyCost = items.reduce((sum, i) => sum + (i.cost_usd ?? 0), 0);
 
   return (
-    <div className="flex-1 bg-[#0d1117] min-h-screen">
+    <div className="flex-1 bg-surface-0 min-h-screen">
       <HistoryFilters />
 
       {/* Summary stats bar */}
-      <div className="flex gap-6 px-5 py-2.5 border-b border-[#21262d] text-xs text-[#8b949e]">
+      <div className="flex gap-6 px-5 py-2.5 border-b border-b-secondary text-xs text-t-tertiary">
         <span>
-          <span className="text-green-400">{activeCount}</span> active
+          <span className="text-j-success tabular-nums">{activeCount}</span> active
         </span>
         <span>
-          <span className="text-[#e6edf3]">{completedToday}</span> completed
+          <span className="text-t-primary tabular-nums">{completedToday}</span> completed
           today
         </span>
         <span>
-          <span className="text-red-400">{failedCount}</span> failed
+          <span className="text-j-error tabular-nums">{failedCount}</span> failed
         </span>
-        <span className="ml-auto">${dailyCost.toFixed(2)} today</span>
+        <span className="ml-auto tabular-nums">${dailyCost.toFixed(2)} today</span>
       </div>
 
       {/* Timeline */}
       {isLoading && items.length === 0 ? (
-        <div className="flex items-center justify-center py-20 text-[#8b949e] text-sm">
+        <div className="flex items-center justify-center py-20 text-t-tertiary text-sm">
           Loading history...
         </div>
       ) : items.length === 0 ? (
-        <div className="flex items-center justify-center py-20 text-[#8b949e] text-sm">
+        <div className="flex items-center justify-center py-20 text-t-tertiary text-sm">
           No runs found
         </div>
       ) : (
@@ -133,7 +133,7 @@ export default function HistoryPage() {
             <div className="py-4 text-center">
               <button
                 onClick={() => setOffset(offset + 20)}
-                className="text-[#58a6ff] text-sm hover:underline"
+                className="text-j-primary text-sm hover:underline"
               >
                 Load more runs...
               </button>

@@ -36,6 +36,12 @@ export interface HistoryItem {
   step_count: number;
   completed_step_count: number;
   cost_usd: number | null;
+  // Primary agent that handled the run, when attributable.
+  agent?: string | null;
+  // Total run duration in milliseconds.
+  duration_ms?: number | null;
+  // Last-updated timestamp (distinct from started/completed).
+  updated_at?: string | null;
   steps: HistoryStepSummary[];
   approval: HistoryApprovalContext | null;
   live_phase: string | null;

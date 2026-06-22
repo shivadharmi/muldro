@@ -37,11 +37,30 @@ interface RendererProps {
   onAction: (action: string, payload: Record<string, unknown>) => void;
 }
 
+/**
+ * Maximum nesting depth the renderer will descend. A2UI trees are author-shallow
+ * (card > column > row > text ≈ 5 levels); this caps untrusted, LLM-authored
+ * surface_data so a pathologically deep (or cyclic-looking) tree can't blow the
+ * React stack. Trees deeper than this render a truncation placeholder at the cap.
+ */
+const MAX_RENDER_DEPTH = 24;
+
 /** Maps A2UI component types to React implementations, wrapped in ErrorBoundary. */
 function renderComponent(
   component: A2UIComponent,
-  onAction: (action: string, payload: Record<string, unknown>) => void
+  onAction: (action: string, payload: Record<string, unknown>) => void,
+  depth: number
 ): React.ReactNode {
+  if (depth > MAX_RENDER_DEPTH) {
+    return (
+      <div
+        key={`depth-${component.id}`}
+        className="p-2 text-xs text-t-tertiary border border-j-warning/30 rounded-[var(--radius-sm)]"
+      >
+        Content nested too deeply to display
+      </div>
+    );
+  }
   return (
     <ErrorBoundary
       key={`eb-${component.id}`}
@@ -51,7 +70,7 @@ function renderComponent(
         </div>
       }
     >
-      {renderComponentInner(component, onAction)}
+      {renderComponentInner(component, onAction, depth)}
     </ErrorBoundary>
   );
 }
@@ -59,9 +78,10 @@ function renderComponent(
 /** Inner render dispatch — errors caught by the wrapping ErrorBoundary. */
 function renderComponentInner(
   component: A2UIComponent,
-  onAction: (action: string, payload: Record<string, unknown>) => void
+  onAction: (action: string, payload: Record<string, unknown>) => void,
+  depth: number
 ): React.ReactNode {
-  const children = component.children?.map((child) => renderComponent(child, onAction));
+  const children = component.children?.map((child) => renderComponent(child, onAction, depth + 1));
 
   switch (component.type) {
     // Text
@@ -90,7 +110,7 @@ function renderComponentInner(
         <A2UITabs
           key={component.id}
           component={component}
-          renderChild={(child) => renderComponent(child, onAction)}
+          renderChild={(child) => renderComponent(child, onAction, depth + 1)}
         >
           {children}
         </A2UITabs>
@@ -153,7 +173,7 @@ function renderComponentInner(
 export function A2UIRenderer({ surface, onAction }: RendererProps) {
   return (
     <div className="space-y-4">
-      {(surface.children ?? []).map((child) => renderComponent(child, onAction))}
+      {(surface.children ?? []).map((child) => renderComponent(child, onAction, 0))}
     </div>
   );
 }

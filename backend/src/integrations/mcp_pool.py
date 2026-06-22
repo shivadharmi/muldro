@@ -44,11 +44,19 @@ class WorkspaceMCPPool:
         # workspace_id → {server_name → ServerEntry}
         self._workspaces: dict[str, dict[str, ServerEntry]] = {}
         self._lock = asyncio.Lock()
+        # (workspace_id, server_name) pairs that completed a successful discovery pass
+        # in this process. The DB persists schemas across restarts, so once-per-process
+        # is correct: a server that responded is never re-probed in the same process.
+        self._discovered_servers: set[tuple[str, str]] = set()
 
     @property
     def session_pool(self) -> UserMCPSessionPool:
         """Access the underlying session pool."""
         return self._session_pool
+
+    def is_discovered(self, server_name: str, workspace_id: str = "") -> bool:
+        """True if a discovery pass already succeeded for this server in-process."""
+        return (workspace_id, server_name) in self._discovered_servers
 
     async def add_server(
         self,
@@ -179,6 +187,54 @@ class WorkspaceMCPPool:
             logger.error("Failed to reload server %s: %s", server_name, e)
             return None
 
+    async def discover_and_persist(
+        self,
+        server_name: str,
+        *,
+        workspace_id: str,
+    ) -> int:
+        """Spawn one short-lived discovery session, persist schemas, tear down.
+
+        Used by lazy discovery. Ensures the server config is registered, finds
+        a user for auth keying, opens a session (which calls list_tools and
+        persists discovered schemas via _register_discovered_tools), then closes
+        it immediately so nothing is left running. Returns tool count.
+        """
+        if not self._session_pool.has_server_config(server_name, workspace_id):
+            if not await self.reload_server(workspace_id, server_name):
+                return 0
+
+        user_id = await self._resolve_workspace_user(workspace_id)
+        if not user_id:
+            return 0
+
+        from src.connectors.mcp_bridge import (
+            clear_discovery_failure,
+            record_discovery_failure,
+        )
+
+        try:
+            session = await self._session_pool.get_or_create_session(
+                server_name, user_id=user_id, workspace_id=workspace_id
+            )
+            count = len(session.tools)
+            # Mark discovered only after the server actually responded. Transient
+            # failures (exception path) are NOT marked so they are retried next time.
+            self._discovered_servers.add((workspace_id, server_name))
+            clear_discovery_failure(server_name)
+        except Exception as e:
+            logger.debug("discover_and_persist failed for %s", server_name, exc_info=True)
+            record_discovery_failure(server_name, str(e))
+            return 0
+        finally:
+            try:
+                await self._session_pool.refresh_session(
+                    server_name, user_id, workspace_id=workspace_id
+                )
+            except Exception:
+                logger.debug("teardown after discovery failed for %s", server_name)
+        return count
+
     def get_servers(self, workspace_id: str) -> list[dict]:
         """List all servers for a workspace with their status."""
         ws = self._workspaces.get(workspace_id, {})
@@ -209,9 +265,11 @@ class WorkspaceMCPPool:
         return result
 
     async def initialize_from_db(self) -> int:
-        """Load all active installations from DB and register them.
+        """Register all active installations from DB. No network/process I/O.
 
-        Called at startup. Returns count of servers registered.
+        Tool schemas are no longer discovered eagerly — they come from the DB
+        registry (durable) and are lazily (re)discovered on first agent build
+        via discover_and_persist. Returns count of servers registered.
         """
         from src.models.database import get_session_factory
 
@@ -231,132 +289,16 @@ class WorkspaceMCPPool:
                 installations = result.scalars().all()
 
                 count = 0
-                http_servers: list[tuple[str, str, dict]] = []
                 for inst in installations:
                     config = _installation_to_config(inst)
-                    await self.add_server(
-                        inst.workspace_id,
-                        inst.server_name,
-                        config,
-                    )
+                    await self.add_server(inst.workspace_id, inst.server_name, config)
                     count += 1
-                    if config.get("transport") in ("sse", "streamable-http"):
-                        http_servers.append((inst.workspace_id, inst.server_name, config))
 
-                # Eagerly discover tools from HTTP MCP servers so schemas are
-                # available before the first tool call.
-                for ws_id, srv_name, cfg in http_servers:
-                    try:
-                        await self._session_pool.discover_tools(
-                            srv_name, workspace_id=ws_id, config=cfg
-                        )
-                    except Exception as disc_err:
-                        logger.warning(
-                            "Tool discovery failed for HTTP server %s: %s",
-                            srv_name,
-                            disc_err,
-                        )
-
-                logger.info("Loaded %d MCP servers from DB", count)
-
-                # Eagerly discover tool schemas from stdio servers that have
-                # OAuth tokens available. Creates a session per (user, server),
-                # which spawns the subprocess and calls list_tools().
-                await self._discover_stdio_schemas(installations)
-
+                logger.info("Registered %d MCP server configs from DB (no discovery)", count)
                 return count
-
         except Exception as e:
-            logger.debug("Failed to load MCP servers from DB: %s", e)
+            logger.debug("Failed to register MCP servers from DB: %s", e)
             return 0
-
-    async def _discover_stdio_schemas(self, installations: list) -> None:
-        """Eagerly discover tool schemas from stdio MCP servers.
-
-        Two categories:
-        - Auth-free servers (auth_provider is None): spawned immediately, no token needed.
-        - OAuth servers: require a user with a valid token for the auth_provider.
-        """
-        oauth_providers = {"github", "slack", "notion"}
-
-        auth_free_servers: list[tuple[str, str]] = []
-        oauth_servers: list[tuple[str, str, str]] = []
-        for inst in installations:
-            if inst.transport != "stdio":
-                continue
-            if inst.auth_provider is None:
-                auth_free_servers.append((inst.workspace_id, inst.server_name))
-            elif inst.auth_provider in oauth_providers:
-                oauth_servers.append((inst.workspace_id, inst.server_name, inst.auth_provider))
-
-        # Discover auth-free servers first (playwright, filesystem) — no token needed
-        for ws_id, srv_name in auth_free_servers:
-            try:
-                # Auth-free servers need a user_id for session keying but no real token.
-                # Use the workspace owner (first member) as the session key.
-                user_id = await self._resolve_workspace_user(ws_id)
-                if not user_id:
-                    logger.debug("No user for workspace %s — skipping %s", ws_id[:16], srv_name)
-                    continue
-                session = await asyncio.wait_for(
-                    self._session_pool.get_or_create_session(
-                        srv_name, user_id=user_id, workspace_id=ws_id
-                    ),
-                    timeout=30,
-                )
-                logger.info(
-                    "Auth-free schema discovery for %s: %d tools",
-                    srv_name,
-                    len(session.tools),
-                )
-            except asyncio.TimeoutError:
-                logger.warning("Schema discovery timed out for %s (30s)", srv_name)
-            except Exception:
-                logger.debug("Schema discovery failed for %s", srv_name, exc_info=True)
-
-        # Discover OAuth servers (need a user with a valid token)
-        if not oauth_servers:
-            return
-
-        oauth_mgr = self._session_pool._oauth_manager
-        if not oauth_mgr:
-            logger.debug("No OAuthManager — skipping OAuth stdio schema discovery")
-            return
-
-        for ws_id, srv_name, auth_provider in oauth_servers:
-            try:
-                from sqlalchemy import select
-
-                from src.models.oauth_token import OAuthToken
-
-                async with oauth_mgr._db_factory() as db:
-                    result = await db.execute(
-                        select(OAuthToken.user_id)
-                        .where(OAuthToken.provider == auth_provider)
-                        .limit(1)
-                    )
-                    row = result.first()
-
-                if not row:
-                    logger.debug(
-                        "No OAuth token for %s — skipping schema discovery for %s",
-                        auth_provider,
-                        srv_name,
-                    )
-                    continue
-
-                user_id = row[0]
-                session = await self._session_pool.get_or_create_session(
-                    srv_name, user_id=user_id, workspace_id=ws_id
-                )
-                logger.info(
-                    "Stdio schema discovery for %s: %d tools (user=%s)",
-                    srv_name,
-                    len(session.tools),
-                    user_id[:16],
-                )
-            except Exception:
-                logger.debug("Stdio schema discovery failed for %s", srv_name, exc_info=True)
 
     async def _resolve_workspace_user(self, workspace_id: str) -> str | None:
         """Find any user in a workspace for session keying (auth-free servers)."""
@@ -420,6 +362,20 @@ def _installation_to_config(inst: Any) -> dict:
 
     elif inst.transport in ("sse", "streamable-http") and inst.remote_url:
         config["url"] = inst.remote_url
+
+    # Carry tool_defaults from the installation's JSONB config into the
+    # session-pool config. UserMCPSessionPool.call_tool merges these into
+    # every MCP tool_input when the matching key is absent — this is how
+    # Atlassian's cloudId (and any other per-workspace constant) reaches
+    # the MCP server without the agent needing to know it.
+    inst_cfg = getattr(inst, "config", None) or {}
+    if isinstance(inst_cfg, dict):
+        defaults = inst_cfg.get("tool_defaults")
+        if isinstance(defaults, dict) and defaults:
+            config["tool_defaults"] = defaults
+
+    if isinstance(inst_cfg, dict) and inst_cfg.get("managed_local"):
+        config["managed_local"] = True
 
     return config
 

@@ -20,6 +20,21 @@ class ArtifactStore:
         self._settings = settings
         self._bucket = settings.s3_bucket
 
+    def _client_kwargs(self) -> dict:
+        """Build aioboto3 S3 client kwargs.
+
+        Adds the MinIO endpoint and explicit credentials when configured (local
+        dev); when they are empty, boto's default credential chain is used
+        (IAM role / instance profile in production).
+        """
+        kwargs: dict = {"region_name": self._settings.s3_region}
+        if self._settings.s3_endpoint_url:
+            kwargs["endpoint_url"] = self._settings.s3_endpoint_url
+        if self._settings.s3_access_key_id and self._settings.s3_secret_access_key:
+            kwargs["aws_access_key_id"] = self._settings.s3_access_key_id
+            kwargs["aws_secret_access_key"] = self._settings.s3_secret_access_key
+        return kwargs
+
     async def store(
         self,
         user_id: str,
@@ -33,15 +48,15 @@ class ArtifactStore:
         key = f"artifacts/{user_id}/{artifact_type}/{artifact_id}"
 
         if not self._bucket:
-            logger.warning("S3 bucket not configured, artifact store is no-op")
-            return key
+            # Fail closed: never return a key for a write that did not happen.
+            # A phantom key would be persisted on the artifact row and a 201
+            # returned, but the content could never be retrieved.
+            raise ValueError("S3 bucket not configured")
 
         import aioboto3
 
         session = aioboto3.Session()
-        kwargs = {"region_name": self._settings.s3_region}
-        if self._settings.s3_endpoint_url:
-            kwargs["endpoint_url"] = self._settings.s3_endpoint_url
+        kwargs = self._client_kwargs()
 
         async with session.client("s3", **kwargs) as s3:
             await s3.put_object(
@@ -63,9 +78,7 @@ class ArtifactStore:
         import aioboto3
 
         session = aioboto3.Session()
-        kwargs = {"region_name": self._settings.s3_region}
-        if self._settings.s3_endpoint_url:
-            kwargs["endpoint_url"] = self._settings.s3_endpoint_url
+        kwargs = self._client_kwargs()
 
         async with session.client("s3", **kwargs) as s3:
             resp = await s3.get_object(Bucket=self._bucket, Key=key)
@@ -81,9 +94,7 @@ class ArtifactStore:
         import aioboto3
 
         session = aioboto3.Session()
-        kwargs = {"region_name": self._settings.s3_region}
-        if self._settings.s3_endpoint_url:
-            kwargs["endpoint_url"] = self._settings.s3_endpoint_url
+        kwargs = self._client_kwargs()
 
         async with session.client("s3", **kwargs) as s3:
             await s3.delete_object(Bucket=self._bucket, Key=key)
@@ -96,9 +107,7 @@ class ArtifactStore:
         import aioboto3
 
         session = aioboto3.Session()
-        kwargs = {"region_name": self._settings.s3_region}
-        if self._settings.s3_endpoint_url:
-            kwargs["endpoint_url"] = self._settings.s3_endpoint_url
+        kwargs = self._client_kwargs()
 
         async with session.client("s3", **kwargs) as s3:
             url = await s3.generate_presigned_url(
@@ -122,9 +131,7 @@ class ArtifactStore:
         import aioboto3
 
         session = aioboto3.Session()
-        kwargs = {"region_name": self._settings.s3_region}
-        if self._settings.s3_endpoint_url:
-            kwargs["endpoint_url"] = self._settings.s3_endpoint_url
+        kwargs = self._client_kwargs()
 
         async with session.client("s3", **kwargs) as s3:
             resp = await s3.list_objects_v2(Bucket=self._bucket, Prefix=prefix, MaxKeys=limit)

@@ -33,7 +33,6 @@ _PROVIDER_TO_OAUTH: dict[str, str] = {
     "github": "github",
     "slack": "slack",
     "notion": "notion",
-    "jira": "jira",
 }
 
 
@@ -142,13 +141,26 @@ class IntegrationManager:
             return {"events": 0, "error": "No credentials found"}
 
         # Get cursor
-        cursor = await self._get_cursor(user_id, provider)
+        cursor = await self._get_cursor(user_id, provider, installation.workspace_id)
 
-        # Poll
+        # Poll. Every registered connector returns a PollResult; on any failure it
+        # carries empty events + the incoming cursor unchanged (fail -> empty +
+        # unchanged cursor), so we never ingest events nor advance the cursor on a
+        # failing poll.
         instance = connector_cls(settings=self._settings)
-        events, new_cursor = await instance.poll(user_id, cursor, creds)
+        raw = await instance.poll(user_id, cursor, creds)
 
-        # Update cursor
+        if raw.failed:
+            logger.warning(
+                "integration_poll_failed",
+                extra={"provider": provider, "error_class": raw.error_class},
+            )
+            await self._db.commit()
+            return {"events": 0, "provider": provider, "error": raw.error_class}
+        events = raw.events
+        new_cursor = raw.cursor
+
+        # Update cursor only on success
         if new_cursor:
             await self._update_cursor(user_id, provider, new_cursor, installation.workspace_id)
 
@@ -157,7 +169,7 @@ class IntegrationManager:
 
         # Publish events to event bus
         if events and self._event_bus:
-            stream = self._event_bus.event_stream(user_id)
+            stream = self._event_bus.event_stream(installation.workspace_id)
             for event in events:
                 await self._event_bus.publish(
                     stream,
@@ -171,6 +183,7 @@ class IntegrationManager:
                         "actor": event.actor,
                     },
                     user_id=user_id,
+                    workspace_id=installation.workspace_id,
                 )
 
         await self._db.commit()
@@ -222,10 +235,11 @@ class IntegrationManager:
             return {"access_token": access_token}
         return None
 
-    async def _get_cursor(self, user_id: str, provider: str) -> str | None:
-        """Get the observation cursor for a provider."""
+    async def _get_cursor(self, user_id: str, provider: str, workspace_id: str) -> str | None:
+        """Get the observation cursor for a provider, scoped to the workspace."""
         result = await self._db.execute(
             select(ObservationCursor).where(
+                ObservationCursor.workspace_id == workspace_id,
                 ObservationCursor.user_id == user_id,
                 ObservationCursor.source == provider,
             )
@@ -234,29 +248,35 @@ class IntegrationManager:
         return cursor.cursor_value if cursor else None
 
     async def _update_cursor(
-        self, user_id: str, provider: str, value: str, workspace_id: str = ""
+        self, user_id: str, provider: str, value: str, workspace_id: str
     ) -> None:
-        """Update the observation cursor."""
+        """Update the observation cursor.
+
+        Uses a single ``INSERT ... ON CONFLICT DO UPDATE`` so this writer and
+        the perception-side writer (``JarvisOrchestrator._update_cursor``)
+        cannot race on the ``uq_cursor_ws_user_source`` unique constraint.
+        """
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
         from ulid import ULID
 
-        result = await self._db.execute(
-            select(ObservationCursor).where(
-                ObservationCursor.user_id == user_id,
-                ObservationCursor.source == provider,
+        now = datetime.now(timezone.utc)
+        stmt = (
+            pg_insert(ObservationCursor)
+            .values(
+                cursor_id=f"cur_{ULID()}",
+                user_id=user_id,
+                workspace_id=workspace_id,
+                source=provider,
+                cursor_type="sync_token",
+                cursor_value=value,
+                last_observation_at=now,
+            )
+            .on_conflict_do_update(
+                constraint="uq_cursor_ws_user_source",
+                set_={
+                    "cursor_value": value,
+                    "last_observation_at": now,
+                },
             )
         )
-        cursor = result.scalar_one_or_none()
-        if cursor:
-            cursor.cursor_value = value
-            cursor.updated_at = datetime.now(timezone.utc)
-        else:
-            self._db.add(
-                ObservationCursor(
-                    cursor_id=f"cur_{ULID()}",
-                    user_id=user_id,
-                    workspace_id=workspace_id,
-                    source=provider,
-                    cursor_type="sync_token",
-                    cursor_value=value,
-                )
-            )
+        await self._db.execute(stmt)

@@ -12,13 +12,15 @@ Ceiling: user-set max autonomy per capability caps the effective trust level.
 """
 
 import logging
-from types import SimpleNamespace
+from dataclasses import dataclass
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.orchestrator.contracts import PolicyDecision
+from src.contracts import PolicyDecision
 from src.services.risk_assessor import (
+    GRADUATION_THRESHOLDS,
+    LEARNING_MIN_APPROVED,
     RiskAssessment,
     _trust_level_index,
     get_or_create_trust_state,
@@ -28,39 +30,53 @@ from src.services.risk_assessor import (
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True, slots=True)
+class _DefaultCeiling:
+    """Typed, immutable default returned by ``_get_ceiling`` when no ``TrustCeiling``
+    row exists. Shaped to the only attribute callers read (``max_level``); replaces an
+    untyped ``SimpleNamespace`` so the contract is explicit and frozen."""
+
+    max_level: str = "autonomous"
+
+
 def _graduation_progress(state) -> dict:
     """Compute graduation progress toward the next trust level.
 
-    Returns dict with: next_level, current, target, percentage.
+    Returns dict with: next_level, current, target, percentage. Thresholds come
+    from ``GRADUATION_THRESHOLDS`` / ``LEARNING_MIN_APPROVED`` (same source of
+    truth as ``graduate_trust``) so the UI can never disagree with the gate.
     """
     level = state.trust_level
     approved = state.approved_count
     rejected = state.rejected_count
     total = approved + rejected
 
+    trusted_target, trusted_max_reject = GRADUATION_THRESHOLDS["trusted"]
+    autonomous_target, autonomous_max_reject = GRADUATION_THRESHOLDS["autonomous"]
+
     if level == "first_use":
         result = {
             "next_level": "learning",
             "current": approved,
-            "target": 3,
-            "percentage": min(approved / 3, 1.0) if approved < 3 else 1.0,
+            "target": LEARNING_MIN_APPROVED,
+            "percentage": min(approved / LEARNING_MIN_APPROVED, 1.0),
             "blocked_by_rejections": rejected > 0,
         }
     elif level == "learning":
         result = {
             "next_level": "trusted",
             "current": approved,
-            "target": 10,
-            "percentage": min(approved / 10, 1.0),
-            "blocked_by_rejections": (total > 0 and rejected / total >= 0.10),
+            "target": trusted_target,
+            "percentage": min(approved / trusted_target, 1.0),
+            "blocked_by_rejections": (total > 0 and rejected / total >= trusted_max_reject),
         }
     elif level == "trusted":
         result = {
             "next_level": "autonomous",
             "current": approved,
-            "target": 25,
-            "percentage": min(approved / 25, 1.0),
-            "blocked_by_rejections": (total > 0 and rejected / total >= 0.05),
+            "target": autonomous_target,
+            "percentage": min(approved / autonomous_target, 1.0),
+            "blocked_by_rejections": (total > 0 and rejected / total >= autonomous_max_reject),
         }
     else:
         result = {
@@ -160,7 +176,7 @@ class TrustEngine:
         if ceiling:
             return ceiling
 
-        return SimpleNamespace(max_level="autonomous")
+        return _DefaultCeiling()
 
     # ── Dashboard + Detail Methods ──────────────────────────────
 
@@ -266,26 +282,29 @@ class TrustEngine:
         }
 
     async def set_ceiling(self, capability: str, max_level: str) -> None:
-        """Set or update the trust ceiling for a capability."""
+        """Set or update the trust ceiling for a capability.
+
+        Uses an atomic ``INSERT ... ON CONFLICT DO UPDATE`` so concurrent
+        callers (e.g. two browser tabs saving simultaneously) cannot race on
+        the ``uq_trust_ceiling`` unique constraint.
+        """
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
         from src.models.trust_state import TrustCeiling
 
-        result = await self._db.execute(
-            select(TrustCeiling).where(
-                TrustCeiling.workspace_id == self._workspace_id,
-                TrustCeiling.capability == capability,
+        stmt = (
+            pg_insert(TrustCeiling)
+            .values(
+                workspace_id=self._workspace_id,
+                capability=capability,
+                max_level=max_level,
+            )
+            .on_conflict_do_update(
+                constraint="uq_trust_ceiling",
+                set_={"max_level": max_level},
             )
         )
-        existing = result.scalar_one_or_none()
-        if existing:
-            existing.max_level = max_level
-        else:
-            self._db.add(
-                TrustCeiling(
-                    workspace_id=self._workspace_id,
-                    capability=capability,
-                    max_level=max_level,
-                )
-            )
+        await self._db.execute(stmt)
         await self._db.flush()
 
     async def set_ceilings_batch(self, capabilities: list[str], max_level: str) -> int:

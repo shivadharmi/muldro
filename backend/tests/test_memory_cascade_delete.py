@@ -43,8 +43,8 @@ def mock_vector_store():
 # ---------------------------------------------------------------------------
 
 
-@patch("src.services.memory_service.EmbeddingService")
-@patch("src.services.memory_service.get_anthropic_client")
+@patch("src.services.memory_service._base.EmbeddingService")
+@patch("src.services.memory_service._base.get_anthropic_client")
 @pytest.mark.asyncio
 async def test_superseded_memory_deleted_from_qdrant(
     mock_get_client, mock_embed_cls, settings, mock_db, mock_vector_store
@@ -90,8 +90,8 @@ async def test_superseded_memory_deleted_from_qdrant(
     mock_vector_store.delete.assert_awaited_once_with("memories", SUPERSEDED_ID)
 
 
-@patch("src.services.memory_service.EmbeddingService")
-@patch("src.services.memory_service.get_anthropic_client")
+@patch("src.services.memory_service._base.EmbeddingService")
+@patch("src.services.memory_service._base.get_anthropic_client")
 @pytest.mark.asyncio
 async def test_no_qdrant_delete_when_no_contradiction(
     mock_get_client, mock_embed_cls, settings, mock_db, mock_vector_store
@@ -139,8 +139,8 @@ async def test_no_qdrant_delete_when_no_contradiction(
 # ---------------------------------------------------------------------------
 
 
-@patch("src.services.memory_service.EmbeddingService")
-@patch("src.services.memory_service.get_anthropic_client")
+@patch("src.services.memory_service._base.EmbeddingService")
+@patch("src.services.memory_service._base.get_anthropic_client")
 @pytest.mark.asyncio
 async def test_merged_memory_deleted_from_qdrant(
     mock_get_client, mock_embed_cls, settings, mock_db, mock_vector_store
@@ -208,8 +208,8 @@ async def test_merged_memory_deleted_from_qdrant(
 # ---------------------------------------------------------------------------
 
 
-@patch("src.services.memory_service.EmbeddingService")
-@patch("src.services.memory_service.get_anthropic_client")
+@patch("src.services.memory_service._base.EmbeddingService")
+@patch("src.services.memory_service._base.get_anthropic_client")
 @pytest.mark.asyncio
 async def test_cascade_delete_graceful_on_qdrant_failure(
     mock_get_client, mock_embed_cls, settings, mock_db, mock_vector_store
@@ -256,8 +256,8 @@ async def test_cascade_delete_graceful_on_qdrant_failure(
     mock_vector_store.delete.assert_awaited_once_with("memories", SUPERSEDED_ID)
 
 
-@patch("src.services.memory_service.EmbeddingService")
-@patch("src.services.memory_service.get_anthropic_client")
+@patch("src.services.memory_service._base.EmbeddingService")
+@patch("src.services.memory_service._base.get_anthropic_client")
 @pytest.mark.asyncio
 async def test_cascade_delete_graceful_on_merge_qdrant_failure(
     mock_get_client, mock_embed_cls, settings, mock_db, mock_vector_store

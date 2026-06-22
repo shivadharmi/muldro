@@ -9,6 +9,7 @@ Polling for event ingestion still uses the lightweight per-provider connectors
 But all *write actions* (send_email, create_draft, create_issue, etc.) go through MCP.
 """
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone
@@ -40,98 +41,83 @@ def clear_discovery_failure(server_name: str) -> None:
     _discovery_failures.pop(server_name, None)
 
 
-async def get_mcp_config() -> dict:
-    """Build the mcpServers config dict from all active installations across workspaces.
-
-    The MCP bridge is process-global (initialized at startup), so it aggregates
-    all active installations. Per-workspace scoping happens at the pool layer.
-    """
-    from src.models.database import get_session_factory
-
-    try:
-        from sqlalchemy import select
-
-        from src.models.integration_installation import IntegrationInstallation
-
-        async with get_session_factory()() as db:
-            result = await db.execute(
-                select(IntegrationInstallation).where(
-                    IntegrationInstallation.status == "active",
-                    IntegrationInstallation.enabled.is_(True),
-                    IntegrationInstallation.transport.in_(["stdio", "sse", "streamable-http"]),
-                )
-            )
-            installations = result.scalars().all()
-
-            servers: dict[str, dict] = {}
-            for inst in installations:
-                if inst.server_name in servers:
-                    continue  # deduplicate across workspaces
-
-                server_cfg: dict = {
-                    "transport": inst.transport,
-                    "auth_provider": inst.auth_provider or "none",
-                }
-
-                if inst.transport == "stdio" and inst.command:
-                    server_cfg["command"] = inst.command
-                    if inst.args:
-                        server_cfg["args"] = inst.args
-                    # Resolve env vars
-                    if inst.env_template:
-                        env = {
-                            k: v
-                            for k, v in ((k, os.environ.get(k, "")) for k in inst.env_template)
-                            if v
-                        }
-                        if env:
-                            server_cfg["env"] = env
-
-                elif inst.transport in ("sse", "streamable-http") and inst.remote_url:
-                    server_cfg["url"] = inst.remote_url
-
-                servers[inst.server_name] = server_cfg
-
-            return {"mcpServers": servers}
-    except Exception:
-        logger.debug("Control plane unavailable, returning empty config")
-        return {"mcpServers": {}}
-
-
 async def initialize_mcp_bridge(
     oauth_manager: Any | None = None,
+    *,
     timeout_seconds: float = 30,
 ) -> None:
-    """Initialize the MCP session pool and workspace pool.
+    """Wire the session pool + local-process manager and register server configs.
 
-    Call once at app startup (e.g. in lifespan). The pool manages
-    per-user sessions lazily. Skipped in test environments.
+    No eager tool discovery and no background tasks: sessions are created
+    lazily on first use, and tool schemas are durable in the DB (lazily
+    re-discovered per server on first agent build). Registration is a few cheap
+    DB reads, bounded by ``timeout_seconds``. Skipped in test environments.
     """
     global _session_pool
 
-    # Skip in test environments to avoid spawning MCP subprocesses
     if os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("JARVIS_SKIP_MCP_BRIDGE"):
         logger.debug("MCP bridge skipped (test environment)")
-        return
+        return None
 
-    # Create session pool
+    # Idempotent: if the pool is already wired (e.g. lifespan ran in this same
+    # process, or the worker re-invoked us under the reload-split fix), return
+    # early WITHOUT re-creating the pool or re-registering server configs.
+    if _session_pool is not None:
+        logger.debug("MCP bridge already initialized")
+        return None
+
+    from src.config.settings import get_settings
+
+    _settings = get_settings()
+
     _session_pool = UserMCPSessionPool(
         oauth_manager=oauth_manager,
         circuit_breaker=_circuit_breaker,
+        ttl_seconds=_settings.mcp_session_idle_ttl_s,
     )
 
-    # Create and initialize workspace pool from DB
     from src.integrations.mcp_pool import WorkspaceMCPPool, set_workspace_pool
 
     workspace_pool = WorkspaceMCPPool(session_pool=_session_pool)
     set_workspace_pool(workspace_pool)
 
-    count = await workspace_pool.initialize_from_db()
-    logger.info("MCP bridge initialized: %d servers from DB", count)
+    # Wire the local-process manager for managed_local servers (Google Workspace).
+    try:
+        from src.integrations.local_process_manager import (
+            LocalMCPProcessManager,
+            set_local_process_manager,
+        )
+        from src.integrations.local_servers import build_local_server_specs
+
+        specs = build_local_server_specs(_settings)
+        set_local_process_manager(
+            LocalMCPProcessManager(specs=specs, ready_timeout=_settings.mcp_local_ready_timeout_s)
+        )
+    except Exception:
+        logger.exception("Failed to wire LocalMCPProcessManager")
+
+    # Preflight: warn if host runtimes for spawning MCP servers are missing.
+    from src.integrations.runtime_preflight import check_mcp_runtimes
+
+    check_mcp_runtimes(["uvx", "npx"])
+
+    # Register all active server configs (no network/process I/O, no eager
+    # discovery). Bounded so a slow DB cannot stall startup.
+    try:
+        count = await asyncio.wait_for(workspace_pool.initialize_from_db(), timeout=timeout_seconds)
+        logger.info("MCP bridge ready: %d server configs registered", count)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "MCP config registration exceeded %.0fs — lazy on first use",
+            timeout_seconds,
+        )
+    except Exception:
+        logger.exception("MCP config registration failed")
+    return None
 
 
 async def shutdown_mcp_bridge() -> None:
-    """Gracefully shut down the workspace pool and session pool."""
+    """Gracefully shut down the workspace pool, session pool, and local processes."""
     global _session_pool
 
     from src.integrations.mcp_pool import get_workspace_pool, set_workspace_pool
@@ -144,6 +130,16 @@ async def shutdown_mcp_bridge() -> None:
     if _session_pool:
         await _session_pool.shutdown()
         _session_pool = None
+
+    from src.integrations.local_process_manager import (
+        get_local_process_manager,
+        set_local_process_manager,
+    )
+
+    mgr = get_local_process_manager()
+    if mgr is not None:
+        await mgr.shutdown()
+        set_local_process_manager(None)
 
 
 def get_session_pool() -> UserMCPSessionPool | None:
@@ -212,7 +208,18 @@ async def call_mcp_tool(
         Dict with either the result or an error.
     """
     if not _session_pool:
-        logger.warning("[mcp:bridge] bridge not initialized for tool %s", tool_name)
+        if os.environ.get("PYTEST_CURRENT_TEST"):
+            skip_reason = "PYTEST_CURRENT_TEST set (test env)"
+        elif os.environ.get("JARVIS_SKIP_MCP_BRIDGE"):
+            skip_reason = "JARVIS_SKIP_MCP_BRIDGE set"
+        else:
+            skip_reason = "initialize_mcp_bridge() not called or raised"
+        logger.warning(
+            "[mcp:bridge] bridge not initialized for tool %s (reason=%s, discovery_failures=%d)",
+            tool_name,
+            skip_reason,
+            len(_discovery_failures),
+        )
         return {"status": "error", "error": "MCP bridge not initialized"}
 
     # Find which server provides this tool.
@@ -263,6 +270,12 @@ async def call_mcp_tool(
     status = result.get("status", "unknown")
     logger.info("[mcp:bridge] %s ← status=%s", tool_name, status)
     return result
+
+
+async def close_turn_sessions(keys: list[tuple[str, str, str]]) -> None:
+    """Tear down the MCP sessions opened during a turn (called by TurnScope)."""
+    if _session_pool and keys:
+        await _session_pool.close_keys(keys)
 
 
 async def refresh_server_auth(

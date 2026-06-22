@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from src.orchestrator.contracts import PlanOutput
+from src.contracts import PlanOutput
 from src.orchestrator.intent_classifier import extract_plan
 
 

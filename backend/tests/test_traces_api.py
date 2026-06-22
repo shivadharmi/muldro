@@ -172,8 +172,8 @@ class TestTraceRoutes:
         resp = client.get("/v1/traces/trace_nonexistent")
         assert resp.status_code == 404
         data = resp.json()
-        assert "detail" in data
-        assert "not found" in data["detail"].lower()
+        assert "error" in data
+        assert "not found" in data["error"]["message"].lower()
 
     @patch("src.api.routes_traces._get_trace_store")
     def test_list_traces_empty_results(self, mock_get_store):

@@ -6,19 +6,18 @@ A **Personal AI Operating System** for founders. Not a chatbot — an OS with a 
 Perceive -> Understand -> Update Model -> Plan -> Act -> Communicate
 ```
 
-Jarvis continuously observes your data sources (Gmail, Calendar, Slack, GitHub), extracts entities and memories, plans actions, seeks approval for external writes, executes approved plans, and communicates results through Telegram and a Next.js web frontend.
+Jarvis continuously observes your data sources (Gmail, Calendar, Slack, GitHub), extracts entities and memories, plans actions, seeks approval for external writes, executes approved plans, and communicates results through a Next.js web frontend.
 
 ## Architecture
 
 ```mermaid
 graph TB
     subgraph UI["User Interfaces"]
-        TG[Telegram Bot]
         WEB[Next.js Frontend<br/>A2UI + Chat + SSE]
     end
 
     subgraph API["API Layer"]
-        FA[FastAPI<br/>31 routers · /v1/ prefix]
+        FA[FastAPI<br/>/v1/ prefix]
     end
 
     subgraph ORCH["Orchestrator"]
@@ -35,8 +34,8 @@ graph TB
     end
 
     subgraph TOOLS["Tool Layer"]
-        CAT[Tool Catalog<br/>163 tools · catalog.py]
-        INT[Internal FastMCP<br/>19 tools · 2 servers]
+        CAT[Tool Catalog<br/>catalog.py]
+        INT[Internal FastMCP<br/>2 servers]
         MCP[MCP Bridge<br/>Google · GitHub · Slack<br/>Notion · Linear · Playwright · Filesystem]
     end
 
@@ -55,7 +54,7 @@ graph TB
         S3[(MinIO / S3<br/>artifact storage)]
     end
 
-    TG & WEB --> FA
+    WEB --> FA
     FA --> JO
     JO --> TR & BU
     JO --> PCV & LIB & PLN & GOV & OPR & PRS & PER
@@ -87,22 +86,44 @@ Only Planner decides intent. Only Operator executes external actions. Only Prese
 
 ## Quick Start
 
+The only thing you must provide is an Anthropic API key. Everything else —
+Postgres, Redis, Qdrant, Neo4j, the backend (API + background worker) and the
+Next.js frontend — comes up together in Docker.
+
 ```bash
-# 1. Start infrastructure (Postgres, Redis, MinIO, Qdrant, Neo4j)
+# 1. Prerequisites: Docker + Docker Compose, and an Anthropic API key
+#    (get one at https://console.anthropic.com)
+
+# 2. Provide your key
+cp .env.minimal backend/.env
+#    then edit backend/.env and set JARVIS_ANTHROPIC_API_KEY
+
+# 3. Build and start the whole stack (migrations run automatically on first boot)
+docker compose --profile app up
+
+# 4. Open the app
+#    Frontend → http://localhost:3000
+#    API      → http://localhost:8000/v1/health
+```
+
+> Bare `docker compose up` (without `--profile app`) starts **infrastructure
+> only** — use that for the native development loop below.
+
+### Develop natively (hot reload)
+
+```bash
+# Infrastructure only
 docker compose up -d
 
-# 2. Set up backend
+# Backend
 cd backend
 uv venv .venv --python 3.13 && source .venv/bin/activate
 uv pip install -e ".[dev]"
-cp .env.example .env  # edit with your API keys
+cp .env.example .env          # edit with your keys
 alembic upgrade head
-python run.py
+python run.py --worker        # API + background worker
 
-# 3. Full system (API + background workers + Telegram bot)
-python run.py --worker --bot
-
-# 4. Frontend (optional)
+# Frontend
 cd frontend && npm install && npm run dev
 ```
 
@@ -116,19 +137,18 @@ Infrastructure is managed with Terraform in `infra/`. A single EC2 instance runs
 jarvis/
 ├── backend/
 │   ├── src/
-│   │   ├── api/            # 31 REST/SSE routers (/v1/ prefix)
+│   │   ├── api/            # REST/SSE routers (/v1/ prefix)
 │   │   ├── config/         # Settings (pydantic-settings, JARVIS_ env prefix)
 │   │   ├── connectors/     # MCP bridge, perception connectors
-│   │   ├── interface/      # Telegram bot
-│   │   ├── models/         # 41 SQLAlchemy models (all workspace-scoped)
+│   │   ├── models/         # SQLAlchemy models (all workspace-scoped)
 │   │   ├── orchestrator/   # JarvisOrchestrator, agents, hooks, tracing, budget, contracts
 │   │   ├── services/       # Business logic (planner, governor, operator, tri_search, etc.)
 │   │   ├── tools/          # Tool catalog, schemas, validation, FastMCP servers
 │   │   ├── ui/             # A2UI renderer + contracts
 │   │   └── workflows/      # inbox_triage, meeting_prep, research
-│   ├── tests/              # 163 test files (pytest + pytest-asyncio)
-│   └── alembic/            # 62 database migrations
-├── frontend/               # Next.js + A2UI renderer + chat panel (7 pages)
+│   ├── tests/              # pytest + pytest-asyncio
+│   └── alembic/            # database migrations
+├── frontend/               # Next.js + A2UI renderer + chat panel
 ├── infra/                  # Terraform (AWS: EC2, VPC, Route53, IAM, SSM)
 ├── docs/architecture/      # Detailed architecture documentation
 └── docker-compose.yml      # Local dev infrastructure
@@ -141,7 +161,7 @@ jarvis/
 | Backend | Python 3.13+ / FastAPI |
 | Frontend | Next.js / React / A2UI |
 | Database | PostgreSQL 17 (tsvector FTS) — source of truth |
-| Vector Search | Qdrant 1.12 — semantic similarity (6 collections with enriched payloads) |
+| Vector Search | Qdrant 1.12 — semantic similarity (enriched payloads) |
 | Reranking | AWS Bedrock amazon.rerank-v1:0 |
 | Knowledge Graph | Neo4j 5 — multi-hop traversal, community detection |
 | Object Storage | MinIO / S3 — artifact documents and media |
@@ -149,7 +169,7 @@ jarvis/
 | AI Models | Claude Opus/Sonnet/Haiku via Anthropic API or AWS Bedrock |
 | Embeddings | AWS Bedrock Titan V2 (1024 dim) |
 | Tool Protocol | MCP (Model Context Protocol) via FastMCP |
-| Delivery | Telegram Bot API + Web SSE |
+| Delivery | Web SSE + A2UI surfaces |
 | Infrastructure | AWS (Terraform), Caddy reverse proxy |
 
 ## Key Features
@@ -169,4 +189,4 @@ jarvis/
 
 ## Status
 
-163 test files, 62 migrations, 41 models, 31 routers, 7 frontend pages, all lint clean. Unified tool registry with 163 cataloged tools.
+Unified tool registry; workspace-scoped models; Alembic migrations; lint clean.

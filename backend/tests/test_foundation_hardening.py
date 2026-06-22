@@ -187,94 +187,65 @@ class TestWorkerConsumerName:
 
 
 class TestWorkerDeadLetter:
-    """Fix 2.3: Worker DLQ after 3 failed retries."""
+    """Fix 2.3: Worker persists EventBus dead-letters to the DLQ.
+
+    Retry/redelivery now lives in ``EventBus.subscribe`` (XAUTOCLAIM reclaim +
+    DLQ_MAX_DELIVERIES). The worker's only job is to provide an
+    ``on_dead_letter`` callback that durably captures exhausted messages.
+    """
 
     @pytest.mark.asyncio
-    async def test_handler_success_clears_retry_counter(self):
+    async def test_dead_letter_handler_persists_to_dlq(self):
+        from contextlib import asynccontextmanager
+        from unittest.mock import patch
+
+        from src.services.event_bus import DeadLetterContext
         from src.services.worker import StreamConsumerManager
 
         settings = make_mock_settings(neo4j_url="")
         manager = StreamConsumerManager(settings)
 
-        mock_redis = AsyncMock()
-        mock_redis.delete = AsyncMock()
+        mock_db = AsyncMock()
 
-        event = MagicMock()
-        event.payload = {"event_id": "evt_test"}
-        event.user_id = "usr_01JTEST00000000000000000000"
-
-        await manager._handle_with_retry(
-            handler=AsyncMock(),  # succeeds
-            event=event,
-            redis=mock_redis,
-            dlq=AsyncMock(),
-            bus=AsyncMock(),
-            stream="test_stream",
-            group="test_group",
-        )
-        mock_redis.delete.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_handler_failure_after_3_retries_goes_to_dlq(self):
-        from src.services.worker import StreamConsumerManager
-
-        settings = make_mock_settings(neo4j_url="")
-        manager = StreamConsumerManager(settings)
-
-        mock_redis = AsyncMock()
-        mock_redis.incr = AsyncMock(return_value=4)  # 4th attempt
-        mock_redis.expire = AsyncMock()
+        @asynccontextmanager
+        async def fake_factory_cm():
+            yield mock_db
 
         mock_dlq = AsyncMock()
         mock_dlq.enqueue = AsyncMock(return_value="dlq_001")
 
-        mock_bus = AsyncMock()
-        mock_bus.ack = AsyncMock()
-
-        event = MagicMock()
-        event.payload = {"event_id": "evt_test"}
-        event.user_id = "usr_01JTEST00000000000000000000"
-        event.message_id = "msg_test"
-
-        await manager._handle_with_retry(
-            handler=AsyncMock(side_effect=Exception("boom")),
-            event=event,
-            redis=mock_redis,
-            dlq=mock_dlq,
-            bus=mock_bus,
-            stream="test_stream",
-            group="test_group",
+        ctx = DeadLetterContext(
+            stream="jarvis:events:usr_1",
+            group="entity_extractor",
+            msg_id="5-0",
+            data={"event_id": "be_42", "user_id": "usr_1"},
+            delivery_count=3,
+            error=ValueError("boom"),
         )
+
+        with (
+            patch("src.services.worker.get_session_factory", return_value=fake_factory_cm),
+            patch("src.services.worker.resolve_workspace_id", AsyncMock(return_value="ws_1")),
+            patch("src.services.dead_letter.DeadLetterService", return_value=mock_dlq),
+        ):
+            handler = manager._build_dead_letter_handler("entity_extractor")
+            await handler(ctx)
+
         mock_dlq.enqueue.assert_called_once()
-        mock_bus.ack.assert_called_once()
+        kwargs = mock_dlq.enqueue.call_args.kwargs
+        assert kwargs["operation_type"] == "worker_entity_extractor"
+        assert kwargs["user_id"] == "usr_1"
+        assert kwargs["error_type"] == "ValueError"
+        assert kwargs["workspace_id"] == "ws_1"
+        assert kwargs["source_id"] == "be_42"
 
     @pytest.mark.asyncio
-    async def test_handler_failure_under_limit_does_not_dlq(self):
+    async def test_handle_with_retry_is_removed(self):
+        """The dead, broken retry path (referenced a nonexistent
+        ``BusEvent.message_id``) must not exist — DLQ lives in EventBus now."""
         from src.services.worker import StreamConsumerManager
 
-        settings = make_mock_settings(neo4j_url="")
-        manager = StreamConsumerManager(settings)
-
-        mock_redis = AsyncMock()
-        mock_redis.incr = AsyncMock(return_value=2)  # 2nd attempt
-        mock_redis.expire = AsyncMock()
-
-        mock_dlq = AsyncMock()
-
-        event = MagicMock()
-        event.payload = {"event_id": "evt_test"}
-        event.user_id = "usr_01JTEST00000000000000000000"
-
-        await manager._handle_with_retry(
-            handler=AsyncMock(side_effect=Exception("boom")),
-            event=event,
-            redis=mock_redis,
-            dlq=mock_dlq,
-            bus=AsyncMock(),
-            stream="test_stream",
-            group="test_group",
-        )
-        mock_dlq.enqueue.assert_not_called()
+        assert not hasattr(StreamConsumerManager, "_handle_with_retry")
 
 
 class TestEventProcessorDLQ:
@@ -397,6 +368,54 @@ class TestNeo4jBatchSync:
         result = await sync.batch_sync_entities(["ent_001", "ent_002"])
         assert result["entities_synced"] == 2
         assert sync._graph.sync_entity.call_count == 2
+
+    async def test_batch_sync_entities_filters_by_workspace(self):
+        """Passing workspace_id constrains BOTH the entity and relationship loads."""
+        from src.services.graph_sync import GraphSyncService
+
+        settings = make_mock_settings(neo4j_url="bolt://localhost:7687")
+        db = AsyncMock()
+        empty = MagicMock()
+        empty.scalars.return_value.all.return_value = []
+        db.execute = AsyncMock(side_effect=[empty, empty])
+
+        sync = GraphSyncService(settings, db)
+        sync._graph = AsyncMock()
+
+        await sync.batch_sync_entities(["ent_001"], workspace_id="ws_1")
+
+        stmts = [
+            str(c.args[0].compile(compile_kwargs={"literal_binds": True}))
+            for c in db.execute.call_args_list
+        ]
+        # The workspace literal only appears when the equality filter is applied
+        # (workspace_id is always in the SELECT column list, so check the value).
+        assert len(stmts) == 2
+        for sql in stmts:
+            assert "ws_1" in sql
+
+    async def test_batch_sync_entities_unscoped_without_workspace(self):
+        """Omitting workspace_id preserves the original unfiltered behaviour."""
+        from src.services.graph_sync import GraphSyncService
+
+        settings = make_mock_settings(neo4j_url="bolt://localhost:7687")
+        db = AsyncMock()
+        empty = MagicMock()
+        empty.scalars.return_value.all.return_value = []
+        db.execute = AsyncMock(side_effect=[empty, empty])
+
+        sync = GraphSyncService(settings, db)
+        sync._graph = AsyncMock()
+
+        await sync.batch_sync_entities(["ent_001"])
+
+        stmts = [
+            str(c.args[0].compile(compile_kwargs={"literal_binds": True}))
+            for c in db.execute.call_args_list
+        ]
+        # No workspace equality filter → no workspace literal in the SQL.
+        for sql in stmts:
+            assert "ws_1" not in sql
 
     def test_sync_stats_initial_state(self):
         from src.services.graph_sync import GraphSyncService
@@ -583,7 +602,7 @@ class TestTraceCostReconciliation:
 
 
 class TestStartupComponentHealth:
-    """Fix 2.6: Worker/bot thread health tracking."""
+    """Fix 2.6: Worker thread health tracking."""
 
     def test_component_health_dict_exists(self):
         from run import get_component_health
@@ -591,7 +610,6 @@ class TestStartupComponentHealth:
         health = get_component_health()
         assert isinstance(health, dict)
         assert "worker" in health
-        assert "bot" in health
 
     def test_initial_health_is_not_started(self):
         from run import _component_health
@@ -599,15 +617,14 @@ class TestStartupComponentHealth:
         # Reset to initial state for test
         original = dict(_component_health)
         _component_health["worker"] = {"status": "not_started"}
-        _component_health["bot"] = {"status": "not_started"}
 
         from run import get_component_health
 
         health = get_component_health()
         assert health["worker"]["status"] == "not_started"
-        assert health["bot"]["status"] == "not_started"
 
         # Restore
+        _component_health.clear()
         _component_health.update(original)
 
 
@@ -628,46 +645,6 @@ class TestBriefingAsyncGeneration:
         result = await model.get_detail("2026-04-07")
         assert result is not None
         assert result["briefing_id"] == "brf_001"
-
-
-class TestTelegramRateLimiting:
-    """Fix 3.3: Per-user rate limiting (10 msg/min)."""
-
-    def test_rate_limiter_allows_under_limit(self):
-        from src.interface.telegram import TelegramRateLimiter
-
-        limiter = TelegramRateLimiter(max_per_minute=10)
-        for _ in range(10):
-            assert limiter.allow("user_1") is True
-
-    def test_rate_limiter_blocks_over_limit(self):
-        from src.interface.telegram import TelegramRateLimiter
-
-        limiter = TelegramRateLimiter(max_per_minute=10)
-        for _ in range(10):
-            limiter.allow("user_1")
-        assert limiter.allow("user_1") is False
-
-    def test_rate_limiter_independent_per_user(self):
-        from src.interface.telegram import TelegramRateLimiter
-
-        limiter = TelegramRateLimiter(max_per_minute=10)
-        for _ in range(10):
-            limiter.allow("user_1")
-        # user_2 should still be allowed
-        assert limiter.allow("user_2") is True
-
-    def test_rate_limiter_resets_after_window(self):
-        import time
-
-        from src.interface.telegram import TelegramRateLimiter
-
-        limiter = TelegramRateLimiter(max_per_minute=10)
-        for _ in range(10):
-            limiter.allow("user_1")
-        # Manually expire the window
-        limiter._windows["user_1"] = (10, time.monotonic() - 61)
-        assert limiter.allow("user_1") is True
 
 
 class TestNotifierWorkspaceValidation:
@@ -868,7 +845,7 @@ class TestSchedulerDLQRetry:
         mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_db)
         mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("src.services.scheduler.get_session_factory", return_value=mock_factory):
+        with patch("src.services.scheduler._base.get_session_factory", return_value=mock_factory):
             for _ in range(5):
                 await scheduler._tick()
 

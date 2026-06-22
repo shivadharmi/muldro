@@ -197,6 +197,10 @@ class TestTraceStoreDB:
         mock_db = MagicMock()
         mock_db.add = MagicMock()
         mock_db.commit = AsyncMock()
+        # store_trace upserts (DELETE prior trace + ModelCalls, then INSERT) so
+        # repeated stores of the same trace_id — partial at pause, complete at
+        # finalize — don't violate the traces PK. execute() must be awaitable.
+        mock_db.execute = AsyncMock()
         mock_db.__aenter__ = AsyncMock(return_value=mock_db)
         mock_db.__aexit__ = AsyncMock(return_value=False)
 
@@ -266,7 +270,7 @@ class TestMetricsService:
     def test_record_notification_sent(self):
         from src.services.metrics_service import MetricsService
 
-        MetricsService.record_notification_sent("info_update", "telegram")
+        MetricsService.record_notification_sent("info_update", "web")
 
     def test_record_trigger_fired(self):
         from src.services.metrics_service import MetricsService

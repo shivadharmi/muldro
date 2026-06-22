@@ -1,34 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { streamChat, type ChatSSEEvent, type ConversationMessage, type PlanOutput } from "@/lib/api";
+import { ApiError, streamChat, type ChatSSEEvent, type ConversationMessage, type PlanOutput } from "@/lib/api";
+import { formatApiError, parseSseError } from "@/lib/api-error";
 import { useCommandStore } from "@/stores/command-store";
 import { useShellStore } from "@/stores/shell-store";
 import { CommandInput } from "./command-input";
 import { MarkdownRenderer } from "./markdown-renderer";
-
-interface AgentStep {
-  agent: string;
-  model?: string;
-  status: "running" | "done" | "error";
-  thinking: string[];
-  realThinking: string[];
-  streamingText: string;
-  toolCalls: {
-    tool: string;
-    input: Record<string, unknown>;
-    result?: unknown;
-    blocked?: boolean;
-    latencyMs?: number;
-  }[];
-  text?: string;
-  inputTokens?: number;
-  outputTokens?: number;
-  cacheCreationTokens?: number;
-  cacheReadTokens?: number;
-  costUsd?: number;
-  latencyMs?: number;
-}
+import { AgentTrace, type AgentStep } from "./agent-trace";
+import { StepList } from "@/components/a2ui/components/step-list";
+import type { StepState } from "@/lib/a2ui-types";
 
 interface ChatMessage {
   id: string;
@@ -95,6 +76,81 @@ function tryParseJson(s: string): unknown {
   } catch {
     return s;
   }
+}
+
+interface MessageMetrics {
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+  latencyMs: number;
+  hasData: boolean;
+}
+
+/** Roll the per-agent token/cost/latency already in state up to one
+ *  message-level total for the design's footer line. */
+function aggregateMetrics(agents: AgentStep[]): MessageMetrics {
+  const totals = agents.reduce(
+    (acc, a) => ({
+      inputTokens: acc.inputTokens + (a.inputTokens ?? 0),
+      outputTokens: acc.outputTokens + (a.outputTokens ?? 0),
+      costUsd: acc.costUsd + (a.costUsd ?? 0),
+      latencyMs: acc.latencyMs + (a.latencyMs ?? 0),
+    }),
+    { inputTokens: 0, outputTokens: 0, costUsd: 0, latencyMs: 0 },
+  );
+  return {
+    ...totals,
+    hasData: totals.inputTokens > 0 || totals.outputTokens > 0 || totals.costUsd > 0,
+  };
+}
+
+function formatCost(costUsd: number): string {
+  return costUsd < 0.01 ? costUsd.toFixed(4) : costUsd.toFixed(3);
+}
+
+function formatLatency(ms: number): string {
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
+}
+
+/** Build a StepState[] from the message's PlanOutput so a chat-only user can
+ *  see the plan → pipeline steps inline (reusing the faithful StepList).
+ *
+ *  The chat SSE stream carries the plan and per-agent progress, but not a
+ *  per-step live status feed (that flows through the autonomous WS path into the
+ *  surfaces pane). We derive a faithful-but-honest status: while streaming, the
+ *  first not-yet-done step is "executing" and the rest "pending"; once the turn
+ *  finishes, every step is "completed". */
+function planToStepStates(msg: ChatMessage): StepState[] {
+  const steps = msg.plan?.steps ?? [];
+  if (steps.length === 0) return [];
+
+  const doneAgents = msg.agents.filter((a) => a.status === "done").length;
+  const failed = msg.agents.some((a) => a.status === "error");
+
+  return steps.map((s, i): StepState => {
+    let status: StepState["status"];
+    if (!msg.streaming) {
+      status = failed && i === steps.length - 1 ? "failed" : "completed";
+    } else if (i < doneAgents) {
+      status = "completed";
+    } else if (i === doneAgents) {
+      status = "executing";
+    } else {
+      status = "pending";
+    }
+    return {
+      step_id: s.step_id,
+      description: s.description,
+      status,
+      output_summary: s.user_context,
+      duration_ms: null,
+      started_at: null,
+      completed_at: null,
+      timeout_seconds: null,
+      error: null,
+      retry_count: null,
+    };
+  });
 }
 
 export function ChatPanel({
@@ -314,13 +370,15 @@ export function ChatPanel({
               scrollToBottom();
               break;
 
-            case "error":
+            case "error": {
+              const parsed = parseSseError(event);
               updateAssistant((m) => ({
                 ...m,
-                content: m.content || `Error: ${event.message}`,
+                content: m.content || `Error: ${formatApiError(parsed)}`,
                 streaming: false,
               }));
               break;
+            }
 
             case "surface":
               if (onSurface && event.id && event.metadata) {
@@ -385,9 +443,13 @@ export function ChatPanel({
       );
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
+        const safe =
+          err instanceof ApiError
+            ? err.displayMessage
+            : "Something went wrong.";
         updateAssistant((m) => ({
           ...m,
-          content: `Error: ${err instanceof Error ? err.message : "Unknown error"}`,
+          content: `Error: ${safe}`,
           streaming: false,
         }));
       }
@@ -443,29 +505,9 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
   const focusedId = useCommandStore((s) => s.focusedMessageId);
   const setFocused = useCommandStore((s) => s.setFocusedMessageId);
   const isFocused = focusedId === msg.id;
-
-  // Auto-expand running agents by computing expanded set from state + running agents
-  const [manualExpanded, setManualExpanded] = useState<Set<string>>(new Set());
-
-  // Derive expandedAgents: manual toggles + auto-expand running agents during streaming
-  const expandedAgents = (() => {
-    const expanded = new Set(manualExpanded);
-    if (msg.streaming) {
-      msg.agents.forEach((a, i) => {
-        if (a.status === "running") expanded.add(`${a.agent}-${i}`);
-      });
-    }
-    return expanded;
-  })();
-
-  const toggleAgent = (agent: string) => {
-    setManualExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(agent)) next.delete(agent);
-      else next.add(agent);
-      return next;
-    });
-  };
+  const metrics = aggregateMetrics(msg.agents);
+  const planSteps = planToStepStates(msg);
+  const currentStep = planSteps.find((s) => s.status === "executing")?.step_id ?? null;
 
   const handleFocus = () => {
     if (msg.streaming) return;
@@ -482,34 +524,15 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
       onClick={handleFocus}
     >
       <div className="max-w-[95%] w-full space-y-2">
-        {/* Agent pipeline visualization */}
-        {msg.agents.length > 0 && (
-          <div className="space-y-1">
-            {msg.agents.map((agent, i) => (
-              <AgentCard
-                key={`${agent.agent}-${i}`}
-                agent={agent}
-                expanded={expandedAgents.has(`${agent.agent}-${i}`)}
-                onToggle={() => toggleAgent(`${agent.agent}-${i}`)}
-              />
-            ))}
-          </div>
-        )}
+        {/* Agent pipeline ("how Jarvis answered") */}
+        <AgentTrace agents={msg.agents} plan={msg.plan ?? null} streaming={!!msg.streaming} />
 
-        {/* Plan badge */}
-        {msg.plan && (
-          <div className="flex items-center gap-2 px-2">
-            <span className="text-[10px] uppercase tracking-wider text-t-tertiary">
-              Plan
-            </span>
-            <span className="text-xs px-2 py-0.5 rounded-full bg-j-secondary-soft text-j-secondary border border-j-secondary/30">
-              {msg.plan.goal}
-            </span>
-            {msg.plan.steps.length > 0 && (
-              <span className="text-[10px] text-t-muted">
-                {msg.plan.steps.length} step{msg.plan.steps.length !== 1 ? "s" : ""}
-              </span>
-            )}
+        {/* Inline plan → pipeline steps (reuses the faithful StepList so a
+            chat-only user sees the pipeline, not just the surfaces pane). */}
+        {planSteps.length > 0 && (
+          <div className="rounded-[var(--radius-lg)] bg-surface-1 border border-b-primary px-3 py-2.5">
+            <p className="text-[10px] uppercase tracking-wider text-t-tertiary mb-2">Pipeline</p>
+            <StepList steps={planSteps} currentStep={currentStep} />
           </div>
         )}
 
@@ -538,141 +561,21 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
           </div>
         ) : null}
 
-        {/* Trace ID */}
-        {msg.traceId && !msg.streaming && (
-          <p className="text-[10px] text-t-muted px-2">
-            trace: {msg.traceId}
-          </p>
+        {/* Message footer: trace id + rolled-up tokens / cost / latency */}
+        {!msg.streaming && (msg.traceId || metrics.hasData) && (
+          <div className="flex items-center gap-2 px-2 text-[10px] text-t-muted">
+            {msg.traceId && <span>trace: {msg.traceId}</span>}
+            {metrics.hasData && (
+              <span className="font-mono tabular-nums">
+                {metrics.inputTokens.toLocaleString()} in /{" "}
+                {metrics.outputTokens.toLocaleString()} out tok ·{" "}
+                <span className="text-j-success">${formatCost(metrics.costUsd)}</span>
+                {metrics.latencyMs > 0 && ` · ${formatLatency(metrics.latencyMs)}`}
+              </span>
+            )}
+          </div>
         )}
       </div>
-    </div>
-  );
-}
-
-function AgentCard({
-  agent,
-  expanded,
-  onToggle,
-}: {
-  agent: AgentStep;
-  expanded: boolean;
-  onToggle: () => void;
-}) {
-  const statusColor =
-    agent.status === "running"
-      ? "text-j-primary"
-      : agent.status === "done"
-        ? "text-j-success"
-        : "text-j-error";
-
-  const statusIcon =
-    agent.status === "running"
-      ? "\u25CB"
-      : agent.status === "done"
-        ? "\u2713"
-        : "\u2717";
-
-  return (
-    <div className="rounded border border-b-primary bg-surface-1 text-xs">
-      <button
-        onClick={onToggle}
-        className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-surface-2 transition-colors cursor-pointer"
-      >
-        <span className={statusColor}>{statusIcon}</span>
-        <span className="font-medium text-t-primary capitalize">
-          {agent.agent}
-        </span>
-        {agent.model && (
-          <span className="text-t-muted">
-            {agent.model.replace("claude-", "").replace(/-\d+$/, "")}
-          </span>
-        )}
-        {agent.costUsd != null && agent.costUsd > 0 && (
-          <span className="text-j-success/70">
-            ${agent.costUsd < 0.01 ? agent.costUsd.toFixed(4) : agent.costUsd.toFixed(3)}
-          </span>
-        )}
-        {agent.latencyMs != null && (
-          <span className="text-t-muted ml-auto">
-            {agent.latencyMs > 1000
-              ? `${(agent.latencyMs / 1000).toFixed(1)}s`
-              : `${agent.latencyMs}ms`}
-          </span>
-        )}
-        <span className="text-t-muted ml-auto">
-          {expanded ? "\u25B2" : "\u25BC"}
-        </span>
-      </button>
-
-      {expanded && (
-        <div className="px-2.5 pb-2 space-y-1.5 border-t border-b-primary">
-          {/* Extended Thinking (real Claude thinking) */}
-          {agent.realThinking.length > 0 && (
-            <div className="mt-1.5">
-              <p className="text-j-warning/70 text-[10px] uppercase tracking-wider mb-0.5">
-                Extended Thinking
-              </p>
-              <div className="text-j-warning/60 bg-j-warning-soft border border-j-warning/20 rounded px-2 py-1 max-h-40 overflow-y-auto">
-                {agent.realThinking.map((t, i) => (
-                  <span key={i} className="whitespace-pre-wrap">
-                    {t.length > 1000 ? t.slice(0, 1000) + "..." : t}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Agent reasoning (non-thinking text blocks) */}
-          {agent.thinking.length > 0 && (
-            <div className="mt-1.5">
-              <p className="text-t-tertiary text-[10px] uppercase tracking-wider mb-0.5">
-                Reasoning
-              </p>
-              <div className="text-t-secondary bg-surface-0 rounded px-2 py-1 max-h-32 overflow-y-auto">
-                {agent.thinking.map((t, i) => (
-                  <p key={i} className="whitespace-pre-wrap">
-                    {t.length > 500 ? t.slice(0, 500) + "..." : t}
-                  </p>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Streaming text (live output) */}
-          {agent.status === "running" && agent.streamingText && (
-            <div className="mt-1.5">
-              <p className="text-j-primary/70 text-[10px] uppercase tracking-wider mb-0.5">
-                Streaming
-              </p>
-              <div className="text-j-primary/60 bg-j-primary-soft border border-j-primary/20 rounded px-2 py-1 max-h-32 overflow-y-auto">
-                <p className="whitespace-pre-wrap">{agent.streamingText}</p>
-              </div>
-            </div>
-          )}
-
-          {/* Token usage + cost stats */}
-          {(agent.inputTokens || agent.outputTokens) && (
-            <div className="text-t-muted mt-1 space-y-0.5">
-              <p>
-                Tokens: {agent.inputTokens?.toLocaleString()} in /{" "}
-                {agent.outputTokens?.toLocaleString()} out
-                {agent.costUsd != null && agent.costUsd > 0 && (
-                  <span className="text-j-success/60 ml-2">
-                    ${agent.costUsd < 0.01 ? agent.costUsd.toFixed(4) : agent.costUsd.toFixed(3)}
-                  </span>
-                )}
-              </p>
-              {(agent.cacheCreationTokens != null && agent.cacheCreationTokens > 0 ||
-                agent.cacheReadTokens != null && agent.cacheReadTokens > 0) && (
-                <p className="text-j-info/60">
-                  Cache: {agent.cacheCreationTokens?.toLocaleString() || 0} write /{" "}
-                  {agent.cacheReadTokens?.toLocaleString() || 0} read
-                </p>
-              )}
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }

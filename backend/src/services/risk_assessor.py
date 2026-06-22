@@ -19,27 +19,9 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.config.models import get_haiku_model
+
 logger = logging.getLogger(__name__)
-
-_HAIKU_MODEL_FALLBACK = "claude-haiku-4-5-20251001"
-
-
-def _get_haiku_model() -> str:
-    """Resolve Haiku model ID from settings, avoiding circular imports."""
-    try:
-        from src.config.settings import get_settings
-
-        settings = get_settings()
-        if settings.use_bedrock:
-            from src.orchestrator.jarvis import BEDROCK_MODEL_TIERS
-
-            return BEDROCK_MODEL_TIERS["haiku"]
-        else:
-            from src.orchestrator.jarvis import MODEL_TIERS
-
-            return MODEL_TIERS["haiku"]
-    except Exception:
-        return _HAIKU_MODEL_FALLBACK
 
 
 # ── Risk Assessment ──────────────────────────────────────────────
@@ -101,7 +83,7 @@ async def assess_risk(
     Falls back to medium risk on any failure (API error, invalid JSON, etc.).
     """
     if model is None:
-        model = _get_haiku_model()
+        model = get_haiku_model()
     user_message = json.dumps(
         {
             "capability": capability,
@@ -125,14 +107,16 @@ async def assess_risk(
         return RiskAssessment.model_validate(data)
     except Exception:
         logger.warning(
-            "Risk assessment failed for %s, falling back to medium",
+            "Risk assessment failed for %s, failing closed to high (forces approval)",
             capability,
             exc_info=True,
         )
+        # Fail closed: when risk cannot be assessed, treat as high so the trust
+        # matrix routes to approval_required at every trust level (incl. autonomous).
         return RiskAssessment(
-            risk_level="medium",
-            reasoning="Fallback — risk assessment failed, defaulting to medium",
-            reversible=True,
+            risk_level="high",
+            reasoning="Fallback — risk assessment failed, failing closed to high",
+            reversible=False,
             blast_radius="self",
         )
 
@@ -148,7 +132,7 @@ async def get_or_assess_risk(
 ) -> RiskAssessment:
     """Redis-cached risk assessment. 24h TTL."""
     if model is None:
-        model = _get_haiku_model()
+        model = get_haiku_model()
     cache_key = build_risk_cache_key(capability, step_input, user_context)
     full_key = f"risk:{workspace_id}:{cache_key}"
 
@@ -190,16 +174,31 @@ def min_trust_level(a: str, b: str) -> str:
 
 # ── Graduation Rules (pure functions) ────────────────────────────
 
+# Single source of truth for graduation thresholds. To HOLD an earned level a
+# capability needs ``>= min_approved`` approvals AND a rejection rate strictly
+# below ``max_rejection_rate``. Both graduate_trust() (the decision) and
+# _graduation_progress() (the Trust-tab UI) derive from this map, so the two can
+# never drift. Keep in sync with the table in CLAUDE.md.
+GRADUATION_THRESHOLDS: dict[str, tuple[int, float]] = {
+    "trusted": (10, 0.10),  # >= 10 approved and < 10% rejection rate
+    "autonomous": (25, 0.05),  # >= 25 approved and < 5% rejection rate
+}
+# Low-volume entry to "learning": a *clean* record earns it cheaply, before the
+# rate-based rules have enough signal to apply.
+LEARNING_MIN_APPROVED = 3
+
 
 def graduate_trust(state) -> str:
     """Compute trust level from approval counters. Pure function — no side effects.
 
-    Thresholds:
+    Thresholds (from ``GRADUATION_THRESHOLDS`` + ``LEARNING_MIN_APPROVED``):
     - 3 approved, 0 rejected → learning
     - 10 approved, <10% rejection rate → trusted
     - 25 approved, <5% rejection rate → autonomous
 
-    Cooldown blocks graduation until expiry.
+    A capability that has trusted-tier *volume* but fails its rejection rate
+    stays at "learning" (gated, not reset to first_use). Cooldown blocks
+    graduation until expiry.
     """
     if state.cooldown_until and datetime.now(timezone.utc) < state.cooldown_until:
         return state.trust_level
@@ -209,17 +208,18 @@ def graduate_trust(state) -> str:
         return "first_use"
 
     rejection_rate = state.rejected_count / total
+    auto_min, auto_max = GRADUATION_THRESHOLDS["autonomous"]
+    trust_min, trust_max = GRADUATION_THRESHOLDS["trusted"]
 
-    if state.approved_count >= 25 and rejection_rate < 0.05:
+    if state.approved_count >= auto_min and rejection_rate < auto_max:
         return "autonomous"
-    elif state.approved_count >= 25 and rejection_rate < 0.15:
-        # High volume with moderate rejections -- trust earned despite some rejections
+    if state.approved_count >= trust_min and rejection_rate < trust_max:
         return "trusted"
-    elif state.approved_count >= 10 and rejection_rate < 0.10:
-        return "trusted"
-    elif state.approved_count >= 10 and rejection_rate >= 0.10:
+    # Trusted-tier volume but failing the rejection rate → hold at learning.
+    if state.approved_count >= trust_min:
         return "learning"
-    elif state.approved_count >= 3 and state.rejected_count == 0:
+    # Low-volume bootstrap: a clean record (no rejections) earns learning.
+    if state.approved_count >= LEARNING_MIN_APPROVED and state.rejected_count == 0:
         return "learning"
 
     return "first_use"

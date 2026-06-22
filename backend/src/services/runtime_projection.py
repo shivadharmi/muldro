@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.runtime_event import RuntimeEvent
 from src.models.task_graph import TaskRun, TaskStep
-from src.models.traces import Trace
+from src.models.traces import ModelCall
 
 logger = logging.getLogger(__name__)
 
@@ -109,19 +109,20 @@ class RuntimeProjectionService:
         """Return workload per agent based on recent runs."""
         cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
 
+        # Agent attribution lives on ModelCall (per-invocation), not Trace.
+        # Trace only carries aggregate token/cost and an agents_invoked array.
         result = await self._db.execute(
             select(
-                Trace.agent_name,
-                func.count(Trace.trace_id).label("call_count"),
-                func.avg(Trace.duration_ms).label("avg_duration_ms"),
+                ModelCall.agent_name,
+                func.count(ModelCall.call_id).label("call_count"),
+                func.avg(ModelCall.duration_ms).label("avg_duration_ms"),
             )
             .where(
-                Trace.workspace_id == self._workspace_id,
-                Trace.created_at >= cutoff,
-                Trace.agent_name.isnot(None),
+                ModelCall.workspace_id == self._workspace_id,
+                ModelCall.created_at >= cutoff,
             )
-            .group_by(Trace.agent_name)
-            .order_by(func.count(Trace.trace_id).desc())
+            .group_by(ModelCall.agent_name)
+            .order_by(func.count(ModelCall.call_id).desc())
         )
 
         workloads = []
@@ -135,11 +136,62 @@ class RuntimeProjectionService:
             )
         return workloads
 
+    async def get_active_agents(self) -> list[str]:
+        """Return distinct agent names currently executing in this workspace.
+
+        "Currently executing" means a ``TaskStep`` in ``running`` status whose
+        parent ``TaskRun`` is also ``running``. Each step's capability (stored
+        in ``input_data["capability"]``) is resolved to the agent that owns it
+        via the same routing logic as :func:`capability_resolver.route_step`.
+
+        Implemented as a single DISTINCT query for in-flight step capabilities,
+        followed by an in-memory resolution against a single enabled-tools load
+        (no per-capability N+1 DB round-trips). Returns an empty list when
+        nothing is running. Names are sorted for stable output.
+        """
+        from src.services.capability_resolver import (
+            CapabilityResolver,
+            classify_capability_agent,
+        )
+
+        result = await self._db.execute(
+            select(TaskStep.input_data)
+            .join(TaskRun, TaskStep.run_id == TaskRun.run_id)
+            .where(
+                TaskStep.workspace_id == self._workspace_id,
+                TaskStep.status == "running",
+                TaskRun.status == "running",
+            )
+            .distinct()
+        )
+
+        capabilities: set[str] = set()
+        for (input_data,) in result.all():
+            capability = (input_data or {}).get("capability")
+            if isinstance(capability, str) and capability:
+                capabilities.add(capability)
+
+        if not capabilities:
+            return []
+
+        # Resolve capability -> agent using a single enabled-tools snapshot so
+        # the read/write classification does not issue one query per capability.
+        resolver = CapabilityResolver(self._db, self._workspace_id)
+        tools = await resolver._list_enabled_tools()
+
+        agents: set[str] = set()
+        for capability in capabilities:
+            agent = classify_capability_agent(capability, tools)
+            if agent:
+                agents.add(agent)
+        return sorted(agents)
+
     async def get_runtime_summary(self) -> dict:
         """Aggregate runtime summary for the workspace."""
         active_runs = await self.get_active_runs(limit=100)
         blocked_runs = await self.get_blocked_runs()
         agent_workload = await self.get_agent_workload()
+        active_agents = await self.get_active_agents()
 
         # Recent completions
         cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
@@ -167,6 +219,7 @@ class RuntimeProjectionService:
             "completed_24h": completed_24h,
             "failed_24h": failed_24h,
             "agents_active": len([w for w in agent_workload if w["call_count_24h"] > 0]),
+            "active_agents": active_agents,
             "top_agents": agent_workload[:5],
         }
 

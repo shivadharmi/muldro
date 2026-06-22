@@ -122,7 +122,7 @@ class TestAuthRoutesSES:
 
         mock_send = AsyncMock(return_value="msg-456")
 
-        with patch("src.api.routes_auth.AuthService") as mock_auth:
+        with patch("src.api.routes_auth_magic_link.AuthService") as mock_auth:
             mock_auth.return_value.send_magic_link = AsyncMock(return_value="test-token-xyz")
 
             with patch("src.services.email_sender.EmailSender.send", mock_send):
@@ -157,7 +157,7 @@ class TestAuthRoutesSES:
         )
         app.dependency_overrides[get_settings] = lambda: mock_settings
 
-        with patch("src.api.routes_auth.AuthService") as mock_auth:
+        with patch("src.api.routes_auth_magic_link.AuthService") as mock_auth:
             mock_auth.return_value.send_magic_link = AsyncMock(return_value="dev-token-abc")
 
             client = TestClient(app, raise_server_exceptions=False)
@@ -190,7 +190,7 @@ class TestAuthRoutesSES:
 
         mock_send = AsyncMock(side_effect=RuntimeError("SES is not enabled"))
 
-        with patch("src.api.routes_auth.AuthService") as mock_auth:
+        with patch("src.api.routes_auth_magic_link.AuthService") as mock_auth:
             mock_auth.return_value.send_magic_link = AsyncMock(return_value="test-token")
 
             with patch("src.services.email_sender.EmailSender.send", mock_send):
@@ -201,6 +201,6 @@ class TestAuthRoutesSES:
                 )
 
                 assert resp.status_code == 500
-                assert "Failed to send" in resp.json()["detail"]
+                assert "Failed to send" in resp.json()["error"]["message"]
 
         app.dependency_overrides.pop(get_settings, None)

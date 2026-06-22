@@ -108,18 +108,25 @@ class TestCancelRun:
         run = MagicMock()
         run.run_id = "run_001"
         run.status = "running"
+        run.plan_id = "plan_001"
 
         step2 = MagicMock()
         step2.status = "pending"
         step3 = MagicMock()
         step3.status = "ready"
 
+        plan = MagicMock()
+        plan.status = "executing"
+
         run_result = MagicMock()
         run_result.scalar_one_or_none.return_value = run
         steps_result = MagicMock()
         steps_result.scalars.return_value.all.return_value = [step2, step3]
+        plan_result = MagicMock()
+        plan_result.scalar_one_or_none.return_value = plan
 
-        mock_db.execute = AsyncMock(side_effect=[run_result, steps_result])
+        # 3rd execute is the parent-plan lookup in _reconcile_plan_status
+        mock_db.execute = AsyncMock(side_effect=[run_result, steps_result, plan_result])
 
         executor = GraphExecutor(settings, mock_db)
         cancelled = await executor.cancel_run("run_001")
@@ -127,6 +134,8 @@ class TestCancelRun:
         assert cancelled.status == "cancelled"
         assert step2.status == "skipped"
         assert step3.status == "skipped"
+        # Cancelling a run reconciles its parent plan to a terminal state
+        assert plan.status == "cancelled"
 
 
 class TestPauseRun:
@@ -168,6 +177,58 @@ class TestResumeRun:
         executor = GraphExecutor(settings, mock_db)
         with pytest.raises(ValueError, match="not resumable"):
             await executor.resume_run("run_001")
+
+    @patch("src.services.graph_executor.get_anthropic_client")
+    async def test_resume_uses_fresh_trace_id(self, mock_client, settings, mock_db):
+        """Regression: each resume segment must get a fresh trace_id.
+
+        TraceStore._store_to_db does INSERT (not upsert). If resume reused
+        run.trace_id, the second segment's INSERT would violate the
+        ``traces`` primary key constraint. The initial trace_id must stay
+        on run.trace_id so consumers that expect a single canonical
+        pointer (routes_history, evidence_bundle) keep working.
+        """
+        from datetime import datetime, timezone
+
+        from src.services.graph_executor import GraphExecutor
+
+        mock_client.return_value = MagicMock()
+
+        now = datetime.now(timezone.utc)
+        run = MagicMock()
+        run.run_id = "run_001"
+        run.status = "paused"
+        run.trace_id = "trace_original_segment"
+        run.started_at = now
+        run.created_at = now
+        run.checkpoint = {}  # falsy → skips _get_all_steps branch
+        run.error = None
+        run.user_id = TEST_USER_ID
+        run.workspace_id = "ws_test"
+        run.source = "background"
+        run.context_pack_json = {}
+
+        run_result = MagicMock()
+        run_result.scalar_one_or_none.return_value = run
+        mock_db.execute = AsyncMock(return_value=run_result)
+
+        executor = GraphExecutor(settings, mock_db)
+        executor._execute_dag = AsyncMock()
+        executor._finalize_trace = AsyncMock()
+        # transition_run state-machine is tested elsewhere; bypass it so
+        # the MagicMock run object doesn't need full state validation.
+        with patch("src.services.graph_executor.transition_run"):
+            await executor.resume_run("run_001")
+
+        trace = executor._active_traces["run_001"]
+        assert trace.trace_id != "trace_original_segment", (
+            "resume must create a fresh trace_id to avoid traces PK violation"
+        )
+        assert trace.trace_id.startswith("trace_")
+        assert trace.trigger == "execution:resume"
+        # run.trace_id must stay pointing at the initial trace for downstream
+        # consumers that expect a single canonical pointer.
+        assert run.trace_id == "trace_original_segment"
 
 
 @pytest.fixture
@@ -219,7 +280,7 @@ class TestAgenticStepExecution:
             yield LoopDone(agent="operator", text="Task completed successfully")
 
         mock_agent_loop.side_effect = fake_agent_loop
-        executor_with_agent_deps._get_all_steps = AsyncMock(return_value=[])
+        executor_with_agent_deps._store.get_all_steps = AsyncMock(return_value=[])
 
         # Create mock step and run
         step = MagicMock()
@@ -248,7 +309,7 @@ class TestAgenticStepExecution:
             yield LoopDone(agent="operator", text="Done")
 
         mock_agent_loop.side_effect = fake_agent_loop
-        executor_with_agent_deps._get_all_steps = AsyncMock(return_value=[])
+        executor_with_agent_deps._store.get_all_steps = AsyncMock(return_value=[])
 
         step = MagicMock()
         step.input_data = {"task_type": "test_task"}
@@ -272,7 +333,7 @@ class TestAgenticStepExecution:
             yield LoopDone(agent="operator", text="Recovered and completed")
 
         mock_agent_loop.side_effect = fake_agent_loop
-        executor_with_agent_deps._get_all_steps = AsyncMock(return_value=[])
+        executor_with_agent_deps._store.get_all_steps = AsyncMock(return_value=[])
 
         step = MagicMock()
         step.input_data = {"task_type": "test_task"}
@@ -299,7 +360,7 @@ class TestAgenticStepExecution:
             yield LoopDone(agent="operator", text="Done via agent loop")
 
         mock_agent_loop.side_effect = fake_loop
-        executor_with_agent_deps._get_all_steps = AsyncMock(return_value=[])
+        executor_with_agent_deps._store.get_all_steps = AsyncMock(return_value=[])
 
         step = MagicMock()
         step.step_id = "step_dispatch"
@@ -313,6 +374,47 @@ class TestAgenticStepExecution:
         result = await executor_with_agent_deps._run_step_action(step, run)
 
         assert result["result"] == "Done via agent loop"
+
+    @patch("src.orchestrator.agent_loop.agent_loop")
+    async def test_agent_loop_surfaces_auth_required(
+        self, mock_agent_loop, executor_with_agent_deps
+    ):
+        """A LoopToolResult with error_code=='auth_required' is surfaced in the
+        step output so DagRunner can defer the run for re-auth."""
+        from src.orchestrator.agent_loop import LoopDone, LoopToolResult
+
+        async def fake_loop(**kwargs):
+            yield LoopToolResult(
+                agent="operator",
+                tool_name="gmail_send",
+                result={
+                    "status": "error",
+                    "error_code": "auth_required",
+                    "provider": "google",
+                    "server": "google-workspace",
+                },
+            )
+            yield LoopDone(agent="operator", text="could not send")
+
+        mock_agent_loop.side_effect = fake_loop
+        executor_with_agent_deps._store.get_all_steps = AsyncMock(return_value=[])
+
+        step = MagicMock()
+        step.step_id = "step_auth"
+        step.input_data = {"capability": "email.send", "goal": "send email"}
+
+        run = MagicMock()
+        run.run_id = "run_auth_surface"
+        run.user_id = TEST_USER_ID
+        run.workspace_id = "ws_test"
+
+        result = await executor_with_agent_deps._run_step_via_agent_loop(step, run)
+
+        assert result["status"] == "error"
+        assert result["error_code"] == "auth_required"
+        assert result["provider"] == "google"
+        assert result["server"] == "google-workspace"
+        assert result["auth_required"]["error_code"] == "auth_required"
 
     @patch("src.orchestrator.agent_loop.agent_loop")
     async def test_prior_step_outputs_injected(self, mock_agent_loop, executor_with_agent_deps):
@@ -338,7 +440,9 @@ class TestAgenticStepExecution:
         current_step.step_id = "step_operator"
         current_step.input_data = {"capability": "notion.create_page", "goal": "Copy to Notion"}
 
-        executor_with_agent_deps._get_all_steps = AsyncMock(return_value=[prior_step, current_step])
+        executor_with_agent_deps._store.get_all_steps = AsyncMock(
+            return_value=[prior_step, current_step]
+        )
 
         run = MagicMock()
         run.run_id = "run_copy"
@@ -492,20 +596,24 @@ class TestExecuteStepCapabilityReading:
         # Attach a mock trust engine
         trust_engine = MagicMock()
         trust_engine._workspace_id = ""
-        from src.orchestrator.contracts import PolicyDecision
+        from src.contracts import PolicyDecision
 
         auto_decision = PolicyDecision(decision="auto_execute_silent", reason="ok")
         trust_engine.evaluate = AsyncMock(return_value=auto_decision)
         executor._trust_engine = trust_engine
 
         # Mock _assess_step_risk
-        executor._assess_step_risk = AsyncMock(return_value="low")
+        executor._trust_gate.assess_step_risk = AsyncMock(return_value="low")
 
         # Mock _run_step_action so we don't need full agent infra
-        executor._run_step_action = AsyncMock(return_value={"status": "completed", "result": "ok"})
-        executor._resolve_step_references = AsyncMock(return_value={"capability": "email.draft"})
-        executor._finalize_step = AsyncMock()
-        executor._emit_event = AsyncMock()
+        executor._runner.run_step_action = AsyncMock(
+            return_value={"status": "completed", "result": "ok"}
+        )
+        executor._store.resolve_step_references = AsyncMock(
+            return_value={"capability": "email.draft"}
+        )
+        executor._dag_runner.finalize_step = AsyncMock()
+        executor._surface_emitter.emit_event = AsyncMock()
 
         step = MagicMock()
         step.step_id = "step_cap_exec"
@@ -540,17 +648,19 @@ class TestExecuteStepCapabilityReading:
 
         trust_engine = MagicMock()
         trust_engine._workspace_id = ""
-        from src.orchestrator.contracts import PolicyDecision
+        from src.contracts import PolicyDecision
 
         auto_decision = PolicyDecision(decision="auto_execute_silent", reason="ok")
         trust_engine.evaluate = AsyncMock(return_value=auto_decision)
         executor._trust_engine = trust_engine
 
-        executor._assess_step_risk = AsyncMock(return_value="low")
-        executor._run_step_action = AsyncMock(return_value={"status": "completed", "result": "ok"})
-        executor._resolve_step_references = AsyncMock(return_value={"task_type": "summarize"})
-        executor._finalize_step = AsyncMock()
-        executor._emit_event = AsyncMock()
+        executor._trust_gate.assess_step_risk = AsyncMock(return_value="low")
+        executor._runner.run_step_action = AsyncMock(
+            return_value={"status": "completed", "result": "ok"}
+        )
+        executor._store.resolve_step_references = AsyncMock(return_value={"task_type": "summarize"})
+        executor._dag_runner.finalize_step = AsyncMock()
+        executor._surface_emitter.emit_event = AsyncMock()
 
         step = MagicMock()
         step.step_id = "step_fallback_exec"
@@ -594,3 +704,315 @@ class TestCapabilityFieldReading:
         input_data = {}
         result = input_data.get("capability", input_data.get("task_type", "unknown"))
         assert result == "unknown"
+
+
+class TestExecuteStepEmptyCapabilityFailsClosed:
+    """FIX #2 — a step with empty/missing capability must NOT auto-execute ungated.
+
+    Per CLAUDE.md the Planner ALWAYS emits a capability per PlanStep, so an empty
+    capability reaching the TrustEngine gate is contract drift. The gate must
+    fail-closed: the step is failed as a contract violation and never reaches the
+    auto-execute path (no risk assessment, no tool action).
+    """
+
+    @patch("src.services.graph_executor.get_anthropic_client")
+    async def test_empty_capability_with_trust_engine_does_not_execute(
+        self, mock_client, settings, mock_db
+    ):
+        mock_client.return_value = MagicMock()
+        from src.services.graph_executor import GraphExecutor
+
+        executor = GraphExecutor(settings, mock_db)
+
+        # TrustEngine present — this is the dangerous case (fail-OPEN previously).
+        trust_engine = MagicMock()
+        trust_engine.evaluate = AsyncMock()
+        executor._trust_engine = trust_engine
+
+        # Spy on the execution-side helpers — none must be called.
+        executor._trust_gate.assess_step_risk = AsyncMock()
+        executor._runner.run_step_action = AsyncMock(return_value={"status": "completed"})
+        executor._store.resolve_step_references = AsyncMock(return_value={})
+        executor._dag_runner.finalize_step = AsyncMock()
+        executor._surface_emitter.emit_event = AsyncMock()
+
+        step = MagicMock()
+        step.step_id = "step_empty_cap"
+        step.status = "ready"
+        step.input_data = {"goal": "do something dangerous"}  # NO capability / task_type
+        step.started_at = None
+        step.name = "Dangerous write"
+        step.timeout_seconds = None
+        step.retry_count = 0
+        step.max_retries = 3
+
+        run = MagicMock()
+        run.run_id = "run_empty_cap"
+        run.user_id = "usr_test"
+        run.workspace_id = "ws_test"
+        run.status = "running"
+
+        await executor._execute_step(run, step)
+
+        # Fail-closed: never assessed risk, never evaluated trust, never ran the action.
+        trust_engine.evaluate.assert_not_called()
+        executor._trust_gate.assess_step_risk.assert_not_called()
+        executor._runner.run_step_action.assert_not_called()
+        executor._dag_runner.finalize_step.assert_not_called()
+        # Step ended in a terminal non-execution state (failed contract violation).
+        assert step.status == "failed"
+
+    @patch("src.services.graph_executor.get_anthropic_client")
+    async def test_empty_capability_missing_input_data_does_not_execute(
+        self, mock_client, settings, mock_db
+    ):
+        """input_data is None entirely → still fail-closed, not ungated execution."""
+        mock_client.return_value = MagicMock()
+        from src.services.graph_executor import GraphExecutor
+
+        executor = GraphExecutor(settings, mock_db)
+        trust_engine = MagicMock()
+        trust_engine.evaluate = AsyncMock()
+        executor._trust_engine = trust_engine
+        executor._runner.run_step_action = AsyncMock(return_value={"status": "completed"})
+        executor._dag_runner.finalize_step = AsyncMock()
+        executor._surface_emitter.emit_event = AsyncMock()
+
+        step = MagicMock()
+        step.step_id = "step_no_input"
+        step.status = "ready"
+        step.input_data = None
+        step.started_at = None
+        step.name = "No input"
+        step.timeout_seconds = None
+        step.retry_count = 0
+        step.max_retries = 3
+
+        run = MagicMock()
+        run.run_id = "run_no_input"
+        run.user_id = "usr_test"
+        run.workspace_id = "ws_test"
+        run.status = "running"
+
+        await executor._execute_step(run, step)
+
+        trust_engine.evaluate.assert_not_called()
+        executor._runner.run_step_action.assert_not_called()
+        executor._dag_runner.finalize_step.assert_not_called()
+        assert step.status == "failed"
+
+    @patch("src.services.graph_executor.get_anthropic_client")
+    async def test_resumed_step_skips_gate(self, mock_client, settings, mock_db):
+        """Already-approved (status == 'running') steps bypass the gate entirely and
+        execute via the common path — the fail-closed guard must not break resume."""
+        mock_client.return_value = MagicMock()
+        from src.services.graph_executor import GraphExecutor
+
+        executor = GraphExecutor(settings, mock_db)
+        trust_engine = MagicMock()
+        trust_engine.evaluate = AsyncMock()
+        executor._trust_engine = trust_engine
+        executor._runner.run_step_action = AsyncMock(return_value={"status": "completed"})
+        executor._store.resolve_step_references = AsyncMock(return_value={})
+        executor._dag_runner.finalize_step = AsyncMock()
+        executor._surface_emitter.emit_event = AsyncMock()
+
+        step = MagicMock()
+        step.step_id = "step_resumed"
+        step.status = "running"  # already approved → already_approved=True
+        step.input_data = {"goal": "resumed"}  # empty capability, but already approved
+        step.started_at = None
+        step.name = "Resumed"
+        step.timeout_seconds = None
+        step.retry_count = 0
+        step.max_retries = 3
+
+        run = MagicMock()
+        run.run_id = "run_resumed"
+        run.user_id = "usr_test"
+        run.workspace_id = "ws_test"
+        run.status = "running"
+
+        await executor._execute_step(run, step)
+
+        # Resumed path: gate skipped, action runs, finalized.
+        trust_engine.evaluate.assert_not_called()
+        executor._runner.run_step_action.assert_called_once()
+        executor._dag_runner.finalize_step.assert_called_once()
+
+
+class TestAuthRequiredDeferral:
+    """A step whose tool returns an ``auth_required`` error defers the run for
+    OAuth re-authorization instead of failing it (task deferral wiring)."""
+
+    def _auto_decision(self):
+        from src.contracts import PolicyDecision
+
+        return PolicyDecision(decision="auto_execute_silent", reason="ok")
+
+    def _make_step_run(self):
+        step = MagicMock()
+        step.step_id = "step_auth"
+        step.status = "ready"
+        step.input_data = {"capability": "email.send", "task_type": "send_email"}
+        step.started_at = None
+        step.name = "Send email"
+        step.timeout_seconds = None
+        step.retry_count = 0
+        step.max_retries = 3
+
+        run = MagicMock()
+        run.run_id = "run_auth"
+        run.user_id = "usr_test"
+        run.workspace_id = "ws_test"
+        run.status = "running"
+        run.checkpoint = {}
+        return step, run
+
+    @patch("src.services.graph_executor.get_anthropic_client")
+    async def test_auth_required_output_defers_run(self, mock_client, settings, mock_db):
+        mock_client.return_value = MagicMock()
+        from src.services.graph_executor import GraphExecutor
+
+        executor = GraphExecutor(settings, mock_db)
+
+        trust_engine = MagicMock()
+        trust_engine.evaluate = AsyncMock(return_value=self._auto_decision())
+        executor._trust_engine = trust_engine
+        executor._trust_gate.assess_step_risk = AsyncMock(return_value="high")
+
+        # The agent loop surfaced an auth_required tool error in the step output.
+        executor._runner.run_step_action = AsyncMock(
+            return_value={
+                "status": "error",
+                "error_code": "auth_required",
+                "provider": "google",
+                "server": "google-workspace",
+                "auth_required": {
+                    "status": "error",
+                    "error_code": "auth_required",
+                    "provider": "google",
+                    "server": "google-workspace",
+                },
+            }
+        )
+        executor._store.resolve_step_references = AsyncMock(
+            return_value={"capability": "email.send"}
+        )
+        executor._dag_runner.finalize_step = AsyncMock()
+        executor._dag_runner.handle_step_failure = AsyncMock()
+        executor._surface_emitter.emit_event = AsyncMock()
+
+        # Mock the ReauthService injected into the dag_runner. Uses the new
+        # coordinator-session contract: defer_run + apply_needs_reauth (DB writes
+        # on self._db, no commit) + notify_reauth (external). spec= ensures the
+        # removed cross-session mark_needs_reauth is never called.
+        reauth = MagicMock(spec=["defer_run", "apply_needs_reauth", "notify_reauth"])
+        reauth.defer_run = AsyncMock()
+        reauth.apply_needs_reauth = AsyncMock()
+        reauth.notify_reauth = AsyncMock()
+        executor._reauth_service = reauth
+
+        step, run = self._make_step_run()
+
+        await executor._execute_step(run, step)
+
+        # Run is DEFERRED, not failed/finalized.
+        reauth.defer_run.assert_awaited_once()
+        defer_args = reauth.defer_run.call_args.args
+        # defer_run(db, run, provider) — db is the coordinator session, provider google.
+        assert defer_args[0] is executor._db
+        assert "google" in defer_args
+
+        # apply_needs_reauth(db, user_id, provider, reason) — same coordinator session.
+        reauth.apply_needs_reauth.assert_awaited_once()
+        apply_args = reauth.apply_needs_reauth.call_args.args
+        assert apply_args[0] is executor._db
+        assert "google" in apply_args
+        assert "auth_required" in apply_args
+
+        # notify_reauth fired with workspace context.
+        reauth.notify_reauth.assert_awaited_once()
+        assert reauth.notify_reauth.call_args.kwargs.get("workspace_id") == "ws_test"
+
+        executor._dag_runner.finalize_step.assert_not_called()
+        executor._dag_runner.handle_step_failure.assert_not_called()
+
+    @patch("src.services.graph_executor.get_anthropic_client")
+    async def test_auth_required_top_level_error_code_defers(self, mock_client, settings, mock_db):
+        """Even without a nested ``auth_required`` key, a top-level
+        ``error_code == 'auth_required'`` output defers the run."""
+        mock_client.return_value = MagicMock()
+        from src.services.graph_executor import GraphExecutor
+
+        executor = GraphExecutor(settings, mock_db)
+
+        trust_engine = MagicMock()
+        trust_engine.evaluate = AsyncMock(return_value=self._auto_decision())
+        executor._trust_engine = trust_engine
+        executor._trust_gate.assess_step_risk = AsyncMock(return_value="high")
+
+        executor._runner.run_step_action = AsyncMock(
+            return_value={
+                "status": "error",
+                "error": "google needs re-authorization",
+                "error_code": "auth_required",
+                "provider": "google",
+                "server": "google-workspace",
+            }
+        )
+        executor._store.resolve_step_references = AsyncMock(
+            return_value={"capability": "email.send"}
+        )
+        executor._dag_runner.finalize_step = AsyncMock()
+        executor._dag_runner.handle_step_failure = AsyncMock()
+        executor._surface_emitter.emit_event = AsyncMock()
+
+        reauth = MagicMock(spec=["defer_run", "apply_needs_reauth", "notify_reauth"])
+        reauth.defer_run = AsyncMock()
+        reauth.apply_needs_reauth = AsyncMock()
+        reauth.notify_reauth = AsyncMock()
+        executor._reauth_service = reauth
+
+        step, run = self._make_step_run()
+        await executor._execute_step(run, step)
+
+        reauth.defer_run.assert_awaited_once()
+        reauth.apply_needs_reauth.assert_awaited_once()
+        reauth.notify_reauth.assert_awaited_once()
+        executor._dag_runner.finalize_step.assert_not_called()
+        executor._dag_runner.handle_step_failure.assert_not_called()
+
+    @patch("src.services.graph_executor.get_anthropic_client")
+    async def test_normal_output_still_finalizes(self, mock_client, settings, mock_db):
+        """A non-auth output is finalized normally (deferral does not interfere)."""
+        mock_client.return_value = MagicMock()
+        from src.services.graph_executor import GraphExecutor
+
+        executor = GraphExecutor(settings, mock_db)
+
+        trust_engine = MagicMock()
+        trust_engine.evaluate = AsyncMock(return_value=self._auto_decision())
+        executor._trust_engine = trust_engine
+        executor._trust_gate.assess_step_risk = AsyncMock(return_value="low")
+        executor._runner.run_step_action = AsyncMock(
+            return_value={"status": "completed", "result": "done"}
+        )
+        executor._store.resolve_step_references = AsyncMock(
+            return_value={"capability": "email.send"}
+        )
+        executor._dag_runner.finalize_step = AsyncMock()
+        executor._surface_emitter.emit_event = AsyncMock()
+
+        reauth = MagicMock(spec=["defer_run", "apply_needs_reauth", "notify_reauth"])
+        reauth.defer_run = AsyncMock()
+        reauth.apply_needs_reauth = AsyncMock()
+        reauth.notify_reauth = AsyncMock()
+        executor._reauth_service = reauth
+
+        step, run = self._make_step_run()
+        await executor._execute_step(run, step)
+
+        reauth.defer_run.assert_not_called()
+        reauth.apply_needs_reauth.assert_not_called()
+        executor._dag_runner.finalize_step.assert_called_once()

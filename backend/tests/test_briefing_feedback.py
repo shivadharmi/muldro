@@ -129,7 +129,7 @@ class TestSubmitFeedback:
             },
         )
         assert resp.status_code == 400
-        assert "rating" in resp.json()["detail"]
+        assert "rating" in resp.json()["error"]["message"]
 
     def test_reject_rating_out_of_range(self, client, mock_db):
         _mock_briefing_exists(mock_db)

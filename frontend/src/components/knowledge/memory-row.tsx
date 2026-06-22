@@ -2,6 +2,7 @@
 
 import type { KnowledgeMemoryItem } from "@/lib/api";
 import { FOCUS_RING } from "@/lib/focus-ring";
+import { SourceIcon } from "@/components/integrations/source-icon";
 
 // ── Memory type styling ──────────────────────────────────────────
 
@@ -46,6 +47,7 @@ interface MemoryRowProps {
 
 export function MemoryRow({ memory, selected, onSelect, onEntityClick }: MemoryRowProps) {
   const style = getTypeStyle(memory.memory_type);
+  const sources = memory.sources ?? [];
 
   const truncatedText =
     memory.fact_text.length > 80
@@ -132,6 +134,21 @@ export function MemoryRow({ memory, selected, onSelect, onEntityClick }: MemoryR
               >
                 {name}
               </button>
+            ))}
+          </div>
+        )}
+
+        {/* Source provenance chips — render only when the row carries sources */}
+        {sources.length > 0 && (
+          <div className="flex flex-wrap gap-1 mt-1.5">
+            {sources.map((source) => (
+              <span
+                key={source}
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-surface-2 text-t-muted capitalize"
+              >
+                <SourceIcon source={source} className="w-3 h-3" />
+                {source.replace(/_/g, " ")}
+              </span>
             ))}
           </div>
         )}

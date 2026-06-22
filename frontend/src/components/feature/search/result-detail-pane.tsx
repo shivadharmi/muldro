@@ -3,12 +3,7 @@
 import type { SearchResult } from "@/lib/types";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Badge } from "@/components/ui/badge";
-
-const SOURCE_DB_LABELS: Record<string, string> = {
-  qdrant: "Vector",
-  postgres_fts: "Keyword",
-  neo4j: "Graph",
-};
+import { sourceDbLabel } from "@/lib/design-tokens";
 
 interface Props {
   result: SearchResult | null;
@@ -39,7 +34,7 @@ export function ResultDetailPane({ result }: Props) {
       <div className="flex flex-wrap gap-2">
         {result.source_db && (
           <Badge variant="info">
-            {SOURCE_DB_LABELS[result.source_db] ?? result.source_db}
+            {sourceDbLabel(result.source_db)}
           </Badge>
         )}
         {result.score != null && (

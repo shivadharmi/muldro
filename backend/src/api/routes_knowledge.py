@@ -1,5 +1,7 @@
 """Knowledge page endpoints — graph, memories, stats."""
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -50,6 +52,7 @@ class MemoryListItem(BaseModel):
     created_at: str | None = None
     entity_ids: list[str] = []
     entity_names: list[str] = []
+    sources: list[str] = []
 
 
 class MemoryListResponse(BaseModel):
@@ -86,6 +89,16 @@ class MemoryDetailResponse(BaseModel):
     entity_ids: list[str] = []
     linked_entities: list[LinkedEntityResponse] = []
     provenance: ProvenanceResponse = ProvenanceResponse()
+
+
+class KnowledgeCardResponse(BaseModel):
+    """Design's memory-card shape — unified projection over entities + memories."""
+
+    id: str
+    kind: Literal["person", "project", "fact", "preference"]
+    label: str
+    desc: str | None = None
+    sources: list[str] = []
 
 
 class WeeklyDeltaResponse(BaseModel):
@@ -188,6 +201,26 @@ async def knowledge_memory_detail(
         raise HTTPException(status_code=404, detail=f"Memory {memory_id} not found")
 
     return result
+
+
+@router.get("/v1/knowledge/cards", response_model=list[KnowledgeCardResponse])
+async def knowledge_cards(
+    user_id: str = Depends(get_current_user_id),
+    workspace_id: str = Depends(get_current_workspace_id),
+    db: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+    limit: int = Query(50, ge=1, le=100),
+):
+    """Unified knowledge-card feed (kind/label/desc/sources) from entities + memories.
+
+    Reads from Postgres only (entities + memories); no Neo4j graph access is
+    needed, so no GraphEngine is constructed for this endpoint.
+    """
+    svc = KnowledgeService(settings=settings, db=db)
+    try:
+        return await svc.get_knowledge_cards(user_id, workspace_id, limit=limit)
+    finally:
+        await svc.close()
 
 
 @router.get("/v1/knowledge/stats", response_model=StatsResponse)

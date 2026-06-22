@@ -26,6 +26,7 @@ from src.models.entities import Entity
 from src.models.events import NormalizedEvent
 from src.models.memory import Memory
 from src.models.plans import Plan
+from src.services.integration_status import get_integration_statuses
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,13 @@ Rules:
 - Recommended actions should be concrete and actionable
 - full_text should be scannable — use bold, bullets, short paragraphs
 - If there are no events, say so briefly
+- The "Connected Integrations" section lists the user's real data sources and
+  their live connection state. When an integration is CONNECTED but produced no
+  events, treat it as a genuinely quiet period — do NOT suggest the user verify,
+  reconnect, or check whether their integrations are connected. Only recommend
+  verifying/reconnecting an integration that is explicitly listed as NOT
+  CONNECTED. Never speculate that "nothing may be connected" when the section
+  shows connected sources.
 """
 
 BRIEFING_STYLE_PROMPTS: dict[str, str] = {
@@ -216,20 +224,10 @@ class Presenter:
 
         logger.info("Briefing generated: %s for %s", briefing_id, briefing_date)
 
-        # Notify user that briefing is ready via active surfaces
-        if self._notifier:
-            try:
-                headline = briefing.headline or "Daily briefing ready"
-                await self._notifier.notify(
-                    user_id=user_id,
-                    notification_type="info_update",
-                    title="Daily Briefing Ready",
-                    body=headline,
-                    data={"briefing_id": briefing_id, "date": str(briefing_date)},
-                )
-            except Exception:
-                logger.warning("Failed to notify for briefing", exc_info=True)
-
+        # Delivery (notification + surface push) is owned solely by the
+        # orchestrator's generate_briefing path so there is exactly one
+        # notification + one surface per (user, date). The Presenter only
+        # builds and caches the Briefing row. See orchestrator.generate_briefing.
         return briefing
 
     async def generate_meeting_prep(
@@ -293,6 +291,10 @@ class Presenter:
 
         sections = [f"Date: {briefing_date.isoformat()}"]
 
+        connection_section = await self._build_connection_section(user_id, workspace_id)
+        if connection_section:
+            sections.append(connection_section)
+
         if events:
             event_lines = []
             for e in events:
@@ -332,6 +334,33 @@ class Presenter:
 
         return "\n\n".join(sections)
 
+    async def _build_connection_section(self, user_id: str, workspace_id: str) -> str:
+        """Render real integration connection status so the LLM can distinguish a
+        quiet-but-connected day from an actual disconnection (fixes the false
+        "verify your integrations" subtitle on zero-event days).
+        """
+        try:
+            statuses = await get_integration_statuses(self._db, user_id, workspace_id)
+        except Exception:
+            logger.debug("Failed to load integration status for briefing", exc_info=True)
+            return ""
+
+        if not statuses:
+            return ""
+
+        connected = [s for s in statuses if s.enabled and s.connected]
+        disconnected = [s for s in statuses if s.enabled and not s.connected]
+
+        lines: list[str] = []
+        if connected:
+            names = ", ".join(f"{s.display_name} (connected)" for s in connected)
+            lines.append(f"## Connected Integrations\n{names}")
+        if disconnected:
+            names = ", ".join(f"{s.display_name} (not connected)" for s in disconnected)
+            lines.append(f"## Not Connected\n{names}")
+
+        return "\n\n".join(lines)
+
     async def _get_recent_events(
         self, user_id: str, cutoff: datetime, workspace_id: str = ""
     ) -> list[NormalizedEvent]:
@@ -348,12 +377,19 @@ class Presenter:
         return list(result.scalars().all())
 
     async def _get_active_plans(self, user_id: str, workspace_id: str = "") -> list[Plan]:
+        # Bound by the plan TTL so a stale plan the heartbeat reaper has not yet
+        # collected can never be surfaced in a briefing as if it were actionable
+        # today (regression: a stuck 'created' plan appeared as "1 critical
+        # security alert requires immediate attention" in every briefing).
+        ttl_hours = getattr(self._settings, "plan_ttl_hours", 72)
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=ttl_hours)
         result = await self._db.execute(
             select(Plan)
             .where(
                 Plan.user_id == user_id,
                 Plan.workspace_id == workspace_id,
                 Plan.status.in_(["created", "executing"]),
+                Plan.created_at >= cutoff,
             )
             .order_by(Plan.created_at.desc())
             .limit(20)

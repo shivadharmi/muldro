@@ -3,15 +3,47 @@
 import { usePathname } from "next/navigation";
 import { NavItem } from "./nav-item";
 import { useTheme } from "@/lib/theme";
+import { useAuth } from "@/lib/auth";
+import { useSettingsModalStore } from "@/stores/settings-modal-store";
 
 interface SidebarProps {
   collapsed: boolean;
   onToggle: () => void;
 }
 
+function JarvisMark({ size = 22 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 56 56"
+      fill="none"
+      aria-hidden="true"
+      className="flex-shrink-0"
+    >
+      <defs>
+        <linearGradient id="jv-mark" x1="0" y1="0" x2="56" y2="56" gradientUnits="userSpaceOnUse">
+          <stop stopColor="var(--jarvis-primary)" />
+          <stop offset="1" stopColor="var(--jarvis-secondary)" />
+        </linearGradient>
+      </defs>
+      <circle cx="28" cy="28" r="18" stroke="url(#jv-mark)" strokeWidth="1.5" opacity="0.35" />
+      <circle cx="28" cy="28" r="11" stroke="url(#jv-mark)" strokeWidth="1.5" opacity="0.7" />
+      <circle cx="28" cy="28" r="4" fill="url(#jv-mark)" />
+    </svg>
+  );
+}
+
 export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const pathname = usePathname();
   const { theme, setTheme, resolved } = useTheme();
+  const { user } = useAuth();
+  const openSettings = useSettingsModalStore((s) => s.openSettings);
+  const settingsOpen = useSettingsModalStore((s) => s.open);
+
+  const displayName = user?.display_name?.trim() || user?.email?.split("@")[0] || "Account";
+  const email = user?.email ?? "";
+  const initial = displayName.charAt(0).toUpperCase() || "?";
 
   const cycleTheme = () => {
     const order: Array<"light" | "dark" | "system"> = ["light", "dark", "system"];
@@ -71,6 +103,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             )}
           </svg>
         </button>
+        {!collapsed && <JarvisMark />}
         {!collapsed && (
           <div className="animate-fade-in flex items-baseline gap-1.5">
             <h1 className="text-[15px] font-semibold tracking-tight brand-gradient-text leading-none">
@@ -82,7 +115,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       </div>
 
       {/* Navigation — flat list */}
-      <nav className="flex-1 overflow-y-auto px-2 py-3 space-y-0.5">
+      <nav className="flex-1 overflow-y-auto px-2 py-3 space-y-1">
         <NavItem
           href="/"
           label="Workspace"
@@ -160,12 +193,21 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         />
 
         <div className="pt-2 mt-2 border-t border-b-secondary">
-          <NavItem
-            href="/settings"
-            label="Settings"
-            active={pathname === "/settings"}
-            collapsed={collapsed}
-            icon={
+          <button
+            type="button"
+            onClick={() => openSettings()}
+            title={collapsed ? "Settings" : undefined}
+            aria-label="Settings"
+            aria-haspopup="dialog"
+            className={`w-full flex items-center gap-2.5 rounded-[var(--radius-md)] text-[13px] transition-all duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-j-ring ${
+              collapsed ? "justify-center p-2.5" : "px-3 py-2"
+            } ${
+              settingsOpen
+                ? "bg-j-primary-soft text-j-primary font-medium"
+                : "text-t-tertiary hover:text-t-primary hover:bg-surface-2"
+            }`}
+          >
+            <span className="flex-shrink-0 w-[18px] h-[18px]">
               <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
                 <circle cx="9" cy="9" r="2.5" stroke="currentColor" strokeWidth="1.4" />
                 <path
@@ -175,23 +217,54 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                   strokeLinecap="round"
                 />
               </svg>
-            }
-          />
+            </span>
+            {!collapsed && <span className="flex-1 truncate text-left">Settings</span>}
+          </button>
         </div>
       </nav>
 
-      {/* Footer: theme toggle */}
-      <div className="border-t border-b-secondary px-2 py-2">
-        <button
-          onClick={cycleTheme}
-          className={`flex items-center gap-2 w-full rounded-[var(--radius-md)] text-xs text-t-muted hover:text-t-primary hover:bg-surface-2 transition-colors cursor-pointer ${
-            collapsed ? "justify-center p-2.5" : "px-3 py-2"
-          }`}
-          title={`Theme: ${theme}`}
-        >
-          {themeIcon}
-          {!collapsed && <span className="capitalize text-[13px]">{theme}</span>}
-        </button>
+      {/* Footer: user tile + compact theme toggle */}
+      <div className="border-t border-b-secondary px-2 py-2 space-y-1">
+        {collapsed ? (
+          <>
+            <div
+              className="mx-auto w-8 h-8 rounded-full bg-j-primary-soft text-j-primary flex items-center justify-center text-[13px] font-semibold select-none"
+              title={email ? `${displayName} · ${email}` : displayName}
+            >
+              {initial}
+            </div>
+            <button
+              onClick={cycleTheme}
+              className="flex items-center justify-center w-full rounded-[var(--radius-md)] p-2.5 text-t-muted hover:text-t-primary hover:bg-surface-2 transition-colors cursor-pointer"
+              title={`Theme: ${theme}`}
+              aria-label={`Theme: ${theme}`}
+            >
+              {themeIcon}
+            </button>
+          </>
+        ) : (
+          <div className="flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-md)]">
+            <div className="w-8 h-8 rounded-full bg-j-primary-soft text-j-primary flex items-center justify-center text-[13px] font-semibold select-none flex-shrink-0">
+              {initial}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-[13px] text-t-primary font-medium truncate leading-tight">
+                {displayName}
+              </div>
+              {email && (
+                <div className="text-[11px] text-t-muted truncate leading-tight">{email}</div>
+              )}
+            </div>
+            <button
+              onClick={cycleTheme}
+              className="flex-shrink-0 flex items-center justify-center p-1.5 rounded-[var(--radius-md)] text-t-muted hover:text-t-primary hover:bg-surface-2 transition-colors cursor-pointer"
+              title={`Theme: ${theme}`}
+              aria-label={`Theme: ${theme}`}
+            >
+              {themeIcon}
+            </button>
+          </div>
+        )}
       </div>
     </aside>
   );

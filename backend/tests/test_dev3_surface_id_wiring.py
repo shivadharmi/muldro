@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.orchestrator.contracts import StepState
+from src.contracts import StepState
 from src.services.graph_executor import GraphExecutor
 
 # ── Helpers ──────────────────────────────────────────────────────
@@ -68,18 +68,8 @@ class TestPushWorkspaceSurfaceReturnsSurfaceId:
     @pytest.mark.asyncio
     async def test_returns_surface_id_on_success(self):
         """When surface kind is derivable, method returns surf_xxx string."""
-        from src.orchestrator.contracts import PlanOutput, PlanStep
-        from src.orchestrator.jarvis import JarvisOrchestrator
-
-        settings = MagicMock()
-        settings.redis_url = "redis://localhost"
-        settings.resolved_model = "claude-sonnet-4-6-20250514"
-        settings.anthropic_api_key = "test"
-        settings.use_bedrock = False
-
-        orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
-        orch._settings = settings
-        orch._db_factory = MagicMock()
+        from src.contracts import PlanOutput, PlanStep
+        from src.orchestrator.surface_pusher import SurfacePusher
 
         # Mock event bus with Redis that returns integer from incr (rate limit check)
         mock_redis = AsyncMock()
@@ -87,12 +77,16 @@ class TestPushWorkspaceSurfaceReturnsSurfaceId:
         mock_redis.expire = AsyncMock()
         mock_event_bus = AsyncMock()
         mock_event_bus._redis = mock_redis
-        orch._ensure_event_bus = AsyncMock(return_value=mock_event_bus)
+        events = MagicMock()
+        events.ensure_event_bus = AsyncMock(return_value=mock_event_bus)
 
         # Mock DB persistence (inner context manager)
+        db_factory = MagicMock()
         mock_db = AsyncMock()
-        orch._db_factory.return_value.__aenter__ = AsyncMock(return_value=mock_db)
-        orch._db_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+        db_factory.return_value.__aenter__ = AsyncMock(return_value=mock_db)
+        db_factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        sp = SurfacePusher(events, lambda: db_factory)
 
         plan = PlanOutput(
             goal="Send email",
@@ -100,7 +94,7 @@ class TestPushWorkspaceSurfaceReturnsSurfaceId:
             steps=[PlanStep(description="Send email", capability="email.send")],
         )
 
-        result = await orch._push_workspace_surface(
+        result = await sp.push_workspace_surface(
             plan=plan,
             user_id="usr_01",
             workspace_id="ws_01",
@@ -113,20 +107,19 @@ class TestPushWorkspaceSurfaceReturnsSurfaceId:
     @pytest.mark.asyncio
     async def test_returns_none_when_no_mapping(self):
         """When plan has no visual surface kind, returns None."""
-        from src.orchestrator.contracts import PlanOutput, PlanStep
-        from src.orchestrator.jarvis import JarvisOrchestrator
+        from src.contracts import PlanOutput, PlanStep
+        from src.orchestrator.surface_pusher import SurfacePusher
 
-        orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
+        sp = SurfacePusher(MagicMock(), lambda: MagicMock())
 
-        # Mock _derive_surface_kind to return None
         plan = PlanOutput(
             goal="Hello",
             reasoning="greeting",
             steps=[PlanStep(description="Greet", capability="respond")],
         )
 
-        with patch("src.orchestrator.jarvis.derive_surface_kind", return_value=None):
-            result = await orch._push_workspace_surface(
+        with patch("src.orchestrator.surface_pusher.derive_surface_kind", return_value=None):
+            result = await sp.push_workspace_surface(
                 plan=plan,
                 user_id="usr_01",
                 workspace_id="ws_01",
@@ -189,8 +182,14 @@ class TestPlanReadyEmission:
             assert s.status == "pending"
 
     @pytest.mark.asyncio
-    async def test_plan_ready_not_emitted_without_surface_id(self):
-        """When no surface_id, plan_ready emission is skipped."""
+    async def test_plan_ready_defaults_to_run_surface_id_when_none_provided(self):
+        """When no surface_id is provided, execute_run defaults to the run_id.
+
+        The unified surface architecture always maintains a surface per run so
+        the REST poll and WebSocket push target the same id; omitting the
+        argument should therefore default to the canonical run surface id (the
+        run_id itself, not a re-prefixed ``run_run_…``), not skip emission.
+        """
         redis = AsyncMock()
         executor = _make_executor(redis_mock=redis)
 
@@ -207,8 +206,10 @@ class TestPlanReadyEmission:
 
         await executor.execute_run("run_01", trace_id="t1", surface_id=None)
 
-        # _emit_surface_update should NOT have been called for plan_ready
-        for call in executor._emit_surface_update.call_args_list:
-            kwargs = call.kwargs if call.kwargs else {}
-            # Also check positional if called positionally
-            assert kwargs.get("phase") != "plan_ready"
+        plan_ready_calls = [
+            call
+            for call in executor._emit_surface_update.call_args_list
+            if (call.kwargs or {}).get("phase") == "plan_ready"
+        ]
+        assert len(plan_ready_calls) == 1
+        assert plan_ready_calls[0].kwargs["surface_id"] == "run_01"

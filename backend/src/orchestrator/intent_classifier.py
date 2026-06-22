@@ -7,8 +7,8 @@ Extracted from jarvis.py to reduce orchestrator size.
 import json
 import logging
 
+from src.contracts import PlanOutput, PlanStep
 from src.llm_utils import parse_llm_json
-from src.orchestrator.contracts import PlanOutput, PlanStep
 
 logger = logging.getLogger(__name__)
 
@@ -256,10 +256,18 @@ async def classify_intent(
 
         text = "".join(b.text for b in response.content if b.type == "text")
 
-        if "{" in text:
-            start = text.index("{")
-            end = text.rindex("}") + 1
-            parsed = json.loads(text[start:end])
+        # Parse via the robust helper (handles code fences + JSON embedded in
+        # prose) — the same path extract_plan uses. Naive index/rindex brace
+        # matching breaks when the model emits stray braces in prose.
+        parsed = None
+        try:
+            candidate = parse_llm_json(text)
+            if isinstance(candidate, dict):
+                parsed = candidate
+        except (json.JSONDecodeError, ValueError):
+            parsed = None
+
+        if parsed is not None:
             intent = parsed.get("intent", "command")
             confidence = float(parsed.get("confidence", 0.5))
 

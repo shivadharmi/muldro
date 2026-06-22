@@ -226,9 +226,10 @@ class TestScheduleSeeder:
         assert "observe_source" in action_types
         assert "consolidate_memories" in action_types
         assert "check_slos" in action_types
+        assert "heartbeat" in action_types
 
-    def test_default_schedules_have_7_entries(self):
-        assert len(DEFAULT_SCHEDULES) == 7
+    def test_default_schedules_have_8_entries(self):
+        assert len(DEFAULT_SCHEDULES) == 8
 
     def test_morning_briefing_at_7am(self):
         briefing = next(s for s in DEFAULT_SCHEDULES if s["name"] == "morning_briefing")
@@ -242,7 +243,7 @@ class TestScheduleSeeder:
 
     @pytest.mark.asyncio
     async def test_seed_creates_all_when_empty(self):
-        """Should seed all 7 schedules when none exist."""
+        """Should seed all 8 schedules when none exist."""
         db = MagicMock()
         result_mock = MagicMock()
         result_mock.scalars.return_value = result_mock
@@ -253,8 +254,8 @@ class TestScheduleSeeder:
 
         count = await seed_default_schedules(db, user_id=TEST_USER_ID)
 
-        assert count == 7
-        assert db.add.call_count == 7
+        assert count == 8
+        assert db.add.call_count == 8
 
     @pytest.mark.asyncio
     async def test_seed_skips_existing(self):
@@ -283,7 +284,7 @@ class TestScheduleSeeder:
 
         count = await seed_default_schedules(db, user_id=TEST_USER_ID)
 
-        assert count == 5  # 7 - 2 existing
+        assert count == 6  # 8 - 2 existing
 
     @pytest.mark.asyncio
     async def test_seeded_schedules_have_next_run(self):
@@ -303,10 +304,15 @@ class TestScheduleSeeder:
         assert first_added.next_run_at is not None
 
     @pytest.mark.asyncio
-    async def test_all_seeded_schedules_disabled(self):
-        """All seeded schedules should be disabled by default."""
+    async def test_connector_independent_schedules_enabled_at_creation(self):
+        """Briefing + housekeeping schedules are enabled at workspace creation so
+        the proactive loop is reachable before any OAuth. Connector-dependent
+        observe_* schedules stay disabled until their connector is authorized."""
+        from src.services.schedule_seeder import WORKSPACE_CREATION_SCHEDULES
+
         db = MagicMock()
         result_mock = MagicMock()
+        result_mock.scalars.return_value = result_mock
         result_mock.all.return_value = []
         db.execute = AsyncMock(return_value=result_mock)
         db.add = MagicMock()
@@ -314,9 +320,15 @@ class TestScheduleSeeder:
 
         await seed_default_schedules(db, user_id=TEST_USER_ID)
 
-        for call in db.add.call_args_list:
-            schedule = call[0][0]
-            assert schedule.enabled is False, f"{schedule.name} should be disabled"
+        by_name = {call[0][0].name: call[0][0] for call in db.add.call_args_list}
+        assert by_name["morning_briefing"].enabled is True
+        for name in WORKSPACE_CREATION_SCHEDULES:
+            assert by_name[name].enabled is True, f"{name} should be enabled at creation"
+        # Connector-dependent observers must NOT poll an unconnected source.
+        assert by_name["observe_gmail"].enabled is False
+        assert by_name["observe_calendar"].enabled is False
+        assert by_name["observe_slack"].enabled is False
+        assert by_name["observe_github"].enabled is False
 
     @pytest.mark.asyncio
     async def test_seed_scopes_to_workspace(self):
@@ -335,7 +347,7 @@ class TestScheduleSeeder:
             user_id=TEST_USER_ID,
             workspace_id="ws_a",
         )
-        assert count_a == 7
+        assert count_a == 8
 
         # Reset mocks for workspace B — DB still returns empty for ws_b query
         db.add.reset_mock()
@@ -347,7 +359,7 @@ class TestScheduleSeeder:
             user_id="usr_other",
             workspace_id="ws_b",
         )
-        assert count_b == 7  # Should seed all 7, not skip
+        assert count_b == 8  # Should seed all 8, not skip
 
     @pytest.mark.asyncio
     async def test_enable_connector_scopes_to_workspace(self):

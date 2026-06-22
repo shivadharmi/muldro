@@ -10,50 +10,50 @@ class TestSurfaceRegistryLocal:
         from src.services.surface_registry import SurfaceRegistry
 
         registry = SurfaceRegistry(redis=None)
-        await registry.register(TEST_USER_ID, "telegram")
+        await registry.register(TEST_USER_ID, "api")
         await registry.register(TEST_USER_ID, "web")
 
         surfaces = await registry.get_active_surfaces(TEST_USER_ID)
-        assert set(surfaces) == {"telegram", "web"}
+        assert set(surfaces) == {"api", "web"}
 
     async def test_unregister(self):
         from src.services.surface_registry import SurfaceRegistry
 
         registry = SurfaceRegistry(redis=None)
-        await registry.register(TEST_USER_ID, "telegram")
+        await registry.register(TEST_USER_ID, "api")
         await registry.register(TEST_USER_ID, "web")
 
         await registry.unregister(TEST_USER_ID, "web")
         surfaces = await registry.get_active_surfaces(TEST_USER_ID)
-        assert surfaces == ["telegram"]
+        assert surfaces == ["api"]
 
     async def test_is_active(self):
         from src.services.surface_registry import SurfaceRegistry
 
         registry = SurfaceRegistry(redis=None)
-        await registry.register(TEST_USER_ID, "telegram")
+        await registry.register(TEST_USER_ID, "api")
 
-        assert await registry.is_active(TEST_USER_ID, "telegram") is True
+        assert await registry.is_active(TEST_USER_ID, "api") is True
         assert await registry.is_active(TEST_USER_ID, "web") is False
 
-    async def test_preferred_surface_web_over_telegram(self):
+    async def test_preferred_surface_web_over_api(self):
         from src.services.surface_registry import SurfaceRegistry
 
         registry = SurfaceRegistry(redis=None)
-        await registry.register(TEST_USER_ID, "telegram")
+        await registry.register(TEST_USER_ID, "api")
         await registry.register(TEST_USER_ID, "web")
 
         preferred = await registry.get_preferred_surface(TEST_USER_ID)
         assert preferred == "web"
 
-    async def test_preferred_surface_telegram_only(self):
+    async def test_preferred_surface_api_only(self):
         from src.services.surface_registry import SurfaceRegistry
 
         registry = SurfaceRegistry(redis=None)
-        await registry.register(TEST_USER_ID, "telegram")
+        await registry.register(TEST_USER_ID, "api")
 
         preferred = await registry.get_preferred_surface(TEST_USER_ID)
-        assert preferred == "telegram"
+        assert preferred == "api"
 
     async def test_preferred_surface_none_when_empty(self):
         from src.services.surface_registry import SurfaceRegistry
@@ -66,12 +66,12 @@ class TestSurfaceRegistryLocal:
         from src.services.surface_registry import SurfaceRegistry
 
         registry = SurfaceRegistry(redis=None)
-        await registry.register(TEST_USER_ID, "telegram", metadata={"chat_id": "12345"})
+        await registry.register(TEST_USER_ID, "api", metadata={"session_id": "12345"})
 
-        info = await registry.get_surface_info(TEST_USER_ID, "telegram")
+        info = await registry.get_surface_info(TEST_USER_ID, "api")
         assert info is not None
-        assert info.surface == "telegram"
-        assert info.metadata == {"chat_id": "12345"}
+        assert info.surface == "api"
+        assert info.metadata == {"session_id": "12345"}
 
     async def test_get_surface_info_not_found(self):
         from src.services.surface_registry import SurfaceRegistry
@@ -105,8 +105,8 @@ class TestSurfaceRegistryLocal:
         from src.services.surface_registry import SurfaceRegistry
 
         registry = SurfaceRegistry(redis=None)
-        await registry.register("user_a", "telegram")
+        await registry.register("user_a", "api")
         await registry.register("user_b", "web")
 
-        assert await registry.get_active_surfaces("user_a") == ["telegram"]
+        assert await registry.get_active_surfaces("user_a") == ["api"]
         assert await registry.get_active_surfaces("user_b") == ["web"]

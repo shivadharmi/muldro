@@ -1,4 +1,4 @@
-"""Track active user surfaces (Telegram, web, API).
+"""Track active user surfaces (web, API).
 
 Redis-backed registry of which surfaces a user is currently connected to.
 Used by the Notifier to decide where to deliver messages and avoid duplicates.
@@ -13,12 +13,11 @@ logger = logging.getLogger(__name__)
 
 # Surface presence TTL — if no heartbeat within this window, surface is stale
 SURFACE_TTL_SECONDS = 120  # 2 minutes for web (WebSocket heartbeat)
-TELEGRAM_TTL_SECONDS = 86400  # Telegram is always "active" (push-based)
 
 
 @dataclass
 class SurfaceInfo:
-    surface: str  # telegram, web, api
+    surface: str  # web, api
     connected_at: str
     last_heartbeat: str
     metadata: dict
@@ -52,8 +51,7 @@ class SurfaceRegistry:
 
         if self._redis:
             await self._redis.hset(self._key(user_id), surface, json.dumps(info))
-            ttl = TELEGRAM_TTL_SECONDS if surface == "telegram" else SURFACE_TTL_SECONDS
-            await self._redis.expire(self._key(user_id), ttl)
+            await self._redis.expire(self._key(user_id), SURFACE_TTL_SECONDS)
         else:
             self._local.setdefault(user_id, {})[surface] = SurfaceInfo(**info)
 
@@ -82,8 +80,7 @@ class SurfaceRegistry:
                 info = json.loads(raw)
                 info["last_heartbeat"] = datetime.now(timezone.utc).isoformat()
                 await self._redis.hset(self._key(user_id), surface, json.dumps(info))
-                ttl = TELEGRAM_TTL_SECONDS if surface == "telegram" else SURFACE_TTL_SECONDS
-                await self._redis.expire(self._key(user_id), ttl)
+                await self._redis.expire(self._key(user_id), SURFACE_TTL_SECONDS)
         else:
             user_surfaces = self._local.get(user_id, {})
             if surface in user_surfaces:
@@ -109,7 +106,7 @@ class SurfaceRegistry:
     async def get_preferred_surface(self, user_id: str) -> str | None:
         """Determine the best surface for notification delivery.
 
-        Priority: web (less intrusive) > telegram (always available).
+        Priority: web (less intrusive) first.
         User preference memories can override this in the future.
         """
         surfaces = await self.get_active_surfaces(user_id)
@@ -117,8 +114,6 @@ class SurfaceRegistry:
             return None
         if "web" in surfaces:
             return "web"
-        if "telegram" in surfaces:
-            return "telegram"
         return surfaces[0]
 
     async def is_active(self, user_id: str, surface: str) -> bool:

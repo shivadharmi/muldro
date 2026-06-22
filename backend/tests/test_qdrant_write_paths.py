@@ -193,7 +193,7 @@ async def test_conversation_summary_embedded():
 
         orch = JarvisOrchestrator(settings=settings, db_factory=MagicMock(), services=MagicMock())
 
-        summary = await orch._summarize_history(
+        summary = await orch._context._summarize_history(
             lines, conversation_id="conv_test123", user_id=TEST_USER_ID
         )
 
@@ -232,7 +232,7 @@ async def test_conversation_embedding_skipped_without_conversation_id():
 
         orch = JarvisOrchestrator(settings=settings, db_factory=MagicMock(), services=MagicMock())
 
-        summary = await orch._summarize_history(
+        summary = await orch._context._summarize_history(
             ["line1"], conversation_id=None, user_id=TEST_USER_ID
         )
         assert summary == "Summary"

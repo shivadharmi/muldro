@@ -51,6 +51,10 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # Fail fast on misconfiguration (covers `uvicorn app:app` started outside
+        # run.py). Idempotent with run.py's check; raising here aborts startup.
+        settings.validate_startup()
+
         # Startup: connect to Redis
         try:
             import redis.asyncio as aioredis
@@ -103,6 +107,18 @@ def create_app() -> FastAPI:
                 exc_info=True,
             )
 
+        # Ensure filesystem MCP root exists before the server is spawned per workspace.
+        try:
+            from pathlib import Path
+
+            from src.integrations.seed_installations import _filesystem_mcp_root
+
+            fs_root = Path(_filesystem_mcp_root())
+            fs_root.mkdir(parents=True, exist_ok=True)
+            logger.info("Filesystem MCP root ready: %s", fs_root)
+        except Exception:
+            logger.warning("Failed to prepare filesystem MCP root", exc_info=True)
+
         # Re-seed integration installations for all workspaces.
         # Installation configs (transport, auth_provider, remote_url) change with
         # code updates but the DB records persist from initial provisioning.
@@ -142,26 +158,30 @@ def create_app() -> FastAPI:
             )
             traceback.print_exc(file=sys.stderr)
 
-        # Validate tool registry consistency
-        try:
-            from src.tools.validation import validate_registry
+        # Validate tool registry consistency. Fail closed: a malformed (or
+        # un-validatable) registry must not serve traffic. Operators can bypass
+        # the whole check with JARVIS_SKIP_REGISTRY_VALIDATION=true in emergencies.
+        if settings.skip_registry_validation:
+            logger.warning("Registry validation SKIPPED (JARVIS_SKIP_REGISTRY_VALIDATION=true)")
+        else:
+            try:
+                from src.tools.validation import validate_registry
 
-            if settings.skip_registry_validation:
-                logger.warning("Registry validation SKIPPED (JARVIS_SKIP_REGISTRY_VALIDATION=true)")
-            else:
                 errors = validate_registry()
-                if errors:
-                    for err in errors:
-                        logger.error("Registry validation: %s", err)
-                    logger.error(
-                        "Registry validation found %d errors — fix or set "
-                        "JARVIS_SKIP_REGISTRY_VALIDATION=true",
-                        len(errors),
-                    )
-                else:
-                    logger.info("Registry validation passed")
-        except Exception:
-            logger.warning("Registry validation failed to run", exc_info=True)
+            except Exception as exc:
+                # The validation harness itself failed to run (import/IO error).
+                # A registry we couldn't validate is not trusted — abort startup.
+                logger.error("Registry validation failed to run", exc_info=True)
+                raise RuntimeError("Registry validation could not run") from exc
+
+            if errors:
+                for err in errors:
+                    logger.error("Registry validation: %s", err)
+                raise RuntimeError(
+                    f"Registry validation found {len(errors)} error(s) — fix them or set "
+                    "JARVIS_SKIP_REGISTRY_VALIDATION=true to bypass."
+                )
+            logger.info("Registry validation passed")
 
         # Ensure Qdrant collections exist
         try:
@@ -202,23 +222,44 @@ def create_app() -> FastAPI:
         except Exception:
             logger.warning("OAuthManager unavailable for MCP bridge", exc_info=True)
 
-        # Initialize MCP bridge with session pool.
-        # Auth is resolved per-user from OAuthManager at call time.
+        # Initialize MCP bridge: register server configs synchronously. No eager
+        # discovery — sessions and tool schemas are created lazily on first use.
+        mcp_bridge_ok = False
         try:
-            from src.connectors.mcp_bridge import initialize_mcp_bridge
+            from src.connectors.mcp_bridge import (
+                get_session_pool,
+                initialize_mcp_bridge,
+            )
 
-            await initialize_mcp_bridge(oauth_manager=oauth_manager)
+            await initialize_mcp_bridge(
+                oauth_manager=oauth_manager,
+                timeout_seconds=30,
+            )
+            mcp_bridge_ok = get_session_pool() is not None
         except Exception:
             logger.error("MCP bridge initialization failed", exc_info=True)
 
-        # Signal the worker thread that MCP bridge initialization is complete
-        # (whether successful or not) so it can start processing tasks.
-        try:
-            from run import mcp_bridge_ready
+        # Signal worker/bot threads — only on success. Lying about readiness
+        # is worse than a 30s timeout in the consumers: a set event with a
+        # broken bridge makes workers proceed and hit silent "not initialized"
+        # failures on every tool call.
+        if mcp_bridge_ok:
+            try:
+                # Shared ``src.`` module so this binds the SAME Event the worker
+                # waits on. Importing ``from run`` would load run.py a second time
+                # (it ran as __main__) and set a different Event — see
+                # runtime_signals for the full rationale.
+                from src.runtime_signals import mcp_bridge_ready
 
-            mcp_bridge_ready.set()
-        except ImportError:
-            pass  # Not running via run.py (e.g., direct uvicorn or tests)
+                mcp_bridge_ready.set()
+            except ImportError:
+                pass  # Not running via run.py (e.g., direct uvicorn or tests)
+        else:
+            logger.error(
+                "MCP bridge not ready — mcp_bridge_ready signal suppressed; "
+                "worker/bot will time out on handshake and every external "
+                "MCP tool call will fail until startup is retried"
+            )
 
         yield
 
@@ -238,16 +279,16 @@ def create_app() -> FastAPI:
         except Exception:
             pass
 
-        # Shutdown: close long-lived orchestrator DB session
+        # Shutdown: release the process-wide orchestrator — await its background
+        # tasks and close the shared Redis client opened by build_shared. (No
+        # long-lived DB session to close: DB-bound services are per-request.)
         try:
-            from src.api.routes_chat import _module_svc_db_ref
+            from src.api.routes_chat import shutdown_orchestrator
 
-            for db_ref in _module_svc_db_ref:
-                await db_ref.close()
-            _module_svc_db_ref.clear()
-            logger.info("Orchestrator DB sessions closed")
+            await shutdown_orchestrator()
+            logger.info("Orchestrator shut down")
         except Exception:
-            pass
+            logger.debug("Orchestrator shutdown failed", exc_info=True)
 
         # Shutdown: dispose DB engine pool (returns all connections)
         try:
@@ -271,6 +312,11 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # --- Error boundary: standard envelope, no raw exceptions to clients ---
+    from src.api.error_handlers import register_exception_handlers
+
+    register_exception_handlers(app)
+
     # --- Middleware (outermost first) ---
     app.add_middleware(RequestSizeLimitMiddleware, max_bytes=settings.max_request_body_bytes)
     app.add_middleware(RateLimitMiddleware, requests_per_minute=settings.rate_limit_rpm)
@@ -282,8 +328,10 @@ def create_app() -> FastAPI:
         app.add_middleware(
             CORSMiddleware,
             allow_origins=origins,
-            allow_methods=["*"],
-            allow_headers=["*"],
+            # Explicit allow-lists (no `*`): browsers only get cross-origin access
+            # to the verbs and headers the frontend actually uses.
+            allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+            allow_headers=["Authorization", "Content-Type", "Accept"],
         )
 
     # Health check

@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
 
+from src.connectors.poll_result import PollResult
 from src.services.event_processor import RawEvent
 
 
@@ -17,7 +18,24 @@ class ConnectorHealth:
 
 
 class BaseConnector(ABC):
-    """Abstract base class for all data source connectors."""
+    """Abstract base class for all data source connectors.
+
+    Single-account assumption (multi-account is NOT supported):
+        Every connector hardcodes ``source_account_id = "<source>_primary"`` and
+        the dedup idempotency keys derived from emitted events omit the account
+        id entirely. Cursor watermark keys are likewise per (user, source), not
+        per account. As a result a user can connect only one account per source.
+
+        Supporting multiple accounts per source per user would require threading
+        an account id through three places consistently:
+          1. the cursor/watermark key (so each account tracks its own position),
+          2. ``RawEvent.source_account_id`` (currently the literal
+             ``"<source>_primary"``), and
+          3. the dedup idempotency key (so identical entity ids from different
+             accounts do not collide / falsely dedup).
+        Until all three are updated together, do not add a second account for a
+        source — it would silently share cursors and collide on dedup.
+    """
 
     provider: str
     cursor_type: str = "opaque"  # Override per connector: history_id, sync_token, etc.
@@ -31,10 +49,14 @@ class BaseConnector(ABC):
         self._settings = settings
 
     @abstractmethod
-    async def poll(
-        self, user_id: str, cursor: str | None, credentials: dict
-    ) -> tuple[list[RawEvent], str | None]:
-        """Poll for new events since cursor. Returns (events, new_cursor)."""
+    async def poll(self, user_id: str, cursor: str | None, credentials: dict) -> PollResult:
+        """Poll for new events since cursor. Returns a typed PollResult.
+
+        Implementations MUST:
+        - Return PollResult with error_class="none" on success (events may be empty).
+        - Return PollResult with the appropriate error_class and the *unchanged*
+          incoming cursor on any failure — never advance the cursor on error.
+        """
 
     @abstractmethod
     async def test(self, credentials: dict) -> ConnectorHealth:

@@ -71,8 +71,8 @@ class TestDlqRetryDispatchBackgroundTask:
         scheduler = _make_scheduler()
 
         with (
-            patch("src.services.scheduler.DeadLetterService", return_value=mock_dlq),
-            patch("src.services.scheduler.transition_run") as mock_transition,
+            patch("src.services.scheduler.dlq_tick.DeadLetterService", return_value=mock_dlq),
+            patch("src.services.scheduler.dlq_tick.transition_run") as mock_transition,
         ):
             await scheduler._tick_dlq_retry(mock_factory)
 
@@ -109,8 +109,8 @@ class TestDlqRetryUnknownOperationType:
         scheduler = _make_scheduler()
 
         with (
-            patch("src.services.scheduler.DeadLetterService", return_value=mock_dlq),
-            caplog.at_level(logging.WARNING, logger="src.services.scheduler"),
+            patch("src.services.scheduler.dlq_tick.DeadLetterService", return_value=mock_dlq),
+            caplog.at_level(logging.WARNING, logger="src.services.scheduler.dlq_tick"),
         ):
             await scheduler._tick_dlq_retry(mock_factory)
 
@@ -149,7 +149,7 @@ class TestDlqRetryHandlerFailure:
 
         scheduler = _make_scheduler()
 
-        with patch("src.services.scheduler.DeadLetterService", return_value=mock_dlq):
+        with patch("src.services.scheduler.dlq_tick.DeadLetterService", return_value=mock_dlq):
             # Should not raise
             await scheduler._tick_dlq_retry(mock_factory)
 
@@ -159,12 +159,12 @@ class TestDlqRetryHandlerFailure:
             mock_db.commit.assert_awaited()
 
 
-class TestDlqRetryFailedEmbeddingDeferred:
-    """Verify failed_embedding entries are not dispatched (requires dedicated retry service)."""
+class TestDlqRetryFailedEmbedding:
+    """Verify failed_embedding entries are re-embedded and upserted to Qdrant."""
 
     @pytest.mark.asyncio
-    async def test_dlq_retry_failed_embedding_deferred(self):
-        """failed_embedding entries return False and do NOT call mark_resolved."""
+    async def test_failed_embedding_memory_re_embeds_and_resolves(self):
+        """A memory embedding failure re-embeds fact_text and upserts to 'memories'."""
         entry = _make_dlq_entry(
             operation_type="failed_embedding",
             payload={"record_id": "mem_abc123", "collection": "memories", "record_type": "memory"},
@@ -175,20 +175,132 @@ class TestDlqRetryFailedEmbeddingDeferred:
         mock_dlq.mark_retrying = AsyncMock(return_value=True)
         mock_dlq.mark_resolved = AsyncMock()
 
+        mock_memory = MagicMock(
+            fact_text="the founder prefers morning standups",
+            memory_type="preference",
+            user_id=TEST_USER_ID,
+            confidence=0.8,
+            stability_score=0.3,
+            entity_ids=["ent_1"],
+            scope="general",
+        )
+
         mock_db = MagicMock()
+        mock_db.get = AsyncMock(return_value=mock_memory)
         mock_db.commit = AsyncMock()
         mock_db.__aenter__ = AsyncMock(return_value=mock_db)
         mock_db.__aexit__ = AsyncMock(return_value=False)
-
         mock_factory = MagicMock(return_value=mock_db)
+
+        mock_embedder = MagicMock()
+        mock_embedder.embed_text = AsyncMock(return_value=[0.1, 0.2, 0.3])
+        mock_store = MagicMock()
+        mock_store.upsert = AsyncMock()
 
         scheduler = _make_scheduler()
 
-        with patch("src.services.scheduler.DeadLetterService", return_value=mock_dlq):
+        with (
+            patch("src.services.scheduler.dlq_tick.DeadLetterService", return_value=mock_dlq),
+            patch("src.services.embedding_service.EmbeddingService", return_value=mock_embedder),
+            patch("src.services.vector_store.VectorStore", return_value=mock_store),
+        ):
             await scheduler._tick_dlq_retry(mock_factory)
 
-            # mark_resolved should NOT be called — handler returns False
-            mock_dlq.mark_resolved.assert_not_called()
+        mock_embedder.embed_text.assert_awaited_once_with("the founder prefers morning standups")
+        mock_store.upsert.assert_awaited_once()
+        args = mock_store.upsert.call_args.args
+        assert args[0] == "memories"
+        assert args[1] == "mem_abc123"
+        assert args[2] == [0.1, 0.2, 0.3]
+        mock_dlq.mark_resolved.assert_awaited_once_with(entry.entry_id)
+
+    @pytest.mark.asyncio
+    async def test_failed_embedding_entity_re_embeds_canonical_name(self):
+        """An entity embedding failure re-embeds canonical_name and upserts to 'entities'."""
+        entry = _make_dlq_entry(
+            operation_type="failed_embedding",
+            payload={
+                "record_id": "ent_xyz",
+                "collection": "entities",
+                "record_type": "entity",
+            },
+        )
+
+        mock_dlq = MagicMock()
+        mock_dlq.list_pending = AsyncMock(return_value=[entry])
+        mock_dlq.mark_retrying = AsyncMock(return_value=True)
+        mock_dlq.mark_resolved = AsyncMock()
+
+        mock_entity = MagicMock(
+            canonical_name="Acme Corp",
+            entity_type="organization",
+            user_id=TEST_USER_ID,
+        )
+
+        mock_db = MagicMock()
+        mock_db.get = AsyncMock(return_value=mock_entity)
+        mock_db.commit = AsyncMock()
+        mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_db.__aexit__ = AsyncMock(return_value=False)
+        mock_factory = MagicMock(return_value=mock_db)
+
+        mock_embedder = MagicMock()
+        mock_embedder.embed_text = AsyncMock(return_value=[0.4, 0.5])
+        mock_store = MagicMock()
+        mock_store.upsert = AsyncMock()
+
+        scheduler = _make_scheduler()
+
+        with (
+            patch("src.services.scheduler.dlq_tick.DeadLetterService", return_value=mock_dlq),
+            patch("src.services.embedding_service.EmbeddingService", return_value=mock_embedder),
+            patch("src.services.vector_store.VectorStore", return_value=mock_store),
+        ):
+            await scheduler._tick_dlq_retry(mock_factory)
+
+        mock_embedder.embed_text.assert_awaited_once_with("Acme Corp")
+        args = mock_store.upsert.call_args.args
+        assert args[0] == "entities"
+        assert args[1] == "ent_xyz"
+        mock_dlq.mark_resolved.assert_awaited_once_with(entry.entry_id)
+
+    @pytest.mark.asyncio
+    async def test_failed_embedding_record_missing_not_resolved(self):
+        """If the source record no longer exists, the entry is not resolved."""
+        entry = _make_dlq_entry(
+            operation_type="failed_embedding",
+            payload={"record_id": "mem_gone", "collection": "memories", "record_type": "memory"},
+        )
+
+        mock_dlq = MagicMock()
+        mock_dlq.list_pending = AsyncMock(return_value=[entry])
+        mock_dlq.mark_retrying = AsyncMock(return_value=True)
+        mock_dlq.mark_resolved = AsyncMock()
+
+        mock_db = MagicMock()
+        mock_db.get = AsyncMock(return_value=None)
+        mock_db.commit = AsyncMock()
+        mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_db.__aexit__ = AsyncMock(return_value=False)
+        mock_factory = MagicMock(return_value=mock_db)
+
+        mock_embedder = MagicMock()
+        mock_embedder.embed_text = AsyncMock()
+        mock_store = MagicMock()
+        mock_store.upsert = AsyncMock()
+
+        scheduler = _make_scheduler()
+
+        with (
+            patch("src.services.scheduler.dlq_tick.DeadLetterService", return_value=mock_dlq),
+            patch("src.services.embedding_service.EmbeddingService", return_value=mock_embedder),
+            patch("src.services.vector_store.VectorStore", return_value=mock_store),
+        ):
+            await scheduler._tick_dlq_retry(mock_factory)
+
+        mock_embedder.embed_text.assert_not_awaited()
+        mock_store.upsert.assert_not_awaited()
+        mock_dlq.mark_resolved.assert_not_called()
 
 
 class TestDlqRetryDispatchPerception:
@@ -219,7 +331,7 @@ class TestDlqRetryDispatchPerception:
 
         scheduler = _make_scheduler(orchestrator=mock_orch)
 
-        with patch("src.services.scheduler.DeadLetterService", return_value=mock_dlq):
+        with patch("src.services.scheduler.dlq_tick.DeadLetterService", return_value=mock_dlq):
             await scheduler._tick_dlq_retry(mock_factory)
 
             mock_orch._bump_perception_for_sources.assert_awaited_once_with(
@@ -254,7 +366,7 @@ class TestDlqRetryExhausted:
 
         scheduler = _make_scheduler()
 
-        with patch("src.services.scheduler.DeadLetterService", return_value=mock_dlq):
+        with patch("src.services.scheduler.dlq_tick.DeadLetterService", return_value=mock_dlq):
             await scheduler._tick_dlq_retry(mock_factory)
 
             mock_db.get.assert_not_awaited()

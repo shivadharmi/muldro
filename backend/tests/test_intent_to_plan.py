@@ -2,13 +2,64 @@
 
 from __future__ import annotations
 
-from src.orchestrator.contracts import PlanOutput
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from src.contracts import PlanOutput
 from src.orchestrator.intent_classifier import (
     _VALID_INTENTS,
     FAST_INTENTS,
     INTENT_CLASSIFIER_PROMPT,
+    classify_intent,
     intent_to_plan,
 )
+
+
+def _mock_client_returning(text: str):
+    """Build a mock Anthropic client whose response yields a single text block."""
+    block = MagicMock()
+    block.type = "text"
+    block.text = text
+    response = MagicMock()
+    response.content = [block]
+    client = MagicMock()
+    client.messages.create = AsyncMock(return_value=response)
+    return client
+
+
+class TestClassifyIntentParsing:
+    """ORCH-P2-3: intent JSON parse must survive prose around the JSON object."""
+
+    @pytest.mark.asyncio
+    async def test_parses_json_wrapped_in_prose_and_fences(self):
+        # Stray braces in prose + a fenced JSON block — the old index/rindex
+        # brace matcher would slice from the first '{' to the last '}' and fail.
+        text = (
+            "Here is my analysis {note: braces in prose}.\n"
+            '```json\n{"intent": "greeting", "confidence": 0.9, "sources": []}\n```'
+        )
+        client = _mock_client_returning(text)
+
+        intent, confidence, sources = await classify_intent(
+            client, "claude-haiku-4-5-20251001", "hi there"
+        )
+
+        assert intent == "greeting"
+        assert confidence == 0.9
+        assert sources == []
+
+    @pytest.mark.asyncio
+    async def test_non_json_response_falls_back_to_command(self):
+        client = _mock_client_returning("I'm not sure how to classify this.")
+
+        intent, confidence, sources = await classify_intent(
+            client, "claude-haiku-4-5-20251001", "???"
+        )
+
+        assert intent == "command"
+        assert sources == []
+
 
 # ── Test expanded FAST_INTENTS ───────────────────────────────────────
 

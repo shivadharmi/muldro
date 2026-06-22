@@ -56,29 +56,35 @@ class TestPublishProgress:
             await executor._publish_progress("run_003", {"data": "x"})
 
     async def test_emit_event_triggers_progress_for_run_events(self):
-        """Events with run_id in payload trigger Redis progress publish."""
+        """Events with run_id in payload trigger Redis progress publish.
+
+        The emit_event->publish_progress wiring lives on the SurfaceEmitter
+        collaborator (SVC-P1-3); the hub forwards to it.
+        """
         executor = self._make_executor()
-        executor._event_bus = MagicMock()
-        executor._event_bus.agent_stream = MagicMock(return_value="stream")
-        executor._event_bus.publish = AsyncMock()
-        executor._publish_progress = AsyncMock()
+        emitter = executor._surface_emitter
+        emitter._event_bus = MagicMock()
+        emitter._event_bus.agent_stream = MagicMock(return_value="stream")
+        emitter._event_bus.publish = AsyncMock()
+        emitter.publish_progress = AsyncMock()
 
         await executor._emit_event(
             "step.completed", "usr_1", {"run_id": "run_001", "step_id": "s1"}
         )
 
-        executor._publish_progress.assert_called_once_with(
+        emitter.publish_progress.assert_called_once_with(
             "run_001", {"event_type": "step.completed", "run_id": "run_001", "step_id": "s1"}
         )
 
     async def test_emit_event_skips_progress_without_run_id(self):
         """Events without run_id don't trigger progress publish."""
         executor = self._make_executor()
-        executor._event_bus = MagicMock()
-        executor._event_bus.agent_stream = MagicMock(return_value="stream")
-        executor._event_bus.publish = AsyncMock()
-        executor._publish_progress = AsyncMock()
+        emitter = executor._surface_emitter
+        emitter._event_bus = MagicMock()
+        emitter._event_bus.agent_stream = MagicMock(return_value="stream")
+        emitter._event_bus.publish = AsyncMock()
+        emitter.publish_progress = AsyncMock()
 
         await executor._emit_event("memory.updated", "usr_1", {"memory_id": "mem_001"})
 
-        executor._publish_progress.assert_not_called()
+        emitter.publish_progress.assert_not_called()

@@ -2,7 +2,7 @@
 
 import json
 
-from src.orchestrator.contracts import (
+from src.contracts import (
     ResultSummary,
     StepState,
     SurfaceUpdate,
@@ -85,7 +85,7 @@ class TestSurfaceUpdateFlow:
 
     def test_approval_needed_includes_context(self):
         """approval_needed phase must include ApprovalContext."""
-        from src.orchestrator.contracts import ApprovalContext
+        from src.contracts import ApprovalContext
 
         su = SurfaceUpdate(
             surface_id="surf_01",

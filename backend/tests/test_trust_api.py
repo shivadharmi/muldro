@@ -126,22 +126,23 @@ async def test_get_capability_detail():
 
 @pytest.mark.asyncio
 async def test_set_ceiling():
-    """set_ceiling upserts a TrustCeiling record."""
+    """set_ceiling issues an atomic upsert carrying the new ceiling value."""
     from src.services.trust_engine import TrustEngine
 
     mock_db = AsyncMock()
     engine = TrustEngine(mock_db, workspace_id="ws_test")
 
-    mock_result = MagicMock()
-    mock_result.scalar_one_or_none.return_value = None
-    mock_db.execute = AsyncMock(return_value=mock_result)
+    captured: dict = {}
+    mock_db.execute = AsyncMock(side_effect=lambda stmt: captured.setdefault("stmt", stmt))
 
     await engine.set_ceiling("email.send", "trusted")
 
-    mock_db.add.assert_called_once()
-    added = mock_db.add.call_args[0][0]
-    assert added.capability == "email.send"
-    assert added.max_level == "trusted"
+    assert mock_db.execute.await_count == 1
+    params = captured["stmt"].compile().params
+    assert params["capability"] == "email.send"
+    assert params["max_level"] == "trusted"
+    assert params["workspace_id"] == "ws_test"
+    mock_db.flush.assert_awaited_once()
 
 
 @pytest.mark.asyncio

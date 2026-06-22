@@ -169,6 +169,38 @@ class TestAssessRelevance:
         assert result.notification_tier == "briefing"
 
     @pytest.mark.asyncio
+    async def test_parses_json_with_trailing_prose_not_silent(self):
+        # Regression: the LLM returns a valid JSON object then trailing prose.
+        # Previously json.loads raised "Extra data" and the assessment was lost
+        # to the silent fallback (a dropped perception signal). Now it parses.
+        from src.services.relevance_assessor import (
+            PerceptionSignal,
+            UserContext,
+            assess_relevance,
+        )
+
+        mock_client = AsyncMock()
+        response_text = (
+            '{"relevance_score": 0.8, "reasoning": "PR from key collaborator",'
+            ' "relates_to_goals": ["ship v2"], "urgency": "today",'
+            ' "suggested_actions": []}\n\nHere is why I scored it this way: the PR'
+            " touches the release-critical path and was opened by a teammate."
+        )
+        mock_client.messages.create.return_value = MagicMock(
+            content=[MagicMock(text=response_text)]
+        )
+        signal = PerceptionSignal(
+            source="github",
+            event_type="pr_review_requested",
+            summary="PR #42 review requested by Alice",
+        )
+        context = UserContext(goals=["ship v2 by Friday"])
+        result = await assess_relevance(signal, context, mock_client)
+        assert result.relevance_score == 0.8
+        assert result.notification_tier == "push"  # 0.8 + today = push, NOT silent
+        assert result.urgency == "today"
+
+    @pytest.mark.asyncio
     async def test_accepts_custom_model_parameter(self):
         from src.services.relevance_assessor import (
             PerceptionSignal,
@@ -208,4 +240,81 @@ class TestAssessRelevance:
         context = UserContext()
         result = await assess_relevance(signal, context, mock_client)
         assert result.relevance_score == 0.0
+        assert result.notification_tier == "silent"
+
+
+class TestRelevancePenalty:
+    """The deterministic engagement penalty downgrades the effective tier."""
+
+    def _client_returning(self, score: float, urgency: str) -> AsyncMock:
+        mock_client = AsyncMock()
+        mock_client.messages.create.return_value = MagicMock(
+            content=[
+                MagicMock(
+                    text=f'{{"relevance_score": {score}, "reasoning": "x",'
+                    f' "relates_to_goals": [], "urgency": "{urgency}",'
+                    ' "suggested_actions": []}'
+                )
+            ]
+        )
+        return mock_client
+
+    @pytest.mark.asyncio
+    async def test_penalty_downgrades_push_to_briefing(self):
+        from src.services.relevance_assessor import (
+            PerceptionSignal,
+            UserContext,
+            assess_relevance,
+        )
+
+        # LLM says 0.8/today → would be push; a 0.2 penalty drops effective
+        # score to 0.6 (< 0.7) → briefing.
+        client = self._client_returning(0.8, "today")
+        signal = PerceptionSignal(source="slack", event_type="message", summary="m")
+        result = await assess_relevance(signal, UserContext(), client, relevance_penalty=0.2)
+        assert result.relevance_score == pytest.approx(0.6)
+        assert result.notification_tier == "briefing"
+
+    @pytest.mark.asyncio
+    async def test_penalty_downgrades_briefing_to_silent(self):
+        from src.services.relevance_assessor import (
+            PerceptionSignal,
+            UserContext,
+            assess_relevance,
+        )
+
+        # 0.45/whenever → briefing; 0.2 penalty → 0.25 (< 0.4) → silent.
+        client = self._client_returning(0.45, "whenever")
+        signal = PerceptionSignal(source="slack", event_type="message", summary="m")
+        result = await assess_relevance(signal, UserContext(), client, relevance_penalty=0.2)
+        assert result.relevance_score == pytest.approx(0.25)
+        assert result.notification_tier == "silent"
+
+    @pytest.mark.asyncio
+    async def test_zero_penalty_leaves_tier_unchanged(self):
+        from src.services.relevance_assessor import (
+            PerceptionSignal,
+            UserContext,
+            assess_relevance,
+        )
+
+        client = self._client_returning(0.8, "today")
+        signal = PerceptionSignal(source="slack", event_type="message", summary="m")
+        result = await assess_relevance(signal, UserContext(), client, relevance_penalty=0.0)
+        assert result.relevance_score == pytest.approx(0.8)
+        assert result.notification_tier == "push"
+
+    @pytest.mark.asyncio
+    async def test_full_penalty_forces_silent_floor_at_zero(self):
+        from src.services.relevance_assessor import (
+            PerceptionSignal,
+            UserContext,
+            assess_relevance,
+        )
+
+        # A full 1.0 penalty (suppression race) floors the score at 0.0.
+        client = self._client_returning(0.9, "immediate")
+        signal = PerceptionSignal(source="slack", event_type="message", summary="m")
+        result = await assess_relevance(signal, UserContext(), client, relevance_penalty=1.0)
+        assert result.relevance_score == pytest.approx(0.0)
         assert result.notification_tier == "silent"

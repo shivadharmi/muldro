@@ -38,6 +38,7 @@ async def get_runtime_summary(
         completed_24h=summary["completed_24h"],
         failed_24h=summary["failed_24h"],
         agents_active=summary["agents_active"],
+        active_agents=summary["active_agents"],
         top_agents=[AgentWorkloadResponse(**a) for a in summary["top_agents"]],
     )
 

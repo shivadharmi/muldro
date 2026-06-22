@@ -60,7 +60,7 @@ export function WorkspaceCanvas({ surfaces, onSurfaceClick }: Props) {
 
   return (
     <div
-      className="grid gap-3"
+      className="grid gap-3 items-start"
       style={{
         gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))",
         gridAutoFlow: "dense",

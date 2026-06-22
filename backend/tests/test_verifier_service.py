@@ -250,6 +250,182 @@ class TestVerifyRunMultipleConditions:
         assert result.score == 0.5
 
 
+class TestVerifyRunUntypedProseCriteria:
+    """An untyped condition carrying a free-text ``criteria`` key (as stored by
+    plan_store for Planner prose) must be routed to the LLM judge — not silently
+    treated as ``status_equals`` (which never reads the prose)."""
+
+    @pytest.mark.asyncio
+    async def test_untyped_criteria_routes_to_llm_judge(self, verifier, mock_db):
+        run = _make_run(status="partially_completed")
+        steps = [_make_step(status="completed")]
+
+        call_count = 0
+
+        async def mock_execute(stmt):
+            nonlocal call_count
+            call_count += 1
+            result = MagicMock()
+            if call_count == 1:
+                result.scalar_one_or_none.return_value = run
+                return result
+            result.scalars.return_value.all.return_value = steps
+            return result
+
+        mock_db.execute = AsyncMock(side_effect=mock_execute)
+
+        # success_conditions as plan_store stores prose: {"criteria": "<prose>"}.
+        conditions = {"criteria": "The user was emailed a summary of Q3 metrics."}
+
+        with patch.object(verifier, "_llm_judge", new=AsyncMock(return_value=True)) as judge:
+            result = await verifier.verify_run("run_001", success_conditions=conditions)
+
+        judge.assert_awaited_once()
+        assert result.verdict == Verdict.passed
+
+    @pytest.mark.asyncio
+    async def test_untyped_criteria_judge_fail_marks_failed(self, verifier, mock_db):
+        run = _make_run(status="partially_completed")
+        steps = [_make_step(status="completed")]
+
+        call_count = 0
+
+        async def mock_execute(stmt):
+            nonlocal call_count
+            call_count += 1
+            result = MagicMock()
+            if call_count == 1:
+                result.scalar_one_or_none.return_value = run
+                return result
+            result.scalars.return_value.all.return_value = steps
+            return result
+
+        mock_db.execute = AsyncMock(side_effect=mock_execute)
+        conditions = {"criteria": "Did the run book a flight?"}
+
+        with patch.object(verifier, "_llm_judge", new=AsyncMock(return_value=False)):
+            result = await verifier.verify_run("run_001", success_conditions=conditions)
+
+        assert result.verdict == Verdict.failed
+
+
+class TestLLMJudgeNonJSONResponse:
+    """The judge is *advisory* (informational, not failing). A non-JSON or empty
+    judge response must degrade quietly to a not-passed verdict — NOT raise a
+    JSONDecodeError that spews a full traceback on every run (see log2.log)."""
+
+    def _judge_response(self, text: str):
+        block = MagicMock()
+        block.text = text
+        resp = MagicMock()
+        resp.content = [block]
+        return resp
+
+    @pytest.mark.asyncio
+    async def test_non_json_judge_response_returns_false_without_raising(self, verifier):
+        verifier._client.messages.create = AsyncMock(
+            return_value=self._judge_response("The run looks fine to me.")
+        )
+        condition = {"type": "llm_judge", "criteria": "Did the run succeed?"}
+        # Must not raise; advisory failure is a clean False.
+        result = await verifier._llm_judge(condition, _make_run(), [_make_step()])
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_empty_judge_response_returns_false_without_raising(self, verifier):
+        verifier._client.messages.create = AsyncMock(return_value=self._judge_response(""))
+        condition = {"type": "llm_judge", "criteria": "Did the run succeed?"}
+        result = await verifier._llm_judge(condition, _make_run(), [_make_step()])
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_valid_json_judge_response_still_parsed(self, verifier):
+        # With assistant-prefill forcing JSON, the model's text begins after "{".
+        verifier._client.messages.create = AsyncMock(
+            return_value=self._judge_response('"passed": true, "reason": "all good"}')
+        )
+        condition = {"type": "llm_judge", "criteria": "Did the run succeed?"}
+        result = await verifier._llm_judge(condition, _make_run(), [_make_step()])
+        assert result is True
+
+
+class TestStatusEqualsDefaultValue:
+    """A ``status_equals`` condition with no explicit ``value`` must accept the
+    post-completion states (``completed``/``partially_completed``) — dag_runner
+    sets the run to ``partially_completed`` *before* verification, so a default
+    check hardcoded to ``completed`` would always fail."""
+
+    @pytest.mark.asyncio
+    async def test_status_equals_default_passes_for_partially_completed(self, verifier, mock_db):
+        run = _make_run(status="partially_completed")
+        steps = [_make_step(status="completed")]
+
+        call_count = 0
+
+        async def mock_execute(stmt):
+            nonlocal call_count
+            call_count += 1
+            result = MagicMock()
+            if call_count == 1:
+                result.scalar_one_or_none.return_value = run
+                return result
+            result.scalars.return_value.all.return_value = steps
+            return result
+
+        mock_db.execute = AsyncMock(side_effect=mock_execute)
+
+        # No "value" key → default must accept partially_completed.
+        conditions = {"type": "status_equals", "label": "status_ok"}
+        result = await verifier.verify_run("run_001", success_conditions=conditions)
+        assert result.verdict == Verdict.passed
+        assert "status_ok" in result.checks_passed
+
+    @pytest.mark.asyncio
+    async def test_status_equals_default_passes_for_completed(self, verifier, mock_db):
+        run = _make_run(status="completed")
+        steps = [_make_step(status="completed")]
+
+        call_count = 0
+
+        async def mock_execute(stmt):
+            nonlocal call_count
+            call_count += 1
+            result = MagicMock()
+            if call_count == 1:
+                result.scalar_one_or_none.return_value = run
+                return result
+            result.scalars.return_value.all.return_value = steps
+            return result
+
+        mock_db.execute = AsyncMock(side_effect=mock_execute)
+        conditions = {"type": "status_equals", "label": "status_ok"}
+        result = await verifier.verify_run("run_001", success_conditions=conditions)
+        assert result.verdict == Verdict.passed
+
+    @pytest.mark.asyncio
+    async def test_status_equals_explicit_value_still_enforced(self, verifier, mock_db):
+        run = _make_run(status="partially_completed")
+        steps = [_make_step(status="completed")]
+
+        call_count = 0
+
+        async def mock_execute(stmt):
+            nonlocal call_count
+            call_count += 1
+            result = MagicMock()
+            if call_count == 1:
+                result.scalar_one_or_none.return_value = run
+                return result
+            result.scalars.return_value.all.return_value = steps
+            return result
+
+        mock_db.execute = AsyncMock(side_effect=mock_execute)
+        # Explicit value that does not match → still fails (no loosening).
+        conditions = {"type": "status_equals", "value": "cancelled", "label": "status_ok"}
+        result = await verifier.verify_run("run_001", success_conditions=conditions)
+        assert result.verdict == Verdict.failed
+
+
 class TestVerifyStepCompleted:
     @pytest.mark.asyncio
     async def test_verify_step_completed(self, verifier, mock_db):

@@ -1,0 +1,374 @@
+"""Run/Summary unified surface detail tab builders."""
+
+import logging
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.ui.contracts import DetailTabResponse
+
+from ._shared import (
+    _empty_tab,
+    _extract_run_id,
+    _section,
+    _truncate,
+)
+
+logger = logging.getLogger(__name__)
+
+
+async def build_run_steps_tab(db: AsyncSession, surface: Any, **kwargs: Any) -> DetailTabResponse:
+    """Steps tab for a run surface: ordered list with status, duration, output."""
+    from src.contracts import step_status_to_ui
+    from src.models.task_graph import TaskRun, TaskStep
+    from src.ui import units
+
+    run_id = _extract_run_id(surface)
+    if not run_id:
+        return _empty_tab("steps", "No linked run.")
+
+    run = (await db.execute(select(TaskRun).where(TaskRun.run_id == run_id))).scalar_one_or_none()
+    if not run:
+        return _empty_tab("steps", f"Run {run_id[:16]}... not found.")
+
+    steps = list(
+        (
+            await db.execute(
+                select(TaskStep).where(TaskStep.run_id == run_id).order_by(TaskStep.step_order)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    step_states = [
+        {
+            "step_id": s.step_id,
+            "description": s.name or (s.input_data or {}).get("description", "") or s.step_id,
+            "status": step_status_to_ui(s.status),
+            "output_summary": (
+                _truncate(str((s.output_data or {}).get("result", "")), 240)
+                if s.output_data
+                else None
+            ),
+            "duration_ms": (
+                int((s.completed_at - s.started_at).total_seconds() * 1000)
+                if (s.started_at and s.completed_at)
+                else None
+            ),
+        }
+        for s in steps
+    ]
+
+    return DetailTabResponse(
+        tab_id="steps",
+        sections=[
+            _section(
+                "steps",
+                f"Steps ({len(steps)})",
+                [units.step_list(steps=step_states, run_id=run_id)],
+                collapsed=False,
+            )
+        ],
+    )
+
+
+async def build_run_plan_tab(db: AsyncSession, surface: Any, **kwargs: Any) -> DetailTabResponse:
+    """Plan tab: goal, reasoning, success criteria, priority, trigger from the linked Plan row."""
+    from src.models.plans import Plan
+    from src.models.task_graph import TaskRun
+    from src.ui import units
+
+    run_id = _extract_run_id(surface)
+    if not run_id:
+        return _empty_tab("plan", "No linked run.")
+
+    run = (await db.execute(select(TaskRun).where(TaskRun.run_id == run_id))).scalar_one_or_none()
+    if not run or not run.plan_id:
+        return _empty_tab("plan", "Run has no linked plan.")
+
+    plan = (await db.execute(select(Plan).where(Plan.plan_id == run.plan_id))).scalar_one_or_none()
+    if not plan:
+        return _empty_tab("plan", "Plan not found.")
+
+    return DetailTabResponse(
+        tab_id="plan",
+        sections=[
+            _section(
+                "plan",
+                "Plan",
+                [
+                    units.plan_summary(
+                        goal=plan.goal or "",
+                        reasoning=plan.reasoning_summary or "",
+                        success_criteria=_format_success_conditions(plan.success_conditions),
+                        priority=plan.priority or "",
+                        trigger_type=plan.trigger_type or "",
+                        run_id=run_id,
+                    )
+                ],
+                collapsed=False,
+            )
+        ],
+    )
+
+
+def _format_success_conditions(conditions: dict | None) -> str:
+    """Render the Plan.success_conditions JSONB (dict|None) into a readable string.
+
+    ``plan_summary`` expects a plain string for ``success_criteria``; the model
+    stores a dict, so join its key/value pairs. None / empty → "".
+    """
+    if not conditions:
+        return ""
+    return "; ".join(f"{key}: {value}" for key, value in conditions.items())
+
+
+async def build_run_events_tab(db: AsyncSession, surface: Any, **kwargs: Any) -> DetailTabResponse:
+    """Events tab: RuntimeEvent timeline ordered by occurred_at."""
+    from src.models.runtime_event import RuntimeEvent
+    from src.ui import units
+
+    run_id = _extract_run_id(surface)
+    if not run_id:
+        return _empty_tab("events", "No linked run.")
+
+    events = list(
+        (
+            await db.execute(
+                select(RuntimeEvent)
+                .where(RuntimeEvent.run_id == run_id)
+                .order_by(RuntimeEvent.occurred_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    event_dicts = [
+        {
+            "timestamp": e.occurred_at.isoformat() if e.occurred_at else "",
+            "event_type": e.event_type,
+            "description": (e.payload or {}).get("summary", "") if e.payload else "",
+        }
+        for e in events
+    ]
+
+    return DetailTabResponse(
+        tab_id="events",
+        sections=[
+            _section(
+                "events",
+                f"Events ({len(events)})",
+                [units.event_timeline(events=event_dicts, run_id=run_id)],
+                collapsed=False,
+            )
+        ],
+    )
+
+
+async def build_run_approval_tab(
+    db: AsyncSession, surface: Any, **kwargs: Any
+) -> DetailTabResponse:
+    """Approval tab: pending approvals for the run, rendered as actionable cards.
+
+    Surfaces the existing ``units.approval_card`` (Approve/Reject/Edit) for the
+    run the user opens, so an ``awaiting_approval`` run is actionable from its
+    persisted detail modal — not only from a transient WS frame.
+    """
+    from src.models.approvals import Approval
+    from src.ui import units
+
+    run_id = _extract_run_id(surface)
+    if not run_id:
+        return _empty_tab("approval", "No linked run.")
+
+    approvals = list(
+        (
+            await db.execute(
+                select(Approval)
+                .where(Approval.run_id == run_id, Approval.status == "pending")
+                .order_by(Approval.created_at, Approval.expires_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    if not approvals:
+        return _empty_tab("approval", "No pending approval for this run.")
+
+    cards = []
+    for apr in approvals:
+        refs = apr.artifact_refs if isinstance(apr.artifact_refs, dict) else {}
+        card_data = {
+            "approval_id": apr.approval_id,
+            "step_description": apr.title or apr.summary or "Approval required to proceed.",
+            "risk_level": apr.risk_level or "medium",
+            "risk_reasoning": apr.summary or "",
+            "expires_at": apr.expires_at.isoformat() if apr.expires_at else None,
+            "reversible": refs.get("reversible", True),
+            "blast_radius": refs.get("blast_radius", "self"),
+        }
+        if refs.get("capability"):
+            card_data["capability"] = refs["capability"]
+        if refs.get("step_name"):
+            card_data["step_name"] = refs["step_name"]
+        cards.append(units.approval_card(card_data, include_actions=True))
+
+    return DetailTabResponse(
+        tab_id="approval",
+        sections=[_section("approval", "Approval", cards, collapsed=False)],
+    )
+
+
+async def build_run_trace_tab(db: AsyncSession, surface: Any, **kwargs: Any) -> DetailTabResponse:
+    """Trace tab: token/cost totals + per-agent breakdown.
+
+    Uses the three-layer fallback from routes_history: trace_id JOIN,
+    traces.run_id reverse lookup, then the task_runs rollup cache.
+    """
+    from src.models.task_graph import TaskRun, TaskStep
+    from src.models.traces import ModelCall, Trace
+    from src.ui import renderer as r
+    from src.ui import units
+
+    run_id = _extract_run_id(surface)
+    if not run_id:
+        return _empty_tab("trace", "No linked run.")
+
+    run = (await db.execute(select(TaskRun).where(TaskRun.run_id == run_id))).scalar_one_or_none()
+    if not run:
+        return _empty_tab("trace", "Run not found.")
+
+    trace_row = None
+    if run.trace_id:
+        trace_row = (
+            await db.execute(select(Trace).where(Trace.trace_id == run.trace_id))
+        ).scalar_one_or_none()
+    if trace_row is None:
+        trace_row = (
+            await db.execute(select(Trace).where(Trace.run_id == run.run_id))
+        ).scalar_one_or_none()
+
+    # The run-level rollup columns are the canonical CROSS-SEGMENT total (a paused/
+    # resumed run accumulates one trace per segment; run.trace_id only points at the
+    # first segment's trace). Prefer them; fall back to the single trace_row only for
+    # legacy runs whose rollup was never written.
+    input_t = int(run.input_tokens or (trace_row.total_input_tokens if trace_row else 0) or 0)
+    output_t = int(run.output_tokens or (trace_row.total_output_tokens if trace_row else 0) or 0)
+    cost = float(run.cost_usd or (trace_row.total_cost_usd if trace_row else 0) or 0.0)
+    duration_ms = (
+        trace_row.duration_ms
+        if trace_row and trace_row.duration_ms
+        else (
+            int((run.completed_at - run.started_at).total_seconds() * 1000)
+            if run.started_at and run.completed_at
+            else None
+        )
+    )
+
+    # Honest empty-state: a grid of zeros looks broken. When there is no model
+    # usage to show, render an informative alert instead — distinguishing a run
+    # that simply hasn't done any model work YET (still pending/awaiting) from a
+    # terminal run that genuinely made no model calls.
+    if input_t == 0 and output_t == 0 and cost == 0.0:
+        completed_steps = list(
+            (
+                await db.execute(
+                    select(TaskStep).where(
+                        TaskStep.run_id == run_id, TaskStep.status == "completed"
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        not_yet_statuses = {
+            "pending",
+            "planned",
+            "approved",
+            "awaiting_approval",
+            "awaiting_input",
+            "paused",
+            "running",
+        }
+        if run.status in not_yet_statuses and not completed_steps:
+            message = "No model calls yet — this run hasn't executed."
+        else:
+            message = "No model usage recorded for this run."
+        return DetailTabResponse(
+            tab_id="trace",
+            sections=[
+                _section(
+                    "trace",
+                    "Trace",
+                    [r.alert("trace_empty", message, severity="info")],
+                    collapsed=False,
+                )
+            ],
+        )
+
+    # Per-agent breakdown across ALL trace segments for this run (not just the first
+    # trace_row), so the breakdown sums to the same headline total for resumed runs.
+    step_breakdown: list[dict[str, Any]] = []
+    calls = list(
+        (
+            await db.execute(
+                select(ModelCall)
+                .join(Trace, ModelCall.trace_id == Trace.trace_id)
+                .where(Trace.run_id == run.run_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not calls and trace_row is not None:
+        # Legacy fallback: traces without run_id linkage — use the single trace_row.
+        calls = list(
+            (await db.execute(select(ModelCall).where(ModelCall.trace_id == trace_row.trace_id)))
+            .scalars()
+            .all()
+        )
+    if calls:
+        by_agent: dict[str, dict[str, Any]] = {}
+        for c in calls:
+            key = c.agent_name or "unknown"
+            entry = by_agent.setdefault(
+                key,
+                {
+                    "step_id": key,
+                    "agent": key,
+                    "calls": 0,
+                    "tokens": 0,
+                    "cost_usd": 0.0,
+                    "duration_ms": 0,
+                },
+            )
+            entry["calls"] += 1
+            entry["tokens"] += int((c.input_tokens or 0) + (c.output_tokens or 0))
+            entry["cost_usd"] = round(entry["cost_usd"] + float(c.cost_usd or 0), 6)
+            entry["duration_ms"] += int(c.duration_ms or 0)
+        step_breakdown = list(by_agent.values())
+
+    return DetailTabResponse(
+        tab_id="trace",
+        sections=[
+            _section(
+                "trace",
+                "Trace",
+                [
+                    units.trace_metrics(
+                        input_tokens=input_t,
+                        output_tokens=output_t,
+                        cost_usd=cost,
+                        duration_ms=duration_ms,
+                        step_breakdown=step_breakdown or None,
+                        run_id=run_id,
+                    )
+                ],
+                collapsed=False,
+            )
+        ],
+    )

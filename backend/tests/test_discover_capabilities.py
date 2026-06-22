@@ -33,9 +33,9 @@ def _mock_ctx():
 def _configure_with_tools(tools: list) -> tuple[AsyncMock, callable]:
     from src.tools import intelligence_server
 
-    old_db_factory = intelligence_server._db_factory
-    old_settings = intelligence_server._settings
-    old_services = intelligence_server._services
+    old_db_factory = intelligence_server._shared._db_factory
+    old_settings = intelligence_server._shared._settings
+    old_services = intelligence_server._shared._services
 
     mock_session = AsyncMock()
     tool_result = MagicMock()
@@ -51,9 +51,9 @@ def _configure_with_tools(tools: list) -> tuple[AsyncMock, callable]:
     intelligence_server.configure(mock_db_factory, MagicMock(), MagicMock())
 
     def cleanup():
-        intelligence_server._db_factory = old_db_factory
-        intelligence_server._settings = old_settings
-        intelligence_server._services = old_services
+        intelligence_server._shared._db_factory = old_db_factory
+        intelligence_server._shared._settings = old_settings
+        intelligence_server._shared._services = old_services
 
     return mock_session, cleanup
 

@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class SessionManager:
-    """Manages user sessions across surfaces (web, telegram, mobile)."""
+    """Manages user sessions across surfaces (web, mobile)."""
 
     def __init__(self, db: AsyncSession):
         self._db = db

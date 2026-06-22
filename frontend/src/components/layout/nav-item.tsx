@@ -32,6 +32,12 @@ export function NavItem({
     >
       <span className="flex-shrink-0 w-[18px] h-[18px]">{icon}</span>
       {!collapsed && <span className="flex-1 truncate">{label}</span>}
+      {active && !collapsed && (
+        <span
+          aria-hidden="true"
+          className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-j-primary"
+        />
+      )}
       {badge !== undefined && badge > 0 && (
         <span
           className={`bg-j-primary text-j-primary-fg text-[10px] font-semibold rounded-full min-w-[18px] text-center leading-[18px] ${

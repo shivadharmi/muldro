@@ -22,18 +22,82 @@ from src.services.graph_engine import GraphEngine
 
 logger = logging.getLogger(__name__)
 
+# Memory types that surface as descriptive "fact" cards (preference handled separately).
+_FACT_MEMORY_TYPES = ("semantic", "relationship")
+_LABEL_MAX_LEN = 48
+
+
+def _derive_label(fact_text: str | None) -> str:
+    """Derive a short card label from a memory's fact_text (pure helper).
+
+    Takes the first sentence/clause and truncates to ~48 chars. Falls back to
+    a generic label when fact_text is empty.
+    """
+    text = (fact_text or "").strip()
+    if not text:
+        return "Untitled"
+    # First sentence — split on terminal punctuation.
+    for sep in (". ", "? ", "! ", "\n"):
+        idx = text.find(sep)
+        if idx != -1:
+            text = text[:idx]
+            break
+    text = text.strip().rstrip(".?!")
+    if len(text) <= _LABEL_MAX_LEN:
+        return text
+    return text[: _LABEL_MAX_LEN - 1].rstrip() + "…"
+
+
+def _normalize_source_event_ids(raw: object) -> list[str]:
+    """Coerce a memory's source_event_ids (dict or list) into a flat list of IDs."""
+    if isinstance(raw, dict):
+        return [str(v) for v in raw.values() if v]
+    if isinstance(raw, list):
+        return [str(v) for v in raw if v]
+    return []
+
+
+def _entity_card_kind(entity_type: str) -> str | None:
+    """Map an entity_type to a knowledge-card kind, or None if it has no card."""
+    if entity_type == "person":
+        return "person"
+    if entity_type in ("project", "initiative"):
+        return "project"
+    return None
+
+
+def _entity_sources(entity: "Entity") -> list[str]:
+    """Best-effort source-system slugs for an entity from its source_refs.
+
+    source_refs is a list of dicts that may carry a ``source`` key. Returns a
+    de-duplicated, order-preserving list; empty when attribution is unknown.
+    """
+    refs = entity.source_refs
+    if not isinstance(refs, list):
+        return []
+    sources: list[str] = []
+    for ref in refs:
+        if isinstance(ref, dict):
+            src = ref.get("source")
+            if src and src not in sources:
+                sources.append(str(src))
+    return sources
+
 
 class KnowledgeService:
     """Orchestrates GraphEngine (Neo4j) + Postgres for knowledge page queries."""
 
-    def __init__(self, settings: Settings, db: AsyncSession, graph_engine: GraphEngine):
+    def __init__(
+        self, settings: Settings, db: AsyncSession, graph_engine: GraphEngine | None = None
+    ):
         self._settings = settings
         self._db = db
         self._graph = graph_engine
 
     async def close(self) -> None:
-        """Release GraphEngine resources."""
-        await self._graph.close()
+        """Release GraphEngine resources (no-op when no graph engine was attached)."""
+        if self._graph is not None:
+            await self._graph.close()
 
     async def __aenter__(self) -> "KnowledgeService":
         return self
@@ -144,7 +208,24 @@ class KnowledgeService:
 
         entity_name_map = await self._resolve_entity_names(all_entity_ids, workspace_id)
 
-        items = [self._memory_to_dict(mem, entity_name_map) for mem in memories]
+        # Batch-resolve provenance source slugs for the whole page in ONE query
+        # (no N+1), reusing the same approach as the knowledge-cards path.
+        per_memory_event_ids = {
+            mem.memory_id: _normalize_source_event_ids(mem.source_event_ids) for mem in memories
+        }
+        all_event_ids: set[str] = set()
+        for ids in per_memory_event_ids.values():
+            all_event_ids.update(ids)
+        event_source_map = await self._resolve_event_sources(all_event_ids, workspace_id)
+
+        items = [
+            self._memory_to_dict(
+                mem,
+                entity_name_map,
+                self._memory_sources(per_memory_event_ids.get(mem.memory_id, []), event_source_map),
+            )
+            for mem in memories
+        ]
 
         pages = max(1, math.ceil(total / limit))
 
@@ -298,6 +379,139 @@ class KnowledgeService:
             "growth_by_day": growth_by_day,
         }
 
+    async def get_knowledge_cards(
+        self,
+        user_id: str,
+        workspace_id: str,
+        *,
+        limit: int = 50,
+    ) -> list[dict]:
+        """Unified knowledge-card feed drawn from BOTH entities and memories.
+
+        Card shape: {id, kind, label, desc, sources}.
+
+        Kind mapping:
+        - entity person -> person; entity project/initiative -> project
+        - memory preference -> preference; memory semantic/relationship -> fact
+
+        Sources:
+        - entities: best-effort from Entity.source_refs (empty when unknown)
+        - memories: source_event_ids resolved (batched) to originating event
+          source systems (gmail/slack/notion/...). Empty when unresolvable.
+        """
+        limit = max(1, min(limit, 100))
+
+        entity_cards = await self._entity_cards(user_id, workspace_id, limit)
+        memory_cards = await self._memory_cards(user_id, workspace_id, limit)
+
+        # Interleave by simple recency-agnostic merge then cap at limit. Entities
+        # first (curated graph), then memories — both already individually limited.
+        return (entity_cards + memory_cards)[:limit]
+
+    async def _entity_cards(self, user_id: str, workspace_id: str, limit: int) -> list[dict]:
+        """Build person/project cards from entities."""
+        stmt = (
+            select(Entity)
+            .where(
+                Entity.user_id == user_id,
+                Entity.workspace_id == workspace_id,
+                Entity.entity_type.in_(("person", "project", "initiative")),
+            )
+            .order_by(Entity.importance_score.desc(), Entity.last_seen_at.desc())
+            .limit(limit)
+        )
+        result = await self._db.execute(stmt)
+        entities = result.scalars().all()
+
+        cards: list[dict] = []
+        for e in entities:
+            kind = _entity_card_kind(e.entity_type)
+            if kind is None:
+                continue
+            attrs = e.attributes or {}
+            desc = attrs.get("role") or attrs.get("summary") or e.entity_type
+            cards.append(
+                {
+                    "id": e.entity_id,
+                    "kind": kind,
+                    "label": e.canonical_name,
+                    "desc": desc,
+                    "sources": _entity_sources(e),
+                }
+            )
+        return cards
+
+    async def _memory_cards(self, user_id: str, workspace_id: str, limit: int) -> list[dict]:
+        """Build preference/fact cards from descriptive memories."""
+        card_types = ("preference", *_FACT_MEMORY_TYPES)
+        stmt = (
+            select(Memory)
+            .where(
+                Memory.user_id == user_id,
+                Memory.workspace_id == workspace_id,
+                Memory.status == "active",
+                Memory.memory_type.in_(card_types),
+            )
+            .order_by(Memory.stability_score.desc(), Memory.created_at.desc())
+            .limit(limit)
+        )
+        result = await self._db.execute(stmt)
+        memories = result.scalars().all()
+
+        # Batch-resolve all referenced event IDs -> source slug in ONE query (no N+1).
+        per_memory_event_ids = {
+            m.memory_id: _normalize_source_event_ids(m.source_event_ids) for m in memories
+        }
+        all_event_ids: set[str] = set()
+        for ids in per_memory_event_ids.values():
+            all_event_ids.update(ids)
+
+        event_source_map = await self._resolve_event_sources(all_event_ids, workspace_id)
+
+        cards: list[dict] = []
+        for m in memories:
+            kind = "preference" if m.memory_type == "preference" else "fact"
+            cards.append(
+                {
+                    "id": m.memory_id,
+                    "kind": kind,
+                    "label": _derive_label(m.fact_text),
+                    "desc": m.fact_text,
+                    "sources": self._memory_sources(
+                        per_memory_event_ids.get(m.memory_id, []), event_source_map
+                    ),
+                }
+            )
+        return cards
+
+    @staticmethod
+    def _memory_sources(event_ids: list[str], event_source_map: dict[str, str]) -> list[str]:
+        """De-duplicated, order-preserving source slugs for one memory.
+
+        Maps a memory's normalized event IDs through the batched event→source
+        map. Empty when none resolve. Shared by the memories-list and cards
+        paths to keep provenance resolution DRY.
+        """
+        sources: list[str] = []
+        for eid in event_ids:
+            src = event_source_map.get(eid)
+            if src and src not in sources:
+                sources.append(src)
+        return sources
+
+    async def _resolve_event_sources(
+        self, event_ids: set[str], workspace_id: str
+    ) -> dict[str, str]:
+        """Map event_id -> source slug for a set of event IDs (single query)."""
+        if not event_ids:
+            return {}
+        stmt = select(NormalizedEvent.event_id, NormalizedEvent.source).where(
+            NormalizedEvent.event_id.in_(list(event_ids)),
+            NormalizedEvent.workspace_id == workspace_id,
+        )
+        result = await self._db.execute(stmt)
+        return {row.event_id: row.source for row in result.all()}
+
     # ── Private helpers ──────────────────────────────────────────────────
 
     async def _enrich_nodes(
@@ -416,8 +630,13 @@ class KnowledgeService:
         result = await self._db.execute(stmt)
         return {row.entity_id: row.canonical_name for row in result.all()}
 
-    def _memory_to_dict(self, mem: Memory, entity_name_map: dict[str, str]) -> dict:
-        """Convert a Memory row to a dict with resolved entity names."""
+    def _memory_to_dict(
+        self,
+        mem: Memory,
+        entity_name_map: dict[str, str],
+        sources: list[str] | None = None,
+    ) -> dict:
+        """Convert a Memory row to a dict with resolved entity names + sources."""
         eids = mem.entity_ids or []
         return {
             "memory_id": mem.memory_id,
@@ -433,6 +652,7 @@ class KnowledgeService:
             "created_at": mem.created_at.isoformat() if mem.created_at else None,
             "entity_ids": list(eids),
             "entity_names": [entity_name_map.get(eid, eid) for eid in eids],
+            "sources": sources or [],
         }
 
     def _resolve_memory_sort(self, sort_by: str):

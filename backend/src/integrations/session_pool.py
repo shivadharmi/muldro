@@ -15,12 +15,20 @@ from typing import Any
 from fastmcp import Client
 from fastmcp.client.auth import BearerAuth
 
+from src.integrations.local_process_manager import get_local_process_manager
+from src.integrations.mcp_errors import McpAuthRequiredError
+from src.integrations.provider_map import provider_for_server
+from src.integrations.turn_scope import current_turn_scope
 from src.services.mcp_resilience import MCPCircuitBreaker
 
 logger = logging.getLogger(__name__)
 
 # Default idle timeout before a session is cleaned up (30 minutes)
 SESSION_TTL_SECONDS = 1800
+
+# Per-call timeout for HTTP MCP tool discovery (list_tools). Kept as a
+# module-level constant so tests can monkeypatch it to avoid real-time waits.
+HTTP_DISCOVERY_TIMEOUT_SECONDS = 15
 
 # Mapping: server_name → env var name for stdio token injection.
 # Google Workspace excluded — it uses file-based auth, not raw tokens.
@@ -36,6 +44,10 @@ _STDIO_TOKEN_ENV_VARS: dict[str, str] = {
     "notion": "NOTION_TOKEN",
 }
 
+# OAuthManager token-reason values that mean the credential is permanently
+# unusable and the user must reconnect (vs. "refresh_failed" which is transient).
+_PERMANENT_REAUTH_REASONS: frozenset[str] = frozenset({"no_token", "no_refresh_token", "revoked"})
+
 
 @dataclass
 class SessionEntry:
@@ -48,6 +60,15 @@ class SessionEntry:
     tools: dict[str, str]  # canonical_name → raw_mcp_name
     created_at: float = field(default_factory=time.monotonic)
     last_used: float = field(default_factory=time.monotonic)
+    # OAuth access token the Client was built with, if any. Recorded so
+    # cached sessions can be cycled when OAuthManager returns a newer token
+    # (e.g., after a background refresh) — preventing "stale bearer bound
+    # to a live Client" failures that manifest as Atlassian's generic
+    # "We are having trouble..." error.
+    bound_token: str | None = None
+    # Name of the locally-managed MCP process this session uses (if any), so
+    # every teardown path releases the process refcount exactly once.
+    managed_server: str | None = None
 
 
 class UserMCPSessionPool:
@@ -88,6 +109,12 @@ class UserMCPSessionPool:
         """Register server configuration for later session creation."""
         self._server_configs[(workspace_id, server_name)] = config
 
+    def _effective_user(self, server_name: str, user_id: str, workspace_id: str = "") -> str:
+        """Resolve the session-key user: auth-free servers share one __shared__ session."""
+        config = self._server_configs.get((workspace_id, server_name))
+        auth_provider = (config or {}).get("auth_provider", "none")
+        return "__shared__" if auth_provider == "none" else user_id
+
     async def get_or_create_session(
         self,
         server_name: str,
@@ -101,13 +128,42 @@ class UserMCPSessionPool:
         """
         config = self._server_configs.get((workspace_id, server_name))
         auth_provider = (config or {}).get("auth_provider", "none")
-        effective_user = "__shared__" if auth_provider == "none" else user_id
+        effective_user = self._effective_user(server_name, user_id, workspace_id)
         key = (workspace_id, server_name, effective_user)
+
+        # If we already have a cached session for an OAuth-backed server,
+        # verify the bound bearer is still the current valid token. The
+        # OAuthManager refresh runs lazily, so a background refresh can
+        # leave the cached Client holding a stale token — Atlassian's
+        # hosted MCP answers those with a generic "having trouble" body
+        # (not a 401), which is hard to recover from after the fact.
+        # Checking up-front is a single DB read on the hot path, traded
+        # for reliable token rotation.
+        if self._is_oauth_server(server_name, workspace_id) and self._oauth_manager:
+            entry = self._sessions.get(key)
+            if entry and entry.bound_token:
+                provider_name = (
+                    auth_provider if auth_provider != "oauth" else _infer_provider(server_name)
+                )
+                try:
+                    current = await self._oauth_manager.get_valid_token(user_id, provider_name)
+                except Exception:
+                    current = None
+                if current and current != entry.bound_token:
+                    logger.info(
+                        "[mcp:session] token changed for %s/%s — rebuilding session",
+                        server_name,
+                        user_id,
+                    )
+                    await self.refresh_session(server_name, user_id, workspace_id=workspace_id)
 
         async with self._lock:
             entry = self._sessions.get(key)
             if entry:
                 entry.last_used = time.monotonic()
+                scope = current_turn_scope()
+                if scope is not None:
+                    scope.acquire(key)
                 return entry
 
             # Create new session
@@ -125,14 +181,49 @@ class UserMCPSessionPool:
 
             # Resolve auth
             auth = await self._resolve_auth(server_name, user_id, config)
+            bound_token: str | None = None
+            if auth is not None and isinstance(auth, BearerAuth):
+                bound_token = (
+                    auth.token.get_secret_value()
+                    if hasattr(auth.token, "get_secret_value")
+                    else str(auth.token)
+                )
 
             # Create Client
             transport = config.get("transport", "stdio")
+            managed_server: str | None = None
             if transport in ("sse", "streamable-http"):
-                url = config["url"]
+                if config.get("managed_local"):
+                    mgr = get_local_process_manager()
+                    if mgr is None:
+                        raise RuntimeError(
+                            f"'{server_name}' is managed_local but no "
+                            "LocalMCPProcessManager is configured"
+                        )
+                    url = await mgr.ensure_running(server_name)
+                    managed_server = server_name
+                else:
+                    url = config["url"]
                 client_ctx = Client(url, auth=auth) if auth else Client(url)
             else:
-                # stdio transport — inject auth as env var, then build config
+                # stdio transport — inject auth as env var, then build config.
+                #
+                # Guard: token-required stdio servers (slack/github/notion)
+                # fatal-crash when spawned with no token — the npx subprocess
+                # dumps raw Go/Node stack traces and exits. Refuse to spawn
+                # when no usable bearer token was resolved (user hasn't
+                # connected the integration). Raising here is handled at every
+                # caller boundary (call_tool, discover_and_persist, OAuth
+                # callback) as a recorded failure — never a crash.
+                if _requires_stdio_token(server_name, config) and not _bearer_token(auth):
+                    # McpAuthRequiredError subclasses ConnectionError, so existing
+                    # `except ConnectionError` boundaries still catch it; the
+                    # provider/reason fields let the re-auth service react.
+                    raise McpAuthRequiredError(
+                        provider=_infer_provider(server_name),
+                        server=server_name,
+                        reason="no_token",
+                    )
                 if auth and isinstance(auth, BearerAuth):
                     # BearerAuth wraps token in SecretStr; unwrap for env dict
                     raw_token = (
@@ -175,8 +266,13 @@ class UserMCPSessionPool:
                 server_name=server_name,
                 user_id=user_id,
                 tools=tool_mapping,
+                bound_token=bound_token,
+                managed_server=managed_server,
             )
             self._sessions[key] = entry
+            scope = current_turn_scope()
+            if scope is not None:
+                scope.register(key)
 
             logger.info(
                 "Created MCP session: server=%s user=%s tools=%d",
@@ -200,7 +296,7 @@ class UserMCPSessionPool:
             from ulid import ULID
 
             from src.models.database import get_session_factory
-            from src.models.tool_definitions import ToolDefinition
+            from src.models.tool_definitions import ToolBackend, ToolDefinition
             from src.services.tool_registry import ToolRegistry
 
             async with get_session_factory()() as db:
@@ -220,7 +316,7 @@ class UserMCPSessionPool:
                             workspace_id=workspace_id or None,
                             name=t.name,
                             server=server_name,
-                            backend="external_mcp",
+                            backend=ToolBackend.EXTERNAL_MCP,
                             source="discovered",
                             capability=None,
                             risk_level="medium",
@@ -274,7 +370,9 @@ class UserMCPSessionPool:
         import random
 
         from src.integrations.mcp_errors import (
+            MCPErrorCode,
             classify_error,
+            is_insufficient_scope,
             is_transient,
             make_error_response,
         )
@@ -299,6 +397,23 @@ class UserMCPSessionPool:
                 user_id,
                 workspace_id,
             )
+        except McpAuthRequiredError as e:
+            # Permanent "needs reconnect" — never crash; return a structured
+            # auth_required envelope carrying provider/server so the caller can
+            # trigger the re-auth flow.
+            logger.warning(
+                "[mcp:session] auth required for %s/%s: %s",
+                server_name,
+                tool_name,
+                e,
+            )
+            return {
+                "status": "error",
+                "error": str(e),
+                "error_code": MCPErrorCode.AUTH_REQUIRED,
+                "provider": e.provider,
+                "server": e.server,
+            }
         except Exception as e:
             logger.warning(
                 "[mcp:session] session creation failed for %s/%s: %s",
@@ -311,10 +426,22 @@ class UserMCPSessionPool:
         # Resolve canonical → raw MCP tool name
         raw_name = tool_name
 
+        # Auto-inject per-server defaults (e.g., Atlassian's cloudId) into
+        # the tool input. The agent doesn't need to know these values —
+        # they're captured at OAuth time and persisted on the installation.
+        # Caller-supplied keys always win so agents can still override
+        # (e.g., targeting a different cloudId if the user has multiple).
+        server_cfg = self._server_configs.get((workspace_id, server_name)) or {}
+        tool_defaults = server_cfg.get("tool_defaults") or {}
+        if tool_defaults:
+            tool_input = {**tool_defaults, **tool_input}
+
         import time as _time
 
         call_start = _time.monotonic()
         last_error: Exception | None = None
+        scope_failure = False
+        attempt = 0
         for attempt in range(max_retries):
             try:
                 result = await session.client.call_tool(raw_name, tool_input)
@@ -351,10 +478,38 @@ class UserMCPSessionPool:
             except Exception as e:
                 last_error = e
                 error_code = classify_error(e)
+                # A permanent grant-scope failure: the user must re-consent with
+                # a broader scope set. Refreshing the bearer fetches the SAME
+                # narrow grant, so skip refresh and route to re-auth below.
+                scope_failure = is_insufficient_scope(e)
 
                 # Only retry transient errors
                 if not is_transient(error_code) or attempt >= max_retries - 1:
                     self._circuit_breaker.record_failure(server_name)
+                    # If the cached session was built with a stale OAuth
+                    # bearer (auth error) or the server is OAuth-backed and
+                    # we've exhausted retries, invalidate it so the next
+                    # call rebuilds with a freshly fetched token. Without
+                    # this, a revoked/expired token is resent repeatedly
+                    # until the 5-min circuit cooldown elapses — at which
+                    # point the same stale session is still cached.
+                    should_refresh = not scope_failure and (
+                        error_code == MCPErrorCode.AUTH_ERROR
+                        or self._is_oauth_server(server_name, workspace_id)
+                    )
+                    if should_refresh:
+                        try:
+                            await self.refresh_session(
+                                server_name,
+                                user_id,
+                                workspace_id=workspace_id,
+                            )
+                        except Exception:
+                            logger.debug(
+                                "Auto-refresh of %s session failed",
+                                server_name,
+                                exc_info=True,
+                            )
                     break
 
                 # Exponential backoff with jitter: 1s, 2s, 4s
@@ -369,17 +524,82 @@ class UserMCPSessionPool:
                 )
                 await asyncio.sleep(delay)
 
+        # Permanent grant-scope failure → emit the structured ``auth_required``
+        # envelope (carrying provider+server) instead of a generic ``auth_error``.
+        # This is the single signal the whole re-auth pipeline keys on: the
+        # agent loop marks the integration unavailable and stops retrying it
+        # (no runaway workaround loop), step_runner surfaces it into the step
+        # output, and dag_runner defers the run for re-authorization + notifies.
+        if scope_failure and last_error is not None:
+            provider = _infer_provider(server_name)
+            logger.warning(
+                "[mcp:session] %s on %s needs re-authorization (insufficient scope) — provider=%s",
+                tool_name,
+                server_name,
+                provider,
+            )
+            return {
+                "status": "error",
+                "error_code": MCPErrorCode.AUTH_REQUIRED,
+                "error": (
+                    f"Integration '{provider}' is missing the permissions this "
+                    "action needs. Ask the user to reconnect it (re-authorize) "
+                    "with the required scopes; do not retry."
+                ),
+                "provider": provider,
+                "server": server_name,
+                "reason": "insufficient_scope",
+            }
+
         logger.warning(
-            "MCP tool '%s' on '%s' failed after %d attempts: %s",
+            "MCP tool '%s' on '%s' failed after %d attempt(s): %s",
             tool_name,
             server_name,
-            max_retries,
+            attempt + 1,
             last_error,
         )
         return make_error_response(
             last_error or RuntimeError("Unknown error"),
             tool_name=tool_name,
         )
+
+    async def _release_managed(self, entry: SessionEntry) -> None:
+        if not entry.managed_server:
+            return
+        mgr = get_local_process_manager()
+        if mgr is not None:
+            try:
+                await mgr.release(entry.managed_server)
+            except Exception:
+                logger.debug("release of %s failed", entry.managed_server, exc_info=True)
+
+    async def close_keys(self, keys: list[tuple[str, str, str]]) -> int:
+        """Close specific sessions by key (used for per-turn teardown).
+
+        Idempotent: keys with no live session are skipped. Releases any
+        managed-local process refcount the session held.
+
+        Invariant: the TurnScope refcount only gates *whether* teardown is
+        attempted for a key; the actual ``__aexit__`` is gated by the entry
+        still being present in ``_sessions`` (popped under the lock). So a
+        key that was refreshed/closed mid-turn is simply skipped here — there
+        is never a double ``__aexit__`` or double process release.
+        """
+        closed = 0
+        async with self._lock:
+            for key in keys:
+                entry = self._sessions.pop(key, None)
+                if not entry:
+                    continue
+                try:
+                    await entry.client_ctx.__aexit__(None, None, None)
+                except Exception:
+                    logger.debug("close_keys: error closing %s", key, exc_info=True)
+                await self._release_managed(entry)
+                closed += 1
+        if closed:
+            logger.info("[mcp:session] closed %d session(s) at turn end", closed)
+        return closed
 
     async def refresh_session(
         self,
@@ -388,7 +608,8 @@ class UserMCPSessionPool:
         workspace_id: str = "",
     ) -> None:
         """Force reconnect a session (e.g., after OAuth token refresh)."""
-        key = (workspace_id, server_name, user_id)
+        effective_user = self._effective_user(server_name, user_id, workspace_id)
+        key = (workspace_id, server_name, effective_user)
 
         async with self._lock:
             entry = self._sessions.pop(key, None)
@@ -397,6 +618,7 @@ class UserMCPSessionPool:
                     await entry.client_ctx.__aexit__(None, None, None)
                 except Exception:
                     logger.debug("Error closing session %s/%s", server_name, user_id)
+                await self._release_managed(entry)
 
         logger.info("Refreshed MCP session: server=%s user=%s", server_name, user_id)
 
@@ -416,6 +638,7 @@ class UserMCPSessionPool:
                     await entry.client_ctx.__aexit__(None, None, None)
                 except Exception:
                     pass
+                await self._release_managed(entry)
 
         if to_remove:
             logger.info("Cleaned up %d idle MCP sessions", len(to_remove))
@@ -429,6 +652,7 @@ class UserMCPSessionPool:
                     await entry.client_ctx.__aexit__(None, None, None)
                 except Exception:
                     pass
+                await self._release_managed(entry)
             self._sessions.clear()
         logger.info("MCP session pool shut down")
 
@@ -445,6 +669,26 @@ class UserMCPSessionPool:
     def has_server_config(self, server_name: str, workspace_id: str = "") -> bool:
         """Check if a server config is registered."""
         return (workspace_id, server_name) in self._server_configs
+
+    def _is_oauth_server(self, server_name: str, workspace_id: str = "") -> bool:
+        """Return True if the server's auth_provider resolves OAuth bearer tokens.
+
+        Used to decide whether a terminal tool-call failure should invalidate
+        the cached session — for OAuth servers, failures may be masking a
+        stale bearer, and cycling the session is the cheap recovery path.
+        """
+        config = self._server_configs.get((workspace_id, server_name))
+        if not config:
+            return False
+        auth_provider = config.get("auth_provider", "none")
+        return auth_provider in {
+            "oauth",
+            "google",
+            "github",
+            "slack",
+            "notion",
+            "atlassian",
+        }
 
     def is_pool_tool(self, tool_name: str, workspace_id: str = "") -> bool:
         """Check if a tool is known to any server in the pool."""
@@ -474,140 +718,34 @@ class UserMCPSessionPool:
                 result[canonical] = key[1]  # server_name
         return result
 
-    async def discover_tools(
-        self,
-        server_name: str,
-        *,
-        workspace_id: str = "",
-        config: dict | None = None,
-    ) -> list[str]:
-        """Eagerly discover tools from an HTTP MCP server.
-
-        Tries unauthenticated first, falls back to using the first available
-        OAuth token from OAuthManager (some servers require auth for list_tools).
-        Populates _tool_metadata so schemas are available before the first
-        authenticated tool call.
-        """
-        cfg = config or self._server_configs.get((workspace_id, server_name))
-        if not cfg:
-            return []
-
-        transport = cfg.get("transport", "stdio")
-        if transport not in ("sse", "streamable-http"):
-            return []
-
-        url = cfg.get("url")
-        if not url:
-            return []
-
-        # Try unauthenticated, then with token if 401
-        raw_tools = None
-        try:
-            async with Client(url) as client:
-                raw_tools = await client.list_tools()
-        except Exception as unauth_err:
-            if "401" not in str(unauth_err):
-                logger.warning(
-                    "[mcp:pool] Tool discovery failed for %s: %s",
-                    server_name,
-                    unauth_err,
-                )
-                return []
-
-            # 401 — try with a user token from OAuthManager
-            if not self._oauth_manager:
-                logger.warning(
-                    "[mcp:pool] %s requires auth for tool discovery but no OAuthManager",
-                    server_name,
-                )
-                return []
-
-            auth_provider = cfg.get("auth_provider", "none")
-            provider_name = (
-                auth_provider
-                if auth_provider not in ("oauth", "none", "token")
-                else _infer_provider(server_name)
-            )
-
-            # Find any user with a valid token for this provider
-            token = await self._resolve_any_token(provider_name)
-            if not token:
-                logger.info(
-                    "[mcp:pool] No OAuth tokens available for %s discovery — "
-                    "schemas will be discovered on first authenticated call",
-                    server_name,
-                )
-                return []
-
-            try:
-                async with Client(url, auth=BearerAuth(token=token)) as client:
-                    raw_tools = await client.list_tools()
-            except Exception as auth_err:
-                logger.warning(
-                    "[mcp:pool] Authenticated discovery also failed for %s: %s",
-                    server_name,
-                    auth_err,
-                )
-                return []
-
-        if not raw_tools:
-            return []
-
-        discovered: list[str] = []
-        for t in raw_tools:
-            input_schema = (
-                getattr(t, "inputSchema", None)
-                or getattr(t, "input_schema", None)
-                or {"type": "object", "properties": {}}
-            )
-            self._tool_metadata[t.name] = {
-                "name": t.name,
-                "server": server_name,
-                "description": t.description or "",
-                "input_schema": input_schema,
-                "_workspace_id": workspace_id,
-            }
-            discovered.append(t.name)
-
-        logger.info(
-            "[mcp:pool] Discovered %d tools from HTTP server %s",
-            len(discovered),
-            server_name,
-        )
-        return discovered
-
-    async def _resolve_any_token(self, provider: str) -> str | None:
-        """Get any valid token for a provider — used for tool discovery only."""
-        if not self._oauth_manager:
-            return None
-        try:
-            from sqlalchemy import select
-
-            from src.models.oauth_token import OAuthToken
-
-            async with self._oauth_manager._db_factory() as db:
-                result = await db.execute(
-                    select(OAuthToken.user_id)
-                    .where(
-                        OAuthToken.provider == provider,
-                    )
-                    .limit(1)
-                )
-                row = result.first()
-                if row:
-                    return await self._oauth_manager.get_valid_token(row[0], provider)
-        except Exception as e:
-            logger.debug("[mcp:pool] Could not resolve token for discovery: %s", e)
-        return None
-
     def get_all_tool_metadata(self, workspace_id: str = "") -> list[dict[str, Any]]:
-        """Return all tool metadata across servers."""
+        """Return all tool metadata across servers.
+
+        Parameters that ``call_tool`` auto-injects from the installation's
+        ``tool_defaults`` (e.g., Atlassian's cloudId) are stripped from the
+        schema shown to agents. Otherwise the agent sees cloudId as
+        ``required`` in the tool schema, reasons "I must get this from the
+        user", and asks — even though the value is already known server-side.
+        Stripping the key from ``required`` and ``properties`` removes that
+        pressure while still letting the user pass it explicitly if they
+        ever want to override (call_tool preserves caller-supplied keys).
+        """
         result: list[dict[str, Any]] = []
         for name, meta in self._tool_metadata.items():
             if workspace_id and meta.get("_workspace_id") and meta["_workspace_id"] != workspace_id:
                 continue
             item = dict(meta)
             item["name"] = name
+
+            server_name = meta.get("server")
+            server_cfg = self._server_configs.get((workspace_id, server_name)) or {}
+            tool_defaults = server_cfg.get("tool_defaults") or {}
+            if tool_defaults:
+                item["input_schema"] = _strip_injected_params(
+                    item.get("input_schema"),
+                    set(tool_defaults.keys()),
+                )
+
             result.append(item)
         return result
 
@@ -641,7 +779,7 @@ class UserMCPSessionPool:
             token = config.get("token", "")
             return BearerAuth(token=token) if token else None
 
-        if auth_provider in ("oauth", "google", "github", "slack", "notion", "jira"):
+        if auth_provider in ("oauth", "google", "github", "slack", "notion", "atlassian"):
             # Resolve OAuth token from OAuthManager
             if not self._oauth_manager:
                 logger.warning("OAuth requested but no OAuthManager configured")
@@ -652,30 +790,91 @@ class UserMCPSessionPool:
                 auth_provider if auth_provider != "oauth" else _infer_provider(server_name)
             )
             try:
-                token = await self._oauth_manager.get_valid_token(user_id, provider_name)
-                if token:
-                    return BearerAuth(token=token)
-                logger.warning("No OAuth token for user=%s provider=%s", user_id, provider_name)
+                result = await self._oauth_manager.get_valid_token_with_reason(
+                    user_id, provider_name
+                )
+            except McpAuthRequiredError:
+                raise
             except Exception as e:
+                # Treat an unexpected lookup failure as transient — return None
+                # so the caller skips (rather than escalating to re-auth on a
+                # DB/network blip).
                 logger.warning("OAuth token resolution failed: %s", e)
+                return None
+
+            if result.reason == "ok" and result.token:
+                return BearerAuth(token=result.token)
+            if result.reason in _PERMANENT_REAUTH_REASONS:
+                # User must reconnect — signal it explicitly.
+                raise McpAuthRequiredError(
+                    provider=provider_name,
+                    server=server_name,
+                    reason=result.reason,
+                )
+            # "refresh_failed" (or token-less "ok") — transient; skip this call.
+            logger.warning(
+                "No usable OAuth token for user=%s provider=%s (reason=%s)",
+                user_id,
+                provider_name,
+                result.reason,
+            )
 
         return None
 
 
+def _strip_injected_params(schema: Any, keys: set[str]) -> dict:
+    """Return a copy of ``schema`` with auto-injected keys removed.
+
+    Only rewrites ``properties`` and ``required`` at the top level — those
+    are the fields the Claude API uses to decide what the agent must
+    provide. Nested definitions are left untouched.
+    """
+    if not isinstance(schema, dict) or not keys:
+        return schema if isinstance(schema, dict) else {}
+
+    new_schema = dict(schema)
+
+    props = new_schema.get("properties")
+    if isinstance(props, dict):
+        new_schema["properties"] = {k: v for k, v in props.items() if k not in keys}
+
+    required = new_schema.get("required")
+    if isinstance(required, list):
+        new_schema["required"] = [k for k in required if k not in keys]
+
+    return new_schema
+
+
+def _requires_stdio_token(server_name: str, config: dict) -> bool:
+    """Return True if a stdio server cannot run without an injected token.
+
+    A server is token-required when it has an env-var mapping (directly or via
+    its inferred provider) — i.e. spawning it without a token guarantees a
+    fatal crash. No-auth stdio servers (filesystem, playwright; auth_provider
+    "none") have no mapping and are excluded.
+    """
+    if config.get("auth_provider", "none") == "none":
+        return False
+    if server_name in _STDIO_TOKEN_ENV_VARS:
+        return True
+    return _infer_provider(server_name) in _STDIO_TOKEN_ENV_VARS
+
+
+def _bearer_token(auth: BearerAuth | str | None) -> str | None:
+    """Extract a non-empty bearer token string from a resolved auth, else None."""
+    if not isinstance(auth, BearerAuth):
+        return None
+    token = auth.token
+    raw = token.get_secret_value() if hasattr(token, "get_secret_value") else str(token)
+    return raw or None
+
+
 def _infer_provider(server_name: str) -> str:
-    """Infer the OAuth provider from the MCP server name."""
-    name_lower = server_name.lower().replace("-", "_")
-    if "google" in name_lower or "gmail" in name_lower or "calendar" in name_lower:
-        return "google"
-    if "github" in name_lower:
-        return "github"
-    if "slack" in name_lower:
-        return "slack"
-    if "notion" in name_lower:
-        return "notion"
-    if "jira" in name_lower or "atlassian" in name_lower:
-        return "jira"
-    return server_name
+    """Infer the OAuth provider from the MCP server name.
+
+    Delegates to :mod:`src.integrations.provider_map` (the canonical map).
+    """
+    return provider_for_server(server_name)
 
 
 def _inject_stdio_auth(config: dict, server_name: str, token: str) -> None:
