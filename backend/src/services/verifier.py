@@ -65,7 +65,7 @@ class Verifier:
             conditions = [success_conditions]
 
         for condition in conditions:
-            cond_type = condition.get("type", "status_equals")
+            cond_type = self._resolve_cond_type(condition)
             passed = await self._check_condition(condition, cond_type, run, steps)
             label = condition.get("label", cond_type)
             if passed:
@@ -90,6 +90,25 @@ class Verifier:
             checks_passed=checks_passed,
             checks_failed=checks_failed,
         )
+
+    @staticmethod
+    def _resolve_cond_type(condition: dict) -> str:
+        """Resolve a condition's check type.
+
+        An explicit ``type`` always wins. Otherwise, an untyped condition that
+        carries a free-text ``criteria`` key (how ``plan_store`` stores the
+        Planner's prose ``success_criteria``) is routed to the LLM judge so the
+        prose is actually evaluated — without this it falls through to
+        ``status_equals``, which never reads the prose and produces a meaningless
+        verdict. Untyped conditions with no ``criteria`` keep the historical
+        ``status_equals`` default.
+        """
+        explicit = condition.get("type")
+        if explicit:
+            return explicit
+        if "criteria" in condition:
+            return "llm_judge"
+        return "status_equals"
 
     async def verify_step(
         self,
@@ -161,7 +180,13 @@ class Verifier:
         steps: list[TaskStep],
     ) -> bool:
         if cond_type == "status_equals":
-            return run.status == condition.get("value", "completed")
+            expected = condition.get("value")
+            if expected is None:
+                # No explicit target: accept the post-completion states. dag_runner
+                # sets the run to ``partially_completed`` *before* verification, so
+                # a default hardcoded to ``completed`` would always fail here.
+                return run.status in ("completed", "partially_completed")
+            return run.status == expected
 
         if cond_type == "all_steps_completed":
             return all(s.status == "completed" for s in steps)

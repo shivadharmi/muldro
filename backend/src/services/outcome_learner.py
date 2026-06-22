@@ -7,9 +7,8 @@ everything that happens *after* the DAG completes:
   knowledge-routed) enrich the world model with entities/graph edges from the
   outcome, mirroring the chat path's InteractionLearner.
 - ``run_verification`` — verify the completed run against the plan's success
-  conditions, stamp the verdict on the checkpoint, and demote/promote the run.
-- ``record_verification_trust_penalty`` — reverse the premature "approved" trust
-  reinforcement that auto-executed steps recorded if the run fails verification.
+  conditions and stamp the verdict on the checkpoint. ADVISORY: the verdict is
+  recorded for learning/visibility but never terminal-fails a completed run.
 
 It depends downward on ``StepGraphStore`` (read sibling outputs + checkpoint); the
 verifier and db_factory are resolved via providers so the coordinator stays the
@@ -229,47 +228,26 @@ class OutcomeLearner:
                     "details": result.details,
                 },
             }
+            # Verification is ADVISORY: the verdict is recorded above for
+            # learning/visibility but never terminal-fails a run. Final status
+            # follows STEP outcomes — a genuinely failed step is handled in
+            # dag_runner (the blocked/failed branch), not here. This prevents a
+            # soft/ harsh judge verdict from flipping a fully-completed run to
+            # failed (which previously happened to 100% of verified runs) and
+            # from falsely demoting trust on auto-executed capabilities.
+            steps_result = await self._db.execute(
+                select(TaskStep).where(TaskStep.run_id == run.run_id)
+            )
+            any_failed_step = any(
+                s.status in ("failed", "timed_out") for s in steps_result.scalars().all()
+            )
+            if run.status == "partially_completed" and not any_failed_step:
+                transition_run(run, "completed")
             if result.verdict.value == "failed":
-                transition_run(run, "failed")
-                run.error = {"verification_failed": result.details}
-                logger.warning("Run %s failed verification: %s", run.run_id, result.details)
-                await self.record_verification_trust_penalty(run)
-            else:
-                # Verification passed — promote from partially_completed to completed
-                if run.status == "partially_completed":
-                    transition_run(run, "completed")
-        except Exception:
-            logger.warning("Verification failed for run %s", run.run_id, exc_info=True)
-
-    async def record_verification_trust_penalty(self, run: TaskRun) -> None:
-        """Reverse premature trust reinforcement when a run fails verification.
-
-        Each auto-executed step recorded an "approved" trust signal at finalize
-        (graduating the capability toward autonomy). If the run then fails
-        verification, those outcomes were not actually good — record a matching
-        "rejected" (deduped per capability+risk) so the capability is demoted
-        rather than keeping a false positive. Best-effort."""
-        auto_executed = (run.checkpoint or {}).get("auto_executed") or []
-        if not auto_executed:
-            return
-        try:
-            from src.services.risk_assessor import record_approval_decision
-
-            seen: set[tuple[str, str]] = set()
-            for entry in auto_executed:
-                capability = entry.get("capability")
-                risk_level = entry.get("risk_level")
-                if not capability or (capability, risk_level) in seen:
-                    continue
-                seen.add((capability, risk_level))
-                await record_approval_decision(
-                    self._db, run.workspace_id or "", capability, risk_level, "rejected"
+                logger.info(
+                    "Run %s advisory verification verdict (informational, not failing): %s",
+                    run.run_id,
+                    result.details,
                 )
         except Exception:
-            # Security-relevant: a swallowed failure here means a capability that
-            # auto-executed a verified-bad outcome is NOT demoted. Surface it.
-            logger.warning(
-                "Verification trust penalty failed for run %s — capability not demoted",
-                run.run_id,
-                exc_info=True,
-            )
+            logger.warning("Verification failed for run %s", run.run_id, exc_info=True)
