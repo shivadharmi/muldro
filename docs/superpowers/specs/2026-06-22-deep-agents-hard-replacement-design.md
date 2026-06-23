@@ -250,14 +250,74 @@ A `mutate` tool persists `risk=medium`, and the matrix returns `auto_execute_not
 | Two paths, different gating (chat ungated / autonomous gated) | Same agent; `trust_interrupt` middleware attached only on the autonomous build |
 | TrustEngine 4×4 is the sole gate; risk fails closed to `high` | `TrustEngine.evaluate` + `RiskAssessor` unchanged, called inside `trust_interrupt`; class-derived `risk_level` feeds it with no matrix change; deny-by-default guard retained |
 | TrustEngine stays external to the runtime | Middleware only *raises* `interrupt`; decision/Approval/resume stay in Jarvis (§B.8#4) |
-| Durable resume across restarts | `AsyncPostgresSaver` checkpointer + `interrupt`/`Command` replace `GraphExecutor` resume |
-| No direct status mutation | `run_projection` is the only writer of the user-facing run/step record |
+| Durable resume across restarts | `AsyncPostgresSaver` checkpointer + `interrupt`/`Command` replace `GraphExecutor` resume. **Resume is also durable *replay*** (a Graph-API tool node re-runs from the top), so external writes need idempotency (§5.1#1) |
+| No direct status mutation; transitions validated | `run_projection` is the only writer of the user-facing run/step record **and** enforces the status-transition allow-set (illegal `from→to` raises a typed error); not a permissive setter (§5.1#2) |
 | Turn-scoped MCP teardown | `turn_scope` stays the **outer** `async with` around `astream`/`execute_run` (ContextVar propagation verified in Step 0) |
 | workspace_id isolation | threaded into middleware, `tool_adapter`, classifier, trust-state, `durable_graph`; **no `workspace_id=None` tool rows** (§4.9) |
 | Immutable plans, acyclic DAG | `PlanOutput` (frozen + cycle validation) unchanged |
 | Per-tool / per-agent cost + budget | `budget` middleware (per-model-call); per-tool split a tracked follow-up |
 | Bedrock/Opus-4.8 adaptive thinking | `model_factory` via `ChatAnthropic` (Phase 0 confirmed) |
 | Client SSE/A2UI contract | `event_serializer` is the single boundary; emits the exact 7 dict shapes |
+
+### 5.1 Execution-engine carry-forward (Step 4 — `durable_graph` / `run_projection`)
+
+The legacy `GraphExecutor`/`DagRunner`/`execution_state` stack carries behavioral semantics that
+LangGraph does **not** inherit for free. Each must be explicitly re-homed in `durable_graph`/
+`run_projection` or it regresses silently. (Confirmed by code audit + LangGraph-docs grounding.)
+
+1. **External writes are at-least-once across crash/resume — exactly-once is Jarvis's job, not the
+   framework's.** Today the DAG is *flush-only* inside the loop (the only `commit()` is at the
+   lifecycle boundary — `graph_executor.py:385/479/491/533`), so a kill mid-segment rolls back the
+   flushed `completed` status and `get_ready_steps` re-picks the still-`running`/`pending` step →
+   `run_step_action` re-fires → **double `email.send`**; there is **no idempotency key anywhere** in
+   step execution. `AsyncPostgresSaver` adds durable resume but **also durable *replay***: a
+   Graph-API tool node re-runs from the top on resume (docs: "side effects before the pause run
+   again"), `pending-writes` spares only *completed sibling* nodes, `@task` result-caching is
+   Functional-API-only (a `ToolNode` is plain Graph-API and gets none), and the **default
+   `durability="async"`** can lose even a completed step's checkpoint. **Requirement:** put each
+   external write in its own minimal node; guard it behind an idempotency ledger keyed
+   `(workspace_id, plan_step_id)` (read-before-write / "already-done?") that short-circuits a replay;
+   `durability="sync"` for irreversible-write nodes; keep the TrustEngine `interrupt` and the send in
+   **separate** nodes so an interrupt-replay cannot re-send. (§8, §10 risk 7, §9 idempotency test.)
+
+2. **Validated status transitions (illegal → RAISE), not a permissive setter.** Port
+   `RUN_TRANSITIONS`/`STEP_TRANSITIONS`: `run_projection` checks every `from→to` against the
+   allow-set and raises on an illegal one. Load-bearing today — `dag_runner` relies on a stale
+   `awaiting_reauth→awaiting_reauth` being *invalid-and-swallowed* to break the ready-batch loop
+   (`dag_runner.py:217-227`); the native path must preserve the guard or replace the logic that
+   leans on it.
+
+3. **Atomic OAuth re-auth deferral.** On `auth_required` (`McpAuthRequiredError` or a structured
+   `auth_required` step-output envelope) the run is parked in a durable `awaiting_reauth` state, the
+   integration row is flagged `needs_reauth`, and the provider's perception sources are paused —
+   **all three in one transaction** (all-or-nothing; no orphan where the integration is flagged but
+   the run never deferred). `awaiting_reauth` re-queues to `pending` on reconnect (**not** terminal
+   failure); there is deliberately **no step-level `awaiting_reauth`**. Distinct from the in-turn
+   `unavailable_server` breaker (§8), which only steers the model this turn. `ReauthService` is kept
+   + re-wired.
+
+4. **Advisory post-run verification + `partially_completed`.** With a verifier wired, a finished run
+   goes `partially_completed` first; verification is **advisory-only** — it records a verdict for
+   trust-reversal / memory writeback and **never** flips a completed run to `failed` — then promotes
+   to `completed` when no step actually failed. `OutcomeLearner` + `Verifier` are kept + re-wired
+   (Step 4's "trust reinforced/reversed" exit criterion already assumes them).
+
+5. **Plan-status reconciliation.** On terminal run exit, mirror status onto the parent `Plan`
+   (completed/partially_completed→completed, failed/timed_out→failed, cancelled→cancelled); skip
+   non-terminal statuses; never resurrect an already-terminal Plan. Without it a Plan stays
+   `created`/`executing` forever and stale `created` plans poison every daily briefing (the "phantom
+   critical alert" regression — briefings read `Plan.status`).
+
+6. **Inter-step reference resolution (Planner-contract coupling).** `PlanStep.input_data` may carry
+   `{task_id}.output.field` placeholders resolved from upstream completed-step outputs before a step
+   runs (today `StepGraphStore.resolve_step_references`, fail-soft on a missing task/field). Preserve
+   the resolution natively or change the Planner contract — do **not** silently pass an unresolved
+   placeholder to the tool. Surface as a Planner-output coupling in writing-plans.
+
+7. **Run-level token/cost rollup.** Aggregate `input_tokens`/`output_tokens`/`cost_usd` onto the run
+   record, accumulating across resume segments and **idempotent per segment** (re-rolling the same
+   segment id must not double-count); history/detail endpoints read these directly off the run row.
+   Distinct from the per-model-call `budget` middleware (§5 table).
 
 ---
 
@@ -292,10 +352,13 @@ that lands its native replacement (structure/behavior commit separation applies:
 | `orchestrator/core_events.py` (internal `LoopEvent→CoreEvent` vocab) | `event_serializer` (boundary only). **Keep** the 7 SSE dict *shapes* | Step 3/5 |
 | `services/graph_executor.py` + `dag_runner` + legacy `step_runner` + `step_graph_store.py` + `execution_support.py` | `deep_runtime/durable_graph` | Step 4 |
 | `services/trust_gate.py` (side-effect helpers) | `trust_interrupt` middleware + `run_projection` | Step 4 |
-| `services/execution_state.py` (TaskRun/TaskStep machine) | LangGraph graph state + `run_projection` | Step 4 |
+| `services/execution_state.py` (TaskRun/TaskStep machine) | LangGraph graph state + `run_projection` (must re-home the **validated allow-set + raise-on-illegal**, not just single-writer — §5.1#2) | Step 4 |
+| `dag_runner._defer_for_reauth` + `execution_support._detect_auth_required` | `durable_graph` re-auth deferral node (atomic 3-write defer + `awaiting_reauth` — §5.1#3) | Step 4 |
+| `step_graph_store.resolve_step_references` (`{task_id}.output.field` wiring) | native graph resolution or Planner-contract change (§5.1#6) | Step 4 |
 
 > Kept (re-wired, **not** legacy): `TrustEngine`, `RiskAssessor`, `TrustState`/`TrustCeiling`,
 > `Approval`, `Plan`, `ToolRegistry`, `ToolExecutor`, `manifest_inspector`, `inspect_manifest`,
+> `ReauthService` (§5.1#3), `OutcomeLearner`/`Verifier` (§5.1#4),
 > `ContextBuilder`/memory/world model, perception/scheduler, A2UI builders.
 
 ---
@@ -343,9 +406,13 @@ that lands its native replacement (structure/behavior commit separation applies:
   scheduler/perception/approval-route resume; route the autonomous step path through the shared
   router (pinned to static `read_only`, as its own characterized rollout). Delete
   `graph_executor`, `dag_runner`, legacy `step_runner`, `step_graph_store`, `trust_gate`,
-  `execution_support`, `execution_state`. Exit: approval-gated autonomous run pauses, persists,
-  **survives a worker restart**, resumes on approval, trust reinforced/reversed; fail-closed
-  risk verified.
+  `execution_support`, `execution_state`. **This step must preserve the §5.1 carry-forward
+  semantics** — per-step idempotency ledger, validated status transitions, atomic re-auth defer,
+  advisory verification + `partially_completed`, plan-status reconciliation, inter-step reference
+  resolution, and the run-level token/cost rollup. Exit: approval-gated autonomous run pauses,
+  persists, **survives a worker restart**, resumes on approval, trust reinforced/reversed;
+  fail-closed risk verified; **and a step whose external side effect already succeeded is NOT
+  re-executed on resume** (idempotency ledger verified by a kill-mid-segment test, §9).
 
 - **Step 5 — Final removal + cleanup:** delete `agent_loop` (+ `LoopEvent` types),
   `api_circuit_breaker`, remaining internal `CoreEvent` vocab; remove all LEGACY banners; update
@@ -358,14 +425,32 @@ that lands its native replacement (structure/behavior commit separation applies:
 
 - **API retry / rate limits:** native LangChain retry; optional `model_resilience`
   (`@wrap_model_call`) ports the per-model circuit breaker if native fallback is insufficient.
-- **Tool timeouts:** enforced in `tool_adapter` (`asyncio.wait_for`, mirrors the legacy 60s).
-- **Tool errors / auth_required:** `unavailable_server` middleware (per-turn breaker + steer).
+- **Step-level retry (distinct from API retry):** each step retries up to `max_retries` with
+  exponential backoff `min(2**n, 30)s`, surfacing `retry_count`/`retry_after_seconds` on the step
+  (legacy `failed→pending` edge); map onto a LangGraph node `RetryPolicy` or explicit
+  `run_projection` logic — confirm `RetryPolicy` covers the backoff cap + per-node max.
+- **Tool / step / run timeouts:** per-tool in `tool_adapter` (`asyncio.wait_for`, legacy 60s);
+  **step-level (120s default, per-step overridable) and run-level (600s for `source=background`,
+  unlimited for user-initiated) produce a distinct `timed_out` status (not `failed`)** with its own
+  transition edges — preserve both the enforcement and the `timed_out` vs `failed` distinction
+  (history + Plan reconciliation depend on it).
+- **Idempotent side effects (REQUIRED):** treat LangGraph as at-least-once — each external-write
+  node checks an idempotency ledger keyed `(workspace_id, plan_step_id)` before firing and records
+  completion in the same node so a replay short-circuits; `durability="sync"` for irreversible
+  writes; the send node is separate from the `interrupt` node (§5.1#1, §10 risk 7).
+- **Tool errors / auth_required:** `unavailable_server` middleware (per-turn breaker + steer) — the
+  **in-turn** breaker; the **run-level** durable re-auth deferral (atomic defer + `awaiting_reauth`)
+  is §5.1#3.
 - **Fail-closed gates:** class+trust eligibility and TrustEngine both deny-by-default; risk and
   classification both fail to the most-restrictive outcome.
 - **Generator drain:** `event_serializer` is an async generator; `_process_core`'s `finally`
   (trace + `turn_scope` teardown) must still run on early-return/cancel — verified by test.
 - **Cancellation:** cooperative (`asyncio.CancelledError` cancels the `astream` task); the outer
-  `async with turn_scope` cleanup runs on cancel.
+  `async with turn_scope` cleanup runs on cancel. Must still produce the correct **terminal fan-out
+  via `run_projection`: run→cancelled, in-flight steps→cancelled, not-yet-started steps→skipped**.
+  Map the `cancel_run()` API + per-run cancel registry (called by routes/scheduler) onto astream
+  task cancellation, and verify LangGraph interrupts a tool-executing node only **between tool
+  rounds** (not mid-tool-call).
 
 ---
 
@@ -384,6 +469,19 @@ that lands its native replacement (structure/behavior commit separation applies:
 - **Invariant tests:** two-dimensional fail-closed eligibility, trust 4×4 + deny-by-default,
   fail-closed risk, workspace isolation (no `None` rows), durable resume across a simulated
   restart, turn_scope teardown, generator-drain-on-cancel.
+- **Idempotency-on-resume (§5.1#1):** simulate a hard kill *after* a write tool returns but
+  *before* its checkpoint commits; on resume assert the write is NOT repeated (ledger
+  short-circuits) — e.g. `email.send` fires exactly once.
+- **Carry-forward tests (§5.1):** re-auth deferral atomicity (run→`awaiting_reauth` + integration
+  flag + source pause are all-or-nothing; reconnect re-queues to `pending` and resumes without
+  double-executing); state-machine validation (`run_projection` raises on `completed→running`,
+  accepts `failed→pending` / `running→timed_out` / `awaiting_reauth→pending`); step-level retry
+  (failed→pending up to `max_retries` with capped backoff, permanent-fail on exhaustion); run/step
+  timeouts → `timed_out` (≠ failed), user-initiated runs uncapped; plan reconciliation (terminal
+  run advances Plan; non-terminal leaves it; never resurrects a terminal Plan); advisory
+  verification (a completed run with a negative verdict stays `completed`, verdict still drives
+  trust reversal); cancellation fan-out (run=cancelled, in-flight=cancelled, not-started=skipped);
+  reference resolution (`{upstream}.output.field` resolves; missing ref is fail-soft).
 - **Edge serializer tests:** recorded `astream` events → exact SSE dict shapes (offline).
 - **Suite hygiene:** the pre-existing red tests (`test_websocket`, `test_endpoint_rate_limits`,
   `test_briefing_feedback` — confirmed failing at parent `31ce42b`, env/infra-dependent) are out
@@ -397,7 +495,12 @@ that lands its native replacement (structure/behavior commit separation applies:
    cost regression. Step-0 spike; mitigate or accept-and-flag.
 2. **Persistence model depth (HIGH)** — how much of `TaskRun`/`TaskStep` becomes checkpointer
    state vs. a thin `run_projection`. Detailed in writing-plans; affects scheduler, perception
-   queueing, approval resume.
+   queueing, approval resume. Also: on resume **refresh the ContextPack if paused beyond a
+   staleness threshold (today 30 min)** — the checkpointer restores graph state, not context
+   freshness; retain the resumable-status guard. And several concerns currently co-tenant in
+   `run.checkpoint` JSONB via non-clobbering merges (trace_rollup, the auto-executed trust trail,
+   the verification verdict, the execution snapshot) — the checkpointer/`run_projection` split must
+   preserve **all** of them.
 3. **Behavior-blind classification (MEDIUM, accepted residual)** — static analysis can't see a
    trusted tool's runtime behavior change; mitigated by runtime demotion (§4.7), not prevented.
 4. **Per-server approval is a product dependency (MEDIUM)** — the Integrations-page approval flow
@@ -405,6 +508,14 @@ that lands its native replacement (structure/behavior commit separation applies:
 5. **Live-probe unknowns (MEDIUM)** — thinking-delta streaming, turn_scope ContextVar, `astream`
    v1/v2, node-filter metadata.
 6. **Per-tool cost attribution (LOW)** — deferred (analytics, not safety).
+7. **Double side-effect on resume (HIGH)** — today's DAG is flush-only inside the loop (commit only
+   at the lifecycle boundary), so a kill mid-segment rolls back the flushed `completed` status and
+   `get_ready_steps` re-picks the still-`running`/`pending` step → re-execution → double
+   `email.send`; there is no idempotency key anywhere in step execution. `AsyncPostgresSaver` adds
+   durable resume but **also durable replay** (a plain Graph-API tool node re-runs from the top;
+   `pending-writes` spares only completed *sibling* nodes; default `durability="async"` can drop a
+   completed step's checkpoint) — it does **not** remove this risk. Closed only by the per-step
+   idempotency ledger (§5.1#1, §8). Resolve the ledger design + `durability` mode in writing-plans.
 
 ---
 
