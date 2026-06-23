@@ -48,7 +48,7 @@ Small, independently-testable units. ✅ = already built (commit `da8c459`).
 | Unit | Purpose | Interface | Depends on |
 |---|---|---|---|
 | `deep_runtime/model_factory` ✅ | SubAgent → `ChatAnthropic` (adaptive thinking/effort) | `build_chat_model(agent)` | langchain-anthropic |
-| `deep_runtime/agent_builder` ✅ | Compile a deep agent | `build_deep_agent(agent, tools, *, extra_middleware, system_prompt, name)` | deepagents |
+| `deep_runtime/agent_builder` ✅→✏️ | Compile a deep agent. **Adopts the native `SubAgent`/`CompiledSubAgent` spec shape** for per-role construction (scoped tools, per-role model, per-role middleware) — compiled agents are **invoked directly in code, NOT via the native `task` tool** (§12) | `build_deep_agent(agent, tools, *, extra_middleware, system_prompt, name)` | deepagents |
 | `deep_runtime/middleware/capability_scope` ✅→✏️ | Per-call fail-closed eligibility — **rewired to the two-dimensional check: `tool.class ∈ ROLE_ALLOWED_CLASSES[agent.role]` AND tool fingerprint is `approved`** (§4) | `make_capability_scope_middleware(agent, workspace_id, db_factory)` | ToolRegistry, tool-trust |
 | `deep_runtime/middleware/budget` ✅ | Per-model-call cost record | `make_budget_middleware(...)` | BudgetTracker |
 | `deep_runtime/middleware/unavailable_server` ✅ | Per-turn auth_required breaker | `make_unavailable_server_middleware(...)` | provider_map / registry |
@@ -58,7 +58,7 @@ Small, independently-testable units. ✅ = already built (commit `da8c459`).
 | `services/capability_resolver` ✏️ | Reduced to a **thin deterministic router** (read→perceiver, write→operator, sentinel table for synthetic caps). Its scope role is deleted | `route(capability) -> agent` | catalog (domain tag + class) |
 | `deep_runtime/tool_adapter` ⬜ | Wrap a Jarvis registry tool as a LangChain `StructuredTool` dispatching via `ToolExecutor.execute_tool` (keeps registry + class/trust gate authoritative) | `as_langchain_tool(tool_dict, tool_executor, user_id, workspace_id)` | ToolExecutor |
 | `deep_runtime/event_serializer` ⬜ | **The one client-edge adapter.** `astream(stream_mode=["messages","updates"])` → the 7 existing SSE dict shapes | `astream_to_sse(compiled, input, cfg, *, agent, model, budget) -> AsyncIterator[dict]` | — |
-| `deep_runtime/middleware/trust_interrupt` ⬜ | Autonomous-only: `TrustEngine.evaluate` (+ fail-closed `RiskAssessor`); on `approval_required` raise a LangGraph `interrupt` carrying `ApprovalContext`; persist `Approval` | `make_trust_interrupt_middleware(...)` | TrustEngine, RiskAssessor, Approval |
+| `deep_runtime/middleware/trust_interrupt` ⬜ | Autonomous-only: `TrustEngine.evaluate` (+ fail-closed `RiskAssessor`); on `approval_required` raise a LangGraph `interrupt` carrying `ApprovalContext`; persist `Approval`. **Reuses the native `interrupt`/checkpoint/`Command(resume)` substrate** (PatchToolCalls repairs resume) but is a custom `wrap_tool_call` — **NOT** `interrupt_on`/`when` (`when()` is boolean-only; native approve/edit/reject/respond can't encode the 4 verdicts). Interrupt-raise node **separate from the send node** (§5.1#1) | `make_trust_interrupt_middleware(...)` | TrustEngine, RiskAssessor, Approval |
 | `deep_runtime/chat_driver` ⬜ | Build-per-turn native chat path (replaces `AgentInvoker.call_agent_stream` body): assemble system_prompt (soul + ContextPack), adapt tools, attach middleware (no trust gate), stream via serializer | same yielded dict shapes as today | the units above, ContextAssembler |
 | `deep_runtime/durable_graph` ⬜ | Autonomous durable execution: LangGraph graph + `AsyncPostgresSaver` checkpointer + `interrupt`/`Command`, replacing `GraphExecutor`/`DagRunner`/`execution_state` | `execute_run(...)`, `resume_run(...)` | checkpointer, trust_interrupt, run projection |
 | `deep_runtime/run_projection` ⬜ | Thin run/step record synced from graph state so A2UI surfaces + history keep working without the legacy `TaskRun`/`TaskStep` state machine | projection read/write | DB (Plan/run record), SurfaceService |
@@ -348,7 +348,7 @@ that lands its native replacement (structure/behavior commit separation applies:
 | 143-entry capability taxonomy's **routing/scope role** | `capability` demoted to a domain tag + `class` (§4) | Step 1 (role removed; tag retained) |
 | `orchestrator/agent_loop.py` (loop + `LoopEvent`/`LoopDone` types) | deepagents agent + middleware + `event_serializer` | Step 5 (after both drivers native) |
 | `orchestrator/agent_invoker.py` (legacy body) | `deep_runtime/chat_driver` | Step 3 |
-| `orchestrator/api_circuit_breaker.py` | native retry + optional `model_resilience` middleware | Step 5 |
+| `orchestrator/api_circuit_breaker.py` | native `ModelRetry`/`ModelFallback` for the common case **+** the stateful breaker ported as a **process-global `@wrap_model_call` singleton** (not pure deletion — §12); fix the latent `is_open()` bug | Step 5 |
 | `orchestrator/core_events.py` (internal `LoopEvent→CoreEvent` vocab) | `event_serializer` (boundary only). **Keep** the 7 SSE dict *shapes* | Step 3/5 |
 | `services/graph_executor.py` + `dag_runner` + legacy `step_runner` + `step_graph_store.py` + `execution_support.py` | `deep_runtime/durable_graph` | Step 4 |
 | `services/trust_gate.py` (side-effect helpers) | `trust_interrupt` middleware + `run_projection` | Step 4 |
@@ -423,8 +423,13 @@ that lands its native replacement (structure/behavior commit separation applies:
 
 ## 8. Error handling & resilience
 
-- **API retry / rate limits:** native LangChain retry; optional `model_resilience`
-  (`@wrap_model_call`) ports the per-model circuit breaker if native fallback is insufficient.
+- **API retry / rate limits:** native `ModelRetryMiddleware` + `init_chat_model(max_retries=…)`
+  for transient/rate-limit backoff and `ModelFallbackMiddleware(*models)` for per-model outage
+  fallback. **But** the stateful `AnthropicCircuitBreaker` (OPEN/HALF_OPEN, 5-fail threshold, 120s
+  cooldown, per-model fast-fail) is **not** covered by native stateless retry — port it as a custom
+  `@wrap_model_call` closing over a **process-global, model-keyed singleton** (a per-turn-built
+  middleware silently resets and never trips, since agents are now built per turn/step). Fix the
+  latent `is_open()` bug in the same port (§12).
 - **Step-level retry (distinct from API retry):** each step retries up to `max_retries` with
   exponential backoff `min(2**n, 30)s`, surfacing `retry_count`/`retry_after_seconds` on the step
   (legacy `failed→pending` edge); map onto a LangGraph node `RetryPolicy` or explicit
@@ -524,3 +529,38 @@ that lands its native replacement (structure/behavior commit separation applies:
 - Frontend rebuild (assessment Option B) — the client SSE/A2UI contract is held stable.
 - LangSmith adoption — optional, later.
 - Per-tool `TokenUsage` split — tracked follow-up.
+
+---
+
+## 12. Native Deep Agents feature adoption decisions
+
+Decision register from a doc-grounded re-research of the deepagents feature surface
+(Skills, SubAgents, Memory/backends, TodoList, Summarization, HITL, model resilience,
+the full customization scope) against every component the spec plans to build custom.
+Verdicts are calibrated to an adversarial pass against the §5/§5.1 invariants — the
+optimistic mapping was downgraded wherever a native feature would break an invariant.
+**Net: native config can shrink the *plumbing*; the safety/correctness core stays custom.**
+
+| Native feature | Component it could touch | Decision | Why (degree from adversarial pass) |
+|---|---|---|---|
+| `AsyncPostgresSaver` + `interrupt`/`Command` | `durable_graph` pause/resume | **adopt-as-config** | Native is the durable substrate (already in §3/§7). `store=` is NOT load-bearing (cross-thread memory, not run durability); thread `workspace_id` into `thread_id`/projection/ledger keys. All §5.1 carry-forward stays custom (durable *replay*). |
+| HITL `interrupt`/checkpoint/`Command` + PatchToolCalls | `trust_interrupt` | **adopt-as-config (substrate only)** | Hosts pause/persist/resume. The 4×4 verdict stays a custom `wrap_tool_call`; **never** `interrupt_on`/`when` (boolean-only, no `notify`/`blocked` tier). Approval persistence + `ApprovalContext` stay custom; interrupt-node ≠ send-node (§5.1#1). |
+| `SubAgent`/`CompiledSubAgent` spec shape | per-role agent construction (`agent_builder`) | **adopt-as-config (shape)** | Free per-role tool-scoping + per-role model + middleware. But invoke compiled agents **directly** — the `task` tool is LLM-routed by `description`, has no deterministic-mapping flag, and pulls a non-strippable `general-purpose` subagent that bypasses the `ToolExecutor` gate. Deterministic router + per-call `capability_scope` stay custom (subagent tool list is build-time, not a per-call gate). |
+| `ModelRetry` + `ModelFallback` + `init_chat_model(max_retries)` | `model_resilience` / `api_circuit_breaker` | **adopt-as-config + custom port** | Native covers transient retry + per-model fallback. The **stateful** breaker (OPEN/HALF_OPEN, threshold, cooldown, fast-fail) must port as a **process-global `@wrap_model_call` singleton** — a per-turn middleware resets and never trips. Fix latent `is_open()` (defined as `is_available`; `jarvis.py:264` `hasattr`-guards a non-existent method → health always reports `False`). |
+| Native graph state / `stream.values` | `run_projection` **read** source | **augment (read only)** | Native durably holds the state the projection reads. The validated transition allow-set (raise-on-illegal), the 12/10-status served record, `timed_out`≠`failed`, reconciliation (§5.1#2/#5) stay custom — no native transition concept; checkpointer state is NOT the served history record. |
+| `StateBackend` (default) scratch + large-tool-result offload | (none today) | **augment (free)** | Comes free on the runtime; nothing to delete (`agent_loop` has no scratch/offload). Durable artifacts stay on the custom S3/MinIO + Postgres (`workspace_id` NOT NULL) store; do **not** route through `StoreBackend` (namespace-convention = **fail-open** vs the fail-closed FK). |
+| `@dynamic_prompt` | ContextPack injection | **augment (optional seam)** | Optional per-turn `system_prompt` seam; static build-per-turn assembly is equally fine. ContextPack content + TriSearch stay custom. Do **not** route preferences through `MemoryMiddleware` — it namespaces on `user_id` → cross-workspace bleed (multi-tenant violation). |
+| Skills (`SkillsMiddleware`) + `StoreBackend(namespace=workspace_id)` | role prompts, "procedures", capability summary, memory | **keep custom; Skills = augment-only, optional, post-cutover** | Activation is **model-chosen** (`read_file` on SKILL.md) → breaks per-role determinism ("only Planner sees PLANNER_PROMPT_V2") and adds a mid-turn instruction-injection surface (§4.1). Static markdown: no typed schema, no decay/TTL, no fail-closed isolation, load-once-per-thread. Role methodology stays in `system_prompt` (**role prompts are NOT a removal target**). Skills are only ever a NET-NEW home for *new* agent-authored playbooks. |
+| `TodoListMiddleware` / `write_todos` | Planner / `PlanOutput` | **keep custom** | A Todo is flat free-form (3 statuses, whole-list-replace, no capability/edges/IDs/acyclicity); nothing executes/routes off it. At most a derived UI scratchpad → A2UI `StepList`. |
+| `SummarizationMiddleware` | conversation-history load | **keep custom (chat); optional autonomous safety-net** | Wrong target for chat history (DB-backed Postgres SELECT, workspace-scoped, 4 non-agent consumers, no checkpointer on the chat path). MAY be enabled as an in-run context-overflow net on `durable_graph` only (must not compact away approval-relevant tool results). |
+| native annotations / `allowed-tools` / `readOnlyHint` | `tool_classifier` + trust + `ROLE_ALLOWED_CLASSES` | **keep custom** | Adopting native would **invert §4.1**: `allowed-tools` is experimental prompt text (doesn't restrict), and MCP hints are exactly the untrusted signal the classifier refuses to let establish a `read` vote. |
+| `SubAgent['tools']` / `FilesystemPermission` / HITL | per-call `capability_scope` | **keep custom** | No native per-tool-**call** authz gate (subagent tool list is build-time; `wrap_tool_call` is the only per-call seam). The fail-closed two-dimensional check is the compensating control on the ungated chat path. |
+| native `astream` / `stream_events` | `event_serializer` | **keep custom** | The one deliberate client-boundary adapter; native shapes ≠ the exact 7 Jarvis SSE dicts. |
+| `langchain-mcp-adapters` / native `StructuredTool` | `tool_adapter` | **keep custom** | Must dispatch through `ToolExecutor` so the registry + class/trust gate + TurnScope teardown stay authoritative; native loading bypasses all three. |
+| `PatchToolCalls` / native ToolRetry | `ReauthService` atomic re-auth defer | **keep custom** | No native transactional construct for the atomic 3-write defer + durable `awaiting_reauth` re-queue (§5.1#3); PatchToolCalls only repairs dangling tool calls. |
+
+**Validate in Step 0 (these adoptions hinge on installed-version behavior):**
+- Can a `wrap_tool_call` raise `interrupt()` from inside a tool wrapper (vs only a graph node)? If not, `trust_interrupt` computes the verdict in `wrap_tool_call` but the interrupt moves to a dedicated node (changes its interface).
+- Does `excluded_middleware` strip the auto-added `general-purpose` subagent / `SubAgentMiddleware` when we invoke compiled agents directly and never use `task`? If non-strippable, confirm the direct-invoke path never exposes the LLM-routed delegation surface.
+- Is `AnthropicPromptCachingMiddleware` in the default stack and does `ChatAnthropic` preserve `cache_control`? Decides risk 1 **and** the `@dynamic_prompt` vs static-assembly cache-boundary choice (a dynamic ContextPack sits outside the cacheable prefix either way).
+- Confirm `durability` (sync/async) semantics and whether a plain Graph-API `ToolNode` gets any resume result-caching — the §5.1#1 idempotency-ledger design depends on the verified replay behavior, not the docs assumption.
