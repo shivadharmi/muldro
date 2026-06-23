@@ -1,6 +1,11 @@
 # Deep Agents Hard Replacement — Design Spec
 
 **Date:** 2026-06-22 · **Status:** Approved shape; ready for implementation plan
+**Amended by:** [`2026-06-23-agentic-redesign-design.md`](./2026-06-23-agentic-redesign-design.md) —
+replaces orchestrator routing + the mandatory Planner / `PlanOutput` / `Plan` / `PlanTask` with a
+pure-agentic agent registry + on-demand planning + user-creatable agents + perception act-tier
+escalation. The `durable_graph` / `trust_interrupt` / `run_projection` / §4 tool-auth / §5.1
+carry-forward / §12 decisions in THIS doc are unchanged and carried forward.
 **Supersedes:** the strangler-fig / gradual-migration strategy in
 [`docs/deep-agents-migration-assessment.md`](../../deep-agents-migration-assessment.md)
 (Part E Option 1 + Part F phasing). **Carries forward** from that doc: the audit (Part B),
