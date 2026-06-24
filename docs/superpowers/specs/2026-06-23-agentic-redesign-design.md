@@ -1,6 +1,8 @@
 # Agentic Redesign — Design Spec
 
 **Date:** 2026-06-23 · **Status:** Approved shape; ready for implementation plan
+**Amended 2026-06-24** (§15): adds **dynamic research agents** (Tier-3) + **emergent workflows**
+(chat-only); resolves §14 q4 & q8. See §15.
 **Amends** the routing / planning / data-model parts of
 [`2026-06-22-deep-agents-hard-replacement-design.md`](./2026-06-22-deep-agents-hard-replacement-design.md)
 (its §2 routing rows, §6 manifest, §7 sequencing). **Carries forward unchanged** from that
@@ -81,6 +83,7 @@ turn (chat or perception "act" escalation)
   agents** are workspace-scoped rows users create.
 - **Autonomous path** (perception act-tier, scheduled): same lead/registry, executed on
   `durable_graph`; `trust_interrupt` attached so every write hits the TrustEngine 4×4 gate.
+- **Dynamic research agents (Tier-3)** and **emergent workflows** extend this architecture — see §15.
 
 ---
 
@@ -203,12 +206,14 @@ Perception currently calls the Planner **every cycle** and queues a plan ([perce
   the high-relevance + urgent band currently mapped to `push`).
 - **Gate the planning / escalation path behind `tier == "act"`:** feed the observation summary to a
   lead-agent turn *as its request* ("the observation becomes the request"). `briefing`/`push`/
-  `silent` **return without planning** — reading/observing never produces a run.
+  `silent` **return without planning** — reading/observing never produces a run. The act-tier turn
+  executes a **single bounded gated action** (optionally one read-only research spawn) — **never a
+  multi-step workflow** (§15.4).
 - Keep the queue/consume plumbing (background tick) as async fulfillment for act-tier work.
 - **Re-home `perception_policy` cadence** for non-act tiers (a cheap policy step or deterministic
   defaults) — this is the one real downstream that depended on the Planner being called every cycle.
-- **Decide cross-source synthesis gating explicitly** — it plans tier-lessly today and would be the
-  loophole that still plans on every multi-source tick.
+- **Cross-source synthesis (resolved, §15.4):** produces a **briefing/insight only** — it never
+  starts a workflow (workflows are chat-only), closing the tier-less planning loophole.
 
 ---
 
@@ -279,6 +284,7 @@ break:
 | `Governor.evaluate_plan`/`evaluate_policy` MCP tool + `system_capability_handler` synthetic PlanTask audit + `routes_approvals` synthetic Plan creation | TrustEngine in `durable_graph` + direct Run/work-item creation + InteractionLog audit | moderate |
 | global `agents` table (no `workspace_id`, `UNIQUE(name)`) | workspace-scoped agents + reserved built-ins (§6.1) | deep |
 | `TaskRun`/`TaskStep`/`execution_state` | already in hard-replacement §6 (durable_graph + run_projection) | deep |
+| `backend/src/workflows/*` (`workflow_registry`, `research_agent`, `inbox_triage`, `meeting_prep`, `daily_briefing`, `context`) — hardcoded `WorkflowStep` sequences (banned by CLAUDE.md) | emergent chat-only workflows on `durable_graph` (§15.3); recurring cases → lean scheduled prompts | moderate |
 
 ---
 
@@ -298,8 +304,15 @@ break:
 9. **Frontend `PlanReady` contract break (MEDIUM)** — the `event_serializer` must emit an equivalent
    payload over the todo list / Run projection (frontend rebuild is out of scope); derive surface
    kind from executed capabilities.
-10. **Perception cadence regression (MEDIUM)** — re-home `perception_policy` for non-act tiers; gate
-    cross-source synthesis or it becomes the planning loophole (§7).
+10. **Perception cadence regression (MEDIUM)** — re-home `perception_policy` for non-act tiers.
+    (Cross-source synthesis is no longer a planning loophole: it produces a briefing/insight only —
+    never a workflow — per §15.4.)
+11. **Free-form ephemeral agent reopens the deleted `task` surface (CRITICAL)** — mitigated by
+    registry-anchored read-only templates with shaped prompts but locked tools (§15.2).
+12. **Agent-bomb / no tree-level cost cap (HIGH)** — mitigated by pre-spawn budget admission +
+    per-run spawn/concurrency/width caps; workflows chat-only (attended) (§15.5).
+13. **Fan-out resume double side-effect (HIGH)** — mitigated by per-`(workspace, step)` idempotency
+    ledger + write-as-own-node + `durability="sync"` (§15.6).
 
 ---
 
@@ -318,6 +331,14 @@ Red-team-derived required tests (all must pass before the legacy paths are delet
 9. Only the `act` tier escalates perception to a queued run; non-act tiers never plan; non-act
    cadence does not regress.
 10. A custom-agent write on the chat path is gated (approval) until the agent+capability graduates.
+11. A dynamic research agent cannot be built with a write-class tool or a `delegate` tool (read-only
+    leaf; a free-form/LLM-authored agent spec is rejected) (§15.2).
+12. A workflow exceeding the per-run spawn / fan-out-width cap is refused (or degraded to cheaper
+    models) **before** spawning, not after spend (§15.5).
+13. A fan-out workflow killed after one sibling write does **not** re-fire that write on resume
+    (per-`(workspace, step)` idempotency ledger) (§15.6).
+14. Perception (any tier) cannot start a multi-step workflow; the act tier executes at most a single
+    bounded gated action; cross-source synthesis never starts a workflow (§15.4).
 
 ---
 
@@ -342,6 +363,12 @@ Red-team-derived required tests (all must pass before the legacy paths are delet
 - **Step F — Cleanup** (with hard-replacement Step 5): drop the `planner` agent, `Governor`
   evaluate_plan path, `surface_mapping` PlanOutput derivation; update CLAUDE.md (agents
   workspace-scoped; routing is agentic; planning is on-demand).
+- **Step G — Dynamic agents & emergent workflows** (§15). After Step D (data-model collapse) + Step E
+  (perception act-tier). Tier-3 read-only research agents (chat + act-tier single-spawn); emergent
+  **chat-only** workflows on `durable_graph` (Send/reducer fan-in + presenter report); cost-admission
+  caps (degrade-then-refuse); per-`(workspace, step)` fan-out idempotency ledger; delete
+  `backend/src/workflows/*`. Step-0 probes (ContextVar-per-child, `interrupt()` in `wrap_tool_call`)
+  precede the fan-out work.
 
 ---
 
@@ -354,13 +381,173 @@ Red-team-derived required tests (all must pass before the legacy paths are delet
    the autonomous executor hardcodes operator.
 3. Is the lead agent's scope strictly read-only with only `delegate`+`respond`, and is that
    startup-asserted? (Assumed yes.)
-4. Does `plan_output_json` have a consumer needing the full tree, or only goal/steps summary?
+4. **Resolved (§15.8):** keep a goal/steps decomposition summary in the Run projection for the final
+   report + history (no full `plan_output_json` tree required).
 5. Do `RuntimeEvent` rows survive as their own projection table or fold into LangGraph events?
 6. Concrete delegation depth bound (1 vs bounded-2) and the visited-set representation.
 7. `perception_policy` cadence for non-act tiers: cheap policy step (extra LLM call) vs deterministic
    defaults?
-8. Cross-source synthesis: own act-tier-equivalent gate, or disabled, or always-act?
+8. **Resolved (§15.4):** cross-source synthesis produces a briefing/insight only — it never starts a
+   workflow (workflows are chat-only).
 9. Can a `wrap_tool_call` raise `interrupt()` from inside a tool wrapper, or must `trust_interrupt`
    move to a dedicated node? (Affects how a delegated child carries the gate. Step-0 probe.)
 10. What replaces the `PlanReady` SSE `plan_dict` for the existing Next.js renderer (frontend rebuild
     is out of scope)?
+
+---
+
+## 15. Dynamic agents & emergent workflows (amendment 2026-06-24)
+
+Adds two user-requested capabilities — runtime **dynamic research agents** and multi-step
+**workflows** — resolved against every invariant above. Grounded by a second research + adversarial
+red-team pass (12 holes, all `holds=false` as first sketched; the controls here are what make them
+hold). The four shape decisions (D1–D4) were taken with the user.
+
+### 15.1 Two primitives, not one
+These are **opposite halves** of "ultracode" and are specced separately:
+- **Dynamic agents = model-driven dynamic dispatch** (Claude Code's `Agent`/Task tool): the lead
+  decides at runtime to spawn a short-lived research/exploration worker. Non-deterministic.
+- **Workflows = deterministic orchestration** (Claude Code's `Workflow` tool): coded multi-step
+  control flow (goal-per-step, fan-out → synthesize → forward → report); only the work *inside* a
+  step is model-powered.
+
+They **compose** (a workflow step may contain a dynamic spawn) but are distinct mechanisms.
+
+### 15.2 Feature 1 — Tier-3 dynamic research agents
+A new **third agent tier** beside built-in seeds (Tier-1) and custom agents (Tier-2): **ephemeral
+research/exploration agents**, spawned at runtime.
+
+**Decision D1 — shaped prompt, locked tools.** The lead authors the child's task/instructions freely
+(flexibility); the child's **tool surface is fixed read-only** (security). The two axes are decoupled
+— the instruction text is untrusted-but-harmless because it can only direct *reads*. (The free-form
+"LLM also picks the tool union" variant is rejected; see H1/H2.)
+
+Required controls (each red-team-confirmed):
+- **Registry-anchored kind.** Tier-3 is one (or a few) reserved seed *kind(s)* (e.g. `_research`), so
+  `delegate(agent_name)` still validates against the **closed per-workspace enum** (§5#5). A
+  free-form / LLM-authored agent spec is **rejected** — that is the deleted `task` surface (H1, CRIT).
+- **Read-class only.** Tool union restricted to the read set of `ROLE_ALLOWED_CLASSES`, drawn only
+  from **already-fingerprint-approved** servers (§4.1). Build-time filtered + per-call
+  `capability_scope` re-applied for the ephemeral role + workspace, fail-closed. No `mutate`/`destroy`
+  ever (H2, CRIT). Any surfaced write hands off to the gated operator/custom agent.
+- **Leaf.** No `delegate` tool; startup-asserted that no Tier-3 (or any non-lead) agent carries
+  `delegate` or a spawn-like attached tool. Preserves depth-1, kills the recursion multiplier (H3).
+- **Tenant from parent closure** only — never an LLM arg; fail closed if unresolvable (§5#4, H10).
+- **One-shot (v1).** Return-final-only, not resumable — resumability adds Run-projection surface;
+  deferred (judgment call; revisit if long exploration is needed).
+
+Net: a Tier-3 agent is "a custom agent minus the DB row" and inherits the **same** §6.1/§6.2/§6.3
+controls, but is strictly read-only — so it is never less safe than a custom agent.
+
+### 15.3 Feature 2 — emergent workflows (a verb, not a noun)
+**Decision D2 — emergent only.** There is **no `Workflow`/`WorkflowTemplate` entity.** A workflow is
+*what on-demand decomposition looks like* when work is multi-step, assembled entirely from parts the
+spec already carries forward:
+
+| "Workflow" concept | Built from |
+|---|---|
+| step has a goal | a todo item (on-demand decomposition, §4) |
+| step spins up agents | `delegate` to a Tier-3 research / operator / custom agent (§5) |
+| fan-out → synthesize | LangGraph **Send + reducer + synthesize node** on `durable_graph` (resume does **not** re-run completed siblings via `pending-writes`) |
+| forward to next step | `{task_id}.output.field` resolution (§5.1#6) |
+| final report | the `respond → presenter` special route (§4) |
+
+- **One repeatability mechanism: schedules.** Recurring cases (briefing, triage, meeting-prep) are
+  **scheduled prompts** the lead decomposes — not a workflow store. `backend/src/workflows/*` (the
+  banned hardcoded-`WorkflowStep` sequences) is **deleted** (§10).
+- Re-apply the acyclicity/dependency validation `PlanOutput`'s `model_validator` did, re-homed on the
+  todo list / Run projection. A pre-computed declarative step-DAG is **forbidden** — that is the
+  deleted `Plan`/`PlanTask` reincarnated (H5).
+
+**Decision D3 — chat-only.** Workflows run **only on the user-initiated chat path** (a human is
+present and can interrupt). This dissolves the worst red-team holes, all of which were on the
+*unattended* path (H6 agent-bomb, H7 plan-everything, H8 synthesis loophole, the unattended half of
+H9).
+
+### 15.4 Where each capability may run (the path matrix)
+
+| Path | Dynamic agents | Workflows | Writes |
+|---|---|---|---|
+| **Chat** (user-initiated) | yes — full, incl. wide fan-out + loop-until-dry | **yes** | gated per §6.3 (custom) / ungated built-in operator |
+| **Perception `act` tier** | at most **one** read-only research spawn to inform one action | **no** | single bounded action, TrustEngine-gated |
+| Perception `briefing`/`push`/`silent` | no | no | surface only — never a run |
+| **Scheduled** runs | no fan-out — lean single-turn | **no** | gated |
+| **Cross-source synthesis** | no | **no** | briefing/insight only — never a workflow |
+
+**Decision D4 — lean act tier survives.** The perception `act` tier still executes a **single
+bounded, gated action** (one lead-agent turn, gated writes, optionally one read-only research spawn)
+— but **never a multi-step workflow**.
+
+### 15.5 Cost / spawn admission control (agent-bomb, H6 HIGH)
+`BudgetTracker` is **reactive** (pauses at 95% *after* spend) with no pre-spawn projection and no
+spawn cap — unacceptable for multi-tenant fan-out. Required:
+- **Pre-spawn budget admission**: project a fan-out's cost against remaining daily budget.
+  **Degrade-then-refuse** — first downgrade non-critical children to a cheaper model (per-child
+  `model` override → Haiku/Sonnet); hard-refuse to start/expand only if still over (judgment call).
+- **Per-run total-spawn cap** + **max-concurrency** (LangGraph `max_concurrency`) + **max-fan-out
+  width** + **loop-until-dry round ceiling** (chat-only). Concrete numbers fixed in the plan.
+- Depth-1 leaf (15.2) kills the recursion multiplier; the shared **process-global** Anthropic breaker
+  is **not** reset per child (H12).
+
+### 15.6 Fan-out durability & idempotency (H9 HIGH, H10 CRIT, H12)
+Durable resume is durable **replay** (at-least-once), so a fan-out where one child wrote and a
+sibling failed will **re-fire** that write on resume without protection. Required:
+- Each external write = its **own minimal node** behind an **idempotency ledger keyed
+  `(workspace_id, step_id)`** (unique per child) that short-circuits replay (§5.1#1).
+- `durability="sync"` for irreversible-write nodes; the **`trust_interrupt`/approval node is separate
+  from the send node** so interrupt-replay can't re-send.
+- **Tenant per child** from the parent closure; **strict `(workspace_id, name)` tool resolution**
+  (§6.2); **Step-0 probe** that `turn_scope`'s ContextVar propagates into each concurrent child
+  `astream` (MCP sessions ref-counted/torn down) (H10).
+- **Idempotent cost rollup** across all children and resume segments (§5.1#7, H12).
+
+### 15.7 Write gating inside workflow steps (H4 CRITICAL)
+Claude Code auto-approves writes inside steps. Jarvis **rejects that posture wholesale**: every write
+step is a **`trust_interrupt` suspension** through TrustEngine mid-run; a delegated child inside a
+step inherits the parent step's full middleware **including `trust_interrupt`** (§5#3). There is no
+"saving is authorization" gap because nothing is saved (emergent only); each step's `agent_name` is
+re-validated against the caller's workspace registry at run time, and custom-agent steps never inherit
+the built-in-operator chat-path exemption (H11).
+
+### 15.8 Run-projection additions (extends §8)
+The Run projection must additionally model:
+- the **N-children → 1-synthesis fan-in** shape (new — today `PlanTask` is one-agent-per-step);
+- **per-step `goal`/`success_criteria`**;
+- **per-child `idempotency_key`** keyed `(workspace_id, step_id)` (15.6);
+- **ephemeral-agent attribution** (Tier-3 kind-id + parent linkage — no stable registry name);
+- **idempotent cross-child cost rollup**;
+- a **goal/steps decomposition summary** retained for the final report + history (resolves §14 q4).
+
+### 15.9 Decisions locked + red-team holes addressed
+
+| Decision | Value |
+|---|---|
+| D1 dynamic-agent definition | shaped prompt, **locked read-only tools**, registry-anchored kind |
+| D2 workflow object | **emergent only** (no entity; `src/workflows/*` deleted) |
+| D3 workflow path | **chat-only** |
+| D4 act tier | **lean act tier survives** (single bounded gated action, no workflow) |
+
+| Hole | Sev | Control | Where |
+|---|---|---|---|
+| H1 free-form reopens `task` | CRIT | registry-anchored read-only template | 15.2 |
+| H2 ephemeral write escalation | CRIT | read-class-only, fingerprint-approved | 15.2 |
+| H3 ephemeral re-delegation | HIGH | leaf + startup-assert | 15.2 |
+| H4 step write bypasses TrustEngine | CRIT | `trust_interrupt` per write step | 15.7 |
+| H5 workflow resurrects deleted DAG | HIGH | emergent pattern, no Plan schema | 15.3 |
+| H6 agent-bomb | HIGH | pre-spawn admission + caps; chat-only | 15.4/15.5 |
+| H7 perception plan-everything | HIGH | workflows chat-only; act-tier no workflow | 15.4 |
+| H8 cross-source synthesis loophole | HIGH | synthesis → surface only, never workflow | 15.4 |
+| H9 fan-out resume double-write | HIGH | per-`(ws, step)` idempotency ledger | 15.6 |
+| H10 tenant leak across fan-out | CRIT | closure tenant + strict resolution + probe | 15.6 |
+| H11 unsafe authored step | HIGH | moot (emergent); run-time agent re-validation | 15.7 |
+| H12 breaker/cost per child | MED | shared breaker + idempotent rollup | 15.5/15.6 |
+
+### 15.10 Open items for the plan / Step-0
+- Concrete cap numbers: per-run spawn cap, `max_concurrency`, max fan-out width, loop-until-dry round
+  ceiling.
+- Step-0 probes: ContextVar propagation per concurrent child `astream` (H10); whether
+  `wrap_tool_call` can raise `interrupt()` or `trust_interrupt` must be a dedicated node (§14 q9 —
+  affects how a fan-out child carries the gate).
+- Whether the synthesize node gets its own advisory verification verdict (§5.1#4) or inherits the
+  run-level one.
+- Deferred: Tier-3 resumability; recurring *heavy* (fan-out) scheduled work.
