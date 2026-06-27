@@ -1,6 +1,11 @@
 # Agentic Redesign — Design Spec
 
 **Date:** 2026-06-23 · **Status:** Approved shape; ready for implementation plan
+**SHAPE SUPERSEDED 2026-06-28** by [`2026-06-28-first-principles-rebuild-design.md`](./2026-06-28-first-principles-rebuild-design.md):
+the lead/registry topology, the "workflow" concept (§15), and the gating model are re-based there
+(workflow-as-concept and Operator-as-agent are deleted; the gate unifies via a deterministic
+`authorization_source`). The tenancy / custom-agent / per-fingerprint-trust controls here are carried
+forward.
 **Amended 2026-06-24** (§15): adds **dynamic research agents** (Tier-3) + **emergent workflows**
 (chat-only); resolves §14 q4 & q8. See §15.
 **Amends** the routing / planning / data-model parts of

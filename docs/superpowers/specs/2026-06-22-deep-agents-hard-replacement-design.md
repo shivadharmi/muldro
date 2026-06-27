@@ -1,6 +1,11 @@
 # Deep Agents Hard Replacement — Design Spec
 
 **Date:** 2026-06-22 · **Status:** Approved shape; ready for implementation plan
+**SHAPE SUPERSEDED 2026-06-28** by [`2026-06-28-first-principles-rebuild-design.md`](./2026-06-28-first-principles-rebuild-design.md):
+agent topology, gating model, verification engine, data model, world model, context engineering, and
+**migration order** are re-based there (runtime swap moves to LAST, after correctness work). The
+durable-execution / fail-closed-authz / TrustEngine / per-fingerprint-trust / workspace-isolation
+invariants in THIS doc are still carried forward by the rebuild.
 **Amended by:** [`2026-06-23-agentic-redesign-design.md`](./2026-06-23-agentic-redesign-design.md) —
 replaces orchestrator routing + the mandatory Planner / `PlanOutput` / `Plan` / `PlanTask` with a
 pure-agentic agent registry + on-demand planning + user-creatable agents + perception act-tier
