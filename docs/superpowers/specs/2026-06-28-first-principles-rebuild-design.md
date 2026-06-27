@@ -116,9 +116,13 @@ carrying `ApprovalContext`, regardless of which loop invoked the tool.
   approval; else evaluate trust × risk. **Not** an LLM judgment; **not** a continuous trust nudge.
 - **`confidence` as a gate dimension stays DEFERRED** until calibrated evidence-derived confidence
   exists (today `confidence_score` is a constant 1.0).
-- **Prerequisite:** the `capability_scope` middleware (`backend/src/deep_runtime/middleware/
-  capability_scope.py`) is **confirmed UNWIRED** (`agent_builder.py` ships `extra_middleware=()`).
-  Native agents have **no scope enforcement today — a live security hole.** Wire it first (§6 Step 0).
+- **Prerequisite (latent, not a live hole — verified 2026-06-28):** the **current live path**
+  (`agent_loop._resolve_tool_scope_and_server`) already enforces capability scope **fail-closed**, so
+  there is no exploitable hole today. But the `deep_runtime` migration scaffold ships
+  `agent_builder.py` with `extra_middleware=()` and the `capability_scope` middleware
+  (`backend/src/deep_runtime/middleware/capability_scope.py`) is **UNWIRED** — it must be wired
+  **before** the Deep Agents path ever serves traffic, or the gap becomes live. Wire it in §6 Step 0.
+  (Exact one-line edit + the missing end-to-end test are captured for the plan.)
 
 ### 4.4 Cross-path write serialization
 "Writes are never parallelized" is **not** enforced by "one gate" (a headless scheduler run and a
@@ -173,10 +177,17 @@ behind the prior:
 Post-action reconciliation is owned by the verification loop: a confirmed read-back raises/records a
 belief; a divergent one lowers confidence — **fed to abstention/ask-the-user only, never the gate**.
 
-**Build/buy is spike-gated** *(fork resolved: spike Graphiti first)*: run a focused spike to verify
-Graphiti's version/Python/Neo4j compatibility **and** a clean per-workspace tenancy boundary before
-committing. A temporal-KG engine without safe tenancy is a non-starter given the fail-open-isolation
-risk. If the spike fails either check → hand-roll supersede on the existing `Entity` schema.
+**Build/buy resolved (spike done 2026-06-28): BUILD — hand-roll `valid_to` supersede on the existing
+`Entity`/`EntityRelationship` schema + reuse `memory_service/contradictions.py`. Graphiti rejected**,
+on two decisive factors: (1) **fail-open tenancy** — Graphiti's `group_ids=None` spans *all* groups
+(confirmed in source + getzep/graphiti#838 as intended behavior), an unacceptable default against the
+workspace-isolation invariant (prior bleed near-miss); adopting it would mean writing the enforcement
+wrapper anyway. (2) **forced `openai` + `posthog` core deps + a second Neo4j driver** in an
+Anthropic-only stack. Graphiti's real edge (bi-temporal + LLM contradiction) is the part Jarvis can
+hand-roll cheaply, and the hand-rolled version is **fail-closed by construction** via the existing
+`NOT NULL workspace_id`. Reassess BUY only if Graphiti makes `group_id` enforcement mandatory and
+drops the hard `openai` dependency. (graphiti-core 0.29.2 is otherwise Python-3.12/Neo4j-5.26
+compatible — compat was not the blocker; tenancy + deps were.)
 
 ### 4.7 Context engineering (JIT-hybrid)
 A lean **always-on core** (identity, active preferences via the existing explicit-injection, recent
@@ -233,8 +244,9 @@ This sits alongside `capability_scope` wiring as a Phase-0 gate.
 **The three forks (resolved with the user):**
 - **Direction:** adopt the full target, **correctness-first** — the Deep Agents runtime cutover is the
   **last** migration step (after idempotency + verification + world-model + data-split land).
-- **World-model KG:** **spike Graphiti first** (compatibility + per-workspace tenancy); build-vs-buy
-  decided on the result.
+- **World-model KG:** spike **done** → **BUILD** (hand-roll `valid_to` supersede + reuse
+  memory-contradiction code). Graphiti rejected: fail-open `group_id` tenancy + forced
+  `openai`/`posthog` core deps (§4.6).
 - **Failed-verification compensation:** **escalate to the user first** (compensation is itself a
   world-touching action).
 
@@ -256,11 +268,13 @@ This sits alongside `capability_scope` wiring as a Phase-0 gate.
 Each step is independently shippable; lowest-risk / highest-correctness-leverage first.
 
 - **Step 0 — Safety + isolation preconditions (blocking, no behavior change):** wire
-  `capability_scope` into `agent_builder.py` (closes the live no-scope hole); add the multi-tenant
+  `capability_scope` into `agent_builder.py` (closes the **latent** scaffold gap — the live
+  `agent_loop` path already enforces scope; `deep_runtime` must be wired before it serves traffic) +
+  the missing end-to-end "out-of-scope blocked through the built agent" test; add the multi-tenant
   isolation test (A cannot read B via Store/checkpointer/projection); add the A2UI `version` field +
   graceful fallback; delete `backend/src/workflows/` + `test_meeting_prep.py`; delete the dead
   context-budget scaffold; add context/cache observability + assert auto-caching survives the
-  explicit `middleware=` shape. **Run the Graphiti tenancy/compat spike here.**
+  explicit `middleware=` shape. (Graphiti spike already done → BUILD, §4.6.)
 - **Step 1 — Per-step idempotency ledger + deterministic-arg normalizer** (hard prerequisite before
   any autonomous cutover). Acceptance: kill the worker after a write's API call but before checkpoint,
   resume where raw args differ, assert the external effect fired **exactly once**.
@@ -320,15 +334,15 @@ Each step is independently shippable; lowest-risk / highest-correctness-leverage
 | **Dual-runtime corruption / shadow-running writes** | Supersede semantics + ledger shared by both runtimes before the window; shadow-compare read-only outputs only; one authoritative runtime per turn; drain paused runs on legacy |
 | **Agent reading a stale projection** | Split readers by audience; execution-truth reads stay read-your-writes |
 | **`completed_unverified` state-machine blast radius** | Its own step (3); explicit rule it doesn't count toward `approved_count` |
-| **Fast-moving-framework coupling / unverified native-feature assumptions** | Escape hatch one cycle + auto-rollback; verify caching + Graphiti compat before relying on either |
+| **Fast-moving-framework coupling / unverified native-feature assumptions** | Escape hatch one cycle + auto-rollback; verify caching survives the explicit `middleware=` shape before relying on it (Graphiti already rejected, §4.6) |
 | **Opportunity cost** (runtime swap is reliability-neutral) | Correctness Steps 1–4 sequenced ahead of the cutover |
 
 ---
 
 ## 8. Open spikes / items for the plan (Step 0)
 
-- **Graphiti spike:** version/Python/Neo4j compatibility **and** per-workspace tenancy. Gate for §4.6
-  build/buy.
+- ~~Graphiti spike~~ **DONE (2026-06-28)** → BUILD (hand-roll supersede); Graphiti rejected on
+  fail-open tenancy + forced `openai`/`posthog` deps (§4.6).
 - **Caching probe:** assert auto-`AnthropicPromptCachingMiddleware` survives the explicit `middleware=`
   call shape (2nd-turn `cache_read_input_tokens > 0`).
 - **Interrupt probe:** can a `wrap_tool_call` raise `interrupt()` from inside the tool wrapper, or must
