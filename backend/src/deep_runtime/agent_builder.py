@@ -16,6 +16,7 @@ TurnScope, …) are threaded in via ``extra_middleware`` in later phases.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from typing import Any
 
@@ -26,6 +27,8 @@ from src.deep_runtime.middleware.capability_scope import make_capability_scope_m
 from src.deep_runtime.model_factory import build_chat_model
 from src.orchestrator.agents import SubAgent
 from src.services.capability_resolver import CapabilityResolver
+
+logger = logging.getLogger(__name__)
 
 
 async def _has_write_capability_in_scope(agent: SubAgent, workspace_id: str, db_factory) -> bool:
@@ -42,6 +45,10 @@ async def _has_write_capability_in_scope(agent: SubAgent, workspace_id: str, db_
                     return True
         return False
     except Exception:
+        logger.warning(
+            "[deep_runtime] %s — capability lookup failed at construction (fail-closed)",
+            agent.name,
+        )
         return True  # cannot prove read-only -> fail closed
 
 
