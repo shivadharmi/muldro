@@ -208,6 +208,24 @@ def _find_entity_stmt(user_id: str, query: str, workspace_id: str):
     )
 
 
+def _find_by_alias_stmt(user_id: str, alias: str, workspace_id: str):
+    """Build the exact-alias lookup SELECT for _find_by_name_or_alias.
+
+    Extracted so the isolation test can compile it and guard the alias
+    subquery's workspace_id scoping against regression.
+    """
+    return select(Entity).where(
+        Entity.user_id == user_id,
+        Entity.workspace_id == workspace_id,
+        Entity.entity_id.in_(
+            select(EntityAlias.entity_id).where(
+                EntityAlias.alias == alias,
+                EntityAlias.workspace_id == workspace_id,
+            )
+        ),
+    )
+
+
 class WorldModel:
     """Manage the entity graph."""
 
@@ -502,18 +520,7 @@ class WorldModel:
 
         if aliases:
             for alias in aliases:
-                result = await self._db.execute(
-                    select(Entity).where(
-                        Entity.user_id == user_id,
-                        Entity.workspace_id == workspace_id,
-                        Entity.entity_id.in_(
-                            select(EntityAlias.entity_id).where(
-                                EntityAlias.alias == alias,
-                                EntityAlias.workspace_id == workspace_id,
-                            )
-                        ),
-                    )
-                )
+                result = await self._db.execute(_find_by_alias_stmt(user_id, alias, workspace_id))
                 entity = result.scalar_one_or_none()
                 if entity:
                     return entity
