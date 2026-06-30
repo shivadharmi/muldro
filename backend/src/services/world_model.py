@@ -186,6 +186,28 @@ def sanitize_canonical_name(
     return (label, out_aliases)
 
 
+def _find_entity_stmt(user_id: str, query: str, workspace_id: str):
+    """Build the find_entity SELECT. Extracted so isolation tests compile it."""
+    pattern = f"%{query}%"
+    return (
+        select(Entity)
+        .where(
+            Entity.user_id == user_id,
+            Entity.workspace_id == workspace_id,
+            or_(
+                Entity.canonical_name.ilike(pattern),
+                Entity.entity_id.in_(
+                    select(EntityAlias.entity_id).where(
+                        EntityAlias.alias.ilike(pattern),
+                        EntityAlias.workspace_id == workspace_id,
+                    )
+                ),
+            ),
+        )
+        .order_by(Entity.importance_score.desc())
+    )
+
+
 class WorldModel:
     """Manage the entity graph."""
 
@@ -444,21 +466,7 @@ class WorldModel:
 
     async def find_entity(self, user_id: str, query: str, workspace_id: str = "") -> list[dict]:
         """Search entities by name or alias. Ordered by importance."""
-        pattern = f"%{query}%"
-        result = await self._db.execute(
-            select(Entity)
-            .where(
-                Entity.user_id == user_id,
-                Entity.workspace_id == workspace_id,
-                or_(
-                    Entity.canonical_name.ilike(pattern),
-                    Entity.entity_id.in_(
-                        select(EntityAlias.entity_id).where(EntityAlias.alias.ilike(pattern))
-                    ),
-                ),
-            )
-            .order_by(Entity.importance_score.desc())
-        )
+        result = await self._db.execute(_find_entity_stmt(user_id, query, workspace_id))
         entities = result.scalars().all()
         return [
             {
@@ -499,7 +507,10 @@ class WorldModel:
                         Entity.user_id == user_id,
                         Entity.workspace_id == workspace_id,
                         Entity.entity_id.in_(
-                            select(EntityAlias.entity_id).where(EntityAlias.alias == alias)
+                            select(EntityAlias.entity_id).where(
+                                EntityAlias.alias == alias,
+                                EntityAlias.workspace_id == workspace_id,
+                            )
                         ),
                     )
                 )
