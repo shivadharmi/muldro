@@ -21,6 +21,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 logger = logging.getLogger(__name__)
 
+# Current A2UI schema version. Bump on contract changes readers must distinguish.
+# Readers MUST tolerate unknown future values and missing values (defaults applied).
+A2UI_SCHEMA_VERSION = 1
+
 # ── Surface kind taxonomy ───────────────────────────────────────
 
 SurfaceKind = Literal[
@@ -118,6 +122,7 @@ class A2UIAction(BaseModel):
 
 class A2UIComponent(BaseModel):
     model_config = ConfigDict(extra="ignore")
+    version: int = A2UI_SCHEMA_VERSION
     type: str
     id: str
     properties: dict = Field(default_factory=dict)
@@ -151,6 +156,7 @@ class A2UIComponent(BaseModel):
 
 class A2UISurface(BaseModel):
     model_config = ConfigDict(extra="ignore")
+    version: int = A2UI_SCHEMA_VERSION
     type: str = "surface"
     id: str
     children: list[A2UIComponent] = Field(default_factory=list)
