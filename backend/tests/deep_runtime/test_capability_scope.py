@@ -186,3 +186,21 @@ async def test_empty_capability_scope_is_blocked(handler):
     registry.get_tool.assert_not_awaited()
     assert isinstance(result, ToolMessage)
     assert result.status == "error"
+
+
+async def test_db_exception_is_blocked(handler):
+    """Fail-closed: a registry lookup error DENIES the call (not propagate)."""
+    agent = _agent({"math.multiply"})
+    mw = make_capability_scope_middleware(
+        agent=agent, workspace_id=WORKSPACE_ID, db_factory=_fake_db_factory()
+    )
+    registry = AsyncMock()
+    registry.get_tool = AsyncMock(side_effect=RuntimeError("db down"))
+    with patch(
+        "src.deep_runtime.middleware.capability_scope.ToolRegistry",
+        return_value=registry,
+    ):
+        result = await _hook(mw)(_request("multiply"), handler)
+    handler.assert_not_awaited()
+    assert isinstance(result, ToolMessage)
+    assert result.status == "error"

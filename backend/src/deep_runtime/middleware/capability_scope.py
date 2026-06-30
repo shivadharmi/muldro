@@ -50,9 +50,17 @@ async def _is_in_scope(
         return False
     if db_factory is None:
         return False
-    async with db_factory() as db:
-        registry = ToolRegistry(db, workspace_id=workspace_id or None)
-        tool = await registry.get_tool(tool_name)
+    try:
+        async with db_factory() as db:
+            registry = ToolRegistry(db, workspace_id=workspace_id or None)
+            tool = await registry.get_tool(tool_name)
+    except Exception:
+        logger.warning(
+            "[deep_runtime] %s DENIED %s — capability lookup failed (fail-closed)",
+            agent.name,
+            tool_name,
+        )
+        return False
     if tool is None:
         return False
     capability = getattr(tool, "capability", None)
