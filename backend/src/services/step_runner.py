@@ -259,6 +259,29 @@ class StepRunner:
         # Build tools list
         tools = await self.build_operator_tools()
 
+        # Install the per-step idempotency ledger on the injected execute_tool_fn
+        # (autonomous path only — the chat path passes the raw fn, so it stays a
+        # no-op there). Writes go through the ledger keyed on a semantic identity
+        # so an LLM-recomposed payload on resume cannot double-fire (Step 1).
+        from src.services.idempotency import (
+            IdempotencyContext,
+            IdempotencyLedger,
+            make_idempotent_execute_tool_fn,
+        )
+
+        idem_execute_tool_fn = self._execute_tool_fn
+        if self._execute_tool_fn is not None:
+            idem_execute_tool_fn = make_idempotent_execute_tool_fn(
+                self._execute_tool_fn,
+                IdempotencyContext(
+                    ledger=IdempotencyLedger(self._db_factory),
+                    run_id=run.run_id,
+                    step_id=step.step_id,
+                    workspace_id=run.workspace_id or "",
+                    db_factory=self._db_factory,
+                ),
+            )
+
         # Collect events from agent loop
         text = ""
         tools_called = []
@@ -281,7 +304,7 @@ class StepRunner:
             services=None,
             budget=self._budget,
             trace=self._active_traces.get(run.run_id),
-            execute_tool_fn=self._execute_tool_fn,
+            execute_tool_fn=idem_execute_tool_fn,
             max_tool_rounds=10,
             stream=False,
             circuit_breaker=self._circuit_breaker,
