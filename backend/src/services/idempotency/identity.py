@@ -33,7 +33,11 @@ class IdentitySpec:
 
 
 # Seeded for the write capabilities that exist today (CAPABILITY_CATALOG). The
-# VOLATILE fields (body/description) are DELIBERATELY excluded.
+# VOLATILE fields (body/description) are DELIBERATELY excluded. Consequence: two
+# sends with the same to+subject but different body within one step intentionally
+# collapse to one key (the "same logical write" default — favouring no-double-fire
+# over field-level distinctness). A genuinely distinct send needs a distinct subject.
+
 IDENTITY_SPECS: dict[str, IdentitySpec] = {
     "email.send": IdentitySpec(identity_fields=("to", "cc", "bcc", "subject")),
     "email.delete": IdentitySpec(identity_fields=("message_id",)),
