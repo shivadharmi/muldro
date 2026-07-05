@@ -589,11 +589,18 @@ import src.services.eviction_service as es
 
 
 def test_eviction_service_never_deletes_runtime_events():
-    # Static guard: no eviction method may reference the RuntimeEvent model or the
-    # runtime_events table for deletion.
+    # Guard: the service must not reference the RuntimeEvent MODEL or issue a DELETE
+    # against the runtime_events table. We check the CamelCase model symbol + a raw
+    # DELETE pattern — NOT the bare table name, which the class docstring legitimately
+    # names to document the exemption (so `"runtime_events" not in src` would wrongly
+    # contradict test_retention_contract_documented below).
+    import re
+
     src = inspect.getsource(es)
-    assert "RuntimeEvent" not in src, "EvictionService must not touch RuntimeEvent (system-of-record)"
-    assert "runtime_events" not in src, "EvictionService must not delete from runtime_events"
+    assert "RuntimeEvent" not in src, "EvictionService must not reference the RuntimeEvent model"
+    assert not re.search(
+        r"delete\s+from\s+runtime_events", src, re.IGNORECASE
+    ), "EvictionService must not DELETE from runtime_events (system-of-record)"
 
 
 def test_retention_contract_documented():
