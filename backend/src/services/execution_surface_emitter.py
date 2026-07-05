@@ -54,8 +54,15 @@ class SurfaceEmitter:
         user_id: str,
         payload: dict,
         workspace_id: str | None = None,
+        durable: bool = False,
     ) -> None:
-        """Publish a domain event (best-effort) + Redis progress + DB persistence."""
+        """Publish a domain event (best-effort) + Redis progress + DB persistence.
+
+        ``durable=True`` marks a *state-recording* event (the runtime_events log is
+        the system-of-record, Step 5 §4.8): a DB-persist failure PROPAGATES so the
+        enclosing state-change transaction aborts atomically rather than leaving the
+        event log with a silent gap. Redis publishing stays best-effort in both modes.
+        """
         if self._event_bus:
             try:
                 stream = self._event_bus.agent_stream(workspace_id or "")
@@ -65,25 +72,30 @@ class SurfaceEmitter:
             except Exception:
                 logger.debug("Failed to emit %s event", event_type, exc_info=True)
 
-        # Persist to runtime_events table for home feed / runtime activity
+        # Persist to runtime_events table (system-of-record for home feed / activity).
         run_id = payload.get("run_id")
         step_id = payload.get("step_id")
         if workspace_id:
-            try:
-                from src.models.runtime_event import RuntimeEvent
+            from src.models.runtime_event import RuntimeEvent
 
-                self._db.add(
-                    RuntimeEvent(
-                        workspace_id=workspace_id,
-                        run_id=run_id,
-                        step_id=step_id,
-                        event_type=event_type.replace(".", "_"),
-                        payload=payload,
-                    )
+            self._db.add(
+                RuntimeEvent(
+                    workspace_id=workspace_id,
+                    run_id=run_id,
+                    step_id=step_id,
+                    event_type=event_type.replace(".", "_"),
+                    payload=payload,
                 )
+            )
+            if durable:
+                # System-of-record: never silently gap. A persist failure must abort
+                # the state-change transaction (do NOT catch — let it propagate).
                 await self._db.flush()
-            except Exception:
-                logger.debug("Failed to persist runtime event %s", event_type, exc_info=True)
+            else:
+                try:
+                    await self._db.flush()
+                except Exception:
+                    logger.debug("Failed to persist runtime event %s", event_type, exc_info=True)
 
         # Publish to Redis for WebSocket progress streaming
         if run_id:

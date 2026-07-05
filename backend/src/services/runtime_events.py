@@ -67,24 +67,32 @@ class RuntimeEventEmitter:
         step_id: str | None = None,
         user_id: str | None = None,
         payload: dict | None = None,
+        durable: bool = False,
     ) -> None:
-        """Emit a runtime event to DB + event bus (best-effort)."""
+        """Emit a runtime event to DB + event bus.
+
+        ``durable=True`` (state-recording events): a DB-persist failure propagates so
+        the enclosing transaction aborts atomically. Redis stays best-effort.
+        """
         event_payload = payload or {}
 
-        # Persist to DB
-        try:
-            self._db.add(
-                RuntimeEvent(
-                    workspace_id=self._workspace_id,
-                    run_id=run_id,
-                    step_id=step_id,
-                    event_type=event_type,
-                    payload=event_payload,
-                )
+        # Persist to DB (system-of-record)
+        self._db.add(
+            RuntimeEvent(
+                workspace_id=self._workspace_id,
+                run_id=run_id,
+                step_id=step_id,
+                event_type=event_type,
+                payload=event_payload,
             )
+        )
+        if durable:
             await self._db.flush()
-        except Exception:
-            logger.debug("Failed to persist runtime event %s", event_type, exc_info=True)
+        else:
+            try:
+                await self._db.flush()
+            except Exception:
+                logger.debug("Failed to persist runtime event %s", event_type, exc_info=True)
 
         # Publish to Redis for realtime subscribers
         if self._event_bus and user_id:
