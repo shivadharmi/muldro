@@ -50,6 +50,26 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def build_verification_meta(capability: str, risk, verdict, output: dict | None) -> dict:
+    """Metadata attached to a verified write's output_data so the deferred-read tick
+    and escalation can act on a completed_unverified / partially_completed step
+    without re-deriving risk. artifact_ref carries the exact observed effect."""
+    out = output if isinstance(output, dict) else {}
+    return {
+        "capability": capability,
+        "risk_level": getattr(risk, "risk_level", "high"),
+        "reversible": getattr(risk, "reversible", False),
+        "blast_radius": getattr(risk, "blast_radius", "self"),
+        "verdict": verdict.value if hasattr(verdict, "value") else str(verdict),
+        "attempts": 1,
+        "artifact_ref": {
+            k: out.get(k)
+            for k in ("event_id", "id", "message_id", "url", "thread_id")
+            if out.get(k) is not None
+        },
+    }
+
+
 class DagRunner:
     """Drives a run's step DAG: ready-step loop, gate, execution, finalization."""
 
@@ -496,6 +516,15 @@ class DagRunner:
             risk=risk,
         )
         step_status = verdict_to_step_status(verdict)
+
+        # Attach verification metadata so the deferred tick / escalation can act
+        # on a completed_unverified / partially_completed step (JSONB, no migration).
+        # A CONFIRMED write finalizes as "completed" and needs no deferred re-check.
+        if step_status != "completed" and isinstance(output, dict):
+            output = {
+                **output,
+                "verification": build_verification_meta(capability, risk, verdict, output),
+            }
 
         await self.finalize_step(run, step, output, elapsed_ms, status=step_status)
 
