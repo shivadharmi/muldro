@@ -1304,9 +1304,49 @@ from src.services.entity_facts.store import EntityFactStore  # noqa: F401 (used 
 
 (The `EntityFactStore` local import inside `_record_attribute_facts` avoids a circular import at module load; the top-level `compute_confidence` import is safe — `confidence.py` imports nothing from `world_model`.)
 
-- [ ] **Step 6: Add `confidence` + `provenance` to the `find_entity` output dict**
+- [ ] **Step 6: Add `confidence` + `provenance` to the entity output dict (BOTH builders)**
 
-The `find_entity` dict comprehension (`world_model.py:504-513`) currently yields `entity_id`/`entity_type`/`canonical_name`/`attributes`/`importance_score`/`interaction_count`/`last_seen_at`. Add `confidence` (age-decayed live) + `provenance` (current facts). Change the comprehension so each entity dict includes:
+**Correction (verified 2026-07-06):** there are TWO parallel entity→dict builders, and the render (Task 6) consumes the resolver one:
+- `entity_resolver._to_dict(e)` (`entity_resolver.py:62-72`) — the shared builder `EntityResolver.resolve` returns; `ContextBuilder.build` → `resolve_entities` → this dict → `_rank_entities` → `pack.entities` → `to_prompt`. **This is the render-feeding path — the PRIMARY edit.**
+- `world_model.find_entity`'s inline comprehension (`world_model.py:504-513`) — used by clean-name `find_entity` callers (and the Task-4 test). Secondary, for consistency.
+
+Add `confidence` (age-decayed live) + `provenance` to **both**. First, in `backend/src/services/entity_resolver.py`, the current `_to_dict` is:
+
+```python
+def _to_dict(e: Entity) -> dict:
+    """Same shape WorldModel.find_entity returns (drop-in for _rank_entities)."""
+    return {
+        "entity_id": e.entity_id,
+        "entity_type": e.entity_type,
+        "canonical_name": e.canonical_name,
+        "attributes": e.attributes,
+        "importance_score": e.importance_score,
+        "interaction_count": e.interaction_count,
+        "last_seen_at": (e.last_seen_at.isoformat() if e.last_seen_at else None),
+    }
+```
+
+Change it to add the two keys (and add the imports `from src.services.entity_facts.confidence import current_confidence` + the `_days_since` helper at module scope of `entity_resolver.py`):
+
+```python
+def _to_dict(e: Entity) -> dict:
+    """Same shape WorldModel.find_entity returns (drop-in for _rank_entities)."""
+    return {
+        "entity_id": e.entity_id,
+        "entity_type": e.entity_type,
+        "canonical_name": e.canonical_name,
+        "attributes": e.attributes,
+        "importance_score": e.importance_score,
+        "interaction_count": e.interaction_count,
+        "last_seen_at": (e.last_seen_at.isoformat() if e.last_seen_at else None),
+        "confidence": current_confidence(
+            e.confidence_score, age_days=_days_since(e.last_seen_at)
+        ),
+        "provenance": {"origin_hint": e.entity_type},
+    }
+```
+
+Then make the SAME addition to `world_model.find_entity`'s comprehension (`world_model.py:504-513`) — add the identical two keys:
 
 ```python
                 "confidence": current_confidence(
@@ -1316,7 +1356,7 @@ The `find_entity` dict comprehension (`world_model.py:504-513`) currently yields
                 "provenance": {"origin_hint": e.entity_type},
 ```
 
-Add the tiny `_days_since` helper at module scope (if not already present from Step 2's recency work — grep first; `context_builder.py` has `_recency_score` but `world_model.py` may not have a days-since helper):
+Add this `_days_since` helper at module scope in **both** `world_model.py` and `entity_resolver.py` (grep each first — neither has it today; `context_builder.py` has a different `_recency_score`):
 
 ```python
 def _days_since(ts) -> float:
@@ -1329,7 +1369,7 @@ def _days_since(ts) -> float:
     return max(0.0, (datetime.now(timezone.utc) - ts).total_seconds() / 86400.0)
 ```
 
-> `provenance` on the *entity* dict is a lightweight hint (the entity has no single origin); rich per-attribute provenance is exposed by the `get_provenance` tool (Task 8). Task 6 renders `confidence` in the prompt; `provenance` is available for the tool path.
+> `provenance` on the *entity* dict is a lightweight hint (the entity has no single origin); rich per-attribute provenance is exposed by the `get_provenance` tool (Task 8). Task 6 renders `confidence` from `pack.entities`, which flows through `entity_resolver._to_dict` — hence that edit is the load-bearing one.
 
 - [ ] **Step 7: Thread `origin` from the two extractors**
 
@@ -1363,20 +1403,29 @@ In `extract_from_event` (`world_model.py:311`), the observation came from a moni
             )
 ```
 
-- [ ] **Step 8: Run the supersede test + the existing world-model suite**
+- [ ] **Step 8: Fix the mocked world-model tests (blast radius) + run the suites**
+
+**Correction (verified 2026-07-06):** `tests/test_world_model.py` uses a **MagicMock `db`** (the `mock_db` fixture), not real Postgres. Routing attribute writes through `EntityFactStore` adds `db.execute(select(...))`, `db.add(...)`, and **`await db.flush()`** calls. The mock fixture defines `db.execute`/`db.commit` as `AsyncMock` but NOT `db.flush` — so `await mock_db.flush()` raises (a plain `MagicMock` attribute isn't awaitable). Add `db.flush = AsyncMock()` to the `mock_db` fixture:
+
+```python
+    db.flush = AsyncMock()
+```
+
+Then run the affected suites and fix any assertion that changed *because facts are now recorded* (e.g. an `add.call_count` in the existing-entity-with-attributes path rises by the number of new facts) — update the expectation to the new correct count; do NOT weaken the feature. `test_upsert_creates_new_entity` calls upsert with NO `attributes`, so `_record_attribute_facts` is skipped and its `add.call_count == 2` still holds; `test_upsert_updates_existing_entity` asserts on the merged `existing.attributes` value (unchanged) but now also records a fact — only the `flush` mock is needed there.
 
 ```bash
 uv run pytest tests/test_entity_fact_supersede_db.py -q
-uv run pytest tests/test_world_model.py tests/test_entity_dedup.py tests/test_knowledge_graph.py -q
+uv run pytest tests/test_world_model.py tests/test_entity_dedup.py tests/test_knowledge_graph.py tests/test_entity_resolver_db.py -q
 ```
-Expected: the new test PASSES; the existing world-model/dedup/knowledge-graph tests still PASS (attributes snapshot behaviour unchanged; the added facts are additive).
+Expected: the new test PASSES; the existing suites PASS after the `flush` mock fix (and any recomputed `add.call_count`). The `entities.attributes` snapshot value is unchanged (D2) — only the mock plumbing + fact-count expectations shift.
 
 - [ ] **Step 9: Commit**
 
 ```bash
-git add backend/src/services/world_model.py backend/tests/test_entity_fact_supersede_db.py
+git add backend/src/services/world_model.py backend/src/services/entity_resolver.py backend/tests/test_entity_fact_supersede_db.py backend/tests/test_world_model.py
 git commit -m "feat(rebuild): upsert_entity supersedes attrs via entity_facts + evidence-derived confidence (Step 4)"
 ```
+(Include any other test files you had to touch for the mock-plumbing fix.)
 
 ---
 
