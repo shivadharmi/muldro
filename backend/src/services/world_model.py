@@ -511,6 +511,22 @@ class WorldModel:
             for e in entities
         ]
 
+    async def resolve_entities(
+        self, user_id: str, text: str, workspace_id: str = "", limit: int = 10
+    ) -> list[dict]:
+        """Resolve entity mentions in free text via span extraction + exact + FTS
+        + vector (replaces the ILIKE-on-raw-message find_entity path). Returns the
+        same dict shape as find_entity so callers/ranking are unchanged."""
+        from src.services.entity_resolver import EntityResolver
+
+        resolver = EntityResolver(
+            self._db,
+            workspace_id,
+            embedding_service=self._embedding_service,
+            vector_store=self._vector_store,
+        )
+        return await resolver.resolve(user_id, text, limit=limit)
+
     async def _find_by_name_or_alias(
         self,
         user_id: str,
