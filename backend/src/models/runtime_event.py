@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Identity, Index, String, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -40,10 +40,16 @@ class RuntimeEvent(Base, TimestampMixin):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     payload: Mapped[dict | None] = mapped_column(JSONB, default=dict)
+    seq: Mapped[int] = mapped_column(
+        BigInteger,
+        Identity(always=False),
+        nullable=False,
+    )
 
     __table_args__ = (
         Index("ix_revt_workspace", "workspace_id"),
         Index("ix_revt_ws_run", "workspace_id", "run_id"),
         Index("ix_revt_ws_type", "workspace_id", "event_type"),
         Index("ix_revt_occurred", "workspace_id", "occurred_at"),
+        Index("ix_revt_ws_seq", "workspace_id", "seq"),
     )
