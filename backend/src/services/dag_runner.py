@@ -136,8 +136,9 @@ class DagRunner:
                     await self._emitter.emit_event(
                         "run_completed",
                         run.user_id,
-                        {"run_id": run.run_id, "plan_id": run.plan_id},
+                        {"run_id": run.run_id, "plan_id": run.plan_id, "status": run.status},
                         workspace_id=run.workspace_id,
+                        durable=True,
                     )
                     # Run verifier if available
                     if self._learner.verification_enabled:
@@ -779,8 +780,10 @@ class DagRunner:
                 "step_id": step.step_id,
                 "task_id": step.task_id,
                 "duration_ms": result.duration_ms,
+                "status": status,
             },
             workspace_id=run.workspace_id,
+            durable=True,
         )
 
         # Emit surface.updated for A2UI live streaming

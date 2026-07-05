@@ -30,7 +30,10 @@ class SurfaceEmitter:
 
     Holds the same datastore/transport handles the executor was injected with
     (``event_bus``, ``redis``, ``db``, ``db_factory``, ``settings``); every
-    method is best-effort and never raises into the execution path.
+    method is best-effort and never raises into the execution path, EXCEPT
+    ``emit_event(..., durable=True)``, which deliberately propagates a persist
+    failure so a state-recording event's transaction aborts atomically
+    (Step 5 §4.8).
     """
 
     def __init__(
