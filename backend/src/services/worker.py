@@ -304,7 +304,9 @@ class StreamConsumerManager:
             if ev.title or ev.summary:
                 wm = WorldModel(settings=self._settings, db=db)
                 query = ev.title or ev.summary or ""
-                entities = await wm.find_entity(user_id, query[:100], workspace_id=workspace_id)
+                entities = await wm.resolve_entities(
+                    user_id, query[:100], workspace_id=workspace_id
+                )
                 if entities:
                     entity_ids = [e["entity_id"] for e in entities[:5]]
 
