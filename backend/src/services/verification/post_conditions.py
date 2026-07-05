@@ -58,7 +58,15 @@ POST_CONDITIONS: dict[str, PostCondition] = {
             "calendar_id": (write_input or {}).get("calendar_id"),
         },
         assertion=_event_created,
-        description="Read the created event back by id to confirm it landed.",
+        description=(
+            "Read the created event back by id to confirm it landed. NOTE (MVP): this is "
+            "the worked example proving the read-back mechanism — exercised via mock in "
+            "tests (D8). On this branch calendar.get is backed by query_freebusy "
+            "(free/busy ranges, not events-by-id), so a LIVE read-back cannot id-match; "
+            "keep this mock-only until a real get-event tool exists, or a live run may "
+            "false-CONTRADICT (low-harm: escalate-first only surfaces a 'couldn't "
+            "confirm' alarm to a present user)."
+        ),
     ),
 }
 

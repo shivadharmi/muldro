@@ -49,8 +49,6 @@ def test_post_condition_has_read_capability_and_assertion():
 def test_coverage_gate_is_exhaustive_over_real_catalog():
     # Belt-and-suspenders: no irreversible write capability in the real catalog is
     # left unregistered (the exact set the startup gate checks).
-    from src.services.verification.predicate import is_irreversible_capability, write_capabilities
-
     registered = set(POST_CONDITIONS) | UNVERIFIABLE_CAPABILITIES
     missing = [
         c for c in write_capabilities() if is_irreversible_capability(c) and c not in registered
