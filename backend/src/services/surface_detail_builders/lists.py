@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.services.execution_state import TERMINAL_SUCCESS
 from src.ui import renderer as r
 from src.ui.contracts import A2UIComponent, DetailTabResponse
 
@@ -66,7 +67,7 @@ async def build_checklist_items(db: AsyncSession, surface: Any, **kwargs: Any) -
 
     children = []
     for i, step in enumerate(steps):
-        variant = "success" if step.status == "completed" else "default"
+        variant = "success" if step.status in TERMINAL_SUCCESS else "default"
         children.append(
             r.row(
                 f"cl_step_{i}",

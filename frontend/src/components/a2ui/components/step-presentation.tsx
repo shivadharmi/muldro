@@ -36,6 +36,12 @@ export function stepStatusIcon(status: string): StepIcon {
     case "completed":
     case "ok":
       return { icon: "✓", className: statusTextColor("completed") };
+    case "completed_unverified":
+      // Fired, read-back not yet confirmed — "sent (unconfirmed)".
+      return { icon: "✓?", className: statusTextColor("awaiting_approval") };
+    case "partially_completed":
+      // Read-back contradicted the expected effect — surfaced for the user.
+      return { icon: "⚠", className: statusTextColor("failed") };
     case "failed":
     case "error":
       return { icon: "✗", className: statusTextColor("failed") };

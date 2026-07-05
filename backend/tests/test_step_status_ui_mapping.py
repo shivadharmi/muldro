@@ -38,6 +38,14 @@ def test_none_and_unknown_fall_back_to_pending():
     assert step_status_to_ui("some_future_status") == "pending"
 
 
+def test_step3_verification_statuses_map_explicitly():
+    # completed_unverified IS a success at this coarse phase map (the "unconfirmed"
+    # nuance lives in the frontend ✓? icon), so it mirrors "completed".
+    assert step_status_to_ui("completed_unverified") == "completed"
+    # partially_completed (read-back contradicted) did not fully succeed → "failed".
+    assert step_status_to_ui("partially_completed") == "failed"
+
+
 def test_run_machine_unchanged_sanity():
     # Guard: awaiting_approval is still not self-allowed (documents Bug 1 invariant).
     assert "awaiting_approval" not in RUN_TRANSITIONS["awaiting_approval"]

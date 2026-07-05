@@ -386,6 +386,12 @@ _STEP_STATUS_TO_UI: dict[str, str] = {
     "ready": "pending",
     "running": "executing",
     "completed": "completed",
+    # A fired-but-unconfirmed write IS a success at this coarse phase map — the
+    # "unconfirmed" nuance is rendered by the frontend ``✓?`` icon layer, not here.
+    "completed_unverified": "completed",
+    # A read-back-contradicted write did NOT fully succeed — map to the nearest
+    # problem literal in the UI set (``failed``); the ``⚠`` icon carries the nuance.
+    "partially_completed": "failed",
     "failed": "failed",
     "skipped": "completed",
     "waiting_approval": "approval_needed",
