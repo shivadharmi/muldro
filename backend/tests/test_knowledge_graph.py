@@ -246,9 +246,9 @@ class TestEntityExtractionExpanded:
         no_result.scalar_one_or_none.return_value = None
         no_result.scalars.return_value.all.return_value = []
 
-        mock_db.execute = AsyncMock(
-            side_effect=[event_result, no_result, no_result, no_result, no_result]
-        )
+        # First execute() is the event lookup; all later lookups (dedup, per-attribute
+        # fact recording current_fact, find_entity for relationships) return no match.
+        mock_db.execute = AsyncMock(side_effect=[event_result] + [no_result] * 30)
 
         wm = WorldModel(settings=settings, db=mock_db)
         entity_ids = await wm.extract_from_event("evt_001", TEST_USER_ID)
@@ -363,6 +363,7 @@ class TestEntityExtractionExpanded:
                 importance_score=0.5,
                 interaction_count=1,
                 last_seen_at=None,
+                confidence_score=0.7,
             )
         ]
         entity_match2 = MagicMock()
@@ -375,6 +376,7 @@ class TestEntityExtractionExpanded:
                 importance_score=0.5,
                 interaction_count=1,
                 last_seen_at=None,
+                confidence_score=0.7,
             )
         ]
         # Check existing relationship
@@ -475,6 +477,7 @@ class TestFindEntityTemporal:
         mock_entity.importance_score = 0.85
         mock_entity.interaction_count = 12
         mock_entity.last_seen_at = now
+        mock_entity.confidence_score = 0.9
 
         result_mock = MagicMock()
         result_mock.scalars.return_value.all.return_value = [mock_entity]

@@ -24,6 +24,7 @@ from ulid import ULID
 from src.config.settings import Settings, get_anthropic_client
 from src.models.entities import Entity, EntityAlias, EntityRelationship
 from src.models.events import NormalizedEvent
+from src.services.entity_facts.confidence import compute_confidence, current_confidence
 from src.services.entity_resolver import EntityResolver
 
 logger = logging.getLogger(__name__)
@@ -243,6 +244,15 @@ def _entity_vector_payload(
     return payload
 
 
+def _days_since(ts) -> float:
+    """Whole/fractional days since a timestamp (tz-safe), floored at 0.0 for None."""
+    if ts is None:
+        return 0.0
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return max(0.0, (datetime.now(timezone.utc) - ts).total_seconds() / 86400.0)
+
+
 class WorldModel:
     """Manage the entity graph."""
 
@@ -316,6 +326,7 @@ class WorldModel:
                 aliases=ent_data.get("aliases"),
                 importance=importance,
                 workspace_id=workspace_id,
+                origin="perception",
             )
             if entity_id:
                 entity_ids.append(entity_id)
@@ -343,8 +354,14 @@ class WorldModel:
         source_refs: list[dict] | None = None,
         importance: float | None = None,
         workspace_id: str = "",
+        origin: str = "unknown",
     ) -> str:
-        """Create or update an entity. Returns entity_id."""
+        """Create or update an entity. Returns entity_id.
+
+        ``origin`` labels the provenance of this observation (e.g. ``user_message``,
+        ``perception``); it drives per-attribute fact recording (bi-temporal
+        supersede) and the evidence-derived ``confidence_score``.
+        """
         now = datetime.now(timezone.utc)
         # Privacy guard: never persist a bare email address as the canonical name.
         canonical_name, aliases = sanitize_canonical_name(canonical_name, aliases)
@@ -353,8 +370,11 @@ class WorldModel:
         )
         if existing:
             if attributes:
-                merged = {**(existing.attributes or {}), **attributes}
-                existing.attributes = merged
+                await self._record_attribute_facts(
+                    existing.entity_id, user_id, workspace_id, attributes, origin, now
+                )
+                # entities.attributes stays the denormalized current snapshot (D2).
+                existing.attributes = {**(existing.attributes or {}), **attributes}
             if aliases:
                 await self._add_aliases(existing.entity_id, aliases, workspace_id=workspace_id)
             # Update temporal tracking
@@ -362,6 +382,11 @@ class WorldModel:
             existing.interaction_count = (existing.interaction_count or 0) + 1
             if importance is not None:
                 existing.importance_score = max(existing.importance_score or 0.0, importance)
+            existing.confidence_score = compute_confidence(
+                origin=origin,
+                corroboration_count=existing.interaction_count or 1,
+                age_days=0.0,
+            )
             await self._db.commit()
             await self._emit_event(
                 "entity.updated",
@@ -389,6 +414,7 @@ class WorldModel:
             last_seen_at=now,
             interaction_count=1,
             importance_score=importance or 0.5,
+            confidence_score=compute_confidence(origin=origin, corroboration_count=1, age_days=0.0),
         )
         self._db.add(entity)
 
@@ -417,6 +443,13 @@ class WorldModel:
             if retry:
                 return retry.entity_id
             raise
+
+        # Record each attribute as a bi-temporal fact now that the entity row exists.
+        if attributes:
+            await self._record_attribute_facts(
+                entity_id, user_id, workspace_id, attributes, origin, now
+            )
+            await self._db.commit()
 
         # Upsert entity vector to Qdrant
         emb = embedding
@@ -454,6 +487,39 @@ class WorldModel:
             "entity.created", user_id, {"entity_id": entity_id}, workspace_id=workspace_id
         )
         return entity_id
+
+    async def _record_attribute_facts(
+        self,
+        entity_id: str,
+        user_id: str,
+        workspace_id: str,
+        attributes: dict,
+        origin: str,
+        now: datetime,
+    ) -> None:
+        """Record each attribute as a bi-temporal fact (supersede-on-change). The
+        entities.attributes JSONB stays the denormalized current snapshot (D2)."""
+        from src.services.entity_facts.store import EntityFactStore
+
+        store = EntityFactStore(self._db)
+        for attr_key, attr_value in attributes.items():
+            try:
+                await store.record_fact(
+                    entity_id=entity_id,
+                    workspace_id=workspace_id,
+                    user_id=user_id,
+                    attr_key=str(attr_key),
+                    attr_value=attr_value,
+                    origin=origin,
+                    now=now,
+                )
+            except Exception:
+                logger.debug(
+                    "entity_fact record failed: entity=%s key=%s",
+                    entity_id,
+                    attr_key,
+                    exc_info=True,
+                )
 
     async def add_relationship(
         self,
@@ -508,6 +574,10 @@ class WorldModel:
                 "importance_score": e.importance_score,
                 "interaction_count": e.interaction_count,
                 "last_seen_at": (e.last_seen_at.isoformat() if e.last_seen_at else None),
+                "confidence": current_confidence(
+                    e.confidence_score, age_days=_days_since(e.last_seen_at)
+                ),
+                "provenance": {"origin_hint": e.entity_type},
             }
             for e in entities
         ]
@@ -651,6 +721,7 @@ class WorldModel:
                 aliases=ent_data.get("aliases"),
                 importance=importance,
                 workspace_id=workspace_id,
+                origin="user_message",
             )
             if entity_id:
                 entity_ids.append(entity_id)

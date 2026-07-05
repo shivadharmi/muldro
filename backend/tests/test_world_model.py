@@ -19,6 +19,7 @@ def mock_db():
     db = MagicMock()
     db.add = MagicMock()
     db.commit = AsyncMock()
+    db.flush = AsyncMock()
 
     # Default: entity not found (for upsert)
     result_mock = MagicMock()
@@ -56,13 +57,18 @@ async def test_upsert_updates_existing_entity(mock_get_client, settings, mock_db
     existing_entity = MagicMock()
     existing_entity.entity_id = "ent_existing"
     existing_entity.attributes = {"role": "investor"}
+    existing_entity.interaction_count = 1
+    existing_entity.importance_score = 0.5
 
     result_mock = MagicMock()
     result_mock.scalar_one_or_none.return_value = existing_entity
+    # For EntityFactStore.current_fact (per-attribute fact recording): no current fact
+    no_fact = MagicMock()
+    no_fact.scalar_one_or_none.return_value = None
     # For _add_aliases: return empty existing aliases
     alias_result = MagicMock()
     alias_result.scalars.return_value.all.return_value = []
-    mock_db.execute = AsyncMock(side_effect=[result_mock, alias_result])
+    mock_db.execute = AsyncMock(side_effect=[result_mock, no_fact, alias_result])
 
     mock_get_client.return_value = MagicMock()
 

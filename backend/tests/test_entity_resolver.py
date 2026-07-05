@@ -40,6 +40,7 @@ def _entity(**kw):
         importance_score=0.9,
         interaction_count=3,
         last_seen_at=None,
+        confidence_score=1.0,
     )
     base.update(kw)
     return SimpleNamespace(**base)
