@@ -32,6 +32,7 @@ class Entity(Base, TimestampMixin):
 
     __table_args__ = (
         Index("ix_entities_user_type_name", "user_id", "entity_type", "canonical_name"),
+        Index("ix_entities_search_vector", "search_vector", postgresql_using="gin"),
     )
 
 
