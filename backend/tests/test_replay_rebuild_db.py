@@ -131,3 +131,44 @@ async def test_rebuild_final_status_from_run_completed():
             svc = RuntimeProjectionService(db, ws)
             rebuilt = await svc.rebuild_run_projection(run_id)
         assert rebuilt["status"] == "partially_completed"
+
+
+async def test_rebuild_orders_by_seq_not_occurred_at():
+    """Two run-terminal events whose seq order is the REVERSE of their occurred_at
+    order: the last-writer-wins status fold must follow seq (server-monotonic total
+    order), NOT occurred_at. This test fails if the projector orders by occurred_at."""
+    async with _run_env() as (factory, ws, uid):
+        run_id = f"run_{ULID()}"
+        later = datetime(2026, 7, 6, 12, 0, 5, tzinfo=timezone.utc)
+        earlier = datetime(2026, 7, 6, 12, 0, 0, tzinfo=timezone.utc)
+        async with factory() as db:
+            # Inserted FIRST -> lower seq, but LATER occurred_at.
+            db.add(
+                RuntimeEvent(
+                    event_id=f"revt_{ULID()}",
+                    workspace_id=ws,
+                    run_id=run_id,
+                    event_type="run_completed",
+                    payload={"run_id": run_id, "status": "completed"},
+                    occurred_at=later,
+                )
+            )
+            await db.flush()  # force this INSERT (assigns the lower seq) before the next
+            # Inserted SECOND -> higher seq, but EARLIER occurred_at.
+            db.add(
+                RuntimeEvent(
+                    event_id=f"revt_{ULID()}",
+                    workspace_id=ws,
+                    run_id=run_id,
+                    event_type="run_cancelled",
+                    payload={"run_id": run_id, "status": "cancelled"},
+                    occurred_at=earlier,
+                )
+            )
+            await db.commit()
+        async with factory() as db:
+            svc = RuntimeProjectionService(db, ws)
+            rebuilt = await svc.rebuild_run_projection(run_id)
+        # seq order: completed (lower seq) then cancelled (higher seq) -> last wins = cancelled.
+        # occurred_at order would give cancelled (earlier) then completed (later) -> completed.
+        assert rebuilt["status"] == "cancelled"
