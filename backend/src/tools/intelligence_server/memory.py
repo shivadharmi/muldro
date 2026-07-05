@@ -94,13 +94,25 @@ async def update_entity(
             if attributes:
                 import json
 
+                from src.services.entity_facts.store import EntityFactStore
+
                 try:
                     new_attrs = json.loads(attributes)
-                    existing = entity.attributes or {}
-                    existing.update(new_attrs)
-                    entity.attributes = existing
                 except json.JSONDecodeError:
                     return {"status": "error", "error": "Invalid JSON for attributes"}
+
+                store = EntityFactStore(db)
+                for attr_key, attr_value in new_attrs.items():
+                    await store.record_fact(
+                        entity_id=entity.entity_id,
+                        workspace_id=workspace_id,
+                        user_id=user_id,
+                        attr_key=str(attr_key),
+                        attr_value=attr_value,
+                        origin="tool_output",
+                    )
+                # entities.attributes stays the denormalized current snapshot (D2).
+                entity.attributes = {**(entity.attributes or {}), **new_attrs}
 
             if add_alias:
                 from src.models.entities import EntityAlias
