@@ -25,6 +25,10 @@ from src.services.fts_service import FTSService
 logger = logging.getLogger(__name__)
 
 _EXACT_SCORE = 1.0
+# FTS ts_rank is small/unbounded; band it strictly BELOW exact (1.0) and above
+# noise so the ordering "exact > FTS > vector-only" holds regardless of rank size.
+_FTS_SCORE_FLOOR = 0.5
+_FTS_SCORE_CEILING = 0.9
 
 
 def _exact_match_stmt(user_id: str, span: str, workspace_id: str):
@@ -74,6 +78,7 @@ class EntityResolver:
         self._workspace_id = workspace_id
         self._embedding_service = embedding_service
         self._vector_store = vector_store
+        self._fts = FTSService(db, workspace_id)
 
     async def resolve(self, user_id: str, text: str, limit: int = 10) -> list[dict]:
         spans = extract_spans(text)
@@ -110,11 +115,12 @@ class EntityResolver:
 
         # 2. FTS over the activated search_vector.
         try:
-            fts = await FTSService(self._db, self._workspace_id).search_table(
-                "entities", span, limit=5
-            )
+            fts = await self._fts.search_table("entities", span, limit=5)
             # ts_rank values are small/unbounded — band FTS below exact, above noise.
-            out.extend((r["id"], min(0.9, 0.5 + float(r.get("score", 0.0)))) for r in fts)
+            out.extend(
+                (r["id"], min(_FTS_SCORE_CEILING, _FTS_SCORE_FLOOR + float(r.get("score", 0.0))))
+                for r in fts
+            )
         except Exception:
             logger.debug("entity FTS failed for span=%r", span, exc_info=True)
 

@@ -24,6 +24,7 @@ from ulid import ULID
 from src.config.settings import Settings, get_anthropic_client
 from src.models.entities import Entity, EntityAlias, EntityRelationship
 from src.models.events import NormalizedEvent
+from src.services.entity_resolver import EntityResolver
 
 logger = logging.getLogger(__name__)
 
@@ -517,8 +518,6 @@ class WorldModel:
         """Resolve entity mentions in free text via span extraction + exact + FTS
         + vector (replaces the ILIKE-on-raw-message find_entity path). Returns the
         same dict shape as find_entity so callers/ranking are unchanged."""
-        from src.services.entity_resolver import EntityResolver
-
         resolver = EntityResolver(
             self._db,
             workspace_id,
