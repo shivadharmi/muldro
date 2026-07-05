@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import math
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict
@@ -22,6 +24,38 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# Continuous recency decay: exp(-lambda * days_since(last_seen_at)). A 30-day
+# half-life mirrors the recency windows used in tri_search / memory retrieval,
+# keeping recency weighting consistent across the codebase.
+_RECENCY_HALFLIFE_DAYS = 30.0
+_RECENCY_LAMBDA = math.log(2) / _RECENCY_HALFLIFE_DAYS
+
+
+def _recency_score(
+    last_seen_at: "str | datetime | None", *, now: "datetime | None" = None
+) -> float:
+    """Continuous recency in [0, 1]: exp(-lambda * days_since(last_seen_at)).
+
+    1.0 at last_seen == now, ~0.5 at 30 days, decaying smoothly. Replaces the old
+    binary 0.8/0.2. A missing or unparseable timestamp -> 0.0 (no recency signal;
+    importance + interaction still contribute to the composite).
+    """
+    if not last_seen_at:
+        return 0.0
+    if now is None:
+        now = datetime.now(timezone.utc)
+    ts = last_seen_at
+    if isinstance(ts, str):
+        try:
+            ts = datetime.fromisoformat(ts)
+        except ValueError:
+            return 0.0
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    days = max(0.0, (now - ts).total_seconds() / 86400.0)
+    return math.exp(-_RECENCY_LAMBDA * days)
+
+
 def _rank_entities(entities: list[dict]) -> list[dict]:
     """Cross-source ranking for entities.
 
@@ -33,8 +67,8 @@ def _rank_entities(entities: list[dict]) -> list[dict]:
         interactions = e.get("interaction_count", 0) or 0
         # Normalize interaction count (cap at 50 for scoring)
         interaction_norm = min(interactions / 50.0, 1.0)
-        # Recency: entities with last_seen_at get a boost (binary for simplicity)
-        recency = 0.8 if e.get("last_seen_at") else 0.2
+        # Continuous recency decay (replaces the old binary 0.8/0.2).
+        recency = _recency_score(e.get("last_seen_at"))
         return 0.40 * importance + 0.30 * recency + 0.30 * interaction_norm
 
     return sorted(entities, key=_score, reverse=True)
