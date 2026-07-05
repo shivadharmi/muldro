@@ -20,9 +20,26 @@ from src.services.execution_state import TERMINAL_SUCCESS
 
 logger = logging.getLogger(__name__)
 
+# Fallback run status when a pre-enrichment run-terminal event lacks payload["status"].
+_EVENT_TYPE_TO_RUN_STATUS = {
+    "run_completed": "completed",
+    "run_failed": "failed",
+    "run_cancelled": "cancelled",
+}
+
 
 class RuntimeProjectionService:
-    """Derives runtime projections from existing data models."""
+    """Audience-scoped READ/analytics projections over the current data model.
+
+    IMPORTANT (Step 5 §4.8): these are derived read models for UI/history/analytics.
+    They read the mutable ``TaskRun``/``TaskStep`` rows (and ``ModelCall`` for
+    workload) — they are NOT execution truth. Execution control-flow reads
+    (readiness, resume cursor, dependency checks) stay read-your-writes on the state
+    row/checkpointer and must never be folded from these projections (§7: "agent
+    reading a stale projection"). ``rebuild_run_projection`` additionally proves the
+    ``runtime_events`` log is a faithful system-of-record for the run-status
+    projection (the seat Step 10's reconcile-from-event-log builds on).
+    """
 
     def __init__(self, db: AsyncSession, workspace_id: str):
         self._db = db
@@ -250,6 +267,56 @@ class RuntimeProjectionService:
             }
             for e in events
         ]
+
+    async def rebuild_run_projection(self, run_id: str) -> dict:
+        """Reconstruct a run's status/progress projection from the runtime_events log
+        ALONE, ordered by the monotonic ``seq`` (Step 5 §4.8, D-B2).
+
+        Folds step_started/step_completed/run-terminal events into
+        {status, total_steps, completed_steps, progress_pct}. ``status`` comes from the
+        run-terminal event payload (enriched, Task 4), falling back to the event type
+        for pre-enrichment events. completed_steps counts step_completed events whose
+        payload status is a TERMINAL_SUCCESS (matches get_active_runs()'s live count).
+        Read/analytics only — NOT execution truth.
+        """
+        rows = (
+            (
+                await self._db.execute(
+                    select(RuntimeEvent)
+                    .where(
+                        RuntimeEvent.workspace_id == self._workspace_id,
+                        RuntimeEvent.run_id == run_id,
+                    )
+                    .order_by(RuntimeEvent.seq)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        status: str | None = None
+        started: set[str] = set()
+        completed: set[str] = set()
+        for e in rows:
+            p = e.payload or {}
+            sid = p.get("step_id") or e.step_id
+            if e.event_type in ("step_started", "tool_call_started") and sid:
+                started.add(sid)
+            elif e.event_type == "step_completed" and sid:
+                if p.get("status", "completed") in TERMINAL_SUCCESS:
+                    completed.add(sid)
+            elif e.event_type in _EVENT_TYPE_TO_RUN_STATUS:
+                status = p.get("status") or _EVENT_TYPE_TO_RUN_STATUS[e.event_type]
+
+        total = len(started)
+        done = len(completed)
+        return {
+            "run_id": run_id,
+            "status": status,
+            "total_steps": total,
+            "completed_steps": done,
+            "progress_pct": round(done / total * 100) if total else 0,
+        }
 
     async def emit_event(
         self,
