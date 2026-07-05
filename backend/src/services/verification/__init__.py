@@ -10,6 +10,10 @@ from src.services.verification.compensation import (
     build_divergence_escalation,
     get_compensation,
 )
+from src.services.verification.inflight import (
+    InflightResolution,
+    resolve_inflight_on_resume,
+)
 from src.services.verification.predicate import (
     IRREVERSIBLE,
     is_irreversible_capability,
@@ -26,6 +30,8 @@ __all__ = [
     "COMPENSATIONS",
     "build_divergence_escalation",
     "get_compensation",
+    "InflightResolution",
+    "resolve_inflight_on_resume",
     "IRREVERSIBLE",
     "is_irreversible_capability",
     "is_write_verification_required",

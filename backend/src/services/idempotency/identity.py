@@ -47,6 +47,88 @@ IDENTITY_SPECS: dict[str, IdentitySpec] = {
 }
 
 
+# Irreversible write capabilities for which the positional/native-token idempotency
+# key is DELIBERATELY accepted (no semantic IdentitySpec authored — typically external
+# MCP tools whose arg schema we don't control). Explicit + audited: the startup gate
+# forbids an irreversible write cap that is neither spec'd NOR listed here, so a new
+# write cap can't silently fall back to positional keying unnoticed. Mirrors the
+# verification UNVERIFIABLE escape valve.
+POSITIONAL_KEY_ACCEPTED: frozenset[str] = frozenset(
+    {
+        "email.reply",
+        "calendar.update",
+        "calendar.delete",
+        "repo.create_pr",
+        "repo.merge_pr",
+        "repo.update_pr",
+        "repo.review_pr",
+        "issue.create",
+        "issue.update",
+        "issue.comment",
+        "issue.delete",
+        "issue.transition",
+        "issue.sub_issue",
+        "doc.create",
+        "doc.update",
+        "doc.delete",
+        "doc.comment",
+        "doc.append",
+        "doc.move",
+        "doc.update_block",
+        "doc.delete_block",
+        "doc.create_datasource",
+        "doc.update_datasource",
+        "doc.drive_create",
+        "doc.drive_delete",
+        "workflow.create_issue",
+        "workflow.update_issue",
+        "workflow.transition",
+        "workflow.comment",
+        "workflow.delete",
+        "workflow.create_issues",
+        "workflow.bulk_update",
+        "workflow.update_comment",
+        "workflow.delete_comment",
+        "workflow.resolve_comment",
+        "workflow.unresolve_comment",
+        "workflow.create_project",
+        "workflow.create_milestone",
+        "workflow.update_milestone",
+        "workflow.delete_milestone",
+        "workflow.create_customer_need",
+        "messaging.send",
+        "messaging.reply",
+        "messaging.react",
+        "messaging.update",
+        "messaging.send_template",
+        "messaging.post",
+        "messaging.share",
+        "filesystem.write",
+        "filesystem.move",
+        "browser.open",
+        "browser.click",
+        "browser.type",
+        "browser.submit",
+        "browser.execute",
+        "browser.install",
+    }
+)
+
+
+def validate_identity_coverage_strict(irreversible_write_capabilities: set[str]) -> list[str]:
+    """Startup HARD-GATE (spec §6 Step-3 carry-forward): every IRREVERSIBLE write
+    capability must have a semantic IdentitySpec OR be explicitly positional-accepted.
+    The caller supplies the irreversible set (keeps this module free of a verification
+    import). Returns list[str] (empty = valid), never raises."""
+    allowed = set(IDENTITY_SPECS) | POSITIONAL_KEY_ACCEPTED
+    return [
+        f"IRREVERSIBLE write capability '{cap}' has no identity strategy "
+        "(add an IdentitySpec or list it in POSITIONAL_KEY_ACCEPTED)"
+        for cap in sorted(irreversible_write_capabilities)
+        if cap not in allowed
+    ]
+
+
 def _normalize(value: object) -> object:
     """Order-independent, whitespace/case-insensitive, TOTAL normalization of an
     identity field. Never raises: heterogeneous / dict / None list elements are

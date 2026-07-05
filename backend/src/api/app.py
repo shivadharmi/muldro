@@ -212,6 +212,37 @@ def create_app() -> FastAPI:
                 )
             logger.info("Post-condition coverage passed")
 
+        # Identity coverage gate (spec §6 Step-3 carry-forward): every IRREVERSIBLE
+        # write capability must have a deliberate idempotency-key strategy (semantic
+        # IdentitySpec or explicit positional-accepted). Fail closed — a new write
+        # capability must not serve traffic able to silently fall back to positional
+        # keying unnoticed. Same emergency bypass as registry validation.
+        if settings.skip_registry_validation:
+            logger.warning("Identity coverage check SKIPPED (skip_registry_validation)")
+        else:
+            try:
+                from src.services.idempotency.identity import validate_identity_coverage_strict
+                from src.services.verification.predicate import (
+                    is_irreversible_capability,
+                    write_capabilities,
+                )
+
+                irreversible = {c for c in write_capabilities() if is_irreversible_capability(c)}
+                id_errors = validate_identity_coverage_strict(irreversible)
+            except Exception as exc:
+                logger.error("Identity coverage check failed to run", exc_info=True)
+                raise RuntimeError("Identity coverage check could not run") from exc
+
+            if id_errors:
+                for err in id_errors:
+                    logger.error("Identity coverage: %s", err)
+                raise RuntimeError(
+                    f"Identity coverage found {len(id_errors)} error(s) — add an IdentitySpec "
+                    "or list the capability in POSITIONAL_KEY_ACCEPTED, or set "
+                    "JARVIS_SKIP_REGISTRY_VALIDATION=true to bypass."
+                )
+            logger.info("Identity coverage passed")
+
         # Ensure Qdrant collections exist
         try:
             from src.services.vector_store import VectorStore
