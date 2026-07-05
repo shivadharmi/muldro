@@ -662,8 +662,9 @@ import src.services.dag_runner as dr
 
 def test_run_completed_emit_includes_status_and_durable():
     src = inspect.getsource(dr)
-    # The run_completed emit must add "status": run.status and durable=True.
-    idx = src.index('"run_completed"')
+    # Anchor on the emit's first-argument form ("run_completed",) so we skip any
+    # other textual occurrence (e.g. a checkpoint call ("...", "step_completed")).
+    idx = src.index('"run_completed",')
     window = src[idx : idx + 400]
     assert '"status": run.status' in window
     assert "durable=True" in window
@@ -671,7 +672,9 @@ def test_run_completed_emit_includes_status_and_durable():
 
 def test_step_completed_emit_includes_status_and_durable():
     src = inspect.getsource(dr)
-    idx = src.index('"step_completed"')
+    # Comma-anchored: matches the emit's first arg "step_completed", NOT the earlier
+    # checkpoint call self._store.checkpoint(run, step.step_id, "step_completed").
+    idx = src.index('"step_completed",')
     window = src[idx : idx + 400]
     assert '"status": status' in window
     assert "durable=True" in window
