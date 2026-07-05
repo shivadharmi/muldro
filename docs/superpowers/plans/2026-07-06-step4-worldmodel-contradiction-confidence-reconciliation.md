@@ -415,7 +415,7 @@ Expected: FAIL at import — `No module named 'src.services.entity_facts'`.
 
 - [ ] **Step 3: Write the package `__init__` + `confidence.py`**
 
-Create `backend/src/services/entity_facts/__init__.py`:
+Create `backend/src/services/entity_facts/__init__.py`. **Build the facade INCREMENTALLY** — a package `__init__` runs on *any* submodule import (`from ...confidence import …` executes this file first), so it must NOT reference `store`/`reconciliation` until those modules exist (Tasks 3 and 7 extend this file). For Task 2, re-export only the confidence surface:
 
 ```python
 """World-model beliefs as a control surface (spec §4.6 items 3-5).
@@ -425,6 +425,9 @@ values are superseded (valid_to) rather than clobbered; confidence is
 source-reliability × corroboration, age-decayed (never LLM-self-reported); the
 Step-3 verification loop reconciles beliefs (confirmed raises, divergent lowers) —
 fed to abstention only, never the gate.
+
+The public facade is built up incrementally across Step-4 tasks: Task 2 exports the
+confidence surface; Task 3 adds ``EntityFactStore``; Task 7 adds ``reconcile_verdict``.
 """
 
 from src.services.entity_facts.confidence import (
@@ -433,20 +436,16 @@ from src.services.entity_facts.confidence import (
     current_confidence,
     reliability_for,
 )
-from src.services.entity_facts.reconciliation import reconcile_verdict
-from src.services.entity_facts.store import EntityFactStore
 
 __all__ = [
     "SOURCE_RELIABILITY",
     "compute_confidence",
     "current_confidence",
     "reliability_for",
-    "reconcile_verdict",
-    "EntityFactStore",
 ]
 ```
 
-> Note: `__init__` imports `store` and `reconciliation` which don't exist yet — that is fine because Task 2's test imports `src.services.entity_facts.confidence` **directly**, bypassing the package `__init__`. Tasks 3 and 7 create `store.py` and `reconciliation.py`; only then does `import src.services.entity_facts` (the facade) resolve. If you run the *whole* suite before Task 3, the facade import will fail — run `tests/entity_facts/test_confidence.py` in isolation for this task.
+> Because a submodule import triggers the package `__init__`, keeping it confidence-only here is what lets Task 2's `test_confidence.py`, Task 3's `test_store_db.py`, and Task 4's `world_model` import all resolve in order. Tasks 3 and 7 append their re-exports to this file as their modules land.
 
 Create `backend/src/services/entity_facts/confidence.py`:
 
@@ -895,7 +894,17 @@ class EntityFactStore:
 
 > `from ulid import ULID` — confirm the import path matches the repo's ULID usage (`world_model.py` uses `f"ent_{ULID()}"`; grep `import ULID` and match it exactly, e.g. `from ulid import ULID` vs `from src...`).
 
-- [ ] **Step 5: Apply migration (if not already at head) + run the test**
+- [ ] **Step 5: Extend the package facade with the store export**
+
+In `backend/src/services/entity_facts/__init__.py`, add the store import + `__all__` entry (the incremental facade, now that `store.py` exists):
+
+```python
+from src.services.entity_facts.store import EntityFactStore
+```
+
+and add `"EntityFactStore"` to `__all__`.
+
+- [ ] **Step 6: Apply migration (if not already at head) + run the test**
 
 ```bash
 uv run alembic upgrade head 2>&1 | tail -1   # ensure c4f9e2a71b83
@@ -903,10 +912,10 @@ uv run pytest tests/entity_facts/test_store_db.py -q
 ```
 Expected: all PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add backend/src/services/entity_facts/store.py backend/src/services/event_families.py backend/tests/entity_facts/test_store_db.py
+git add backend/src/services/entity_facts/store.py backend/src/services/entity_facts/__init__.py backend/src/services/event_families.py backend/tests/entity_facts/test_store_db.py
 git commit -m "feat(rebuild): EntityFactStore bi-temporal supersede/corroborate/as-of (Step 4)"
 ```
 
@@ -1733,6 +1742,16 @@ def _resolve_entity_id(write_input: dict, write_output: dict) -> str | None:
     return None
 ```
 
+- [ ] **Step 3b: Extend the package facade with the reconciliation export**
+
+In `backend/src/services/entity_facts/__init__.py`, add (the final incremental-facade step, now that `reconciliation.py` exists):
+
+```python
+from src.services.entity_facts.reconciliation import reconcile_verdict
+```
+
+and add `"reconcile_verdict"` to `__all__`.
+
 - [ ] **Step 4: Run the unit test to verify it PASSES**
 
 Run: `uv run pytest tests/entity_facts/test_reconciliation.py -q`
@@ -1843,7 +1862,7 @@ Expected: wiring test PASSES; the Step-3 verification tests still PASS.
 - [ ] **Step 10: Commit**
 
 ```bash
-git add backend/src/services/entity_facts/reconciliation.py backend/src/services/dag_runner.py backend/src/services/scheduler/deferred_verification_tick.py backend/tests/entity_facts/test_reconciliation.py backend/tests/test_worldmodel_recon_wiring.py
+git add backend/src/services/entity_facts/reconciliation.py backend/src/services/entity_facts/__init__.py backend/src/services/dag_runner.py backend/src/services/scheduler/deferred_verification_tick.py backend/tests/entity_facts/test_reconciliation.py backend/tests/test_worldmodel_recon_wiring.py
 git commit -m "feat(rebuild): verification loop reconciles world-model confidence (raise/lower, never the gate) (Step 4)"
 ```
 
