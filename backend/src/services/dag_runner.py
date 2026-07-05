@@ -377,17 +377,40 @@ class DagRunner:
             if decision.decision == "auto_execute_notify":
                 await self._trust_gate.notify_auto_executed(run, step, risk, output)
 
-            await self.finalize_step(run, step, output, elapsed_ms)
-            # Reinforce trust: a successful auto-execution graduates trust the
-            # same way an explicit user approval does, so the autonomous path
-            # learns from its own outcomes (not only from approval prompts).
-            risk_level = getattr(risk, "risk_level", risk)
-            await self._trust_gate.record_auto_execution_outcome(
-                capability, risk_level, run.workspace_id or ""
+            # Read-back verification BEFORE marking terminal (spec §4.5). Only
+            # irreversible writes are verified; everything else is trivially CONFIRMED.
+            from src.services.verification import ReadBackVerifier, VerifyVerdict
+            from src.services.verification.readback import verdict_to_step_status
+
+            verifier = ReadBackVerifier(
+                read_fn=lambda cap, args: self._runner.run_readback(cap, args, run)
             )
-            # Remember the auto-executed (capability, risk_level) so a later
-            # verification failure can reverse this reinforcement (SVC).
+            verdict = await verifier.verify_step(
+                capability=capability,
+                write_input=step.input_data or {},
+                write_output=output if isinstance(output, dict) else {},
+                risk=risk,
+            )
+            step_status = verdict_to_step_status(verdict)
+
+            await self.finalize_step(run, step, output, elapsed_ms, status=step_status)
+
+            # Trust reinforcement fires ONLY on a confirmed-verified completion
+            # (Task 7 moves the completed_unverified deferred-increment to the tick).
+            risk_level = getattr(risk, "risk_level", risk)
+            if verdict == VerifyVerdict.CONFIRMED:
+                await self._trust_gate.record_auto_execution_outcome(
+                    capability, risk_level, run.workspace_id or ""
+                )
+            # Record the auto-executed (capability, risk_level) regardless, so the
+            # deferred-read tick can fire the increment when a completed_unverified
+            # step is later confirmed (Task 7/9). Now finally has a reader.
             self._trust_gate.remember_auto_executed(run, capability, risk_level)
+
+            # A read-back that CONTRADICTED an irreversible write escalates to the
+            # user (escalate-first compensation) — wired in Task 8.
+            if verdict == VerifyVerdict.CONTRADICTED:
+                await self._escalate_divergence(run, step, capability, risk, output)
             return
 
         # ── Common execution path (step resumed after approval) ──────
@@ -630,8 +653,11 @@ class DagRunner:
         step: TaskStep,
         output: dict | None,
         elapsed_ms: int,
+        status: str = "completed",
     ) -> None:
-        """Mark step completed, emit events, checkpoint."""
+        """Mark step terminal (status defaults to completed; a write step passes the
+        read-back verdict status — completed / completed_unverified / partially_completed).
+        Emit events, checkpoint."""
         await self._emitter.emit_event(
             "tool_call_completed",
             run.user_id,
@@ -647,14 +673,14 @@ class DagRunner:
             workspace_id=run.workspace_id,
         )
 
-        transition_step(step, "completed")
+        transition_step(step, status)
         step.output_data = output
         step.completed_at = datetime.now(timezone.utc)
         await self._db.flush()
 
         result = StepResult(
             step_id=step.step_id,
-            status="completed",
+            status=status,
             output_data=output,
             duration_ms=elapsed_ms,
         )
@@ -686,3 +712,10 @@ class DagRunner:
                 },
                 workspace_id=run.workspace_id,
             )
+
+    async def _escalate_divergence(self, *a, **k):
+        """Escalate-first compensation for a CONTRADICTED read-back on an irreversible
+        write (spec §7). Temporary no-op stub — Task 8 replaces the body with the
+        actual user-surfacing escalation. Kept here so Task 6's execute_step wiring is
+        self-consistent and green."""
+        return None

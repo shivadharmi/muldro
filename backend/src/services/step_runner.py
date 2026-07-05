@@ -27,6 +27,15 @@ from src.services.step_graph_store import StepGraphStore
 
 logger = logging.getLogger(__name__)
 
+# Read capabilities whose currently-resolved tool cannot serve the read shape a
+# post-condition needs, so a LIVE read-back would risk a FALSE CONTRADICTED on a
+# correct irreversible write. ``run_readback`` refuses these -> the verifier fails
+# safe to UNVERIFIED (completed_unverified). On this branch ``calendar.get`` is
+# backed by ``query_freebusy`` (free/busy ranges, not an event-by-id lookup); remove
+# the capability from this set once a real get-event tool backs it. See D8 note in
+# ``src/services/verification/post_conditions.py``.
+_READBACK_UNSERVABLE_CAPABILITIES: frozenset[str] = frozenset({"calendar.get"})
+
 
 class StepRunner:
     """Runs one step via the Operator agent loop (or a minimal Claude fallback)."""
@@ -186,6 +195,46 @@ class StepRunner:
             logger.debug("Failed to list external tools", exc_info=True)
 
         return tools
+
+    async def run_readback(self, read_capability: str, read_args: dict, run: TaskRun) -> object:
+        """Invoke a READ capability (post-condition read-back) via the tool path and
+        return its raw result. Best-effort: raises on any failure so ReadBackVerifier
+        resolves it to UNVERIFIED (never a false CONTRADICTED). Reads never go through
+        the idempotency ledger, so this is side-effect free.
+
+        Resolution note: ``build_operator_tools()`` strips the capability from its tool
+        dicts, so we resolve ``read_capability`` -> tool via the registry's
+        ``ToolDefinition`` objects (which carry ``.capability`` and ``.name``).
+
+        Production-safety guard (D8 footgun): a read capability whose currently-resolved
+        tool cannot actually serve the required read shape (e.g. ``calendar.get`` is
+        backed by ``query_freebusy`` — free/busy ranges, NOT an event-by-id lookup) is
+        REFUSED here. Serving it live would let a non-matching result flip a correct
+        irreversible write to CONTRADICTED (a false ``partially_completed``). Raising
+        instead makes the verifier fail SAFE to UNVERIFIED (``completed_unverified``).
+        Tests inject their own mocked ``read_fn`` and never reach this path, so the
+        mechanism stays fully proven in ``test_readback.py``."""
+        if read_capability in _READBACK_UNSERVABLE_CAPABILITIES:
+            raise RuntimeError(
+                f"read capability {read_capability} has no tool that serves an "
+                "event-by-id read on this branch — failing safe to unverified"
+            )
+        if self._execute_tool_fn is None:
+            raise RuntimeError("no execute_tool_fn available for read-back")
+        if self._tool_registry is None:
+            raise RuntimeError("no tool_registry available for read-back")
+
+        all_tools = await self._tool_registry.list_tools(enabled_only=True)
+        tool = next((t for t in all_tools if t.capability == read_capability), None)
+        if tool is None:
+            raise RuntimeError(f"no tool serves read capability {read_capability}")
+
+        return await self._execute_tool_fn(
+            tool.name,
+            read_args,
+            user_id=run.user_id,
+            workspace_id=run.workspace_id or "",
+        )
 
     async def run_step_via_agent_loop(
         self,

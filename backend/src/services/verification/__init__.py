@@ -11,10 +11,18 @@ from src.services.verification.predicate import (
     is_write_verification_required,
     write_capabilities,
 )
+from src.services.verification.readback import (
+    ReadBackVerifier,
+    VerifyVerdict,
+    verdict_to_step_status,
+)
 
 __all__ = [
     "IRREVERSIBLE",
     "is_irreversible_capability",
     "is_write_verification_required",
     "write_capabilities",
+    "ReadBackVerifier",
+    "VerifyVerdict",
+    "verdict_to_step_status",
 ]
