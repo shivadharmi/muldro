@@ -1,8 +1,9 @@
 """Bi-temporal entity-attribute fact store (spec §4.6 item 3). Supersede-on-change
 (close the old row's valid_to + insert a new current row), corroborate-on-same (raise
 confidence), insert-on-new. Reuses the memory-contradiction SHAPE (successor pointer +
-confidence adjustment + event emit) with DETERMINISTIC structural detection (same
-attr_key, changed value) — no LLM in the write path.
+confidence adjustment) with DETERMINISTIC structural detection (same attr_key, changed
+value) — no LLM in the write path. Supersede is logged; the ``ENTITY_FACT_SUPERSEDED``
+event constant is defined ahead of use, wired to an emitter in a later task.
 
 Executes on an injected AsyncSession and flush()es only; the caller owns commit
 (mirrors WorldModel / MemoryContradictions)."""
