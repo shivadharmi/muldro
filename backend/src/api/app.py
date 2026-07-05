@@ -183,6 +183,35 @@ def create_app() -> FastAPI:
                 )
             logger.info("Registry validation passed")
 
+        # Post-condition coverage gate (spec §4.5): every IRREVERSIBLE write
+        # capability must have a registered read-back post-condition (or be
+        # explicitly marked UNVERIFIABLE). Fail closed — a new write capability must
+        # not serve traffic able to silently skip verification on the irreversible
+        # path. Same emergency bypass as registry validation.
+        if settings.skip_registry_validation:
+            logger.warning("Post-condition coverage check SKIPPED (skip_registry_validation)")
+        else:
+            try:
+                from src.services.verification.post_conditions import (
+                    validate_post_condition_coverage,
+                )
+                from src.services.verification.predicate import write_capabilities
+
+                pc_errors = validate_post_condition_coverage(write_capabilities())
+            except Exception as exc:
+                logger.error("Post-condition coverage check failed to run", exc_info=True)
+                raise RuntimeError("Post-condition coverage check could not run") from exc
+
+            if pc_errors:
+                for err in pc_errors:
+                    logger.error("Post-condition coverage: %s", err)
+                raise RuntimeError(
+                    f"Post-condition coverage found {len(pc_errors)} error(s) — register a "
+                    "post-condition or mark UNVERIFIABLE, or set "
+                    "JARVIS_SKIP_REGISTRY_VALIDATION=true to bypass."
+                )
+            logger.info("Post-condition coverage passed")
+
         # Ensure Qdrant collections exist
         try:
             from src.services.vector_store import VectorStore
