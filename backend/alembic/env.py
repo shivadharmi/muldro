@@ -1,16 +1,16 @@
 import asyncio
 import os
 import sys
-from pathlib import Path
 from logging.config import fileConfig
+from pathlib import Path
 
 # Ensure the backend directory is on sys.path so `src` is importable
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+from alembic import context
 from src.models import Base
 
 config = context.config
