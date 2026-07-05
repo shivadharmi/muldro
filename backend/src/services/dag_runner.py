@@ -24,6 +24,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from src.contracts import ResultSummary, StepResult
 from src.integrations.mcp_errors import McpAuthRequiredError
@@ -42,6 +43,9 @@ from src.services.outcome_learner import OutcomeLearner
 from src.services.step_graph_store import StepGraphStore
 from src.services.step_runner import StepRunner
 from src.services.trust_gate import TrustGate
+
+if TYPE_CHECKING:
+    from src.services.verification import VerifyVerdict
 
 logger = logging.getLogger(__name__)
 
@@ -377,26 +381,20 @@ class DagRunner:
             if decision.decision == "auto_execute_notify":
                 await self._trust_gate.notify_auto_executed(run, step, risk, output)
 
-            # Read-back verification BEFORE marking terminal (spec §4.5). Only
-            # irreversible writes are verified; everything else is trivially CONFIRMED.
-            from src.services.verification import ReadBackVerifier, VerifyVerdict
-            from src.services.verification.readback import verdict_to_step_status
+            # Read-back verification BEFORE marking terminal (spec §4.5), shared with
+            # the approved-resume path so NO write path emits a terminal status without
+            # a verdict. Only irreversible writes are verified; everything else is
+            # trivially CONFIRMED.
+            from src.services.verification import VerifyVerdict
 
-            verifier = ReadBackVerifier(
-                read_fn=lambda cap, args: self._runner.run_readback(cap, args, run)
+            verdict = await self._finalize_with_verification(
+                run, step, output, elapsed_ms, capability, risk
             )
-            verdict = await verifier.verify_step(
-                capability=capability,
-                write_input=step.input_data or {},
-                write_output=output if isinstance(output, dict) else {},
-                risk=risk,
-            )
-            step_status = verdict_to_step_status(verdict)
 
-            await self.finalize_step(run, step, output, elapsed_ms, status=step_status)
-
-            # Trust reinforcement fires ONLY on a confirmed-verified completion
-            # (Task 7 moves the completed_unverified deferred-increment to the tick).
+            # Trust reinforcement fires ONLY on a confirmed-verified completion, and
+            # ONLY on the auto-execute path (the approved-resume path records trust at
+            # approval time in routes_approvals). Task 7 moves the completed_unverified
+            # deferred-increment to the tick.
             risk_level = getattr(risk, "risk_level", risk)
             if verdict == VerifyVerdict.CONFIRMED:
                 await self._trust_gate.record_auto_execution_outcome(
@@ -406,11 +404,6 @@ class DagRunner:
             # deferred-read tick can fire the increment when a completed_unverified
             # step is later confirmed (Task 7/9). Now finally has a reader.
             self._trust_gate.remember_auto_executed(run, capability, risk_level)
-
-            # A read-back that CONTRADICTED an irreversible write escalates to the
-            # user (escalate-first compensation) — wired in Task 8.
-            if verdict == VerifyVerdict.CONTRADICTED:
-                await self._escalate_divergence(run, step, capability, risk, output)
             return
 
         # ── Common execution path (step resumed after approval) ──────
@@ -463,7 +456,52 @@ class DagRunner:
         if await self._defer_for_reauth(run, step, output, surface_id=surface_id):
             return
 
-        await self.finalize_step(run, step, output, elapsed_ms)
+        # Approved-resume path: a HUMAN-approved write is the highest-risk write class,
+        # so it must be read-back verified too (spec §4.5 — "ANY write path"). Re-derive
+        # the verifier inputs: capability from the step, risk via assess_step_risk (the
+        # RiskAssessor is Redis-cached 24h, and this capability was already assessed at
+        # pause time, so a resume within the window is a cache hit — cheap). Trust for
+        # the approved path is recorded at approval time (routes_approvals), NOT here.
+        capability = (step.input_data or {}).get(
+            "capability", (step.input_data or {}).get("task_type", "unknown")
+        )
+        risk = await self._trust_gate.assess_step_risk(capability, step, run)
+        await self._finalize_with_verification(run, step, output, elapsed_ms, capability, risk)
+
+    async def _finalize_with_verification(
+        self,
+        run: TaskRun,
+        step: TaskStep,
+        output: dict | None,
+        elapsed_ms: int,
+        capability: str,
+        risk,
+    ) -> "VerifyVerdict":
+        """Read-back verify a write step BEFORE marking it terminal, then finalize with
+        the verdict's status (spec §4.5). Shared by the auto-execute and approved-resume
+        paths so neither can emit a terminal status without a verdict. A CONTRADICTED
+        irreversible write escalates to the user (escalate-first — wired in Task 8).
+        Returns the verdict; the caller owns any path-specific trust bookkeeping (this
+        helper deliberately does NOT touch trust)."""
+        from src.services.verification import ReadBackVerifier, VerifyVerdict
+        from src.services.verification.readback import verdict_to_step_status
+
+        verifier = ReadBackVerifier(
+            read_fn=lambda cap, args: self._runner.run_readback(cap, args, run)
+        )
+        verdict = await verifier.verify_step(
+            capability=capability,
+            write_input=step.input_data or {},
+            write_output=output if isinstance(output, dict) else {},
+            risk=risk,
+        )
+        step_status = verdict_to_step_status(verdict)
+
+        await self.finalize_step(run, step, output, elapsed_ms, status=step_status)
+
+        if verdict == VerifyVerdict.CONTRADICTED:
+            await self._escalate_divergence(run, step, capability, risk, output)
+        return verdict
 
     async def _defer_for_reauth(
         self,
@@ -713,9 +751,10 @@ class DagRunner:
                 workspace_id=run.workspace_id,
             )
 
-    async def _escalate_divergence(self, *a, **k):
+    async def _escalate_divergence(self, run, step, capability, risk, output) -> None:
         """Escalate-first compensation for a CONTRADICTED read-back on an irreversible
-        write (spec §7). Temporary no-op stub — Task 8 replaces the body with the
-        actual user-surfacing escalation. Kept here so Task 6's execute_step wiring is
+        write (spec §7). Temporary no-op stub — Task 8 replaces the body with the actual
+        user-surfacing escalation. The explicit 5-arg signature documents the Task 8
+        contract (and catches call-site drift). Kept here so the execute_step wiring is
         self-consistent and green."""
         return None

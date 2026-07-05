@@ -188,12 +188,18 @@ class TestSingleGateAutoExecuteSilent:
 
 
 class TestSingleGateResumedStep:
-    """Step already running (resumed after approval) -> skip gate."""
+    """Step already running (resumed after approval) -> skip the approval GATE.
+
+    The resumed path still re-derives risk (Redis-cached 24h) to feed the §4.5
+    read-back verification of the approved write, but it must NOT re-run the
+    TrustEngine gate — the human already approved this step at pause time.
+    """
 
     @patch("src.services.trust_gate.get_or_assess_risk")
-    async def test_resumed_step_skips_trust_check(
+    async def test_resumed_step_skips_trust_gate_but_still_verifies(
         self, mock_risk, settings, mock_db, mock_trust_engine
     ):
+        mock_risk.return_value = RiskAssessment(risk_level="low", reasoning="cached")
         executor = _make_executor(settings, mock_db, trust_engine=mock_trust_engine)
         executor._runner.run_step_action = AsyncMock(return_value={"ok": True})
         executor._surface_emitter.emit_event = AsyncMock()
@@ -208,8 +214,13 @@ class TestSingleGateResumedStep:
 
         await executor._execute_step(run, step)
 
-        mock_risk.assert_not_called()
+        # The approval GATE is skipped (already approved) ...
         mock_trust_engine.evaluate.assert_not_called()
+        # ... but risk IS re-derived to drive read-back verification of the write,
+        # and finalize_step runs with the verdict's status (email.send -> UNVERIFIED
+        # -> completed_unverified; asserted end-to-end in test_finalize_verification).
+        mock_risk.assert_called_once()
+        executor._dag_runner.finalize_step.assert_called_once()
         executor._runner.run_step_action.assert_called_once()
 
 

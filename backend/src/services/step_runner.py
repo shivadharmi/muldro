@@ -224,6 +224,10 @@ class StepRunner:
         if self._tool_registry is None:
             raise RuntimeError("no tool_registry available for read-back")
 
+        # This list_tools() lookup is workspace-agnostic and used for NAME resolution
+        # ONLY (capability -> tool.name). execute_tool re-resolves the tool
+        # workspace-scoped at dispatch time, and reads are side-effect-free, so there is
+        # no cross-tenant effect from resolving the name against the global list here.
         all_tools = await self._tool_registry.list_tools(enabled_only=True)
         tool = next((t for t in all_tools if t.capability == read_capability), None)
         if tool is None:
