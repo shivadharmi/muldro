@@ -106,3 +106,57 @@ async def test_fts_service_matches_entity_after_activation():
             await db.commit()
             hits = await FTSService(db, workspace_id).search_table("entities", "Bob Smith", limit=5)
             assert any(h["title"] == "Bob Smith" for h in hits), f"FTS returned nothing: {hits}"
+
+
+async def test_trigger_refreshes_search_vector_on_relevant_update_only():
+    """The trigger is `UPDATE OF canonical_name, entity_type`: an unrelated-column
+    update must NOT refire it; a canonical_name change MUST refresh the vector."""
+    async with _entity_env() as (factory, workspace_id, user_id):
+        entity_id = f"ent_{ULID()}"
+        async with factory() as db:
+            db.add(
+                Entity(
+                    entity_id=entity_id,
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    entity_type="person",
+                    canonical_name="Bob Smith",
+                )
+            )
+            await db.commit()
+
+        async def _sv() -> str:
+            async with factory() as db:
+                row = await db.execute(
+                    text("SELECT search_vector::text FROM entities WHERE entity_id = :e"),
+                    {"e": entity_id},
+                )
+                return row.scalar_one()
+
+        before = await _sv()
+        assert "bob" in before and "smith" in before
+
+        # (a) unrelated-column update -> trigger does NOT refire -> unchanged.
+        async with factory() as db:
+            await db.execute(
+                text(
+                    "UPDATE entities SET interaction_count = interaction_count + 1 "
+                    "WHERE entity_id = :e"
+                ),
+                {"e": entity_id},
+            )
+            await db.commit()
+        assert await _sv() == before
+
+        # (b) canonical_name change -> trigger refreshes the vector.
+        async with factory() as db:
+            await db.execute(
+                text("UPDATE entities SET canonical_name = 'Carol Jones' WHERE entity_id = :e"),
+                {"e": entity_id},
+            )
+            await db.commit()
+        after = await _sv()
+        assert after != before
+        # English-dictionary stemming: "Jones" -> lexeme "jone" (trailing 's' stripped).
+        assert "carol" in after and "jone" in after
+        assert "bob" not in after
