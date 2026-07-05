@@ -386,6 +386,13 @@ class ContextBuilder:
                 interactions = e.get("interaction_count")
                 if interactions and interactions > 1:
                     parts.append(f"interactions={interactions}")
+                confidence = e.get("confidence")
+                if confidence is not None:
+                    parts.append(f"confidence={confidence:.2f}")
+                    if confidence < 0.5:
+                        # Abstention hint for the agent (ask/verify before relying on
+                        # this). NOT a gate signal — confidence never gates (spec §4.3).
+                        parts.append("[low confidence — verify before relying]")
                 ent_lines.append(" ".join(parts))
             sections.append("## Relevant Entities\n" + "\n".join(ent_lines))
 
