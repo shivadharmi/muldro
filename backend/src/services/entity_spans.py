@@ -17,8 +17,10 @@ _HANDLE = re.compile(r"(?<!\w)@\w{2,}")
 _QUOTED = re.compile(r"[\"']([^\"']{2,64})[\"']")
 # Two-or-more capitalized words in a row (strong proper-noun signal).
 _CAP_RUN = re.compile(r"\b[A-Z][\w&'-]*(?:\s+[A-Z][\w&'-]*)+\b")
-# A single capitalized token (weaker — filtered by _STOP below).
-_CAP_WORD = re.compile(r"\b[A-Z][\w&'-]+\b")
+# A single capitalized token. The initial is any Unicode LETTER; the uppercase
+# constraint is enforced below via str.isupper() (Unicode-correct — [A-Z] would
+# silently drop names like "Émile"/"José"). Still filtered by _STOP.
+_CAP_WORD = re.compile(r"\b[^\W\d_][\w&'-]+\b")
 
 _STOP = {
     "the",
@@ -77,7 +79,7 @@ def extract_spans(text: str, *, max_spans: int = 12) -> list[str]:
     for m in _CAP_RUN.findall(text):
         _add(m)
     for m in _CAP_WORD.findall(text):
-        if m.lower() not in _STOP:
+        if m[:1].isupper() and m.lower() not in _STOP:
             _add(m)
 
     return spans[:max_spans]

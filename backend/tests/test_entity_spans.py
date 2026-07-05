@@ -50,3 +50,12 @@ def test_common_sentence_starters_are_not_single_word_spans():
     spans = extract_spans("The report is late")  # 4 tokens -> no whole-text span
     assert "The" not in spans
     assert "Report" not in spans  # "report" is lowercase in the text
+
+
+def test_non_ascii_capitalized_name_is_extracted_midsentence():
+    # recall-first: a non-ASCII capitalized first name embedded in a sentence must
+    # not be silently dropped (regression for the ASCII-only [A-Z] initial).
+    spans = extract_spans("please email Émile about the draft")
+    assert "Émile" in spans
+    # regression guard: lowercase filler still excluded
+    assert "please" not in spans and "about" not in spans
