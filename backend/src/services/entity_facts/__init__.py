@@ -16,6 +16,7 @@ from src.services.entity_facts.confidence import (
     current_confidence,
     reliability_for,
 )
+from src.services.entity_facts.reconciliation import reconcile_verdict
 from src.services.entity_facts.store import EntityFactStore
 
 __all__ = [
@@ -23,5 +24,6 @@ __all__ = [
     "EntityFactStore",
     "compute_confidence",
     "current_confidence",
+    "reconcile_verdict",
     "reliability_for",
 ]

@@ -411,6 +411,23 @@ class DagRunner:
                 run, step, output, elapsed_ms, capability, risk
             )
 
+            # Post-action reconciliation (spec §4.5): feed the verdict to the world model
+            # so a confirmed read-back RAISES a belief and a divergent one LOWERS it.
+            # Abstention feed only — never the gate (§4.3). Best-effort.
+            try:
+                from src.services.entity_facts.reconciliation import reconcile_verdict
+
+                await reconcile_verdict(
+                    self._db,
+                    workspace_id=run.workspace_id or "",
+                    user_id=run.user_id,
+                    verdict=verdict,
+                    write_input=step.input_data or {},
+                    write_output=output if isinstance(output, dict) else {},
+                )
+            except Exception:
+                logger.debug("world-model reconciliation failed (auto-exec path)", exc_info=True)
+
             # Trust reinforcement fires ONLY on a confirmed-verified completion, and
             # ONLY on the auto-execute path (the approved-resume path records trust at
             # approval time in routes_approvals). Task 7 moves the completed_unverified

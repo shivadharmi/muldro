@@ -60,6 +60,23 @@ async def _apply_recheck(db, run, step, verdict: VerifyVerdict, *, notifier) -> 
     meta = (step.output_data or {}).get("verification", {})
     capability = meta.get("capability") or (step.input_data or {}).get("capability", "")
 
+    # Post-action reconciliation feed (spec §4.5): raise on confirmed, lower on
+    # contradicted. Abstention feed only — never the gate (§4.3). Best-effort.
+    if verdict in (VerifyVerdict.CONFIRMED, VerifyVerdict.CONTRADICTED):
+        try:
+            from src.services.entity_facts.reconciliation import reconcile_verdict
+
+            await reconcile_verdict(
+                db,
+                workspace_id=run.workspace_id or "",
+                user_id=run.user_id,
+                verdict=verdict,
+                write_input=step.input_data or {},
+                write_output=step.output_data or {},
+            )
+        except Exception:
+            logger.debug("world-model reconciliation failed (deferred tick)", exc_info=True)
+
     if verdict == VerifyVerdict.CONFIRMED:
         transition_step(step, "completed")
         # Deferred trust increment: trust graduates now that the write is verified.
