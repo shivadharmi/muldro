@@ -21,7 +21,7 @@ from ulid import ULID
 
 from src.models.plans import Plan, PlanTask
 from src.models.task_graph import TaskCheckpoint, TaskRun, TaskStep
-from src.services.execution_state import transition_step
+from src.services.execution_state import TERMINAL_SUCCESS, transition_step
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +132,7 @@ class StepGraphStore:
         resumes the DAG).
         """
         all_steps = await self.get_all_steps(run_id)
-        completed_ids = {s.step_id for s in all_steps if s.status == "completed"}
+        completed_ids = {s.step_id for s in all_steps if s.status in TERMINAL_SUCCESS}
 
         ready = []
         needs_flush = False
@@ -222,7 +222,7 @@ class StepGraphStore:
                     "output_summary": str(s.output_data) if s.output_data else None,
                 }
                 for s in all_steps
-                if s.status == "completed"
+                if s.status in TERMINAL_SUCCESS
             }
         except Exception:
             pass  # Non-critical — checkpoint still saved without outputs

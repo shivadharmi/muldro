@@ -26,7 +26,7 @@ from src.models.task_graph import TaskRun, TaskStep
 from src.orchestrator.tracing import JarvisTrace
 from src.services.audit import AuditService
 from src.services.dag_runner import DagRunner
-from src.services.execution_state import transition_run, transition_step
+from src.services.execution_state import TERMINAL_SUCCESS, transition_run, transition_step
 from src.services.execution_support import _safe_error_fields, _step_to_state
 from src.services.execution_surface_emitter import SurfaceEmitter
 
@@ -425,7 +425,7 @@ class GraphExecutor:
         if run.checkpoint:
             cp_completed = set(run.checkpoint.get("completed_steps", {}).keys())
             actual_steps = await self._get_all_steps(run.run_id)
-            actual_completed = {s.step_id for s in actual_steps if s.status == "completed"}
+            actual_completed = {s.step_id for s in actual_steps if s.status in TERMINAL_SUCCESS}
             if cp_completed != actual_completed:
                 logger.warning(
                     "Checkpoint/DB mismatch for run %s: checkpoint=%d completed, DB=%d completed",

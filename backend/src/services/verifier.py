@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config.settings import Settings, get_anthropic_client
 from src.models.task_graph import TaskRun, TaskStep
+from src.services.execution_state import TERMINAL_SUCCESS
 
 logger = logging.getLogger(__name__)
 
@@ -189,7 +190,7 @@ class Verifier:
             return run.status == expected
 
         if cond_type == "all_steps_completed":
-            return all(s.status == "completed" for s in steps)
+            return all(s.status in TERMINAL_SUCCESS for s in steps)
 
         if cond_type == "output_contains":
             needle = condition.get("value", "")

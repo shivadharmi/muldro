@@ -16,6 +16,7 @@ from src.models.ids import ensure_prefix
 from src.models.task_graph import TaskRun, TaskStep
 from src.models.trust_state import TrustState
 from src.models.ui_state import UISurface
+from src.services.execution_state import TERMINAL_SUCCESS
 from src.services.surface_mapping import apply_surface_cap
 from src.ui.contracts import SurfaceMetric, SurfacePreview
 from src.ui.renderer import build_detail_config
@@ -238,7 +239,7 @@ class SurfaceService:
                 select(TaskStep).where(TaskStep.run_id == run.run_id).order_by(TaskStep.created_at)
             )
             steps = list(step_result.scalars().all())
-            completed = sum(1 for s in steps if s.status == "completed")
+            completed = sum(1 for s in steps if s.status in TERMINAL_SUCCESS)
             total = len(steps)
 
             current_step_name = None

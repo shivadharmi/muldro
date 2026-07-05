@@ -20,6 +20,7 @@ from sqlalchemy import select
 
 from src.config.settings import Settings
 from src.models.task_graph import TaskRun, TaskStep
+from src.services.execution_state import TERMINAL_SUCCESS
 
 logger = logging.getLogger(__name__)
 
@@ -261,7 +262,7 @@ class SurfaceEmitter:
                     )
                     steps = list(step_rows.scalars().all())
                     step_count = len(steps)
-                    completed_count = sum(1 for s in steps if s.status == "completed")
+                    completed_count = sum(1 for s in steps if s.status in TERMINAL_SUCCESS)
             except Exception:
                 logger.debug("Failed to count steps for summary surface", exc_info=True)
 

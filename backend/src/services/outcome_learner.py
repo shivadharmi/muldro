@@ -28,7 +28,7 @@ from sqlalchemy import select
 from src.config.settings import Settings
 from src.models.plans import Plan
 from src.models.task_graph import TaskRun, TaskStep
-from src.services.execution_state import transition_run
+from src.services.execution_state import TERMINAL_SUCCESS, transition_run
 from src.services.step_graph_store import StepGraphStore
 
 logger = logging.getLogger(__name__)
@@ -84,7 +84,7 @@ class OutcomeLearner:
         if not self._memory_service:
             return
         all_steps = await self._store.get_all_steps(run.run_id)
-        completed = [s for s in all_steps if s.status == "completed" and s.output_data]
+        completed = [s for s in all_steps if s.status in TERMINAL_SUCCESS and s.output_data]
         if not completed:
             return
         parts = [f"Completed plan: {run.plan_id}"]

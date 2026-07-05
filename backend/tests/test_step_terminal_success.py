@@ -56,3 +56,11 @@ def test_completed_stays_terminal():
     step = _Step("completed")
     with pytest.raises(InvalidTransitionError):
         transition_step(step, "completed_unverified")  # can't un-verify a confirmed step
+
+
+def test_terminal_success_covers_dependency_satisfaction_semantics():
+    # A completed_unverified predecessor must satisfy a dependency the same as completed.
+    done = {"completed", "completed_unverified"}
+    assert all(s in TERMINAL_SUCCESS for s in done)
+    assert "partially_completed" not in TERMINAL_SUCCESS  # a diverged step does NOT satisfy deps
+    assert "failed" not in TERMINAL_SUCCESS

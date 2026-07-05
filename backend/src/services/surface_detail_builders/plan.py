@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.services.execution_state import TERMINAL_SUCCESS
 from src.ui import renderer as r
 from src.ui.contracts import A2UIComponent, DetailSection, DetailTabResponse
 
@@ -50,7 +51,7 @@ async def build_plan_overview(db: AsyncSession, surface: Any, **kwargs: Any) -> 
 
     step_children: list[A2UIComponent] = []
     for i, step in enumerate(steps):
-        variant = "success" if step.status == "completed" else "default"
+        variant = "success" if step.status in TERMINAL_SUCCESS else "default"
         step_children.append(
             r.row(
                 f"step_{i}",
@@ -62,7 +63,7 @@ async def build_plan_overview(db: AsyncSession, surface: Any, **kwargs: Any) -> 
             )
         )
 
-    completed = sum(1 for s in steps if s.status == "completed")
+    completed = sum(1 for s in steps if s.status in TERMINAL_SUCCESS)
     total = len(steps)
     sections = [_section("summary", "Run Summary", run_children, collapsed=False)]
     if step_children:

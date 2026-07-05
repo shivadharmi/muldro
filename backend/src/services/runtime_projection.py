@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.models.runtime_event import RuntimeEvent
 from src.models.task_graph import TaskRun, TaskStep
 from src.models.traces import ModelCall
+from src.services.execution_state import TERMINAL_SUCCESS
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,7 @@ class RuntimeProjectionService:
             )
             steps = steps_result.scalars().all()
             total = len(steps)
-            completed = sum(1 for s in steps if s.status == "completed")
+            completed = sum(1 for s in steps if s.status in TERMINAL_SUCCESS)
             blocking_step = next(
                 (s for s in steps if s.status in ("awaiting_approval", "blocked")), None
             )

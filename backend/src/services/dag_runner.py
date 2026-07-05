@@ -30,7 +30,7 @@ from src.integrations.mcp_errors import McpAuthRequiredError
 from src.integrations.provider_map import provider_for_server
 from src.models.task_graph import TaskRun, TaskStep
 from src.orchestrator.agent_loop import CancellationRequested
-from src.services.execution_state import transition_run, transition_step
+from src.services.execution_state import TERMINAL_SUCCESS, transition_run, transition_step
 from src.services.execution_support import (
     _compute_retry_delay,
     _detect_auth_required,
@@ -186,7 +186,7 @@ class DagRunner:
                     )
                     for s in _all_for_surface
                 ]
-                _done_count = sum(1 for s in _all_for_surface if s.status == "completed")
+                _done_count = sum(1 for s in _all_for_surface if s.status in TERMINAL_SUCCESS)
                 await self._emitter.emit_surface_update(
                     surface_id=surface_id,
                     user_id=run.user_id,

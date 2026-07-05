@@ -28,7 +28,7 @@ from src.models.approvals import Approval
 from src.models.plans import Plan
 from src.models.runtime_event import RuntimeEvent
 from src.models.task_graph import TaskRun, TaskStep
-from src.services.execution_state import transition_run
+from src.services.execution_state import TERMINAL_SUCCESS, transition_run
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -139,7 +139,7 @@ async def list_history(
             for step in steps
         ]
 
-        completed_step_count = sum(1 for s in steps if s.status == "completed")
+        completed_step_count = sum(1 for s in steps if s.status in TERMINAL_SUCCESS)
 
         # Plan context
         goal: str | None = None
