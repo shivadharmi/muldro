@@ -109,6 +109,9 @@ class SchedulerBase:
         if self._tick_count % 5 == 0:
             await self._run_subtick("eviction", self._tick_eviction(factory))
             await self._run_subtick("dlq_retry", self._tick_dlq_retry(factory))
+            await self._run_subtick(
+                "deferred_verification", self._tick_deferred_verification(factory)
+            )
 
             # Memory expiration — cascade to Qdrant
             vector_store = None
