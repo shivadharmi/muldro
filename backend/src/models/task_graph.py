@@ -116,6 +116,30 @@ class TaskStep(Base, TimestampMixin):
     __table_args__ = (Index("ix_task_steps_run_status", "run_id", "status"),)
 
 
+class TaskRunDetail(Base, TimestampMixin):
+    """1:1 side table for audience-specific run fields extracted off the hot TaskRun
+    row (Step 5 §4.8). Owns policy_decision (durable, evidence/audit) and context_pack
+    (heavy, ephemeral working context — by-ref + TTL via context_pack_expires_at with a
+    dereference/expiry render fallback). run_id is the PK (structural 1:1)."""
+
+    __tablename__ = "task_run_details"
+
+    run_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("task_runs.run_id", ondelete="CASCADE"), primary_key=True
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
+    )
+    policy_decision: Mapped[dict | None] = mapped_column(JSONB)
+    context_pack: Mapped[dict | None] = mapped_column(JSONB)
+    context_pack_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        Index("ix_task_run_details_ws", "workspace_id"),
+        Index("ix_task_run_details_ctx_expiry", "context_pack_expires_at"),
+    )
+
+
 class TaskCheckpoint(Base):
     __tablename__ = "task_checkpoints"
 
