@@ -2,6 +2,7 @@
 
 import type { A2UIComponent } from "@/lib/a2ui-types";
 import type { ExecutionPhase, StepState, ApprovalContext, ResultSummary } from "@/lib/a2ui-types";
+import { isStepDone } from "@/lib/a2ui-types";
 import { phaseTextColor } from "@/lib/design-tokens";
 import { StepList } from "./step-list";
 import { InlineApprovalCard } from "./inline-approval";
@@ -37,7 +38,7 @@ export function A2UIExecutionSurface({ component }: Props) {
   const { goal, phase, steps, currentStep, approval, results, progress } =
     getExecutionProps(component.properties);
 
-  const completedCount = steps.filter((s) => s.status === "completed").length;
+  const completedCount = steps.filter((s) => isStepDone(s.status)).length;
   const totalCount = steps.length;
   const progressPct = totalCount > 0 ? completedCount / totalCount : 0;
   const labelText = phaseLabel[phase] ?? "Planning";
