@@ -147,6 +147,7 @@ class VectorStore:
             ],
             COLLECTION_ENTITIES: [
                 ("entity_type", PayloadSchemaType.KEYWORD),
+                ("workspace_id", PayloadSchemaType.KEYWORD),
             ],
             COLLECTION_EVENTS: [
                 ("source", PayloadSchemaType.KEYWORD),

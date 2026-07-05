@@ -226,6 +226,22 @@ def _find_by_alias_stmt(user_id: str, alias: str, workspace_id: str):
     )
 
 
+def _entity_vector_payload(
+    entity_type: str, canonical_name: str, user_id: str, workspace_id: str
+) -> dict:
+    """Qdrant payload for an entity vector. Includes workspace_id so
+    workspace-scoped vector search actually matches — it was previously omitted,
+    silently breaking scoped entity resolution/dedup."""
+    payload = {
+        "entity_type": entity_type,
+        "canonical_name": canonical_name,
+        "user_id": user_id,
+    }
+    if workspace_id:
+        payload["workspace_id"] = workspace_id
+    return payload
+
+
 class WorldModel:
     """Manage the entity graph."""
 
@@ -416,11 +432,7 @@ class WorldModel:
                         "entities",
                         entity_id,
                         emb,
-                        {
-                            "entity_type": entity_type,
-                            "canonical_name": canonical_name,
-                            "user_id": user_id,
-                        },
+                        _entity_vector_payload(entity_type, canonical_name, user_id, workspace_id),
                         user_id,
                     )
                 except Exception:
