@@ -34,21 +34,18 @@ async def reconcile_verdict(
         return  # narrow by design (D6); richer write->belief lineage is deferred
 
     try:
-        store = EntityFactStore(db)
-        facts = await store.current_facts(entity_id, workspace_id)
-        if not facts:
-            return
-        for fact in facts:
-            if verdict == VerifyVerdict.CONFIRMED:
-                await store.corroborate(fact.fact_id)
-            else:
-                await store.weaken(fact.fact_id)
-        logger.info(
-            "reconciled %d belief(s) for entity=%s verdict=%s",
-            len(facts),
-            entity_id,
-            verdict.value,
-        )
+        # SAVEPOINT: if a fact-write flush fails mid-loop, roll back ONLY this nested
+        # transaction so the caller's shared session stays usable for its own commit.
+        # A best-effort belief write must never poison the primary op's transaction.
+        async with db.begin_nested():
+            store = EntityFactStore(db)
+            facts = await store.current_facts(entity_id, workspace_id)
+            for fact in facts:
+                if verdict == VerifyVerdict.CONFIRMED:
+                    await store.corroborate(fact.fact_id)
+                else:
+                    await store.weaken(fact.fact_id)
+        logger.info("reconciled belief(s) for entity=%s verdict=%s", entity_id, verdict.value)
     except Exception:
         logger.debug("Belief reconciliation failed for entity=%s", entity_id, exc_info=True)
 

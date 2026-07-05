@@ -154,3 +154,45 @@ async def test_unverified_verdict_is_a_noop():
             )
             await db.commit()
             assert (await EntityFactStore(db).get_fact(fid)).confidence == before
+
+
+async def test_reconcile_failure_does_not_poison_the_outer_session():
+    """A failed belief write must roll back only its SAVEPOINT and leave the shared
+    session usable for its own commit (no PendingRollbackError). Regression for the
+    swallowed-flush-failure bug (Step 4 Task 7 review)."""
+    from unittest.mock import patch
+
+    from sqlalchemy import text
+
+    from src.services.entity_facts import store as store_mod
+    from src.services.entity_facts.reconciliation import reconcile_verdict
+
+    async with _env_with_fact() as (factory, ws, uid, eid, fid):
+        async with factory() as db:
+            # Force the mutating write to blow up mid-reconcile the way a failed
+            # flush() does: a DB-level error leaves the session in a failed-transaction
+            # state. Without the surrounding SAVEPOINT that state escapes and the outer
+            # commit below raises PendingRollbackError.
+            async def _boom(self, fact_id):
+                await self._db.execute(text("SELECT this_column_does_not_exist"))
+
+            # Open the outer transaction first (as a live primary op would have), so a
+            # swallowed poisoning would land on an ACTIVE transaction.
+            await db.execute(text("SELECT 1"))
+
+            with patch.object(store_mod.EntityFactStore, "corroborate", _boom):
+                # Must NOT raise (best-effort swallow) ...
+                await reconcile_verdict(
+                    db,
+                    workspace_id=ws,
+                    user_id=uid,
+                    verdict=VerifyVerdict.CONFIRMED,
+                    write_input={"entity_id": eid},
+                    write_output={},
+                )
+
+            # ... and the outer session must still be usable: the primary op can keep
+            # issuing statements and commit. Without the SAVEPOINT this raises
+            # PendingRollbackError (wrapped DBAPIError).
+            assert (await EntityFactStore(db).get_fact(fid)) is not None
+            await db.commit()
