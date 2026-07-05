@@ -108,6 +108,8 @@ async def _entity_env():
         await engine.dispose()
 ```
 
+> **FK-ordering gotcha (learned in Task 3):** if a test seeds an `Entity` in the *same* `db` block as `User`+`Workspace`, SQLAlchemy's unit-of-work may emit the `entities` INSERT before the `workspaces` INSERT → `ForeignKeyViolationError`. Either add `await db.flush()` after the `User`+`Workspace` adds and before the `Entity` add, or seed the `Entity` in a *separate* committed `async with factory() as db:` block (the parents are already committed by the time `_entity_env` yields).
+
 ---
 
 ## Design decisions (rationale + rejected alternatives)
