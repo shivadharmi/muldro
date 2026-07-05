@@ -55,7 +55,7 @@ class TestContextAssembly:
 
         # Mock world_model service
         mock_world_model = AsyncMock()
-        mock_world_model.find_entity = AsyncMock(
+        mock_world_model.resolve_entities = AsyncMock(
             return_value=[
                 {"entity_type": "person", "name": "Alice"},
                 {"entity_type": "project", "name": "Project X"},
@@ -90,7 +90,7 @@ class TestContextAssembly:
 
         # Mock only world_model, no memory service
         mock_world_model = AsyncMock()
-        mock_world_model.find_entity = AsyncMock(
+        mock_world_model.resolve_entities = AsyncMock(
             return_value=[{"entity_type": "person", "name": "Bob"}]
         )
 
@@ -120,7 +120,7 @@ class TestContextAssembly:
         mock_memory_svc.retrieve = AsyncMock(return_value=[])
 
         mock_world_model = AsyncMock()
-        mock_world_model.find_entity = AsyncMock(return_value=[])
+        mock_world_model.resolve_entities = AsyncMock(return_value=[])
 
         orchestrator = JarvisOrchestrator(
             settings=settings,
@@ -151,7 +151,7 @@ class TestContextAssembly:
 
         # Mock world_model that works
         mock_world_model = AsyncMock()
-        mock_world_model.find_entity = AsyncMock(
+        mock_world_model.resolve_entities = AsyncMock(
             return_value=[{"entity_type": "person", "name": "Charlie"}]
         )
 

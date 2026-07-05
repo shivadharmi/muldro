@@ -183,7 +183,7 @@ class ContextBuilder:
         entity_ids: list[str] = []
         if not pack.entities and self._world_model and query:
             try:
-                entities = await self._world_model.find_entity(
+                entities = await self._world_model.resolve_entities(
                     user_id,
                     query,
                     workspace_id=workspace_id,
