@@ -43,7 +43,16 @@ LOW_STABILITY_BATCH = 100
 
 
 class EvictionService:
-    """Hard-delete expired records with cascade to external stores."""
+    """Hard-delete expired records with cascade to external stores.
+
+    Retention contract (Step 5 §6, one-owner-per-fact): the ``runtime_events`` table
+    is the durable **system-of-record** and is intentionally EXEMPT from eviction —
+    hard-deleting it would make reconcile-from-event-log (Step 10) impossible. This
+    service only hard-deletes derivable/replaceable data (normalized_events at 90d,
+    memories, sessions, surfaces, approvals, interaction_logs). If bounded retention
+    of runtime_events is ever required it MUST be an archive (cold storage), never a
+    hard-delete.
+    """
 
     def __init__(
         self,
