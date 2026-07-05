@@ -24,16 +24,47 @@ if env_db_url:
 
 target_metadata = Base.metadata
 
+# LangGraph's AsyncPostgresSaver manages its own checkpoint tables directly (via
+# saver.setup(), outside Alembic — they appear once the Step-1 spike or the
+# Step-10 autonomous cutover has run). Exclude them from autogenerate so
+# `alembic check` / autogenerate never try to DROP the durable-execution
+# substrate.
+_LANGGRAPH_TABLES = {
+    "checkpoints",
+    "checkpoint_blobs",
+    "checkpoint_writes",
+    "checkpoint_migrations",
+}
+
+
+def _include_object(object, name, type_, reflected, compare_to):
+    if type_ == "table" and name in _LANGGRAPH_TABLES:
+        return False
+    if type_ == "index":
+        table = getattr(object, "table", None)
+        if table is not None and table.name in _LANGGRAPH_TABLES:
+            return False
+    return True
+
 
 def run_migrations_offline() -> None:
     url = config.get_main_option("sqlalchemy.url")
-    context.configure(url=url, target_metadata=target_metadata, literal_binds=True)
+    context.configure(
+        url=url,
+        target_metadata=target_metadata,
+        literal_binds=True,
+        include_object=_include_object,
+    )
     with context.begin_transaction():
         context.run_migrations()
 
 
 def do_run_migrations(connection):
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        include_object=_include_object,
+    )
     with context.begin_transaction():
         context.run_migrations()
 
