@@ -236,6 +236,32 @@ class DiscoverCapabilitiesInput(BaseModel):
     query: str = Field(description="Search query, e.g. 'email', 'calendar management'")
 
 
+class GetEntityInput(BaseModel):
+    """Fetch a world-model entity + its current attribute beliefs."""
+
+    entity_id: str = Field(description="Entity id (ent_...) to fetch")
+
+
+class QueryFactsInput(BaseModel):
+    """Query an entity's attribute beliefs as-of a timestamp (bi-temporal)."""
+
+    entity_id: str = Field(description="Entity id (ent_...) to query")
+    as_of: str = Field(default="", description="ISO-8601 timestamp; empty = now")
+
+
+class TraverseInput(BaseModel):
+    """List the relationships incident to an entity (one hop)."""
+
+    entity_id: str = Field(description="Entity id (ent_...) to traverse from")
+
+
+class GetProvenanceInput(BaseModel):
+    """Provenance for an entity's current beliefs."""
+
+    entity_id: str = Field(description="Entity id (ent_...)")
+    attr_key: str = Field(default="", description="Optional single attribute key")
+
+
 # ── Registry ───────────────────────────────────────────────────────
 
 TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
@@ -260,6 +286,10 @@ TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
     "store_preference": StorePreferenceInput,
     "get_plan_details": GetPlanDetailsInput,
     "discover_capabilities": DiscoverCapabilitiesInput,
+    "get_entity": GetEntityInput,
+    "query_facts": QueryFactsInput,
+    "traverse": TraverseInput,
+    "get_provenance": GetProvenanceInput,
 }
 
 

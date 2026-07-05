@@ -72,11 +72,21 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "browser.snapshot",
         "browser.extract",
         "browser.screenshot",
+        # World-model reads (spec §4.6 item 5)
+        "internal.get_entity",
+        "internal.query_facts",
+        "internal.traverse",
+        "internal.get_provenance",
     },
     "librarian": {
         "internal.update_entity",
         "internal.search",
         "internal.store_memory",
+        # World-model reads (spec §4.6 item 5)
+        "internal.get_entity",
+        "internal.query_facts",
+        "internal.traverse",
+        "internal.get_provenance",
     },
     "planner": {
         "internal.get_plans",
@@ -84,6 +94,11 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "internal.search",
         "internal.store_memory",
         "system.discovery",
+        # World-model reads (spec §4.6 item 5)
+        "internal.get_entity",
+        "internal.query_facts",
+        "internal.traverse",
+        "internal.get_provenance",
     },
     "governor": {
         "internal.evaluate_policy",

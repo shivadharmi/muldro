@@ -14,8 +14,8 @@ from src.tools.catalog import (
 
 
 def test_internal_tools_count():
-    """Verify exactly 21 internal tools are registered."""
-    assert len(INTERNAL_TOOLS) == 21
+    """Verify exactly 25 internal tools are registered."""
+    assert len(INTERNAL_TOOLS) == 25
 
 
 def test_internal_tool_names_match_jarvis():
@@ -44,6 +44,10 @@ def test_internal_tool_names_match_jarvis():
         "discover_capabilities",
         "report_governor_verdict",
         "push_ui_update",
+        "get_entity",
+        "query_facts",
+        "traverse",
+        "get_provenance",
     }
 
     catalog_names = get_internal_tool_names()
@@ -59,12 +63,12 @@ def test_all_input_models_are_pydantic():
 
 
 def test_server_distribution():
-    """Verify correct server counts: 19 intelligence, 1 communication, 1 _special."""
+    """Verify correct server counts: 23 intelligence, 1 communication, 1 _special."""
     server_counts = {}
     for tool in INTERNAL_TOOLS:
         server_counts[tool.server] = server_counts.get(tool.server, 0) + 1
 
-    assert server_counts.get("intelligence", 0) == 19, "Expected 19 intelligence tools"
+    assert server_counts.get("intelligence", 0) == 23, "Expected 23 intelligence tools"
     assert server_counts.get("communication", 0) == 1, "Expected 1 communication tool"
     assert server_counts.get("_special", 0) == 1, "Expected 1 _special tool"
 
@@ -94,9 +98,9 @@ def test_get_internal_tools_for_server_communication():
 
 
 def test_get_internal_tools_for_server_intelligence():
-    """Verify get_internal_tools_for_server returns 19 intelligence tools."""
+    """Verify get_internal_tools_for_server returns 23 intelligence tools."""
     tools = get_internal_tools_for_server("intelligence")
-    assert len(tools) == 19
+    assert len(tools) == 23
 
 
 def test_get_internal_tools_for_server_special():

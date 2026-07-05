@@ -49,6 +49,12 @@ from src.tools.intelligence_server.planning import (
     update_execution,
     verify_run,
 )
+from src.tools.intelligence_server.world_model_tools import (
+    get_entity,
+    get_provenance,
+    query_facts,
+    traverse,
+)
 
 __all__ = [
     "intelligence",
@@ -76,4 +82,8 @@ __all__ = [
     "extract_preferences",
     "get_briefing",
     "store_preference",
+    "get_entity",
+    "query_facts",
+    "traverse",
+    "get_provenance",
 ]

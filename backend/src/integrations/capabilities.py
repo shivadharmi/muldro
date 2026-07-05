@@ -158,6 +158,10 @@ CAPABILITY_CATALOG: dict[str, CapabilityMeta] = {
     "internal.push_ui": _cap(CapabilityFamily.INTERNAL, False),
     "internal.store_memory": _cap(CapabilityFamily.INTERNAL, False),
     "internal.store_preference": _cap(CapabilityFamily.INTERNAL, False),
+    "internal.get_entity": _cap(CapabilityFamily.INTERNAL, True),
+    "internal.query_facts": _cap(CapabilityFamily.INTERNAL, True),
+    "internal.traverse": _cap(CapabilityFamily.INTERNAL, True),
+    "internal.get_provenance": _cap(CapabilityFamily.INTERNAL, True),
     # Drive
     "doc.drive_list": _cap(CapabilityFamily.DOC, True),
     "doc.drive_search": _cap(CapabilityFamily.DOC, True),
