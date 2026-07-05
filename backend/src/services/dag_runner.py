@@ -781,9 +781,33 @@ class DagRunner:
             )
 
     async def _escalate_divergence(self, run, step, capability, risk, output) -> None:
-        """Escalate-first compensation for a CONTRADICTED read-back on an irreversible
-        write (spec §7). Temporary no-op stub — Task 8 replaces the body with the actual
-        user-surfacing escalation. The explicit 5-arg signature documents the Task 8
-        contract (and catches call-site drift). Kept here so the execute_step wiring is
-        self-consistent and green."""
-        return None
+        """Escalate-first: a contradicted read-back on an irreversible write surfaces
+        the exact artifact_ref + observed divergence to the present user, offering the
+        registered compensator (if any). No compensator -> escalate anyway (§4.5)."""
+        from src.services.verification.compensation import build_divergence_escalation
+
+        out = output if isinstance(output, dict) else {}
+        meta = out.get("verification", {})
+        artifact_ref = meta.get("artifact_ref") or {}
+        escalation = build_divergence_escalation(
+            capability=capability,
+            artifact_ref=artifact_ref,
+            observed="Read-back could not confirm the expected effect of this write.",
+        )
+        try:
+            await self._emitter.emit_event(
+                "surface_created",
+                run.user_id,
+                {
+                    "run_id": run.run_id,
+                    "step_id": step.step_id,
+                    "surface_type": "verification_divergence",
+                    "preview": f"Could not confirm {capability} — review needed",
+                    "escalation": escalation,
+                },
+                workspace_id=run.workspace_id,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to emit divergence escalation for step %s", step.step_id, exc_info=True
+            )

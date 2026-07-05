@@ -5,6 +5,11 @@ read-back BEFORE its step is marked terminal (mandatory only when IRREVERSIBLE),
 and a failed read-back on an irreversible write escalates to the user.
 """
 
+from src.services.verification.compensation import (
+    COMPENSATIONS,
+    build_divergence_escalation,
+    get_compensation,
+)
 from src.services.verification.predicate import (
     IRREVERSIBLE,
     is_irreversible_capability,
@@ -18,6 +23,9 @@ from src.services.verification.readback import (
 )
 
 __all__ = [
+    "COMPENSATIONS",
+    "build_divergence_escalation",
+    "get_compensation",
     "IRREVERSIBLE",
     "is_irreversible_capability",
     "is_write_verification_required",
