@@ -157,6 +157,14 @@ async def test_get_provenance_returns_origin():
         assert res["provenance"][0]["provenance"]["origin"] == "user_message"
 
 
+async def test_get_provenance_is_workspace_fail_closed():
+    from src.tools.intelligence_server.world_model_tools import get_provenance
+
+    async with _env() as (ws, other, uid, eid, eid2):
+        res = await get_provenance(user_id=uid, entity_id=eid, ctx=MagicMock(), workspace_id=other)
+        assert res["provenance"] == []
+
+
 async def test_traverse_returns_edges_and_is_workspace_scoped():
     from src.tools.intelligence_server.world_model_tools import traverse
 

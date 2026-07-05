@@ -4,6 +4,7 @@ LLM-self-reported — reliability is a fixed per-origin lookup, corroboration is
 count, decay is exponential. Pure: no DB, no network, no LLM."""
 
 import math
+from datetime import datetime, timezone
 
 # Per-origin source reliability. Higher = more trustworthy provenance. A missing
 # origin falls back to "unknown". These are deterministic weights, NOT LLM output.
@@ -30,6 +31,16 @@ def reliability_for(origin: str) -> float:
 def age_factor(age_days: float) -> float:
     """Exponential age decay; negative/zero age → 1.0 (fresh)."""
     return math.exp(-_DECAY_LAMBDA * max(0.0, age_days))
+
+
+def days_since(ts) -> float:
+    """Whole+fractional days since a timestamp (naive → assume UTC); None/future → 0.0.
+    Shared by the read/render paths to age-decay stored confidence at display time."""
+    if ts is None:
+        return 0.0
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return max(0.0, (datetime.now(timezone.utc) - ts).total_seconds() / 86400.0)
 
 
 def compute_confidence(*, origin: str, corroboration_count: int, age_days: float) -> float:

@@ -24,7 +24,11 @@ from ulid import ULID
 from src.config.settings import Settings, get_anthropic_client
 from src.models.entities import Entity, EntityAlias, EntityRelationship
 from src.models.events import NormalizedEvent
-from src.services.entity_facts.confidence import compute_confidence, current_confidence
+from src.services.entity_facts.confidence import (
+    compute_confidence,
+    current_confidence,
+    days_since,
+)
 from src.services.entity_resolver import EntityResolver
 
 logger = logging.getLogger(__name__)
@@ -242,15 +246,6 @@ def _entity_vector_payload(
     if workspace_id:
         payload["workspace_id"] = workspace_id
     return payload
-
-
-def _days_since(ts) -> float:
-    """Whole/fractional days since a timestamp (tz-safe), floored at 0.0 for None."""
-    if ts is None:
-        return 0.0
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    return max(0.0, (datetime.now(timezone.utc) - ts).total_seconds() / 86400.0)
 
 
 class WorldModel:
@@ -575,7 +570,7 @@ class WorldModel:
                 "interaction_count": e.interaction_count,
                 "last_seen_at": (e.last_seen_at.isoformat() if e.last_seen_at else None),
                 "confidence": current_confidence(
-                    e.confidence_score, age_days=_days_since(e.last_seen_at)
+                    e.confidence_score, age_days=days_since(e.last_seen_at)
                 ),
                 "provenance": {"origin_hint": e.entity_type},
             }

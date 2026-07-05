@@ -10,26 +10,18 @@ from fastmcp.server.providers.local_provider.decorators.tools import ToolAnnotat
 from sqlalchemy import select
 
 from src.models.entities import Entity, EntityRelationship
-from src.services.entity_facts.confidence import current_confidence
+from src.services.entity_facts.confidence import current_confidence, days_since
 from src.services.entity_facts.store import EntityFactStore
 from src.tools.intelligence_server._shared import _get_db, intelligence
 
 logger = logging.getLogger(__name__)
 
 
-def _days_since(ts) -> float:
-    if ts is None:
-        return 0.0
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    return max(0.0, (datetime.now(timezone.utc) - ts).total_seconds() / 86400.0)
-
-
 def _fact_dict(f) -> dict:
     return {
         "attr_key": f.attr_key,
         "attr_value": f.attr_value,
-        "confidence": current_confidence(f.confidence, age_days=_days_since(f.valid_from)),
+        "confidence": current_confidence(f.confidence, age_days=days_since(f.valid_from)),
         "corroboration_count": f.corroboration_count,
         "valid_from": f.valid_from.isoformat() if f.valid_from else None,
         "valid_to": f.valid_to.isoformat() if f.valid_to else None,
@@ -68,7 +60,7 @@ async def get_entity(
                 "entity_type": ent.entity_type,
                 "canonical_name": ent.canonical_name,
                 "confidence": current_confidence(
-                    ent.confidence_score, age_days=_days_since(ent.last_seen_at)
+                    ent.confidence_score, age_days=days_since(ent.last_seen_at)
                 ),
                 "attributes": ent.attributes,
             },

@@ -19,7 +19,7 @@ import logging
 from sqlalchemy import or_, select
 
 from src.models.entities import Entity, EntityAlias
-from src.services.entity_facts.confidence import current_confidence
+from src.services.entity_facts.confidence import current_confidence, days_since
 from src.services.entity_spans import extract_spans
 from src.services.fts_service import FTSService
 
@@ -60,16 +60,6 @@ def _hydrate_entities_stmt(user_id: str, entity_ids: list[str], workspace_id: st
     )
 
 
-def _days_since(ts) -> float:
-    if ts is None:
-        return 0.0
-    from datetime import datetime, timezone
-
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    return max(0.0, (datetime.now(timezone.utc) - ts).total_seconds() / 86400.0)
-
-
 def _to_dict(e: Entity) -> dict:
     """Same shape WorldModel.find_entity returns (drop-in for _rank_entities)."""
     return {
@@ -80,7 +70,7 @@ def _to_dict(e: Entity) -> dict:
         "importance_score": e.importance_score,
         "interaction_count": e.interaction_count,
         "last_seen_at": (e.last_seen_at.isoformat() if e.last_seen_at else None),
-        "confidence": current_confidence(e.confidence_score, age_days=_days_since(e.last_seen_at)),
+        "confidence": current_confidence(e.confidence_score, age_days=days_since(e.last_seen_at)),
         "provenance": {"origin_hint": e.entity_type},
     }
 
