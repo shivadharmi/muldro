@@ -16,9 +16,11 @@ from src.services.entity_facts.confidence import (
     current_confidence,
     reliability_for,
 )
+from src.services.entity_facts.store import EntityFactStore
 
 __all__ = [
     "SOURCE_RELIABILITY",
+    "EntityFactStore",
     "compute_confidence",
     "current_confidence",
     "reliability_for",
