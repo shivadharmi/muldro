@@ -46,6 +46,67 @@ Four extraction passes established the grounding facts this plan relies on. The 
 8. **`intelligence_server` is a PACKAGE, not a file.** `src/tools/intelligence_server/{_shared,memory,observation,planning,persona}.py`; `_shared.py` holds the `intelligence = FastMCP(...)` instance, `configure()`, `_get_db()`, `request_services(db)`. Tools register by `@intelligence.tool` decorators that run on package `__init__` import — **new tool functions must be imported in `intelligence_server/__init__.py`** (and listed in `__all__`) to register.
 9. **`_rank_entities` preserves added dict keys.** `context_builder.py:59` `.get()`s only its scoring keys and returns `sorted(entities, …)` without rebuilding dicts — so `confidence`/`provenance` added at the `world_model` source survive ranking through to the `to_prompt` render (Task 6).
 10. **`WorldModel` receives an injected `AsyncSession` (`self._db`)** and commits internally (`world_model.py:365/407/489`); callers wrap it in `async with factory() as db:` and commit again. The fact-store writes execute on `self._db` within the existing commit boundary — no new session management.
+11. **Real-DB tests use a self-contained `_entity_env()` context manager, NOT a `db_session` fixture** (there is no such fixture). The authoritative pattern is `tests/test_entity_fts_db.py` (mirroring `tests/idempotency/test_ledger_db.py`): a module-level `_db_reachable()` asyncpg probe → `pytestmark = pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")`; an `@asynccontextmanager async def _entity_env()` that builds its own `create_async_engine(get_settings().database_url, poolclass=NullPool)` + `async_sessionmaker(engine, expire_on_commit=False)`, **seeds the FK parents `User` + `Workspace`** (imported from `src.models.users`, where `Workspace(workspace_id=..., name=..., owner_user_id=user_id)` and `User(user_id=..., email=..., display_name=...)`), `yield`s `(factory, workspace_id, user_id)`, and on exit `delete(Workspace)` (CASCADE removes entities + entity_facts) + `delete(User)` then `await engine.dispose()`. IDs are `usr_{ULID}` / `ws_{ULID}` / `ent_{ULID}`. **Every real-DB test in this plan (Tasks 3/4/5/7/8) must adopt this harness verbatim** — the plan's earlier `db_session`/`INSERT INTO workspaces` sketches are superseded by this note. Reference scaffold to copy:
+
+```python
+import asyncio
+from contextlib import asynccontextmanager
+
+import pytest
+from sqlalchemy import delete, text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
+from ulid import ULID
+
+from src.config.settings import get_settings
+from src.models.users import User, Workspace
+
+
+def _db_reachable() -> bool:
+    import asyncpg
+
+    dsn = get_settings().database_url.replace("+asyncpg", "", 1)
+
+    async def _probe() -> None:
+        conn = await asyncpg.connect(dsn=dsn)
+        try:
+            await conn.execute("SELECT 1")
+        finally:
+            await conn.close()
+
+    try:
+        asyncio.run(_probe())
+        return True
+    except Exception:  # pragma: no cover
+        return False
+
+
+pytestmark = pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
+
+
+@asynccontextmanager
+async def _entity_env():
+    engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    suffix = str(ULID())
+    user_id = f"usr_{suffix}"
+    workspace_id = f"ws_{suffix}"
+    try:
+        async with factory() as db:
+            db.add(User(user_id=user_id, email=f"s4-{suffix}@example.com", display_name="s4"))
+            db.add(Workspace(workspace_id=workspace_id, name="s4-ws", owner_user_id=user_id))
+            await db.commit()
+        yield factory, workspace_id, user_id
+    finally:
+        try:
+            async with factory() as db:
+                await db.execute(delete(Workspace).where(Workspace.workspace_id == workspace_id))
+                await db.execute(delete(User).where(User.user_id == user_id))
+                await db.commit()
+        except Exception:  # pragma: no cover
+            pass
+        await engine.dispose()
+```
 
 ---
 
