@@ -9,8 +9,10 @@ the side-effecting pieces of the single TrustEngine approval gate:
   push the ``approval_needed`` surface.
 - ``notify_auto_executed`` / ``record_auto_execution_outcome`` — post-execution
   notification + trust reinforcement for the auto-execute path.
-- ``remember_auto_executed`` — stamp the run checkpoint audit trail that a later
-  verification failure reads to reverse premature reinforcement.
+- ``remember_auto_executed`` — stamp the run checkpoint audit trail of auto-executed
+  (capability, risk_level) pairs (currently has no reader; the deferred-verification
+  tick uses ``step.output_data["verification"]`` and only reinforces trust on a
+  confirmed read-back, never reverses it here).
 
 The gate *decision* itself (``TrustEngine.evaluate`` + the fail-closed contract
 guard) stays in the executor's step pipeline; this collaborator holds the helpers
@@ -247,9 +249,13 @@ class TrustGate:
     def remember_auto_executed(self, run: TaskRun, capability: str, risk_level: str) -> None:
         """Record an auto-executed (capability, risk_level) on the run checkpoint.
 
-        This is the audit trail the verification feedback reads to reverse the
-        premature "approved" trust signal if the run later fails verification.
-        JSONB is reassigned (not mutated in place) so SQLAlchemy detects it."""
+        ``checkpoint["auto_executed"]`` is an audit trail of auto-executed
+        (capability, risk_level) pairs that currently has no reader: the
+        deferred-verification tick reads ``step.output_data["verification"]``
+        (persisted by ``build_verification_meta``) instead, and it only
+        *reinforces* trust on a confirmed read-back — it never reverses trust
+        here. JSONB is reassigned (not mutated in place) so SQLAlchemy detects
+        it."""
         prior = list((run.checkpoint or {}).get("auto_executed") or [])
         prior.append({"capability": capability, "risk_level": risk_level})
         run.checkpoint = {**(run.checkpoint or {}), "auto_executed": prior}

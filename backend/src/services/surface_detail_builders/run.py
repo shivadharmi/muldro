@@ -278,7 +278,8 @@ async def build_run_trace_tab(db: AsyncSession, surface: Any, **kwargs: Any) -> 
             (
                 await db.execute(
                     select(TaskStep).where(
-                        TaskStep.run_id == run_id, TaskStep.status == "completed"
+                        TaskStep.run_id == run_id,
+                        TaskStep.status.in_(("completed", "completed_unverified")),
                     )
                 )
             )

@@ -22,6 +22,7 @@ import logging
 from src.config.settings import Settings
 from src.llm_utils import parse_llm_json
 from src.models.task_graph import TaskRun, TaskStep
+from src.services.execution_state import TERMINAL_SUCCESS
 from src.services.execution_surface_emitter import SurfaceEmitter
 from src.services.step_graph_store import StepGraphStore
 
@@ -277,7 +278,7 @@ class StepRunner:
         for s in all_steps:
             if s.step_id == step.step_id:
                 continue
-            if s.status != "completed" or not s.output_data:
+            if s.status not in TERMINAL_SUCCESS or not s.output_data:
                 continue
             result_text = s.output_data.get("result", "")
             if not result_text:
