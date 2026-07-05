@@ -2099,7 +2099,7 @@ import logging
 from datetime import datetime, timezone
 
 from fastmcp import Context
-from mcp.types import ToolAnnotations
+from fastmcp.server.providers.local_provider.decorators.tools import ToolAnnotations
 from sqlalchemy import select
 
 from src.models.entities import Entity, EntityRelationship
@@ -2274,7 +2274,7 @@ def _parse_iso(value: str) -> datetime | None:
         return None
 ```
 
-> Confirm the FastMCP/annotations imports (`from fastmcp import Context`, `from mcp.types import ToolAnnotations`) match `memory.py`'s import lines exactly — copy them verbatim from `intelligence_server/memory.py`'s header to avoid an import mismatch.
+> Confirm the FastMCP/annotations imports (`from fastmcp import Context`, `from fastmcp.server.providers.local_provider.decorators.tools import ToolAnnotations`) match `memory.py`'s import lines exactly — copy them verbatim from `intelligence_server/memory.py`'s header to avoid an import mismatch.
 
 - [ ] **Step 4: Register the tools in the package `__init__`**
 
