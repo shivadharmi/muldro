@@ -85,3 +85,41 @@ class EntityRelationship(Base, TimestampMixin):
         Index("ix_relations_to", "to_entity_id", "relation_type"),
         Index("ix_entity_rels_ws", "workspace_id"),
     )
+
+
+class EntityFact(Base, TimestampMixin):
+    """Bi-temporal attribute belief — one row per (entity, attr_key) assertion.
+
+    Superseding a contradicting value closes the old row (``valid_to = now``,
+    ``superseded_by = new_fact_id``) and inserts a new current row, so the full
+    history is queryable as-of (spec §4.6 items 3-5). ``entities.attributes`` JSONB
+    remains the denormalized *current* snapshot; these rows are the versioned truth.
+
+    ``confidence`` stores the AGE-0 evidence base (``1 - (1 - reliability)^n``); the
+    presented, age-decayed value is computed live at read time (see
+    ``entity_facts.confidence.current_confidence``). ``attr_value`` holds the raw
+    JSON-serialisable value (scalar or nested)."""
+
+    __tablename__ = "entity_facts"
+
+    fact_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    entity_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("entities.entity_id", ondelete="CASCADE"), nullable=False
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("workspaces.workspace_id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    attr_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    attr_value = mapped_column(JSONB, nullable=True)
+    confidence: Mapped[float] = mapped_column(Float, default=0.5, nullable=False)
+    corroboration_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    provenance: Mapped[dict | None] = mapped_column(JSONB)
+    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    valid_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    superseded_by: Mapped[str | None] = mapped_column(String(64))
+
+    __table_args__ = (
+        Index("ix_entity_facts_lookup", "entity_id", "attr_key", "valid_to"),
+        Index("ix_entity_facts_ws", "workspace_id"),
+    )
