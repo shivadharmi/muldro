@@ -206,7 +206,6 @@ class TestResumeRun:
         run.user_id = TEST_USER_ID
         run.workspace_id = "ws_test"
         run.source = "background"
-        run.context_pack_json = {}
 
         run_result = MagicMock()
         run_result.scalar_one_or_none.return_value = run

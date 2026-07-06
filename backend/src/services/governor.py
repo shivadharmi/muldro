@@ -98,10 +98,6 @@ class Governor:
             workspace_id=workspace_id,
             source="plan",
             execution_mode=policy_decision,
-            policy_decision={
-                "decision": policy_decision,
-                "risk_level": plan.risk_level or "low",
-            },
             status=_DECISION_TO_RUN_STATUS.get(policy_decision, "pending"),
         )
         self._db.add(run)

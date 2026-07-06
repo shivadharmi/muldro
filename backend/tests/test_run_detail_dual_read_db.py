@@ -1,5 +1,6 @@
-"""Dual-read: a reader prefers RunDetailStore and falls back to the old column for a run
-with no detail row (resume-across-deploy / pre-cutover gap). Step 5, D-C4."""
+"""Post-contract read (Step 5, D-C4): the old context_pack_json column is dropped, so
+RunDetailStore is the sole source. A reader returns the detail-store pack, or an empty
+pack when no detail row exists."""
 
 import asyncio
 from contextlib import asynccontextmanager
@@ -62,13 +63,13 @@ async def _run_env():
         await engine.dispose()
 
 
-async def test_reader_falls_back_to_old_column_when_no_detail():
+async def test_reader_returns_empty_when_no_detail():
     from src.services.surface_detail_builders.plan import _load_context_pack
 
     async with _run_env() as (factory, ws, uid):
         run_id = f"run_{ULID()}"
         async with factory() as db:
-            # Old-column-only run (no detail row): simulates a pre-cutover / in-flight run.
+            # No detail row seeded: post-contract there is no old column to fall back to.
             db.add(
                 TaskRun(
                     run_id=run_id,
@@ -76,14 +77,13 @@ async def test_reader_falls_back_to_old_column_when_no_detail():
                     workspace_id=ws,
                     source="plan",
                     status="pending",
-                    context_pack_json={"task_summary": "legacy"},
                 )
             )
             await db.commit()
         async with factory() as db:
             run = await db.get(TaskRun, run_id)
             ctx = await _load_context_pack(db, run)
-        assert ctx == {"task_summary": "legacy"}
+        assert ctx == {}
 
 
 async def test_reader_prefers_detail_store():
@@ -99,7 +99,6 @@ async def test_reader_prefers_detail_store():
                     workspace_id=ws,
                     source="plan",
                     status="pending",
-                    context_pack_json={"task_summary": "OLD"},
                 )
             )
             await db.commit()
@@ -108,4 +107,4 @@ async def test_reader_prefers_detail_store():
         async with factory() as db:
             run = await db.get(TaskRun, run_id)
             ctx = await _load_context_pack(db, run)
-        assert ctx == {"task_summary": "NEW"}  # detail store wins
+        assert ctx == {"task_summary": "NEW"}  # detail store is the only source

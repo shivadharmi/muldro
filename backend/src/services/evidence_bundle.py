@@ -88,8 +88,6 @@ class EvidenceBundleService:
         from src.services.run_detail_store import RunDetailStore
 
         route_info = await RunDetailStore(self._db).get_policy_decision(run.run_id)
-        if route_info is None:
-            route_info = getattr(run, "policy_decision", None)
 
         return EvidenceBundle(
             sources=sources,

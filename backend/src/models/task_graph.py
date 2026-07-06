@@ -32,7 +32,6 @@ class TaskRun(Base, TimestampMixin):
     # user_message, event, schedule, trigger, plan
     execution_mode: Mapped[str | None] = mapped_column(String(32))
     # auto_execute, approval_required, blocked, suggest_only
-    policy_decision: Mapped[dict | None] = mapped_column(JSONB)
     conversation_id: Mapped[str | None] = mapped_column(String(64))
     graph_definition: Mapped[dict | None] = mapped_column(JSONB)
     current_step_ids: Mapped[list[str] | None] = mapped_column(ARRAY(String(64)))
@@ -41,7 +40,6 @@ class TaskRun(Base, TimestampMixin):
     runtime_version: Mapped[str | None] = mapped_column(String(32))
     planner_version: Mapped[str | None] = mapped_column(String(32))
     verifier_version: Mapped[str | None] = mapped_column(String(32))
-    context_pack_json: Mapped[dict | None] = mapped_column(JSONB)
     trace_id: Mapped[str | None] = mapped_column(String(64))
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     max_retries: Mapped[int] = mapped_column(Integer, default=3)

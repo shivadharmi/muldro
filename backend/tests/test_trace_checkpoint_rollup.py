@@ -237,7 +237,6 @@ async def test_resume_run_checkpoints_when_paused_again(settings, mock_db):
     run.created_at = now
     run.checkpoint = {}
     run.error = None
-    run.context_pack_json = {}
 
     run_result = MagicMock()
     run_result.scalar_one_or_none.return_value = run
