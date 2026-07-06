@@ -407,14 +407,17 @@ class GraphExecutor:
         ).total_seconds()
         if pause_duration > 1800 and hasattr(self, "_context_builder") and self._context_builder:
             try:
+                from src.services.run_detail_store import RunDetailStore
+
+                _prior = await RunDetailStore(self._db).get_context_pack(run.run_id)
+                if _prior is None:
+                    _prior = getattr(run, "context_pack_json", None) or {}
                 fresh_pack = await self._context_builder.build(
                     user_id=run.user_id,
-                    query=(run.context_pack_json or {}).get("task_summary", "")[:500],
+                    query=_prior.get("task_summary", "")[:500],
                     workspace_id=run.workspace_id,
                 )
                 run.context_pack_json = fresh_pack.model_dump()
-                from src.services.run_detail_store import RunDetailStore
-
                 await RunDetailStore(self._db).upsert_context_pack(
                     run.run_id, run.workspace_id, fresh_pack.model_dump()
                 )

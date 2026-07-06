@@ -22,6 +22,20 @@ from ._shared import (
 logger = logging.getLogger(__name__)
 
 
+async def _load_context_pack(db, run) -> dict:
+    """Dual-read (Step 5, D-C4): prefer RunDetailStore, fall back to the run's old
+    context_pack_json column for a run with no detail row yet (pre-cutover gap).
+    Post-contract (column dropped) the getattr fallback is simply None -> {}."""
+    if run is None:
+        return {}
+    from src.services.run_detail_store import RunDetailStore
+
+    pack = await RunDetailStore(db).get_context_pack(run.run_id)
+    if pack is not None:
+        return pack
+    return getattr(run, "context_pack_json", None) or {}
+
+
 async def build_plan_overview(db: AsyncSession, surface: Any, **kwargs: Any) -> DetailTabResponse:
     """Plan overview — TaskRun + TaskSteps with statuses."""
     from src.models.task_graph import TaskRun, TaskStep
@@ -83,7 +97,7 @@ async def build_plan_context(db: AsyncSession, surface: Any, **kwargs: Any) -> D
     if run_id:
         run_result = await db.execute(select(TaskRun).where(TaskRun.run_id == run_id))
         run = run_result.scalar_one_or_none()
-        ctx = (run.context_pack_json if run else None) or {}
+        ctx = await _load_context_pack(db, run)
 
         if ctx.get("memories"):
             mem_children = [
