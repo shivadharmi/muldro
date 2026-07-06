@@ -82,6 +82,7 @@ class JarvisOrchestrator:
         settings: Settings,
         db_factory,
         services: ServiceContainer,
+        checkpointer_provider=None,
     ):
         self._settings = settings
         self._db_factory = db_factory
@@ -122,6 +123,8 @@ class JarvisOrchestrator:
         # AgentInvoker runs a single sub-agent through the agent loop — shared by
         # the chat (streaming) and perception (batch) paths. Depends on the tool
         # executor + context assembler; agent set is kept in sync via set_agents().
+        # checkpointer_provider: zero-arg callable → durable LangGraph checkpointer
+        # (Step 6A.5); None/default falls back to MemorySaver inside the invoker.
         self._invoker = AgentInvoker(
             settings,
             self._client,
@@ -132,6 +135,7 @@ class JarvisOrchestrator:
             self._tool_executor,
             self._context,
             self._agents,
+            checkpointer_provider=checkpointer_provider,
         )
         # ConnectorPoller owns connector polling, raw-event ingest, and cursor
         # I/O — the connector-facing half of each perception cycle.

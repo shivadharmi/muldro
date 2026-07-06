@@ -48,13 +48,17 @@ class ChatRequest(BaseModel):
     conversation_id: str | None = None
 
 
-def _build_orchestrator(settings: Settings):
+def _build_orchestrator(settings: Settings, checkpointer_provider=None):
     """Build the process-wide orchestrator with session-free shared services.
 
     The orchestrator holds only the shared singletons (``build_shared``); every
     DB-bound service is built per request against a fresh ``AsyncSession`` via
     ``JarvisOrchestrator._request_services``. This avoids sharing one
     long-lived session across concurrent chat requests (P2 #4).
+
+    ``checkpointer_provider`` is a zero-arg callable that returns the durable
+    LangGraph checkpointer from ``app.state.deep_checkpointer`` (Step 6A.5).
+    None (default) falls back to MemorySaver inside AgentInvoker.
     """
     from src.models.database import get_session_factory
     from src.orchestrator.jarvis import JarvisOrchestrator
@@ -75,6 +79,7 @@ def _build_orchestrator(settings: Settings):
         settings=settings,
         db_factory=db_factory,
         services=svc,
+        checkpointer_provider=checkpointer_provider,
     )
 
 
@@ -83,10 +88,20 @@ _orchestrator = None
 _module_shared_redis: list = []  # shared Redis client(s) to close at shutdown
 
 
-async def _get_orchestrator(settings: Settings):
+async def _get_orchestrator(settings: Settings, app=None):
+    """Return the process-wide orchestrator, building it on first call.
+
+    ``app`` — the FastAPI application instance; when provided, the deep-runtime
+    checkpointer is read from ``app.state.deep_checkpointer`` so the durable
+    saver (opened at lifespan) is threaded into the invoker without a module
+    global. Omitting ``app`` (e.g. non-chat call sites) falls back to None.
+    """
     global _orchestrator
     if _orchestrator is None:
-        _orchestrator = _build_orchestrator(settings)
+        provider = (
+            (lambda: getattr(app.state, "deep_checkpointer", None)) if app is not None else None
+        )
+        _orchestrator = _build_orchestrator(settings, checkpointer_provider=provider)
         await _orchestrator.load_agents_from_db()
     return _orchestrator
 
@@ -134,7 +149,7 @@ async def chat_stream(
       - error: {code, message, correlation_id}  — client-safe (no raw exception)
       - done: {trace_id}
     """
-    orchestrator = await _get_orchestrator(settings)
+    orchestrator = await _get_orchestrator(settings, app=request.app)
 
     # Resolve or create conversation
     conversation_id = req.conversation_id

@@ -66,6 +66,24 @@ def create_app() -> FastAPI:
             logger.warning("Redis unavailable — using in-memory fallback for rate limiting")
             app.state.redis = None
 
+        # Initialize durable deep-runtime checkpointer (Step 6A.5).
+        # Gated on runtime=="deep" so the psycopg3 pool never opens on legacy.
+        app.state.deep_checkpointer = None
+        app.state.deep_checkpointer_pool = None
+        if settings.runtime == "deep":
+            try:
+                from src.deep_runtime.checkpointer import build_async_postgres_saver
+
+                saver, pool = await build_async_postgres_saver(settings.database_url)
+                app.state.deep_checkpointer = saver
+                app.state.deep_checkpointer_pool = pool
+                logger.info("[deep_runtime] durable checkpointer ready at lifespan")
+            except Exception:
+                logger.error(
+                    "[deep_runtime] checkpointer init failed — falling back to MemorySaver",
+                    exc_info=True,
+                )
+
         # Initialize surface registry
         from src.services.surface_registry import SurfaceRegistry
 
@@ -337,6 +355,14 @@ def create_app() -> FastAPI:
             logger.info("Orchestrator shut down")
         except Exception:
             logger.debug("Orchestrator shutdown failed", exc_info=True)
+
+        # Shutdown: close the deep-runtime psycopg3 pool (if opened at startup).
+        if getattr(app.state, "deep_checkpointer_pool", None):
+            try:
+                await app.state.deep_checkpointer_pool.close()
+                logger.info("[deep_runtime] checkpointer pool closed")
+            except Exception:
+                logger.debug("deep_checkpointer_pool close failed", exc_info=True)
 
         # Shutdown: dispose DB engine pool (returns all connections)
         try:
