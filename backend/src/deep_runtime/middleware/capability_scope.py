@@ -25,6 +25,7 @@ import logging
 from langchain.agents.middleware import AgentMiddleware, wrap_tool_call
 from langchain_core.messages import ToolMessage
 
+from src.deep_runtime.builtins import DEEPAGENTS_BUILTIN_NAMES
 from src.orchestrator.agents import SubAgent
 from src.services.tool_registry import ToolRegistry
 
@@ -93,6 +94,11 @@ def make_capability_scope_middleware(
     @wrap_tool_call
     async def capability_scope_guard(request, handler):
         tool_name = request.tool_call["name"]
+        # deepagents built-ins (write_todos, ls, read_file, …) are auto-installed
+        # framework scaffolding that Jarvis cannot drop.  They are NOT Jarvis registry
+        # tools, so skip the capability lookup and let them run their own bodies.
+        if tool_name in DEEPAGENTS_BUILTIN_NAMES:
+            return await handler(request)
         if await _is_in_scope(tool_name, agent, workspace_id, db_factory):
             return await handler(request)
 
