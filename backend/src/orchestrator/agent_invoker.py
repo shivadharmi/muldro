@@ -270,6 +270,11 @@ class AgentInvoker:
             )
             config = {"configurable": {"thread_id": thread_id}}
             graph_input = {"messages": [{"role": "user", "content": message}]}
+            # durability="sync" keeps the build/stream path uniform across direct and gated
+            # turns (required so a gated interrupt's checkpoint commits BEFORE the
+            # approval_needed frame). It is frame-neutral and a no-op on the live MemorySaver
+            # default; with a durable saver a non-pausing direct turn commits each superstep
+            # synchronously — a minor, accepted latency cost for one shared stream path.
             async for frame in stream_deep_agent_events(
                 deep_agent,
                 graph_input,
