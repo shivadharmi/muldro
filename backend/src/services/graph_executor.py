@@ -413,6 +413,11 @@ class GraphExecutor:
                     workspace_id=run.workspace_id,
                 )
                 run.context_pack_json = fresh_pack.model_dump()
+                from src.services.run_detail_store import RunDetailStore
+
+                await RunDetailStore(self._db).upsert_context_pack(
+                    run.run_id, run.workspace_id, fresh_pack.model_dump()
+                )
                 logger.info(
                     "Refreshed stale context for run %s (paused %ds)",
                     run_id,

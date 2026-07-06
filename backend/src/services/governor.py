@@ -106,6 +106,15 @@ class Governor:
         )
         self._db.add(run)
 
+        from src.services.run_detail_store import RunDetailStore
+
+        await self._db.flush()  # ensure the run row exists for the task_run_details FK
+        await RunDetailStore(self._db).upsert_policy_decision(
+            run_id,
+            workspace_id,
+            {"decision": policy_decision, "risk_level": plan.risk_level or "low"},
+        )
+
         plan.status = "policy_checked"
         plan.execution_mode = policy_decision
 

@@ -74,6 +74,11 @@ class StepGraphStore:
                 prompt = ContextBuilder.to_prompt(pack)
                 if prompt:
                     run.context_pack_json = pack.model_dump()
+                    from src.services.run_detail_store import RunDetailStore
+
+                    await RunDetailStore(self._db).upsert_context_pack(
+                        run.run_id, run.workspace_id, pack.model_dump()
+                    )
             except Exception:
                 logger.debug("ContextBuilder failed at run creation", exc_info=True)
 
