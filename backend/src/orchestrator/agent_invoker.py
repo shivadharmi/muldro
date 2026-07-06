@@ -21,8 +21,10 @@ from langgraph.checkpoint.memory import MemorySaver
 from src.config.models import BEDROCK_MODEL_TIERS, MODEL_TIERS
 from src.config.settings import Settings
 from src.deep_runtime.agent_builder import build_deep_agent
-from src.deep_runtime.prompt_bridge import flatten_system_blocks
+from src.deep_runtime.middleware.jarvis_tool_dispatcher import make_jarvis_tool_dispatcher
+from src.deep_runtime.prompt_bridge import build_system_message
 from src.deep_runtime.stream_adapter import stream_deep_agent_events
+from src.deep_runtime.tool_bridge import build_tool_shells
 from src.errors import _GENERIC_CODE, _GENERIC_MESSAGE, new_correlation_id
 from src.middleware.observability import get_correlation_id
 from src.models.ids import generate_id
@@ -61,7 +63,15 @@ class AgentInvoker:
         tool_executor: ToolExecutor,
         context: ContextAssembler,
         agents: dict[str, SubAgent],
+        checkpointer_provider=None,
     ):
+        """Initialise the invoker.
+
+        ``checkpointer_provider`` is a zero-arg callable that returns a LangGraph
+        checkpointer for the deep runtime (Step 6A.5). Defaults to a no-op that lets
+        the deep branch fall back to ``MemorySaver``; replaced at lifespan with a
+        durable backend when 6B lands.
+        """
         self._settings = settings
         self._client = client
         self._services = services
@@ -71,6 +81,7 @@ class AgentInvoker:
         self._tool_executor = tool_executor
         self._context = context
         self._agents = agents
+        self._checkpointer_provider = checkpointer_provider or (lambda: None)
 
     @property
     def _db_factory(self):
@@ -171,19 +182,25 @@ class AgentInvoker:
 
         AGENT_RUNTIME_CALLS.labels(runtime=self._settings.runtime).inc()
         if self._settings.runtime == "deep":
-            # Step 6A runtime foundation: run the already-routed chat agent on the Deep
-            # Agents runtime instead of agent_loop. NOTE (6A limitation): `tools` here are
-            # the legacy Anthropic tool-schema dicts (cache_control-tagged), NOT LangChain
-            # tools — end-to-end tool execution on the deep path needs a Jarvis->LangChain
-            # tool bridge (a later task, out of 6A scope). The branch is behind
-            # JARVIS_RUNTIME=deep (default legacy), so this is dormant until explicitly flipped.
+            # Step 6A.5: run the routed chat agent on the Deep Agents runtime. Jarvis tools
+            # are inert schema shells; the jarvis_tool_dispatcher middleware centrally routes
+            # each call through execute_tool (capability_scope stays a separate outer guard).
+            # A structured SystemMessage keeps the soul/role cache breakpoint; the durable
+            # checkpointer falls back to an in-process saver until wired at lifespan.
+            shells = build_tool_shells(tools)
+            dispatcher = make_jarvis_tool_dispatcher(
+                execute_tool=self._tool_executor.execute_tool,
+                user_id=user_id,
+                workspace_id=workspace_id,
+            )
             deep_agent = await build_deep_agent(
                 agent,
-                tools,
+                shells,
                 workspace_id=workspace_id,
                 db_factory=self._db_factory,
-                system_prompt=flatten_system_blocks(system_blocks),
-                checkpointer=MemorySaver(),
+                extra_middleware=(dispatcher,),
+                system_prompt=build_system_message(system_blocks),
+                checkpointer=self._checkpointer_provider() or MemorySaver(),
             )
             config = {"configurable": {"thread_id": generate_id("chat")}}
             graph_input = {"messages": [{"role": "user", "content": message}]}
