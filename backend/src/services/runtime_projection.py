@@ -1,10 +1,14 @@
-"""Runtime projection service — derives live system state from TaskRun/TaskStep/events.
+"""Runtime projection service — audience-scoped READ/analytics projections.
 
-Provides the read-model for:
+These are derived read models for UI/history/analytics over the mutable
+``TaskRun``/``TaskStep`` rows (and ``ModelCall`` for workload) — NOT execution
+truth (execution control-flow reads stay read-your-writes; see the class docstring,
+Step 5 §4.8). Provides the read-model for:
 - Active runs and their current stage
 - Blocked runs awaiting approval or input
 - Agent workload distribution
-- Route quality metrics
+- ``rebuild_run_projection``: proves the ``runtime_events`` log is a faithful
+  system-of-record for the run-status projection (seq-ordered replay).
 """
 
 import logging
