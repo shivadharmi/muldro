@@ -26,7 +26,6 @@ _FAMILY_DISPLAY: dict[str, str] = {
     "messaging": "messaging — Slack",
     "browser": "browser — Playwright",
     "search": "search — Web",
-    "filesystem": "filesystem — Local Files",
     "internal": "internal",
     "system": "system",
 }

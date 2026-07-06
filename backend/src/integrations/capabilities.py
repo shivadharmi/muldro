@@ -33,7 +33,6 @@ class CapabilityFamily(StrEnum):
     BROWSER = "browser"
     SEARCH = "search"
     INTERNAL = "internal"
-    FILESYSTEM = "filesystem"
     SYSTEM = "system"
 
 
@@ -167,13 +166,6 @@ CAPABILITY_CATALOG: dict[str, CapabilityMeta] = {
     "doc.drive_search": _cap(CapabilityFamily.DOC, True),
     "doc.drive_create": _cap(CapabilityFamily.DOC, False, "medium"),
     "doc.drive_delete": _cap(CapabilityFamily.DOC, False, "critical"),
-    # Filesystem
-    "filesystem.read": _cap(CapabilityFamily.FILESYSTEM, True),
-    "filesystem.read_media": _cap(CapabilityFamily.FILESYSTEM, True),
-    "filesystem.write": _cap(CapabilityFamily.FILESYSTEM, False, "high"),
-    "filesystem.move": _cap(CapabilityFamily.FILESYSTEM, False, "high"),
-    "filesystem.list": _cap(CapabilityFamily.FILESYSTEM, True),
-    "filesystem.search": _cap(CapabilityFamily.FILESYSTEM, True),
     # Browser (new — additions to existing browser family)
     "browser.execute": _cap(CapabilityFamily.BROWSER, False, "high"),
     "browser.install": _cap(CapabilityFamily.BROWSER, False, "medium"),

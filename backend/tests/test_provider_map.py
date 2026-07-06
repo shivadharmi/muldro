@@ -66,7 +66,7 @@ class TestProviderForServer:
         assert provider_for_server("atlassian") == "atlassian"
 
     def test_unknown_server_returns_itself(self):
-        assert provider_for_server("filesystem") == "filesystem"
+        assert provider_for_server("custom_server") == "custom_server"
 
 
 class TestSourcesForProvider:

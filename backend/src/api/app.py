@@ -107,18 +107,6 @@ def create_app() -> FastAPI:
                 exc_info=True,
             )
 
-        # Ensure filesystem MCP root exists before the server is spawned per workspace.
-        try:
-            from pathlib import Path
-
-            from src.integrations.seed_installations import _filesystem_mcp_root
-
-            fs_root = Path(_filesystem_mcp_root())
-            fs_root.mkdir(parents=True, exist_ok=True)
-            logger.info("Filesystem MCP root ready: %s", fs_root)
-        except Exception:
-            logger.warning("Failed to prepare filesystem MCP root", exc_info=True)
-
         # Re-seed integration installations for all workspaces.
         # Installation configs (transport, auth_provider, remote_url) change with
         # code updates but the DB records persist from initial provisioning.

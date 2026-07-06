@@ -183,14 +183,14 @@ def test_special_tool_properties():
 
 
 def test_external_tool_seeds_count():
-    """Verify exactly 120 external tool seeds are registered."""
-    assert len(EXTERNAL_TOOL_SEEDS) == 120
+    """Verify exactly 106 external tool seeds are registered."""
+    assert len(EXTERNAL_TOOL_SEEDS) == 106
 
 
 def test_verified_seeds_count():
-    """Verify exactly 76 seeds are verified."""
+    """Verify exactly 62 seeds are verified."""
     verified = get_verified_seeds()
-    assert len(verified) == 76
+    assert len(verified) == 62
 
 
 def test_no_duplicate_external_names_per_server():
@@ -225,7 +225,6 @@ def test_seeds_for_server_counts():
         "slack": 8,
         "notion": 22,
         "playwright": 22,
-        "filesystem": 14,
         "atlassian": 13,
         "_composite": 1,
     }
@@ -252,7 +251,7 @@ def test_get_seeds_for_server_helper():
 def test_get_verified_seeds_helper():
     """Verify get_verified_seeds only returns verified=True entries."""
     verified = get_verified_seeds()
-    assert len(verified) == 76
+    assert len(verified) == 62
 
     # All returned seeds should be verified
     for seed in verified:
@@ -260,7 +259,7 @@ def test_get_verified_seeds_helper():
 
     # Verify expected servers are present in verified seeds
     verified_servers = {seed.server for seed in verified}
-    expected_verified = {"notion", "playwright", "filesystem", "google-workspace"}
+    expected_verified = {"notion", "playwright", "google-workspace"}
     assert expected_verified.issubset(verified_servers)
 
     # Verify unverified servers are NOT in verified seeds
@@ -277,7 +276,6 @@ def test_seed_server_names_match_installations():
         "slack",
         "notion",
         "playwright",
-        "filesystem",
         "atlassian",
         "_composite",  # special case for composite tools
     }
@@ -298,7 +296,7 @@ def test_verified_tool_servers():
     """Verify exactly 4 servers have verified tools."""
     verified = get_verified_seeds()
     verified_servers = {seed.server for seed in verified}
-    assert verified_servers == {"notion", "playwright", "filesystem", "google-workspace"}
+    assert verified_servers == {"notion", "playwright", "google-workspace"}
 
 
 def test_composite_tools():

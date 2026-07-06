@@ -92,9 +92,6 @@ class TestFamilyDisplayName:
     def test_search(self):
         assert _family_display_name("search") == "search — Web"
 
-    def test_filesystem(self):
-        assert _family_display_name("filesystem") == "filesystem — Local Files"
-
     def test_internal(self):
         assert _family_display_name("internal") == "internal"
 

@@ -114,7 +114,6 @@ def test_downward_risk_divergence_is_allowlisted():
         "batch_modify_gmail_message_labels": ("medium", "high"),
         "manage_gmail_filter": ("medium", "high"),
         "manage_gmail_label": ("medium", "high"),
-        "create_directory": ("medium", "high"),
         "browser_tabs": ("low", "medium"),
         "browser_close": ("low", "medium"),
         "browser_resize": ("low", "medium"),

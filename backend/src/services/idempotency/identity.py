@@ -103,8 +103,6 @@ POSITIONAL_KEY_ACCEPTED: frozenset[str] = frozenset(
         "messaging.send_template",
         "messaging.post",
         "messaging.share",
-        "filesystem.write",
-        "filesystem.move",
         "browser.open",
         "browser.click",
         "browser.type",

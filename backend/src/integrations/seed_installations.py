@@ -5,8 +5,6 @@ workspace-scoped DB rows managed by the IntegrationControlPlane.
 """
 
 import logging
-import os
-from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,17 +14,6 @@ from src.models.integration_installation import IntegrationInstallation
 from src.models.server_trust import ServerTrustRecord
 
 logger = logging.getLogger(__name__)
-
-_DEFAULT_FILESYSTEM_ROOT = str(Path.home() / "jarvis-workspace")
-
-
-def _filesystem_mcp_root() -> str:
-    """Root directory exposed to the filesystem MCP server.
-
-    Configurable via JARVIS_FILESYSTEM_MCP_ROOT; defaults to ~/jarvis-workspace
-    (persists across reboots, unlike /tmp on many systems).
-    """
-    return os.environ.get("JARVIS_FILESYSTEM_MCP_ROOT", "") or _DEFAULT_FILESYSTEM_ROOT
 
 
 async def _clear_stale_tool_schemas(db: AsyncSession, server_name: str, workspace_id: str) -> None:
@@ -135,16 +122,6 @@ _DEFAULT_INSTALLATIONS: list[dict] = [
             "browser.submit",
             "browser.screenshot",
         ],
-    },
-    {
-        "server_name": "filesystem",
-        "display_name": "Filesystem",
-        "transport": "stdio",
-        "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-filesystem@2026.1.14", _filesystem_mcp_root()],
-        "env_template": {},
-        "auth_provider": None,
-        "scopes_granted": [],
     },
     {
         "server_name": "notion",

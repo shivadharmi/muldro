@@ -57,9 +57,6 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "workflow.get",
         "workflow.search",
         "workflow.get_teams",
-        "filesystem.read",
-        "filesystem.list",
-        "filesystem.search",
         # Internal observation tools
         "internal.ingest_event",
         "internal.report_observation",

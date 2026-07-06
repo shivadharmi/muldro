@@ -850,7 +850,7 @@ def _requires_stdio_token(server_name: str, config: dict) -> bool:
 
     A server is token-required when it has an env-var mapping (directly or via
     its inferred provider) — i.e. spawning it without a token guarantees a
-    fatal crash. No-auth stdio servers (filesystem, playwright; auth_provider
+    fatal crash. No-auth stdio servers (e.g. playwright; auth_provider
     "none") have no mapping and are excluded.
     """
     if config.get("auth_provider", "none") == "none":

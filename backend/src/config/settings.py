@@ -171,10 +171,6 @@ class Settings(BaseSettings):
     # Default legacy so the Deep Agents path is dormant until explicitly enabled.
     runtime: str = "legacy"  # JARVIS_RUNTIME
 
-    # Filesystem MCP server root directory (seeded into filesystem installation args).
-    # Created at app startup if missing. Defaults to ~/jarvis-workspace.
-    filesystem_mcp_root: str = ""
-
     # Webhook / push-notification infrastructure (OPTIONAL — empty = poll-only).
     # When unset, webhook registration is a graceful no-op and the system stays
     # poll-only exactly as before. All three must be satisfied (see
