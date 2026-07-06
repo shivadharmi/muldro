@@ -378,7 +378,9 @@ class GraphExecutor:
                 try:
                     await self._db.flush()
                 except Exception:
-                    pass
+                    logger.debug(
+                        "Mark-failed probe flush failed; session likely poisoned", exc_info=True
+                    )
                 if not self._db.is_active:
                     await self._db.rollback()
                     await self._db.refresh(run)
@@ -522,7 +524,9 @@ class GraphExecutor:
             try:
                 await self._db.flush()
             except Exception:
-                pass
+                logger.debug(
+                    "Mark-failed probe flush failed; session likely poisoned", exc_info=True
+                )
             if not self._db.is_active:
                 await self._db.rollback()
                 await self._db.refresh(run)
