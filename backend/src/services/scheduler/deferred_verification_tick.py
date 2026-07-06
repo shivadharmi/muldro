@@ -86,13 +86,19 @@ async def _apply_recheck(db, run, step, verdict: VerifyVerdict, *, notifier) -> 
         # trust write must never fail an otherwise-successful confirmation.
         if capability:
             try:
-                await record_approval_decision(
-                    db,
-                    run.workspace_id or "",
-                    capability,
-                    meta.get("risk_level", "high"),
-                    "approved",
-                )
+                # SAVEPOINT: a failed trust write (e.g. a flush inside
+                # record_approval_decision) must roll back only this nested
+                # transaction, never poison the shared session's later flush/commit
+                # (mirrors the Step-4 reconcile fix). A best-effort trust increment
+                # must never fail an otherwise-successful confirmation.
+                async with db.begin_nested():
+                    await record_approval_decision(
+                        db,
+                        run.workspace_id or "",
+                        capability,
+                        meta.get("risk_level", "high"),
+                        "approved",
+                    )
             except Exception:
                 logger.debug("Deferred trust increment failed for %s", step.step_id, exc_info=True)
         await db.flush()
