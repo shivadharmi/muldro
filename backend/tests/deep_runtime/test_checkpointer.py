@@ -31,16 +31,14 @@ def _db_reachable() -> bool:
         return False
 
 
-pytestmark = pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
-
-
 def test_to_psycopg_dsn_strips_asyncpg() -> None:
-    """Unit test — no DB needed (module-level skip applies but asyncpg probe is fast)."""
+    """Unit test — no DB needed; always runs regardless of Postgres availability."""
     assert to_psycopg_dsn("postgresql+asyncpg://u:p@h/db") == "postgresql://u:p@h/db"
     # Idempotent: already-plain DSN is unchanged.
     assert to_psycopg_dsn("postgresql://u:p@h/db") == "postgresql://u:p@h/db"
 
 
+@pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
 async def test_saver_round_trips_a_checkpoint() -> None:
     """Real-DB round-trip: setup() is idempotent and aput/aget_tuple work correctly."""
     database_url = get_settings().database_url
@@ -88,6 +86,7 @@ async def test_saver_round_trips_a_checkpoint() -> None:
         await pool.close()
 
 
+@pytest.mark.skipif(not _db_reachable(), reason="Postgres not reachable")
 async def test_build_is_idempotent() -> None:
     """setup() can be called twice without error (CREATE ... IF NOT EXISTS semantics)."""
     database_url = get_settings().database_url

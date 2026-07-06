@@ -7,7 +7,7 @@ from src.integrations.turn_scope import turn_scope
 async def test_session_create_and_reuse_tracked_in_turn_scope():
     pool = UserMCPSessionPool()
     pool.register_server_config(
-        "filesystem",
+        "example_stdio",
         {"transport": "stdio", "auth_provider": "none", "command": "x"},
         workspace_id="ws",
     )
@@ -24,7 +24,7 @@ async def test_session_create_and_reuse_tracked_in_turn_scope():
         patch.object(pool, "_register_discovered_tools", AsyncMock()),
     ):
         async with turn_scope(on_close=lambda keys: captured.append(keys)):
-            await pool.get_or_create_session("filesystem", user_id="u", workspace_id="ws")
-            await pool.get_or_create_session("filesystem", user_id="u", workspace_id="ws")
-    key = ("ws", "filesystem", "__shared__")
+            await pool.get_or_create_session("example_stdio", user_id="u", workspace_id="ws")
+            await pool.get_or_create_session("example_stdio", user_id="u", workspace_id="ws")
+    key = ("ws", "example_stdio", "__shared__")
     assert captured == [[key]]
