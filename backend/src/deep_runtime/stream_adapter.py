@@ -28,6 +28,17 @@ The 7 shapes (key-identical to the legacy LoopEvent → SSE mapping):
 6. ``agent_done``   — synthesized AT stream end from the summed telemetry.
 7. ``error``        — sanitized: the raw exception is logged, only a generic frame is
    emitted (a raising tool propagates out of ``astream`` and lands here).
+8. ``approval_needed`` — Step 6B: emitted when a ``wrap_tool_call`` gate (e.g.
+   ``trust_gate``) pauses the graph via ``interrupt()``. Empirically (Task-0 spike,
+   ``spikes/deep_stream/interrupt_resume_stream_proof.py``, langgraph 1.2.6) this
+   does NOT raise — ``astream`` yields an ``updates`` item shaped
+   ``{"__interrupt__": (Interrupt(value={...}),)}`` and then ends normally. The adapter
+   detects that item and yields this frame instead of falling through to a bogus
+   ``agent_done``. A ``GraphInterrupt`` except-clause is kept as a harmless
+   version-portability fallback (it does not fire on the currently installed
+   langgraph). This is a stream DICT frame only — the typed ``CoreEvent`` counterpart
+   in ``core_events.py`` and its HTTP-emission arms are deferred (Step 6B scope
+   lever B); do not add them here.
 
 is_thinking=False parity (spike concern #4): the LangGraph stream has no native signal
 for legacy's ``thinking{is_thinking=False}`` relabel of pre-tool plain text; per the
@@ -43,6 +54,7 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
+from langgraph.errors import GraphInterrupt
 
 from src.errors import _GENERIC_CODE, _GENERIC_MESSAGE, new_correlation_id
 from src.middleware.observability import get_correlation_id
@@ -51,6 +63,24 @@ from src.orchestrator.budget import BudgetTracker
 logger = logging.getLogger(__name__)
 
 _ZERO_USAGE: dict[str, int] = {"input": 0, "output": 0, "cache_creation": 0, "cache_read": 0}
+
+
+def _approval_needed_frame(agent_name: str, value: dict, config: dict) -> dict:
+    """Build the ``approval_needed`` frame from a gate's ``interrupt(...)`` payload.
+
+    ``value`` is the dict a ``wrap_tool_call`` gate (e.g. ``trust_gate``) passed to
+    ``interrupt(...)`` — see ``src/deep_runtime/middleware/trust_gate.py``. ``thread_id``
+    falls back to the LangGraph ``config`` when the gate payload omits it.
+    """
+    configurable = config.get("configurable", {}) or {}
+    return {
+        "event": "approval_needed",
+        "agent": agent_name,
+        "approval_id": value.get("approval_id"),
+        "thread_id": value.get("thread_id") or configurable.get("thread_id"),
+        "capability": value.get("capability"),
+        "risk_level": value.get("risk_level"),
+    }
 
 
 def _content_events(content: Any) -> list[tuple[str, str]]:
@@ -160,6 +190,13 @@ async def stream_deep_agent_events(
                         "latency_ms": max(0, int((time.monotonic() - started) * 1000)),
                     }
             elif mode == "updates":
+                if isinstance(payload, dict) and "__interrupt__" in payload:
+                    interrupts = payload["__interrupt__"]
+                    value = interrupts[0].value if interrupts else {}
+                    if not isinstance(value, dict):
+                        value = {}
+                    yield _approval_needed_frame(agent_name, value, config)
+                    return
                 for _node, update in (payload or {}).items():
                     if not isinstance(update, dict):
                         continue
@@ -179,6 +216,22 @@ async def stream_deep_agent_events(
                                 "tool": name,
                                 "input": call.get("args", {}),
                             }
+    except GraphInterrupt as gi:
+        # Version-portability fallback ONLY: on the currently installed langgraph
+        # (1.2.6) a gate's interrupt() does NOT raise — the "updates" branch above
+        # detects the "__interrupt__" item and returns before this except is ever
+        # reached (see the Task-0 spike). This clause exists so a future langgraph
+        # bump that starts raising GraphInterrupt can't silently fall through to the
+        # generic `except Exception` below and turn a pause into a client-visible
+        # "error" frame.
+        try:
+            value = gi.args[0][0].value
+        except (IndexError, AttributeError, TypeError):
+            value = {}
+        if not isinstance(value, dict):
+            value = {}
+        yield _approval_needed_frame(agent_name, value, config)
+        return
     except Exception as exc:  # noqa: BLE001 — sanitize any upstream failure into a safe frame.
         # exc may carry raw upstream detail (a raising tool propagates here under
         # deepagents' default ToolNode). Log it, but emit only a client-safe frame.
