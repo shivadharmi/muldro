@@ -58,15 +58,22 @@ from src.services.verification.predicate import is_write_verification_required
 logger = logging.getLogger(__name__)
 
 
-async def _resolve_capability(name: str, workspace_id: str, db_factory) -> str | None:
+async def _resolve_capability(name: str, workspace_id: str, db_factory) -> tuple[bool, str | None]:
     """Resolve *name* → capability via ONE short-lived registry lookup.
 
     Mirrors ``capability_scope._is_in_scope``: ``ToolRegistry(db, workspace_id or None)``
-    → ``get_tool(name)`` → ``tool.capability``. Returns ``None`` on any failure, unknown
-    tool, or missing capability — the caller treats ``None`` as "fall through and let the
-    tool run" (capability_scope has already authorized it; an unresolvable capability
-    must not silently block). The session is opened and CLOSED here, never held across
-    risk assessment or ``interrupt()``.
+    → ``get_tool(name)`` → ``tool.capability``. Returns ``(lookup_ok, capability)``:
+
+    * ``(True, "<capability>")`` — resolved (may be a read or a write capability);
+    * ``(True, None)`` — the lookup SUCCEEDED but the tool is unknown / has no capability.
+      This cannot happen on the gated path (the outer ``capability_scope`` guard already
+      denied such tools), so the caller falls through;
+    * ``(False, None)`` — the lookup ERRORED. The caller MUST fail CLOSED (block) — a gated
+      write must never execute ungated on a transient DB/registry failure, mirroring
+      ``capability_scope``'s fail-closed deny.
+
+    The session is opened and CLOSED here, never held across risk assessment or
+    ``interrupt()``.
     """
     try:
         async with db_factory() as db:
@@ -74,14 +81,14 @@ async def _resolve_capability(name: str, workspace_id: str, db_factory) -> str |
             tool = await registry.get_tool(name)
     except Exception:
         logger.warning(
-            "[deep_runtime] trust_gate capability lookup failed for %s — falling through",
+            "[deep_runtime] trust_gate capability lookup failed for %s — failing closed",
             name,
             exc_info=True,
         )
-        return None
+        return (False, None)
     if tool is None:
-        return None
-    return getattr(tool, "capability", None)
+        return (True, None)
+    return (True, getattr(tool, "capability", None))
 
 
 async def _decide_and_maybe_persist(
@@ -109,7 +116,9 @@ async def _decide_and_maybe_persist(
     """
     async with db_factory() as db:
         decision = await TrustEngine(db, workspace_id).evaluate(capability, risk, workspace_id)
-        matrix_requires = decision.decision == "approval_required"
+        # Fail closed: only the two explicit auto-execute verdicts skip approval; any other
+        # value (approval_required, or an unexpected/future decision) requires approval.
+        matrix_requires = decision.decision not in ("auto_execute_notify", "auto_execute_silent")
         irreversible_override = is_write_verification_required(capability, risk)
         require_approval = matrix_requires or irreversible_override
         if not require_approval:
@@ -201,7 +210,22 @@ def make_trust_gate_middleware(
         args = request.tool_call.get("args") or {}
 
         # Resolve capability in its own short-lived session (closed before risk/interrupt).
-        capability = await _resolve_capability(name, workspace_id, db_factory)
+        lookup_ok, capability = await _resolve_capability(name, workspace_id, db_factory)
+        if not lookup_ok:
+            # Fail CLOSED: a capability-lookup error on a gated write must never execute
+            # ungated (mirrors capability_scope's fail-closed deny). Block with an error.
+            logger.warning(
+                "[deep_runtime] trust_gate BLOCKED %s — capability lookup failed (fail-closed)",
+                name,
+            )
+            return ToolMessage(
+                content=json.dumps(
+                    {"error": "capability lookup failed — blocked (fail-closed)", "blocked": True}
+                ),
+                tool_call_id=tool_call_id,
+                name=name,
+                status="error",
+            )
         if not capability or is_read_only_capability(capability):
             return await handler(request)
 

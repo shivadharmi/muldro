@@ -310,7 +310,7 @@ async def test_gated_irreversible_write_forces_interrupt_then_approve_executes()
     cfg = {"configurable": {"thread_id": thread_id}}
 
     with (
-        patch(f"{MODULE}._resolve_capability", AsyncMock(return_value="email.send")),
+        patch(f"{MODULE}._resolve_capability", AsyncMock(return_value=(True, "email.send"))),
         patch(f"{MODULE}.TrustEngine", return_value=fake_te),
         patch(f"{MODULE}.create_approval", side_effect=fake_create_approval),
     ):
@@ -386,7 +386,7 @@ async def test_gated_write_reject_blocks():
     cfg = {"configurable": {"thread_id": thread_id}}
 
     with (
-        patch(f"{MODULE}._resolve_capability", AsyncMock(return_value="email.send")),
+        patch(f"{MODULE}._resolve_capability", AsyncMock(return_value=(True, "email.send"))),
         patch(f"{MODULE}.TrustEngine", return_value=fake_te),
         patch(f"{MODULE}.create_approval", side_effect=fake_create_approval),
     ):
@@ -431,7 +431,7 @@ async def test_auto_execute_when_trusted_and_reversible(handler):
         assess_risk=assess_risk,
     )
     with (
-        patch(f"{MODULE}._resolve_capability", AsyncMock(return_value="email.draft")),
+        patch(f"{MODULE}._resolve_capability", AsyncMock(return_value=(True, "email.draft"))),
         patch(f"{MODULE}.TrustEngine", return_value=fake_te),
         patch(f"{MODULE}.create_approval", create_approval_mock),
     ):
@@ -479,3 +479,65 @@ async def test_approval_persistence_is_idempotent_reuses_existing():
     assert require_approval is True
     assert approval_id == "apr_existing"
     create_approval_mock.assert_not_called()
+
+
+# ── Test 8: capability-lookup error fails CLOSED (blocks, no ungated execution) ─
+
+
+async def test_capability_lookup_error_fails_closed(handler):
+    """A capability-lookup ERROR on a gated write must fail CLOSED: the gate returns a
+    ToolMessage(status='error', blocked=True) and never runs the tool or assesses risk —
+    it must NOT fall through to ungated execution (mirrors capability_scope's deny)."""
+    assess_risk = AsyncMock(name="assess_risk")
+
+    mw = _gate(
+        authorization_source="autonomous",
+        db_factory=_sentinel_db_factory(),
+        assess_risk=assess_risk,
+    )
+    # ToolRegistry construction raises → _resolve_capability's except → (False, None).
+    with patch(f"{MODULE}.ToolRegistry", side_effect=RuntimeError("db down")):
+        result = await _hook(mw)(_request("send_email", {}, "c1"), handler)
+
+    handler.assert_not_awaited()
+    assess_risk.assert_not_awaited()
+    assert isinstance(result, ToolMessage)
+    assert result.status == "error"
+    assert result.tool_call_id == "c1"
+    payload = json.loads(result.content)
+    assert payload.get("blocked") is True
+
+
+# ── Test 9: an unexpected PolicyDecision value fails CLOSED to approval ───────
+
+
+async def test_unexpected_decision_requires_approval_fail_closed():
+    """A reversible-internal write (no irreversible override) whose trust decision is an
+    unexpected value ('blocked') must still require approval — the auto-execute allowlist
+    fails closed (only the two explicit auto-execute verdicts skip approval)."""
+    risk = RiskAssessment(risk_level="low", reasoning="x", reversible=True, blast_radius="internal")
+    fake_te = MagicMock()
+    fake_te.evaluate = AsyncMock(
+        return_value=SimpleNamespace(decision="blocked", justification="j")
+    )
+    create_approval_mock = AsyncMock(return_value=SimpleNamespace(approval_id="apr_new"))
+
+    with (
+        patch(f"{MODULE}.TrustEngine", return_value=fake_te),
+        patch(f"{MODULE}.create_approval", create_approval_mock),
+    ):
+        require_approval, approval_id = await _decide_and_maybe_persist(
+            name="draft_email",
+            capability="email.draft",
+            risk=risk,
+            workspace_id=WORKSPACE_ID,
+            user_id=USER_ID,
+            thread_id=THREAD_ID,
+            tool_call_id="call_x",
+            agent_name="operator",
+            db_factory=_persist_db_factory(),
+        )
+
+    assert require_approval is True
+    assert approval_id == "apr_new"
+    create_approval_mock.assert_awaited_once()
