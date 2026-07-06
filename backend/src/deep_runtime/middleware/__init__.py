@@ -13,6 +13,7 @@ is built per turn. See ``docs/deep-agents-migration-assessment.md`` Part F (Phas
 
 from src.deep_runtime.middleware.budget import make_budget_middleware
 from src.deep_runtime.middleware.capability_scope import make_capability_scope_middleware
+from src.deep_runtime.middleware.jarvis_tool_dispatcher import make_jarvis_tool_dispatcher
 from src.deep_runtime.middleware.unavailable_server import (
     make_unavailable_server_middleware,
 )
@@ -20,5 +21,6 @@ from src.deep_runtime.middleware.unavailable_server import (
 __all__ = [
     "make_budget_middleware",
     "make_capability_scope_middleware",
+    "make_jarvis_tool_dispatcher",
     "make_unavailable_server_middleware",
 ]
