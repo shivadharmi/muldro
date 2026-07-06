@@ -252,30 +252,31 @@ class AgentInvoker:
 
         AGENT_RUNTIME_CALLS.labels(runtime=self._settings.runtime).inc()
         if self._settings.runtime == "deep":
-            # Step 6A.5: run the routed chat agent on the Deep Agents runtime. Jarvis tools
-            # are inert schema shells; the jarvis_tool_dispatcher middleware centrally routes
-            # each call through execute_tool (capability_scope stays a separate outer guard).
-            # A structured SystemMessage keeps the soul/role cache breakpoint; the durable
-            # checkpointer falls back to an in-process saver until wired at lifespan.
-            shells = build_tool_shells(tools)
-            dispatcher = make_jarvis_tool_dispatcher(
-                execute_tool=self._tool_executor.execute_tool,
+            # Step 6B: the routed chat agent runs on the Deep Agents runtime through the
+            # single gated build path (``_build_deep_agent_for``, shared with the resume
+            # seam). On live chat authorization_source is direct_user_request, so trust_gate
+            # SHORT-CIRCUITS (dormant) — byte-identical to today; the gate only activates for
+            # non-direct provenance (6C). thread_id is minted ONCE and shared by both the
+            # graph config and the gate closure so a paused turn is resumable.
+            thread_id = generate_id("chat")
+            deep_agent = await self._build_deep_agent_for(
+                agent,
+                tools,
                 user_id=user_id,
                 workspace_id=workspace_id,
-            )
-            deep_agent = await build_deep_agent(
-                agent,
-                shells,
-                workspace_id=workspace_id,
-                db_factory=self._db_factory,
-                extra_middleware=(dispatcher,),
+                thread_id=thread_id,
+                authorization_source=AuthorizationSource.DIRECT_USER_REQUEST,
                 system_prompt=build_system_message(system_blocks),
-                checkpointer=self._checkpointer_provider() or MemorySaver(),
             )
-            config = {"configurable": {"thread_id": generate_id("chat")}}
+            config = {"configurable": {"thread_id": thread_id}}
             graph_input = {"messages": [{"role": "user", "content": message}]}
             async for frame in stream_deep_agent_events(
-                deep_agent, graph_input, config, agent_name=agent_name, model=model
+                deep_agent,
+                graph_input,
+                config,
+                agent_name=agent_name,
+                model=model,
+                durability="sync",
             ):
                 yield frame
             return
