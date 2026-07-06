@@ -280,6 +280,7 @@ Single deterministic approval gate via `TrustEngine` (`src/services/trust_engine
 - **Autonomous path** (`graph_executor.py`): multi-step / risky plans (and all scheduler/perception-triggered runs) are persisted as DB `Plan`s and executed through GraphExecutor, where **TrustEngine gates every step**.
 - **Compensating control on the chat path (ORCH-P0-1):** `agent_loop._capability_in_scope()` enforces capability-scope at tool-execution time, so even ungated, a chat-routed agent can only call tools within its `capability_scope` (fail-closed for known capabilities). This is what keeps the ungated path safe.
 - **Latent enhancement (not yet implemented):** if a chat turn's write step was triggered by *perception-sourced* content rather than the user's literal words, gating it would be defensible. Tracked, not built.
+- **Step 6A (runtime swap):** The chat path can run on the Deep Agents runtime via `JARVIS_RUNTIME=deep` (default `legacy` = unchanged agent_loop). This is a per-streaming-call switch in `AgentInvoker.call_agent_stream` that reproduces the SSE contract; the interrupt gate, kill-Operator, and trust relocation land in 6B/6C. No gate fires on the deep path in 6A.
 
 **Key files:** `src/services/risk_assessor.py`, `src/services/trust_engine.py`, `src/models/trust_state.py` (TrustState + TrustCeiling), `src/api/routes_trust.py`
 

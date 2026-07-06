@@ -42,6 +42,7 @@ from src.orchestrator.context_assembler import ContextAssembler
 from src.orchestrator.prompts import JARVIS_SOUL_CORE
 from src.orchestrator.services import ServiceContainer
 from src.orchestrator.tool_executor import ToolExecutor
+from src.services.metrics_service import AGENT_RUNTIME_CALLS
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +169,7 @@ class AgentInvoker:
             agent, context_block, capability_summary=capability_summary
         )
 
+        AGENT_RUNTIME_CALLS.labels(runtime=self._settings.runtime).inc()
         if self._settings.runtime == "deep":
             # Step 6A runtime foundation: run the already-routed chat agent on the Deep
             # Agents runtime instead of agent_loop. NOTE (6A limitation): `tools` here are

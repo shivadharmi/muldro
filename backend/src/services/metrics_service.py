@@ -32,6 +32,11 @@ AGENT_CALLS = Counter(
     "Total agent calls",
     ["agent_name", "model"],
 )
+AGENT_RUNTIME_CALLS = Counter(
+    "jarvis_agent_runtime_calls_total",
+    "Streaming agent calls by execution runtime (legacy agent_loop vs deep Deep-Agents)",
+    ["runtime"],
+)
 TOOL_CALLS = Counter(
     "jarvis_tool_calls_total",
     "Total tool calls",
@@ -121,6 +126,10 @@ class MetricsService:
     def record_agent_call(agent_name: str, model: str, duration_ms: float) -> None:
         AGENT_CALLS.labels(agent_name=agent_name, model=model).inc()
         AGENT_CALL_LATENCY.labels(agent_name=agent_name).observe(duration_ms / 1000)
+
+    @staticmethod
+    def record_runtime_call(runtime: str) -> None:
+        AGENT_RUNTIME_CALLS.labels(runtime=runtime).inc()
 
     @staticmethod
     def record_event_processing(source: str, duration_ms: float) -> None:
