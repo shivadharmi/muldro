@@ -56,11 +56,11 @@ uv run pytest tests/ --ignore=tests/e2e         # baseline: 3110 passed / 18 ski
 - **D1 — 6A is a per-agent runtime swap, not the single-lead collapse.** Behind `JARVIS_RUNTIME="deep"`, the *already-routed* chat agent (perceiver/librarian/operator/presenter/planner) runs on `build_deep_agent` instead of `agent_loop`. Orchestration (planner→route→per-step→presenter) is UNCHANGED. Operator still exists (killed in 6C). This bounds blast radius and lets the runtime land "once."
 - **D2 — One seam covers stream + batch.** Branch inside `call_agent_stream` only. `process_message` (batch) consumes `call_agent_stream` transitively, so no separate batch branch.
 - **D3 — The 7 SSE dict shapes are the contract.** The adapter's acceptance test asserts the deep path emits dicts with identical keys/types to the legacy path. Downstream (`agent_event_from_sse`, `core_event_to_sse`, `routes_chat`) is UNTOUCHED.
-- **D4 — `checkpointer=` lands in 6A but no gate fires.** 6A forwards `checkpointer` to `create_deep_agent` so 6B can raise `interrupt()`. In 6A, chat turns pass an in-memory checkpointer (or `None`); no interrupt topology yet. (Durable AsyncPostgresSaver is Step 10; 6A's chat cutover is interactive — an in-process `MemorySaver` per turn is sufficient and is what 6B's interactive approval will use.)
+- **D4 — `checkpointer=` lands in 6A but no gate fires; the durable choice is 6B's (do NOT pre-decide here).** 6A forwards `checkpointer` to `create_deep_agent` so 6B can raise `interrupt()`. In 6A no interrupt fires, so the checkpointer is inert — a per-turn `MemorySaver` is a sufficient *placeholder*. **Open flag for 6B:** an in-process `MemorySaver` will NOT survive a chat approval that resolves via a separate REST round-trip (`routes_approvals` runs in a different request/process), so 6B must choose a checkpointer that spans the approval wait (AsyncPostgresSaver from the Step-1 spike, or a Redis-backed saver) keyed by a stable per-turn `thread_id`. 6A only proves the param threads through and picks the `thread_id` scheme; it does not lock the saver.
 - **D5 — Default `"legacy"` = zero behavior change.** The deep path is dormant until an operator flips `JARVIS_RUNTIME=deep`. This is the "two-path behavior preservable behind a flag" the spec requires.
 - **D6 — Telemetry via `custom` stream if needed.** `cost_usd`/`blocked`/`latency_ms` are Jarvis-computed, not langgraph-native. The spike (Task 0) decides: extract from `AIMessage.usage_metadata` + wall-clock timing in the adapter, or emit via a middleware `get_stream_writer()` `custom` event. The plan pins the *contract* (the 7 dicts); the spike pins the *mechanism*.
 - **D7 — Error sanitization preserved.** The deep path catches all exceptions, logs the raw error, and emits ONLY `{"event":"error","agent","code","message","correlation_id"}` with generic `code`/`message` — reusing the existing `_GENERIC_CODE`/`_GENERIC_MESSAGE`/correlation-id helper from `agent_invoker`.
-- **D8 — Prompt flattening is lossy-but-safe.** `system_blocks` → `"\n\n".join(b["text"] …)`. Cache-control markers are dropped for the lead (langchain-anthropic manages prompt caching itself); the spike asserts caching still engages (Step-0 already asserted auto-caching survives the `middleware=` shape).
+- **D8 — Prompt flattening is lossy; caching is a spike gate, not an assumption.** `system_blocks` → `"\n\n".join(b["text"] …)` drops the explicit `cache_control` ephemeral markers on the soul/role blocks. langchain-anthropic manages prompt caching itself, but losing the markers is a real per-turn **cost regression** if caching doesn't re-engage — so Task 0 (point 6) must verify it, and the DECISION line records `caching <confirmed|AT-RISK>`. If AT-RISK, escalate before the cutover ships (do not silently accept a cache loss).
 
 ---
 
@@ -102,10 +102,12 @@ uv run pytest tests/ --ignore=tests/e2e         # baseline: 3110 passed / 18 ski
 **Goal:** Prove a compiled Deep Agent can stream token-by-token and that the stream can be reconstructed into the 7 frozen dict shapes (agent_start, text_delta, thinking, tool_call, tool_result, agent_done+telemetry, error) — using a **fake streaming ChatModel** (no API key). Decide the `stream_mode` mechanism.
 
 - [ ] **Step 1: Write a runnable probe** at `backend/spikes/deep_stream/probe.py` that:
-  1. Builds a fake streaming chat model that emits: a couple of text chunks, then a tool call to a trivial `echo` tool, then a final text chunk. Use `langchain_core.language_models.fake_chat_models.GenericFakeChatModel` (or `FakeMessagesListChatModel`) — whichever the installed `langchain-core 1.4.8` exposes with `.astream` support (verify with `uv run python -c "import langchain_core.language_models.fake_chat_models as m; print([n for n in dir(m)])"`).
+  1. Builds a fake streaming chat model **scripted for two turns** (turn 1: a couple of text chunks + a `tool_call` to a trivial `echo` tool; turn 2: a final text chunk) so `create_deep_agent` actually executes the tool then re-invokes the model. Try `langchain_core.language_models.fake_chat_models.GenericFakeChatModel`/`FakeMessagesListChatModel` first (verify with `uv run python -c "import langchain_core.language_models.fake_chat_models as m; print([n for n in dir(m)])"`), **but** a model that can't emit `tool_calls` inside a streamed `AIMessageChunk` won't drive the agent — expect to write a small custom `BaseChatModel` subclass whose `_astream` yields scripted `AIMessageChunk`s (with `tool_call_chunks` on turn 1 and `usage_metadata` on the terminal chunk).
   2. Compiles a deep agent: `create_deep_agent(model=<fake>, tools=[echo], checkpointer=MemorySaver())`.
   3. Streams it three ways and prints the raw events: `astream(input, config, stream_mode="messages")`, `stream_mode="updates"`, and `stream_mode=["messages","updates"]`.
-  4. Attempts to reconstruct each of the 7 dict shapes from the stream, printing which mode yields which. For `agent_done` telemetry, read `AIMessage.usage_metadata` off the final message (fake model can set `usage_metadata`); compute `latency_ms` via `time.monotonic()` around the stream and `cost_usd` via the existing cost helper (grep `cost` in `agent_loop.py`/`tracing.py` for the token→USD formula).
+  4. Attempts to reconstruct each of the 7 dict shapes from the stream, printing which mode yields which. For `agent_done` telemetry, read `AIMessage.usage_metadata` off the final message (the fake model sets it); compute `latency_ms` via `time.monotonic()` around the stream and `cost_usd` via the existing cost helper (grep `cost` in `agent_loop.py`/`tracing.py` for the token→USD formula — reuse it, do not re-derive).
+  5. **`blocked` mapping:** compile a SECOND deep agent WITH a `db_factory` + a `capability_scope` that does NOT include the tool's capability, so the Step-0 capability-scope guard denies `echo` (returns a `ToolMessage(status="error")` without running it). Confirm that denial is observable in the stream (a tool result marked error/blocked) so the adapter can set `tool_result.blocked=True`. If the guard's denial is NOT distinguishable in the stream from a normal tool result, record that as a required `custom`-writer item.
+  6. **Prompt-caching check (cost-regression guard for D8):** confirm that flattening `system_blocks` → one `system_prompt` string still engages Anthropic prompt caching on the deep path. With the fake model this is structural only (assert the system prompt reaches the model unsplit); note in the decision doc that the *real* cache-hit validation belongs in the live smoke (Task 8) — and flag it LOUDLY if caching cannot be confirmed, since losing the soul/role cache is a real per-turn cost regression.
 
 - [ ] **Step 2: Run it**
 
@@ -116,7 +118,9 @@ Expected: prints, for each of the 7 target shapes, the source `stream_mode` and 
   - The exact `stream_mode` (or combination) that reconstructs each of the 7 shapes.
   - The precise object types yielded (e.g. `(AIMessageChunk, metadata)` for `messages`) and how to discriminate a text chunk vs a thinking/reasoning chunk (`is_thinking`) — langchain-anthropic emits reasoning content blocks; document how they appear in a chunk.
   - Whether telemetry (`usage_metadata`, cost, latency) is reconstructable in the adapter (D6) or needs a `custom` writer.
-  - A **DECISION line**: "Adapter uses `stream_mode=<...>`; telemetry via `<usage_metadata|custom>`." This is what Task 4 implements.
+  - How a capability-scope **guard denial** surfaces in the stream (→ `tool_result.blocked=True`), per Step-1 point 5.
+  - The **prompt-caching** finding (Step-1 point 6): does the flattened `system_prompt` still engage caching, or is this a cost regression to escalate?
+  - A **DECISION line**: "Adapter uses `stream_mode=<...>`; telemetry via `<usage_metadata|custom>`; blocked via `<...>`; caching `<confirmed|AT-RISK>`." This is what Task 4 implements.
 
 - [ ] **Step 4: Commit**
 
@@ -149,23 +153,28 @@ async def test_build_deep_agent_forwards_checkpointer():
     from src.orchestrator.agents import SubAgent
 
     saver = MemorySaver()
-    read_agent = SubAgent(
-        name="perceiver",
+    # EMPTY capability_scope on purpose: with no capabilities, _has_write_capability_in_scope
+    # returns False, so build_deep_agent does NOT hit the fail-closed "refuse write agent
+    # without a guard" raise even when db_factory is None — letting the test reach (patched)
+    # create_deep_agent to assert checkpointer forwarding. (The write-agent refusal is tested
+    # separately by the existing test_build_deep_agent_refuses_write_agent_without_scope_middleware.)
+    probe_agent = SubAgent(
+        name="probe",
         prompt="p",
         model_tier="sonnet",
-        capability_scope={"email.read"},
+        capability_scope=set(),
         temperature=0.0,
         max_tokens=1024,
     )
 
     with patch.object(agent_builder, "create_deep_agent") as mock_create:
         await agent_builder.build_deep_agent(
-            read_agent, tools=[], workspace_id="ws", db_factory=None, checkpointer=saver
+            probe_agent, tools=[], workspace_id="ws", db_factory=None, checkpointer=saver
         )
     assert mock_create.call_args.kwargs["checkpointer"] is saver
 ```
 
-(Confirm `SubAgent`'s exact constructor fields first — read `src/orchestrator/agents.py` for the dataclass; adjust the kwargs to match. A read-only agent with a `db_factory=None` avoids the write-agent fail-closed raise.)
+(Confirm `SubAgent`'s exact constructor fields first — read `src/orchestrator/agents.py` for the dataclass; adjust the kwargs to match. If `SubAgent` rejects an empty `capability_scope`, instead pass a non-None `db_factory` stub — `db_factory=MagicMock()` — so the scope-guard middleware installs (`has_scope_mw=True`) and short-circuits the raise; verify `make_capability_scope_middleware` accepts the stub at construction, since it only uses `db_factory` at tool-call time.)
 
 - [ ] **Step 2: Run it → FAIL**
 
@@ -586,9 +595,9 @@ git commit -m "feat(rebuild): call_agent_stream branches to the deep runtime beh
 **Files:**
 - Test: `backend/tests/test_chat_deep_runtime_parity.py` (create)
 
-- [ ] **Step 1: Write the test** — drive a chat turn through `ChatProcessor` (or `_process_core` directly) with `settings.runtime="deep"`, a fake streaming model wired into the deep path, and a single read step, asserting the emitted `CoreEvent`s → `core_event_to_sse` frames carry the same `event:` names the legacy path produces for the same turn. Reuse the Task-0 fake model. Assert at minimum: a `text_delta`/`response` path and a terminal `done` frame, and that `core_event_to_sse` never raises on any deep-path frame.
+- [ ] **Step 1a (PRIMARY — the reliable guarantee): seam-boundary round-trip.** For every frame the adapter emits over the Task-0 fake stream, assert the full downstream chain does not drop or choke on it: `typed = agent_event_from_sse(frame, agent="operator")` is not None, and `core_event_to_sse(typed)` returns a dict whose `"event"` name is in the frozen set from the current-state table (or `None` for the intentionally stream-dropped types). This proves the deep path's frames survive the exact pipeline the web client consumes, WITHOUT needing a real API or wiring a fake model through `build_chat_model`. This is the load-bearing test.
 
-(This is a coverage/contract test — it pins that the deep path integrates cleanly through `_process_core` → `core_event_to_sse` without a real API call. If wiring a fake model deep into `build_chat_model`→`create_deep_agent` proves too invasive for a unit test, scope this to asserting `agent_event_from_sse(frame)` + `core_event_to_sse(typed_event)` round-trips for every frame the adapter emits over the fake stream — the same guarantee at the seam boundary.)
+- [ ] **Step 1b (OPTIONAL integration): full `_process_core` turn.** If a fake model can be wired through `build_chat_model`→`create_deep_agent` cheaply, additionally drive one read turn through `_process_core` with `settings.runtime="deep"` and assert the SSE `event:` names match the legacy path for the same turn. If wiring proves invasive, SKIP this and rely on 1a — do not spend a task budget forcing a brittle integration harness.
 
 - [ ] **Step 2: Run it → PASS.** (No production change; if it fails, the failure reveals a real seam/contract gap — fix the adapter/branch, not the test.)
 
