@@ -16,10 +16,16 @@ import logging
 from collections.abc import AsyncGenerator
 from typing import Any
 
+from langgraph.checkpoint.memory import MemorySaver
+
 from src.config.models import BEDROCK_MODEL_TIERS, MODEL_TIERS
 from src.config.settings import Settings
+from src.deep_runtime.agent_builder import build_deep_agent
+from src.deep_runtime.prompt_bridge import flatten_system_blocks
+from src.deep_runtime.stream_adapter import stream_deep_agent_events
 from src.errors import _GENERIC_CODE, _GENERIC_MESSAGE, new_correlation_id
 from src.middleware.observability import get_correlation_id
+from src.models.ids import generate_id
 from src.orchestrator.agent_loop import (
     LoopAgentStart,
     LoopDone,
@@ -161,6 +167,29 @@ class AgentInvoker:
         system_blocks = self.build_system_prompt(
             agent, context_block, capability_summary=capability_summary
         )
+
+        if self._settings.runtime == "deep":
+            # Step 6A runtime foundation: run the already-routed chat agent on the Deep
+            # Agents runtime instead of agent_loop. NOTE (6A limitation): `tools` here are
+            # the legacy Anthropic tool-schema dicts (cache_control-tagged), NOT LangChain
+            # tools — end-to-end tool execution on the deep path needs a Jarvis->LangChain
+            # tool bridge (a later task, out of 6A scope). The branch is behind
+            # JARVIS_RUNTIME=deep (default legacy), so this is dormant until explicitly flipped.
+            deep_agent = await build_deep_agent(
+                agent,
+                tools,
+                workspace_id=workspace_id,
+                db_factory=self._db_factory,
+                system_prompt=flatten_system_blocks(system_blocks),
+                checkpointer=MemorySaver(),
+            )
+            config = {"configurable": {"thread_id": generate_id("chat")}}
+            graph_input = {"messages": [{"role": "user", "content": message}]}
+            async for frame in stream_deep_agent_events(
+                deep_agent, graph_input, config, agent_name=agent_name, model=model
+            ):
+                yield frame
+            return
 
         async for evt in agent_loop(
             client=self._client,
