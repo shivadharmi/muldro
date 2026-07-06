@@ -172,3 +172,60 @@ class TestBuildStoreHealth:
         )
 
         assert result["postgres"] == {"status": "unreachable"}
+
+    # --- deep_runtime checkpointer health ---
+
+    async def test_deep_runtime_degraded(self):
+        """runtime=deep + degraded flag → status=degraded, deep_checkpointer listed."""
+        settings = make_mock_settings(neo4j_url="", qdrant_url="", redis_url="", runtime="deep")
+        db = AsyncMock()
+        db.execute = AsyncMock(return_value=MagicMock(scalar=MagicMock(return_value=0)))
+
+        result = await _build_store_health(
+            settings=settings,
+            graph_engine=None,
+            vector_store=None,
+            redis=None,
+            db=db,
+            deep_checkpointer_degraded=True,
+        )
+
+        assert result["deep_runtime"]["status"] == "degraded"
+        assert result["deep_runtime"]["durable"] is False
+        assert "deep_checkpointer" in result["degraded_services"]
+
+    async def test_deep_runtime_healthy(self):
+        """runtime=deep + not degraded → deep_runtime.status=healthy, NOT in degraded_services."""
+        settings = make_mock_settings(neo4j_url="", qdrant_url="", redis_url="", runtime="deep")
+        db = AsyncMock()
+        db.execute = AsyncMock(return_value=MagicMock(scalar=MagicMock(return_value=0)))
+
+        result = await _build_store_health(
+            settings=settings,
+            graph_engine=None,
+            vector_store=None,
+            redis=None,
+            db=db,
+            deep_checkpointer_degraded=False,
+        )
+
+        assert result["deep_runtime"]["status"] == "healthy"
+        assert result["deep_runtime"]["durable"] is True
+        assert "deep_checkpointer" not in result["degraded_services"]
+
+    async def test_deep_runtime_disabled_on_legacy(self):
+        """runtime=legacy (default) → deep_runtime.status=disabled, NOT in degraded_services."""
+        settings = make_mock_settings(neo4j_url="", qdrant_url="", redis_url="", runtime="legacy")
+        db = AsyncMock()
+        db.execute = AsyncMock(return_value=MagicMock(scalar=MagicMock(return_value=0)))
+
+        result = await _build_store_health(
+            settings=settings,
+            graph_engine=None,
+            vector_store=None,
+            redis=None,
+            db=db,
+        )
+
+        assert result["deep_runtime"]["status"] == "disabled"
+        assert "deep_checkpointer" not in result["degraded_services"]

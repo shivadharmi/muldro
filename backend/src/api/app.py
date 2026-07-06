@@ -70,6 +70,7 @@ def create_app() -> FastAPI:
         # Gated on runtime=="deep" so the psycopg3 pool never opens on legacy.
         app.state.deep_checkpointer = None
         app.state.deep_checkpointer_pool = None
+        app.state.deep_checkpointer_degraded = False
         if settings.runtime == "deep":
             try:
                 from src.deep_runtime.checkpointer import build_async_postgres_saver
@@ -83,6 +84,7 @@ def create_app() -> FastAPI:
                     "[deep_runtime] checkpointer init failed — falling back to MemorySaver",
                     exc_info=True,
                 )
+                app.state.deep_checkpointer_degraded = True
 
         # Initialize surface registry
         from src.services.surface_registry import SurfaceRegistry
