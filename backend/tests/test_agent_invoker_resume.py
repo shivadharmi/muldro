@@ -21,10 +21,13 @@ from src.orchestrator.agents import SubAgent
 from tests.conftest import make_mock_settings
 
 
-def _fake_approval(thread_id="t-resume", agent_name="perceiver"):
+def _fake_approval(
+    thread_id="t-resume", agent_name="perceiver", workspace_id="ws", status="pending"
+):
     return SimpleNamespace(
+        workspace_id=workspace_id,
         artifact_refs={"thread_id": thread_id, "agent_name": agent_name},
-        status="pending",
+        status=status,
         decided_at=None,
         approved_by=None,
     )
@@ -167,3 +170,47 @@ async def test_resume_unknown_approval_yields_error_and_never_streams():
 
     assert any(f["event"] == "error" for f in frames)
     mock_stream.assert_not_called()
+
+
+async def test_resume_cross_tenant_approval_is_not_found_and_never_streams():
+    """IDOR guard: an Approval owned by another workspace is unresumable and its state is
+    NOT mutated; the response is the same generic "not found" so existence is not leaked."""
+    approval = _fake_approval(workspace_id="ws_victim")
+    inv, fake_db = _make_invoker_with_approval(approval)
+
+    with patch("src.orchestrator.agent_invoker.stream_deep_agent_events") as mock_stream:
+        frames = [
+            f
+            async for f in inv.resume_deep_turn(
+                approval_id="apr_x",
+                decision="approve",
+                user_id="attacker",
+                workspace_id="ws_attacker",
+            )
+        ]
+
+    assert any(f["event"] == "error" and f.get("message") == "approval not found" for f in frames)
+    mock_stream.assert_not_called()
+    # the victim's approval was NEVER mutated
+    assert approval.status == "pending"
+    assert approval.approved_by is None
+    fake_db.commit.assert_not_awaited()
+
+
+async def test_resume_already_decided_approval_is_blocked():
+    """Only a still-pending approval may be resumed — an already-decided one is blocked so
+    the tool cannot be re-executed by a replayed/duplicate resume."""
+    approval = _fake_approval(status="approved")
+    inv, fake_db = _make_invoker_with_approval(approval)
+
+    with patch("src.orchestrator.agent_invoker.stream_deep_agent_events") as mock_stream:
+        frames = [
+            f
+            async for f in inv.resume_deep_turn(
+                approval_id="apr_x", decision="approve", user_id="u", workspace_id="ws"
+            )
+        ]
+
+    assert any(f["event"] == "error" and f.get("message") == "approval not pending" for f in frames)
+    mock_stream.assert_not_called()
+    fake_db.commit.assert_not_awaited()

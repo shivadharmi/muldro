@@ -379,8 +379,17 @@ class AgentInvoker:
 
         async with self._db_factory() as db:
             approval = await db.get(Approval, approval_id)
-            if approval is None:
+            # Tenant-isolation (IDOR) guard: an approval is resumable ONLY by its owning
+            # workspace. Return the SAME "not found" for a missing OR cross-tenant approval
+            # so existence is never leaked across tenants. workspace_id is resolved from the
+            # caller's auth context by the (deferred) HTTP endpoint — never LLM-supplied.
+            if approval is None or approval.workspace_id != workspace_id:
                 yield {"event": "error", "message": "approval not found"}
+                return
+            # Only a still-pending approval may be resumed — blocks re-resuming (and thus
+            # re-executing) an already-decided approval.
+            if approval.status != "pending":
+                yield {"event": "error", "message": "approval not pending"}
                 return
             refs = approval.artifact_refs or {}
             thread_id = refs.get("thread_id")
