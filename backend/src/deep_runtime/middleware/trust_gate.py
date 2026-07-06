@@ -1,0 +1,253 @@
+"""THE ONE approval gate for the deep chat runtime (Step 6B).
+
+A ``wrap_tool_call`` interceptor placed BETWEEN capability_scope (OUTER) and
+jarvis_tool_dispatcher (INNER) — the composed chain is
+``capability_scope → trust_gate → dispatcher``. By the time this gate runs,
+capability_scope has ALREADY authorized that the tool is inside the agent's
+``capability_scope``, so the gate never re-checks scope; it only decides *approval*.
+
+Gate policy (LOCKED for Step 6B, activated in 6C):
+    The gate is DORMANT on real chat traffic. When ``authorization_source ==
+    "direct_user_request"`` (live chat today) it SHORT-CIRCUITS — the user's message IS
+    the authorization for that turn (the two-execution-paths invariant). It evaluates
+    trust×risk + an IRREVERSIBLE hard override ONLY for other provenance
+    (autonomous / headless / custom). Do NOT add a trust gate to the direct-chat path
+    beyond this short-circuit.
+
+Two hard rules learned from live spikes in this repo — do not violate:
+
+1. ``interrupt()`` must NOT be called while a DB session/transaction is open, and the
+   risk assessment must NOT run with a session open either. ``interrupt()`` suspends the
+   coroutine for the ENTIRE approval round-trip (minutes/hours); holding a Postgres
+   connection across it would exhaust the pool, and risk assessment may hit a slow LLM.
+   So: resolve capability in its own short-lived session; assess risk with NO session
+   open; then open a SEPARATE session that persists+**commits** the Approval and closes
+   BEFORE ``interrupt()`` is reached.
+
+2. The ``wrap_tool_call`` gate body REPLAYS from the top on resume — proven by
+   ``spikes/deep_stream/interrupt_replay_side_effect_probe.py`` (PRE-interrupt code runs
+   TWICE, the tool runs once). A naive ``create_approval`` before ``interrupt()`` would
+   therefore create a DUPLICATE pending Approval on every resume. Approval persistence is
+   IDEMPOTENT: a get-or-create keyed on ``(workspace_id, thread_id, tool_call_id)`` with
+   NO status filter (the resume path marks the original approved/rejected BEFORE resuming
+   the graph, so filtering by ``pending`` would miss it and duplicate the row).
+
+``interrupt()`` and ``handler(request)`` are intentionally NOT wrapped in try/except so a
+``GraphInterrupt`` (and any handler error) propagates normally.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+
+from langchain.agents.middleware import AgentMiddleware, wrap_tool_call
+from langchain_core.messages import ToolMessage
+from langgraph.types import interrupt
+from sqlalchemy import select
+
+from src.deep_runtime.authorization import is_gated_source
+from src.deep_runtime.builtins import DEEPAGENTS_BUILTIN_NAMES
+from src.integrations.capabilities import is_read_only_capability
+from src.models.approvals import Approval
+from src.services.approval_service import create_approval
+from src.services.tool_registry import ToolRegistry
+from src.services.trust_engine import TrustEngine
+from src.services.verification.predicate import is_write_verification_required
+
+logger = logging.getLogger(__name__)
+
+
+async def _resolve_capability(name: str, workspace_id: str, db_factory) -> str | None:
+    """Resolve *name* → capability via ONE short-lived registry lookup.
+
+    Mirrors ``capability_scope._is_in_scope``: ``ToolRegistry(db, workspace_id or None)``
+    → ``get_tool(name)`` → ``tool.capability``. Returns ``None`` on any failure, unknown
+    tool, or missing capability — the caller treats ``None`` as "fall through and let the
+    tool run" (capability_scope has already authorized it; an unresolvable capability
+    must not silently block). The session is opened and CLOSED here, never held across
+    risk assessment or ``interrupt()``.
+    """
+    try:
+        async with db_factory() as db:
+            registry = ToolRegistry(db, workspace_id=workspace_id or None)
+            tool = await registry.get_tool(name)
+    except Exception:
+        logger.warning(
+            "[deep_runtime] trust_gate capability lookup failed for %s — falling through",
+            name,
+            exc_info=True,
+        )
+        return None
+    if tool is None:
+        return None
+    return getattr(tool, "capability", None)
+
+
+async def _decide_and_maybe_persist(
+    *,
+    name: str,
+    capability: str,
+    risk,
+    workspace_id: str,
+    user_id: str,
+    thread_id: str,
+    tool_call_id: str,
+    agent_name: str,
+    db_factory,
+) -> tuple[bool, str | None]:
+    """Decide whether *this* tool call needs approval and, if so, persist the Approval.
+
+    Runs entirely inside ONE short-lived session that is COMMITTED and CLOSED before the
+    caller reaches ``interrupt()``. Returns ``(require_approval, approval_id)`` where
+    ``approval_id`` is ``None`` when no approval is required.
+
+    Approval is required when EITHER the trust matrix says ``approval_required`` OR the
+    IRREVERSIBLE union override (``is_write_verification_required``) fires — the override
+    forces approval even when the matrix alone would auto-execute. Persistence is
+    idempotent (get-or-create, no status filter) because the gate body replays on resume.
+    """
+    async with db_factory() as db:
+        decision = await TrustEngine(db, workspace_id).evaluate(capability, risk, workspace_id)
+        matrix_requires = decision.decision == "approval_required"
+        irreversible_override = is_write_verification_required(capability, risk)
+        require_approval = matrix_requires or irreversible_override
+        if not require_approval:
+            return (False, None)
+
+        # Idempotent get-or-create keyed on (workspace_id, thread_id, tool_call_id).
+        # NO status filter: the resume path may already have marked this row
+        # approved/rejected, and a pending-only filter would miss it and duplicate.
+        stmt = select(Approval).where(
+            Approval.workspace_id == workspace_id,
+            Approval.artifact_refs.op("@>")({"thread_id": thread_id, "tool_call_id": tool_call_id}),
+        )
+        result = await db.execute(stmt)
+        existing = result.scalars().first()
+        if existing is not None:
+            return (True, existing.approval_id)
+
+        approval = await create_approval(
+            db,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            approval_type=f"tool:{name}",
+            title=f"Approve: {capability}",
+            summary=(getattr(decision, "justification", None) or risk.reasoning),
+            risk_level=risk.risk_level,
+            requested_by=user_id,
+            run_id=None,
+            step_id=None,
+            artifact_refs={
+                "thread_id": thread_id,
+                "tool_call_id": tool_call_id,
+                "capability": capability,
+                "reversible": risk.reversible,
+                "blast_radius": risk.blast_radius,
+                "tool_name": name,
+                "agent_name": agent_name,
+            },
+        )
+        await db.commit()
+        return (True, approval.approval_id)
+
+
+def make_trust_gate_middleware(
+    *,
+    authorization_source: str,
+    workspace_id: str,
+    user_id: str,
+    thread_id: str,
+    agent_name: str,
+    db_factory,
+    assess_risk,
+) -> AgentMiddleware:
+    """Build THE approval gate for one turn.
+
+    ``authorization_source`` / ``workspace_id`` / ``user_id`` / ``thread_id`` /
+    ``agent_name`` are captured in the closure — never LLM-supplied.
+
+    Args:
+        authorization_source: Provenance literal captured at the seam. When
+            ``"direct_user_request"`` the gate is dormant (short-circuits).
+        workspace_id: Tenant scope for registry/trust/approval work.
+        user_id: Authenticated user for this turn (approval owner + requester).
+        thread_id: Stable LangGraph thread id — part of the idempotency key and echoed
+            in the interrupt payload so the resume path can correlate.
+        agent_name: The routed sub-agent's name — recorded on the approval provenance.
+        db_factory: Async-context-manager factory yielding an ``AsyncSession``. Each use
+            opens and closes a short-lived session; none is held across ``interrupt()``.
+        assess_risk: DB-free async callable ``(capability, tool_input) -> RiskAssessment``
+            (fails closed to high internally).
+
+    Returns:
+        An ``AgentMiddleware`` exposing an async ``wrap_tool_call`` hook.
+    """
+
+    @wrap_tool_call
+    async def trust_gate(request, handler):
+        name = request.tool_call["name"]
+
+        # deepagents built-ins (write_todos, ls, …) are framework scaffolding — never gated.
+        if name in DEEPAGENTS_BUILTIN_NAMES:
+            return await handler(request)
+
+        # DORMANT direct-chat path: the user's message IS the authorization. Nothing else
+        # runs — no DB, no risk assessment.
+        if not is_gated_source(authorization_source):
+            return await handler(request)
+
+        tool_call_id = request.tool_call["id"]
+        args = request.tool_call.get("args") or {}
+
+        # Resolve capability in its own short-lived session (closed before risk/interrupt).
+        capability = await _resolve_capability(name, workspace_id, db_factory)
+        if not capability or is_read_only_capability(capability):
+            return await handler(request)
+
+        # Risk assessment with NO DB session open (it may hit a slow LLM).
+        risk = await assess_risk(capability, args)
+
+        # Decide + (idempotently) persist inside a SEPARATE session that commits + closes.
+        require_approval, approval_id = await _decide_and_maybe_persist(
+            name=name,
+            capability=capability,
+            risk=risk,
+            workspace_id=workspace_id,
+            user_id=user_id,
+            thread_id=thread_id,
+            tool_call_id=tool_call_id,
+            agent_name=agent_name,
+            db_factory=db_factory,
+        )
+
+        # Auto-execute path (both auto_execute_notify and auto_execute_silent land here;
+        # notification delivery is out of scope for this gate).
+        if not require_approval:
+            return await handler(request)
+
+        # Suspend for approval. Called OUTSIDE any DB session/transaction. On resume the
+        # gate body replays from the top; this returns the resume value instead of pausing.
+        verdict = interrupt(
+            {
+                "approval_id": approval_id,
+                "thread_id": thread_id,
+                "capability": capability,
+                "risk_level": risk.risk_level,
+            }
+        )
+
+        approved = verdict == "approve" or (
+            isinstance(verdict, dict) and verdict.get("decision") == "approve"
+        )
+        if approved:
+            return await handler(request)
+
+        return ToolMessage(
+            content=json.dumps({"error": "rejected by approver", "rejected": True}),
+            tool_call_id=tool_call_id,
+            name=name,
+            status="error",
+        )
+
+    return trust_gate
