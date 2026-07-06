@@ -26,7 +26,12 @@ from src.models.task_graph import TaskRun, TaskStep
 from src.orchestrator.tracing import JarvisTrace
 from src.services.audit import AuditService
 from src.services.dag_runner import DagRunner
-from src.services.execution_state import TERMINAL_SUCCESS, transition_run, transition_step
+from src.services.execution_state import (
+    RUN_TRANSITIONS,
+    TERMINAL_SUCCESS,
+    transition_run,
+    transition_step,
+)
 from src.services.execution_support import _safe_error_fields, _step_to_state
 from src.services.execution_surface_emitter import SurfaceEmitter
 
@@ -350,6 +355,17 @@ class GraphExecutor:
                     workspace_id=run.workspace_id,
                 )
             except Exception as exc:
+                # A durable state-recording event flush inside the DAG (§4.8,
+                # SurfaceEmitter.emit_event(durable=True)) can transiently fail and abort
+                # the shared session. Roll it back first so this mark-failed path commits
+                # cleanly instead of raising PendingRollbackError on the commit below.
+                # rollback() expires ORM state AND reverts the flushed-but-uncommitted
+                # "running" transition, so re-hydrate the run and re-establish an in-flight
+                # status before failing it (the machine forbids e.g. pending→failed).
+                await self._db.rollback()
+                await self._db.refresh(run)
+                if "failed" not in RUN_TRANSITIONS.get(run.status, set()):
+                    transition_run(run, "running")
                 transition_run(run, "failed")
                 run.completed_at = datetime.now(timezone.utc)
                 # run.error is rendered in execution surfaces + run history (client-facing).
