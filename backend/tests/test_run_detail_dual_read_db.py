@@ -64,7 +64,7 @@ async def _run_env():
 
 
 async def test_reader_returns_empty_when_no_detail():
-    from src.services.surface_detail_builders.plan import _load_context_pack
+    from src.services.surface_detail_builders._shared import _load_context_pack
 
     async with _run_env() as (factory, ws, uid):
         run_id = f"run_{ULID()}"
@@ -87,7 +87,7 @@ async def test_reader_returns_empty_when_no_detail():
 
 
 async def test_reader_prefers_detail_store():
-    from src.services.surface_detail_builders.plan import _load_context_pack
+    from src.services.surface_detail_builders._shared import _load_context_pack
 
     async with _run_env() as (factory, ws, uid):
         run_id = f"run_{ULID()}"

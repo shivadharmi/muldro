@@ -15,24 +15,12 @@ from ._shared import (
     _extract_run_id,
     _format_ts,
     _get_step_desc,
+    _load_context_pack,
     _section,
     _truncate,
 )
 
 logger = logging.getLogger(__name__)
-
-
-async def _load_context_pack(db, run) -> dict:
-    """Read the context pack from RunDetailStore (Step 5, D-C4). Post-contract the
-    detail table is authoritative; a run with no detail row renders with an empty pack."""
-    if run is None:
-        return {}
-    from src.services.run_detail_store import RunDetailStore
-
-    pack = await RunDetailStore(db).get_context_pack(run.run_id)
-    if pack is not None:
-        return pack
-    return {}
 
 
 async def build_plan_overview(db: AsyncSession, surface: Any, **kwargs: Any) -> DetailTabResponse:
