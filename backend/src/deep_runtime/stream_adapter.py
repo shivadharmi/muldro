@@ -135,15 +135,21 @@ async def stream_deep_agent_events(
     *,
     agent_name: str,
     model: str | None = None,
+    durability: str | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Stream *agent* and yield the 7 frozen chat SSE dicts (see module docstring).
 
     Args:
         agent: A ``CompiledStateGraph`` from ``build_deep_agent`` / ``create_deep_agent``.
-        graph_input: ``{"messages": [{"role": "user", "content": message}]}``.
+        graph_input: ``{"messages": [{"role": "user", "content": message}]}`` on a fresh
+            turn, or a ``Command(resume=...)`` to re-enter a paused turn (Step 6B).
         config: LangGraph config, e.g. ``{"configurable": {"thread_id": ...}}``.
         agent_name: The Jarvis agent name stamped onto every frame (``"agent"``).
         model: The model id (for the ``agent_start`` frame + cost attribution).
+        durability: Forwarded to ``agent.astream(..., durability=...)`` when set (e.g.
+            ``"sync"`` on the resume path, per the Task-0 interrupt/resume spike).
+            Defaults to ``None``, which omits the kwarg entirely so every existing
+            caller's behaviour is unchanged.
 
     Yields:
         Client-safe SSE dicts key-identical to ``AgentInvoker.call_agent_stream``.
@@ -158,10 +164,12 @@ async def stream_deep_agent_events(
     tool_started_at: dict[str, float] = {}
     usage = dict(_ZERO_USAGE)
 
+    astream_kwargs: dict[str, Any] = {"stream_mode": ["messages", "updates"]}
+    if durability is not None:
+        astream_kwargs["durability"] = durability
+
     try:
-        async for mode, payload in agent.astream(
-            graph_input, config=config, stream_mode=["messages", "updates"]
-        ):
+        async for mode, payload in agent.astream(graph_input, config=config, **astream_kwargs):
             if mode == "messages":
                 msg = payload[0] if isinstance(payload, tuple) else payload
                 if isinstance(msg, AIMessageChunk):

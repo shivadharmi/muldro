@@ -14,19 +14,24 @@ orchestrator stays the single source of truth across ``load_agents_from_db``.
 
 import logging
 from collections.abc import AsyncGenerator
+from datetime import datetime, timezone
 from typing import Any
 
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import Command
 
 from src.config.models import BEDROCK_MODEL_TIERS, MODEL_TIERS
 from src.config.settings import Settings
 from src.deep_runtime.agent_builder import build_deep_agent
+from src.deep_runtime.authorization import AuthorizationSource
 from src.deep_runtime.middleware.jarvis_tool_dispatcher import make_jarvis_tool_dispatcher
+from src.deep_runtime.middleware.trust_gate import make_trust_gate_middleware
 from src.deep_runtime.prompt_bridge import build_system_message
 from src.deep_runtime.stream_adapter import stream_deep_agent_events
 from src.deep_runtime.tool_bridge import build_tool_shells
 from src.errors import _GENERIC_CODE, _GENERIC_MESSAGE, new_correlation_id
 from src.middleware.observability import get_correlation_id
+from src.models.approvals import Approval
 from src.models.ids import generate_id
 from src.orchestrator.agent_loop import (
     LoopAgentStart,
@@ -149,6 +154,71 @@ class AgentInvoker:
             except Exception:
                 logger.debug("Failed to generate capability summary", exc_info=True)
         return capability_summary
+
+    async def _build_deep_agent_for(
+        self,
+        agent: SubAgent,
+        tools: list,
+        *,
+        user_id: str,
+        workspace_id: str,
+        thread_id: str,
+        authorization_source: str,
+        system_prompt,
+    ):
+        """Build a compiled deep agent WITH the full gated middleware chain:
+        capability_scope (installed by ``build_deep_agent`` when ``db_factory`` is given)
+        → trust_gate → jarvis_tool_dispatcher. Shared by the resume path (Task 4) and the
+        live seam (Task 5) so both rebuild identically. The trust_gate short-circuits
+        ``direct_user_request`` (dormant); a gated ``authorization_source`` activates it.
+        """
+        shells = build_tool_shells(tools)
+
+        async def _assess_risk(capability, tool_input):
+            from src.services.risk_assessor import RiskAssessment, get_or_assess_risk
+
+            try:
+                return await get_or_assess_risk(
+                    capability=capability,
+                    step_input=tool_input,
+                    user_context={"user_id": user_id},
+                    workspace_id=workspace_id,
+                    client=self._client,
+                    redis=getattr(self._services, "redis", None),
+                )
+            except Exception:
+                return RiskAssessment(
+                    risk_level="high",
+                    reasoning="risk assessment unavailable — failing closed to high",
+                    reversible=False,
+                )
+
+        trust_gate = make_trust_gate_middleware(
+            authorization_source=authorization_source,
+            workspace_id=workspace_id,
+            user_id=user_id,
+            thread_id=thread_id,
+            agent_name=agent.name,
+            db_factory=self._db_factory,
+            assess_risk=_assess_risk,
+        )
+        dispatcher = make_jarvis_tool_dispatcher(
+            execute_tool=self._tool_executor.execute_tool,
+            user_id=user_id,
+            workspace_id=workspace_id,
+        )
+        # Order matters: extra_middleware=(trust_gate, dispatcher) puts the gate OUTER of
+        # the dispatcher. build_deep_agent installs capability_scope first, so the full
+        # chain is capability_scope → trust_gate → dispatcher.
+        return await build_deep_agent(
+            agent,
+            shells,
+            workspace_id=workspace_id,
+            db_factory=self._db_factory,
+            extra_middleware=(trust_gate, dispatcher),
+            system_prompt=system_prompt,
+            checkpointer=self._checkpointer_provider() or MemorySaver(),
+        )
 
     async def call_agent_stream(
         self,
@@ -281,6 +351,73 @@ class AgentInvoker:
                     "latency_ms": evt.latency_ms,
                     "cost_usd": round(evt.cost_usd, 6),
                 }
+
+    async def resume_deep_turn(
+        self, *, approval_id: str, decision: str, user_id: str, workspace_id: str
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """Re-enter a paused deep turn via ``Command(resume=decision)`` on the Approval's
+        stored ``thread_id``. ``decision`` is ``"approve"`` or ``"reject"``. Marks the
+        Approval approved/rejected, rebuilds the deep agent identically (a GATED
+        ``authorization_source`` so the replayed gate re-reaches ``interrupt()`` and
+        honors the verdict), and re-streams the continuation.
+        """
+        if decision not in ("approve", "reject"):
+            cid = get_correlation_id() or new_correlation_id()
+            yield {
+                "event": "error",
+                "code": _GENERIC_CODE,
+                "message": _GENERIC_MESSAGE,
+                "correlation_id": cid,
+            }
+            return
+
+        async with self._db_factory() as db:
+            approval = await db.get(Approval, approval_id)
+            if approval is None:
+                yield {"event": "error", "message": "approval not found"}
+                return
+            refs = approval.artifact_refs or {}
+            thread_id = refs.get("thread_id")
+            agent_name = refs.get("agent_name")
+            approval.status = "approved" if decision == "approve" else "rejected"
+            approval.decided_at = datetime.now(timezone.utc)
+            approval.approved_by = user_id
+            await db.commit()
+
+        if not thread_id or not agent_name:
+            yield {"event": "error", "message": "approval missing thread_id/agent_name"}
+            return
+
+        agent = self._agents.get(agent_name)
+        if agent is None:
+            yield {"event": "error", "message": f"Unknown agent: {agent_name}"}
+            return
+
+        model = self.get_model_for_agent(agent)
+        tools = await self._resolve_tools(agent, workspace_id, None)
+        system_blocks = self.build_system_prompt(agent, "")
+        deep_agent = await self._build_deep_agent_for(
+            agent,
+            tools,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            thread_id=thread_id,
+            # Any gated source works; it must NOT be direct_user_request or the replayed
+            # gate would short-circuit before interrupt() and a rejected write would
+            # still execute.
+            authorization_source=AuthorizationSource.AUTONOMOUS,
+            system_prompt=build_system_message(system_blocks),
+        )
+        config = {"configurable": {"thread_id": thread_id}}
+        async for frame in stream_deep_agent_events(
+            deep_agent,
+            Command(resume=decision),
+            config,
+            agent_name=agent_name,
+            model=model,
+            durability="sync",
+        ):
+            yield frame
 
     async def call_agent(
         self,
