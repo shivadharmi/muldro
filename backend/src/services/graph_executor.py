@@ -356,22 +356,37 @@ class GraphExecutor:
                 )
             except Exception as exc:
                 # A durable state-recording event flush inside the DAG (§4.8,
-                # SurfaceEmitter.emit_event(durable=True)) can transiently fail and abort
-                # the shared session. Roll it back first so this mark-failed path commits
-                # cleanly instead of raising PendingRollbackError on the commit below.
-                # rollback() expires ORM state AND reverts the flushed-but-uncommitted
-                # "running" transition, so re-hydrate the run and re-establish an in-flight
-                # status before failing it (the machine forbids e.g. pending→failed).
-                await self._db.rollback()
-                await self._db.refresh(run)
-                if "failed" not in RUN_TRANSITIONS.get(run.status, set()):
-                    transition_run(run, "running")
+                # SurfaceEmitter.emit_event(durable=True)) can transiently fail and
+                # deactivate the shared session ("partial rollback" state); the tail commit
+                # would then raise PendingRollbackError. session.is_active only reflects this
+                # AFTER a flush is attempted against the aborted transaction — an ordinary
+                # Python-level failure never touches the DB, so is_active reads True until we
+                # actually try one. Mark failed in memory, then flush to both (a) persist the
+                # common case and (b) probe for poisoning. ONLY when that flush fails do we
+                # roll back + re-hydrate: rollback() expires ORM state AND reverts the
+                # flushed-but-uncommitted "running" transition, so re-establish an in-flight
+                # status before re-marking failed (the machine forbids e.g. pending→failed).
+                # A healthy session's flush succeeds here and the tail commit is then a cheap
+                # no-op re-flush, preserving the run's partial step progress + trace (the DAG
+                # never commits mid-run).
                 transition_run(run, "failed")
                 run.completed_at = datetime.now(timezone.utc)
                 # run.error is rendered in execution surfaces + run history (client-facing).
                 # Store the safe message + code + correlation id; raw str(exc) → logs only.
                 safe = _safe_error_fields(exc)
                 run.error = {"type": "execution_error", **safe}
+                try:
+                    await self._db.flush()
+                except Exception:
+                    pass
+                if not self._db.is_active:
+                    await self._db.rollback()
+                    await self._db.refresh(run)
+                    if "failed" not in RUN_TRANSITIONS.get(run.status, set()):
+                        transition_run(run, "running")
+                    transition_run(run, "failed")
+                    run.completed_at = datetime.now(timezone.utc)
+                    run.error = {"type": "execution_error", **safe}
                 logger.error("Run %s failed: %s", run_id, exc, exc_info=True)
                 await self._emit_event(
                     "run.failed",
@@ -487,12 +502,35 @@ class GraphExecutor:
             if run.status in ("awaiting_approval", "awaiting_input", "paused"):
                 await self._checkpoint_trace(run)
         except Exception as exc:
+            # Same poisoned-session recovery as execute_run (CF-2): a durable flush inside
+            # the resumed DAG can deactivate the session ("partial rollback" state) and make
+            # the tail commit raise PendingRollbackError. session.is_active only reflects this
+            # AFTER a flush is attempted against the aborted transaction — an ordinary
+            # Python-level failure never touches the DB, so is_active reads True until we
+            # actually try one. Mark failed in memory, then flush to both (a) persist the
+            # common case and (b) probe for poisoning. ONLY when that flush fails do we roll
+            # back + re-hydrate: rollback() reverts the flushed-but-uncommitted "running", so
+            # re-establish an in-flight status before re-marking failed (e.g.
+            # paused→running→failed). A healthy session's flush succeeds here and the tail
+            # commit is then a cheap no-op re-flush, preserving partial resume progress.
             transition_run(run, "failed")
             run.completed_at = datetime.now(timezone.utc)
             # Client-facing (served by the history API) — safe message + code only;
             # raw str(exc) goes to logs.
             safe = _safe_error_fields(exc)
             run.error = {"type": "resume_error", **safe}
+            try:
+                await self._db.flush()
+            except Exception:
+                pass
+            if not self._db.is_active:
+                await self._db.rollback()
+                await self._db.refresh(run)
+                if "failed" not in RUN_TRANSITIONS.get(run.status, set()):
+                    transition_run(run, "running")
+                transition_run(run, "failed")
+                run.completed_at = datetime.now(timezone.utc)
+                run.error = {"type": "resume_error", **safe}
             logger.error("Resume run %s failed: %s", run.run_id, exc, exc_info=True)
         finally:
             self._cancel_events.pop(run.run_id, None)
