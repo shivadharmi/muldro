@@ -167,6 +167,10 @@ class Settings(BaseSettings):
     # Registry validation
     skip_registry_validation: bool = False  # JARVIS_SKIP_REGISTRY_VALIDATION
 
+    # Chat execution runtime: "legacy" (agent_loop) | "deep" (Deep Agents lead).
+    # Default legacy so the Deep Agents path is dormant until explicitly enabled.
+    runtime: str = "legacy"  # JARVIS_RUNTIME
+
     # Filesystem MCP server root directory (seeded into filesystem installation args).
     # Created at app startup if missing. Defaults to ~/jarvis-workspace.
     filesystem_mcp_root: str = ""
