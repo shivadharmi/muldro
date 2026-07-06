@@ -89,7 +89,6 @@ def _build_runner(run, step, reauth, *, auth_output):
     trust_gate.assess_step_risk = AsyncMock(return_value="high")
     trust_gate.notify_auto_executed = AsyncMock()
     trust_gate.record_auto_execution_outcome = AsyncMock()
-    trust_gate.remember_auto_executed = MagicMock()
 
     learner = MagicMock()
     learner.verification_enabled = False

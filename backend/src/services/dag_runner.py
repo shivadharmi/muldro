@@ -438,10 +438,6 @@ class DagRunner:
                 await self._trust_gate.record_auto_execution_outcome(
                     capability, risk_level, run.workspace_id or ""
                 )
-            # Record the auto-executed (capability, risk_level) regardless, so the
-            # deferred-read tick can fire the increment when a completed_unverified
-            # step is later confirmed (Task 7/9). Now finally has a reader.
-            self._trust_gate.remember_auto_executed(run, capability, risk_level)
             return
 
         # ── Common execution path (step resumed after approval) ──────

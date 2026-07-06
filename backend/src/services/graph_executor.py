@@ -663,10 +663,6 @@ class GraphExecutor:
         """Facade → TrustGate.record_auto_execution_outcome."""
         await self._trust_gate.record_auto_execution_outcome(capability, risk_level, workspace_id)
 
-    def _remember_auto_executed(self, run: TaskRun, capability: str, risk_level: str) -> None:
-        """Facade → TrustGate.remember_auto_executed."""
-        self._trust_gate.remember_auto_executed(run, capability, risk_level)
-
     async def _handle_step_failure(
         self,
         run: TaskRun,

@@ -247,9 +247,9 @@ class StepGraphStore:
         )
         self._db.add(checkpoint)
         # run.checkpoint shares its JSONB column with application-state keys
-        # written by other paths (the ``auto_executed`` trust audit trail, the
-        # ``verification`` verdict). checkpoint() owns only the execution-snapshot
-        # keys built above — merge so those other keys survive instead of being
-        # clobbered. The persisted TaskCheckpoint row still stores pure snapshot.
+        # written by other paths (the ``verification`` verdict). checkpoint()
+        # owns only the execution-snapshot keys built above — merge so those
+        # other keys survive instead of being clobbered. The persisted
+        # TaskCheckpoint row still stores pure snapshot.
         run.checkpoint = {**(run.checkpoint or {}), **snapshot}
         await self._db.flush()
