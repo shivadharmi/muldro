@@ -1,7 +1,14 @@
 """Bridge the chat path's Anthropic multi-block system prompt to the flat system_prompt
-string build_deep_agent / create_deep_agent expects (Step 6A)."""
+string build_deep_agent / create_deep_agent expects (Step 6A).
+
+``build_system_message`` (Step 6A.5) preserves the two-block cache layout so
+langchain-anthropic's ``AnthropicPromptCachingMiddleware`` (injected by deepagents)
+can honour the per-block ``cache_control`` markers.
+"""
 
 from typing import Any
+
+from langchain_core.messages import SystemMessage
 
 
 def flatten_system_blocks(system_blocks: Any) -> str:
@@ -20,3 +27,23 @@ def flatten_system_blocks(system_blocks: Any) -> str:
         if isinstance(b, dict) and b.get("type") == "text" and b.get("text")
     ]
     return "\n\n".join(parts)
+
+
+def build_system_message(system_blocks: Any) -> SystemMessage:
+    """Build a SystemMessage preserving the chat path's two-block cache layout.
+
+    Legacy emits [{soul+role, cache_control: ephemeral}, {context}]. Flattening merged
+    the volatile context into the same cache prefix as the stable soul+role, thrashing
+    turn-2 caching. A structured SystemMessage (cache_control on the soul+role block
+    only) restores the breakpoint: langchain-anthropic honours block-level
+    ``cache_control`` and ``create_deep_agent`` preserves the caller's blocks. A plain
+    string is wrapped as-is.
+    """
+    if isinstance(system_blocks, str):
+        return SystemMessage(content=system_blocks)
+    blocks = [
+        b
+        for b in system_blocks
+        if isinstance(b, dict) and b.get("type") == "text" and b.get("text")
+    ]
+    return SystemMessage(content=blocks)

@@ -21,6 +21,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from deepagents import create_deep_agent
+from langchain_core.messages import SystemMessage
 from langgraph.graph.state import CompiledStateGraph
 
 from src.deep_runtime.middleware.capability_scope import make_capability_scope_middleware
@@ -59,7 +60,7 @@ async def build_deep_agent(
     workspace_id: str = "",
     db_factory=None,
     extra_middleware: Sequence[Any] = (),
-    system_prompt: str | None = None,
+    system_prompt: str | SystemMessage | None = None,
     name: str | None = None,
     checkpointer=None,
 ) -> CompiledStateGraph:
@@ -79,7 +80,9 @@ async def build_deep_agent(
             when the agent has any write-class capability in scope.
         extra_middleware: Additional Jarvis policy middlewares to install after
             the scope guard (none in Phase 1).
-        system_prompt: Override for the agent's role prompt; defaults to ``agent.prompt``.
+        system_prompt: Override for the agent's role prompt; may be a plain string or a
+            structured ``SystemMessage`` (e.g. from ``build_system_message``) to preserve
+            per-block ``cache_control`` markers; defaults to ``agent.prompt``.
         name: Override for the agent name; defaults to ``agent.name``.
         checkpointer: LangGraph checkpointer forwarded to create_deep_agent so a
             later gate can raise interrupt(); None in 6A.

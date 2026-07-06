@@ -163,3 +163,28 @@ async def test_build_deep_agent_forwards_checkpointer():
             probe_agent, tools=[], workspace_id="ws", db_factory=None, checkpointer=saver
         )
     assert mock_create.call_args.kwargs["checkpointer"] is saver
+
+
+async def test_build_deep_agent_accepts_system_message():
+    from unittest.mock import patch
+
+    from langchain_core.messages import SystemMessage
+
+    from src.deep_runtime import agent_builder
+
+    sm = SystemMessage(
+        content=[{"type": "text", "text": "SOUL", "cache_control": {"type": "ephemeral"}}]
+    )
+    probe = SubAgent(
+        name="probe",
+        prompt="p",
+        model_tier="sonnet",
+        capability_scope=set(),
+        temperature=0.0,
+        max_tokens=1024,
+    )
+    with patch.object(agent_builder, "create_deep_agent") as mock_create:
+        await agent_builder.build_deep_agent(
+            probe, tools=[], workspace_id="ws", db_factory=None, system_prompt=sm
+        )
+    assert mock_create.call_args.kwargs["system_prompt"] is sm
