@@ -131,3 +131,35 @@ async def test_build_deep_agent_refuses_write_agent_without_scope_middleware():
     with patch("src.deep_runtime.agent_builder.CapabilityResolver", return_value=resolver):
         with pytest.raises(ValueError, match="refusing to compile agent 'operator'"):
             await build_deep_agent(agent, tools=[send_email], db_factory=None)
+
+
+async def test_build_deep_agent_forwards_checkpointer():
+    """build_deep_agent must forward a checkpointer to create_deep_agent so the 6B gate
+    can raise interrupt() (which requires a checkpointer + thread_id)."""
+    from unittest.mock import patch
+
+    from langgraph.checkpoint.memory import MemorySaver
+
+    from src.deep_runtime import agent_builder
+    from src.orchestrator.agents import SubAgent
+
+    saver = MemorySaver()
+    # EMPTY capability_scope on purpose: with no capabilities, _has_write_capability_in_scope
+    # returns False, so build_deep_agent does NOT hit the fail-closed "refuse write agent
+    # without a guard" raise even when db_factory is None — letting the test reach (patched)
+    # create_deep_agent to assert checkpointer forwarding. (The write-agent refusal is tested
+    # separately by test_build_deep_agent_refuses_write_agent_without_scope_middleware.)
+    probe_agent = SubAgent(
+        name="probe",
+        prompt="p",
+        model_tier="sonnet",
+        capability_scope=set(),
+        temperature=0.0,
+        max_tokens=1024,
+    )
+
+    with patch.object(agent_builder, "create_deep_agent") as mock_create:
+        await agent_builder.build_deep_agent(
+            probe_agent, tools=[], workspace_id="ws", db_factory=None, checkpointer=saver
+        )
+    assert mock_create.call_args.kwargs["checkpointer"] is saver

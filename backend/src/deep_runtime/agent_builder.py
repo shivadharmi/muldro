@@ -61,6 +61,7 @@ async def build_deep_agent(
     extra_middleware: Sequence[Any] = (),
     system_prompt: str | None = None,
     name: str | None = None,
+    checkpointer=None,
 ) -> CompiledStateGraph:
     """Build a compiled deep agent for *agent*.
 
@@ -80,6 +81,8 @@ async def build_deep_agent(
             the scope guard (none in Phase 1).
         system_prompt: Override for the agent's role prompt; defaults to ``agent.prompt``.
         name: Override for the agent name; defaults to ``agent.name``.
+        checkpointer: LangGraph checkpointer forwarded to create_deep_agent so a
+            later gate can raise interrupt(); None in 6A.
 
     Returns:
         A LangGraph ``CompiledStateGraph`` ready for ``.ainvoke()``/``.astream()``.
@@ -117,4 +120,5 @@ async def build_deep_agent(
         system_prompt=system_prompt or agent.prompt,
         middleware=middleware,
         name=name or agent.name,
+        checkpointer=checkpointer,
     )
