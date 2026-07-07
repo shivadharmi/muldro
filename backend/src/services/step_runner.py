@@ -42,19 +42,30 @@ def make_lock_wrapped_execute_tool_fn(inner_fn, *, redis, workspace_id, resolve_
     """Wrap an execute_tool_fn so external WRITES acquire the cross-path write lock
     (src.services.write_lock) — same key as the deep-runtime middleware. Reads pass through.
     Layered OUTSIDE the idempotency ledger so the lock serializes the whole write attempt
-    (idempotency check + execute)."""
+    (idempotency check + execute).
+
+    The wrapped fn matches agent_loop's calling convention exactly:
+    ``execute_tool_fn(tool_name, tool_input, user_id=..., workspace_id=...)`` — user_id and
+    workspace_id are keyword-only, forwarded verbatim to ``inner_fn``. The LOCK KEY, however,
+    is keyed on the CLOSURE-captured workspace_id (the run's workspace), never on the call's
+    argument, mirroring the deep middleware's closure-captured workspace_id safety property.
+    """
     from src.integrations.capabilities import is_read_only_capability
     from src.services.write_lock import WriteLockContended, acquire_write_lock
 
-    async def _wrapped(name, args, user_id, ws):
+    lock_workspace_id = workspace_id  # closure-captured; the lock key never comes from the call
+
+    async def _wrapped(tool_name, tool_input, *, user_id, workspace_id):
         if redis is None:
-            return await inner_fn(name, args, user_id, ws)
-        capability = await resolve_capability(name)
+            return await inner_fn(tool_name, tool_input, user_id=user_id, workspace_id=workspace_id)
+        capability = await resolve_capability(tool_name)
         if not capability or is_read_only_capability(capability):
-            return await inner_fn(name, args, user_id, ws)
+            return await inner_fn(tool_name, tool_input, user_id=user_id, workspace_id=workspace_id)
         try:
-            async with acquire_write_lock(redis, workspace_id, capability):
-                return await inner_fn(name, args, user_id, ws)
+            async with acquire_write_lock(redis, lock_workspace_id, capability):
+                return await inner_fn(
+                    tool_name, tool_input, user_id=user_id, workspace_id=workspace_id
+                )
         except WriteLockContended:
             return {"error": "resource busy — another write is in progress, retry", "blocked": True}
 
@@ -367,7 +378,13 @@ class StepRunner:
         if self._redis is not None and self._tool_registry is not None:
 
             async def _resolve_cap(tool_name: str):
-                td = await self._tool_registry.get_tool(tool_name)
+                try:
+                    td = await self._tool_registry.get_tool(tool_name)
+                except Exception:
+                    logger.debug(
+                        "write-lock capability resolution failed for %s", tool_name, exc_info=True
+                    )
+                    return None
                 return getattr(td, "capability", None) if td else None
 
             idem_execute_tool_fn = make_lock_wrapped_execute_tool_fn(
