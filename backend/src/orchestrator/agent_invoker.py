@@ -25,7 +25,8 @@ from src.config.settings import Settings
 from src.deep_runtime.agent_builder import build_deep_agent
 from src.deep_runtime.authorization import AuthorizationSource
 from src.deep_runtime.middleware.jarvis_tool_dispatcher import make_jarvis_tool_dispatcher
-from src.deep_runtime.middleware.trust_gate import make_trust_gate_middleware
+from src.deep_runtime.middleware.trust_gate import _resolve_capability, make_trust_gate_middleware
+from src.deep_runtime.middleware.write_lock import make_write_lock_middleware
 from src.deep_runtime.prompt_bridge import build_system_message
 from src.deep_runtime.stream_adapter import stream_deep_agent_events
 from src.deep_runtime.tool_bridge import build_tool_shells
@@ -207,15 +208,31 @@ class AgentInvoker:
             user_id=user_id,
             workspace_id=workspace_id,
         )
-        # Order matters: extra_middleware=(trust_gate, dispatcher) puts the gate OUTER of
-        # the dispatcher. build_deep_agent installs capability_scope first, so the full
-        # chain is capability_scope → trust_gate → dispatcher.
+
+        # Step 6C: cross-path write lock, placed INNER of trust_gate, OUTER of dispatcher.
+        # Resolve capability with the SAME registry lookup trust_gate uses, so the lock key
+        # matches the autonomous path exactly. Because trust_gate calls its handler only
+        # AFTER approval, the lock is entered around the actual execute — never held across
+        # the interrupt wait.
+        async def _resolve_cap(name: str):
+            _ok, cap = await _resolve_capability(name, workspace_id, self._db_factory)
+            return cap
+
+        write_lock = make_write_lock_middleware(
+            workspace_id=workspace_id,
+            redis=getattr(self._services, "redis", None),
+            resolve_capability=_resolve_cap,
+        )
+        # Order matters: extra_middleware=(trust_gate, write_lock, dispatcher) puts the gate
+        # OUTER of the lock and the lock OUTER of the dispatcher. build_deep_agent installs
+        # capability_scope first, so the full chain is
+        # capability_scope → trust_gate → write_lock → dispatcher.
         return await build_deep_agent(
             agent,
             shells,
             workspace_id=workspace_id,
             db_factory=self._db_factory,
-            extra_middleware=(trust_gate, dispatcher),
+            extra_middleware=(trust_gate, write_lock, dispatcher),
             system_prompt=system_prompt,
             checkpointer=self._checkpointer_provider() or MemorySaver(),
         )

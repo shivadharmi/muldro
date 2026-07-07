@@ -5,7 +5,8 @@ Tests confirm:
 - runtime="deep": build_tool_shells, make_jarvis_tool_dispatcher, make_trust_gate_middleware,
   build_system_message, and checkpointer_provider are all wired correctly into
   build_deep_agent via the shared ``_build_deep_agent_for`` helper (Step 6B Task 5).
-- The gate is OUTER of the dispatcher (``extra_middleware=(trust_gate, dispatcher)``), the
+- The gate is OUTER of the write lock and dispatcher
+  (``extra_middleware=(trust_gate, write_lock, dispatcher)``, Step 6C Task 1.2), the
   seam passes ``authorization_source="direct_user_request"`` (dormant on live chat), and the
   SAME minted ``thread_id`` is shared by the gate closure and the graph config.
 - ``stream_deep_agent_events`` is called with ``durability="sync"``.
@@ -54,10 +55,11 @@ def _make_invoker(runtime: str, checkpointer_provider=None) -> AgentInvoker:
 
 
 async def test_deep_branch_uses_shells_dispatcher_systemmessage_and_provider():
-    """runtime=deep: build_deep_agent receives shells, gate+dispatcher (in order),
+    """runtime=deep: build_deep_agent receives shells, gate+write_lock+dispatcher (in order),
     SystemMessage, provider saver — and the live seam is dormant + durability="sync"."""
     sentinel_saver = object()
     sentinel_dispatcher = object()
+    sentinel_write_lock = object()
     sentinel_gate = object()
     captured_config: dict = {}
 
@@ -91,6 +93,10 @@ async def test_deep_branch_uses_shells_dispatcher_systemmessage_and_provider():
             "src.orchestrator.agent_invoker.make_trust_gate_middleware",
             return_value=sentinel_gate,
         ) as mock_gate,
+        patch(
+            "src.orchestrator.agent_invoker.make_write_lock_middleware",
+            return_value=sentinel_write_lock,
+        ) as mock_write_lock,
         patch("src.orchestrator.agent_invoker.stream_deep_agent_events", _fake_adapter),
     ):
         frames = [
@@ -117,10 +123,14 @@ async def test_deep_branch_uses_shells_dispatcher_systemmessage_and_provider():
         f"expected shells ['SHELL'] as positional arg[1], got {mock_build.call_args.args!r}"
     )
 
-    # (b) extra_middleware is EXACTLY (trust_gate, dispatcher) — gate OUTER, dispatcher INNER.
-    assert kw["extra_middleware"] == (sentinel_gate, sentinel_dispatcher), (
-        f"expected (gate, dispatcher) in that order, got {kw.get('extra_middleware')!r}"
+    # (b) extra_middleware is EXACTLY (trust_gate, write_lock, dispatcher) — gate OUTER,
+    # write lock in the middle, dispatcher INNER (Step 6C Task 1.2).
+    assert kw["extra_middleware"] == (sentinel_gate, sentinel_write_lock, sentinel_dispatcher), (
+        f"expected (gate, write_lock, dispatcher) in that order, got {kw.get('extra_middleware')!r}"
     )
+
+    # (b'') the write lock is built with the closure-bound workspace_id (never LLM-supplied).
+    assert mock_write_lock.call_args.kwargs["workspace_id"] == "ws"
 
     # (c) system_prompt is a structured SystemMessage (not a flat string).
     assert isinstance(kw["system_prompt"], SystemMessage), (
