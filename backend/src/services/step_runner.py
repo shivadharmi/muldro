@@ -179,59 +179,16 @@ class StepRunner:
         except json.JSONDecodeError:
             return {"status": "completed", "result": response.content[0].text}
 
-    async def build_executor_tools(self) -> list[dict]:
-        """Build Claude API tool definitions filtered by the Executor's capability scope."""
-        if not self._tool_registry:
-            return []
+    async def build_executor_tools(self, step_capability: str, workspace_id: str) -> list[dict]:
+        """Offer ONLY the current step's capability tools (its primary tool + same-family
+        read-only tools), NOT the executor's full write union. The per-step scope security
+        win of Step 6C: an ``email.send`` step is never offered ``calendar.create``'s tool.
+        Delegates to the workspace-scoped ``CapabilityResolver.resolve_for_step``."""
+        from src.services.capability_resolver import CapabilityResolver
 
-        from src.orchestrator.agents import AGENTS
-        from src.tools.schemas import TOOL_INPUT_MODELS
-
-        executor = AGENTS.get("executor")
-        if not executor:
-            return []
-
-        scope = executor.capability_scope
-        tools = []
-        seen = set()
-
-        # Internal tools from TOOL_INPUT_MODELS
-        for tool_name, model_cls in TOOL_INPUT_MODELS.items():
-            tool_def = await self._tool_registry.get_tool(tool_name)
-            if tool_def and tool_def.capability and tool_def.capability in scope:
-                schema = model_cls.model_json_schema()
-                tools.append(
-                    {
-                        "name": tool_name,
-                        "description": (
-                            model_cls.__doc__.strip() if model_cls.__doc__ else tool_name
-                        ),
-                        "input_schema": schema,
-                    }
-                )
-                seen.add(tool_name)
-
-        # External tools from registry
-        try:
-            all_tools = await self._tool_registry.list_tools(enabled_only=True)
-            for tool_def in all_tools:
-                if (
-                    tool_def.name not in seen
-                    and tool_def.capability
-                    and tool_def.capability in scope
-                ):
-                    tools.append(
-                        {
-                            "name": tool_def.name,
-                            "description": tool_def.description or tool_def.name,
-                            "input_schema": tool_def.input_schema or {"type": "object"},
-                        }
-                    )
-                    seen.add(tool_def.name)
-        except Exception:
-            logger.debug("Failed to list external tools", exc_info=True)
-
-        return tools
+        async with self._db_factory() as db:
+            resolver = CapabilityResolver(db, workspace_id=workspace_id)
+            return await resolver.resolve_for_step(step_capability)
 
     async def run_readback(self, read_capability: str, read_args: dict, run: TaskRun) -> object:
         """Invoke a READ capability (post-condition read-back) via the tool path and
@@ -239,9 +196,10 @@ class StepRunner:
         resolves it to UNVERIFIED (never a false CONTRADICTED). Reads never go through
         the idempotency ledger, so this is side-effect free.
 
-        Resolution note: ``build_executor_tools()`` strips the capability from its tool
-        dicts, so we resolve ``read_capability`` -> tool via the registry's
-        ``ToolDefinition`` objects (which carry ``.capability`` and ``.name``).
+        Resolution note: ``build_executor_tools(step_capability, workspace_id)`` returns
+        capability-stripped ``{"name", "description", "input_schema"}`` dicts (no
+        ``.capability``), so we resolve ``read_capability`` -> tool independently via the
+        registry's ``ToolDefinition`` objects (which carry ``.capability`` and ``.name``).
 
         Production-safety guard (D8 footgun): a read capability whose currently-resolved
         tool cannot actually serve the required read shape (e.g. ``calendar.get`` is
@@ -346,8 +304,12 @@ class StepRunner:
         if context_prompt:
             system_blocks.append({"type": "text", "text": f"\n--- Context ---\n{context_prompt}"})
 
-        # Build tools list
-        tools = await self.build_executor_tools()
+        # Build tools list — per-step capability scope (Step 6C): only this step's
+        # capability's tools, not the executor's full write union.
+        step_capability = (step.input_data or {}).get(
+            "capability", (step.input_data or {}).get("task_type", "unknown")
+        )
+        tools = await self.build_executor_tools(step_capability, run.workspace_id or "")
 
         # Install the per-step idempotency ledger on the injected execute_tool_fn
         # (autonomous path only — the chat path passes the raw fn, so it stays a

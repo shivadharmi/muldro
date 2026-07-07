@@ -234,8 +234,9 @@ class TestResumeRun:
 def executor_with_agent_deps(settings, mock_db):
     """GraphExecutor with agent loop dependencies for agentic execution tests."""
 
-    async def mock_db_factory():
-        """Mock async context manager for db_factory."""
+    def mock_db_factory():
+        """Mock db session factory — a sync callable returning an async CM, matching a
+        sessionmaker's contract (``build_executor_tools`` opens ``async with db_factory()``)."""
 
         class MockDbContext:
             async def __aenter__(self):
@@ -245,6 +246,14 @@ def executor_with_agent_deps(settings, mock_db):
                 pass
 
         return MockDbContext()
+
+    # build_executor_tools now resolves per-step tools via CapabilityResolver, which runs
+    # a real ``db.execute`` -> ``.scalars().all()``. These agent-loop tests are not about
+    # tool scoping (the old build_executor_tools returned [] with no tool_registry), so make
+    # the enabled-tools query resolve to an empty list and keep tools=[] as before.
+    _empty_result = MagicMock()
+    _empty_result.scalars.return_value.all.return_value = []
+    mock_db.execute = AsyncMock(return_value=_empty_result)
 
     execute_tool_fn = AsyncMock()
 
