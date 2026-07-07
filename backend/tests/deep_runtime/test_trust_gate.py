@@ -541,3 +541,54 @@ async def test_unexpected_decision_requires_approval_fail_closed():
     assert require_approval is True
     assert approval_id == "apr_new"
     create_approval_mock.assert_awaited_once()
+
+
+# ── Test 10: lost the create race → IntegrityError → rollback → re-SELECT finds winner ─
+
+
+async def test_get_or_create_reselects_on_integrity_error():
+    """SELECT-miss -> create -> commit raises IntegrityError (lost the race) -> rollback ->
+    re-SELECT finds the row the winner committed -> return ITS id, no duplicate."""
+    from sqlalchemy.exc import IntegrityError
+
+    risk = RiskAssessment(
+        risk_level="high", reasoning="x", reversible=False, blast_radius="external_single"
+    )
+    fake_te = MagicMock()
+    fake_te.evaluate = AsyncMock(
+        return_value=SimpleNamespace(decision="auto_execute_silent", justification="j")
+    )
+    winner = SimpleNamespace(approval_id="apr_winner")
+
+    @asynccontextmanager
+    async def _factory():
+        db = MagicMock(name="race-db")
+        miss = MagicMock()
+        miss.scalars.return_value.first.return_value = None
+        found = MagicMock()
+        found.scalars.return_value.first.return_value = winner
+        db.execute = AsyncMock(side_effect=[miss, found])  # 1st SELECT miss, re-SELECT found
+        db.commit = AsyncMock(side_effect=IntegrityError("dup", None, Exception("dup")))
+        db.rollback = AsyncMock()
+        db.add = MagicMock()
+        yield db
+
+    create_approval_mock = AsyncMock(return_value=SimpleNamespace(approval_id="apr_loser"))
+    with (
+        patch(f"{MODULE}.TrustEngine", return_value=fake_te),
+        patch(f"{MODULE}.create_approval", create_approval_mock),
+    ):
+        require_approval, approval_id = await _decide_and_maybe_persist(
+            name="echo",
+            capability="email.send",
+            risk=risk,
+            workspace_id=WORKSPACE_ID,
+            user_id=USER_ID,
+            thread_id=THREAD_ID,
+            tool_call_id="call_echo",
+            agent_name="operator",
+            db_factory=_factory,
+        )
+    assert require_approval is True
+    assert approval_id == "apr_winner"  # the committed winner, NOT apr_loser
+    create_approval_mock.assert_awaited_once()

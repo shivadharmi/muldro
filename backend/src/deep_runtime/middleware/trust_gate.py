@@ -45,6 +45,7 @@ from langchain.agents.middleware import AgentMiddleware, wrap_tool_call
 from langchain_core.messages import ToolMessage
 from langgraph.types import interrupt
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from src.deep_runtime.authorization import is_gated_source
 from src.deep_runtime.builtins import DEEPAGENTS_BUILTIN_NAMES
@@ -124,12 +125,14 @@ async def _decide_and_maybe_persist(
         if not require_approval:
             return (False, None)
 
-        # Idempotent get-or-create keyed on (workspace_id, thread_id, tool_call_id).
+        # Idempotent get-or-create keyed on (workspace_id, thread_id, tool_call_id) via the
+        # promoted COLUMNS (fenced by the partial UNIQUE index uq_approvals_thread_tool_call).
         # NO status filter: the resume path may already have marked this row
         # approved/rejected, and a pending-only filter would miss it and duplicate.
         stmt = select(Approval).where(
             Approval.workspace_id == workspace_id,
-            Approval.artifact_refs.op("@>")({"thread_id": thread_id, "tool_call_id": tool_call_id}),
+            Approval.thread_id == thread_id,
+            Approval.tool_call_id == tool_call_id,
         )
         result = await db.execute(stmt)
         existing = result.scalars().first()
@@ -157,7 +160,20 @@ async def _decide_and_maybe_persist(
                 "agent_name": agent_name,
             },
         )
-        await db.commit()
+        try:
+            await db.commit()
+        except IntegrityError:
+            # Lost the create race — another concurrent replay/writer committed the same
+            # (workspace_id, thread_id, tool_call_id) first, tripping the partial UNIQUE
+            # index. Roll back and re-select the winner's row.
+            await db.rollback()
+            result = await db.execute(stmt)
+            existing = result.scalars().first()
+            if existing is None:
+                # The unique violation implies a row exists; if we still can't see it,
+                # fail LOUD rather than returning a bogus approval_id.
+                raise
+            return (True, existing.approval_id)
         return (True, approval.approval_id)
 
 

@@ -22,18 +22,24 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy import delete
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 from ulid import ULID
 
 from src.config.settings import get_settings
+from src.deep_runtime.middleware.trust_gate import _decide_and_maybe_persist
 from src.models.approvals import Approval
 from src.models.users import User, Workspace
 from src.services.approval_service import create_approval
+from src.services.risk_assessor import RiskAssessment
+
+TRUST_GATE_MODULE = "src.deep_runtime.middleware.trust_gate"
 
 
 def _db_reachable() -> bool:
@@ -236,3 +242,91 @@ async def test_same_tuple_different_workspace_does_not_conflict():
             b.tool_call_id = tool_call_id
             # Different workspace_id → no conflict.
             await db.commit()
+
+
+async def test_decide_and_persist_writes_columns_and_get_path_returns_same_row():
+    """Task 2.2: ``_decide_and_maybe_persist`` creates an Approval via ``create_approval``
+    that POPULATES the promoted ``thread_id``/``tool_call_id`` columns (Step 1), and a
+    replay with the SAME (workspace_id, thread_id, tool_call_id) tuple finds the row BY
+    THOSE COLUMNS and reuses its id — exactly ONE row, no duplicate (Step 2 get-path).
+
+    ``TrustEngine`` is patched so ``evaluate`` returns ``approval_required`` (deterministic
+    create path); ``create_approval`` runs FOR REAL so the columns are actually written.
+    """
+    async with _env() as (factory, user_id, workspace_id, _ws2):
+        thread_id = "chat_decide_1"
+        tool_call_id = "tc_decide_1"
+        risk = RiskAssessment(
+            risk_level="high",
+            reasoning="sends external email",
+            reversible=False,
+            blast_radius="external_single",
+        )
+        fake_te = MagicMock()
+        fake_te.evaluate = AsyncMock(
+            return_value=SimpleNamespace(decision="approval_required", justification="risky")
+        )
+
+        # Phase 1 — CREATE path: real create_approval runs and writes the columns.
+        with patch(f"{TRUST_GATE_MODULE}.TrustEngine", return_value=fake_te):
+            require_approval, approval_id = await _decide_and_maybe_persist(
+                name="send_email",
+                capability="email.send",
+                risk=risk,
+                workspace_id=workspace_id,
+                user_id=user_id,
+                thread_id=thread_id,
+                tool_call_id=tool_call_id,
+                agent_name="operator",
+                db_factory=factory,
+            )
+        assert require_approval is True
+        assert approval_id and approval_id.startswith("apr_")
+
+        # Exactly ONE row for the tuple, and the COLUMNS are populated (proves Step 1).
+        async with factory() as db:
+            rows = (
+                (
+                    await db.execute(
+                        select(Approval).where(
+                            Approval.workspace_id == workspace_id,
+                            Approval.thread_id == thread_id,
+                            Approval.tool_call_id == tool_call_id,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        assert len(rows) == 1
+        assert rows[0].approval_id == approval_id
+        assert rows[0].thread_id == thread_id
+        assert rows[0].tool_call_id == tool_call_id
+
+        # Phase 2 — GET path: the SAME tuple resolves to the committed row, no duplicate.
+        with patch(f"{TRUST_GATE_MODULE}.TrustEngine", return_value=fake_te):
+            require_approval_2, approval_id_2 = await _decide_and_maybe_persist(
+                name="send_email",
+                capability="email.send",
+                risk=risk,
+                workspace_id=workspace_id,
+                user_id=user_id,
+                thread_id=thread_id,
+                tool_call_id=tool_call_id,
+                agent_name="operator",
+                db_factory=factory,
+            )
+        assert require_approval_2 is True
+        assert approval_id_2 == approval_id  # same id → the get path, not a second create
+
+        async with factory() as db:
+            count = (
+                await db.execute(
+                    select(func.count(Approval.approval_id)).where(
+                        Approval.workspace_id == workspace_id,
+                        Approval.thread_id == thread_id,
+                        Approval.tool_call_id == tool_call_id,
+                    )
+                )
+            ).scalar_one()
+        assert count == 1, f"get path must not duplicate; got {count} rows"

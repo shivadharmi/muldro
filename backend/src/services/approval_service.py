@@ -60,6 +60,8 @@ async def create_approval(
         title=title,
         summary=summary,
         artifact_refs=artifact_refs,
+        thread_id=(artifact_refs or {}).get("thread_id"),
+        tool_call_id=(artifact_refs or {}).get("tool_call_id"),
         risk_level=risk_level,
         status="pending",
         expires_at=expires_at,
