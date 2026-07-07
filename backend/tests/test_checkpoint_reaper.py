@@ -291,6 +291,47 @@ async def test_sweep_reaps_only_decided_older_than_window():
         assert reaped == len(deleted)
 
 
+@requires_db
+async def test_sweep_skips_thread_with_a_pending_approval_even_if_another_is_decided_old():
+    """A single deep turn reuses ONE thread_id across tool calls, so two sequential writes
+    produce two Approval rows sharing that thread_id. If write#1 is approved (decided, >24h
+    ago) while write#2 is still PENDING on the SAME thread, the sweep must NOT reap that
+    thread — the pending sibling's resume still needs the checkpoint. The guard is
+    per-THREAD (``decided - pending``), not per-row: even though the shared thread has a
+    decided-old approval, its pending sibling protects it."""
+    async with _gate_env() as (factory, user_id, workspace_id):
+        now = datetime.now(timezone.utc)
+        shared_tid = f"shared_thread_{ULID()}"
+
+        # write#1 on the shared thread: approved 48h ago (decided + old).
+        await _seed_approval(
+            factory,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            thread_id=shared_tid,
+            status="approved",
+            decided_at=now - timedelta(hours=48),
+        )
+        # write#2 on the SAME thread: still pending (no decided_at) — the protector.
+        await _seed_approval(
+            factory,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            thread_id=shared_tid,
+            status="pending",
+            decided_at=None,
+        )
+
+        fake = _FakeSaver()
+        reaped = await sweep_decided_approval_checkpoints(fake, factory, retention_hours=24)
+
+        assert shared_tid not in set(fake.deleted), (
+            "a thread with a still-PENDING approval must NOT be reaped, even when a sibling "
+            "approval on the same thread is decided-and-old (per-THREAD guard)"
+        )
+        assert reaped == 0, f"expected zero reaped threads (pending sibling protects), got {reaped}"
+
+
 # ── real-saver end-to-end: scripted streaming model + wired AgentInvoker ──────────
 
 

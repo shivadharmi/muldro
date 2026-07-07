@@ -49,16 +49,23 @@ async def sweep_decided_approval_checkpoints(
 
     cutoff = (now or datetime.now(timezone.utc)) - timedelta(hours=retention_hours)
     async with db_factory() as db:
-        stmt = select(Approval.thread_id).where(
+        decided_stmt = select(Approval.thread_id).where(
             Approval.status.in_(("approved", "rejected", "expired")),
             Approval.decided_at.is_not(None),
             Approval.decided_at < cutoff,
             Approval.thread_id.is_not(None),
         )
-        result = await db.execute(stmt)
-        thread_ids = [t for t in result.scalars().all() if t]
+        decided = {t for t in (await db.execute(decided_stmt)).scalars().all() if t}
+        # Per-THREAD guard: a thread that ALSO has ANY still-pending approval must NOT be
+        # reaped — a deep turn reuses one thread_id across tool calls, so a decided write#1
+        # and a pending write#2 can share a thread; reaping would strand write#2's resume.
+        pending_stmt = select(Approval.thread_id).where(
+            Approval.status == "pending", Approval.thread_id.is_not(None)
+        )
+        pending = {t for t in (await db.execute(pending_stmt)).scalars().all() if t}
+        reapable = decided - pending
     reaped = 0
-    for tid in set(thread_ids):
+    for tid in reapable:
         if await reap_thread(saver, tid):
             reaped += 1
     return reaped

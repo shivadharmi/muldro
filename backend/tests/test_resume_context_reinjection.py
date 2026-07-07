@@ -338,3 +338,62 @@ async def test_resume_reinjects_persisted_context_block():
         assert captured.get("context") == sentinel, (
             f"resume must re-inject the persisted context_block; got {captured.get('context')!r}"
         )
+
+
+@pytest.mark.skipif(not _DB_REACHABLE, reason="Postgres not reachable")
+async def test_resume_threads_context_into_rebuilt_gate():
+    """CF-1 chained-approval carry-forward: resume must pass the persisted ``context_block``
+    into ``_build_deep_agent_for`` (which threads it into the trust_gate). Without this, a
+    resumed continuation that pauses AGAIN on a second write would persist ``context_block=""``
+    for that chained approval, losing the original turn's context. Spy on
+    ``_build_deep_agent_for`` and assert the sentinel arrives as the ``context_block`` kwarg."""
+    sentinel = "ORIG_CTX_SENTINEL"
+
+    async with _gate_env() as (factory, user_id, workspace_id):
+        approval_id = f"apr_{ULID()}"
+        thread_id = f"chat_{ULID()}"
+        async with factory() as db:
+            db.add(
+                _seed_pending_approval(
+                    approval_id=approval_id,
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                    refs={
+                        "thread_id": thread_id,
+                        "agent_name": "executor",
+                        "tool_call_id": "call_send_1",
+                        "context_block": sentinel,
+                    },
+                )
+            )
+            await db.commit()
+
+        invoker = _make_invoker(factory=factory)
+
+        # Patch the rebuild itself so we can inspect the kwargs the resume threads into it.
+        build_spy = AsyncMock(return_value=MagicMock())
+        invoker._build_deep_agent_for = build_spy
+
+        async def _empty_stream(*args, **kwargs):
+            return
+            yield  # pragma: no cover - makes this an async generator
+
+        with patch(f"{INVOKER_MODULE}.stream_deep_agent_events", _empty_stream):
+            frames = [
+                f
+                async for f in invoker.resume_deep_turn(
+                    approval_id=approval_id,
+                    decision="approve",
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                )
+            ]
+
+        assert not any(f.get("event") == "error" for f in frames), f"frames={frames}"
+        build_spy.assert_awaited_once()
+        # THE PROOF: the persisted context is carried into the rebuilt gate, so a chained
+        # approval created during this resume would carry the original turn's context (not "").
+        assert build_spy.await_args.kwargs.get("context_block") == sentinel, (
+            "resume must thread the persisted context_block into _build_deep_agent_for; "
+            f"got {build_spy.await_args.kwargs.get('context_block')!r}"
+        )

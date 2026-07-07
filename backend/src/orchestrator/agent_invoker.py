@@ -467,6 +467,10 @@ class AgentInvoker:
             # still execute.
             authorization_source=AuthorizationSource.AUTONOMOUS,
             system_prompt=build_system_message(system_blocks),
+            # CF-1: thread the original turn's context forward so a CHAINED approval created
+            # if this resumed continuation pauses AGAIN (a second write) carries the same
+            # context — otherwise the trust_gate would persist context_block="" for it.
+            context_block=persisted_context,
         )
         config = {"configurable": {"thread_id": thread_id}}
         # Step 6C CF-4: same reap-on-non-paused-completion rule as the initial turn. A resume
