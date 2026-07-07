@@ -97,6 +97,27 @@ async def _resolve_capability(name: str, workspace_id: str, db_factory) -> tuple
     return (True, getattr(tool, "capability", None))
 
 
+async def _find_existing_approval(workspace_id, thread_id, tool_call_id, db_factory):
+    """Return the Approval already persisted for this (workspace, thread, tool_call) tuple, or
+    None. Used to detect the RESUME REPLAY: the gate body re-runs on resume, and if the approval
+    already exists we skip the redundant risk assessment + trust evaluation and go straight to
+    ``interrupt()`` (which returns the resume value immediately).
+
+    Keyed on the promoted COLUMNS (CF-3) fenced by the partial UNIQUE index
+    ``uq_approvals_thread_tool_call``. NO status filter: the resume path marks the original
+    approved/rejected BEFORE resuming the graph, so a pending-only filter would miss it. The
+    session is opened and CLOSED here, never held across ``interrupt()``.
+    """
+    async with db_factory() as db:
+        stmt = select(Approval).where(
+            Approval.workspace_id == workspace_id,
+            Approval.thread_id == thread_id,
+            Approval.tool_call_id == tool_call_id,
+        )
+        result = await db.execute(stmt)
+        return result.scalars().first()
+
+
 async def _decide_and_maybe_persist(
     *,
     name: str,
@@ -258,6 +279,35 @@ def make_trust_gate_middleware(
         if not capability or is_read_only_capability(capability):
             return await handler(request)
 
+        # CF-2: on the resume REPLAY the Approval already exists — read its persisted decision
+        # and go STRAIGHT to interrupt() (which returns the resume value immediately), skipping
+        # the redundant risk assessment + trust evaluation that the FIRST pass already ran and
+        # persisted. Reads bypass ABOVE, so a read never pays for this extra SELECT.
+        existing = await _find_existing_approval(workspace_id, thread_id, tool_call_id, db_factory)
+        if existing is not None:
+            verdict = interrupt(
+                {
+                    "approval_id": existing.approval_id,
+                    "thread_id": thread_id,
+                    "capability": (existing.artifact_refs or {}).get("capability", capability),
+                    "risk_level": existing.risk_level,
+                }
+            )
+            approved = verdict == "approve" or (
+                isinstance(verdict, dict) and verdict.get("decision") == "approve"
+            )
+            if approved:
+                return await handler(request)
+            return ToolMessage(
+                content=json.dumps({"error": "rejected by approver", "rejected": True}),
+                tool_call_id=tool_call_id,
+                name=name,
+                status="error",
+            )
+
+        # First pass (no existing row): assess + decide + persist, then interrupt. The
+        # get-or-create inside _decide_and_maybe_persist stays as the replay-safe create with
+        # its IntegrityError re-select — the early check above only handles the REPLAY case.
         # Risk assessment with NO DB session open (it may hit a slow LLM).
         risk = await assess_risk(capability, args)
 

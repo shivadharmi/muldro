@@ -40,6 +40,7 @@ from langgraph.types import Command
 
 from src.deep_runtime.middleware.trust_gate import (
     _decide_and_maybe_persist,
+    _find_existing_approval,
     make_trust_gate_middleware,
 )
 from src.services.risk_assessor import RiskAssessment
@@ -592,3 +593,25 @@ async def test_get_or_create_reselects_on_integrity_error():
     assert require_approval is True
     assert approval_id == "apr_winner"  # the committed winner, NOT apr_loser
     create_approval_mock.assert_awaited_once()
+
+
+# ── Test 11: CF-2 _find_existing_approval reads the persisted row by columns ──────
+
+
+async def test_find_existing_approval_returns_matching_row():
+    """CF-2: ``_find_existing_approval`` returns the Approval keyed on the promoted COLUMNS
+    (workspace_id, thread_id, tool_call_id) — the replay-detection SELECT."""
+    existing = SimpleNamespace(approval_id="apr_replay", risk_level="high", artifact_refs={})
+    result = await _find_existing_approval(
+        WORKSPACE_ID, THREAD_ID, "call_echo", _persist_db_factory(existing=existing)
+    )
+    assert result is existing
+
+
+async def test_find_existing_approval_returns_none_when_absent():
+    """On the FIRST pass (no prior row) it returns None, so the gate falls through to
+    assess + persist — the CF-2 skip only fires on the replay."""
+    result = await _find_existing_approval(
+        WORKSPACE_ID, THREAD_ID, "call_echo", _persist_db_factory(existing=None)
+    )
+    assert result is None

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -40,11 +40,13 @@ from src.models.trust_state import TrustCeiling, TrustState
 from src.models.users import User, Workspace
 from src.orchestrator.agent_invoker import AgentInvoker
 from src.orchestrator.agents import SubAgent
+from src.services.risk_assessor import RiskAssessment
 from tests.conftest import make_mock_settings
 
 TRUST_GATE_MODULE = "src.deep_runtime.middleware.trust_gate"
 CAP_SCOPE_MODULE = "src.deep_runtime.middleware.capability_scope"
 AGENT_BUILDER_MODULE = "src.deep_runtime.agent_builder"
+RISK_ASSESSOR_MODULE = "src.services.risk_assessor"
 
 TOOL_DEF = {
     "name": "send_email",
@@ -506,3 +508,125 @@ async def test_negative_control_bypassed_gate_check_does_not_pause():
 
         count = await _approval_count(factory, workspace_id=workspace_id, thread_id=thread_id)
         assert count == 0, "a bypassed gate must never persist an Approval row"
+
+
+# ── (F) CF-2: risk assessment runs EXACTLY ONCE across pause + resume ──────────────
+
+
+async def _drive_pause_then_approve_counting_assess(*, patch_find_existing):
+    """Shared harness: force-autonomous PAUSE then resume(approve), spying on the risk
+    assessor. Returns ``(assess_call_count, executed, approval_count)``.
+
+    ``patch_find_existing`` toggles the negative control: when True, ``_find_existing_approval``
+    is patched to always return None — reverting the gate to its pre-CF-2 always-assess shape
+    so the replay re-assesses (proving the CF-2 early check is what suppresses the 2nd assess).
+    """
+    async with _gate_env() as (factory, user_id, workspace_id):
+        executed: list = []
+        checkpointer = MemorySaver()
+        invoker = _make_invoker(factory=factory, checkpointer=checkpointer, executed=executed)
+        agent = invoker._agents["executor"]
+        thread_id = f"chat_{ULID()}"
+
+        # SPY on the exact seam _build_deep_agent_for's _assess_risk closure calls. It returns a
+        # fixed high-risk assessment; email.send is statically irreversible so approval is forced.
+        assess_spy = AsyncMock(
+            return_value=RiskAssessment(
+                risk_level="high",
+                reasoning="spy — forced high",
+                reversible=False,
+                blast_radius="external_single",
+            )
+        )
+
+        patches = [
+            patch(f"{AGENT_BUILDER_MODULE}.build_chat_model", return_value=_ScriptedModel()),
+            patch(f"{CAP_SCOPE_MODULE}._is_in_scope", AsyncMock(return_value=True)),
+            patch(
+                f"{TRUST_GATE_MODULE}._resolve_capability",
+                AsyncMock(return_value=(True, "email.send")),
+            ),
+            patch(f"{RISK_ASSESSOR_MODULE}.get_or_assess_risk", assess_spy),
+        ]
+        if patch_find_existing:
+            patches.append(
+                patch(f"{TRUST_GATE_MODULE}._find_existing_approval", AsyncMock(return_value=None))
+            )
+
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+
+            deep_agent = await invoker._build_deep_agent_for(
+                agent,
+                [TOOL_DEF],
+                user_id=user_id,
+                workspace_id=workspace_id,
+                thread_id=thread_id,
+                authorization_source="autonomous",
+                system_prompt=build_system_message(invoker.build_system_prompt(agent, "")),
+            )
+            config = {"configurable": {"thread_id": thread_id}}
+
+            frames1 = [
+                f
+                async for f in stream_deep_agent_events(
+                    deep_agent,
+                    {"messages": [{"role": "user", "content": "go"}]},
+                    config,
+                    agent_name="executor",
+                    model="claude-sonnet-5",
+                    durability="sync",
+                )
+            ]
+            approval_frames = [f for f in frames1 if f["event"] == "approval_needed"]
+            assert len(approval_frames) == 1, f"expected one pause; frames1={frames1}"
+            approval_id = approval_frames[0]["approval_id"]
+            assert executed == [], "tool must not run while paused"
+
+            frames2 = [
+                f
+                async for f in invoker.resume_deep_turn(
+                    approval_id=approval_id,
+                    decision="approve",
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                )
+            ]
+            assert any(f["event"] == "agent_done" for f in frames2), f"frames2={frames2}"
+
+        count = await _approval_count(factory, workspace_id=workspace_id, thread_id=thread_id)
+        return assess_spy.call_count, executed, count
+
+
+async def test_cf2_risk_assessment_runs_exactly_once_across_pause_and_resume():
+    """CF-2: with the early replay check LIVE, the risk assessor runs EXACTLY ONCE — the
+    first pass assesses + persists; the resume REPLAY reads the persisted Approval and goes
+    straight to interrupt(), skipping the redundant assess + trust evaluation. The write still
+    executes exactly once and no duplicate Approval row is created."""
+    call_count, executed, approval_count = await _drive_pause_then_approve_counting_assess(
+        patch_find_existing=False
+    )
+    assert call_count == 1, f"CF-2 must assess ONCE across pause+resume; got {call_count}"
+    assert executed == [("send_email", TOOL_ARGS)], (
+        f"write must execute exactly once after approval; executed={executed}"
+    )
+    assert approval_count == 1, f"exactly one Approval row expected; got {approval_count}"
+
+
+async def test_cf2_negative_control_without_replay_skip_assesses_twice():
+    """NEGATIVE CONTROL — prove the CF-2 early check has teeth: with ``_find_existing_approval``
+    forced to always return None (reverting the gate to its pre-CF-2 always-assess shape), the
+    resume REPLAY re-runs the risk assessment, so the spy is called TWICE. The idempotent
+    get-or-create inside ``_decide_and_maybe_persist`` still keeps the write + Approval singular,
+    so this proves the SECOND assess is pure waste that the CF-2 check removes."""
+    call_count, executed, approval_count = await _drive_pause_then_approve_counting_assess(
+        patch_find_existing=True
+    )
+    assert call_count == 2, (
+        f"without the CF-2 skip the replay must re-assess (teeth); got {call_count}"
+    )
+    assert executed == [("send_email", TOOL_ARGS)], (
+        f"write must still execute exactly once (idempotent persist); executed={executed}"
+    )
+    assert approval_count == 1, f"idempotency must still hold; got {approval_count}"
