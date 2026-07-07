@@ -24,6 +24,7 @@ from src.config.models import BEDROCK_MODEL_TIERS, MODEL_TIERS
 from src.config.settings import Settings
 from src.deep_runtime.agent_builder import build_deep_agent
 from src.deep_runtime.authorization import AuthorizationSource
+from src.deep_runtime.checkpoint_reaper import reap_thread
 from src.deep_runtime.middleware.jarvis_tool_dispatcher import make_jarvis_tool_dispatcher
 from src.deep_runtime.middleware.trust_gate import _resolve_capability, make_trust_gate_middleware
 from src.deep_runtime.middleware.write_lock import make_write_lock_middleware
@@ -93,6 +94,15 @@ class AgentInvoker:
     def _db_factory(self):
         """Resolve the current DB session factory live via the provider."""
         return self._db_factory_provider()
+
+    @property
+    def checkpointer(self):
+        """The durable LangGraph checkpointer for this turn (or None on the legacy runtime).
+
+        Public accessor so the scheduler's retention-sweep tick can reach the durable saver
+        without a double-private reach into ``_checkpointer_provider``. Returns ``None`` when
+        no durable saver is wired (legacy runtime, or a worker built without one)."""
+        return self._checkpointer_provider()
 
     def set_agents(self, agents: dict[str, SubAgent]) -> None:
         """Replace the agent set (called after a runtime DB agent reload)."""
@@ -298,6 +308,10 @@ class AgentInvoker:
             # approval_needed frame). It is frame-neutral and a no-op on the live MemorySaver
             # default; with a durable saver a non-pausing direct turn commits each superstep
             # synchronously — a minor, accepted latency cost for one shared stream path.
+            # Step 6C CF-4: reap this thread's durable checkpoints once the turn finishes
+            # WITHOUT pausing. A paused turn emits an ``approval_needed`` frame and keeps its
+            # checkpoint until the resume path runs — reaping it here would strand the resume.
+            paused = False
             async for frame in stream_deep_agent_events(
                 deep_agent,
                 graph_input,
@@ -306,7 +320,11 @@ class AgentInvoker:
                 model=model,
                 durability="sync",
             ):
+                if isinstance(frame, dict) and frame.get("event") == "approval_needed":
+                    paused = True
                 yield frame
+            if not paused:
+                await reap_thread(self._checkpointer_provider(), thread_id)
             return
 
         async for evt in agent_loop(
@@ -451,6 +469,10 @@ class AgentInvoker:
             system_prompt=build_system_message(system_blocks),
         )
         config = {"configurable": {"thread_id": thread_id}}
+        # Step 6C CF-4: same reap-on-non-paused-completion rule as the initial turn. A resume
+        # that pauses AGAIN (re-interrupts on a later write) keeps its checkpoint for the next
+        # resume; a resume that runs to completion reaps the thread it just finished.
+        paused = False
         async for frame in stream_deep_agent_events(
             deep_agent,
             Command(resume=decision),
@@ -459,7 +481,11 @@ class AgentInvoker:
             model=model,
             durability="sync",
         ):
+            if isinstance(frame, dict) and frame.get("event") == "approval_needed":
+                paused = True
             yield frame
+        if not paused:
+            await reap_thread(self._checkpointer_provider(), thread_id)
 
     async def call_agent(
         self,

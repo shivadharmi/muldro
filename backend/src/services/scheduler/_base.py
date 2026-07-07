@@ -158,6 +158,11 @@ class SchedulerBase:
         if self._tick_count % 120 == 0:
             await self._run_subtick("webhook_renewal", self._tick_webhook_renewal(factory))
 
+        # 4f. Durable-checkpoint retention sweep — every 120th tick (~1h).
+        # No-op unless runtime="deep" AND a durable saver is reachable (Step 6C CF-4).
+        if self._tick_count % 120 == 0:
+            await self._run_subtick("checkpoint_reaper", self._tick_checkpoint_reaper(factory))
+
         # 5. Process due schedules (bounded so a stuck schedule fire can't hang the loop)
         await self._run_subtick("schedule_dispatch", self._process_due_schedules(factory))
 

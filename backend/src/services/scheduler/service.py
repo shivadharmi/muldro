@@ -8,6 +8,7 @@ mutable tick state the mixins share through the composed instance.
 
 from src.services.scheduler._base import SchedulerBase
 from src.services.scheduler.background_tasks_tick import BackgroundTasksTickMixin
+from src.services.scheduler.checkpoint_reaper_tick import CheckpointReaperTickMixin
 from src.services.scheduler.deferred_verification_tick import DeferredVerificationTickMixin
 from src.services.scheduler.dlq_tick import DlqTickMixin
 from src.services.scheduler.lifecycle_tick import LifecycleTickMixin
@@ -30,6 +31,7 @@ class SchedulerLoop(
     ScheduleDispatchMixin,
     WebhookRenewalTickMixin,
     DeferredVerificationTickMixin,
+    CheckpointReaperTickMixin,
     SchedulerBase,
 ):
     """Backend-owned scheduler. Runs as asyncio task in worker thread."""
