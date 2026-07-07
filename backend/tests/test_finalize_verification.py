@@ -152,8 +152,10 @@ async def test_auto_execute_irreversible_unverified_lands_completed_unverified(m
 async def test_approved_resume_irreversible_unverified_lands_completed_unverified(mock_risk):
     """Approved-resume path (the highest-risk write class): a HUMAN-approved
     irreversible write must ALSO be verified — landing 'completed_unverified' when the
-    read-back is UNVERIFIED, never bare 'completed'. Trust is NOT re-recorded here (the
-    approval path records trust at approval time)."""
+    read-back is UNVERIFIED, never bare 'completed'. On UNVERIFIED the positive trust
+    increment does NOT fire at finalize (Step 6C relocates it to the CONFIRMED outcome);
+    instead the user's decision_type is stamped into the verification meta so the deferred
+    tick can increment with it."""
     settings = make_mock_settings()
     mock_db = AsyncMock()
     mock_db.add = MagicMock()
@@ -165,7 +167,10 @@ async def test_approved_resume_irreversible_unverified_lands_completed_unverifie
 
     executor = _make_executor(settings, mock_db)
     _wire_common(executor)
-    executor._trust_gate.record_auto_execution_outcome = AsyncMock()
+    executor._trust_gate.record_user_approval_outcome = AsyncMock()
+    # The persisted decision_type read is exercised separately (test_trust_increment_
+    # relocation); here we stub it so this test stays focused on the terminal status.
+    executor._dag_runner._read_approval_decision_type = AsyncMock(return_value="approved")
 
     step = _make_step(status="running")  # already_approved
     run = _make_run()
@@ -173,5 +178,7 @@ async def test_approved_resume_irreversible_unverified_lands_completed_unverifie
     await executor._execute_step(run, step)
 
     assert step.status == "completed_unverified"
-    # No trust increment on the approved-resume path (recorded at approval time).
-    executor._trust_gate.record_auto_execution_outcome.assert_not_called()
+    # UNVERIFIED → the increment is deferred to the tick, NOT recorded at finalize.
+    executor._trust_gate.record_user_approval_outcome.assert_not_called()
+    # The user's decision_type is stamped into the verification meta for the deferred tick.
+    assert step.output_data["verification"]["decision_type"] == "approved"

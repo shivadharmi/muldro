@@ -824,6 +824,11 @@ class TestExecuteStepEmptyCapabilityFailsClosed:
         executor._store.resolve_step_references = AsyncMock(return_value={})
         executor._dag_runner.finalize_step = AsyncMock()
         executor._surface_emitter.emit_event = AsyncMock()
+        # Step 6C: the resumed path reads the persisted decision_type + records the
+        # verified-outcome trust increment; stub both so this gate-skip test does not
+        # depend on a real DB (mirrors the finalize_step stub above).
+        executor._dag_runner._read_approval_decision_type = AsyncMock(return_value="approved")
+        executor._trust_gate.record_user_approval_outcome = AsyncMock()
 
         step = MagicMock()
         step.step_id = "step_resumed"

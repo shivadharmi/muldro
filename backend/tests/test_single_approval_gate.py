@@ -208,6 +208,11 @@ class TestSingleGateResumedStep:
             return_value={"capability": "email.send"}
         )
         executor._dag_runner.finalize_step = AsyncMock()
+        # Step 6C: the resumed path reads the persisted decision_type + records the
+        # verified-outcome trust increment; stub both so this test stays focused on the
+        # gate-skip/verify wiring and does not depend on a real DB.
+        executor._dag_runner._read_approval_decision_type = AsyncMock(return_value="approved")
+        executor._trust_gate.record_user_approval_outcome = AsyncMock()
 
         step = _make_step(status="running")
         run = _make_run()

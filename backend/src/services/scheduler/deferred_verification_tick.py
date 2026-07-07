@@ -97,7 +97,10 @@ async def _apply_recheck(db, run, step, verdict: VerifyVerdict, *, notifier) -> 
                         run.workspace_id or "",
                         capability,
                         meta.get("risk_level", "high"),
-                        "approved",
+                        # Honor the user's decision_type when a human-approved write is
+                        # confirmed here (stamped by dag_runner). Auto-exec writes carry
+                        # none → default "approved".
+                        meta.get("decision_type", "approved"),
                     )
             except Exception:
                 logger.debug("Deferred trust increment failed for %s", step.step_id, exc_info=True)

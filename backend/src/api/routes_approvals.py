@@ -181,19 +181,11 @@ async def approve_action(
         details={"reason": req.reason if req else None},
     )
 
-    # Trust feedback loop — record approval for graduated autonomy
-    try:
-        from src.services.risk_assessor import record_approval_decision
-
-        capability = approval.approval_type
-        if ":" in capability:
-            capability = capability.split(":", 1)[1]
-        decision_type = "modified" if req and req.reason else "approved"
-        await record_approval_decision(
-            db, workspace_id, capability, approval.risk_level or "low", decision_type
-        )
-    except Exception:
-        logger.warning("Trust feedback failed for approval %s", approval_id, exc_info=True)
+    # Step 6C: the POSITIVE trust increment is relocated to the CONFIRMED-verified outcome
+    # (dag_runner approved-resume / deferred tick), mirroring the auto-exec model — NOT fired
+    # here at click. Persist the user's decision_type so the verified-outcome hook can use it.
+    decision_type = "modified" if req and req.reason else "approved"
+    approval.artifact_refs = {**(approval.artifact_refs or {}), "decision_type": decision_type}
 
     await db.commit()
 

@@ -241,3 +241,24 @@ class TrustGate:
             )
         except Exception:
             logger.debug("Failed to record auto-execution trust outcome", exc_info=True)
+
+    async def record_user_approval_outcome(
+        self, capability: str, risk_level: str, workspace_id: str, decision_type: str
+    ) -> None:
+        """Record a user-approved write's trust outcome AFTER it verified CONFIRMED.
+
+        The positive increment for a human-approved write fires here (on the verified
+        outcome), NOT at approval-click — mirroring record_auto_execution_outcome. Preserves
+        the user's decision_type ("approved"/"modified"). Best-effort in a SAVEPOINT so a
+        failed trust write never poisons the run's own commit."""
+        if not capability:
+            return
+        try:
+            from src.services.risk_assessor import record_approval_decision
+
+            async with self._db.begin_nested():
+                await record_approval_decision(
+                    self._db, workspace_id, capability, risk_level, decision_type
+                )
+        except Exception:
+            logger.debug("Failed to record user-approval trust outcome", exc_info=True)

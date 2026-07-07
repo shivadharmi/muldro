@@ -494,13 +494,60 @@ class DagRunner:
         # so it must be read-back verified too (spec §4.5 — "ANY write path"). Re-derive
         # the verifier inputs: capability from the step, risk via assess_step_risk (the
         # RiskAssessor is Redis-cached 24h, and this capability was already assessed at
-        # pause time, so a resume within the window is a cache hit — cheap). Trust for
-        # the approved path is recorded at approval time (routes_approvals), NOT here.
+        # pause time, so a resume within the window is a cache hit — cheap).
+        from src.services.verification import VerifyVerdict
+
         capability = (step.input_data or {}).get(
             "capability", (step.input_data or {}).get("task_type", "unknown")
         )
         risk = await self._trust_gate.assess_step_risk(capability, step, run)
-        await self._finalize_with_verification(run, step, output, elapsed_ms, capability, risk)
+        verdict = await self._finalize_with_verification(
+            run, step, output, elapsed_ms, capability, risk
+        )
+        # Step 6C: the user-approval positive increment fires HERE on the CONFIRMED verified
+        # outcome (mirrors the auto-exec increment above), NOT at approval click.
+        if verdict == VerifyVerdict.CONFIRMED:
+            decision_type = await self._read_approval_decision_type(run, step)
+            await self._trust_gate.record_user_approval_outcome(
+                capability,
+                getattr(risk, "risk_level", risk),
+                run.workspace_id or "",
+                decision_type,
+            )
+        elif verdict == VerifyVerdict.UNVERIFIED:
+            # completed_unverified: stamp the user's decision_type into the verification meta
+            # so the deferred tick increments with it (auto-exec has none → defaults to
+            # "approved").
+            decision_type = await self._read_approval_decision_type(run, step)
+            if isinstance(step.output_data, dict) and isinstance(
+                step.output_data.get("verification"), dict
+            ):
+                step.output_data = {
+                    **step.output_data,
+                    "verification": {
+                        **step.output_data["verification"],
+                        "decision_type": decision_type,
+                    },
+                }
+                await self._db.flush()
+
+    async def _read_approval_decision_type(self, run: TaskRun, step: TaskStep) -> str:
+        """Read the persisted decision_type ("approved"/"modified") for this step's decided
+        Approval. Defaults to "approved" (the auto-exec-equivalent) if none is found."""
+        from sqlalchemy import select
+
+        from src.models.approvals import Approval
+
+        stmt = (
+            select(Approval)
+            .where(Approval.run_id == run.run_id, Approval.step_id == step.step_id)
+            .order_by(Approval.decided_at.desc().nullslast())
+        )
+        result = await self._db.execute(stmt)
+        approval = result.scalars().first()
+        if approval is None:
+            return "approved"
+        return (approval.artifact_refs or {}).get("decision_type", "approved")
 
     async def _finalize_with_verification(
         self,
