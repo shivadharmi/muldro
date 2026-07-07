@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -21,6 +21,8 @@ class Approval(Base, TimestampMixin):
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     summary: Mapped[str | None] = mapped_column(Text)
     artifact_refs: Mapped[dict | None] = mapped_column(JSONB)
+    thread_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    tool_call_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     risk_level: Mapped[str] = mapped_column(String(16), default="medium")
     status: Mapped[str] = mapped_column(String(16), default="pending")
     # pending, approved, rejected, expired
@@ -40,4 +42,14 @@ class Approval(Base, TimestampMixin):
     __table_args__ = (
         Index("ix_approvals_user_status", "user_id", "status", "created_at"),
         Index("ix_approvals_run_status", "run_id", "status"),
+        # Partial UNIQUE: only rows that carry the deep-gate idempotency tuple are fenced;
+        # legacy/autonomous approvals (NULL thread_id/tool_call_id) are unaffected.
+        Index(
+            "uq_approvals_thread_tool_call",
+            "workspace_id",
+            "thread_id",
+            "tool_call_id",
+            unique=True,
+            postgresql_where=text("thread_id IS NOT NULL AND tool_call_id IS NOT NULL"),
+        ),
     )
