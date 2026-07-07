@@ -411,19 +411,19 @@ class AgentInvoker:
             refs = approval.artifact_refs or {}
             thread_id = refs.get("thread_id")
             agent_name = refs.get("agent_name")
+            # CF-5: validate the rebuild inputs BEFORE consuming (flipping + committing) the
+            # approval, so a malformed approval stays pending and re-resumable — not stranded.
+            if not thread_id or not agent_name:
+                yield {"event": "error", "message": "approval missing thread_id/agent_name"}
+                return
+            agent = self._agents.get(agent_name)
+            if agent is None:
+                yield {"event": "error", "message": f"Unknown agent: {agent_name}"}
+                return
             approval.status = "approved" if decision == "approve" else "rejected"
             approval.decided_at = datetime.now(timezone.utc)
             approval.approved_by = user_id
             await db.commit()
-
-        if not thread_id or not agent_name:
-            yield {"event": "error", "message": "approval missing thread_id/agent_name"}
-            return
-
-        agent = self._agents.get(agent_name)
-        if agent is None:
-            yield {"event": "error", "message": f"Unknown agent: {agent_name}"}
-            return
 
         model = self.get_model_for_agent(agent)
         tools = await self._resolve_tools(agent, workspace_id, None)
