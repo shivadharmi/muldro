@@ -38,6 +38,29 @@ logger = logging.getLogger(__name__)
 _READBACK_UNSERVABLE_CAPABILITIES: frozenset[str] = frozenset({"calendar.get"})
 
 
+def make_lock_wrapped_execute_tool_fn(inner_fn, *, redis, workspace_id, resolve_capability):
+    """Wrap an execute_tool_fn so external WRITES acquire the cross-path write lock
+    (src.services.write_lock) — same key as the deep-runtime middleware. Reads pass through.
+    Layered OUTSIDE the idempotency ledger so the lock serializes the whole write attempt
+    (idempotency check + execute)."""
+    from src.integrations.capabilities import is_read_only_capability
+    from src.services.write_lock import WriteLockContended, acquire_write_lock
+
+    async def _wrapped(name, args, user_id, ws):
+        if redis is None:
+            return await inner_fn(name, args, user_id, ws)
+        capability = await resolve_capability(name)
+        if not capability or is_read_only_capability(capability):
+            return await inner_fn(name, args, user_id, ws)
+        try:
+            async with acquire_write_lock(redis, workspace_id, capability):
+                return await inner_fn(name, args, user_id, ws)
+        except WriteLockContended:
+            return {"error": "resource busy — another write is in progress, retry", "blocked": True}
+
+    return _wrapped
+
+
 class StepRunner:
     """Runs one step via the Operator agent loop (or a minimal Claude fallback)."""
 
@@ -55,6 +78,7 @@ class StepRunner:
         execute_tool_fn=None,
         budget=None,
         circuit_breaker=None,
+        redis=None,
     ):
         self._settings = settings
         self._client = client
@@ -67,6 +91,7 @@ class StepRunner:
         self._execute_tool_fn = execute_tool_fn
         self._budget = budget
         self._circuit_breaker = circuit_breaker
+        self._redis = redis
 
     @property
     def _db_factory(self):
@@ -334,6 +359,22 @@ class StepRunner:
                     workspace_id=run.workspace_id or "",
                     db_factory=self._db_factory,
                 ),
+            )
+
+        # Step 6C: fence writes with the cross-path lock, OUTSIDE the idempotency ledger, so
+        # the lock serializes the whole write attempt (idempotency check + execute). Same key
+        # as the deep-runtime middleware (capability via ToolRegistry.get_tool().capability).
+        if self._redis is not None and self._tool_registry is not None:
+
+            async def _resolve_cap(tool_name: str):
+                td = await self._tool_registry.get_tool(tool_name)
+                return getattr(td, "capability", None) if td else None
+
+            idem_execute_tool_fn = make_lock_wrapped_execute_tool_fn(
+                idem_execute_tool_fn,
+                redis=self._redis,
+                workspace_id=run.workspace_id or "",
+                resolve_capability=_resolve_cap,
             )
 
         # Collect events from agent loop

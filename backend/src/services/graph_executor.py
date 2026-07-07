@@ -136,6 +136,7 @@ class GraphExecutor:
             execute_tool_fn=execute_tool_fn,
             budget=budget,
             circuit_breaker=circuit_breaker,
+            redis=redis,
         )
         # The side-effecting helpers of the single TrustEngine approval gate
         # (risk assessment, approval persistence + pause, auto-execute trust
