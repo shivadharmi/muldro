@@ -166,6 +166,7 @@ class AgentInvoker:
         thread_id: str,
         authorization_source: str,
         system_prompt,
+        context_block: str = "",
     ):
         """Build a compiled deep agent WITH the full gated middleware chain:
         capability_scope (installed by ``build_deep_agent`` when ``db_factory`` is given)
@@ -202,6 +203,7 @@ class AgentInvoker:
             agent_name=agent.name,
             db_factory=self._db_factory,
             assess_risk=_assess_risk,
+            context_block=context_block,
         )
         dispatcher = make_jarvis_tool_dispatcher(
             execute_tool=self._tool_executor.execute_tool,
@@ -284,6 +286,10 @@ class AgentInvoker:
                 thread_id=thread_id,
                 authorization_source=AuthorizationSource.DIRECT_USER_REQUEST,
                 system_prompt=build_system_message(system_blocks),
+                # CF-1: persist the assembled ContextPack on any Approval this turn pauses
+                # on, so the resume path can re-inject it (dormant on direct chat — the gate
+                # short-circuits before persisting — but threaded uniformly through the seam).
+                context_block=context_block,
             )
             config = {"configurable": {"thread_id": thread_id}}
             graph_input = {"messages": [{"role": "user", "content": message}]}
@@ -411,6 +417,10 @@ class AgentInvoker:
             refs = approval.artifact_refs or {}
             thread_id = refs.get("thread_id")
             agent_name = refs.get("agent_name")
+            # CF-1: re-inject the ContextPack the original turn assembled (persisted onto the
+            # Approval at pause time). Without this the continuation would rebuild with an
+            # EMPTY context block and lose the turn's ambient entities/memories/preferences.
+            persisted_context = refs.get("context_block", "")
             # CF-5: validate the rebuild inputs BEFORE consuming (flipping + committing) the
             # approval, so a malformed approval stays pending and re-resumable — not stranded.
             if not thread_id or not agent_name:
@@ -427,7 +437,7 @@ class AgentInvoker:
 
         model = self.get_model_for_agent(agent)
         tools = await self._resolve_tools(agent, workspace_id, None)
-        system_blocks = self.build_system_prompt(agent, "")
+        system_blocks = self.build_system_prompt(agent, persisted_context)
         deep_agent = await self._build_deep_agent_for(
             agent,
             tools,
