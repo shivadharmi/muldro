@@ -53,13 +53,13 @@ async def acquire_write_lock(
     """
     redis_key = f"lock:{write_lock_key(workspace_id, capability)}"
     token = uuid.uuid4().hex
-    deadline = asyncio.get_event_loop().time() + wait_timeout
+    deadline = asyncio.get_running_loop().time() + wait_timeout
     acquired = False
     while True:
         acquired = bool(await redis.set(redis_key, token, nx=True, ex=ttl))
         if acquired:
             break
-        if asyncio.get_event_loop().time() >= deadline:
+        if asyncio.get_running_loop().time() >= deadline:
             raise WriteLockContended(
                 f"write lock contended: {write_lock_key(workspace_id, capability)}"
             )
