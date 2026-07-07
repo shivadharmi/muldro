@@ -43,10 +43,10 @@ def _agent() -> SubAgent:
     )
 
 
-def _operator_agent(capability_scope: set[str]) -> SubAgent:
+def _executor_agent(capability_scope: set[str]) -> SubAgent:
     return SubAgent(
-        name="operator",
-        prompt="You are the operator.",
+        name="executor",
+        prompt="You are the executor.",
         model_tier="sonnet",
         capability_scope=capability_scope,
         max_tokens=2048,
@@ -88,7 +88,7 @@ async def test_build_deep_agent_accepts_extra_middleware():
 
 async def test_build_deep_agent_installs_scope_guard_and_blocks_out_of_scope():
     """A built agent's installed capability_scope guard blocks an out-of-scope tool."""
-    agent = _operator_agent({"calendar.read"})
+    agent = _executor_agent({"calendar.read"})
     resolver = AsyncMock()
     resolver.is_write_capability = AsyncMock(return_value=False)
     registry = AsyncMock()
@@ -125,11 +125,11 @@ async def test_build_deep_agent_refuses_write_agent_without_scope_middleware():
     """Builder refuses to compile a write-capable agent with no scope guard."""
     import pytest
 
-    agent = _operator_agent({"email.send"})
+    agent = _executor_agent({"email.send"})
     resolver = AsyncMock()
     resolver.is_write_capability = AsyncMock(return_value=True)
     with patch("src.deep_runtime.agent_builder.CapabilityResolver", return_value=resolver):
-        with pytest.raises(ValueError, match="refusing to compile agent 'operator'"):
+        with pytest.raises(ValueError, match="refusing to compile agent 'executor'"):
             await build_deep_agent(agent, tools=[send_email], db_factory=None)
 
 

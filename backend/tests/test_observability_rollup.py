@@ -74,14 +74,14 @@ def test_history_trace_info_schema_includes_step_breakdown():
                 step_id="planner", agent="planner", calls=1, input_tokens=500, output_tokens=200
             ),
             HistoryTraceStep(
-                step_id="operator", agent="operator", calls=2, input_tokens=500, output_tokens=300
+                step_id="executor", agent="executor", calls=2, input_tokens=500, output_tokens=300
             ),
         ],
     )
 
     assert len(info.step_breakdown) == 2
     assert info.step_breakdown[0].agent == "planner"
-    assert info.step_breakdown[1].agent == "operator"
+    assert info.step_breakdown[1].agent == "executor"
 
 
 def test_task_run_model_has_rollup_columns():

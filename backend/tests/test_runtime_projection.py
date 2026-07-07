@@ -111,7 +111,7 @@ def _make_db(step_rows, tool_rows):
 class TestGetActiveAgents:
     @pytest.mark.asyncio
     async def test_returns_distinct_resolved_agent_names(self):
-        # Two running steps map to perceiver (read), one write step -> operator,
+        # Two running steps map to perceiver (read), one write step -> executor,
         # one respond step -> presenter. Duplicate read capability collapses.
         step_rows = [
             ({"capability": "email.search"},),
@@ -125,7 +125,7 @@ class TestGetActiveAgents:
         ]
         svc = RuntimeProjectionService(_make_db(step_rows, tool_rows), "ws_test")
         agents = await svc.get_active_agents()
-        assert agents == ["operator", "perceiver", "presenter"]
+        assert agents == ["executor", "perceiver", "presenter"]
 
     @pytest.mark.asyncio
     async def test_knowledge_capability_routes_to_librarian(self):
@@ -170,7 +170,7 @@ class TestGetAgentWorkload:
     async def test_maps_modelcall_rows_to_workload(self):
         rows = [
             _workload_row("planner", 12, 1840.6),
-            _workload_row("operator", 5, 920.0),
+            _workload_row("executor", 5, 920.0),
         ]
         db = MagicMock()
 
@@ -184,7 +184,7 @@ class TestGetAgentWorkload:
 
         assert workload == [
             {"agent_name": "planner", "call_count_24h": 12, "avg_duration_ms": 1840.6},
-            {"agent_name": "operator", "call_count_24h": 5, "avg_duration_ms": 920.0},
+            {"agent_name": "executor", "call_count_24h": 5, "avg_duration_ms": 920.0},
         ]
 
     @pytest.mark.asyncio

@@ -19,14 +19,14 @@ You are calm, capable, trustworthy, and quietly powerful.
 | Librarian  | Extract entities, update world model    | entities, memories     |
 | Planner    | Produce task graphs (structured JSON)   | plans, plan_tasks      |
 | Governor   | Edge-case safety fallback (novel/ambiguous) | policy decisions       |
-| Operator   | Execute approved plans via tools        | task_runs, task_steps  |
+| Executor   | Execute approved plans via tools, scoped per step | task_runs, task_steps  |
 | Presenter  | Generate user-facing output             | briefings, UI payloads |
 | Persona    | Learn preferences                       | memories (preference)  |
 </agents>
 
 <rules>
 1. Only Planner decides intent - no other agent redefines goals
-2. Only Operator touches external write tools - makes system traceable
+2. Only the Executor touches external write tools (scoped per step) - makes system traceable
 3. Only Presenter talks to the user - tone/timing stay consistent
 4. TrustEngine gates every external write - Governor handles edge cases only
 5. Pass structured JSON between agents, not prose
@@ -540,9 +540,9 @@ justification: "Bulk operation exceeds normal blast radius threshold"
 </examples>
 """
 
-OPERATOR_PROMPT = """\
+EXECUTOR_PROMPT = """\
 <role>
-You are the Operator agent in Jarvis — you act on the user's behalf using tools.
+You are the Executor in Jarvis — you act on the user's behalf using tools.
 You can both READ and WRITE to external services (email, calendar, messaging, etc.).
 Use the tools available to you to accomplish the goal autonomously.
 </role>
@@ -757,7 +757,7 @@ AGENT_PROMPTS = {
     "librarian": LIBRARIAN_PROMPT,
     "planner": PLANNER_PROMPT_V2,
     "governor": GOVERNOR_PROMPT,
-    "operator": OPERATOR_PROMPT,
+    "executor": EXECUTOR_PROMPT,
     "presenter": PRESENTER_PROMPT,
     "persona": PERSONA_PROMPT,
 }

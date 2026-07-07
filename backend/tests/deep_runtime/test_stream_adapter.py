@@ -202,7 +202,7 @@ async def _run_adapter_over_fake_stream() -> AsyncIterator[dict]:
     )
     config = {"configurable": {"thread_id": "t1"}}
     async for frame in stream_deep_agent_events(
-        agent, _graph_input(), config, agent_name="operator", model=MODEL_ID
+        agent, _graph_input(), config, agent_name="executor", model=MODEL_ID
     ):
         yield frame
 
@@ -216,7 +216,7 @@ async def _run_adapter_over_raising_stream(detail: str) -> AsyncIterator[dict]:
     )
     config = {"configurable": {"thread_id": "t-err"}}
     async for frame in stream_deep_agent_events(
-        agent, _graph_input(), config, agent_name="operator", model=MODEL_ID
+        agent, _graph_input(), config, agent_name="executor", model=MODEL_ID
     ):
         yield frame
 
@@ -227,7 +227,7 @@ async def test_adapter_emits_frozen_sse_shapes():
     for f in frames:
         assert f["event"] in _ALLOWED_EVENTS
         assert _REQUIRED_KEYS[f["event"]] <= set(f.keys())
-        assert f["agent"] == "operator"
+        assert f["agent"] == "executor"
     kinds = [f["event"] for f in frames]
     assert "text_delta" in kinds
     assert kinds.count("tool_call") == kinds.count("tool_result") >= 1

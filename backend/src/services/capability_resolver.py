@@ -115,7 +115,7 @@ def classify_capability_agent(
     1. ``"reason"`` / ``"respond"`` / ``"none"`` -> ``"presenter"``
     2. ``"knowledge.*"`` -> ``"librarian"``
     3. Known read capability (tools exist, none need approval) -> ``"perceiver"``
-    4. Known write capability (any tool needs approval) -> ``"operator"``
+    4. Known write capability (any tool needs approval) -> ``"executor"``
     5. Unknown capability (no tools found) -> ``""`` (unroutable, skipped by caller)
 
     ``"perceiver"`` handles information gathering (merged from Observer + Researcher).
@@ -137,7 +137,7 @@ def classify_capability_agent(
     if all(not t.requires_approval for t in matching):
         return "perceiver"
 
-    return "operator"
+    return "executor"
 
 
 async def route_step(step_capability: str, resolver: CapabilityResolver) -> str:

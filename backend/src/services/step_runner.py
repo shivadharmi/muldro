@@ -2,7 +2,7 @@
 
 Extracted from ``GraphExecutor`` (god-object decomposition, 2026-06-20). This is
 the durable-DAG-wraps-``agent_loop`` core: given a ready ``TaskStep``, it runs the
-Operator sub-agent through the agent loop (with full tool discovery, prior-step
+Executor sub-agent through the agent loop (with full tool discovery, prior-step
 context injection, and per-run trace accumulation), falling back to a minimal
 single-turn Claude call when the agent-loop dependencies are not wired.
 
@@ -73,7 +73,7 @@ def make_lock_wrapped_execute_tool_fn(inner_fn, *, redis, workspace_id, resolve_
 
 
 class StepRunner:
-    """Runs one step via the Operator agent loop (or a minimal Claude fallback)."""
+    """Runs one step via the Executor agent loop (or a minimal Claude fallback)."""
 
     def __init__(
         self,
@@ -179,19 +179,19 @@ class StepRunner:
         except json.JSONDecodeError:
             return {"status": "completed", "result": response.content[0].text}
 
-    async def build_operator_tools(self) -> list[dict]:
-        """Build Claude API tool definitions filtered by Operator's capability scope."""
+    async def build_executor_tools(self) -> list[dict]:
+        """Build Claude API tool definitions filtered by the Executor's capability scope."""
         if not self._tool_registry:
             return []
 
         from src.orchestrator.agents import AGENTS
         from src.tools.schemas import TOOL_INPUT_MODELS
 
-        operator = AGENTS.get("operator")
-        if not operator:
+        executor = AGENTS.get("executor")
+        if not executor:
             return []
 
-        scope = operator.capability_scope
+        scope = executor.capability_scope
         tools = []
         seen = set()
 
@@ -239,7 +239,7 @@ class StepRunner:
         resolves it to UNVERIFIED (never a false CONTRADICTED). Reads never go through
         the idempotency ledger, so this is side-effect free.
 
-        Resolution note: ``build_operator_tools()`` strips the capability from its tool
+        Resolution note: ``build_executor_tools()`` strips the capability from its tool
         dicts, so we resolve ``read_capability`` -> tool via the registry's
         ``ToolDefinition`` objects (which carry ``.capability`` and ``.name``).
 
@@ -283,7 +283,7 @@ class StepRunner:
         run: TaskRun,
         cancel_event=None,
     ) -> dict:
-        """Execute a step via the Operator agent loop with full tool discovery."""
+        """Execute a step via the Executor agent loop with full tool discovery."""
         from src.orchestrator.agent_loop import (
             LoopDone,
             LoopError,
@@ -307,7 +307,7 @@ class StepRunner:
 
         message = "\n".join(message_parts)
 
-        # Inject completed predecessor step outputs so the operator sees
+        # Inject completed predecessor step outputs so the executor sees
         # what earlier agents (e.g. Perceiver) read or produced.
         all_steps = await self._store.get_all_steps(run.run_id)
         prior_parts: list[str] = []
@@ -332,22 +332,22 @@ class StepRunner:
         # Get context
         context_prompt = await self.build_step_context(run, step)
 
-        # Resolve operator agent
-        operator = AGENTS.get("operator")
-        if not operator:
+        # Resolve executor agent
+        executor = AGENTS.get("executor")
+        if not executor:
             return {
                 "status": "completed",
-                "result": "Operator agent not found",
-                "errors": ["Operator agent not configured"],
+                "result": "Executor agent not found",
+                "errors": ["Executor agent not configured"],
             }
 
         # Build system blocks
-        system_blocks = [{"type": "text", "text": operator.prompt}]
+        system_blocks = [{"type": "text", "text": executor.prompt}]
         if context_prompt:
             system_blocks.append({"type": "text", "text": f"\n--- Context ---\n{context_prompt}"})
 
         # Build tools list
-        tools = await self.build_operator_tools()
+        tools = await self.build_executor_tools()
 
         # Install the per-step idempotency ledger on the injected execute_tool_fn
         # (autonomous path only — the chat path passes the raw fn, so it stays a
@@ -405,7 +405,7 @@ class StepRunner:
 
         async for event in agent_loop(
             client=self._client,
-            agent=operator,
+            agent=executor,
             model=self._settings.resolved_model,
             system_blocks=system_blocks,
             tools=tools,

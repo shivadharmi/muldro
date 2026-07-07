@@ -242,13 +242,13 @@ class TestRouteStep:
         assert await route_step("email.search", resolver) == "perceiver"
 
     @pytest.mark.asyncio
-    async def test_write_capability_routes_to_operator(self):
+    async def test_write_capability_routes_to_executor(self):
         tools = [
             _mock_tool("gmail_send", "email.send", requires_approval=True),
         ]
         db = _mock_db_with_tools(tools)
         resolver = CapabilityResolver(db)
-        assert await route_step("email.send", resolver) == "operator"
+        assert await route_step("email.send", resolver) == "executor"
 
     @pytest.mark.asyncio
     async def test_unknown_capability_returns_empty_string(self):

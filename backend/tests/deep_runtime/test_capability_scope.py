@@ -30,8 +30,8 @@ WORKSPACE_ID = "ws_test"
 
 def _agent(capability_scope: set[str]) -> SubAgent:
     return SubAgent(
-        name="operator",
-        prompt="You are the operator.",
+        name="executor",
+        prompt="You are the executor.",
         model_tier="sonnet",
         capability_scope=capability_scope,
         max_tokens=2048,
@@ -116,7 +116,7 @@ async def test_out_of_scope_benign_tool_is_blocked(handler):
     assert result.status == "error"
     payload = json.loads(result.content)
     assert payload["error"] == (
-        "Agent 'operator' is not permitted to call 'multiply' — capability is outside its scope."
+        "Agent 'executor' is not permitted to call 'multiply' — capability is outside its scope."
     )
 
 
@@ -140,7 +140,7 @@ async def test_tool_capability_none_is_blocked(handler):
     assert isinstance(result, ToolMessage)
     assert result.status == "error"
     assert json.loads(result.content)["error"].startswith(
-        "Agent 'operator' is not permitted to call 'multiply'"
+        "Agent 'executor' is not permitted to call 'multiply'"
     )
 
 

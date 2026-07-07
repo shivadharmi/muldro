@@ -188,7 +188,7 @@ def _gate(*, authorization_source: str, db_factory, assess_risk, thread_id: str 
         workspace_id=WORKSPACE_ID,
         user_id=USER_ID,
         thread_id=thread_id,
-        agent_name="operator",
+        agent_name="executor",
         db_factory=db_factory,
         assess_risk=assess_risk,
     )
@@ -472,7 +472,7 @@ async def test_approval_persistence_is_idempotent_reuses_existing():
             user_id=USER_ID,
             thread_id=THREAD_ID,
             tool_call_id="call_echo",
-            agent_name="operator",
+            agent_name="executor",
             db_factory=_persist_db_factory(existing=existing),
         )
 
@@ -534,7 +534,7 @@ async def test_unexpected_decision_requires_approval_fail_closed():
             user_id=USER_ID,
             thread_id=THREAD_ID,
             tool_call_id="call_x",
-            agent_name="operator",
+            agent_name="executor",
             db_factory=_persist_db_factory(),
         )
 
@@ -586,7 +586,7 @@ async def test_get_or_create_reselects_on_integrity_error():
             user_id=USER_ID,
             thread_id=THREAD_ID,
             tool_call_id="call_echo",
-            agent_name="operator",
+            agent_name="executor",
             db_factory=_factory,
         )
     assert require_approval is True

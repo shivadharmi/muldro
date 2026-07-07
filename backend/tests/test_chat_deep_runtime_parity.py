@@ -82,7 +82,7 @@ async def test_deep_frames_survive_web_sse_pipeline() -> None:
     frames = [
         f
         async for f in stream_deep_agent_events(
-            agent, graph_input, config, agent_name="operator", model="claude-sonnet-4-6"
+            agent, graph_input, config, agent_name="executor", model="claude-sonnet-4-6"
         )
     ]
 

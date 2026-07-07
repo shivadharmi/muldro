@@ -65,7 +65,7 @@ async def test_seed_defaults_skips_existing(mock_db):
     """seed_defaults should skip agents that already exist (with matching scope/prompt)."""
     # Simulate 5 existing agents with correct scope/prompt — no updates needed
     existing_agents = []
-    for name in ["perceiver", "librarian", "planner", "governor", "operator"]:
+    for name in ["perceiver", "librarian", "planner", "governor", "executor"]:
         agent = MagicMock(spec=Agent)
         agent.name = name
         agent.capability_scope = sorted(AGENT_CAPABILITY_SCOPES.get(name, set()))

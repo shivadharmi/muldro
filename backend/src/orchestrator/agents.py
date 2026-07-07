@@ -18,7 +18,7 @@ AGENT_MODEL_TIERS = {
     "librarian": "sonnet",
     "planner": "opus",
     "governor": "sonnet",
-    "operator": "sonnet",
+    "executor": "sonnet",
     "presenter": "sonnet",
     "persona": "haiku",
 }
@@ -103,7 +103,7 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "internal.approve_action",
         "internal.get_plan_details",
     },
-    "operator": {
+    "executor": {
         # Email
         "email.list",
         "email.read",
@@ -192,7 +192,7 @@ AGENT_THINKING: dict[str, ThinkingConfig] = {
     "librarian": ThinkingConfig(enabled=True, budget_tokens=4096),
     "presenter": ThinkingConfig(enabled=True, budget_tokens=4096),
     "governor": ThinkingConfig(enabled=True, budget_tokens=2048),
-    "operator": ThinkingConfig(enabled=True, budget_tokens=2048),
+    "executor": ThinkingConfig(enabled=True, budget_tokens=2048),
     "persona": ThinkingConfig(enabled=True, budget_tokens=2048),
 }
 

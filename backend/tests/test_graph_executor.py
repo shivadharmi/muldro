@@ -276,7 +276,7 @@ class TestAgenticStepExecution:
 
         # Mock agent_loop to yield LoopDone
         async def fake_agent_loop(**kwargs):
-            yield LoopDone(agent="operator", text="Task completed successfully")
+            yield LoopDone(agent="executor", text="Task completed successfully")
 
         mock_agent_loop.side_effect = fake_agent_loop
         executor_with_agent_deps._store.get_all_steps = AsyncMock(return_value=[])
@@ -295,17 +295,17 @@ class TestAgenticStepExecution:
         assert "Task completed successfully" in result["result"]
 
     @patch("src.orchestrator.agent_loop.agent_loop")
-    async def test_step_via_agent_loop_passes_operator(
+    async def test_step_via_agent_loop_passes_executor(
         self, mock_agent_loop, executor_with_agent_deps
     ):
-        """Test that agent_loop is called with operator agent and max_tool_rounds=10."""
+        """Test that agent_loop is called with executor agent and max_tool_rounds=10."""
         from src.orchestrator.agent_loop import LoopDone
 
         captured_kwargs = {}
 
         async def fake_agent_loop(**kwargs):
             captured_kwargs.update(kwargs)
-            yield LoopDone(agent="operator", text="Done")
+            yield LoopDone(agent="executor", text="Done")
 
         mock_agent_loop.side_effect = fake_agent_loop
         executor_with_agent_deps._store.get_all_steps = AsyncMock(return_value=[])
@@ -319,7 +319,7 @@ class TestAgenticStepExecution:
 
         await executor_with_agent_deps._run_step_via_agent_loop(step, run)
 
-        assert captured_kwargs["agent"].name == "operator"
+        assert captured_kwargs["agent"].name == "executor"
         assert captured_kwargs["max_tool_rounds"] == 10
 
     @patch("src.orchestrator.agent_loop.agent_loop")
@@ -328,8 +328,8 @@ class TestAgenticStepExecution:
         from src.orchestrator.agent_loop import LoopDone, LoopError
 
         async def fake_agent_loop(**kwargs):
-            yield LoopError(agent="operator", message="Something went wrong")
-            yield LoopDone(agent="operator", text="Recovered and completed")
+            yield LoopError(agent="executor", message="Something went wrong")
+            yield LoopDone(agent="executor", text="Recovered and completed")
 
         mock_agent_loop.side_effect = fake_agent_loop
         executor_with_agent_deps._store.get_all_steps = AsyncMock(return_value=[])
@@ -356,7 +356,7 @@ class TestAgenticStepExecution:
         from src.orchestrator.agent_loop import LoopDone
 
         async def fake_loop(**kwargs):
-            yield LoopDone(agent="operator", text="Done via agent loop")
+            yield LoopDone(agent="executor", text="Done via agent loop")
 
         mock_agent_loop.side_effect = fake_loop
         executor_with_agent_deps._store.get_all_steps = AsyncMock(return_value=[])
@@ -384,7 +384,7 @@ class TestAgenticStepExecution:
 
         async def fake_loop(**kwargs):
             yield LoopToolResult(
-                agent="operator",
+                agent="executor",
                 tool_name="gmail_send",
                 result={
                     "status": "error",
@@ -393,7 +393,7 @@ class TestAgenticStepExecution:
                     "server": "google-workspace",
                 },
             )
-            yield LoopDone(agent="operator", text="could not send")
+            yield LoopDone(agent="executor", text="could not send")
 
         mock_agent_loop.side_effect = fake_loop
         executor_with_agent_deps._store.get_all_steps = AsyncMock(return_value=[])
@@ -417,14 +417,14 @@ class TestAgenticStepExecution:
 
     @patch("src.orchestrator.agent_loop.agent_loop")
     async def test_prior_step_outputs_injected(self, mock_agent_loop, executor_with_agent_deps):
-        """Completed predecessor step outputs are injected into the operator message."""
+        """Completed predecessor step outputs are injected into the executor message."""
         from src.orchestrator.agent_loop import LoopDone
 
         captured_kwargs = {}
 
         async def fake_agent_loop(**kwargs):
             captured_kwargs.update(kwargs)
-            yield LoopDone(agent="operator", text="Created page with content")
+            yield LoopDone(agent="executor", text="Created page with content")
 
         mock_agent_loop.side_effect = fake_agent_loop
 
@@ -436,7 +436,7 @@ class TestAgenticStepExecution:
         prior_step.input_data = {"capability": "file.read", "goal": "Read the markdown file"}
 
         current_step = MagicMock()
-        current_step.step_id = "step_operator"
+        current_step.step_id = "step_executor"
         current_step.input_data = {"capability": "notion.create_page", "goal": "Copy to Notion"}
 
         executor_with_agent_deps._store.get_all_steps = AsyncMock(

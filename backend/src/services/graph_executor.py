@@ -120,7 +120,7 @@ class GraphExecutor:
         # white-box suite (which calls _get_all_steps/_checkpoint/etc. directly)
         # keeps passing unchanged.
         self._store = StepGraphStore(db=db, context_builder=context_builder)
-        # Agentic step execution (Operator agent loop + minimal-Claude fallback)
+        # Agentic step execution (Executor agent loop + minimal-Claude fallback)
         # lives in an injected collaborator. db_factory + the per-run trace map
         # are resolved live via providers so the coordinator stays the single
         # source of truth (tests reassign _db_factory; _active_traces is owned here).

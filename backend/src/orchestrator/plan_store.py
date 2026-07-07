@@ -2,7 +2,7 @@
 
 Extracted from ``JarvisOrchestrator`` (god-object decomposition, 2026-06-19).
 A leaf collaborator: it depends only on the DB session factory. Converts a
-``PlanOutput`` into DB ``Plan`` + ``PlanTask`` rows (so the Operator/GraphExecutor
+``PlanOutput`` into DB ``Plan`` + ``PlanTask`` rows (so the Executor/GraphExecutor
 can execute it) and records ``InteractionLog`` audit rows for simple interactions.
 """
 
@@ -54,7 +54,7 @@ class PlanStore:
         """Persist a Plan + PlanTasks to DB, returning PlanOutput with plan_id set.
 
         Converts PlanOutput steps into DB Plan + PlanTask rows so the Governor
-        can evaluate_policy(plan_id) and the Operator can execute via
+        can evaluate_policy(plan_id) and the Executor can execute via
         GraphExecutor — both require a DB-backed Plan.
 
         Both ``jarvis`` and ``user`` actor steps become PlanTasks. User-actor

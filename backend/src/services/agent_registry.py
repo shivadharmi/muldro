@@ -18,13 +18,13 @@ from src.orchestrator.prompts import AGENT_PROMPTS
 
 logger = logging.getLogger(__name__)
 
-# Display names for the 8 default agents
+# Display names for the 7 default agents
 _DEFAULT_DISPLAY_NAMES = {
     "perceiver": "Perceiver",
     "librarian": "Librarian",
     "planner": "Planner",
     "governor": "Governor",
-    "operator": "Operator",
+    "executor": "Executor",
     "presenter": "Presenter",
     "persona": "Persona",
 }
@@ -34,7 +34,7 @@ _DEFAULT_DESCRIPTIONS = {
     "librarian": "Understands events — extracts entities, updates world model, curates memories.",
     "planner": "Decides what to do — produces structured task graphs, never prose.",
     "governor": "Enforces safety — evaluates policies, gates approvals, audits actions.",
-    "operator": "Executes approved plans — calls external tools, tracks execution state.",
+    "executor": "Executes approved plans — calls external tools, tracks execution state.",
     "presenter": "Communicates with the user — briefings, notifications, dynamic UI.",
     "persona": "Learns preferences — adapts communication style, detects patterns.",
 }
@@ -47,7 +47,7 @@ class AgentRegistry:
         self._db = db
 
     async def seed_defaults(self) -> int:
-        """Seed or update the 8 default agents. Returns count of agents created/updated.
+        """Seed or update the 7 default agents. Returns count of agents created/updated.
 
         Creates new agents that don't exist. For existing agents, syncs
         capability_scope and system_prompt from hardcoded defaults so that

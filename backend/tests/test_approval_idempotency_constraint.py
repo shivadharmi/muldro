@@ -277,7 +277,7 @@ async def test_decide_and_persist_writes_columns_and_get_path_returns_same_row()
                 user_id=user_id,
                 thread_id=thread_id,
                 tool_call_id=tool_call_id,
-                agent_name="operator",
+                agent_name="executor",
                 db_factory=factory,
             )
         assert require_approval is True
@@ -313,7 +313,7 @@ async def test_decide_and_persist_writes_columns_and_get_path_returns_same_row()
                 user_id=user_id,
                 thread_id=thread_id,
                 tool_call_id=tool_call_id,
-                agent_name="operator",
+                agent_name="executor",
                 db_factory=factory,
             )
         assert require_approval_2 is True

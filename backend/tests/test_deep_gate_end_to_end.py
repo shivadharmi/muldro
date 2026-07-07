@@ -198,7 +198,7 @@ def _make_invoker(*, factory, checkpointer, executed: list) -> AgentInvoker:
     context.assemble_context = AsyncMock(return_value="")
 
     agent = SubAgent(
-        name="operator", prompt="p", model_tier="sonnet", capability_scope={"email.send"}
+        name="executor", prompt="p", model_tier="sonnet", capability_scope={"email.send"}
     )
 
     return AgentInvoker(
@@ -210,7 +210,7 @@ def _make_invoker(*, factory, checkpointer, executed: list) -> AgentInvoker:
         db_factory_provider=lambda: factory,
         tool_executor=tool_executor,
         context=context,
-        agents={"operator": agent},
+        agents={"executor": agent},
         checkpointer_provider=lambda: checkpointer,
     )
 
@@ -239,7 +239,7 @@ async def test_forced_autonomous_pauses_persists_then_approve_executes_idempoten
         executed: list = []
         checkpointer = MemorySaver()
         invoker = _make_invoker(factory=factory, checkpointer=checkpointer, executed=executed)
-        agent = invoker._agents["operator"]
+        agent = invoker._agents["executor"]
         thread_id = f"chat_{ULID()}"
 
         with (
@@ -268,7 +268,7 @@ async def test_forced_autonomous_pauses_persists_then_approve_executes_idempoten
                     deep_agent,
                     {"messages": [{"role": "user", "content": "go"}]},
                     config,
-                    agent_name="operator",
+                    agent_name="executor",
                     model="claude-sonnet-5",
                     durability="sync",
                 )
@@ -331,7 +331,7 @@ async def test_forced_autonomous_reject_blocks_the_tool():
         executed: list = []
         checkpointer = MemorySaver()
         invoker = _make_invoker(factory=factory, checkpointer=checkpointer, executed=executed)
-        agent = invoker._agents["operator"]
+        agent = invoker._agents["executor"]
         thread_id = f"chat_{ULID()}"
 
         with (
@@ -359,7 +359,7 @@ async def test_forced_autonomous_reject_blocks_the_tool():
                     deep_agent,
                     {"messages": [{"role": "user", "content": "go"}]},
                     config,
-                    agent_name="operator",
+                    agent_name="executor",
                     model="claude-sonnet-5",
                     durability="sync",
                 )
@@ -403,7 +403,7 @@ async def test_direct_user_request_stays_ungated():
         executed: list = []
         checkpointer = MemorySaver()
         invoker = _make_invoker(factory=factory, checkpointer=checkpointer, executed=executed)
-        agent = invoker._agents["operator"]
+        agent = invoker._agents["executor"]
         thread_id = f"chat_{ULID()}"
 
         with (
@@ -431,7 +431,7 @@ async def test_direct_user_request_stays_ungated():
                     deep_agent,
                     {"messages": [{"role": "user", "content": "go"}]},
                     config,
-                    agent_name="operator",
+                    agent_name="executor",
                     model="claude-sonnet-5",
                     durability="sync",
                 )
@@ -459,7 +459,7 @@ async def test_negative_control_bypassed_gate_check_does_not_pause():
         executed: list = []
         checkpointer = MemorySaver()
         invoker = _make_invoker(factory=factory, checkpointer=checkpointer, executed=executed)
-        agent = invoker._agents["operator"]
+        agent = invoker._agents["executor"]
         thread_id = f"chat_{ULID()}"
 
         with (
@@ -491,7 +491,7 @@ async def test_negative_control_bypassed_gate_check_does_not_pause():
                     deep_agent,
                     {"messages": [{"role": "user", "content": "go"}]},
                     config,
-                    agent_name="operator",
+                    agent_name="executor",
                     model="claude-sonnet-5",
                     durability="sync",
                 )

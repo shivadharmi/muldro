@@ -146,10 +146,10 @@ _AGENT_SSE_DICTS = [
     {"event": "agent_start", "agent": "planner", "model": "claude-opus"},
     {"event": "thinking", "agent": "planner", "text": "hmm", "is_thinking": True},
     {"event": "text_delta", "agent": "planner", "text": "hello"},
-    {"event": "tool_call", "agent": "operator", "tool": "send", "input": {"to": "x"}},
+    {"event": "tool_call", "agent": "executor", "tool": "send", "input": {"to": "x"}},
     {
         "event": "tool_result",
-        "agent": "operator",
+        "agent": "executor",
         "tool": "send",
         "result": {"ok": True},
         "blocked": False,
@@ -200,7 +200,7 @@ class TestAgentEventRoundTrip:
         for the AgentDone validation crash that killed the live chat stream."""
         sse = {
             "event": "agent_done",
-            "agent": "operator",
+            "agent": "executor",
             "text": "done",
             "input_tokens": 10,
             "output_tokens": 5,

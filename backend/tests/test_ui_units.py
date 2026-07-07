@@ -45,12 +45,12 @@ def test_require_kind_accepts_known_and_rejects_unknown() -> None:
 
 
 def test_run_header_builds_card_with_phase_badge() -> None:
-    c = units.run_header(title="Test run", phase="executing", agent_name="operator", progress="2/5")
+    c = units.run_header(title="Test run", phase="executing", agent_name="executor", progress="2/5")
     assert c.type == "Card"
     serialized = c.model_dump()
     assert "Test run" in str(serialized)
     assert "executing" in str(serialized)
-    assert "operator" in str(serialized)
+    assert "executor" in str(serialized)
     assert "2/5" in str(serialized)
 
 
@@ -213,7 +213,7 @@ def test_trace_metrics_with_step_breakdown() -> None:
         },
         {
             "step_id": "s2",
-            "agent": "operator",
+            "agent": "executor",
             "calls": 3,
             "tokens": 900,
             "cost_usd": 0.02,
@@ -225,7 +225,7 @@ def test_trace_metrics_with_step_breakdown() -> None:
     assert "s1" in s
     assert "s2" in s
     assert "perceiver" in s
-    assert "operator" in s
+    assert "executor" in s
 
 
 # ── insight_body ────────────────────────────────────────────────────

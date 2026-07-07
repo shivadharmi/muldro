@@ -340,14 +340,14 @@ def _scenario_user_action():
         user_context="needs your ok",
     )
     plan = PlanOutput(goal="send", reasoning="r", steps=[s1, s2])
-    routing = [(s1, "operator", [{"name": "t"}])]
-    canned = {"planner": "PLAN_TEXT", "operator": "SENT", "presenter": "Done."}
+    routing = [(s1, "executor", [{"name": "t"}])]
+    canned = {"planner": "PLAN_TEXT", "executor": "SENT", "presenter": "Done."}
     return plan, routing, [s2], canned
 
 
 class TestUserActions:
     async def test_batch_includes_user_actions_and_skips_risky_step(self):
-        # Batch defaults to mode="plan" (drift #6): the HIGH-risk operator step
+        # Batch defaults to mode="plan" (drift #6): the HIGH-risk executor step
         # is surfaced for approval, not executed; user actions still surface.
         plan, routing, users, canned = _scenario_user_action()
         orch, rec = _make_orch(canned)
@@ -363,8 +363,8 @@ class TestUserActions:
         assert result["user_actions"] == [
             {"description": "confirm send", "context": "needs your ok"}
         ]
-        # Risky operator step was skipped, surfaced under plan_ready.
-        assert rec.message_to("operator") is None
+        # Risky executor step was skipped, surfaced under plan_ready.
+        assert rec.message_to("executor") is None
         assert "step_0_email.send" not in result
         assert result["plan_ready"] == [
             {"plan_id": plan.plan_id, "message": "Plan created. Review and approve to execute."}
@@ -383,7 +383,7 @@ class TestUserActions:
             for c in ctx:
                 c.stop()
 
-        assert rec.message_to("operator") is not None
+        assert rec.message_to("executor") is not None
         assert result["step_0_email.send"] == "SENT"
         assert "plan_ready" not in result
 
@@ -536,7 +536,7 @@ class TestStreamMode:
     async def test_plan_mode_marks_requires_user_input_and_skips_risky(self):
         s1 = _step("s1", "email.send", risk="high", description="send")
         plan = PlanOutput(goal="send", reasoning="r", steps=[s1])
-        routing = [(s1, "operator", [{"name": "t"}])]
+        routing = [(s1, "executor", [{"name": "t"}])]
         canned = {"planner": "PLAN_TEXT", "presenter": "Plan ready."}
         orch, rec = _make_orch(canned)
         # mode="plan"/"execute" forces use_planner True regardless of intent.
@@ -551,5 +551,5 @@ class TestStreamMode:
 
         names = _events(stream)
         assert "plan_ready" in names
-        # Risky step skipped -> operator never executed.
-        assert rec.message_to("operator") is None
+        # Risky step skipped -> executor never executed.
+        assert rec.message_to("executor") is None

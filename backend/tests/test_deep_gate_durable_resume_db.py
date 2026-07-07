@@ -196,7 +196,7 @@ def _make_invoker(*, factory, checkpointer, executed: list) -> AgentInvoker:
     context.assemble_context = AsyncMock(return_value="")
 
     agent = SubAgent(
-        name="operator", prompt="p", model_tier="sonnet", capability_scope={"email.send"}
+        name="executor", prompt="p", model_tier="sonnet", capability_scope={"email.send"}
     )
 
     return AgentInvoker(
@@ -208,7 +208,7 @@ def _make_invoker(*, factory, checkpointer, executed: list) -> AgentInvoker:
         db_factory_provider=lambda: factory,
         tool_executor=tool_executor,
         context=context,
-        agents={"operator": agent},
+        agents={"executor": agent},
         checkpointer_provider=lambda: checkpointer,
     )
 
@@ -252,7 +252,7 @@ async def test_interrupt_resume_spans_durable_postgres_saver():
         holder = {"saver": saver_a}
         invoker = _make_invoker(factory=factory, checkpointer=saver_a, executed=executed)
         invoker._checkpointer_provider = lambda: holder["saver"]
-        agent = invoker._agents["operator"]
+        agent = invoker._agents["executor"]
 
         pool_a_closed = False
         pool_b = None
@@ -283,7 +283,7 @@ async def test_interrupt_resume_spans_durable_postgres_saver():
                         deep_agent,
                         {"messages": [{"role": "user", "content": "go"}]},
                         config,
-                        agent_name="operator",
+                        agent_name="executor",
                         model="claude-sonnet-5",
                         durability="sync",
                     )

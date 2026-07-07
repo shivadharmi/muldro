@@ -24,6 +24,10 @@ def _runner():
     r._execute_tool_fn = AsyncMock(name="RAW_execute_tool_fn")
     r._budget = None
     r._circuit_breaker = None
+    # No write-lock deps: with _redis None the cross-path lock fence is skipped, so the
+    # execute_tool_fn agent_loop receives is exactly the idempotency-ledger wrapper.
+    r._redis = None
+    r._tool_registry = None
     return r
 
 
@@ -43,9 +47,9 @@ async def test_agent_loop_receives_a_wrapped_execute_tool_fn():
 
     with (
         patch("src.orchestrator.agent_loop.agent_loop", fake_agent_loop),
-        patch("src.orchestrator.agents.AGENTS", {"operator": SimpleNamespace(prompt="p")}),
+        patch("src.orchestrator.agents.AGENTS", {"executor": SimpleNamespace(prompt="p")}),
         patch.object(runner, "build_step_context", AsyncMock(return_value="")),
-        patch.object(runner, "build_operator_tools", AsyncMock(return_value=[])),
+        patch.object(runner, "build_executor_tools", AsyncMock(return_value=[])),
     ):
         await runner.run_step_via_agent_loop(step, run)
 

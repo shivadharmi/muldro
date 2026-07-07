@@ -198,7 +198,7 @@ class TestAgents:
             "librarian",
             "planner",
             "governor",
-            "operator",
+            "executor",
             "presenter",
             "persona",
         }
@@ -253,9 +253,9 @@ class TestAgents:
             assert await AGENTS["perceiver"].can_use_tool("ingest_event", mock_db) is True
             assert await AGENTS["perceiver"].can_use_tool("gmail_send", mock_db) is False
 
-            # Operator can send email but not plan
-            assert await AGENTS["operator"].can_use_tool("gmail_send", mock_db) is True
-            assert await AGENTS["operator"].can_use_tool("get_active_plans", mock_db) is False
+            # Executor can send email but not plan
+            assert await AGENTS["executor"].can_use_tool("gmail_send", mock_db) is True
+            assert await AGENTS["executor"].can_use_tool("get_active_plans", mock_db) is False
 
             # Perceiver can search but not write (read-only)
             assert await AGENTS["perceiver"].can_use_tool("search", mock_db) is True
@@ -290,7 +290,7 @@ class TestHooks:
         from src.orchestrator.hooks import governor_pre_tool_hook
 
         result = await governor_pre_tool_hook(
-            "API-delete-block", {}, "operator", user_id=TEST_USER_ID
+            "API-delete-block", {}, "executor", user_id=TEST_USER_ID
         )
         assert result["allowed"] is True
 
@@ -299,7 +299,7 @@ class TestHooks:
         from src.orchestrator.hooks import governor_pre_tool_hook
 
         result = await governor_pre_tool_hook(
-            "send_gmail_message", {}, "operator", user_id=TEST_USER_ID
+            "send_gmail_message", {}, "executor", user_id=TEST_USER_ID
         )
         assert result["allowed"] is True
 
@@ -334,7 +334,7 @@ class TestPrompts:
             "librarian",
             "planner",
             "governor",
-            "operator",
+            "executor",
             "presenter",
             "persona",
         }

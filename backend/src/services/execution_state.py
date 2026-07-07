@@ -1,7 +1,7 @@
 """Execution state machine — enforces valid transitions for TaskRun and TaskStep.
 
 Single source of truth for allowed status transitions in the execution engine.
-Used by GraphExecutor, Operator, and recovery to validate state changes.
+Used by GraphExecutor, the Executor, and recovery to validate state changes.
 """
 
 import logging

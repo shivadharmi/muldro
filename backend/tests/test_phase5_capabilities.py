@@ -121,10 +121,10 @@ class TestAgentScopeFixes:
     def test_perceiver_has_workflow_get_teams(self):
         assert "workflow.get_teams" in AGENT_CAPABILITY_SCOPES["perceiver"]
 
-    def test_operator_has_calendar_delete(self):
-        assert "calendar.delete" in AGENT_CAPABILITY_SCOPES["operator"]
+    def test_executor_has_calendar_delete(self):
+        assert "calendar.delete" in AGENT_CAPABILITY_SCOPES["executor"]
 
-    def test_operator_has_workflow_delete(self):
-        scope = AGENT_CAPABILITY_SCOPES["operator"]
+    def test_executor_has_workflow_delete(self):
+        scope = AGENT_CAPABILITY_SCOPES["executor"]
         for cap in ("workflow.delete", "workflow.delete_comment", "workflow.delete_milestone"):
-            assert cap in scope, f"Operator missing {cap}"
+            assert cap in scope, f"Executor missing {cap}"

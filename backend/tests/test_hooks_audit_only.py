@@ -46,7 +46,7 @@ class TestAuditOnlyHook:
             result = await governor_pre_tool_hook(
                 "gmail_send_email",
                 {"to": "test@example.com", "subject": "Hi"},
-                "operator",
+                "executor",
                 user_id="usr_1",
                 workspace_id="ws_1",
                 db_factory=factory,
@@ -73,7 +73,7 @@ class TestAuditOnlyHook:
             result = await governor_pre_tool_hook(
                 "dangerous_tool",
                 {},
-                "operator",
+                "executor",
                 user_id="usr_1",
                 workspace_id="ws_1",
                 db_factory=factory,
@@ -100,7 +100,7 @@ class TestAuditOnlyHook:
             result = await governor_pre_tool_hook(
                 "gmail_send_email",
                 {"to": "test@example.com"},
-                "operator",
+                "executor",
                 user_id="usr_1",
                 workspace_id="ws_1",
                 db_factory=factory,

@@ -23,7 +23,7 @@ CONTEXT_ENRICHED_AGENTS = {
     "presenter",
     "perceiver",
     "librarian",
-    "operator",
+    "executor",
     "governor",
 }
 

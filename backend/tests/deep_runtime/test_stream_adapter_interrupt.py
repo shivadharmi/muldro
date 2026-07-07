@@ -155,7 +155,7 @@ async def _run_adapter_over_gated_stream() -> AsyncIterator[dict]:
         agent,
         {"messages": [{"role": "user", "content": "go"}]},
         config,
-        agent_name="operator",
+        agent_name="executor",
         model=MODEL_ID,
     ):
         yield frame
@@ -172,7 +172,7 @@ async def test_adapter_emits_approval_needed_on_gate_interrupt():
     assert frame["thread_id"] == "t-adapter"
     assert frame["capability"] == "email.send"
     assert frame["risk_level"] == "high"
-    assert frame["agent"] == "operator"
+    assert frame["agent"] == "executor"
 
     # The pause must not ALSO look like a failure or a completion.
     assert not any(f["event"] == "error" for f in frames)
