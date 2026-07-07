@@ -15,7 +15,7 @@ User <-> Next.js Frontend (A2UI)
               |
          JarvisOrchestrator (Claude API)
          Routes to: Perceiver, Librarian, Planner, Governor,
-                    Operator, Presenter, Persona
+                    Executor, Presenter, Persona
               |
          CapabilityResolver (step.capability → agent)
          TrustEngine (single approval gate per step)
@@ -24,12 +24,12 @@ User <-> Next.js Frontend (A2UI)
               |
          Intelligence Backend (Postgres + Redis)
          EventProcessor, WorldModel, MemoryService, Planner,
-         Governor, Operator, Presenter, Audit, DLQ
+         Governor, Executor, Presenter, Audit, DLQ
 ```
 
 **Key paths:**
 - Orchestrator + agents: `backend/src/orchestrator/` (jarvis.py, agents.py, agent_loop.py, hooks.py, prompts.py, tracing.py, budget.py, perception.py, recovery.py, intent_classifier.py, api_circuit_breaker.py, capability_summary.py, services.py)
-- Services (business logic): `backend/src/services/` — planner, governor, operator, presenter, memory_service, world_model, event_processor, capability_resolver, risk_assessor, trust_engine, etc.
+- Services (business logic): `backend/src/services/` — planner, governor, executor, presenter, memory_service, world_model, event_processor, capability_resolver, risk_assessor, trust_engine, etc.
 - Tool layer: `backend/src/tools/` (catalog.py, schemas.py, validation.py, intelligence_server.py, communication_server.py, server.py)
 - Runtime contracts: `backend/src/contracts/` (PlanOutput, PlanStep, CapabilityGap, PolicyDecision, SurfaceUpdate, InsightSurfaceData, StepResult, ToolCallRequest, DomainEvent, WorkspaceSurfacePush) — neutral layer both api and services import downward from
 - A2UI component system: `backend/src/ui/` (contracts.py, renderer.py)
@@ -125,11 +125,11 @@ side-effect rule, and OSS hygiene. Read it before structural changes. Summary be
 | Librarian | Sonnet | Extract entities, update world model, store memories | entities, relationships, memories |
 | Planner | Opus | Produce capability-based plans (structured PlanOutput JSON) via PLANNER_PROMPT_V2 | plans, plan_tasks, goal memories |
 | Governor | Sonnet | Edge-case safety fallback only (audit-only hooks, `edge_case_only=True`). Invoked when: low confidence, unknown capability, conflicting signals | policy decisions |
-| Operator | Sonnet | Execute approved plans via tools (reads context first) | task_runs, task_steps |
+| Executor | Sonnet | Execute approved plans via tools, scoped per step (reads context first; offered only the current step's capability tools, not the full write union) | task_runs, task_steps |
 | Presenter | Sonnet | Generate user-facing text output | briefings, A2UI surfaces (via SurfaceService + renderer.py) |
 | Persona | Haiku | Learn and store preferences (batched every 10th scheduler tick, min 5 interactions) | memories (preference type) |
 
-**Only Planner decides intent. Only Operator executes external actions. Only Presenter talks to the user. TrustEngine (not Governor) gates every external write via a single deterministic approval gate in GraphExecutor.**
+**Only Planner decides intent. Only the Executor executes external actions (scoped to the step's capability). Only Presenter talks to the user. TrustEngine (not Governor) gates every external write via a single deterministic approval gate in GraphExecutor.**
 
 ## Capability-Based Routing
 
@@ -140,7 +140,7 @@ The Planner produces a `PlanOutput` with ordered `PlanStep` entries. Each step h
 | `reason.*`, `respond.*`, `system.respond` | Presenter |
 | `knowledge.*` | Librarian |
 | `email.read/list/search`, `calendar.read`, any read capability | Perceiver |
-| Write capabilities (`email.send`, `calendar.create`, etc.) | Operator |
+| Write capabilities (`email.send`, `calendar.create`, etc.) | Executor (per-step capability scope via `resolve_for_step`) |
 
 **Key files:** `src/services/capability_resolver.py` (resolve, route_step, is_read_capability, is_write_capability), `src/orchestrator/capability_summary.py` (generate_capability_summary — compact ~200-token XML for Planner prompt)
 
@@ -192,7 +192,7 @@ System prompts (`src/orchestrator/prompts.py`):
 
 Only the Planner sees `PLANNER_PROMPT_V2`. Other agents receive `JARVIS_SOUL_CORE` + their role prompt. The Planner also receives a ~200-token capability summary (via `generate_capability_summary()`) instead of 15-20K raw tool schemas.
 
-**Thinking budgets** (`src/orchestrator/agents.py`): Planner=8192, Perceiver=6144, Librarian=4096, Presenter=4096, Governor=2048, Operator=2048, Persona=2048.
+**Thinking budgets** (`src/orchestrator/agents.py`): Planner=8192, Perceiver=6144, Librarian=4096, Presenter=4096, Governor=2048, Executor=2048, Persona=2048.
 
 ## Intent Classification
 
@@ -207,7 +207,7 @@ Fast intents (`greeting`, `chitchat`, `simple_question`, `data_fetch`, `status_q
 
 ## Data Flow
 
-Perceiver → EventProcessor (normalize, score, dedup, DLQ on failure) → Librarian (entities, memories) → Planner (PlanOutput with capability steps) → TrustEngine (single approval gate per step) → Operator (execute via GraphExecutor) → Presenter (deliver via A2UI / web)
+Perceiver → EventProcessor (normalize, score, dedup, DLQ on failure) → Librarian (entities, memories) → Planner (PlanOutput with capability steps) → TrustEngine (single approval gate per step) → Executor (execute via GraphExecutor, per-step capability scope) → Presenter (deliver via A2UI / web)
 
 **Perception signal flow:** Scheduler → PerceptionPolicyService (circuit breaker, rate limiting) → Perceiver → RelevanceAssessor (tier routing: act/alert/brief/silent) → Notifier (priority-scored delivery with hold-for-briefing)
 
