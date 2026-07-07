@@ -22,6 +22,7 @@ from src.config.settings import Settings
 from src.connectors.mcp_bridge import close_turn_sessions
 from src.contracts import PlanOutput
 from src.errors import classify, new_correlation_id
+from src.integrations.capabilities import CAPABILITY_CATALOG
 from src.integrations.turn_scope import turn_scope
 from src.middleware.observability import get_correlation_id
 from src.orchestrator.chat_pipeline import (
@@ -69,6 +70,29 @@ _PLANNER_JSON_CONTRACT_SUFFIX = (
     "\n\nRespond with a single PlanOutput JSON object — no prose, "
     "no preamble, no code fences. Start with { and end with }."
 )
+
+# Uncataloged capabilities that the fast path (intent_to_plan) legitimately emits — these are
+# reads/respond/reason, never external writes. Keep in sync with intent_to_plan's emissions
+# (a regression test asserts every fast intent stays within these + cataloged reads).
+_FAST_SAFE_CAPABILITIES = frozenset(
+    {"respond", "reason", "perceive", "knowledge.search", "system.respond", "none"}
+)
+
+
+def _fast_step_is_write(capability: str) -> bool:
+    """Fail-closed write classifier for the ungated fast path.
+
+    A fast-path step is treated as a WRITE (→ divert to the gated Planner path) unless it is a
+    known-safe fast capability (respond/reason/perceive/knowledge.search/...) or a cataloged
+    read-only capability. An UNKNOWN capability fails CLOSED (treated as a write) so a future
+    mutating fast intent can never execute ungated on the inline path.
+    """
+    if capability in _FAST_SAFE_CAPABILITIES:
+        return False
+    meta = CAPABILITY_CATALOG.get(capability)
+    if meta is not None:
+        return not meta.read_only  # cataloged: email.send -> write, email.list -> read
+    return True  # unknown capability -> fail closed -> route through the gate + lock
 
 
 class ChatProcessor:
@@ -348,6 +372,28 @@ class ChatProcessor:
                         intent not in FAST_INTENTS or confidence < INTENT_CONFIDENCE_THRESHOLD
                     )
 
+                # Fast path: synthesize the lightweight plan and FAIL-CLOSED fence any write
+                # (Step 6C). The fast path executes inline, UNGATED (skips the Planner AND
+                # GraphExecutor's trust gate + write lock). If a fast intent ever emits a write
+                # capability, divert to the Planner path so the write goes through the gate +
+                # lock instead of the ungated inline loop.
+                fast_plan: PlanOutput | None = None
+                if not use_planner:
+                    capabilities = await self._get_available_capabilities(workspace_id)
+                    fast_plan = intent_to_plan(intent, message, capabilities)
+                    write_caps = [
+                        s.capability for s in fast_plan.steps if _fast_step_is_write(s.capability)
+                    ]
+                    if write_caps:
+                        logger.warning(
+                            "fast intent %s emitted write capability(ies) %s — diverting to "
+                            "Planner (gate+lock)",
+                            intent,
+                            write_caps,
+                        )
+                        use_planner = True
+                        fast_plan = None
+
                 _fire_event(
                     "route_selected",
                     workspace_id=workspace_id,
@@ -384,8 +430,7 @@ class ChatProcessor:
 
                     plan = extract_plan(plan_text)
                 else:
-                    capabilities = await self._get_available_capabilities(workspace_id)
-                    plan = intent_to_plan(intent, message, capabilities)
+                    plan = fast_plan  # already synthesized + write-fenced above
 
                 # Apply mode overrides
                 if mode == "plan":
