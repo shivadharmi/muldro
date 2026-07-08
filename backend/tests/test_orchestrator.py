@@ -197,7 +197,6 @@ class TestAgents:
             "perceiver",
             "librarian",
             "planner",
-            "governor",
             "executor",
             "presenter",
             "persona",
@@ -268,11 +267,6 @@ class TestAgents:
         assert AGENTS["planner"].max_tokens == 8192
         assert AGENTS["perceiver"].max_tokens == 4096
 
-    def test_governor_has_low_temperature(self):
-        from src.orchestrator.agents import AGENTS
-
-        assert AGENTS["governor"].temperature == 0.1
-
 
 # ── Hooks Tests ──────────────────────────────────────────────────────────
 
@@ -333,7 +327,6 @@ class TestPrompts:
             "perceiver",
             "librarian",
             "planner",
-            "governor",
             "executor",
             "presenter",
             "persona",
@@ -350,11 +343,6 @@ class TestPrompts:
         from src.orchestrator.prompts import PLANNER_PROMPT_V2
 
         assert "JSON" in PLANNER_PROMPT_V2
-
-    def test_governor_prompt_mentions_approval(self):
-        from src.orchestrator.prompts import GOVERNOR_PROMPT
-
-        assert "approval" in GOVERNOR_PROMPT.lower()
 
 
 # ── Orchestrator Tests ───────────────────────────────────────────────────

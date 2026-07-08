@@ -69,13 +69,12 @@ class TestPerceiverRegistration:
         assert AGENT_PROMPTS["planner"] is PLANNER_PROMPT_V2
 
     def test_total_agent_count(self):
-        """7 agents: perceiver, librarian, planner, governor, executor, presenter, persona."""
-        assert len(AGENTS) == 7
+        """6 agents: perceiver, librarian, planner, executor, presenter, persona."""
+        assert len(AGENTS) == 6
         expected = {
             "perceiver",
             "librarian",
             "planner",
-            "governor",
             "executor",
             "presenter",
             "persona",

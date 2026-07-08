@@ -37,16 +37,16 @@ def mock_db():
 
 
 @pytest.mark.asyncio
-async def test_seed_defaults_creates_seven_agents(mock_db):
-    """seed_defaults should create 7 agents when table is empty."""
+async def test_seed_defaults_creates_six_agents(mock_db):
+    """seed_defaults should create 6 agents when table is empty."""
     # No existing agents
     mock_db.execute = AsyncMock(return_value=FakeResult(rows=[]))
 
     registry = AgentRegistry(mock_db)
     count = await registry.seed_defaults()
 
-    assert count == 7
-    assert mock_db.add.call_count == 7
+    assert count == 6
+    assert mock_db.add.call_count == 6
 
     # Verify agent names match AGENT_PROMPTS
     added_names = set()
@@ -63,9 +63,9 @@ async def test_seed_defaults_creates_seven_agents(mock_db):
 @pytest.mark.asyncio
 async def test_seed_defaults_skips_existing(mock_db):
     """seed_defaults should skip agents that already exist (with matching scope/prompt)."""
-    # Simulate 5 existing agents with correct scope/prompt — no updates needed
+    # Simulate 4 existing agents with correct scope/prompt — no updates needed
     existing_agents = []
-    for name in ["perceiver", "librarian", "planner", "governor", "executor"]:
+    for name in ["perceiver", "librarian", "planner", "executor"]:
         agent = MagicMock(spec=Agent)
         agent.name = name
         agent.capability_scope = sorted(AGENT_CAPABILITY_SCOPES.get(name, set()))
@@ -162,8 +162,8 @@ async def test_load_as_sub_agents(mock_db):
 
 
 @pytest.mark.asyncio
-async def test_planner_gets_opus_and_governor_low_temp(mock_db):
-    """Planner should get Opus model and Governor 0.1 temperature."""
+async def test_planner_gets_opus_and_persona_haiku(mock_db):
+    """Planner should get Opus model and Persona the Haiku tier."""
     mock_db.execute = AsyncMock(return_value=FakeResult(rows=[]))
 
     registry = AgentRegistry(mock_db)
@@ -176,5 +176,4 @@ async def test_planner_gets_opus_and_governor_low_temp(mock_db):
 
     assert agents_by_name["planner"].model_tier == "opus"
     assert agents_by_name["planner"].max_tokens == 8192
-    assert agents_by_name["governor"].temperature == 0.1
     assert agents_by_name["persona"].model_tier == "haiku"
