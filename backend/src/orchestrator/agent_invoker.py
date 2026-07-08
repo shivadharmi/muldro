@@ -370,7 +370,7 @@ class AgentInvoker:
             workspace_id=workspace_id,
             db_factory=self._db_factory,
             budget=self._budget,
-            trace_id=None,
+            trace_id=thread_id,  # per-turn correlation, matching librarian_extract in this method
             trigger="chat",
         )
 
@@ -472,7 +472,6 @@ class AgentInvoker:
             build_read_only_delegate,
             disable_general_purpose_subagent,
         )
-        from src.deep_runtime.model_factory import MODEL_TIER_IDS
         from src.orchestrator.agents import AGENTS, build_agent_set
 
         perceiver_cfg = build_agent_set(AGENTS, self._settings.cheap_mode)["perceiver"]

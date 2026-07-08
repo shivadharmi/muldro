@@ -13,7 +13,7 @@ Two flavours of test:
 
 * Two wiring tests build a REAL ``AgentInvoker`` and assert ``_build_deep_agent_for``
   PREPENDS the critique to ``extra_middleware`` when ``deep_delegates_enabled`` and leaves
-  the 7B1 5-tuple UNCHANGED when the flag is off (dormancy proof).
+  the base chain UNCHANGED (no critique prepend) when the flag is off (dormancy proof).
 
 Invariant proven: a READ delegate is NEVER blocked (fail-open annotation); the WRITE branch
 (unreached in production — 7B2 delegates are read-only) is REAL and BLOCKS a failed critique.
@@ -348,7 +348,7 @@ async def test_redis_failure_still_runs_critique():
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Wiring: _build_deep_agent_for PREPENDS the critique when the flag is on and leaves
-# the 7B1 5-tuple UNCHANGED when it is off (dormancy proof).
+# the base chain UNCHANGED (no critique prepend) when it is off (dormancy proof).
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -428,7 +428,7 @@ async def test_wiring_flag_on_prepends_critique():
     assert len(mw_tuple) == 8
 
 
-async def test_wiring_flag_off_no_critique_five_tuple_unchanged():
+async def test_wiring_flag_off_no_critique_prepend():
     invoker = _make_invoker(deep_delegates_enabled=False)
 
     with (
