@@ -170,8 +170,10 @@ class _WriteScriptedModel(BaseChatModel):
 def _make_write_invoker(*, executed: list, redis):
     """A minimal real ``AgentInvoker`` wired for a gated auto-executing write.
 
-    ``services.redis`` is the fake so write_lock engages; the db_factory backs the approval
-    find (returns None → no pending row); ``execute_tool`` records what reaches the dispatcher.
+    ``services.extras['redis']`` is the fake so write_lock engages (the real accessor the
+    seam uses — ``_build_deep_agent_for`` sources redis from ``services.extras``, not a typed
+    field); the db_factory backs the approval find (returns None → no pending row);
+    ``execute_tool`` records what reaches the dispatcher.
     """
     from src.orchestrator.agent_invoker import AgentInvoker
     from src.orchestrator.agents import SubAgent
@@ -192,7 +194,7 @@ def _make_write_invoker(*, executed: list, redis):
     return AgentInvoker(
         settings=make_mock_settings(runtime="deep"),
         client=MagicMock(),
-        services=SimpleNamespace(redis=redis),
+        services=SimpleNamespace(extras={"redis": redis}),
         budget=MagicMock(),
         circuit_breaker=MagicMock(),
         db_factory_provider=lambda: _persist_db_factory(),

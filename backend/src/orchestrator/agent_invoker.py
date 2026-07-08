@@ -247,7 +247,10 @@ class AgentInvoker:
                     user_context={"user_id": user_id},
                     workspace_id=workspace_id,
                     client=self._client,
-                    redis=getattr(self._services, "redis", None),
+                    # redis lives in services.extras (runtime.py stores it there); a typed
+                    # ``redis`` field never existed, so the old getattr was always None →
+                    # risk assessment never cached. None-safe: services may be None in tests.
+                    redis=self._services.extras.get("redis") if self._services else None,
                 )
             except Exception:
                 return RiskAssessment(
@@ -289,7 +292,10 @@ class AgentInvoker:
 
         write_lock = make_write_lock_middleware(
             workspace_id=workspace_id,
-            redis=getattr(self._services, "redis", None),
+            # redis lives in services.extras (runtime.py stores it there); a typed ``redis``
+            # field never existed, so the old getattr was always None → the 6C cross-path
+            # write lock silently never engaged. None-safe: services may be None in tests.
+            redis=self._services.extras.get("redis") if self._services else None,
             resolve_capability=_resolve_cap,
         )
 
@@ -311,6 +317,9 @@ class AgentInvoker:
                 self._settings,
                 self._db_factory,
                 vector_store=getattr(self._services, "vector_store", None),
+                # INTENTIONALLY getattr → None (NOT services.extras): this mirrors the live
+                # InteractionLearner construction at jarvis.py:172 (redis=None). Keep it in
+                # lock-step with live — do NOT "fix" it to services.extras and diverge.
                 redis=getattr(self._services, "redis", None),
                 event_bus=getattr(self._services, "event_bus", None),
             )
