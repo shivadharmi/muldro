@@ -178,6 +178,13 @@ class Settings(BaseSettings):
     # live activation (dropping the separate presenter step) is a Step-10 gate.
     deep_inline_format: bool = False  # JARVIS_DEEP_INLINE_FORMAT
 
+    # Deep delegate layer (Step 7B2): when True, the deep lead is built with
+    # read-only Jarvis sub-agents (e.g. Perceiver) registered via
+    # ``create_deep_agent(subagents=)`` so it can route reads through the built-in
+    # ``task`` tool. Off by default — the layer stays dormant (no live lead→delegate
+    # routing) until explicitly enabled; live wiring is a Step-8/10 gate.
+    deep_delegates_enabled: bool = False  # JARVIS_DEEP_DELEGATES_ENABLED
+
     # Webhook / push-notification infrastructure (OPTIONAL — empty = poll-only).
     # When unset, webhook registration is a graceful no-op and the system stays
     # poll-only exactly as before. All three must be satisfied (see

@@ -16,3 +16,16 @@ def test_runtime_reads_jarvis_runtime_env():
     with patch.dict(os.environ, {"JARVIS_RUNTIME": "deep"}):
         s = Settings(_env_file=None)
         assert s.runtime == "deep"
+
+
+def test_deep_delegates_defaults_to_false():
+    # Step 7B2: the deep delegate layer (lead→subagent routing) is dormant by
+    # default; only JARVIS_DEEP_DELEGATES_ENABLED=true wires the delegates.
+    s = Settings(_env_file=None)
+    assert s.deep_delegates_enabled is False
+
+
+def test_deep_delegates_reads_jarvis_env():
+    with patch.dict(os.environ, {"JARVIS_DEEP_DELEGATES_ENABLED": "true"}):
+        s = Settings(_env_file=None)
+        assert s.deep_delegates_enabled is True
