@@ -24,7 +24,7 @@ resolution or process-global ``_HARNESS_PROFILES`` mutation happens.
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.orchestrator.agent_invoker import AgentInvoker
-from src.orchestrator.agents import SubAgent
+from src.orchestrator.agents import SubAgent, ThinkingConfig
 from src.orchestrator.prompts import PRESENTER_VOICE
 from tests.conftest import make_mock_settings
 
@@ -36,6 +36,20 @@ def _make_invoker(*, deep_delegates_enabled: bool) -> AgentInvoker:
     so the delegate-source assertions are deterministic. ``get_tools_for_agent`` is an
     AsyncMock because the delegate branch resolves the Perceiver's tools with
     ``tools_override=None`` (unlike the lead, short-circuited via ``tools_override=[]``).
+
+    ``self._agents`` carries TWO leads with deliberately-chosen properties that give the
+    flag-ON assertions teeth:
+
+    * ``perceiver`` — carries a SENTINEL thinking budget (4096, the bare-``SubAgent``
+      default) DISTINCT from the ``AGENTS``-singleton Perceiver's 6144. This is the teeth
+      for the thinking-preservation invariant: ``_build_delegate_subagents`` MUST source
+      the delegate from ``build_agent_set(AGENTS, cheap_mode)`` (6144) — if it ever
+      regressed to ``self._agents["perceiver"]`` the delegate would carry 4096 and the
+      ``cfg.thinking.budget_tokens == 6144`` assertion would FAIL.
+    * ``planner`` — an OPUS lead (distinct tier from the sonnet Perceiver delegate) so the
+      flag-ON test can route a non-sonnet lead and prove GP-disable fires on TWO distinct
+      model ids (lead ``claude-opus-4-8`` + delegate ``claude-sonnet-4-6``), not one model
+      disabled twice.
     """
     tool_executor = MagicMock()
     tool_executor.apply_cache_control_to_tools = lambda tools: tools
@@ -44,7 +58,14 @@ def _make_invoker(*, deep_delegates_enabled: bool) -> AgentInvoker:
     context = MagicMock()
     context.assemble_context = AsyncMock(return_value="")
 
-    agent = SubAgent(name="perceiver", prompt="p", model_tier="sonnet", capability_scope=set())
+    perceiver = SubAgent(
+        name="perceiver",
+        prompt="p",
+        model_tier="sonnet",
+        capability_scope=set(),
+        thinking=ThinkingConfig(budget_tokens=4096),
+    )
+    planner = SubAgent(name="planner", prompt="p", model_tier="opus", capability_scope=set())
 
     return AgentInvoker(
         settings=make_mock_settings(
@@ -59,7 +80,7 @@ def _make_invoker(*, deep_delegates_enabled: bool) -> AgentInvoker:
         db_factory_provider=lambda: MagicMock(),
         tool_executor=tool_executor,
         context=context,
-        agents={"perceiver": agent},
+        agents={"perceiver": perceiver, "planner": planner},
         checkpointer_provider=lambda: None,
     )
 
@@ -79,12 +100,16 @@ async def _agent_done_frame(*a, **k):
     }
 
 
-async def _drive(inv: AgentInvoker) -> list[dict]:
-    """Drive call_agent_stream to completion with the LEAD tool resolution short-circuited."""
+async def _drive(inv: AgentInvoker, agent_name: str = "perceiver") -> list[dict]:
+    """Drive call_agent_stream to completion with the LEAD tool resolution short-circuited.
+
+    ``agent_name`` selects the LEAD (default ``perceiver``); the flag-ON test routes the
+    opus ``planner`` lead so the delegate stays a distinct-tier (sonnet) Perceiver.
+    """
     return [
         f
         async for f in inv.call_agent_stream(
-            "perceiver",
+            agent_name,
             message="hi",
             user_id="u",
             workspace_id="ws",
@@ -95,9 +120,13 @@ async def _drive(inv: AgentInvoker) -> list[dict]:
 
 async def test_flag_on_wires_perceiver_delegate_and_gp_disable():
     """deep_delegates_enabled=True: the seam builds the read-only Perceiver delegate,
-    passes it as ``subagents`` into ``_build_deep_agent_for``, and GP-disables both the
-    lead's and the delegate's built model ids (the direct-Anthropic ``claude-sonnet-4-6``,
-    NOT a Bedrock id)."""
+    passes it as ``subagents`` into ``_build_deep_agent_for``, and GP-disables BOTH the
+    lead's and the delegate's built (direct-Anthropic, NOT Bedrock) model ids.
+
+    The LEAD is the opus ``planner`` (a distinct tier from the sonnet Perceiver delegate)
+    so the GP-disable assertion can prove two DISTINCT model ids are disabled — the lead's
+    ``claude-opus-4-8`` AND the delegate's ``claude-sonnet-4-6`` — not one id disabled twice.
+    """
     inv = _make_invoker(deep_delegates_enabled=True)
     inv._build_deep_agent_for = AsyncMock(return_value=object())
 
@@ -115,7 +144,7 @@ async def test_flag_on_wires_perceiver_delegate_and_gp_disable():
         ) as mock_build_delegate,
         patch("src.deep_runtime.delegates.disable_general_purpose_subagent") as mock_disable_gp,
     ):
-        frames = await _drive(inv)
+        frames = await _drive(inv, "planner")
 
     assert any(f["event"] == "agent_done" for f in frames)
 
@@ -124,18 +153,23 @@ async def test_flag_on_wires_perceiver_delegate_and_gp_disable():
     assert isinstance(subagents, list) and len(subagents) == 1
     assert subagents[0]["name"] == "perceiver"
 
-    # (2) GP-disable was called with the direct-Anthropic sonnet id (lead + delegate models),
-    # never a Bedrock id (get_model_for_agent) — proving MODEL_TIER_IDS keying.
+    # (2) GP-disable fired on BOTH the lead's opus id AND the delegate's sonnet id — the
+    # direct-Anthropic MODEL_TIER_IDS values, never a Bedrock id (get_model_for_agent).
+    # A distinct-tier lead is what proves two separate models are disabled (not one twice).
     assert mock_disable_gp.called
     disabled_ids = [c.args[0] for c in mock_disable_gp.call_args_list]
-    assert "claude-sonnet-4-6" in disabled_ids
+    assert "claude-opus-4-8" in disabled_ids  # lead (planner, opus)
+    assert "claude-sonnet-4-6" in disabled_ids  # delegate (perceiver, sonnet)
 
-    # (3) build_read_only_delegate got the in-memory Perceiver config (thinking-preserved
-    # source), proven by its name + sonnet tier — NOT a DB-loaded row from self._agents.
+    # (3) build_read_only_delegate got the in-memory Perceiver config from
+    # build_agent_set(AGENTS, cheap_mode) — the thinking-PRESERVED source. Proven by name +
+    # sonnet tier AND the 6144 thinking budget: self._agents["perceiver"] carries a distinct
+    # sentinel 4096, so this ==6144 assertion FAILS if the source ever regressed to self._agents.
     mock_build_delegate.assert_awaited_once()
     cfg = mock_build_delegate.call_args.args[0]
     assert cfg.name == "perceiver"
     assert cfg.model_tier == "sonnet"
+    assert cfg.thinking.budget_tokens == 6144
 
 
 async def test_flag_on_delegate_bypasses_presenter_voice():

@@ -72,6 +72,10 @@ def make_mock_settings(**overrides) -> MagicMock:
         # dormant Step-7B2 deep delegate layer: MagicMock's unset attrs are truthy, which
         # would otherwise flip this flag ON for every runtime="deep" test.
         deep_delegates_enabled=False,
+        # Same MagicMock-truthiness hazard: _augment_system_blocks_for_inline does
+        # `if not inline_format: return`, so a truthy unset attr would inject PRESENTER_VOICE
+        # into every deep test's prompt. Mirror the real Settings default (False).
+        deep_inline_format=False,
     )
     defaults.update(overrides)
     for k, v in defaults.items():
