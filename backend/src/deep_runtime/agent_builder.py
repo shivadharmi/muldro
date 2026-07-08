@@ -60,6 +60,7 @@ async def build_deep_agent(
     workspace_id: str = "",
     db_factory=None,
     extra_middleware: Sequence[Any] = (),
+    subagents: Sequence[Any] = (),
     system_prompt: str | SystemMessage | None = None,
     name: str | None = None,
     checkpointer=None,
@@ -80,6 +81,11 @@ async def build_deep_agent(
             when the agent has any write-class capability in scope.
         extra_middleware: Additional Jarvis policy middlewares to install after
             the scope guard (none in Phase 1).
+        subagents: Read-only Jarvis delegates (``SubAgent``/``CompiledSubAgent`` dicts)
+            registered on the lead so its built-in ``task`` tool can route to them.
+            Empty by default → forwarded as ``None`` so the call is byte-identical to
+            today when no delegates are wired. Note: the fail-closed write guard below
+            inspects only the LEAD ``agent``, never these subagents.
         system_prompt: Override for the agent's role prompt; may be a plain string or a
             structured ``SystemMessage`` (e.g. from ``build_system_message``) to preserve
             per-block ``cache_control`` markers; defaults to ``agent.prompt``.
@@ -122,6 +128,7 @@ async def build_deep_agent(
         tools=tools,
         system_prompt=system_prompt or agent.prompt,
         middleware=middleware,
+        subagents=subagents or None,
         name=name or agent.name,
         checkpointer=checkpointer,
     )

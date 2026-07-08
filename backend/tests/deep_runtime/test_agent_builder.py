@@ -165,6 +165,69 @@ async def test_build_deep_agent_forwards_checkpointer():
     assert mock_create.call_args.kwargs["checkpointer"] is saver
 
 
+async def test_build_deep_agent_default_omits_subagents():
+    """Step 7B2: with no subagents passed, create_deep_agent must be called with
+    subagents=None (NOT an empty tuple) so today's behavior is byte-identical."""
+    from unittest.mock import patch
+
+    from src.deep_runtime import agent_builder
+
+    with patch.object(agent_builder, "create_deep_agent") as mock_create:
+        await agent_builder.build_deep_agent(_agent(), tools=[echo])
+    assert mock_create.call_args.kwargs.get("subagents") is None
+
+
+async def test_build_deep_agent_forwards_subagents():
+    """A passed subagents list is forwarded verbatim to create_deep_agent."""
+    from unittest.mock import patch
+
+    from src.deep_runtime import agent_builder
+
+    researcher = {
+        "name": "researcher",
+        "description": "Read-only research delegate.",
+        "runnable": object(),
+    }
+    with patch.object(agent_builder, "create_deep_agent") as mock_create:
+        await agent_builder.build_deep_agent(_agent(), tools=[echo], subagents=[researcher])
+    assert mock_create.call_args.kwargs["subagents"] == [researcher]
+
+
+async def test_build_deep_agent_compiles_with_real_subagent():
+    """End-to-end (offline): a CompiledSubAgent forwarded through subagents= is
+    accepted by the real deepagents create_deep_agent and yields a compiled graph
+    whose built-in `task` tool can route to the registered `researcher` delegate."""
+    child = await build_deep_agent(_agent(), tools=[echo], name="researcher")
+    researcher = {
+        "name": "researcher",
+        "description": "Read-only research delegate.",
+        "runnable": child,
+    }
+    lead = await build_deep_agent(_agent(), tools=[echo], subagents=[researcher])
+    assert isinstance(lead, CompiledStateGraph)
+
+
+async def test_build_deep_agent_write_guard_unaffected_by_subagents():
+    """The fail-closed write-capability guard inspects only the LEAD agent, never
+    the subagents: a write-capable lead with no db_factory still raises even when
+    a subagent is registered."""
+    import pytest
+
+    researcher = {
+        "name": "researcher",
+        "description": "Read-only research delegate.",
+        "runnable": object(),
+    }
+    agent = _executor_agent({"email.send"})
+    resolver = AsyncMock()
+    resolver.is_write_capability = AsyncMock(return_value=True)
+    with patch("src.deep_runtime.agent_builder.CapabilityResolver", return_value=resolver):
+        with pytest.raises(ValueError, match="refusing to compile agent 'executor'"):
+            await build_deep_agent(
+                agent, tools=[send_email], db_factory=None, subagents=[researcher]
+            )
+
+
 async def test_build_deep_agent_accepts_system_message():
     from unittest.mock import patch
 
