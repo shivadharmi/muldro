@@ -19,6 +19,7 @@ from src.deep_runtime.middleware.governor_delegate_critique import (
 )
 from src.deep_runtime.middleware.jarvis_tool_dispatcher import make_jarvis_tool_dispatcher
 from src.deep_runtime.middleware.librarian_extract import make_librarian_extract_middleware
+from src.deep_runtime.middleware.readback import make_readback_middleware
 from src.deep_runtime.middleware.unavailable_server import (
     make_unavailable_server_middleware,
 )
@@ -30,5 +31,6 @@ __all__ = [
     "make_governor_delegate_critique_middleware",
     "make_jarvis_tool_dispatcher",
     "make_librarian_extract_middleware",
+    "make_readback_middleware",
     "make_unavailable_server_middleware",
 ]
