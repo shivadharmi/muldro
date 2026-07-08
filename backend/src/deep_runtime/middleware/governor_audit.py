@@ -7,29 +7,36 @@ AUDIT-ONLY — approval gating is the trust_gate's job (Step 6B); the block here
 legacy hook's single safety invariant (a disabled tool never runs).
 
 Placed FIRST in ``extra_middleware`` so the composed chain is
-``capability_scope → governor_audit → trust_gate → write_lock → dispatcher``. The registry
+``capability_scope → governor_audit → trust_gate → write_lock → dispatcher``. The tool-def
 lookup fails OPEN (audit-only): a transient DB/registry error never blocks a tool, matching
 the legacy hook's ``except Exception: pass`` allow-through.
+
+Step 7B1 P2 (6C #1): the registry lookup is no longer done here. governor_audit consumes the
+per-turn SHARED ``_resolve_tool_def`` (injected as ``resolve_tool_def``), memoized in the
+invoker and shared with trust_gate + write_lock — three consumers, one lookup, one session.
+governor_audit derives its OWN projection (``.enabled`` for the block, ``.risk_level`` for the
+audit) and keeps its OWN fail-OPEN policy over ``(False, None)``.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware, wrap_tool_call
 from langchain_core.messages import ToolMessage
 
 from src.deep_runtime.builtins import DEEPAGENTS_BUILTIN_NAMES
-from src.services.tool_registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
+ResolveToolDefFn = Callable[[str], Awaitable[tuple[bool, Any]]]
+
 
 def make_governor_audit_middleware(
-    *, agent_name: str, workspace_id: str, db_factory: Callable[[], Any]
+    *, agent_name: str, workspace_id: str, resolve_tool_def: ResolveToolDefFn
 ) -> AgentMiddleware:
     """Build the Governor audit middleware for one turn.
 
@@ -37,9 +44,12 @@ def make_governor_audit_middleware(
 
     Args:
         agent_name: The routed sub-agent's name, stamped onto each audit/block log record.
-        workspace_id: Tenant scope for the registry lookup (``"" -> None``).
-        db_factory: Async-context-manager factory yielding an ``AsyncSession``. Each call opens
-            and closes a short-lived session for the registry lookup.
+        workspace_id: Tenant scope, stamped onto each audit log record.
+        resolve_tool_def: Async ``(name) -> (lookup_ok, tool_def | None)`` — the per-turn
+            SHARED ToolDef resolver (6C #1), memoized in the invoker and shared with trust_gate
+            + write_lock. It handles its OWN lookup error internally and returns ``(False,
+            None)``; governor_audit then falls OPEN (allow, audit low-risk) — an audit hook
+            must never turn a transient lookup error into a blocked tool.
 
     Returns:
         An ``AgentMiddleware`` exposing an async ``wrap_tool_call`` hook.
@@ -54,18 +64,12 @@ def make_governor_audit_middleware(
         if name in DEEPAGENTS_BUILTIN_NAMES:
             return await handler(request)
 
-        # Classify via the registry for audit + the disabled-tool block. Fail OPEN: an audit
-        # hook must never turn a transient lookup error into a blocked tool.
-        is_blocked = False
-        risk_level = "low"
-        try:
-            async with db_factory() as db:
-                tool_def = await ToolRegistry(db, workspace_id or None).get_tool(name)
-                if tool_def:
-                    is_blocked = not tool_def.enabled
-                    risk_level = tool_def.risk_level
-        except Exception:
-            logger.debug("[deep_runtime] governor_audit lookup failed for %s", name, exc_info=True)
+        # Classify via the SHARED resolver for audit + the disabled-tool block. Fail OPEN: the
+        # resolver returns (False, None) on a lookup error and (True, None) for an unknown
+        # tool — both leave the tool unblocked and audited at low risk.
+        _ok, tool_def = await resolve_tool_def(name)
+        is_blocked = bool(tool_def and not tool_def.enabled)
+        risk_level = getattr(tool_def, "risk_level", "low") if tool_def else "low"
 
         # Blocked tools never run (the one safety invariant carried over from the legacy hook).
         if is_blocked:

@@ -55,12 +55,14 @@ def _make_invoker(runtime: str, checkpointer_provider=None) -> AgentInvoker:
 
 
 async def test_deep_branch_uses_shells_dispatcher_systemmessage_and_provider():
-    """runtime=deep: build_deep_agent receives shells, gate+write_lock+dispatcher (in order),
-    SystemMessage, provider saver — and the live seam is dormant + durability="sync"."""
+    """runtime=deep: build_deep_agent receives shells, governor_audit+gate+write_lock+dispatcher
+    (in order), SystemMessage, provider saver — and the live seam is dormant + durability="sync".
+    """
     sentinel_saver = object()
     sentinel_dispatcher = object()
     sentinel_write_lock = object()
     sentinel_gate = object()
+    sentinel_governor = object()
     captured_config: dict = {}
 
     inv = _make_invoker(runtime="deep", checkpointer_provider=lambda: sentinel_saver)
@@ -97,6 +99,10 @@ async def test_deep_branch_uses_shells_dispatcher_systemmessage_and_provider():
             "src.orchestrator.agent_invoker.make_write_lock_middleware",
             return_value=sentinel_write_lock,
         ) as mock_write_lock,
+        patch(
+            "src.orchestrator.agent_invoker.make_governor_audit_middleware",
+            return_value=sentinel_governor,
+        ) as mock_governor,
         patch("src.orchestrator.agent_invoker.stream_deep_agent_events", _fake_adapter),
     ):
         frames = [
@@ -123,14 +129,24 @@ async def test_deep_branch_uses_shells_dispatcher_systemmessage_and_provider():
         f"expected shells ['SHELL'] as positional arg[1], got {mock_build.call_args.args!r}"
     )
 
-    # (b) extra_middleware is EXACTLY (trust_gate, write_lock, dispatcher) — gate OUTER,
-    # write lock in the middle, dispatcher INNER (Step 6C Task 1.2).
-    assert kw["extra_middleware"] == (sentinel_gate, sentinel_write_lock, sentinel_dispatcher), (
-        f"expected (gate, write_lock, dispatcher) in that order, got {kw.get('extra_middleware')!r}"
-    )
+    # (b) extra_middleware is EXACTLY (governor_audit, trust_gate, write_lock, dispatcher) —
+    # audit OUTER-MOST, gate next, write lock in the middle, dispatcher INNER (Step 7B1 P1 +
+    # 6C Task 1.2). build_deep_agent installs capability_scope ahead of all four.
+    assert kw["extra_middleware"] == (
+        sentinel_governor,
+        sentinel_gate,
+        sentinel_write_lock,
+        sentinel_dispatcher,
+    ), f"expected (governor, gate, lock, dispatcher) order, got {kw.get('extra_middleware')!r}"
 
     # (b'') the write lock is built with the closure-bound workspace_id (never LLM-supplied).
     assert mock_write_lock.call_args.kwargs["workspace_id"] == "ws"
+
+    # (b''') the governor_audit is built with the closure-bound workspace_id + the SHARED
+    # per-turn ToolDef resolver (6C #1) — never LLM-supplied, never its own db_factory.
+    gov_kw = mock_governor.call_args.kwargs
+    assert gov_kw["workspace_id"] == "ws"
+    assert callable(gov_kw["resolve_tool_def"])
 
     # (c) system_prompt is a structured SystemMessage (not a flat string).
     assert isinstance(kw["system_prompt"], SystemMessage), (

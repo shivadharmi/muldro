@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import ExitStack, asynccontextmanager
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -248,8 +249,17 @@ async def test_forced_autonomous_pauses_persists_then_approve_executes_idempoten
             patch(f"{AGENT_BUILDER_MODULE}.build_chat_model", return_value=_ScriptedModel()),
             patch(f"{CAP_SCOPE_MODULE}._is_in_scope", AsyncMock(return_value=True)),
             patch(
-                f"{TRUST_GATE_MODULE}._resolve_capability",
-                AsyncMock(return_value=(True, "email.send")),
+                # 6C #1 fold: the gate resolves via the per-turn SHARED _resolve_tool_def, so
+                # steer resolution at the deepest boundary (ToolRegistry.get_tool) — a write
+                # capability, enabled (so governor_audit does not block), risk high.
+                f"{TRUST_GATE_MODULE}.ToolRegistry",
+                return_value=SimpleNamespace(
+                    get_tool=AsyncMock(
+                        return_value=SimpleNamespace(
+                            capability="email.send", enabled=True, risk_level="high"
+                        )
+                    )
+                ),
             ),
         ):
             deep_agent = await invoker._build_deep_agent_for(
@@ -340,8 +350,17 @@ async def test_forced_autonomous_reject_blocks_the_tool():
             patch(f"{AGENT_BUILDER_MODULE}.build_chat_model", return_value=_ScriptedModel()),
             patch(f"{CAP_SCOPE_MODULE}._is_in_scope", AsyncMock(return_value=True)),
             patch(
-                f"{TRUST_GATE_MODULE}._resolve_capability",
-                AsyncMock(return_value=(True, "email.send")),
+                # 6C #1 fold: the gate resolves via the per-turn SHARED _resolve_tool_def, so
+                # steer resolution at the deepest boundary (ToolRegistry.get_tool) — a write
+                # capability, enabled (so governor_audit does not block), risk high.
+                f"{TRUST_GATE_MODULE}.ToolRegistry",
+                return_value=SimpleNamespace(
+                    get_tool=AsyncMock(
+                        return_value=SimpleNamespace(
+                            capability="email.send", enabled=True, risk_level="high"
+                        )
+                    )
+                ),
             ),
         ):
             deep_agent = await invoker._build_deep_agent_for(
@@ -412,8 +431,17 @@ async def test_direct_user_request_stays_ungated():
             patch(f"{AGENT_BUILDER_MODULE}.build_chat_model", return_value=_ScriptedModel()),
             patch(f"{CAP_SCOPE_MODULE}._is_in_scope", AsyncMock(return_value=True)),
             patch(
-                f"{TRUST_GATE_MODULE}._resolve_capability",
-                AsyncMock(return_value=(True, "email.send")),
+                # 6C #1 fold: the gate resolves via the per-turn SHARED _resolve_tool_def, so
+                # steer resolution at the deepest boundary (ToolRegistry.get_tool) — a write
+                # capability, enabled (so governor_audit does not block), risk high.
+                f"{TRUST_GATE_MODULE}.ToolRegistry",
+                return_value=SimpleNamespace(
+                    get_tool=AsyncMock(
+                        return_value=SimpleNamespace(
+                            capability="email.send", enabled=True, risk_level="high"
+                        )
+                    )
+                ),
             ),
         ):
             deep_agent = await invoker._build_deep_agent_for(
@@ -468,8 +496,17 @@ async def test_negative_control_bypassed_gate_check_does_not_pause():
             patch(f"{AGENT_BUILDER_MODULE}.build_chat_model", return_value=_ScriptedModel()),
             patch(f"{CAP_SCOPE_MODULE}._is_in_scope", AsyncMock(return_value=True)),
             patch(
-                f"{TRUST_GATE_MODULE}._resolve_capability",
-                AsyncMock(return_value=(True, "email.send")),
+                # 6C #1 fold: the gate resolves via the per-turn SHARED _resolve_tool_def, so
+                # steer resolution at the deepest boundary (ToolRegistry.get_tool) — a write
+                # capability, enabled (so governor_audit does not block), risk high.
+                f"{TRUST_GATE_MODULE}.ToolRegistry",
+                return_value=SimpleNamespace(
+                    get_tool=AsyncMock(
+                        return_value=SimpleNamespace(
+                            capability="email.send", enabled=True, risk_level="high"
+                        )
+                    )
+                ),
             ),
             # THE BYPASS: force the dormancy check to always say "not gated", exactly
             # as if authorization_source were direct_user_request even though we pass
@@ -543,8 +580,17 @@ async def _drive_pause_then_approve_counting_assess(*, patch_find_existing):
             patch(f"{AGENT_BUILDER_MODULE}.build_chat_model", return_value=_ScriptedModel()),
             patch(f"{CAP_SCOPE_MODULE}._is_in_scope", AsyncMock(return_value=True)),
             patch(
-                f"{TRUST_GATE_MODULE}._resolve_capability",
-                AsyncMock(return_value=(True, "email.send")),
+                # 6C #1 fold: the gate resolves via the per-turn SHARED _resolve_tool_def, so
+                # steer resolution at the deepest boundary (ToolRegistry.get_tool) — a write
+                # capability, enabled (so governor_audit does not block), risk high.
+                f"{TRUST_GATE_MODULE}.ToolRegistry",
+                return_value=SimpleNamespace(
+                    get_tool=AsyncMock(
+                        return_value=SimpleNamespace(
+                            capability="email.send", enabled=True, risk_level="high"
+                        )
+                    )
+                ),
             ),
             patch(f"{RISK_ASSESSOR_MODULE}.get_or_assess_risk", assess_spy),
         ]

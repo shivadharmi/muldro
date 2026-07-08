@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware, wrap_tool_call
 from langchain_core.messages import ToolMessage
@@ -64,11 +65,43 @@ logger = logging.getLogger(__name__)
 _MAX_PERSISTED_CONTEXT_CHARS = 8000
 
 
+async def _resolve_tool_def(name: str, workspace_id: str, db_factory) -> tuple[bool, Any]:
+    """Resolve *name* → its ``ToolDefinition`` via ONE short-lived registry lookup.
+
+    Mirrors ``capability_scope._is_in_scope``: ``ToolRegistry(db, workspace_id or None)``
+    → ``get_tool(name)``. Returns ``(lookup_ok, tool_def_or_None)``:
+
+    * ``(True, <ToolDefinition>)`` — the tool is known (caller projects out whatever field it
+      needs: ``.capability`` / ``.enabled`` / ``.risk_level``);
+    * ``(True, None)`` — the lookup SUCCEEDED but the tool is unknown;
+    * ``(False, None)`` — the lookup ERRORED. Callers decide their OWN fail policy over this:
+      trust_gate fails CLOSED (block), governor_audit + write_lock fail OPEN (allow / no lock).
+
+    This is the SINGLE per-turn ToolDef resolution shared (memoized in the invoker) by
+    governor_audit + trust_gate + write_lock (6C #1) — three consumers, one lookup, one
+    session. The session is opened and CLOSED here, never held across risk assessment or
+    ``interrupt()`` (the memoized value is a plain ToolDef, not an open session).
+    """
+    try:
+        async with db_factory() as db:
+            registry = ToolRegistry(db, workspace_id=workspace_id or None)
+            tool = await registry.get_tool(name)
+    except Exception:
+        logger.warning(
+            "[deep_runtime] tool-def lookup failed for %s — caller decides fail policy",
+            name,
+            exc_info=True,
+        )
+        return (False, None)
+    return (True, tool)
+
+
 async def _resolve_capability(name: str, workspace_id: str, db_factory) -> tuple[bool, str | None]:
     """Resolve *name* → capability via ONE short-lived registry lookup.
 
-    Mirrors ``capability_scope._is_in_scope``: ``ToolRegistry(db, workspace_id or None)``
-    → ``get_tool(name)`` → ``tool.capability``. Returns ``(lookup_ok, capability)``:
+    Thin ``.capability`` projection over :func:`_resolve_tool_def`, kept as a stable module
+    function so existing callers/tests that patch ``_resolve_capability`` keep working.
+    Returns ``(lookup_ok, capability)``:
 
     * ``(True, "<capability>")`` — resolved (may be a read or a write capability);
     * ``(True, None)`` — the lookup SUCCEEDED but the tool is unknown / has no capability.
@@ -77,24 +110,9 @@ async def _resolve_capability(name: str, workspace_id: str, db_factory) -> tuple
     * ``(False, None)`` — the lookup ERRORED. The caller MUST fail CLOSED (block) — a gated
       write must never execute ungated on a transient DB/registry failure, mirroring
       ``capability_scope``'s fail-closed deny.
-
-    The session is opened and CLOSED here, never held across risk assessment or
-    ``interrupt()``.
     """
-    try:
-        async with db_factory() as db:
-            registry = ToolRegistry(db, workspace_id=workspace_id or None)
-            tool = await registry.get_tool(name)
-    except Exception:
-        logger.warning(
-            "[deep_runtime] trust_gate capability lookup failed for %s — failing closed",
-            name,
-            exc_info=True,
-        )
-        return (False, None)
-    if tool is None:
-        return (True, None)
-    return (True, getattr(tool, "capability", None))
+    ok, tool = await _resolve_tool_def(name, workspace_id, db_factory)
+    return (ok, getattr(tool, "capability", None) if tool else None)
 
 
 async def _find_existing_approval(workspace_id, thread_id, tool_call_id, db_factory):
@@ -216,6 +234,7 @@ def make_trust_gate_middleware(
     agent_name: str,
     db_factory,
     assess_risk,
+    resolve_capability=None,
     context_block: str = "",
 ) -> AgentMiddleware:
     """Build THE approval gate for one turn.
@@ -231,10 +250,17 @@ def make_trust_gate_middleware(
         thread_id: Stable LangGraph thread id — part of the idempotency key and echoed
             in the interrupt payload so the resume path can correlate.
         agent_name: The routed sub-agent's name — recorded on the approval provenance.
-        db_factory: Async-context-manager factory yielding an ``AsyncSession``. Each use
-            opens and closes a short-lived session; none is held across ``interrupt()``.
+        db_factory: Async-context-manager factory yielding an ``AsyncSession``. Used ONLY for
+            approval find/persist (``_find_existing_approval`` / ``_decide_and_maybe_persist``);
+            capability resolution is delegated to ``resolve_capability``. Each use opens and
+            closes a short-lived session; none is held across ``interrupt()``.
         assess_risk: DB-free async callable ``(capability, tool_input) -> RiskAssessment``
             (fails closed to high internally).
+        resolve_capability: Async ``(name) -> (lookup_ok, capability | None)``. Injected by the
+            invoker as a projection over the per-turn SHARED ``_resolve_tool_def`` (6C #1) so
+            governor_audit + trust_gate + write_lock resolve each tool ONCE. Defaults to a
+            standalone ``_resolve_capability`` closure over ``db_factory`` when not injected.
+            The gate FAILS CLOSED on ``(False, None)`` regardless of who supplies it.
         context_block: The assembled ContextPack for this turn. Persisted (capped) onto the
             Approval's ``artifact_refs`` at pause time so the resume path can re-inject the
             original turn's ambient context (CF-1). Empty on the dormant direct-chat path.
@@ -242,6 +268,10 @@ def make_trust_gate_middleware(
     Returns:
         An ``AgentMiddleware`` exposing an async ``wrap_tool_call`` hook.
     """
+    if resolve_capability is None:
+
+        async def resolve_capability(name: str) -> tuple[bool, str | None]:
+            return await _resolve_capability(name, workspace_id, db_factory)
 
     @wrap_tool_call
     async def trust_gate(request, handler):
@@ -259,8 +289,9 @@ def make_trust_gate_middleware(
         tool_call_id = request.tool_call["id"]
         args = request.tool_call.get("args") or {}
 
-        # Resolve capability in its own short-lived session (closed before risk/interrupt).
-        lookup_ok, capability = await _resolve_capability(name, workspace_id, db_factory)
+        # Resolve capability via the injected (per-turn shared) resolver — its own short-lived
+        # session, closed before risk/interrupt. Returns (lookup_ok, capability).
+        lookup_ok, capability = await resolve_capability(name)
         if not lookup_ok:
             # Fail CLOSED: a capability-lookup error on a gated write must never execute
             # ungated (mirrors capability_scope's fail-closed deny). Block with an error.

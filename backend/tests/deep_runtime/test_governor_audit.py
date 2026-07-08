@@ -39,6 +39,7 @@ from src.deep_runtime.middleware.governor_audit import make_governor_audit_middl
 MODULE = "src.deep_runtime.middleware.governor_audit"
 AGENT_BUILDER_MODULE = "src.deep_runtime.agent_builder"
 CAP_SCOPE_MODULE = "src.deep_runtime.middleware.capability_scope"
+TRUST_GATE_MODULE = "src.deep_runtime.middleware.trust_gate"
 INVOKER_MODULE = "src.orchestrator.agent_invoker"
 
 AGENT_NAME = "executor"
@@ -69,11 +70,14 @@ def _fake_db_factory():
     return _factory
 
 
-def _patched_registry(tool_def):
-    """Patch ``{MODULE}.ToolRegistry`` so ``get_tool(...)`` resolves to *tool_def*."""
-    registry = MagicMock(name="registry")
-    registry.get_tool = AsyncMock(return_value=tool_def)
-    return patch(f"{MODULE}.ToolRegistry", return_value=registry), registry
+def _resolver(tool_def, *, ok: bool = True):
+    """An injected ``resolve_tool_def`` spy returning ``(ok, tool_def)`` for every name.
+
+    Models the per-turn SHARED ``_resolve_tool_def`` (6C #1): ``(True, <def>)`` known,
+    ``(True, None)`` unknown, ``(False, None)`` lookup errored (fail-open for governor_audit).
+    """
+    spy = AsyncMock(name="resolve_tool_def", return_value=(ok, tool_def))
+    return spy
 
 
 @pytest.fixture
@@ -89,16 +93,16 @@ def handler():
 
 async def test_builtin_falls_through_without_registry_lookup(handler):
     """A deepagents built-in (``task``) is framework scaffolding — passthrough, no lookup."""
-    db_factory = MagicMock(name="db_factory")  # must never be entered for a built-in
+    resolve = _resolver(SimpleNamespace(enabled=True, risk_level="low"))  # must never be called
 
     mw = make_governor_audit_middleware(
-        agent_name=AGENT_NAME, workspace_id=WORKSPACE_ID, db_factory=db_factory
+        agent_name=AGENT_NAME, workspace_id=WORKSPACE_ID, resolve_tool_def=resolve
     )
     result = await _hook(mw)(_request("task", {"description": "x"}, "call_bi"), handler)
 
     handler.assert_awaited_once()
     assert result is handler.return_value
-    db_factory.assert_not_called()
+    resolve.assert_not_awaited()
 
 
 # ── Unit (ii): a DISABLED tool is BLOCKED → ToolMessage(status="error") ───────
@@ -107,13 +111,12 @@ async def test_builtin_falls_through_without_registry_lookup(handler):
 async def test_disabled_tool_is_blocked(handler):
     """A tool whose registry def is ``enabled=False`` → blocked ToolMessage, handler NOT run."""
     tool_def = SimpleNamespace(enabled=False, risk_level="high")
-    reg_patch, registry = _patched_registry(tool_def)
+    resolve = _resolver(tool_def)
 
     mw = make_governor_audit_middleware(
-        agent_name=AGENT_NAME, workspace_id=WORKSPACE_ID, db_factory=_fake_db_factory()
+        agent_name=AGENT_NAME, workspace_id=WORKSPACE_ID, resolve_tool_def=resolve
     )
-    with reg_patch:
-        result = await _hook(mw)(_request("disabled_tool", {}, "call_blk"), handler)
+    result = await _hook(mw)(_request("disabled_tool", {}, "call_blk"), handler)
 
     handler.assert_not_awaited()
     assert isinstance(result, ToolMessage)
@@ -123,7 +126,7 @@ async def test_disabled_tool_is_blocked(handler):
     payload = json.loads(result.content)
     assert payload["blocked"] is True
     assert "blocked" in result.content.lower()
-    registry.get_tool.assert_awaited_once_with("disabled_tool")
+    resolve.assert_awaited_once_with("disabled_tool")
 
 
 # ── Unit (iii): an ENABLED tool audits + falls through ────────────────────────
@@ -132,17 +135,17 @@ async def test_disabled_tool_is_blocked(handler):
 async def test_enabled_tool_audits_and_falls_through(handler, caplog):
     """An enabled tool: handler runs once AND a ``tool_audit`` INFO record is emitted."""
     tool_def = SimpleNamespace(enabled=True, risk_level="low")
-    reg_patch, registry = _patched_registry(tool_def)
+    resolve = _resolver(tool_def)
 
     mw = make_governor_audit_middleware(
-        agent_name=AGENT_NAME, workspace_id=WORKSPACE_ID, db_factory=_fake_db_factory()
+        agent_name=AGENT_NAME, workspace_id=WORKSPACE_ID, resolve_tool_def=resolve
     )
-    with reg_patch, caplog.at_level(logging.INFO, logger=MODULE):
+    with caplog.at_level(logging.INFO, logger=MODULE):
         result = await _hook(mw)(_request("search_memories", {"query": "q"}, "call_ok"), handler)
 
     handler.assert_awaited_once()
     assert result is handler.return_value
-    registry.get_tool.assert_awaited_once_with("search_memories")
+    resolve.assert_awaited_once_with("search_memories")
     audit_records = [r for r in caplog.records if r.getMessage() == "tool_audit"]
     assert audit_records, "an enabled tool must emit a tool_audit log record"
     rec = audit_records[0]
@@ -155,14 +158,13 @@ async def test_enabled_tool_audits_and_falls_through(handler, caplog):
 
 
 async def test_missing_tool_def_is_allowed(handler):
-    """Registry returns None (unknown tool) → NOT blocked; the audit falls through."""
-    reg_patch, registry = _patched_registry(None)
+    """Resolver returns ``(True, None)`` (unknown tool) → NOT blocked; the audit falls through."""
+    resolve = _resolver(None)  # (True, None)
 
     mw = make_governor_audit_middleware(
-        agent_name=AGENT_NAME, workspace_id=WORKSPACE_ID, db_factory=_fake_db_factory()
+        agent_name=AGENT_NAME, workspace_id=WORKSPACE_ID, resolve_tool_def=resolve
     )
-    with reg_patch:
-        result = await _hook(mw)(_request("unknown_tool", {}, "call_unk"), handler)
+    result = await _hook(mw)(_request("unknown_tool", {}, "call_unk"), handler)
 
     handler.assert_awaited_once()
     assert result is handler.return_value
@@ -172,16 +174,12 @@ async def test_missing_tool_def_is_allowed(handler):
 
 
 async def test_lookup_failure_falls_through(handler):
-    """A registry error must not block (audit-only hook) — mirrors the legacy hook's
-    ``except Exception: pass`` allow-through."""
-
-    @asynccontextmanager
-    async def _boom_factory():
-        raise RuntimeError("db down")
-        yield  # pragma: no cover
+    """A lookup error surfaces as ``(False, None)`` from the shared resolver and must NOT block
+    (audit-only hook) — mirrors the legacy hook's ``except Exception: pass`` allow-through."""
+    resolve = _resolver(None, ok=False)  # (False, None) — the fail-open contract
 
     mw = make_governor_audit_middleware(
-        agent_name=AGENT_NAME, workspace_id=WORKSPACE_ID, db_factory=_boom_factory
+        agent_name=AGENT_NAME, workspace_id=WORKSPACE_ID, resolve_tool_def=resolve
     )
     result = await _hook(mw)(_request("some_tool", {}, "call_err"), handler)
 
@@ -297,10 +295,12 @@ async def _drive_disabled_tool(invoker):
     reg = MagicMock(name="registry")
     reg.get_tool = AsyncMock(return_value=disabled_def)
 
+    # 6C #1 fold: governor_audit no longer does its OWN lookup — it consumes the per-turn
+    # SHARED ``_resolve_tool_def`` (which lives in trust_gate), so patch the registry THERE.
     with (
         patch(f"{AGENT_BUILDER_MODULE}.build_chat_model", return_value=_ScriptedModel()),
         patch(f"{CAP_SCOPE_MODULE}._is_in_scope", AsyncMock(return_value=True)),
-        patch(f"{MODULE}.ToolRegistry", return_value=reg),
+        patch(f"{TRUST_GATE_MODULE}.ToolRegistry", return_value=reg),
     ):
         deep_agent = await invoker._build_deep_agent_for(
             agent,
@@ -341,7 +341,9 @@ async def test_integration_disabled_tool_blocked_by_governor_audit():
     assert executed == [], f"a blocked tool must NEVER reach the dispatcher; executed={executed}"
 
 
-def _passthrough_governor_audit_factory(*, agent_name, workspace_id, db_factory) -> AgentMiddleware:  # noqa: ARG001
+def _passthrough_governor_audit_factory(
+    *, agent_name, workspace_id, resolve_tool_def
+) -> AgentMiddleware:  # noqa: ARG001
     """Stand-in factory returning a no-op audit middleware (the negative control)."""
 
     @wrap_tool_call

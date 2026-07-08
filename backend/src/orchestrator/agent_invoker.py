@@ -27,7 +27,7 @@ from src.deep_runtime.authorization import AuthorizationSource
 from src.deep_runtime.checkpoint_reaper import reap_thread
 from src.deep_runtime.middleware.governor_audit import make_governor_audit_middleware
 from src.deep_runtime.middleware.jarvis_tool_dispatcher import make_jarvis_tool_dispatcher
-from src.deep_runtime.middleware.trust_gate import _resolve_capability, make_trust_gate_middleware
+from src.deep_runtime.middleware.trust_gate import _resolve_tool_def, make_trust_gate_middleware
 from src.deep_runtime.middleware.write_lock import make_write_lock_middleware
 from src.deep_runtime.prompt_bridge import build_system_message
 from src.deep_runtime.stream_adapter import stream_deep_agent_events
@@ -189,12 +189,28 @@ class AgentInvoker:
         """
         shells = build_tool_shells(tools)
 
+        # 6C #1 fold: resolve each tool's ToolDef ONCE per turn, shared by governor_audit +
+        # trust_gate + write_lock (was 3 lookups + 3 sessions per gated write). The cached
+        # value is the resolved ToolDef (or None) — NO DB session is held in the cache;
+        # _resolve_tool_def opens+closes its own short-lived session per distinct tool name.
+        # Each consumer derives its OWN projection AND keeps its OWN fail-on-error behavior
+        # (governor_audit + write_lock fail OPEN, trust_gate fails CLOSED).
+        _tool_def_cache: dict[str, tuple[bool, Any]] = {}
+
+        async def _resolve_tool_def_shared(name: str) -> tuple[bool, Any]:
+            if name not in _tool_def_cache:
+                _tool_def_cache[name] = await _resolve_tool_def(
+                    name, workspace_id, self._db_factory
+                )
+            return _tool_def_cache[name]
+
         # Step 7B1: audit-only Governor middleware — logs every tool call and blocks disabled
         # tools. Placed FIRST in extra_middleware so it runs before the gate/lock/dispatch.
+        # Fails OPEN: the shared resolver returns (False, None) on a lookup error → allow.
         governor_audit = make_governor_audit_middleware(
             agent_name=agent.name,
             workspace_id=workspace_id,
-            db_factory=self._db_factory,
+            resolve_tool_def=_resolve_tool_def_shared,
         )
 
         async def _assess_risk(capability, tool_input):
@@ -216,6 +232,11 @@ class AgentInvoker:
                     reversible=False,
                 )
 
+        # trust_gate FAILS CLOSED on a lookup error: (False, None) → block the gated write.
+        async def _gate_cap(name: str) -> tuple[bool, Any]:
+            ok, td = await _resolve_tool_def_shared(name)
+            return (ok, getattr(td, "capability", None) if td else None)
+
         trust_gate = make_trust_gate_middleware(
             authorization_source=authorization_source,
             workspace_id=workspace_id,
@@ -224,6 +245,7 @@ class AgentInvoker:
             agent_name=agent.name,
             db_factory=self._db_factory,
             assess_risk=_assess_risk,
+            resolve_capability=_gate_cap,
             context_block=context_block,
         )
         dispatcher = make_jarvis_tool_dispatcher(
@@ -233,13 +255,13 @@ class AgentInvoker:
         )
 
         # Step 6C: cross-path write lock, placed INNER of trust_gate, OUTER of dispatcher.
-        # Resolve capability with the SAME registry lookup trust_gate uses, so the lock key
-        # matches the autonomous path exactly. Because trust_gate calls its handler only
-        # AFTER approval, the lock is entered around the actual execute — never held across
-        # the interrupt wait.
+        # Resolve capability from the SAME shared per-turn ToolDef trust_gate uses, so the lock
+        # key matches the autonomous path exactly. Because trust_gate calls its handler only
+        # AFTER approval, the lock is entered around the actual execute — never held across the
+        # interrupt wait. FAILS OPEN on a lookup error: (False, None) → cap None → no lock.
         async def _resolve_cap(name: str):
-            _ok, cap = await _resolve_capability(name, workspace_id, self._db_factory)
-            return cap
+            ok, td = await _resolve_tool_def_shared(name)
+            return getattr(td, "capability", None) if (ok and td) else None
 
         write_lock = make_write_lock_middleware(
             workspace_id=workspace_id,

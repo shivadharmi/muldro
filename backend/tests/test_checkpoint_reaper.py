@@ -25,6 +25,7 @@ import asyncio
 import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import asyncpg
@@ -433,8 +434,16 @@ async def test_non_paused_turn_reaps_its_checkpoints():
                 patch(f"{AGENT_BUILDER_MODULE}.build_chat_model", return_value=_ScriptedModel()),
                 patch(f"{CAP_SCOPE_MODULE}._is_in_scope", AsyncMock(return_value=True)),
                 patch(
-                    f"{TRUST_GATE_MODULE}._resolve_capability",
-                    AsyncMock(return_value=(True, "email.send")),
+                    # 6C #1 fold: steer resolution at the deepest boundary (the SHARED
+                    # _resolve_tool_def's ToolRegistry.get_tool) — write cap, enabled, high risk.
+                    f"{TRUST_GATE_MODULE}.ToolRegistry",
+                    return_value=SimpleNamespace(
+                        get_tool=AsyncMock(
+                            return_value=SimpleNamespace(
+                                capability="email.send", enabled=True, risk_level="high"
+                            )
+                        )
+                    ),
                 ),
             ):
                 frames = [
@@ -476,8 +485,16 @@ async def test_negative_control_without_reap_checkpoints_remain():
                 patch(f"{AGENT_BUILDER_MODULE}.build_chat_model", return_value=_ScriptedModel()),
                 patch(f"{CAP_SCOPE_MODULE}._is_in_scope", AsyncMock(return_value=True)),
                 patch(
-                    f"{TRUST_GATE_MODULE}._resolve_capability",
-                    AsyncMock(return_value=(True, "email.send")),
+                    # 6C #1 fold: steer resolution at the deepest boundary (the SHARED
+                    # _resolve_tool_def's ToolRegistry.get_tool) — write cap, enabled, high risk.
+                    f"{TRUST_GATE_MODULE}.ToolRegistry",
+                    return_value=SimpleNamespace(
+                        get_tool=AsyncMock(
+                            return_value=SimpleNamespace(
+                                capability="email.send", enabled=True, risk_level="high"
+                            )
+                        )
+                    ),
                 ),
             ):
                 frames = [
@@ -513,8 +530,16 @@ async def test_paused_turn_checkpoint_survives():
                 patch(f"{AGENT_BUILDER_MODULE}.build_chat_model", return_value=_ScriptedModel()),
                 patch(f"{CAP_SCOPE_MODULE}._is_in_scope", AsyncMock(return_value=True)),
                 patch(
-                    f"{TRUST_GATE_MODULE}._resolve_capability",
-                    AsyncMock(return_value=(True, "email.send")),
+                    # 6C #1 fold: steer resolution at the deepest boundary (the SHARED
+                    # _resolve_tool_def's ToolRegistry.get_tool) — write cap, enabled, high risk.
+                    f"{TRUST_GATE_MODULE}.ToolRegistry",
+                    return_value=SimpleNamespace(
+                        get_tool=AsyncMock(
+                            return_value=SimpleNamespace(
+                                capability="email.send", enabled=True, risk_level="high"
+                            )
+                        )
+                    ),
                 ),
                 # Force the gate to treat even direct provenance as gated → the turn pauses.
                 patch(f"{TRUST_GATE_MODULE}.is_gated_source", return_value=True),
