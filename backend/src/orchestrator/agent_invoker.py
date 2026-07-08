@@ -25,6 +25,7 @@ from src.config.settings import Settings
 from src.deep_runtime.agent_builder import build_deep_agent
 from src.deep_runtime.authorization import AuthorizationSource
 from src.deep_runtime.checkpoint_reaper import reap_thread
+from src.deep_runtime.middleware.governor_audit import make_governor_audit_middleware
 from src.deep_runtime.middleware.jarvis_tool_dispatcher import make_jarvis_tool_dispatcher
 from src.deep_runtime.middleware.trust_gate import _resolve_capability, make_trust_gate_middleware
 from src.deep_runtime.middleware.write_lock import make_write_lock_middleware
@@ -180,11 +181,21 @@ class AgentInvoker:
     ):
         """Build a compiled deep agent WITH the full gated middleware chain:
         capability_scope (installed by ``build_deep_agent`` when ``db_factory`` is given)
-        → trust_gate → jarvis_tool_dispatcher. Shared by the resume path (Task 4) and the
-        live seam (Task 5) so both rebuild identically. The trust_gate short-circuits
-        ``direct_user_request`` (dormant); a gated ``authorization_source`` activates it.
+        → governor_audit → trust_gate → write_lock → jarvis_tool_dispatcher. Shared by the
+        resume path (Task 4) and the live seam (Task 5) so both rebuild identically.
+        governor_audit (Step 7B1) audit-logs every tool call and blocks disabled tools; the
+        trust_gate short-circuits ``direct_user_request`` (dormant), a gated
+        ``authorization_source`` activates it.
         """
         shells = build_tool_shells(tools)
+
+        # Step 7B1: audit-only Governor middleware — logs every tool call and blocks disabled
+        # tools. Placed FIRST in extra_middleware so it runs before the gate/lock/dispatch.
+        governor_audit = make_governor_audit_middleware(
+            agent_name=agent.name,
+            workspace_id=workspace_id,
+            db_factory=self._db_factory,
+        )
 
         async def _assess_risk(capability, tool_input):
             from src.services.risk_assessor import RiskAssessment, get_or_assess_risk
@@ -235,16 +246,16 @@ class AgentInvoker:
             redis=getattr(self._services, "redis", None),
             resolve_capability=_resolve_cap,
         )
-        # Order matters: extra_middleware=(trust_gate, write_lock, dispatcher) puts the gate
-        # OUTER of the lock and the lock OUTER of the dispatcher. build_deep_agent installs
-        # capability_scope first, so the full chain is
-        # capability_scope → trust_gate → write_lock → dispatcher.
+        # Order matters: extra_middleware=(governor_audit, trust_gate, write_lock, dispatcher)
+        # puts the audit OUTER of the gate, the gate OUTER of the lock, and the lock OUTER of
+        # the dispatcher. build_deep_agent installs capability_scope first, so the full chain is
+        # capability_scope → governor_audit → trust_gate → write_lock → dispatcher.
         return await build_deep_agent(
             agent,
             shells,
             workspace_id=workspace_id,
             db_factory=self._db_factory,
-            extra_middleware=(trust_gate, write_lock, dispatcher),
+            extra_middleware=(governor_audit, trust_gate, write_lock, dispatcher),
             system_prompt=system_prompt,
             checkpointer=self._checkpointer_provider() or MemorySaver(),
         )
