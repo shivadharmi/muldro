@@ -37,6 +37,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from deepagents import (
+    GeneralPurposeSubagentProfile,
+    HarnessProfile,
+    register_harness_profile,
+)
 from pydantic import BaseModel
 
 from src.deep_runtime.agent_builder import build_deep_agent
@@ -142,3 +147,51 @@ async def build_read_only_delegate(
         "description": description or f"Read-only research delegate ({agent_config.name}).",
         "runnable": compiled,
     }
+
+
+def disable_general_purpose_subagent(model_name: str) -> None:
+    """Disable the ambient auto-added general-purpose ``task`` subagent for a deep lead.
+
+    ``create_deep_agent`` auto-inserts a stock ``general-purpose`` subagent (backing the
+    built-in ``task`` tool) unless a harness profile disables it. On a Jarvis delegate
+    host we want the lead's only ``task`` targets to be the read-only Jarvis delegates
+    explicitly registered via ``subagents=[...]`` — never an unscoped general-purpose
+    child. This registers a deepagents ``HarnessProfile`` whose
+    ``general_purpose_subagent.enabled`` is ``False`` under ``anthropic:<model_name>``,
+    so a lead whose model resolves to that key is built without the GP child.
+
+    Model-scoped by design: the key is ``f"anthropic:{model_name}"`` (the direct
+    Anthropic model id, e.g. ``MODEL_TIER_IDS["sonnet"]`` == ``"claude-sonnet-4-6"``).
+    Verified in the Phase-0 spike as preferred over the provider-wide ``"anthropic"``
+    key — disabling GP for a sonnet lead leaves GP intact for opus/haiku agents built
+    in the same process.
+
+    Idempotent + quiet: if the key is already GP-disabled this returns early without
+    re-registering, so the Phase-4 seam (which calls this on every deep delegate-host
+    lead build) does not trigger deepagents' additive-merge INFO log on every turn.
+
+    PROCESS-GLOBAL SCOPE — Step-10 activation gate ("GP-disable process-global scope
+    re-audit"): ``register_harness_profile`` mutates a process-global registry, so the
+    disable persists for the lifetime of the process. This is DORMANT scaffolding; the
+    Phase-4 seam calls it only when ``deep_delegates_enabled`` and the lead is a
+    delegate host.
+
+    Args:
+        model_name: The direct Anthropic model id of the lead (e.g. ``"claude-sonnet-4-6"``).
+            The harness-profile key is ``f"anthropic:{model_name}"``.
+    """
+    # Private-registry read for the idempotency guard only; the write goes through the
+    # public register_harness_profile (which owns lazy built-in bootstrap + merge).
+    from deepagents.profiles.harness.harness_profiles import _HARNESS_PROFILES
+
+    key = f"anthropic:{model_name}"
+    existing = _HARNESS_PROFILES.get(key)
+    if existing is not None:
+        gp = existing.general_purpose_subagent
+        if gp is not None and gp.enabled is False:
+            return  # already disabled — stay quiet (no re-merge, no INFO log spam)
+
+    register_harness_profile(
+        key,
+        HarnessProfile(general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False)),
+    )

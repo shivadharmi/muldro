@@ -19,6 +19,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import (
@@ -30,6 +31,7 @@ from langchain_core.messages import (
 )
 from langchain_core.messages.tool import tool_call_chunk
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 
 from src.deep_runtime import agent_builder
@@ -37,6 +39,7 @@ from src.deep_runtime.delegates import (
     DELEGATE_RESPONSE_FORMAT,
     DelegateSummary,
     build_read_only_delegate,
+    disable_general_purpose_subagent,
 )
 from src.deep_runtime.model_factory import build_chat_model
 from src.orchestrator.agents import SubAgent, ThinkingConfig, create_sub_agents
@@ -464,3 +467,176 @@ async def test_negative_control_scope_guard_is_the_gate():
             {"configurable": {"thread_id": "neg-open"}},
         )
     assert any(n == "email_send" for n, _ in rec_open)  # no guard -> executed
+
+
+# ===========================================================================
+# 6 — disable_general_purpose_subagent(model_name): drop the ambient GP task child
+#     on a deep delegate-host lead, model-scoped, idempotent.
+#
+# THE ONE CRITICAL HAZARD: disable_general_purpose_subagent mutates the
+# PROCESS-GLOBAL deepagents `_HARNESS_PROFILES` registry. If a sonnet GP-disable
+# leaked, every other suite test that builds a sonnet-lead deep agent would
+# silently lose its general-purpose subagent. The autouse fixture below snapshots
+# the exact keys these tests touch (capturing the built-in anthropic profiles) and
+# RESTORES them after each test so nothing leaks.
+# ===========================================================================
+_GP_TEST_KEYS = ("anthropic:claude-sonnet-4-6", "anthropic:claude-opus-4-8")
+
+
+@pytest.fixture(autouse=True)
+def _restore_harness_profiles():
+    """Snapshot + restore the process-global harness-profile registry for the keys
+    these tests register under, so a GP-disable never leaks into the wider suite.
+
+    Ensures the built-in profile bootstrap has run *before* snapshotting, so the
+    saved value is the real built-in (e.g. the sonnet system-prompt suffix) and
+    teardown restores it byte-for-byte instead of destroying it.
+    """
+    from deepagents.profiles.harness.harness_profiles import (
+        _HARNESS_PROFILES,
+        _ensure_harness_profiles_loaded,
+    )
+
+    _ensure_harness_profiles_loaded()
+    saved = {k: _HARNESS_PROFILES.get(k) for k in _GP_TEST_KEYS}
+    try:
+        yield
+    finally:
+        for key, prev in saved.items():
+            if prev is None:
+                _HARNESS_PROFILES.pop(key, None)
+            else:
+                _HARNESS_PROFILES[key] = prev
+
+
+def _list_subagents_turns() -> list[list[AIMessageChunk]]:
+    """Turn 0 calls task(subagent_type='__list__') — an unknown type, so the task
+    tool returns an error naming every allowed subagent type; turn 1 answers."""
+    return [
+        [
+            AIMessageChunk(
+                content=[],
+                tool_call_chunks=[
+                    tool_call_chunk(
+                        name="task",
+                        args=json.dumps({"subagent_type": "__list__", "description": "enumerate"}),
+                        id="lead_list_tc",
+                        index=0,
+                    )
+                ],
+            ),
+            _usage_chunk("tool_use"),
+        ],
+        [
+            AIMessageChunk(content=[{"type": "text", "text": "done", "index": 0}]),
+            _usage_chunk("end_turn"),
+        ],
+    ]
+
+
+def _allowed_subagent_types(messages: list[BaseMessage]) -> set[str]:
+    """Read the allowed subagent-type set off the task(__list__) error ToolMessage.
+
+    The task tool returns: '...the only allowed types are `researcher`,
+    `general-purpose`' — parse the backtick-quoted names.
+    """
+    for m in messages:
+        content = str(getattr(m, "content", ""))
+        if isinstance(m, ToolMessage) and "the only allowed types are" in content:
+            tokens = content.replace(",", " ").split()
+            return {tok.strip("`") for tok in tokens if tok.startswith("`")}
+    return set()
+
+
+async def _build_delegate_spec(name: str = "researcher") -> dict:
+    """Build a real read-only Perceiver delegate (Phase-2 build method A). Compiled
+    in its own patch scope so the lead's later build_chat_model patch can't touch it.
+    Never actually invoked here — the lead's task(__list__) errors before routing."""
+    cfg = _read_only_perceiver()
+    rec: list = []
+    with (
+        patch.object(
+            agent_builder,
+            "build_chat_model",
+            lambda a: ScriptedModel(_call_then_answer_turns("internal_search", {"query": "X"})),
+        ),
+        patch.object(agent_builder, "CapabilityResolver", return_value=_read_only_resolver()),
+    ):
+        return await build_read_only_delegate(
+            cfg,
+            _TOOL_DEFS,
+            workspace_id=WS,
+            user_id=USER,
+            db_factory=_fake_db_factory(),
+            execute_tool=_recorder(rec),
+            name=name,
+        )
+
+
+async def _allowed_types_for_lead(lead_model_name: str, subagents: list, thread: str) -> set[str]:
+    """Build a deep lead whose model resolves to anthropic:<lead_model_name>, drive
+    it to enumerate its allowed subagent types, and return that set."""
+    lead_cfg = _empty_scope_read_only()  # sonnet cfg, empty scope -> no db_factory / ValueError
+    with patch.object(
+        agent_builder,
+        "build_chat_model",
+        lambda a: ScriptedModel(_list_subagents_turns(), model_name=lead_model_name),
+    ):
+        lead = await agent_builder.build_deep_agent(
+            lead_cfg,
+            [],
+            subagents=subagents,
+            checkpointer=MemorySaver(),
+        )
+    result = await lead.ainvoke(
+        {"messages": [HumanMessage("list subagents")]},
+        {"configurable": {"thread_id": thread}},
+    )
+    return _allowed_subagent_types(result["messages"])
+
+
+async def test_disable_gp_removes_general_purpose_keeps_delegate():
+    delegate = await _build_delegate_spec("researcher")
+    disable_general_purpose_subagent("claude-sonnet-4-6")
+    allowed = await _allowed_types_for_lead("claude-sonnet-4-6", [delegate], "gp-off")
+    assert "general-purpose" not in allowed  # ambient GP task child is gone
+    assert "researcher" in allowed  # our delegate still routes
+
+
+async def test_general_purpose_present_without_disable():
+    # Negative control (teeth): without the disable call, GP IS auto-added.
+    delegate = await _build_delegate_spec("researcher")
+    allowed = await _allowed_types_for_lead("claude-sonnet-4-6", [delegate], "gp-ctrl")
+    assert "general-purpose" in allowed
+    assert "researcher" in allowed
+
+
+async def test_disable_gp_is_model_scoped_opus_unaffected():
+    # Disabling the sonnet key must NOT disable GP for an opus lead in the same process.
+    delegate = await _build_delegate_spec("researcher")
+    disable_general_purpose_subagent("claude-sonnet-4-6")
+    allowed = await _allowed_types_for_lead("claude-opus-4-8", [delegate], "gp-opus")
+    assert "general-purpose" in allowed  # opus lead unaffected by the sonnet disable
+    assert "researcher" in allowed
+
+
+async def test_disable_gp_is_idempotent():
+    delegate = await _build_delegate_spec("researcher")
+    from src.deep_runtime import delegates as delegates_mod
+
+    real_register = delegates_mod.register_harness_profile
+    registered_keys: list[str] = []
+
+    def _counting(key, profile):
+        registered_keys.append(key)
+        return real_register(key, profile)
+
+    with patch.object(delegates_mod, "register_harness_profile", side_effect=_counting):
+        disable_general_purpose_subagent("claude-sonnet-4-6")
+        disable_general_purpose_subagent("claude-sonnet-4-6")  # second call must not raise
+
+    # early-return guard: only the FIRST call re-registers (no per-turn merge/log spam).
+    assert registered_keys == ["anthropic:claude-sonnet-4-6"]
+    allowed = await _allowed_types_for_lead("claude-sonnet-4-6", [delegate], "gp-idem")
+    assert "general-purpose" not in allowed
+    assert "researcher" in allowed
