@@ -76,11 +76,6 @@ def _unavailable_server(result: Any) -> str | None:
     return None
 
 
-# The Governor's structured-output tool. Capability-scoped to the Governor, so
-# its presence in an agent's tool list is the discriminator for forcing
-# tool_choice (no agent-name sniffing).
-GOVERNOR_VERDICT_TOOL = "report_governor_verdict"
-
 # Max chars persisted per span field after serialization. Live tool results are
 # unaffected — this only caps/redacts what gets written into trace spans.
 _MAX_SPAN_FIELD_CHARS = 20_000
@@ -492,27 +487,6 @@ async def agent_loop(
 
             if tools:
                 api_kwargs["tools"] = tools
-
-            # Structured output: when the Governor's verdict tool is available,
-            # force tool_choice to it so the model returns the verdict as a tool
-            # call. The tool is capability-scoped to the Governor, so its presence
-            # in `tools` is the discriminator — no agent-name sniffing needed.
-            # Forced tool_choice is incompatible with thinking — disable it.
-            verdict_tool = (
-                next((t for t in tools if t["name"] == GOVERNOR_VERDICT_TOOL), None)
-                if tools
-                else None
-            )
-            if verdict_tool:
-                api_kwargs["tool_choice"] = {"type": "tool", "name": GOVERNOR_VERDICT_TOOL}
-                # Forced tool_choice is incompatible with thinking; effort rides
-                # with thinking, so drop both.
-                api_kwargs.pop("thinking", None)
-                api_kwargs.pop("output_config", None)
-                # Re-add temperature only for models that accept it (adaptive-only
-                # models 400 on any sampling param).
-                if not _requires_adaptive_thinking(model) and "temperature" not in api_kwargs:
-                    api_kwargs["temperature"] = agent.temperature
 
             response = None
             _api_start = time.time()
