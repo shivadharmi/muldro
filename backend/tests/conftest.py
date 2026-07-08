@@ -68,6 +68,10 @@ def make_mock_settings(**overrides) -> MagicMock:
         scheduler_subtick_timeout_s=90.0,
         resume_reaper_stale_after_s=300.0,
         resume_reaper_max_attempts=5,
+        # Mirror the real Settings default (False) so a mock Settings never trips the
+        # dormant Step-7B2 deep delegate layer: MagicMock's unset attrs are truthy, which
+        # would otherwise flip this flag ON for every runtime="deep" test.
+        deep_delegates_enabled=False,
     )
     defaults.update(overrides)
     for k, v in defaults.items():

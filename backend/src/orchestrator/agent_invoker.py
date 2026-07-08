@@ -13,7 +13,7 @@ orchestrator stays the single source of truth across ``load_agents_from_db``.
 """
 
 import logging
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 from datetime import datetime, timezone
 from typing import Any
 
@@ -202,6 +202,7 @@ class AgentInvoker:
         authorization_source: str,
         system_prompt,
         context_block: str = "",
+        subagents: Sequence[Any] = (),
     ):
         """Build a compiled deep agent WITH the full gated middleware chain:
         capability_scope (installed by ``build_deep_agent`` when ``db_factory`` is given)
@@ -210,6 +211,13 @@ class AgentInvoker:
         governor_audit (Step 7B1) audit-logs every tool call and blocks disabled tools; the
         trust_gate short-circuits ``direct_user_request`` (dormant), a gated
         ``authorization_source`` activates it.
+
+        ``subagents`` (Step 7B2 P4) are read-only Jarvis delegates (CompiledSubAgent dicts)
+        registered on the lead so its built-in ``task`` tool can route to them. Empty by
+        default (``()``) → forwarded straight to ``build_deep_agent`` which passes
+        ``subagents or None`` to ``create_deep_agent`` — byte-identical to 7B1 when no
+        delegates are wired. The resume path (Task 4) never passes any, keeping its rebuild
+        delegate-free.
         """
         shells = build_tool_shells(tools)
 
@@ -358,9 +366,57 @@ class AgentInvoker:
                 dispatcher,
                 librarian_extract,
             ),
+            subagents=subagents,
             system_prompt=system_prompt,
             checkpointer=self._checkpointer_provider() or MemorySaver(),
         )
+
+    async def _build_delegate_subagents(
+        self, lead_agent: SubAgent, *, workspace_id: str, user_id: str
+    ) -> list[Any]:
+        """DORMANT (``deep_delegates_enabled``): build the read-only Perceiver delegate list
+        for a deep lead + disable the ambient general-purpose ``task`` child on BOTH the lead's
+        and the delegate's built models. Called from the live seam ONLY when the flag is on.
+
+        The Perceiver config is sourced from the in-memory ``build_agent_set(AGENTS, cheap_mode)``
+        singleton — NOT ``self._agents`` — because ``self._agents`` may be overwritten at runtime
+        by ``load_as_sub_agents()`` (jarvis.py), which DROPS per-agent ``thinking``. Sourcing from
+        the singleton preserves the Perceiver's sonnet/6144 thinking AND applies the SAME cheap-mode
+        transform the lead received.
+
+        GP-disable keys off ``MODEL_TIER_IDS[<tier>]`` — the direct-Anthropic id the deep
+        runtime always builds via ``build_chat_model`` (deepagents derives the harness-profile
+        key from that built model) — NOT ``get_model_for_agent`` (which returns a Bedrock id
+        when ``use_bedrock``). Disabling GP on BOTH models, BEFORE either is built, stops the
+        sonnet delegate — itself a deep lead — from getting its own ungated general-purpose
+        child. Both calls are idempotent + process-global.
+
+        The delegate carries its OWN role prompt (``perceiver_cfg.prompt``, the default inside
+        ``build_read_only_delegate``) — never the lead's Presenter-voice inline-format augmentation.
+        Composing ``JARVIS_SOUL_CORE`` + ambient context into the delegate prompt is a Step-10
+        activation refinement (dormant scaffold; the forced-on e2e uses fake models, so delegate
+        prompt content is behavior-neutral there).
+        """
+        from src.deep_runtime.delegates import (
+            build_read_only_delegate,
+            disable_general_purpose_subagent,
+        )
+        from src.deep_runtime.model_factory import MODEL_TIER_IDS
+        from src.orchestrator.agents import AGENTS, build_agent_set
+
+        perceiver_cfg = build_agent_set(AGENTS, self._settings.cheap_mode)["perceiver"]
+        disable_general_purpose_subagent(MODEL_TIER_IDS[lead_agent.model_tier])
+        disable_general_purpose_subagent(MODEL_TIER_IDS[perceiver_cfg.model_tier])
+        tools = await self._resolve_tools(perceiver_cfg, workspace_id, None)
+        delegate = await build_read_only_delegate(
+            perceiver_cfg,
+            tools,
+            workspace_id=workspace_id,
+            user_id=user_id,
+            db_factory=self._db_factory,
+            execute_tool=self._tool_executor.execute_tool,
+        )
+        return [delegate]
 
     async def call_agent_stream(
         self,
@@ -401,6 +457,19 @@ class AgentInvoker:
             # non-direct provenance (6C). thread_id is minted ONCE and shared by both the
             # graph config and the gate closure so a paused turn is resumable.
             thread_id = generate_id("chat")
+            # Step 7B2 P4 (DORMANT behind deep_delegates_enabled): build the read-only
+            # Perceiver delegate list so the lead's built-in ``task`` tool can route reads to
+            # it. Flag OFF → ``()`` → _build_deep_agent_for forwards subagents=() →
+            # build_deep_agent(subagents=()) → create_deep_agent(subagents=None) = byte-identical
+            # to 7B1 (no delegate build, no GP-disable). No live lead→delegate routing exists
+            # yet; that is a Step-8/10 gate.
+            subagents = (
+                await self._build_delegate_subagents(
+                    agent, workspace_id=workspace_id, user_id=user_id
+                )
+                if self._settings.deep_delegates_enabled
+                else ()
+            )
             deep_agent = await self._build_deep_agent_for(
                 agent,
                 tools,
@@ -408,6 +477,7 @@ class AgentInvoker:
                 workspace_id=workspace_id,
                 thread_id=thread_id,
                 authorization_source=AuthorizationSource.DIRECT_USER_REQUEST,
+                subagents=subagents,
                 # Step 7B1 P4 (Fork-1): deep-only, off-by-default inline-format
                 # augmentation. Builds a NEW block list (legacy agent_loop below keeps the
                 # ORIGINAL system_blocks) so the deep lead can format the reply inline. A
