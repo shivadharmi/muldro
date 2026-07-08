@@ -492,6 +492,9 @@ class TestPersonaBatch:
             m = MagicMock()
             m.message_preview = f"message {i}"
             m.intent = "command"
+            m.plan_summary = None
+            m.response_preview = f"response {i}"
+            m.created_at = datetime.now(timezone.utc)
             m.user_id = "usr_test"
             m.workspace_id = "ws_test"
             mock_interactions.append(m)
