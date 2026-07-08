@@ -76,6 +76,10 @@ def make_mock_settings(**overrides) -> MagicMock:
         # `if not inline_format: return`, so a truthy unset attr would inject PRESENTER_VOICE
         # into every deep test's prompt. Mirror the real Settings default (False).
         deep_inline_format=False,
+        # Same MagicMock-truthiness hazard (Step 7C): a truthy unset attr would wire the
+        # deep read-back middleware into the chain for every runtime="deep" test. Mirror
+        # the real Settings default (False).
+        deep_readback_enabled=False,
     )
     defaults.update(overrides)
     for k, v in defaults.items():

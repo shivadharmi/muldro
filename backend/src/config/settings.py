@@ -185,6 +185,13 @@ class Settings(BaseSettings):
     # routing) until explicitly enabled; live wiring is a Step-8/10 gate.
     deep_delegates_enabled: bool = False  # JARVIS_DEEP_DELEGATES_ENABLED
 
+    # Deep inline read-back verifier (Step 7C): when True, an inner-of-write_lock
+    # ``@wrap_tool_call`` middleware reads an irreversible/external write's effect back
+    # and ANNOTATES the verdict onto the ToolMessage content (never status, so the SSE
+    # frame does not flip to blocked). Off by default — dormant until Phase 3 wires it
+    # into the chain; live activation is a Step-10 gate.
+    deep_readback_enabled: bool = False  # JARVIS_DEEP_READBACK_ENABLED
+
     # Webhook / push-notification infrastructure (OPTIONAL — empty = poll-only).
     # When unset, webhook registration is a graceful no-op and the system stays
     # poll-only exactly as before. All three must be satisfied (see
