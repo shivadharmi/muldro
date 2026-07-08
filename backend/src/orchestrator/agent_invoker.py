@@ -26,6 +26,9 @@ from src.deep_runtime.agent_builder import build_deep_agent
 from src.deep_runtime.authorization import AuthorizationSource
 from src.deep_runtime.checkpoint_reaper import reap_thread
 from src.deep_runtime.middleware.governor_audit import make_governor_audit_middleware
+from src.deep_runtime.middleware.governor_delegate_critique import (
+    make_governor_delegate_critique_middleware,
+)
 from src.deep_runtime.middleware.jarvis_tool_dispatcher import make_jarvis_tool_dispatcher
 from src.deep_runtime.middleware.librarian_extract import make_librarian_extract_middleware
 from src.deep_runtime.middleware.trust_gate import _resolve_tool_def, make_trust_gate_middleware
@@ -354,18 +357,37 @@ class AgentInvoker:
         # capability_scope → governor_audit → trust_gate → write_lock → dispatcher.
         # librarian_extract is an @after_model hook (post-turn, not a wrap_tool_call), so its
         # position in the tuple is irrelevant to the tool chain — it runs after each model round.
+        extra_middleware: tuple[Any, ...] = (
+            governor_audit,
+            trust_gate,
+            write_lock,
+            dispatcher,
+            librarian_extract,
+        )
+
+        # Step 7B2 P5 (DORMANT behind deep_delegates_enabled): the Governor LLM
+        # delegate-summary critique. It is the ONE lead-side wrap_tool_call that does NOT skip
+        # the built-in ``task`` tool: it runs the read-only delegate, side-calls Haiku to
+        # critique the returned summary, and annotates it (fail-OPEN for reads — never blocks).
+        # PREPENDED so it is OUTERMOST — it wraps the whole ``task`` call, unwrapping the
+        # delegate's Command after the inner chain returns. redis is sourced from
+        # services.extras (the 6C carry-fix pattern; a typed ``redis`` attr never existed).
+        # Flag OFF → the 7B1 5-tuple is UNCHANGED (byte-identical); even wired the critique acts
+        # on ``task`` only, and the resume path (no delegates) never fires it.
+        if self._settings.deep_delegates_enabled:
+            critique = make_governor_delegate_critique_middleware(
+                client=self._client,
+                redis=self._services.extras.get("redis") if self._services else None,
+                is_read_only_delegate=True,
+            )
+            extra_middleware = (critique, *extra_middleware)
+
         return await build_deep_agent(
             agent,
             shells,
             workspace_id=workspace_id,
             db_factory=self._db_factory,
-            extra_middleware=(
-                governor_audit,
-                trust_gate,
-                write_lock,
-                dispatcher,
-                librarian_extract,
-            ),
+            extra_middleware=extra_middleware,
             subagents=subagents,
             system_prompt=system_prompt,
             checkpointer=self._checkpointer_provider() or MemorySaver(),
