@@ -302,8 +302,9 @@ INTERNAL_TOOLS: list[InternalToolDef] = [
     ),
     # Special: inline-dispatched (not a real MCP tool). Has its own capability
     # (internal.report_verdict) so the tool↔capability mapping stays 1:1 — distinct
-    # from evaluate_policy's internal.evaluate_policy. Both are governor-domain caps
-    # and both are in the governor's capability_scope (see orchestrator/agents.py).
+    # from evaluate_policy's internal.evaluate_policy. Both are governor-domain caps,
+    # currently held by no agent scope (orphaned-but-harmless; validate_registry
+    # tolerates capabilities without an agent holder).
     InternalToolDef(
         name="report_governor_verdict",
         input_model=ReportGovernorVerdictInput,
