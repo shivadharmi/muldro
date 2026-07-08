@@ -27,6 +27,7 @@ from src.deep_runtime.authorization import AuthorizationSource
 from src.deep_runtime.checkpoint_reaper import reap_thread
 from src.deep_runtime.middleware.governor_audit import make_governor_audit_middleware
 from src.deep_runtime.middleware.jarvis_tool_dispatcher import make_jarvis_tool_dispatcher
+from src.deep_runtime.middleware.librarian_extract import make_librarian_extract_middleware
 from src.deep_runtime.middleware.trust_gate import _resolve_tool_def, make_trust_gate_middleware
 from src.deep_runtime.middleware.write_lock import make_write_lock_middleware
 from src.deep_runtime.prompt_bridge import build_system_message
@@ -268,16 +269,63 @@ class AgentInvoker:
             redis=getattr(self._services, "redis", None),
             resolve_capability=_resolve_cap,
         )
-        # Order matters: extra_middleware=(governor_audit, trust_gate, write_lock, dispatcher)
-        # puts the audit OUTER of the gate, the gate OUTER of the lock, and the lock OUTER of
-        # the dispatcher. build_deep_agent installs capability_scope first, so the full chain is
+
+        # Step 7B1 P3: Librarian → extraction-middleware collapse. This @after_model hook
+        # relocates the chat InteractionLearner's entity/memory extraction into the deep turn
+        # itself, firing ONCE per turn (terminal round only). WIRED-BUT-DORMANT: active=False
+        # so it NEVER double-fires with the still-live InteractionLearner (chat_processor's
+        # background spawn). The learn closure adapts the existing, tested InteractionLearner
+        # (fresh DB session, cooldown, memory + world-model extraction) — nothing re-implemented.
+        # Ctor deps match jarvis.py's live InteractionLearner construction: vector_store from
+        # the typed ServiceContainer field; redis/event_bus resolve to None via getattr (they
+        # live in services.extras, not typed attrs) — matching the live path's redis=None.
+        # Live activation (flip active + skip InteractionLearner on runtime=deep) is a Step-10
+        # gate.
+        async def _librarian_learn(user_message: str, agent_response: str) -> None:
+            from src.services.interaction_learner import InteractionLearner
+
+            learner = InteractionLearner(
+                self._settings,
+                self._db_factory,
+                vector_store=getattr(self._services, "vector_store", None),
+                redis=getattr(self._services, "redis", None),
+                event_bus=getattr(self._services, "event_bus", None),
+            )
+            await learner.learn(
+                user_id=user_id,
+                workspace_id=workspace_id,
+                user_message=user_message,
+                agent_response=agent_response,
+                intent=None,
+                trace_id=thread_id,
+            )
+
+        librarian_extract = make_librarian_extract_middleware(
+            workspace_id=workspace_id,
+            user_id=user_id,
+            learn=_librarian_learn,
+            active=False,
+        )
+
+        # Order matters for the wrap_tool_call chain:
+        # extra_middleware=(governor_audit, trust_gate, write_lock, dispatcher) puts the audit
+        # OUTER of the gate, the gate OUTER of the lock, and the lock OUTER of the dispatcher.
+        # build_deep_agent installs capability_scope first, so the full tool chain is
         # capability_scope → governor_audit → trust_gate → write_lock → dispatcher.
+        # librarian_extract is an @after_model hook (post-turn, not a wrap_tool_call), so its
+        # position in the tuple is irrelevant to the tool chain — it runs after each model round.
         return await build_deep_agent(
             agent,
             shells,
             workspace_id=workspace_id,
             db_factory=self._db_factory,
-            extra_middleware=(governor_audit, trust_gate, write_lock, dispatcher),
+            extra_middleware=(
+                governor_audit,
+                trust_gate,
+                write_lock,
+                dispatcher,
+                librarian_extract,
+            ),
             system_prompt=system_prompt,
             checkpointer=self._checkpointer_provider() or MemorySaver(),
         )

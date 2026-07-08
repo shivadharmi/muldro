@@ -6,9 +6,10 @@ Tests confirm:
   build_system_message, and checkpointer_provider are all wired correctly into
   build_deep_agent via the shared ``_build_deep_agent_for`` helper (Step 6B Task 5).
 - The gate is OUTER of the write lock and dispatcher
-  (``extra_middleware=(trust_gate, write_lock, dispatcher)``, Step 6C Task 1.2), the
-  seam passes ``authorization_source="direct_user_request"`` (dormant on live chat), and the
-  SAME minted ``thread_id`` is shared by the gate closure and the graph config.
+  (``extra_middleware=(governor_audit, trust_gate, write_lock, dispatcher, librarian_extract)``,
+  Step 7B1 P1/P3 + 6C Task 1.2); librarian_extract is an @after_model hook appended last
+  (post-turn, dormant). The seam passes ``authorization_source="direct_user_request"`` (dormant
+  on live chat), and the SAME minted ``thread_id`` is shared by the gate closure and config.
 - ``stream_deep_agent_events`` is called with ``durability="sync"``.
 - runtime="legacy": agent_loop is still called and the deep adapter is never touched
   (legacy path byte-behavior-identical after adding checkpointer_provider param).
@@ -63,6 +64,7 @@ async def test_deep_branch_uses_shells_dispatcher_systemmessage_and_provider():
     sentinel_write_lock = object()
     sentinel_gate = object()
     sentinel_governor = object()
+    sentinel_librarian = object()
     captured_config: dict = {}
 
     inv = _make_invoker(runtime="deep", checkpointer_provider=lambda: sentinel_saver)
@@ -103,6 +105,10 @@ async def test_deep_branch_uses_shells_dispatcher_systemmessage_and_provider():
             "src.orchestrator.agent_invoker.make_governor_audit_middleware",
             return_value=sentinel_governor,
         ) as mock_governor,
+        patch(
+            "src.orchestrator.agent_invoker.make_librarian_extract_middleware",
+            return_value=sentinel_librarian,
+        ) as mock_librarian,
         patch("src.orchestrator.agent_invoker.stream_deep_agent_events", _fake_adapter),
     ):
         frames = [
@@ -129,15 +135,30 @@ async def test_deep_branch_uses_shells_dispatcher_systemmessage_and_provider():
         f"expected shells ['SHELL'] as positional arg[1], got {mock_build.call_args.args!r}"
     )
 
-    # (b) extra_middleware is EXACTLY (governor_audit, trust_gate, write_lock, dispatcher) —
-    # audit OUTER-MOST, gate next, write lock in the middle, dispatcher INNER (Step 7B1 P1 +
-    # 6C Task 1.2). build_deep_agent installs capability_scope ahead of all four.
+    # (b) extra_middleware is EXACTLY (governor_audit, trust_gate, write_lock, dispatcher,
+    # librarian_extract) — audit OUTER-MOST, gate next, write lock in the middle, dispatcher
+    # INNER for the wrap_tool_call chain (Step 7B1 P1 + 6C Task 1.2); build_deep_agent installs
+    # capability_scope ahead of all four. librarian_extract (Step 7B1 P3) is an @after_model
+    # hook appended LAST — its tuple position is irrelevant to the tool chain (post-turn hook).
     assert kw["extra_middleware"] == (
         sentinel_governor,
         sentinel_gate,
         sentinel_write_lock,
         sentinel_dispatcher,
-    ), f"expected (governor, gate, lock, dispatcher) order, got {kw.get('extra_middleware')!r}"
+        sentinel_librarian,
+    ), (
+        "expected (governor, gate, lock, dispatcher, librarian) order, got "
+        f"{kw.get('extra_middleware')!r}"
+    )
+
+    # (b'''') the librarian_extract is built DORMANT (active=False) so it never double-fires
+    # with the still-live InteractionLearner, with closure-bound workspace_id/user_id + an
+    # injected async learn adapter (never LLM-supplied).
+    lib_kw = mock_librarian.call_args.kwargs
+    assert lib_kw["active"] is False
+    assert lib_kw["workspace_id"] == "ws"
+    assert lib_kw["user_id"] == "u"
+    assert callable(lib_kw["learn"])
 
     # (b'') the write lock is built with the closure-bound workspace_id (never LLM-supplied).
     assert mock_write_lock.call_args.kwargs["workspace_id"] == "ws"
@@ -364,3 +385,87 @@ async def test_legacy_runtime_unchanged_after_new_param():
 
     assert any(f["event"] == "agent_done" for f in frames)
     mock_deep.assert_not_called()
+
+
+async def test_librarian_learn_closure_adapts_interaction_learner():
+    """The seam's ``learn`` closure (Step 7B1 P3) adapts the existing InteractionLearner:
+    it constructs it with the SAME ctor deps the live jarvis path uses (settings, db_factory,
+    vector_store; redis/event_bus resolve to None via getattr) and calls ``.learn`` with the
+    turn's user_id/workspace_id/message/response, intent=None, trace_id=thread_id.
+
+    This is the forced-integration teeth for the wiring: the middleware itself is patched to a
+    sentinel so we can capture the REAL closure it was built with, then invoke it directly (no
+    live model / deep-agent build needed) and assert the InteractionLearner adapter fires
+    correctly. Terminal/intermediate/dormant round gating is proven directly against the
+    @after_model body in tests/deep_runtime/test_librarian_extract.py.
+    """
+    captured: dict = {}
+
+    def _capture_librarian(*, workspace_id, user_id, learn, active):
+        captured["learn"] = learn
+        captured["active"] = active
+        return object()
+
+    async def _fake_adapter(*a, **k):
+        yield {
+            "event": "agent_done",
+            "agent": "perceiver",
+            "text": "ok",
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "cache_creation_tokens": 0,
+            "cache_read_tokens": 0,
+            "tools_called": [],
+            "latency_ms": 1,
+            "cost_usd": 0.0,
+        }
+
+    inv = _make_invoker(runtime="deep", checkpointer_provider=lambda: object())
+
+    with (
+        patch("src.orchestrator.agent_invoker.build_deep_agent", new=AsyncMock()),
+        patch("src.orchestrator.agent_invoker.build_tool_shells", return_value=["SHELL"]),
+        patch("src.orchestrator.agent_invoker.make_jarvis_tool_dispatcher", return_value=object()),
+        patch("src.orchestrator.agent_invoker.make_trust_gate_middleware", return_value=object()),
+        patch(
+            "src.orchestrator.agent_invoker.make_librarian_extract_middleware",
+            side_effect=_capture_librarian,
+        ),
+        patch("src.orchestrator.agent_invoker.stream_deep_agent_events", _fake_adapter),
+    ):
+        _ = [
+            f
+            async for f in inv.call_agent_stream(
+                "perceiver",
+                message="hi",
+                user_id="u",
+                workspace_id="ws",
+                tools_override=[],
+            )
+        ]
+
+    assert captured["active"] is False  # dormant by design
+    learn = captured["learn"]
+
+    # Invoke the captured closure directly with a patched InteractionLearner.
+    with patch("src.services.interaction_learner.InteractionLearner") as mock_learner_cls:
+        instance = mock_learner_cls.return_value
+        instance.learn = AsyncMock()
+        await learn("remember Bob works at Acme", "Noted — Bob @ Acme.")
+
+    # Constructed with the live-path ctor deps (settings + db_factory positional).
+    mock_learner_cls.assert_called_once()
+    ctor_kwargs = mock_learner_cls.call_args.kwargs
+    assert "vector_store" in ctor_kwargs
+    assert ctor_kwargs["redis"] is None  # lives in services.extras → getattr miss → None
+    assert ctor_kwargs["event_bus"] is None
+
+    # .learn called with the turn scope + intent=None + trace_id=thread_id.
+    instance.learn.assert_awaited_once()
+    lk = instance.learn.await_args.kwargs
+    assert lk["user_id"] == "u"
+    assert lk["workspace_id"] == "ws"
+    assert lk["user_message"] == "remember Bob works at Acme"
+    assert lk["agent_response"] == "Noted — Bob @ Acme."
+    assert lk["intent"] is None
+    assert lk["trace_id"].startswith("chat_")

@@ -15,6 +15,7 @@ from src.deep_runtime.middleware.budget import make_budget_middleware
 from src.deep_runtime.middleware.capability_scope import make_capability_scope_middleware
 from src.deep_runtime.middleware.governor_audit import make_governor_audit_middleware
 from src.deep_runtime.middleware.jarvis_tool_dispatcher import make_jarvis_tool_dispatcher
+from src.deep_runtime.middleware.librarian_extract import make_librarian_extract_middleware
 from src.deep_runtime.middleware.unavailable_server import (
     make_unavailable_server_middleware,
 )
@@ -24,5 +25,6 @@ __all__ = [
     "make_capability_scope_middleware",
     "make_governor_audit_middleware",
     "make_jarvis_tool_dispatcher",
+    "make_librarian_extract_middleware",
     "make_unavailable_server_middleware",
 ]
