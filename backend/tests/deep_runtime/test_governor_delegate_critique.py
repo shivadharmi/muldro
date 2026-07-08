@@ -423,7 +423,9 @@ async def test_wiring_flag_on_prepends_critique():
 
     mw_tuple = mock_build.call_args.kwargs["extra_middleware"]
     assert mw_tuple[0] is sentinel  # PREPENDED — outermost
-    assert len(mw_tuple) == 6
+    # 7C: base chain grew to 7 (governor, unavailable, gate, write_lock, dispatcher, librarian,
+    # budget); critique prepend → 8.
+    assert len(mw_tuple) == 8
 
 
 async def test_wiring_flag_off_no_critique_five_tuple_unchanged():
@@ -437,4 +439,5 @@ async def test_wiring_flag_off_no_critique_five_tuple_unchanged():
 
     mock_factory.assert_not_called()  # never built when the flag is off
     mw_tuple = mock_build.call_args.kwargs["extra_middleware"]
-    assert len(mw_tuple) == 5  # the 7B1 5-tuple, UNCHANGED
+    # 7C base chain: governor, unavailable, gate, write_lock, dispatcher, librarian, budget.
+    assert len(mw_tuple) == 7  # no critique prepend when the delegates flag is off

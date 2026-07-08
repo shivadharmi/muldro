@@ -31,6 +31,7 @@ from langchain.agents.middleware import AgentMiddleware, wrap_tool_call
 from langchain.agents.middleware.types import ToolCallRequest
 from langchain_core.messages import ToolMessage
 
+from src.deep_runtime.builtins import DEEPAGENTS_BUILTIN_NAMES
 from src.integrations.provider_map import provider_for_server
 from src.services.tool_registry import ToolRegistry
 
@@ -160,6 +161,13 @@ def make_unavailable_server_middleware(
         tool_call = request.tool_call
         tool_name = tool_call["name"]
         tool_call_id = tool_call["id"]
+
+        # deepagents built-ins (write_todos, ls, task, …) are framework scaffolding — never MCP
+        # tools, and their result may be a ``Command`` (not a ToolMessage) that ``_payload`` cannot
+        # inspect. Skip exactly like every sibling wrap_tool_call middleware (governor_audit,
+        # trust_gate, write_lock, dispatcher) per src/deep_runtime/builtins.py.
+        if tool_name in DEEPAGENTS_BUILTIN_NAMES:
+            return await handler(request)
 
         # ── Short-circuit (pre): server known-down OR name-inferred provider down ──
         # PRIMARY KEY = registered SERVER name (C5); FALLBACK = provider inferred

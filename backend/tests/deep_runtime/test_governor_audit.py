@@ -40,6 +40,7 @@ MODULE = "src.deep_runtime.middleware.governor_audit"
 AGENT_BUILDER_MODULE = "src.deep_runtime.agent_builder"
 CAP_SCOPE_MODULE = "src.deep_runtime.middleware.capability_scope"
 TRUST_GATE_MODULE = "src.deep_runtime.middleware.trust_gate"
+UNAVAILABLE_SERVER_MODULE = "src.deep_runtime.middleware.unavailable_server"
 INVOKER_MODULE = "src.orchestrator.agent_invoker"
 
 AGENT_NAME = "executor"
@@ -297,10 +298,16 @@ async def _drive_disabled_tool(invoker):
 
     # 6C #1 fold: governor_audit no longer does its OWN lookup — it consumes the per-turn
     # SHARED ``_resolve_tool_def`` (which lives in trust_gate), so patch the registry THERE.
+    # Step 7C: the unavailable_server breaker (inner of governor_audit) does its OWN registry
+    # lookup for the tool's MCP server — patch it too so the offline SimpleNamespace db is never
+    # queried. ``disabled_def`` has no ``server`` attr → the breaker resolves server=None and is a
+    # no-op, so this negative control still reaches (or is blocked before) the dispatcher on its
+    # own terms.
     with (
         patch(f"{AGENT_BUILDER_MODULE}.build_chat_model", return_value=_ScriptedModel()),
         patch(f"{CAP_SCOPE_MODULE}._is_in_scope", AsyncMock(return_value=True)),
         patch(f"{TRUST_GATE_MODULE}.ToolRegistry", return_value=reg),
+        patch(f"{UNAVAILABLE_SERVER_MODULE}.ToolRegistry", return_value=reg),
     ):
         deep_agent = await invoker._build_deep_agent_for(
             agent,

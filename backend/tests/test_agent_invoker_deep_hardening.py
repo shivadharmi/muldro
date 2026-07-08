@@ -25,13 +25,14 @@ from src.orchestrator.agents import SubAgent
 from tests.conftest import make_mock_settings
 
 
-def _make_invoker(runtime: str, checkpointer_provider=None) -> AgentInvoker:
+def _make_invoker(runtime: str, checkpointer_provider=None, **settings_overrides) -> AgentInvoker:
     """Build a real AgentInvoker with the minimal mocks to reach the runtime branch.
 
     Extends the pattern from test_agent_invoker_runtime_branch._make_invoker with an
     optional ``checkpointer_provider`` param to test the durable-checkpointer wiring.
     ``tools_override=[]`` short-circuits ``_resolve_tools``. ``assemble_context`` returns
-    ``""`` so system_blocks build cleanly.
+    ``""`` so system_blocks build cleanly. ``settings_overrides`` flow through to
+    ``make_mock_settings`` (e.g. ``deep_readback_enabled=True``).
     """
     tool_executor = MagicMock()
     tool_executor.apply_cache_control_to_tools = lambda tools: tools
@@ -42,7 +43,7 @@ def _make_invoker(runtime: str, checkpointer_provider=None) -> AgentInvoker:
     agent = SubAgent(name="perceiver", prompt="p", model_tier="sonnet", capability_scope=set())
 
     return AgentInvoker(
-        settings=make_mock_settings(runtime=runtime),
+        settings=make_mock_settings(runtime=runtime, **settings_overrides),
         client=MagicMock(),
         services=None,
         budget=MagicMock(),
@@ -65,6 +66,8 @@ async def test_deep_branch_uses_shells_dispatcher_systemmessage_and_provider():
     sentinel_gate = object()
     sentinel_governor = object()
     sentinel_librarian = object()
+    sentinel_unavailable = object()
+    sentinel_budget = object()
     captured_config: dict = {}
 
     inv = _make_invoker(runtime="deep", checkpointer_provider=lambda: sentinel_saver)
@@ -109,6 +112,14 @@ async def test_deep_branch_uses_shells_dispatcher_systemmessage_and_provider():
             "src.orchestrator.agent_invoker.make_librarian_extract_middleware",
             return_value=sentinel_librarian,
         ) as mock_librarian,
+        patch(
+            "src.orchestrator.agent_invoker.make_unavailable_server_middleware",
+            return_value=sentinel_unavailable,
+        ) as mock_unavailable,
+        patch(
+            "src.orchestrator.agent_invoker.make_budget_middleware",
+            return_value=sentinel_budget,
+        ) as mock_budget,
         patch("src.orchestrator.agent_invoker.stream_deep_agent_events", _fake_adapter),
     ):
         frames = [
@@ -135,21 +146,32 @@ async def test_deep_branch_uses_shells_dispatcher_systemmessage_and_provider():
         f"expected shells ['SHELL'] as positional arg[1], got {mock_build.call_args.args!r}"
     )
 
-    # (b) extra_middleware is EXACTLY (governor_audit, trust_gate, write_lock, dispatcher,
-    # librarian_extract) — audit OUTER-MOST, gate next, write lock in the middle, dispatcher
-    # INNER for the wrap_tool_call chain (Step 7B1 P1 + 6C Task 1.2); build_deep_agent installs
-    # capability_scope ahead of all four. librarian_extract (Step 7B1 P3) is an @after_model
-    # hook appended LAST — its tuple position is irrelevant to the tool chain (post-turn hook).
+    # (b) extra_middleware is EXACTLY (governor_audit, unavailable_server, trust_gate, write_lock,
+    # dispatcher, librarian_extract, budget_mw) — audit OUTER-MOST, then the Step 7C
+    # unavailable_server breaker (OUTER of the gate so a known-down write is short-circuited before
+    # approval), gate next, write lock, dispatcher INNER for the wrap_tool_call chain (Step 7B1 P1 +
+    # 6C Task 1.2 + 7C P3); build_deep_agent installs capability_scope ahead of all. read_back is
+    # absent (deep_readback_enabled=False). librarian_extract (7B1 P3) + budget_mw (7C P3) are
+    # @after_model hooks — their tuple positions are irrelevant to the tool chain (post-turn hooks).
     assert kw["extra_middleware"] == (
         sentinel_governor,
+        sentinel_unavailable,
         sentinel_gate,
         sentinel_write_lock,
         sentinel_dispatcher,
         sentinel_librarian,
+        sentinel_budget,
     ), (
-        "expected (governor, gate, lock, dispatcher, librarian) order, got "
+        "expected (governor, unavailable, gate, lock, dispatcher, librarian, budget) order, got "
         f"{kw.get('extra_middleware')!r}"
     )
+    # unavailable_server is built with the closure-bound workspace_id (never LLM-supplied).
+    assert mock_unavailable.call_args.kwargs["workspace_id"] == "ws"
+    # budget_mw is built with the direct-Anthropic model id for the agent's tier (NOT Bedrock).
+    bud_kw = mock_budget.call_args.kwargs
+    assert bud_kw["model"] == "claude-sonnet-4-6"
+    assert bud_kw["agent_name"] == "perceiver"
+    assert bud_kw["workspace_id"] == "ws"
 
     # (b'''') the librarian_extract is built DORMANT (active=False) so it never double-fires
     # with the still-live InteractionLearner, with closure-bound workspace_id/user_id + an
@@ -195,6 +217,105 @@ async def test_deep_branch_uses_shells_dispatcher_systemmessage_and_provider():
     # (f) the SAME minted thread_id is shared by the gate closure and the graph config —
     # required so a paused turn (future gated provenance) is resumable on the right thread.
     assert gate_kw["thread_id"] == captured_config["configurable"]["thread_id"]
+
+
+async def test_deep_readback_flag_on_inserts_readback_between_write_lock_and_dispatcher():
+    """Step 7C: with deep_readback_enabled=True, read_back is spliced INNER of write_lock, OUTER of
+    dispatcher — the tuple grows to 8 and index 4 is the read-back (the last policy hop before the
+    tool actually runs). The rest of the chain is unchanged."""
+    sentinel_dispatcher = object()
+    sentinel_write_lock = object()
+    sentinel_gate = object()
+    sentinel_governor = object()
+    sentinel_librarian = object()
+    sentinel_unavailable = object()
+    sentinel_budget = object()
+    sentinel_readback = object()
+
+    inv = _make_invoker(
+        runtime="deep",
+        checkpointer_provider=lambda: object(),
+        deep_readback_enabled=True,
+    )
+
+    async def _fake_adapter(agent, graph_input, config, **k):
+        yield {
+            "event": "agent_done",
+            "agent": "perceiver",
+            "text": "ok",
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "cache_creation_tokens": 0,
+            "cache_read_tokens": 0,
+            "tools_called": [],
+            "latency_ms": 1,
+            "cost_usd": 0.0,
+        }
+
+    with (
+        patch("src.orchestrator.agent_invoker.build_deep_agent", new=AsyncMock()) as mock_build,
+        patch("src.orchestrator.agent_invoker.build_tool_shells", return_value=["SHELL"]),
+        patch(
+            "src.orchestrator.agent_invoker.make_jarvis_tool_dispatcher",
+            return_value=sentinel_dispatcher,
+        ),
+        patch(
+            "src.orchestrator.agent_invoker.make_trust_gate_middleware",
+            return_value=sentinel_gate,
+        ),
+        patch(
+            "src.orchestrator.agent_invoker.make_write_lock_middleware",
+            return_value=sentinel_write_lock,
+        ),
+        patch(
+            "src.orchestrator.agent_invoker.make_governor_audit_middleware",
+            return_value=sentinel_governor,
+        ),
+        patch(
+            "src.orchestrator.agent_invoker.make_librarian_extract_middleware",
+            return_value=sentinel_librarian,
+        ),
+        patch(
+            "src.orchestrator.agent_invoker.make_unavailable_server_middleware",
+            return_value=sentinel_unavailable,
+        ),
+        patch(
+            "src.orchestrator.agent_invoker.make_budget_middleware",
+            return_value=sentinel_budget,
+        ),
+        patch(
+            "src.orchestrator.agent_invoker.make_readback_middleware",
+            return_value=sentinel_readback,
+        ) as mock_readback,
+        patch("src.orchestrator.agent_invoker.stream_deep_agent_events", _fake_adapter),
+    ):
+        frames = [
+            f
+            async for f in inv.call_agent_stream(
+                "perceiver",
+                message="hi",
+                user_id="u",
+                workspace_id="ws",
+                tools_override=[],
+            )
+        ]
+
+    assert any(f["event"] == "agent_done" for f in frames)
+    mock_readback.assert_called_once()
+
+    kw = mock_build.call_args.kwargs
+    assert kw["extra_middleware"] == (
+        sentinel_governor,
+        sentinel_unavailable,
+        sentinel_gate,
+        sentinel_write_lock,
+        sentinel_readback,
+        sentinel_dispatcher,
+        sentinel_librarian,
+        sentinel_budget,
+    ), f"expected read_back spliced INNER of write_lock, got {kw.get('extra_middleware')!r}"
+    assert len(kw["extra_middleware"]) == 8
+    assert kw["extra_middleware"][4] is sentinel_readback
 
 
 async def test_deep_branch_passes_durability_sync_to_stream_adapter():

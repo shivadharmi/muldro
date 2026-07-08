@@ -461,6 +461,17 @@ def _restore_harness_profiles():
                 _HARNESS_PROFILES[key] = prev
 
 
+@pytest.fixture(autouse=True)
+def _stub_unavailable_server_registry():
+    """Step 7C: the unavailable_server breaker (now in the lead's gated chain) resolves each
+    tool's MCP server via ``ToolRegistry.get_tool`` on every tool call. Offline, stub it with the
+    SAME fake registry the capability_scope guard uses so no real DB session is touched — the fake
+    ToolDef carries no ``server`` attr, so the breaker resolves every tool to server=None and never
+    short-circuits (a pure no-op here)."""
+    with patch("src.deep_runtime.middleware.unavailable_server.ToolRegistry", _FakeRegistry):
+        yield
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # POSITIVE GUARD — assertions 1,2,3,4,6.
 # ═══════════════════════════════════════════════════════════════════════════════

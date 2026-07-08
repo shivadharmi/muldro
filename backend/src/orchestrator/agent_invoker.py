@@ -25,14 +25,18 @@ from src.config.settings import Settings
 from src.deep_runtime.agent_builder import build_deep_agent
 from src.deep_runtime.authorization import AuthorizationSource
 from src.deep_runtime.checkpoint_reaper import reap_thread
+from src.deep_runtime.middleware.budget import make_budget_middleware
 from src.deep_runtime.middleware.governor_audit import make_governor_audit_middleware
 from src.deep_runtime.middleware.governor_delegate_critique import (
     make_governor_delegate_critique_middleware,
 )
 from src.deep_runtime.middleware.jarvis_tool_dispatcher import make_jarvis_tool_dispatcher
 from src.deep_runtime.middleware.librarian_extract import make_librarian_extract_middleware
+from src.deep_runtime.middleware.readback import make_readback_middleware
 from src.deep_runtime.middleware.trust_gate import _resolve_tool_def, make_trust_gate_middleware
+from src.deep_runtime.middleware.unavailable_server import make_unavailable_server_middleware
 from src.deep_runtime.middleware.write_lock import make_write_lock_middleware
+from src.deep_runtime.model_factory import MODEL_TIER_IDS
 from src.deep_runtime.prompt_bridge import build_system_message
 from src.deep_runtime.stream_adapter import stream_deep_agent_events
 from src.deep_runtime.tool_bridge import build_tool_shells
@@ -350,19 +354,64 @@ class AgentInvoker:
             active=False,
         )
 
-        # Order matters for the wrap_tool_call chain:
-        # extra_middleware=(governor_audit, trust_gate, write_lock, dispatcher) puts the audit
-        # OUTER of the gate, the gate OUTER of the lock, and the lock OUTER of the dispatcher.
-        # build_deep_agent installs capability_scope first, so the full tool chain is
-        # capability_scope → governor_audit → trust_gate → write_lock → dispatcher.
-        # librarian_extract is an @after_model hook (post-turn, not a wrap_tool_call), so its
-        # position in the tuple is irrelevant to the tool chain — it runs after each model round.
+        # Step 7C: MCP-server-down breaker (per-turn, self-contained). OUTER of trust_gate so a
+        # known-down WRITE tool is short-circuited before it is prompted for approval.
+        unavailable_server = make_unavailable_server_middleware(
+            workspace_id=workspace_id,
+            db_factory=self._db_factory,
+        )
+
+        # Step 7C: re-home the legacy agent_loop authoritative cost record (@after_model).
+        # ADDITIVE — the deep path recorded no TokenUsage before. model = the direct-Anthropic id
+        # (MODEL_TIER_IDS), NOT get_model_for_agent (Bedrock-tainted).
+        budget_mw = make_budget_middleware(
+            agent_name=agent.name,
+            model=MODEL_TIER_IDS[agent.model_tier],
+            workspace_id=workspace_id,
+            db_factory=self._db_factory,
+            budget=self._budget,
+            trace_id=None,
+            trigger="chat",
+        )
+
+        # Step 7C: inline read-back (DORMANT behind deep_readback_enabled). read_fn=None
+        # (deferred-tick template). Reuses _resolve_cap (fail-open cap|None, same as write_lock) +
+        # _assess_risk. CONFIRMED + gated → the deep trust-increment helper.
+        gated_chain: tuple[Any, ...] = (write_lock, dispatcher)
+        if self._settings.deep_readback_enabled:
+
+            async def _record_confirmed_outcome(*, capability, risk_level):
+                from src.deep_runtime.trust_increment import record_deep_confirmed_outcome
+
+                await record_deep_confirmed_outcome(
+                    db_factory=self._db_factory,
+                    workspace_id=workspace_id,
+                    capability=capability,
+                    risk_level=risk_level,
+                )
+
+            read_back = make_readback_middleware(
+                workspace_id=workspace_id,
+                authorization_source=authorization_source,
+                resolve_capability=_resolve_cap,
+                assess_risk=_assess_risk,
+                read_fn=None,
+                record_confirmed_outcome=_record_confirmed_outcome,
+            )
+            gated_chain = (write_lock, read_back, dispatcher)
+
+        # Order (outer→inner). capability_scope is installed FIRST by build_deep_agent, so the full
+        # tool chain is:
+        #   capability_scope → governor_audit → unavailable_server → trust_gate → write_lock
+        #     [→ read_back (only when deep_readback_enabled)] → dispatcher
+        # librarian_extract + budget_mw are @after_model (tuple position irrelevant to tool chain).
         extra_middleware: tuple[Any, ...] = (
             governor_audit,
+            unavailable_server,
             trust_gate,
-            write_lock,
-            dispatcher,
+            *gated_chain,
             librarian_extract,
+            budget_mw,
         )
 
         # Step 7B2 P5 (DORMANT behind deep_delegates_enabled): the Governor LLM
