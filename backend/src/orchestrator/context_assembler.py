@@ -24,7 +24,6 @@ CONTEXT_ENRICHED_AGENTS = {
     "perceiver",
     "librarian",
     "executor",
-    "governor",
 }
 
 

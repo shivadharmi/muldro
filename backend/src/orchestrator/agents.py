@@ -1,6 +1,6 @@
 """Sub-agent definitions for the Jarvis orchestrator.
 
-Defines 7 specialized agents with their prompts, model assignments,
+Defines 6 specialized agents with their prompts, model assignments,
 capability-based access scopes, and per-agent thinking configuration.
 """
 
@@ -17,7 +17,6 @@ AGENT_MODEL_TIERS = {
     "perceiver": "sonnet",
     "librarian": "sonnet",
     "planner": "opus",
-    "governor": "sonnet",
     "executor": "sonnet",
     "presenter": "sonnet",
     "persona": "haiku",
@@ -96,12 +95,6 @@ AGENT_CAPABILITY_SCOPES: dict[str, set[str]] = {
         "internal.query_facts",
         "internal.traverse",
         "internal.get_provenance",
-    },
-    "governor": {
-        "internal.evaluate_policy",
-        "internal.report_verdict",
-        "internal.approve_action",
-        "internal.get_plan_details",
     },
     "executor": {
         # Email
@@ -191,7 +184,6 @@ AGENT_THINKING: dict[str, ThinkingConfig] = {
     "perceiver": ThinkingConfig(enabled=True, budget_tokens=6144),
     "librarian": ThinkingConfig(enabled=True, budget_tokens=4096),
     "presenter": ThinkingConfig(enabled=True, budget_tokens=4096),
-    "governor": ThinkingConfig(enabled=True, budget_tokens=2048),
     "executor": ThinkingConfig(enabled=True, budget_tokens=2048),
     "persona": ThinkingConfig(enabled=True, budget_tokens=2048),
 }
@@ -208,7 +200,6 @@ class SubAgent:
     max_tokens: int = 4096
     temperature: float = 0.3
     thinking: ThinkingConfig = field(default_factory=ThinkingConfig)
-    edge_case_only: bool = False
 
     async def can_use_tool(self, tool_name: str, db, workspace_id: str | None = None) -> bool:
         """Registry-driven capability check. One lookup, no normalizer."""
@@ -224,7 +215,7 @@ class SubAgent:
 
 
 def create_sub_agents() -> dict[str, SubAgent]:
-    """Create all 7 sub-agent definitions."""
+    """Create all 6 sub-agent definitions."""
     agents = {}
     for name, prompt in AGENT_PROMPTS.items():
         agents[name] = SubAgent(
@@ -233,9 +224,8 @@ def create_sub_agents() -> dict[str, SubAgent]:
             model_tier=AGENT_MODEL_TIERS.get(name, "sonnet"),
             capability_scope=set(AGENT_CAPABILITY_SCOPES.get(name, set())),
             max_tokens=8192 if name == "planner" else 4096,
-            temperature=0.1 if name == "governor" else 0.3,
+            temperature=0.3,
             thinking=AGENT_THINKING.get(name, ThinkingConfig()),
-            edge_case_only=(name == "governor"),
         )
     return agents
 
