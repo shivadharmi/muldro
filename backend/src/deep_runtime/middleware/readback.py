@@ -83,8 +83,8 @@ def make_readback_middleware(
         if not capability or is_read_only_capability(capability):
             return result  # reads are never read-back-verified
 
-        risk = await assess_risk(capability, request.tool_call.get("args") or {})
         write_input = request.tool_call.get("args") or {}
+        risk = await assess_risk(capability, write_input)
         content = result.content
         try:
             parsed = json.loads(content) if isinstance(content, str) else content
@@ -104,9 +104,10 @@ def make_readback_middleware(
                 observed="read-back could not confirm the effect",
             )
             logger.warning(
-                "[deep_runtime] read-back CONTRADICTED for %s (%s) — escalate-first",
+                "[deep_runtime] read-back CONTRADICTED for %s (%s) in ws=%s — escalate-first",
                 name,
                 capability,
+                workspace_id,
             )
         elif verdict == VerifyVerdict.CONFIRMED and is_gated_source(authorization_source):
             if record_confirmed_outcome is not None:

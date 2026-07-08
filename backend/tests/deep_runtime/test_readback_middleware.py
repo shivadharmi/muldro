@@ -98,6 +98,7 @@ async def test_unverified_annotates_and_does_not_block():
     out = await _hook(mw)(_request("send_email"), _handler_returning(msg))
     body = json.loads(out.content)
     assert body["verification"]["verdict"] == "unverified"
+    assert body["result"] == "ok"  # the non-JSON content is preserved under _annotate's fallback
     assert out.status != "error"
 
 
@@ -230,3 +231,16 @@ async def test_confirmed_direct_chat_does_NOT_increment(monkeypatch):  # noqa: N
     body = json.loads(out.content)
     assert body["verification"]["verdict"] == "confirmed"
     record.assert_not_awaited()
+
+
+async def test_confirmed_gated_record_none_is_noop(monkeypatch):
+    """CONFIRMED + gated but record_confirmed_outcome=None → the None-guard makes it a no-op
+    (still annotates the verdict, no crash)."""
+    fake_cap = "fake.confirm3"
+    monkeypatch.setitem(post_conditions.POST_CONDITIONS, fake_cap, _fake_pc(True))
+    read_fn = AsyncMock(return_value=[{"id": "x1"}])
+    msg = ToolMessage(content=json.dumps({"id": "x1"}), tool_call_id="tc1", name="do_write")
+    mw = _mw(resolve=lambda n: _async(fake_cap), read_fn=read_fn, record=None, source="autonomous")
+    out = await _hook(mw)(_request("do_write"), _handler_returning(msg))
+    body = json.loads(out.content)
+    assert body["verification"]["verdict"] == "confirmed"
