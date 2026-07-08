@@ -86,7 +86,10 @@ def _annotate_content(content: Any, *, unreviewed: bool, critique_obj: dict) -> 
         obj = {"summary": content}
     obj["unreviewed"] = unreviewed
     obj["critique"] = critique_obj
-    return json.dumps(obj)
+    # default=str: the read branch runs this OUTSIDE any try/except, so a non-serializable
+    # content (never produced by the real task tool — always str — but defensive) must not
+    # raise and turn a "never-blocks" read into an error. Mirrors _safe_critique's dumps.
+    return json.dumps(obj, default=str)
 
 
 def _build_critique_obj(verdict: CritiqueVerdict | None) -> dict:

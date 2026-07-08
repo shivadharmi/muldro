@@ -160,6 +160,31 @@ async def test_non_json_summary_wrapped_and_annotated():
     assert payload["unreviewed"] is False
 
 
+# ── (c3) non-serializable content never raises in the read branch (default=str) ──
+
+
+def test_annotate_content_non_serializable_does_not_raise():
+    """``_annotate_content`` runs OUTSIDE any try/except in the read branch, so it must never
+    raise on a non-serializable content — else a "never-blocks" read could error out. The real
+    ``task`` always yields ``str`` content, so this is defense-in-depth (matches
+    ``_safe_critique``'s ``json.dumps(..., default=str)``). Without ``default=str`` the final
+    ``json.dumps`` raises ``TypeError`` and this test fails.
+    """
+    from src.deep_runtime.middleware.governor_delegate_critique import _annotate_content
+
+    class _Weird:  # not JSON-serializable
+        def __repr__(self) -> str:
+            return "<weird-summary>"
+
+    out = _annotate_content(
+        _Weird(), unreviewed=True, critique_obj={"ok": False, "concerns": ["c"]}
+    )
+    payload = json.loads(out)  # valid JSON, did not raise
+    assert payload["unreviewed"] is True
+    assert payload["critique"]["ok"] is False
+    assert payload["summary"] == "<weird-summary>"  # stringified via default=str, not dropped
+
+
 # ── (d) name != "task" → passthrough UNCHANGED; critique client NEVER called ──
 
 
