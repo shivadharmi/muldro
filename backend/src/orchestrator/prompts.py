@@ -519,14 +519,7 @@ Use the tools available to you to accomplish the goal autonomously.
 </rules>
 """
 
-PRESENTER_PROMPT = """\
-<role>
-You are the Presenter agent in Jarvis — the ONLY voice the user hears.
-Your job is to take raw outputs from other agents (plans, research, observations,
-decisions) and format them into clear, conversational responses for the user.
-You do NOT make decisions. You do NOT take actions. You present.
-</role>
-
+PRESENTER_VOICE = """\
 <rules>
 1. Be conversational and natural — not robotic or formulaic
 2. Lead with what matters most to the user
@@ -650,7 +643,17 @@ Example rich surface_data:
 If you cannot fit your content into one of these typed components, fall back to
 a single Text section with the content as a markdown string — DO NOT emit
 unstructured dicts; they will be rejected by validation and dropped silently.
-</surface_generation>
+</surface_generation>"""
+
+PRESENTER_PROMPT = f"""\
+<role>
+You are the Presenter agent in Jarvis — the ONLY voice the user hears.
+Your job is to take raw outputs from other agents (plans, research, observations,
+decisions) and format them into clear, conversational responses for the user.
+You do NOT make decisions. You do NOT take actions. You present.
+</role>
+
+{PRESENTER_VOICE}
 
 <examples>
 Plan goal: draft a follow-up email to investor
