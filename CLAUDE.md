@@ -8,13 +8,13 @@ Jarvis is a **Personal AI Operating System** for founders. It is NOT a chatbot �
 
 ## Architecture
 
-Multi-agent hub-and-spoke: a central `JarvisOrchestrator` (`backend/src/orchestrator/jarvis.py`) routes to 7 sub-agents via Claude API. Capability-based routing: Planner produces `PlanOutput` with steps, `CapabilityResolver` maps each step's capability to the appropriate agent. Internal FastMCP servers wrap the intelligence layer; external MCP servers provide connectors — all run **on demand with no Docker dependency**: GitHub and Atlassian as remote HTTP MCP servers, Google Workspace as an on-demand local `uvx` process managed by `LocalMCPProcessManager` (`backend/src/integrations/local_process_manager.py`), and stdio servers (Slack, Notion, Playwright) via `npx`. MCP sessions are **turn-scoped** via `TurnScope` (`backend/src/integrations/turn_scope.py`) and torn down at turn end; the scheduler's `run_health_tick` idle reaper is the safety net.
+Multi-agent hub-and-spoke: a central `JarvisOrchestrator` (`backend/src/orchestrator/jarvis.py`) routes to 6 sub-agents via Claude API. Capability-based routing: Planner produces `PlanOutput` with steps, `CapabilityResolver` maps each step's capability to the appropriate agent. Internal FastMCP servers wrap the intelligence layer; external MCP servers provide connectors — all run **on demand with no Docker dependency**: GitHub and Atlassian as remote HTTP MCP servers, Google Workspace as an on-demand local `uvx` process managed by `LocalMCPProcessManager` (`backend/src/integrations/local_process_manager.py`), and stdio servers (Slack, Notion, Playwright) via `npx`. MCP sessions are **turn-scoped** via `TurnScope` (`backend/src/integrations/turn_scope.py`) and torn down at turn end; the scheduler's `run_health_tick` idle reaper is the safety net.
 
 ```
 User <-> Next.js Frontend (A2UI)
               |
          JarvisOrchestrator (Claude API)
-         Routes to: Perceiver, Librarian, Planner, Governor,
+         Routes to: Perceiver, Librarian, Planner,
                     Executor, Presenter, Persona
               |
          CapabilityResolver (step.capability → agent)
@@ -124,12 +124,13 @@ side-effect rule, and OSS hygiene. Read it before structural changes. Summary be
 | Perceiver | Sonnet | Gather information from any source — email, calendar, Slack, GitHub, web, internal knowledge (read-only) | normalized_events |
 | Librarian | Sonnet | Extract entities, update world model, store memories | entities, relationships, memories |
 | Planner | Opus | Produce capability-based plans (structured PlanOutput JSON) via PLANNER_PROMPT_V2 | plans, plan_tasks, goal memories |
-| Governor | Sonnet | Edge-case safety fallback only (audit-only hooks, `edge_case_only=True`). Invoked when: low confidence, unknown capability, conflicting signals | policy decisions |
 | Executor | Sonnet | Execute approved plans via tools, scoped per step (reads context first; offered only the current step's capability tools, not the full write union) | task_runs, task_steps |
 | Presenter | Sonnet | Generate user-facing text output | briefings, A2UI surfaces (via SurfaceService + renderer.py) |
 | Persona | Haiku | Learn and store preferences (batched every 10th scheduler tick, min 5 interactions) | memories (preference type) |
 
-**Only Planner decides intent. Only the Executor executes external actions (scoped to the step's capability). Only Presenter talks to the user. TrustEngine (not Governor) gates every external write via a single deterministic approval gate in GraphExecutor.**
+**Only Planner decides intent. Only the Executor executes external actions (scoped to the step's capability). Only Presenter talks to the user. TrustEngine gates every external write via a single deterministic approval gate in GraphExecutor.**
+
+*The Governor is not a routed cognitive agent — its deterministic policy service (`services/governor.py`) and audit-only pre-tool hook (`hooks.py::governor_pre_tool_hook`, always `allowed: True` except disabled tools) remain as non-agent machinery.*
 
 ## Capability-Based Routing
 
@@ -184,15 +185,14 @@ The `_special` value is a `server` (not a `backend`): tools with `backend="inter
 ## Agent Prompt Architecture
 
 System prompts (`src/orchestrator/prompts.py`):
-- `JARVIS_SOUL_CORE` — shared by all 7 agents (role, agent table, rules, TrustEngine gates writes)
+- `JARVIS_SOUL_CORE` — shared by all 6 agents (role, agent table, rules, TrustEngine gates writes)
 - `PLANNER_PROMPT_V2` — 7-step capability-based decomposition engine (replaces decision classification)
 - `PERCEIVER_PROMPT` — 7-step read-only methodology with JSON output (findings, synthesis, gaps, confidence)
-- `GOVERNOR_PROMPT` — Edge-case safety fallback only (audit-only per Spec 2B-i)
-- `LIBRARIAN_PROMPT`, `OPERATOR_PROMPT`, `PRESENTER_PROMPT`, `PERSONA_PROMPT` — agent-specific roles
+- `LIBRARIAN_PROMPT`, `EXECUTOR_PROMPT`, `PRESENTER_PROMPT`, `PERSONA_PROMPT` — agent-specific roles
 
 Only the Planner sees `PLANNER_PROMPT_V2`. Other agents receive `JARVIS_SOUL_CORE` + their role prompt. The Planner also receives a ~200-token capability summary (via `generate_capability_summary()`) instead of 15-20K raw tool schemas.
 
-**Thinking budgets** (`src/orchestrator/agents.py`): Planner=8192, Perceiver=6144, Librarian=4096, Presenter=4096, Governor=2048, Executor=2048, Persona=2048.
+**Thinking budgets** (`src/orchestrator/agents.py`): Planner=8192, Perceiver=6144, Librarian=4096, Presenter=4096, Executor=2048, Persona=2048.
 
 ## Intent Classification
 
