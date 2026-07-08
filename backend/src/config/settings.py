@@ -171,6 +171,13 @@ class Settings(BaseSettings):
     # Default legacy so the Deep Agents path is dormant until explicitly enabled.
     runtime: str = "legacy"  # JARVIS_RUNTIME
 
+    # Deep-only inline-format augmentation (Step 7B1 P4, Fork-1): when True, the deep
+    # lead's system prompt is augmented with PRESENTER_VOICE so it formats the
+    # user-facing reply inline (chat reply + optional fenced surface spec) instead of
+    # delegating to a separate Presenter step. Off by default and legacy-untouched —
+    # live activation (dropping the separate presenter step) is a Step-10 gate.
+    deep_inline_format: bool = False  # JARVIS_DEEP_INLINE_FORMAT
+
     # Webhook / push-notification infrastructure (OPTIONAL — empty = poll-only).
     # When unset, webhook registration is a graceful no-op and the system stays
     # poll-only exactly as before. All three must be satisfied (see

@@ -58,6 +58,21 @@ from src.services.metrics_service import AGENT_RUNTIME_CALLS
 logger = logging.getLogger(__name__)
 
 
+def _augment_system_blocks_for_inline(system_blocks: list[dict], inline_format: bool) -> list[dict]:
+    """Deep-only: append the Presenter voice so a deep agent formats the user-facing reply
+    inline (Fork-1). Off by default; when on, returns a NEW list (legacy blocks untouched).
+
+    Immutable: never mutates ``system_blocks`` — the same list object feeds the legacy
+    agent_loop, which must stay byte-identical. When ``inline_format`` is False the input
+    is returned unchanged (identity), so the deep prompt is byte-neutral by default.
+    """
+    if not inline_format:
+        return system_blocks
+    from src.orchestrator.prompts import PRESENTER_VOICE
+
+    return [*system_blocks, {"type": "text", "text": PRESENTER_VOICE}]
+
+
 class AgentInvoker:
     """Runs a single sub-agent through the agent loop (streaming or batch)."""
 
@@ -376,7 +391,15 @@ class AgentInvoker:
                 workspace_id=workspace_id,
                 thread_id=thread_id,
                 authorization_source=AuthorizationSource.DIRECT_USER_REQUEST,
-                system_prompt=build_system_message(system_blocks),
+                # Step 7B1 P4 (Fork-1): deep-only, off-by-default inline-format
+                # augmentation. Builds a NEW block list (legacy agent_loop below keeps the
+                # ORIGINAL system_blocks) so the deep lead can format the reply inline. A
+                # no-op identity when deep_inline_format is False → deep prompt unchanged.
+                system_prompt=build_system_message(
+                    _augment_system_blocks_for_inline(
+                        system_blocks, self._settings.deep_inline_format
+                    )
+                ),
                 # CF-1: persist the assembled ContextPack on any Approval this turn pauses
                 # on, so the resume path can re-inject it (dormant on direct chat — the gate
                 # short-circuits before persisting — but threaded uniformly through the seam).
