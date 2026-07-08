@@ -50,7 +50,7 @@ from src.orchestrator.agent_loop import (
 from src.orchestrator.agents import SubAgent
 from src.orchestrator.budget import BudgetTracker
 from src.orchestrator.context_assembler import ContextAssembler
-from src.orchestrator.prompts import JARVIS_SOUL_CORE
+from src.orchestrator.prompts import JARVIS_SOUL_CORE, PRESENTER_VOICE
 from src.orchestrator.services import ServiceContainer
 from src.orchestrator.tool_executor import ToolExecutor
 from src.services.metrics_service import AGENT_RUNTIME_CALLS
@@ -60,16 +60,24 @@ logger = logging.getLogger(__name__)
 
 def _augment_system_blocks_for_inline(system_blocks: list[dict], inline_format: bool) -> list[dict]:
     """Deep-only: append the Presenter voice so a deep agent formats the user-facing reply
-    inline (Fork-1). Off by default; when on, returns a NEW list (legacy blocks untouched).
+    inline (Fork-1, Step 7B1). Off by default; when on, returns a NEW list (legacy blocks
+    untouched). Idempotent: an agent whose base prompt already carries PRESENTER_VOICE (the
+    presenter itself) is not double-injected.
 
     Immutable: never mutates ``system_blocks`` — the same list object feeds the legacy
     agent_loop, which must stay byte-identical. When ``inline_format`` is False the input
     is returned unchanged (identity), so the deep prompt is byte-neutral by default.
+
+    ACTIVATION NOTE (Step-10): today this is applied to every deep call_agent_stream agent
+    when the flag is on. At live activation it MUST be restricted to the single reply-producing
+    lead — the planner (emits PlanOutput JSON) and non-responding agents should NOT receive
+    surface-generation rules — and land together with chat_processor dropping the separate
+    presenter step.
     """
     if not inline_format:
         return system_blocks
-    from src.orchestrator.prompts import PRESENTER_VOICE
-
+    if any(PRESENTER_VOICE in b.get("text", "") for b in system_blocks):
+        return system_blocks
     return [*system_blocks, {"type": "text", "text": PRESENTER_VOICE}]
 
 

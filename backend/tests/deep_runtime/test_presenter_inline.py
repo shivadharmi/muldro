@@ -140,6 +140,19 @@ def test_augment_off_is_identity():
     assert not any(b.get("text") == PRESENTER_VOICE for b in out)
 
 
+def test_augment_is_idempotent_when_voice_already_present():
+    """When a block ALREADY carries PRESENTER_VOICE (the presenter's own prompt), the
+    augmentation is a no-op: the voice is NOT injected a second time and the input is
+    returned unchanged."""
+    blocks = [{"type": "text", "text": f"You are the Presenter.\n\n{PRESENTER_VOICE}"}]
+    out = _augment_system_blocks_for_inline(blocks, True)
+
+    assert out is blocks  # identity — no copy, no second injection
+    # PRESENTER_VOICE appears exactly once across all block texts.
+    joined = "".join(b.get("text", "") for b in out)
+    assert joined.count(PRESENTER_VOICE) == 1
+
+
 # --- 2. immutability ------------------------------------------------------------------
 def test_augment_does_not_mutate_input():
     """The input block list (shared with the legacy agent_loop) must never be mutated."""
