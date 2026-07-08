@@ -90,7 +90,15 @@ class TestAutoExecutionTrustFeedback:
 
         from src.services.graph_executor import GraphExecutor
 
-        executor = GraphExecutor(MagicMock(), AsyncMock())
+        # begin_nested() is a SAVEPOINT context manager (6C follow-up #4); mock it as
+        # a real async context manager, matching tests/test_resume_reaper.py.
+        db = AsyncMock()
+        nested_cm = MagicMock()
+        nested_cm.__aenter__ = AsyncMock(return_value=None)
+        nested_cm.__aexit__ = AsyncMock(return_value=False)
+        db.begin_nested = MagicMock(return_value=nested_cm)
+
+        executor = GraphExecutor(MagicMock(), db)
         with patch("src.services.risk_assessor.record_approval_decision", new=AsyncMock()) as rec:
             await executor._record_auto_execution_outcome("email.send", "low", "ws_test")
 

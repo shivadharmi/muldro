@@ -236,9 +236,10 @@ class TrustGate:
         try:
             from src.services.risk_assessor import record_approval_decision
 
-            await record_approval_decision(
-                self._db, workspace_id, capability, risk_level, "approved"
-            )
+            async with self._db.begin_nested():
+                await record_approval_decision(
+                    self._db, workspace_id, capability, risk_level, "approved"
+                )
         except Exception:
             logger.debug("Failed to record auto-execution trust outcome", exc_info=True)
 
