@@ -25,11 +25,6 @@ const kindLabel: Record<string, string> = {
   // Legacy
   plan: "Plan",
   execution: "Execution",
-  checklist: "Checklist",
-  comparison: "Compare",
-  timeline: "Timeline",
-  table: "Table",
-  activity: "Activity",
 };
 
 const kindColor: Record<string, string> = {
