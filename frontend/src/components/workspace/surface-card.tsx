@@ -24,7 +24,6 @@ const kindLabel: Record<string, string> = {
   proactive_insight: "Insight",
   // Legacy
   plan: "Plan",
-  approval: "Approval",
   execution: "Execution",
   checklist: "Checklist",
   comparison: "Compare",
@@ -43,7 +42,6 @@ const kindColor: Record<string, string> = {
   proactive_insight: "bg-j-secondary-soft text-j-secondary",
   // Legacy
   plan: "bg-j-info-soft text-j-info",
-  approval: "bg-j-warning-soft text-j-warning",
   execution: "bg-j-info-soft text-j-info",
 };
 
