@@ -105,7 +105,11 @@ gates + a 1-production-clean-week escape hatch (spec Step 10).
   Step 9 (Step 9 deliberately built nothing for it — no source phases, no consumer). Also the full
   **"one interrupt approval event"** backend-contract unification spanning WS `ApprovalContext`
   (phase machine) + the deep `approval_needed` frame (6B) converges here, when the phase machine is
-  reworked; Step 9 only did the frontend-render de-dup + dead-shim removal.
+  reworked. **Step 9 (P3) did ONLY the safe subset** — retired the dead `approval.edit` no-op + dropped
+  the legacy `approval`-kind badge shim (3 reps → 2). The **renderer unification** ("one
+  `InlineApprovalCard` for both live transports") was DEFERRED here too: `InlineApprovalCard` consumes
+  a rich typed `ApprovalContext` the persisted REST/detail path does not carry, so unifying it needs
+  this unified contract first (forcing it in Step 9 = speculative glue on the highest-risk surface).
 
 ## Category C — QUALITY CARRIES (safe-not-broken; opportunistic)
 
@@ -161,6 +165,14 @@ gates + a 1-production-clean-week escape hatch (spec Step 10).
   3B FastMCP `ui://` resources + frontend-as-MCP-host. Out of the rebuild's Step-9 scope; sequence
   after the runtime cutover settles. Also folds the spec-explicit **phase-machine deletion** (after
   Step 10) + dropping the two dead phase arms `planning`/`partial` (`contracts/__init__.py:462`).
+- [ ] **C14 — Step-9 opportunistic narrative-Markdown carries (holistic nits, safe-not-broken).** (a)
+  `PRESENTER_VOICE` fallback guidance (`prompts.py:~636`) still tells the LLM to fall back to a single
+  `Text` section "with the content as a markdown string" — but `Text` renders literally; now that a
+  `Markdown` component exists, that fallback could route through it (a real Presenter `surface_data`
+  behavior change + a golden-hash re-baseline — out of Step-9's scoped 4 backend narrative sites).
+  (b) Two shorter insight prose fields left as `Text` for consistency — `build_insight_actions`
+  description (`insight.py:71`) and `build_insight_context` goals (`insight.py:107`) — vs the briefing
+  action description which now renders Markdown. Align when the insight surface is next touched.
 
 ## Remaining rebuild steps (scoped, not "gates")
 
@@ -172,18 +184,24 @@ gates + a 1-production-clean-week escape hatch (spec Step 10).
   Presenter/Executor stay eager; graph→JIT one-hop. **NO migration** (head `1a2770a28c39`); 3325 non-e2e
   green. Activation → B11; carries → C10/C11. Execution correction: `tool_options` is LIVE on the
   autonomous path (kept; only dead `artifacts` fetch deleted).
-- [ ] **Step 9 — A2UI render-payload cleanup** (spec §4.9). **SCOPED + PLAN WRITTEN** 2026-07-09/10
-  (`docs/superpowers/plans/2026-07-09-step9-a2ui-layer-split.md`, committed `1cc90b8`; skeleton
-  `ef33e9f`). Grounded by 4 parallel extraction passes (all cross-verified @ `ef33e9f`). Forks
-  resolved one-by-one: (1) adapter→Step 10 / phase machine untouched / approval bounded /
-  **Step 9 is LIVE runtime-agnostic UI cleanup, NOT dormant-behind-a-flag** (first such step since
-  Step 6 — the shared render payload can't be flag-gated); (2) `version`→TTL-prune, no bump, reserved
-  hook; (3) defer BOTH the rename AND the AG-UI/MCP-Apps standards adoption; (4) ONE plan, 5 phases,
-  **NO P0 spike** (adapter unknown disproven-as-out-of-scope by extraction, nothing left to prove).
-  Scope = prune **13** never-produced ComponentTypes (spec's "10" is wrong) + **5** dead SurfaceKinds
-  (`plan` LIVE + `approval` demoted → KEEP) + add a `Markdown` component (react-markdown already a FE
-  dep) rewiring briefing/insight narrative + bounded frontend approval de-dup. **NO migration**
-  (head stays `1a2770a28c39`). Execution is the NEXT session.
+- [x] **Step 9 — A2UI render-payload cleanup** (spec §4.9). **DONE = SHIP** 2026-07-10 (subagent-driven,
+  commits `b0e9c0a..6dd6c4d` on `rebuild/first-principles`, NOT pushed). Plan
+  `docs/superpowers/plans/2026-07-09-step9-a2ui-layer-split.md` (`1cc90b8`). Grounded by 4 parallel
+  extraction passes. LIVE runtime-agnostic UI cleanup (NOT dormant — first such step since Step 6).
+  **NO migration** (head `1a2770a28c39` unchanged, drift-free); `A2UI_SCHEMA_VERSION`=1 unbumped
+  (Fork 2 TTL-prune); phase machine byte-untouched. Backend 3292 passed / 18 skipped; frontend 100
+  passed, lint/build green. Landed: **P1** pruned 13 never-produced ComponentTypes + 5 dead
+  SurfaceKinds (+`lists.py`) — the 2-stage review CAUGHT a live regression the census missed
+  (`PRESENTER_VOICE` still advertised the deleted kinds; strict `SurfaceSpec.kind` Literal → the LLM
+  chat path would silently drop surfaces → fixed `f24f1e4`, re-baselined the 7B1 golden hash + added
+  a dead-schema teeth test). **P2** added a `Markdown` ComponentType + builder + `A2UIMarkdown`
+  (react-markdown, XSS-safe) rewiring 4 briefing/insight narrative sites. **P3** REDUCED to the safe
+  subset — retired the dead `approval.edit` no-op + dropped the legacy `approval`-kind badge shim
+  (3 approval reps → 2); **the renderer-unification (`one InlineApprovalCard for both transports`)
+  was DEFERRED to B12** (it needs the unified approval contract; `InlineApprovalCard` consumes a rich
+  typed `ApprovalContext` the persisted REST path doesn't carry — forcing it now = speculative glue).
+  Holistic opus = SHIP-WITH-NITS (nit closed `6dd6c4d`: dropped 5 dead-kind labels from
+  `surface-card.tsx`). Carries → C12/C13 (unchanged) + C14 (below).
 - [ ] **Step 10 — autonomous-path runtime cutover** (the coordinated flip above + shadow-compare + auto-rollback).
 
 ---

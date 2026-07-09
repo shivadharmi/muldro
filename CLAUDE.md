@@ -239,7 +239,7 @@ fetchWorkspaceSurfaces() or useJarvisWs hook (surface_update message type)
 - Contracts: `src/ui/contracts.py` (A2UIComponent, A2UISurface, ComponentType enum)
 - Builders: `src/ui/renderer.py` (builder functions: card, text, button, table, metric, etc.)
 - Surface builder: `src/services/surface_builder.py` (SurfaceService — builds workspace surfaces from DB)
-- Surface details: `src/services/surface_detail_builders.py` (trust context, approval preview, graduation hints)
+- Surface details: `src/services/surface_detail_builders/` (package — per-kind tab builders + a `(kind, tab_id)` registry)
 - WS surface push: `src/orchestrator/jarvis.py` `_push_workspace_surface()` + `_push_insight_surface()`
 - Notifier: `src/services/notifier.py` (priority-scored delivery with rate limiting + hold-for-briefing)
 - Frontend renderer: `frontend/src/components/a2ui/renderer.tsx`
@@ -250,11 +250,11 @@ fetchWorkspaceSurfaces() or useJarvisWs hook (surface_update message type)
 - Workspace: `frontend/src/app/page.tsx` → `workspace-canvas.tsx` (pure A2UIRenderer grid)
 - Chat: `frontend/src/app/chat/page.tsx` → split-pane layout (chat left, surfaces right)
 
-**Surface kinds:** summary, briefing, plan, checklist, approval, comparison, alert, timeline, table, recommendation, activity, execution, proactive_insight
+**Surface kinds:** run, summary, briefing, alert, recommendation, proactive_insight, message (system/agent-managed) + legacy `plan` (still produced by `derive_surface_kind`) and `approval` (demoted to an inline run-surface detail tab). See the `SurfaceKind` Literal in `src/ui/contracts.py` for the authoritative set.
 
 **Capability → Surface mapping** (in `_push_workspace_surface`): derives surface kind from plan capabilities.
 
-**Live execution surfaces:** `SurfaceUpdate` contract (`contracts.py`) with phases: plan_ready → executing → approval_needed → completed/failed. Multiple emission points in `graph_executor.py`. Frontend `StepList` shows status icons (○ ◉ ✓ ✗ ⚠ 👤).
+**Live execution surfaces:** `SurfaceUpdate` contract (`src/contracts/__init__.py`, the neutral contracts layer — NOT `src/ui/contracts.py`, which holds the A2UI component tree) with phases: plan_ready → executing → approval_needed → completed/failed. This phase machine is **autonomous-path only** (emitted from `graph_executor.py`/`dag_runner.py`/`trust_gate.py` via `execution_surface_emitter.py`); the deep chat path emits none. Frontend `StepList` shows status icons (○ ◉ ✓ ✗ ⚠ 👤).
 
 **Proactive insight surfaces:** `InsightSurfaceData` contract with signal summary, relevance reasoning, goals, suggested actions. Delivered via `_push_insight_surface()`. Dismissal tracked by `EngagementService` (3+ dismissals: penalty, 5+: suppressed). API: `POST /v1/insights/{surface_id}/dismiss`.
 
