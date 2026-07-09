@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from src.orchestrator.agent_invoker import AgentInvoker
 from src.orchestrator.agents import SubAgent
 from src.orchestrator.context_assembler import JIT_ENABLED_AGENTS
+from src.orchestrator.prompts import JARVIS_SOUL_CORE
 from tests.conftest import make_mock_settings
 
 
@@ -153,3 +154,30 @@ async def test_legacy_runtime_calls_assemble_context_with_jit_false_regardless_o
     mock_deep.assert_not_called()
     captured.assert_awaited_once()
     assert captured.await_args.kwargs["jit"] is False
+
+
+def test_build_system_prompt_two_block_cache_layout_survives_slim_context():
+    """Task 4.2: structural prompt-cache-layout guard.
+
+    ``build_system_prompt`` (``agent_invoker.py``) must keep the stable soul+role
+    text in block 0 WITH ``cache_control`` (so it is the durable, cached prefix),
+    and put the (now possibly JIT-slim) context in block 1 WITHOUT
+    ``cache_control`` — the slim rendering must not disturb this layout. The
+    LIVE ``cache_read_input_tokens>0`` proof is deferred to the activation gate;
+    this is the structural proof only (no live API call).
+    """
+    invoker, _ = _make_invoker(runtime="legacy", agent_name="presenter")
+    agent = SubAgent(name="presenter", prompt="role", model_tier="sonnet", capability_scope=set())
+
+    slim_context = (
+        "## Known Entities\n- Acme (org)\n\n## Retrieving More Context\nUse `get_entity` ..."
+    )
+
+    blocks = invoker.build_system_prompt(agent, context=slim_context)
+
+    assert len(blocks) == 2
+    assert blocks[0]["cache_control"] == {"type": "ephemeral"}
+    assert JARVIS_SOUL_CORE in blocks[0]["text"]
+    assert "role" in blocks[0]["text"]
+    assert blocks[1]["text"] == slim_context
+    assert "cache_control" not in blocks[1]
