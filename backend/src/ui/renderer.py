@@ -11,6 +11,7 @@ from src.ui.component_properties import (
     CodeBlockProperties,
     EntityCardProperties,
     ExecutionTraceProperties,
+    MarkdownProperties,
     MemoryCardProperties,
     MetricProperties,
     ProgressProperties,
@@ -41,6 +42,13 @@ def heading(id: str, text: str) -> A2UIComponent:
 def caption(id: str, text: str) -> A2UIComponent:
     props = TextProperties(text=text, variant="caption")
     return A2UIComponent(type="Text", id=id, properties=props.model_dump())
+
+
+def markdown(id: str, content: str) -> A2UIComponent:
+    """Render GitHub-flavored markdown as a single block. Preserves paragraph/
+    list/emphasis structure the frontend renders via react-markdown."""
+    props = MarkdownProperties(content=content)
+    return A2UIComponent(type="Markdown", id=id, properties=props.model_dump())
 
 
 def code_block(id: str, code: str, language: str = "text") -> A2UIComponent:

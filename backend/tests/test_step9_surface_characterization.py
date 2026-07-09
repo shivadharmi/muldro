@@ -21,9 +21,9 @@ from src.services.surface_detail_builders.insight import build_insight_signal
 from src.ui import renderer as r
 from src.ui.contracts import ComponentType
 
-# The 16 ComponentType values that some renderer.py / narrative builder actually
-# PRODUCES today. The other 13 enum values are dead (never emitted by any builder).
-# P1 deletes those 13; this set is what should survive.
+# The 17 ComponentType values that renderer.py / narrative builders actually
+# PRODUCE. P1 deleted the 13 dead types; P2 added Markdown (the 17th) — the
+# narrative builders now emit it for prose bodies.
 LIVE_COMPONENT_TYPES = frozenset(
     {
         "Text",
@@ -42,6 +42,7 @@ LIVE_COMPONENT_TYPES = frozenset(
         "Progress",
         "EntityCard",
         "ExecutionTrace",
+        "Markdown",
     }
 )
 
@@ -56,15 +57,15 @@ def test_live_component_types_all_exist_in_enum():
 
 
 def test_component_type_count_tripwire():
-    """TRIPWIRE: ComponentType currently has exactly 16 values.
+    """TRIPWIRE: ComponentType currently has exactly 17 values.
 
     Do NOT relax this to make an unrelated change pass — a drift here means the
     enum changed. This number is edited DELIBERATELY by later Step 9 phases:
-      * P1 deleted the 13 dead types  -> count is now 16
-      * P2 adds the Markdown component -> expected count becomes 17
+      * P1 deleted the 13 dead types   -> count was 16
+      * P2 added the Markdown component -> count is now 17
     When you make those edits, change the literal below and this comment to match.
     """
-    assert len({ct.value for ct in ComponentType}) == 16
+    assert len({ct.value for ct in ComponentType}) == 17
 
 
 def test_live_builders_emit_expected_component_types():
@@ -134,6 +135,20 @@ def test_caption_and_heading_are_text_variants_not_distinct_types():
     assert heading.properties["variant"] == "heading"
     assert body.type == "Text"
     assert body.properties["variant"] == "body"
+
+
+def test_markdown_builder_emits_new_markdown_type_with_content():
+    """P2: r.markdown is a genuinely NEW component type (not a Text variant).
+
+    It carries the raw GitHub-flavored markdown source in properties['content']
+    so the frontend can render paragraph/list/emphasis structure via
+    react-markdown instead of the flattened single-line Text it replaces.
+    """
+    comp = r.markdown("id", "# H\n- a\n- b")
+
+    assert comp.type == "Markdown"
+    assert comp.properties["content"] == "# H\n- a\n- b"
+    assert "Markdown" in {ct.value for ct in ComponentType}
 
 
 async def test_build_insight_signal_emits_badge_text_metric():

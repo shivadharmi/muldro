@@ -3,9 +3,9 @@
 Declarative JSON protocol for agent-driven interfaces. The Presenter agent
 generates these surfaces, which the frontend renders using native React components.
 
-Component Types (16 — the set actually produced by renderer.py builders):
+Component Types (17 — the set actually produced by renderer.py builders):
   Layout: Row, Card, Divider
-  Text: Text, CodeBlock, Badge, Alert
+  Text: Text, Markdown, CodeBlock, Badge, Alert
   Data: Table, Timeline, Metric, Progress
   Input: Button
   Display: List, EntityCard, MemoryCard
@@ -78,6 +78,7 @@ class ComponentType(str, Enum):
     DIVIDER = "Divider"
     # Text
     TEXT = "Text"
+    MARKDOWN = "Markdown"
     CODE_BLOCK = "CodeBlock"
     BADGE = "Badge"
     ALERT = "Alert"

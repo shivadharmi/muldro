@@ -11,6 +11,7 @@ from src.ui.component_properties import (
     CodeBlockProperties,
     EntityCardProperties,
     ExecutionTraceProperties,
+    MarkdownProperties,
     MemoryCardProperties,
     MetricProperties,
     ProgressProperties,
@@ -37,6 +38,16 @@ class TestTextProperties:
     def test_invalid_variant_raises(self):
         with pytest.raises(ValidationError):
             TextProperties(text="x", variant="giant")
+
+
+class TestMarkdownProperties:
+    def test_valid_markdown(self):
+        p = MarkdownProperties(content="# H\n- a\n- b")
+        assert p.content == "# H\n- a\n- b"
+
+    def test_missing_content_raises(self):
+        with pytest.raises(ValidationError):
+            MarkdownProperties()
 
 
 class TestCodeBlockProperties:
@@ -209,10 +220,10 @@ class TestExecutionTraceProperties:
 
 
 class TestPropertyModelsRegistry:
-    def test_registry_has_12_entries(self):
-        # 16 live component types minus the 4 layout containers with no required
-        # properties (Card, Row, List, Divider) = 12 registered property models.
-        assert len(PROPERTY_MODELS) == 12
+    def test_registry_has_13_entries(self):
+        # 17 live component types minus the 4 layout containers with no required
+        # properties (Card, Row, List, Divider) = 13 registered property models.
+        assert len(PROPERTY_MODELS) == 13
 
     def test_all_registry_values_are_base_model_subclasses(self):
         from pydantic import BaseModel

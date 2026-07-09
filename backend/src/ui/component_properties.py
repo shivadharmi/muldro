@@ -19,6 +19,12 @@ class TextProperties(BaseModel):
     variant: Literal["heading", "body", "caption"] = "body"
 
 
+class MarkdownProperties(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    content: str
+
+
 class CodeBlockProperties(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -121,6 +127,7 @@ class ExecutionTraceProperties(BaseModel):
 PROPERTY_MODELS: dict[str, type[BaseModel]] = {
     # Text
     "Text": TextProperties,
+    "Markdown": MarkdownProperties,
     "CodeBlock": CodeBlockProperties,
     "Badge": BadgeProperties,
     "Alert": AlertProperties,
