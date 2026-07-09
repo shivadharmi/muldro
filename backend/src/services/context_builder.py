@@ -279,21 +279,6 @@ class ContextBuilder:
             except Exception:
                 logger.debug("Goal memory fetch failed", exc_info=True)
 
-        # Artifacts
-        if self._artifact_store and query:
-            try:
-                artifacts = await self._artifact_store.search(user_id, query, limit=5)
-                pack.artifacts = [
-                    {
-                        "artifact_id": a.artifact_id,
-                        "artifact_type": a.artifact_type,
-                        "title": a.title,
-                    }
-                    for a in artifacts
-                ]
-            except Exception:
-                logger.debug("Artifact search failed", exc_info=True)
-
         # Related runs — recent TaskRuns for context
         if self._db:
             try:

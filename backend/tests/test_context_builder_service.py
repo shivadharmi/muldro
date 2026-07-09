@@ -1,6 +1,6 @@
 """Tests for ContextBuilder — assembles rich context for agent prompts."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -44,18 +44,6 @@ def builder(
 @pytest.fixture
 def empty_builder():
     return ContextBuilder()
-
-
-def _make_artifact(
-    artifact_id="art_001",
-    artifact_type="document",
-    title="Investor Deck",
-):
-    a = MagicMock()
-    a.artifact_id = artifact_id
-    a.artifact_type = artifact_type
-    a.title = title
-    return a
 
 
 class TestBuildEmptyContext:
@@ -137,15 +125,6 @@ class TestBuildWithGoals:
         assert len(pack.recent_events) == 1
         assert len(pack.preferences) == 1
         assert pack.preferences[0]["fact_text"] == "Prefers concise emails"
-
-    @pytest.mark.asyncio
-    async def test_build_with_artifacts(self, builder, mock_artifact_store):
-        artifacts = [_make_artifact()]
-        mock_artifact_store.search.return_value = artifacts
-
-        pack = await builder.build("usr_1", "investor deck")
-        assert len(pack.artifacts) == 1
-        assert pack.artifacts[0]["title"] == "Investor Deck"
 
 
 class TestToPromptFormatting:
@@ -239,7 +218,6 @@ class TestBuildHandlesServiceFailures:
     ):
         mock_world_model.resolve_entities.side_effect = Exception("fail")
         mock_memory_service.retrieve.side_effect = Exception("fail")
-        mock_artifact_store.search.side_effect = Exception("fail")
 
         pack = await builder.build("usr_1", "query", task_type="send_email")
         assert pack.task_summary == "query"
