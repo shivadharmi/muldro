@@ -26,6 +26,10 @@ CONTEXT_ENRICHED_AGENTS = {
     "executor",
 }
 
+# Step 8: agents that hold the JIT read tools and can therefore run on the slim
+# pack. Presenter/Executor lack world-model reads → they keep the eager pack.
+JIT_ENABLED_AGENTS = {"planner", "perceiver", "librarian"}
+
 
 class ContextAssembler:
     """Assembles conversation history and ambient context for agent prompts."""
@@ -208,16 +212,29 @@ class ContextAssembler:
             return "\n".join(lines)
 
     async def assemble_context(
-        self, agent_name: str, message: str, user_id: str, workspace_id: str = ""
+        self,
+        agent_name: str,
+        message: str,
+        user_id: str,
+        workspace_id: str = "",
+        jit: bool = False,
     ) -> str:
         """Pre-load relevant context for context-enriched agents using ContextBuilder.
 
         Returns a context block to append to the system prompt, giving the
         agent ambient awareness of the user's world without requiring it to
         explicitly call search_memory.
+
+        ``jit`` (Step 8, dormant unless the caller opts in) requests the slim JIT
+        context pack from ``ContextBuilder``. It is gated per-agent here: only
+        agents in ``JIT_ENABLED_AGENTS`` (the ones that hold the JIT read tools)
+        actually get the slim pack — other enriched agents keep the eager one even
+        when the caller passes ``jit=True``.
         """
         if agent_name not in CONTEXT_ENRICHED_AGENTS:
             return ""
+
+        use_jit = jit and agent_name in JIT_ENABLED_AGENTS
 
         sections: list[str] = []
 
@@ -242,8 +259,9 @@ class ContextAssembler:
                     user_id=user_id,
                     query=message,
                     workspace_id=workspace_id,
+                    jit=use_jit,
                 )
-                context_text = ContextBuilder.to_prompt(pack)
+                context_text = ContextBuilder.to_prompt(pack, jit=use_jit)
                 if context_text:
                     sections.append(context_text)
         except Exception:

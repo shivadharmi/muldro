@@ -512,7 +512,14 @@ class AgentInvoker:
         )
 
         context_block = await self._context.assemble_context(
-            agent_name, message, user_id=user_id, workspace_id=workspace_id
+            agent_name,
+            message,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            # Step 8 P2: the slim JIT context pack only ever applies on the deep
+            # runtime AND behind its own flag (dormant by default). Per-agent
+            # gating (JIT_ENABLED_AGENTS) happens inside assemble_context itself.
+            jit=(self._settings.runtime == "deep" and self._settings.deep_context_jit),
         )
         system_blocks = self.build_system_prompt(
             agent, context_block, capability_summary=capability_summary
