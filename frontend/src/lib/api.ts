@@ -309,13 +309,6 @@ export function fetchApprovals(status?: string): Promise<Approval[]> {
   return api(`/approvals${qs}`);
 }
 
-export function editApproval(
-  id: string,
-  body: { title?: string; summary?: string; risk_level?: string }
-): Promise<ApprovalDetail> {
-  return post(`/approvals/${id}/edit`, body);
-}
-
 export function fetchApproval(id: string): Promise<ApprovalDetail> {
   return api(`/approvals/${id}`);
 }

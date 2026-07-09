@@ -1,7 +1,7 @@
 /** Routes A2UI approval-button actions to the REST approval endpoints.
  *
  * A2UI approval buttons (rendered server-side via `units.approval_card`) emit
- *   onAction("click", { type: "approval.{approve|reject|edit}", approval_id, surface_id })
+ *   onAction("click", { type: "approval.{approve|reject}", approval_id, surface_id })
  * These must go to the REST endpoints in `lib/api.ts` (POST /v1/approvals/{id}/...),
  * NOT to the WebSocket action registry (which only knows the live InlineApprovalCard
  * frames "approve"/"reject" with `{id}`). This helper isolates that routing decision
@@ -9,10 +9,10 @@
  * any non-approval action.
  */
 
-import { approveAction, editApproval, rejectAction } from "@/lib/api";
+import { approveAction, rejectAction } from "@/lib/api";
 
 /** Known approval action discriminators emitted by the A2UI approval card. */
-const APPROVAL_ACTION_TYPES = ["approval.approve", "approval.reject", "approval.edit"] as const;
+const APPROVAL_ACTION_TYPES = ["approval.approve", "approval.reject"] as const;
 
 type ApprovalActionType = (typeof APPROVAL_ACTION_TYPES)[number];
 
@@ -46,7 +46,6 @@ export async function routeApprovalAction(
   payload: Record<string, unknown>,
   onError?: ApprovalErrorReporter,
   onSuccess?: () => void,
-  onInfo?: ApprovalErrorReporter,
 ): Promise<boolean> {
   const actionType = payload.type;
   if (!isApprovalActionType(actionType)) return false;
@@ -71,21 +70,6 @@ export async function routeApprovalAction(
         await rejectAction(approvalId, reason);
         onSuccess?.();
         break;
-      case "approval.edit":
-        // v1 limitation: the A2UI approval card does not yet carry an edited body
-        // (title/summary/risk_level). Until an inline edit form is wired up we only
-        // forward an edit when the payload supplies a concrete `body`; otherwise this
-        // is a no-op that still counts as "handled" so the click is not re-routed to WS.
-        if (isEditBody(payload.body)) {
-          await editApproval(approvalId, payload.body);
-          onSuccess?.();
-        } else {
-          // Tell the user why nothing happened instead of silently closing the modal.
-          const msg = "Editing approvals here isn't available yet — approve or reject instead.";
-          if (onInfo) onInfo(msg);
-          else console.info(msg);
-        }
-        break;
     }
   } catch (error: unknown) {
     const msg = errorMessage(error);
@@ -94,20 +78,4 @@ export async function routeApprovalAction(
   }
 
   return true;
-}
-
-interface EditApprovalBody {
-  title?: string;
-  summary?: string;
-  risk_level?: string;
-}
-
-function isEditBody(value: unknown): value is EditApprovalBody {
-  if (typeof value !== "object" || value === null) return false;
-  const body = value as Record<string, unknown>;
-  return (
-    (body.title === undefined || typeof body.title === "string") &&
-    (body.summary === undefined || typeof body.summary === "string") &&
-    (body.risk_level === undefined || typeof body.risk_level === "string")
-  );
 }

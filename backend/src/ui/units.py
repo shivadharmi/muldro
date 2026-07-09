@@ -248,12 +248,6 @@ def approval_card(
                         variant="secondary",
                         action_payload={"type": "approval.reject", "approval_id": a.approval_id},
                     ),
-                    r.button(
-                        f"{base}_edit",
-                        "Edit",
-                        variant="secondary",
-                        action_payload={"type": "approval.edit", "approval_id": a.approval_id},
-                    ),
                 ],
             )
         )

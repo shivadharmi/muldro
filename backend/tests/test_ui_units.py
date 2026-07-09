@@ -153,6 +153,9 @@ def test_approval_card_renders_risk_and_actions() -> None:
     assert "irreversible" in s
     assert "Approve" in s
     assert "Reject" in s
+    # The dead edit no-op was retired — no Edit button / approval.edit payload.
+    assert "Edit" not in s
+    assert "approval.edit" not in s
 
 
 def test_approval_card_without_actions() -> None:

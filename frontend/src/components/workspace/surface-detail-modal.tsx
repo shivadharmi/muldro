@@ -32,12 +32,12 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
   const queryClient = useQueryClient();
   const { addToast } = useToast();
 
-  // A2UI button clicks: approval.* actions go to REST (approveAction/rejectAction/
-  // editApproval) — the WS registry does not handle them. Everything else keeps
-  // going through the WS action handler. Only a *successful* approve/reject refreshes
-  // the workspace surfaces (the run leaves awaiting_approval; resume is scheduler-driven)
-  // and closes the modal — on a REST failure or an unsupported edit the modal stays open
-  // so the user can retry, with the reason shown via toast.
+  // A2UI button clicks: approval.* actions go to REST (approveAction/rejectAction)
+  // — the WS registry does not handle them. Everything else keeps going through the
+  // WS action handler. Only a *successful* approve/reject refreshes the workspace
+  // surfaces (the run leaves awaiting_approval; resume is scheduler-driven) and closes
+  // the modal — on a REST failure the modal stays open so the user can retry, with the
+  // reason shown via toast.
   const handleAction = useCallback(
     (action: string, payload: Record<string, unknown>) => {
       const enriched = { ...payload, surface_id: surface.id };
@@ -48,7 +48,6 @@ export function SurfaceDetailModal({ surface, open, onClose }: Props) {
           void queryClient.invalidateQueries({ queryKey: ["workspace-surfaces"] });
           onClose();
         },
-        (msg) => addToast(msg, "info"),
       ).then((handled) => {
         if (!handled) handleA2UIAction(sendAction, action, enriched);
       });
