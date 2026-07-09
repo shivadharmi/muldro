@@ -192,6 +192,10 @@ class Settings(BaseSettings):
     # into the chain; live activation is a Step-10 gate.
     deep_readback_enabled: bool = False  # JARVIS_DEEP_READBACK_ENABLED
 
+    # Step 8: gate the JIT-hybrid slim context pack. Deep chat path only; when
+    # False the deep path builds the full eager pack (byte-identical to legacy).
+    deep_context_jit: bool = False  # JARVIS_DEEP_CONTEXT_JIT
+
     # Webhook / push-notification infrastructure (OPTIONAL — empty = poll-only).
     # When unset, webhook registration is a graceful no-op and the system stays
     # poll-only exactly as before. All three must be satisfied (see

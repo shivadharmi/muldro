@@ -141,9 +141,25 @@ class ContextBuilder:
         query: str,
         task_type: str | None = None,
         workspace_id: str = "",
+        jit: bool = False,
     ) -> ContextPack:
-        """Build a context pack for the given query/task."""
+        """Build a context pack for the given query/task.
+
+        ``jit=True`` (Step 8) builds a SLIM always-on core only — explicit
+        preferences, active goals, and a compact top-N entity list — via cheap
+        direct queries, skipping the bulky semantic/graph/memory retrieval below.
+        Bulky detail is retrieved on demand by the agent via existing tools.
+        ``jit=False`` (default) is the full eager pack, unchanged.
+        """
         pack = ContextPack(task_summary=query)
+
+        if jit:
+            # SLIM: always-on core only — cheap, largely query-independent. Bulky
+            # detail (full entities, graph, memories) is retrieved on demand via tools.
+            pack.preferences = await self._fetch_core_preferences(user_id, workspace_id)
+            pack.goals = await self._fetch_core_goals(user_id, workspace_id)
+            pack.entities = await self._fetch_core_entities(user_id, workspace_id)
+            return pack
 
         # Try TriSearch for unified context retrieval
         if self._tri_search and self._db:
@@ -340,9 +356,97 @@ class ContextBuilder:
             for r in runs
         ]
 
+    async def _fetch_core_preferences(self, user_id: str, workspace_id: str) -> list[dict]:
+        """All active preferences (D3), non-semantic — mirrors the eager explicit-pref fetch."""
+        if not self._memory_service:
+            return []
+        try:
+            prefs = await self._memory_service.get_user_preferences(
+                user_id, workspace_id=workspace_id, max_results=20
+            )
+            return [
+                {
+                    "memory_id": p.get("memory_id") or p.get("id", ""),
+                    "fact_text": p.get("fact_text", ""),
+                    **p,
+                }
+                for p in prefs
+            ][:25]
+        except Exception:
+            logger.debug("Core preference fetch failed", exc_info=True)
+            return []
+
+    async def _fetch_core_goals(self, user_id: str, workspace_id: str) -> list[dict]:
+        """Active goal memories via a DIRECT query (no embed/Qdrant/stability writes)."""
+        if not self._db:
+            return []
+        try:
+            from sqlalchemy import select
+
+            from src.models.memory import Memory
+
+            result = await self._db.execute(
+                select(Memory)
+                .where(
+                    Memory.user_id == user_id,
+                    Memory.workspace_id == workspace_id,
+                    Memory.memory_type == "goal",
+                    Memory.status == "active",
+                )
+                .order_by(Memory.created_at.desc())
+                .limit(5)
+            )
+            return [
+                {
+                    "memory_id": g.memory_id,
+                    "title": g.fact_text,
+                    "confidence": g.confidence,
+                    "priority": "medium",
+                }
+                for g in result.scalars().all()
+            ]
+        except Exception:
+            logger.debug("Core goal fetch failed", exc_info=True)
+            return []
+
+    async def _fetch_core_entities(
+        self, user_id: str, workspace_id: str, limit: int = 8
+    ) -> list[dict]:
+        """Top-N entities by importance/recency via a DIRECT query (NOT semantic resolution)."""
+        if not self._db:
+            return []
+        try:
+            from sqlalchemy import select
+
+            from src.models.entities import Entity  # NOTE: plural module name
+
+            result = await self._db.execute(
+                select(Entity)
+                .where(Entity.user_id == user_id, Entity.workspace_id == workspace_id)
+                .order_by(Entity.importance_score.desc(), Entity.last_seen_at.desc())
+                .limit(limit)
+            )
+            return [
+                {
+                    "entity_id": e.entity_id,
+                    "canonical_name": e.canonical_name,
+                    "entity_type": e.entity_type,
+                }
+                for e in result.scalars().all()
+            ]
+        except Exception:
+            logger.debug("Core entity fetch failed", exc_info=True)
+            return []
+
     @staticmethod
-    def to_prompt(pack: ContextPack) -> str:
-        """Convert a context pack into a prompt string for system context injection."""
+    def to_prompt(pack: ContextPack, jit: bool = False) -> str:
+        """Convert a context pack into a prompt string for system context injection.
+
+        ``jit=True`` (Step 8) renders a terse entity block (no eager decoration)
+        and appends a trailing retrieval-hint section pointing the agent at the
+        tools it can use to pull bulky detail on demand. ``jit=False`` (default)
+        is byte-identical to the pre-Step-8 rendering.
+        """
         sections = []
 
         if pack.task_summary:
@@ -357,29 +461,37 @@ class ContextBuilder:
             sections.append("## Active Goals\n" + "\n".join(goal_lines))
 
         if pack.entities:
-            ent_lines = []
-            for e in pack.entities:
-                name = e.get("canonical_name") or e.get("name", "unknown")
-                etype = e.get("entity_type", "?")
-                parts = [f"- {name} ({etype})"]
-                importance = e.get("importance_score")
-                if importance and importance > 0.7:
-                    parts.append(f"importance={importance:.1f}")
-                last_seen = e.get("last_seen_at")
-                if last_seen:
-                    parts.append(f"last_seen={last_seen[:10]}")
-                interactions = e.get("interaction_count")
-                if interactions and interactions > 1:
-                    parts.append(f"interactions={interactions}")
-                confidence = e.get("confidence")
-                if confidence is not None:
-                    parts.append(f"confidence={confidence:.2f}")
-                    if confidence < 0.5:
-                        # Abstention hint for the agent (ask/verify before relying on
-                        # this). NOT a gate signal — confidence never gates (spec §4.3).
-                        parts.append("[low confidence — verify before relying]")
-                ent_lines.append(" ".join(parts))
-            sections.append("## Relevant Entities\n" + "\n".join(ent_lines))
+            if jit:
+                ent_lines = []
+                for e in pack.entities:
+                    name = e.get("canonical_name") or e.get("name", "unknown")
+                    etype = e.get("entity_type", "?")
+                    ent_lines.append(f"- {name} ({etype})")
+                sections.append("## Known Entities\n" + "\n".join(ent_lines))
+            else:
+                ent_lines = []
+                for e in pack.entities:
+                    name = e.get("canonical_name") or e.get("name", "unknown")
+                    etype = e.get("entity_type", "?")
+                    parts = [f"- {name} ({etype})"]
+                    importance = e.get("importance_score")
+                    if importance and importance > 0.7:
+                        parts.append(f"importance={importance:.1f}")
+                    last_seen = e.get("last_seen_at")
+                    if last_seen:
+                        parts.append(f"last_seen={last_seen[:10]}")
+                    interactions = e.get("interaction_count")
+                    if interactions and interactions > 1:
+                        parts.append(f"interactions={interactions}")
+                    confidence = e.get("confidence")
+                    if confidence is not None:
+                        parts.append(f"confidence={confidence:.2f}")
+                        if confidence < 0.5:
+                            # Abstention hint for the agent (ask/verify before relying on
+                            # this). NOT a gate signal — confidence never gates (spec §4.3).
+                            parts.append("[low confidence — verify before relying]")
+                    ent_lines.append(" ".join(parts))
+                sections.append("## Relevant Entities\n" + "\n".join(ent_lines))
 
         if pack.graph_relationships:
             rel_lines = []
@@ -429,6 +541,14 @@ class ContextBuilder:
 
         if pack.risks:
             sections.append("## Risks\n" + "\n".join(f"- {r}" for r in pack.risks))
+
+        if jit:
+            sections.append(
+                "## Retrieving More Context\n"
+                "Only a compact core is preloaded. Use `get_entity`, `query_facts`, "
+                "`traverse`, `get_provenance`, and `search` to retrieve entity detail, "
+                "facts, relationships, and memories on demand."
+            )
 
         return "\n\n".join(sections) if sections else ""
 

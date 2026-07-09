@@ -80,6 +80,9 @@ def make_mock_settings(**overrides) -> MagicMock:
         # deep read-back middleware into the chain for every runtime="deep" test. Mirror
         # the real Settings default (False).
         deep_readback_enabled=False,
+        # Step 8: an unset MagicMock bool is truthy, which would route every
+        # runtime="deep" test through the slim JIT pack. Default OFF to mirror prod.
+        deep_context_jit=False,
     )
     defaults.update(overrides)
     for k, v in defaults.items():
