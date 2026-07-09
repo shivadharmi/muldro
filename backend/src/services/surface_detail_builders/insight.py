@@ -32,7 +32,7 @@ async def build_insight_signal(db: AsyncSession, surface: Any, **kwargs: Any) ->
 
     signal_summary = insight_data.get("signal_summary", "")
     if signal_summary:
-        children.append(r.text("ins_summary", signal_summary))
+        children.append(r.markdown("ins_summary", signal_summary))
 
     relevance_score = insight_data.get("relevance_score")
     if relevance_score is not None:
@@ -40,7 +40,7 @@ async def build_insight_signal(db: AsyncSession, surface: Any, **kwargs: Any) ->
 
     relevance_reasoning = insight_data.get("relevance_reasoning", "")
     if relevance_reasoning:
-        children.append(r.caption("ins_reasoning", relevance_reasoning))
+        children.append(r.markdown("ins_reasoning", relevance_reasoning))
 
     if not children:
         return _empty_tab("signal", "No signal details available.")

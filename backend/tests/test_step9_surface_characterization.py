@@ -151,13 +151,14 @@ def test_markdown_builder_emits_new_markdown_type_with_content():
     assert "Markdown" in {ct.value for ct in ComponentType}
 
 
-async def test_build_insight_signal_emits_badge_text_metric():
-    """P2 rewire tripwire: characterize the node types build_insight_signal emits.
+async def test_build_insight_signal_emits_badge_markdown_metric_markdown():
+    """P2 rewire: build_insight_signal routes prose bodies through Markdown.
 
-    Today the signal tab is a flat list of Badge (source), Text (summary),
-    Metric (relevance), Text (reasoning via caption). P2 may rewire the prose
-    parts to Markdown — this pins the current shape so that change is visible.
-    build_insight_signal reads only surface.payload (no DB), so db is unused.
+    The signal tab is Badge (source), Markdown (signal_summary), Metric
+    (relevance), Markdown (relevance_reasoning). Both prose bodies become
+    Markdown so paragraph/list structure survives; the short source badge and
+    the relevance metric stay as-is. Reads only surface.payload (no DB), so db
+    is unused.
     """
 
     class _FakeSurface:
@@ -174,16 +175,16 @@ async def test_build_insight_signal_emits_badge_text_metric():
     children = resp.sections[0].children
     types = [c.type for c in children]
 
-    assert types == ["Badge", "Text", "Metric", "Text"]
+    assert types == ["Badge", "Markdown", "Metric", "Markdown"]
     assert set(types) <= LIVE_COMPONENT_TYPES
 
 
-async def test_build_briefing_priorities_emits_text_and_divider():
-    """P2 rewire tripwire: characterize build_briefing_priorities node types.
+async def test_build_briefing_priorities_emits_text_markdown_and_divider():
+    """P2 rewire: build_briefing_priorities routes the `why` prose through Markdown.
 
-    Each priority emits a Text (title) + a caption-Text (why); a Divider is
-    inserted between consecutive priorities. Patch _resolve_briefing to avoid a
-    DB round-trip and pin the emitted component types.
+    Each priority emits a Text (title) + a Markdown (why); a Divider is inserted
+    between consecutive priorities. The short title stays Text — only the prose
+    `why` body becomes Markdown. Patch _resolve_briefing to avoid a DB round-trip.
     """
 
     class _FakeBriefing:
@@ -201,7 +202,7 @@ async def test_build_briefing_priorities_emits_text_and_divider():
     children = resp.sections[0].children
     types = [c.type for c in children]
 
-    # priority 0: title(Text) + why(Text) + divider(Divider); priority 1: title + why
-    assert types == ["Text", "Text", "Divider", "Text", "Text"]
-    assert set(types) == {"Text", "Divider"}
+    # priority 0: title(Text) + why(Markdown) + divider(Divider); priority 1: title + why
+    assert types == ["Text", "Markdown", "Divider", "Text", "Markdown"]
+    assert set(types) == {"Text", "Markdown", "Divider"}
     assert set(types) <= LIVE_COMPONENT_TYPES
