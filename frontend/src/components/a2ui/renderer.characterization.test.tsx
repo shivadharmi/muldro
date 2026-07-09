@@ -74,12 +74,12 @@ test("an unmapped component type DOES render the [Unknown] fallback", () => {
   expect(screen.getByText(/\[Unknown: Bogus\]/)).toBeInTheDocument();
 });
 
-test("TRIPWIRE: Chart currently renders its real component, NOT the [Unknown] fallback", () => {
-  // Chart is one of the 13 dead component types that P1 will delete from the
-  // renderer switch. TODAY it still has a case (-> <A2UIChart/>), so [Unknown:
-  // Chart] must NOT appear. When P1 removes the Chart case, this expectation
-  // flips: Chart should THEN render [Unknown: Chart]. Update this test as part
-  // of that deletion — a failure here means the dead-type removal happened.
+test("TRIPWIRE: Chart is a dead type and renders the [Unknown] fallback", () => {
+  // Chart was one of the 13 dead component types P1 deleted from the renderer
+  // switch. Its case is gone, so a Chart node now falls through to the
+  // `[Unknown: …]` default. This assertion was flipped in P1: it USED to assert
+  // Chart rendered its real <A2UIChart/> component; it now pins the post-deletion
+  // behavior (Chart -> [Unknown: Chart]).
   render(
     <A2UIRenderer
       surface={surface([
@@ -88,5 +88,5 @@ test("TRIPWIRE: Chart currently renders its real component, NOT the [Unknown] fa
       onAction={vi.fn()}
     />,
   );
-  expect(screen.queryByText(/\[Unknown: Chart\]/)).not.toBeInTheDocument();
+  expect(screen.getByText(/\[Unknown: Chart\]/)).toBeInTheDocument();
 });
