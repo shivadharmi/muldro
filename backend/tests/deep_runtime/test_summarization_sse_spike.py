@@ -1,36 +1,25 @@
-"""Step 8 Phase 0 Task 0.1 — OFFLINE spike: does a nested/same-graph
-``model.ainvoke`` call made by LangChain's summarization middleware
-(tagged ``metadata={"lc_source": "summarization"}``) leak into the
-frozen ``text_delta`` SSE frames?
+"""Regression guard (originally Step 8 Phase 0 Task 0.1 spike, now a
+permanent test): summarization-tagged model-call chunks must never leak
+into the frozen ``text_delta`` SSE frames, and normal chunks must survive
+the filter untouched.
 
-Static-analysis hypothesis: ``stream_deep_agent_events``
-(src/deep_runtime/stream_adapter.py:172-174) discards ``payload[1]`` (the
-per-chunk metadata half) in the "messages" stream-mode branch:
+LangChain's summarization middleware issues a nested/same-graph
+``model.ainvoke`` call tagged ``metadata={"lc_source": "summarization"}``.
+LangGraph relays that call through the SAME "messages" stream as ordinary
+turn chunks, so without a filter ``stream_deep_agent_events``
+(src/deep_runtime/stream_adapter.py) would emit the summarization chunk's
+text straight into a user-visible ``text_delta`` frame (and double-count
+its usage into ``agent_done`` telemetry).
 
-    msg = payload[0] if isinstance(payload, tuple) else payload
-
-If LangGraph relays a same-graph nested ``model.ainvoke`` call (as the
-summarization middleware makes internally) through the SAME "messages"
-stream with ``metadata={"lc_source": "summarization", ...}`` riding on
-``payload[1]``, the adapter has no way to distinguish it from a normal
-turn's chunk — it will emit the summarization chunk's text straight into
-a user-visible ``text_delta`` frame (and double-count its usage into
-``agent_done`` telemetry).
-
-This spike drives the REAL ``stream_deep_agent_events`` over a minimal
-fake agent whose ``astream`` yields exactly the ``(mode, (chunk, metadata))``
-tuple shape LangGraph produces under ``stream_mode=["messages", "updates"]``,
-and asserts on the resulting frames.
-
-VALID OUTCOMES (this is a spike, not a feature — a FAIL is an expected,
-useful result, not a bug in this test):
-  - FAIL -> leak confirmed: a Phase 3 filter on ``payload[1]["lc_source"]``
-    is required before summarization middleware ships on the deep path.
-  - PASS -> the adapter, as it stands today, already happens not to leak
-    this specific vector; no filter is needed for it.
-
-Do NOT "fix" stream_adapter.py here to force a pass — that is Phase 3,
-explicitly out of scope for this spike.
+The Phase 3 fix (commit 25f7e16) filters on ``payload[1]["lc_source"] ==
+"summarization"`` in the "messages" stream-mode branch of
+``stream_deep_agent_events``. This test drives the REAL
+``stream_deep_agent_events`` over a minimal fake agent whose ``astream``
+yields exactly the ``(mode, (chunk, metadata))`` tuple shape LangGraph
+produces under ``stream_mode=["messages", "updates"]``, and asserts both
+that the summarization text is absent AND that the surrounding normal
+chunks are preserved intact — guarding against both under-filtering (leak
+regresses) and over-filtering (normal chunks wrongly dropped).
 """
 
 from __future__ import annotations
@@ -75,10 +64,11 @@ def _scripted_events() -> list[tuple[str, tuple[AIMessageChunk, dict]]]:
     ]
 
 
-async def test_summarization_chunk_leaks_into_frozen_text_delta_frames():
-    """OFFLINE spike (Step 8 P0 Task 0.1). See module docstring for the
-    hypothesis and valid-outcomes framing — a FAIL here is a confirmed leak,
-    not a defect in the test.
+async def test_summarization_chunks_are_filtered_from_sse_frames():
+    """Guards the Phase 3 ``lc_source == "summarization"`` filter in
+    ``stream_adapter.py``: internal summarization model-call chunks must be
+    kept out of the frozen SSE ``text_delta`` frames, while normal chunks
+    pass through unaffected. See module docstring for background.
     """
     agent = _FakeAgent(_scripted_events())
     config = {"configurable": {"thread_id": "spike-t1"}}
@@ -97,6 +87,10 @@ async def test_summarization_chunk_leaks_into_frozen_text_delta_frames():
     text_delta_text = "".join(f["text"] for f in frames if f.get("event") == "text_delta")
 
     assert "[[internal summary]]" not in text_delta_text, (
-        "LEAK CONFIRMED: summarization chunk leaked into text_delta frames — "
-        f"P3 filter REQUIRED. Full text_delta stream was: {text_delta_text!r}"
+        "REGRESSION: summarization chunk leaked into text_delta frames — "
+        f"Phase 3 filter is broken. Full text_delta stream was: {text_delta_text!r}"
+    )
+    assert text_delta_text == "hello world", (
+        "OVER-FILTERING: normal chunks did not survive the summarization filter "
+        f"intact. Full text_delta stream was: {text_delta_text!r}"
     )
