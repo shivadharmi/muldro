@@ -10,6 +10,22 @@
 
 ---
 
+## EXECUTED = SHIP (2026-07-09, subagent-driven)
+
+All 5 phases landed on `rebuild/first-principles` (off `main`, NOT pushed/merged). Full non-e2e gate **3325 passed / 18 skipped / 0 failed**, ruff clean, single migration head `1a2770a28c39` (drift-free — **NO migration**), no new tools. Holistic opus = **SHIP** (independently reproduced all 3 negative controls RED→restore→GREEN; tree clean). All Step-8 machinery is DORMANT behind `deep_context_jit=False` + `runtime=="deep"` — flag flip is a Step-10 activation gate (ledger B11).
+
+**Commits:** P0 spike `77ffe31` (+ nit `98f77b7`) → P3 SSE filter `25f7e16` → P1 dead-`artifacts` cleanup `55a0412` → P2 producer `669f675` + wiring `3fb3bd6` + review-nits `9de00ab` → P4 forced-on e2e + cache guard `0ea0bf2`.
+
+**Two plan-corrections made during execution (verify-don't-trust catches):**
+1. **`tool_options` is NOT dead — KEPT it.** The plan (from extraction E1) claimed no `build()` caller passes `task_type`. FALSE: `step_graph_store.py:67` and `step_runner.py:427` both pass it, and `graph_executor_factory.py:98-101` builds the `ContextBuilder` WITH a real `tool_registry` → `pack.tool_options` is live on the autonomous DAG path. Deleting it would have silently regressed autonomous. P1 deletes ONLY the genuinely-dead `artifacts` fetch (`ArtifactStore` has no `.search()` → throws+swallows every chat turn) + its fiction-mock test.
+2. **Phase order was P0→P3→P1→P2→P4** (not P0→P1→P2→P3→P4). The P0 spike confirmed the SSE leak, committing a RED spike; P3 (the filter) was pulled forward to flip it GREEN so P1/P2 ran on a fully-green suite ("green at every checkpoint").
+
+**Review tiers actually run:** P0 = re-run-the-probe (verdict self-evident); P3 = independent opus (APPROVE-WITH-NITS — reviewer's "middleware not installed" nit REJECTED after reading `deepagents/graph.py:777`, which unconditionally installs it in the lead stack; spike name/docstring tidied); P1 = self + diff verify; P2 = **2-stage PARALLEL** spec (SPEC-COMPLIANT) + quality (APPROVE-WITH-NITS → per-agent-gate teeth test + `nullslast` + goal-priority comment applied); P4 = forced-on e2e; final holistic opus = SHIP.
+
+**Execution-surfaced carries (added to ledger):** SSE filter matches only `lc_source=="summarization"` (fail-open on tag-key/nesting drift — C11); `_fetch_core_entities` nullable-`last_seen_at` ordering unexercised vs real Postgres (dormant — activation sanity check under B11).
+
+---
+
 ## Forks resolved (2026-07-09, with user, grounded in 4-agent extraction)
 
 | # | Fork | Resolution |

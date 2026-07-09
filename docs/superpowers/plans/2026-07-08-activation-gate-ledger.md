@@ -133,7 +133,10 @@ gates + a 1-production-clean-week escape hatch (spec Step 10).
   langchain `SummarizationMiddleware` in `extra_middleware` — needs a SECOND spike proving the swap composes
   with `AnthropicPromptCachingMiddleware`. Also: the live check that the REAL summary `.ainvoke` streams under
   `build_chat_model`'s adaptive-thinking config (P0 proves the ADAPTER offline; the model-streaming half needs
-  an API key — pair with C8).
+  an API key — pair with C8). **SSE-filter forward-compat (Step 8 P3):** `stream_adapter.py`'s summarization
+  skip matches ONLY `lc_source=="summarization"` on `payload[1]` — fail-OPEN if a future langchain/langgraph
+  renames the tag or nests metadata differently (leak returns silently). Verified correct vs pinned langchain
+  1.3.10 (`summarization.py:833`); re-check at any langchain/deepagents bump.
 - [ ] **C11 — Richer graph JIT tool + eager-path micro-perf.** *(Step 8, Fork 3b + E1.)* The slim pack routes
   graph via one-hop Postgres `traverse` (accepted reach downgrade vs eager Neo4j weighted depth-2); add a
   weighted depth-2 graph tool if agents need reach. Eager-path-only waste (relevant only while legacy eager
@@ -143,12 +146,14 @@ gates + a 1-production-clean-week escape hatch (spec Step 10).
 
 ## Remaining rebuild steps (scoped, not "gates")
 
-- [x] **Step 8 — context JIT-hybrid** (spec T7). **SCOPED + PLAN WRITTEN** 2026-07-09 →
-  `docs/superpowers/plans/2026-07-09-step8-context-jit-hybrid.md` (commit `af5b841`). Forks resolved:
-  deep-only dormant behind `deep_context_jit` (legacy+autonomous byte-identical); keep 85% summarization
-  default (de-risk only); reuse Step-4 tools (0 new); Presenter/Executor stay eager; graph→JIT one-hop; one
-  5-phase plan (P0 SSE-leak spike → P1 live dead-code cleanup → P2 slim/JIT behind flag → P3 summarization
-  de-risk → P4 forced-on e2e). NOT executed. Activation → B11; carries → C10/C11. NO migration.
+- [x] **Step 8 — context JIT-hybrid** (spec T7). **DONE + reviewed = SHIP** 2026-07-09 (subagent-driven,
+  commits `77ffe31..0ea0bf2` on `rebuild/first-principles`, NOT pushed). Plan
+  `docs/superpowers/plans/2026-07-09-step8-context-jit-hybrid.md`. Slim/JIT pack DORMANT behind
+  `deep_context_jit=False` + `runtime=="deep"` (legacy + autonomous byte-identical); SSE summarization
+  filter live on the deep path; kept the deepagents 85% summarization default; reused Step-4 tools (0 new);
+  Presenter/Executor stay eager; graph→JIT one-hop. **NO migration** (head `1a2770a28c39`); 3325 non-e2e
+  green. Activation → B11; carries → C10/C11. Execution correction: `tool_options` is LIVE on the
+  autonomous path (kept; only dead `artifacts` fetch deleted).
 - [ ] **Step 9 — A2UI split** (spec T4/§9).
 - [ ] **Step 10 — autonomous-path runtime cutover** (the coordinated flip above + shadow-compare + auto-rollback).
 
