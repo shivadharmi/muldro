@@ -98,6 +98,14 @@ gates + a 1-production-clean-week escape hatch (spec Step 10).
   `summary.py:103`) on slimmer packs; (c) LIVE-validate that slim-core + JIT retrieval doesn't regress
   agent output (the reduction can't be proven byte-identical — it's a behavior change on the retrieved
   runtime). Consider the Presenter-only read-scope relaxation if its output degrades on the slim core.
+- [ ] **B12 — Native-stream → `surface_update` translation adapter.** *(Step 9, Fork 1.)* The only
+  producer of `SurfaceUpdate` phases is the autonomous DAG (`graph_executor`/`dag_runner` →
+  `execution_surface_emitter.py`), legacy until this cutover. A deep run has no phases to translate
+  until the autonomous path itself runs on the deep runtime — so the adapter is built HERE, not in
+  Step 9 (Step 9 deliberately built nothing for it — no source phases, no consumer). Also the full
+  **"one interrupt approval event"** backend-contract unification spanning WS `ApprovalContext`
+  (phase machine) + the deep `approval_needed` frame (6B) converges here, when the phase machine is
+  reworked; Step 9 only did the frontend-render de-dup + dead-shim removal.
 
 ## Category C — QUALITY CARRIES (safe-not-broken; opportunistic)
 
@@ -143,6 +151,16 @@ gates + a 1-production-clean-week escape hatch (spec Step 10).
   lives): the same query is embedded 3×/turn (uncached) and context assembly fires ~15 read-path
   `refresh_stability` PG WRITES; `internal.build_context` (whole-pack tool) sits in no agent's scope
   (orphaned escape hatch); `catalog.py:8` "intelligence: 19 tools" is a stale count (actual 23).
+- [ ] **C12 — A2UI → SurfaceKit rename.** *(Step 9, Fork 3.)* Deferred out of Step 9 — pure churn,
+  categorically larger blast radius than the prune (every importer, not just the layer), and its
+  purpose (free the "A2UI" name for Google A2UI) only bites when the standards layer is built. Land
+  it WITH the standards track (`project_week3_standards_adoption` threads the rename through 3A/3B).
+- [ ] **C13 — Agentic-UI standards adoption (AG-UI transport + MCP-Apps artifacts).** *(Step 9, Fork 3
+  / `project_week3_standards_adoption`.)* Separate larger track: 3A replaces `SurfaceUpdate` + the
+  dual SSE/Redis-WS with one AG-UI SSE stream (overlaps the post-Step-10 phase-machine deletion);
+  3B FastMCP `ui://` resources + frontend-as-MCP-host. Out of the rebuild's Step-9 scope; sequence
+  after the runtime cutover settles. Also folds the spec-explicit **phase-machine deletion** (after
+  Step 10) + dropping the two dead phase arms `planning`/`partial` (`contracts/__init__.py:462`).
 
 ## Remaining rebuild steps (scoped, not "gates")
 
@@ -154,7 +172,18 @@ gates + a 1-production-clean-week escape hatch (spec Step 10).
   Presenter/Executor stay eager; graph→JIT one-hop. **NO migration** (head `1a2770a28c39`); 3325 non-e2e
   green. Activation → B11; carries → C10/C11. Execution correction: `tool_options` is LIVE on the
   autonomous path (kept; only dead `artifacts` fetch deleted).
-- [ ] **Step 9 — A2UI split** (spec T4/§9).
+- [ ] **Step 9 — A2UI render-payload cleanup** (spec §4.9). **SCOPED + PLAN WRITTEN** 2026-07-09/10
+  (`docs/superpowers/plans/2026-07-09-step9-a2ui-layer-split.md`, committed `1cc90b8`; skeleton
+  `ef33e9f`). Grounded by 4 parallel extraction passes (all cross-verified @ `ef33e9f`). Forks
+  resolved one-by-one: (1) adapter→Step 10 / phase machine untouched / approval bounded /
+  **Step 9 is LIVE runtime-agnostic UI cleanup, NOT dormant-behind-a-flag** (first such step since
+  Step 6 — the shared render payload can't be flag-gated); (2) `version`→TTL-prune, no bump, reserved
+  hook; (3) defer BOTH the rename AND the AG-UI/MCP-Apps standards adoption; (4) ONE plan, 5 phases,
+  **NO P0 spike** (adapter unknown disproven-as-out-of-scope by extraction, nothing left to prove).
+  Scope = prune **13** never-produced ComponentTypes (spec's "10" is wrong) + **5** dead SurfaceKinds
+  (`plan` LIVE + `approval` demoted → KEEP) + add a `Markdown` component (react-markdown already a FE
+  dep) rewiring briefing/insight narrative + bounded frontend approval de-dup. **NO migration**
+  (head stays `1a2770a28c39`). Execution is the NEXT session.
 - [ ] **Step 10 — autonomous-path runtime cutover** (the coordinated flip above + shadow-compare + auto-rollback).
 
 ---
