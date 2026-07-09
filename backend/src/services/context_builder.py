@@ -401,6 +401,8 @@ class ContextBuilder:
                     "memory_id": g.memory_id,
                     "title": g.fact_text,
                     "confidence": g.confidence,
+                    # slim core flattens priority (no provenance in the direct query);
+                    # eager path derives it from provenance.priority
                     "priority": "medium",
                 }
                 for g in result.scalars().all()
@@ -423,7 +425,7 @@ class ContextBuilder:
             result = await self._db.execute(
                 select(Entity)
                 .where(Entity.user_id == user_id, Entity.workspace_id == workspace_id)
-                .order_by(Entity.importance_score.desc(), Entity.last_seen_at.desc())
+                .order_by(Entity.importance_score.desc(), Entity.last_seen_at.desc().nullslast())
                 .limit(limit)
             )
             return [
