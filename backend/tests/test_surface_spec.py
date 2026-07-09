@@ -38,7 +38,7 @@ class TestSurfaceSpec:
     def test_metrics_default_empty(self):
         from src.contracts import SurfaceSpec
 
-        spec = SurfaceSpec(should_surface=True, kind="table", title="Data")
+        spec = SurfaceSpec(should_surface=True, kind="summary", title="Data")
         assert spec.metrics == []
         assert spec.tags == []
 
@@ -204,7 +204,7 @@ More text follows."""
         text = """Intro.
 
 ```json:surface
-{"should_surface": true, "kind": "table", "title": "PRs"}
+{"should_surface": true, "kind": "summary", "title": "PRs"}
 ```
 
 ```json:surface_data

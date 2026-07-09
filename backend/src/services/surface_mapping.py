@@ -98,11 +98,6 @@ PRIORITY_TIERS: dict[str, int] = {
     "proactive_insight": 4,
     "recommendation": 5,
     "summary": 6,
-    "checklist": 6,
-    "comparison": 6,
-    "timeline": 6,
-    "table": 6,
-    "activity": 6,
 }
 
 

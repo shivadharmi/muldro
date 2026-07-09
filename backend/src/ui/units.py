@@ -561,9 +561,7 @@ def require_kind(kind: str) -> SurfaceKind:
     raise ValueError(f"Unknown surface kind: {kind!r}")
 
 
-_LEGACY_KINDS: frozenset[str] = frozenset(
-    {"plan", "checklist", "approval", "comparison", "timeline", "table", "activity"}
-)
+_LEGACY_KINDS: frozenset[str] = frozenset({"plan", "approval"})
 
 
 # ── Coercion helpers ────────────────────────────────────────────────

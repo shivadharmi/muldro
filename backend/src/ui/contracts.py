@@ -37,15 +37,10 @@ SurfaceKind = Literal[
     "proactive_insight",
     # Agent-managed (inline children, no detail API)
     "message",  # Presenter-authored rich response promoted to workspace feed
-    # Legacy kinds retained for backward compatibility with existing persisted surfaces
-    # and REST-polled fallbacks; new code SHOULD NOT create these.
+    # Legacy kinds retained: `plan` is still produced by derive_surface_kind;
+    # `approval` is demoted-to-inline but its detail tabs are still used.
     "plan",
-    "checklist",
     "approval",
-    "comparison",
-    "timeline",
-    "table",
-    "activity",
 ]
 
 

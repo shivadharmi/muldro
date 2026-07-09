@@ -227,11 +227,6 @@ _TABS_BY_KIND: dict[str, list[tuple[str, str]]] = {
     "approval": [("request", "Request"), ("risk", "Risk"), ("history", "History")],
     "recommendation": [("overview", "Overview"), ("evidence", "Evidence"), ("context", "Context")],
     "alert": [("overview", "Overview"), ("diagnostics", "Diagnostics")],
-    "checklist": [("items", "Items"), ("context", "Context")],
-    "comparison": [("options", "Options"), ("criteria", "Criteria")],
-    "timeline": [("events", "Events"), ("context", "Context")],
-    "table": [("data", "Data"), ("sources", "Sources")],
-    "activity": [("runs", "Recent Runs"), ("stats", "Stats")],
     "proactive_insight": [("signal", "Signal"), ("actions", "Actions"), ("context", "Context")],
 }
 
@@ -244,7 +239,7 @@ def build_detail_config(
 ) -> DetailConfig | None:
     """Build detail modal configuration for a surface kind.
 
-    Returns None for kinds with no detail tabs (checklist, timeline, etc.).
+    Returns None for kinds with no detail tabs.
 
     ``extra_tabs`` appends conditional ``(tab_id, label)`` pairs to the resolved
     tabs (e.g. an Approval tab when a run is awaiting approval). ``default_tab``
