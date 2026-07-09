@@ -171,6 +171,10 @@ async def stream_deep_agent_events(
     try:
         async for mode, payload in agent.astream(graph_input, config=config, **astream_kwargs):
             if mode == "messages":
+                meta = payload[1] if isinstance(payload, tuple) and len(payload) > 1 else {}
+                if isinstance(meta, dict) and meta.get("lc_source") == "summarization":
+                    # Step 8: summarization is an internal model call — never a user-visible frame.
+                    continue
                 msg = payload[0] if isinstance(payload, tuple) else payload
                 if isinstance(msg, AIMessageChunk):
                     for kind, text in _content_events(msg.content):
