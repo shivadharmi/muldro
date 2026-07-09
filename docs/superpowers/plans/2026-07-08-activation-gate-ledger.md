@@ -89,6 +89,15 @@ gates + a 1-production-clean-week escape hatch (spec Step 10).
   `seq`; Step-10 reconciles.)* The autonomous durable-resume cutover proper.
 - [ ] **B10 — Checkpoint reaper / TTL cleanup before deep is default.** *(6B CF-4; 6C added
   `checkpoint_reaper.py` reap-on-completion + decided-approval sweep — confirm it's sufficient at scale.)*
+- [ ] **B11 — Flip `deep_context_jit=True` + slim the AUTONOMOUS path + live quality-validate.** *(Step 8.)*
+  Step 8 landed the slim/JIT pack DORMANT on the deep CHAT path only (`deep_context_jit` default off,
+  scoped to `JIT_ENABLED_AGENTS={planner,perceiver,librarian}`; Presenter/Executor stay eager). At
+  activation: (a) flip the flag; (b) slim the autonomous callers (`step_graph_store.py:67` /
+  `step_runner.py:427` / `graph_executor.py:449`) whose slimmed pack persists to
+  `TaskRunDetail.context_pack` → **validate surface rendering** (`surface_detail_builders/plan.py:87`,
+  `summary.py:103`) on slimmer packs; (c) LIVE-validate that slim-core + JIT retrieval doesn't regress
+  agent output (the reduction can't be proven byte-identical — it's a behavior change on the retrieved
+  runtime). Consider the Presenter-only read-scope relaxation if its output degrades on the slim core.
 
 ## Category C — QUALITY CARRIES (safe-not-broken; opportunistic)
 
@@ -118,10 +127,28 @@ gates + a 1-production-clean-week escape hatch (spec Step 10).
 - [ ] **C9 — Latent perf carries.** Native-token key hashing (unbounded `:tok:` length, latent — no spec
   uses it) + any remaining per-call capability-resolver memoization (6C #1 folded the deep-chain lookups;
   audit the autonomous path). *(Step-1/6C carry.)*
+- [ ] **C10 — Summarization trigger tuning.** *(Step 8, Fork 2.)* deepagents' `_DeepAgentsSummarizationMiddleware`
+  runs at the auto-computed `trigger=("fraction",0.85)` default. If long-session cost telemetry argues for a
+  tighter working budget, swap it via `excluded_middleware=["SummarizationMiddleware"]` + a custom-configured
+  langchain `SummarizationMiddleware` in `extra_middleware` — needs a SECOND spike proving the swap composes
+  with `AnthropicPromptCachingMiddleware`. Also: the live check that the REAL summary `.ainvoke` streams under
+  `build_chat_model`'s adaptive-thinking config (P0 proves the ADAPTER offline; the model-streaming half needs
+  an API key — pair with C8).
+- [ ] **C11 — Richer graph JIT tool + eager-path micro-perf.** *(Step 8, Fork 3b + E1.)* The slim pack routes
+  graph via one-hop Postgres `traverse` (accepted reach downgrade vs eager Neo4j weighted depth-2); add a
+  weighted depth-2 graph tool if agents need reach. Eager-path-only waste (relevant only while legacy eager
+  lives): the same query is embedded 3×/turn (uncached) and context assembly fires ~15 read-path
+  `refresh_stability` PG WRITES; `internal.build_context` (whole-pack tool) sits in no agent's scope
+  (orphaned escape hatch); `catalog.py:8` "intelligence: 19 tools" is a stale count (actual 23).
 
 ## Remaining rebuild steps (scoped, not "gates")
 
-- [ ] **Step 8 — context JIT-hybrid** (spec T7). The next planned step after Step 7.
+- [x] **Step 8 — context JIT-hybrid** (spec T7). **SCOPED + PLAN WRITTEN** 2026-07-09 →
+  `docs/superpowers/plans/2026-07-09-step8-context-jit-hybrid.md` (commit `af5b841`). Forks resolved:
+  deep-only dormant behind `deep_context_jit` (legacy+autonomous byte-identical); keep 85% summarization
+  default (de-risk only); reuse Step-4 tools (0 new); Presenter/Executor stay eager; graph→JIT one-hop; one
+  5-phase plan (P0 SSE-leak spike → P1 live dead-code cleanup → P2 slim/JIT behind flag → P3 summarization
+  de-risk → P4 forced-on e2e). NOT executed. Activation → B11; carries → C10/C11. NO migration.
 - [ ] **Step 9 — A2UI split** (spec T4/§9).
 - [ ] **Step 10 — autonomous-path runtime cutover** (the coordinated flip above + shadow-compare + auto-rollback).
 
