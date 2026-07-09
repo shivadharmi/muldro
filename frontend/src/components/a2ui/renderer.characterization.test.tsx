@@ -27,12 +27,13 @@ function surface(children: A2UIComponent[]): A2UISurface {
   return { type: "surface", id: "srf", children, metadata: {} };
 }
 
-// The 16 LIVE component types — the ones some backend builder actually produces.
+// The 17 LIVE component types — the ones some backend builder actually produces.
 // Each has a dedicated switch case in renderer.tsx today; none should fall through
 // to the [Unknown] placeholder. Props are minimal; every LIVE component tolerates
 // empty properties (|| "" / || [] fallbacks), so none hit the ErrorBoundary.
 const LIVE_COMPONENTS: Array<Partial<A2UIComponent> & { type: string }> = [
   { type: "Text", properties: { text: "body copy" } },
+  { type: "Markdown", properties: { content: "# H\n- a\n- b" } },
   { type: "Badge", properties: { label: "new" } },
   { type: "Row", children: [comp({ type: "Text", id: "row-child", properties: { text: "in row" } })] },
   { type: "Card", children: [comp({ type: "Text", id: "card-child", properties: { text: "in card" } })] },
@@ -72,6 +73,24 @@ test("an unmapped component type DOES render the [Unknown] fallback", () => {
     <A2UIRenderer surface={surface([comp({ type: "Bogus", id: "x1" })])} onAction={vi.fn()} />,
   );
   expect(screen.getByText(/\[Unknown: Bogus\]/)).toBeInTheDocument();
+});
+
+test("Markdown renders its markdown content (heading + list), not the [Unknown] fallback", () => {
+  // Step 9 P2: the Markdown component type is emitted by briefing/insight NARRATIVE
+  // sections. It must render real markdown (react-markdown) — a heading and list —
+  // and never fall through to the [Unknown: Markdown] placeholder.
+  render(
+    <A2UIRenderer
+      surface={surface([
+        comp({ type: "Markdown", id: "m1", properties: { content: "# H\n- a\n- b" } }),
+      ])}
+      onAction={vi.fn()}
+    />,
+  );
+  expect(screen.queryByText(/\[Unknown: Markdown\]/)).not.toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "H" })).toBeInTheDocument();
+  expect(screen.getByText("a")).toBeInTheDocument();
+  expect(screen.getByText("b")).toBeInTheDocument();
 });
 
 test("TRIPWIRE: Chart is a dead type and renders the [Unknown] fallback", () => {

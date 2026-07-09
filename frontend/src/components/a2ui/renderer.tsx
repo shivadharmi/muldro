@@ -11,6 +11,7 @@ import { A2UIDivider } from "./components/divider";
 import { A2UIEntityCard } from "./components/entity-card";
 import { A2UIExecutionTrace } from "./components/execution-trace";
 import { A2UIList } from "./components/list";
+import { A2UIMarkdown } from "./components/markdown";
 import { A2UIMemoryCard } from "./components/memory-card";
 import { A2UIMetric } from "./components/metric";
 import { A2UIProgress } from "./components/progress";
@@ -74,6 +75,8 @@ function renderComponentInner(
     // Text
     case "Text":
       return <A2UIText key={component.id} component={component} />;
+    case "Markdown":
+      return <A2UIMarkdown key={component.id} component={component} />;
     case "CodeBlock":
       return <A2UICodeBlock key={component.id} component={component} />;
     case "Badge":
