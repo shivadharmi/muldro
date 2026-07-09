@@ -47,23 +47,24 @@ LIVE_COMPONENT_TYPES = frozenset(
 
 
 def test_live_component_types_all_exist_in_enum():
-    """Every LIVE type is a real ComponentType value today (subset invariant)."""
+    """After P1, ComponentType is EXACTLY the live set (no dead types remain)."""
     enum_values = {ct.value for ct in ComponentType}
-    assert LIVE_COMPONENT_TYPES <= enum_values, (
-        f"A live component type vanished from ComponentType: {LIVE_COMPONENT_TYPES - enum_values}"
+    assert LIVE_COMPONENT_TYPES == enum_values, (
+        f"ComponentType drifted from the live set: "
+        f"missing={LIVE_COMPONENT_TYPES - enum_values}, extra={enum_values - LIVE_COMPONENT_TYPES}"
     )
 
 
 def test_component_type_count_tripwire():
-    """TRIPWIRE: ComponentType currently has exactly 29 values.
+    """TRIPWIRE: ComponentType currently has exactly 16 values.
 
     Do NOT relax this to make an unrelated change pass — a drift here means the
     enum changed. This number is edited DELIBERATELY by later Step 9 phases:
-      * P1 deletes the 13 dead types  -> expected count becomes 16
+      * P1 deleted the 13 dead types  -> count is now 16
       * P2 adds the Markdown component -> expected count becomes 17
     When you make those edits, change the literal below and this comment to match.
     """
-    assert len({ct.value for ct in ComponentType}) == 29
+    assert len({ct.value for ct in ComponentType}) == 16
 
 
 def test_live_builders_emit_expected_component_types():

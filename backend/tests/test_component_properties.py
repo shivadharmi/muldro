@@ -6,28 +6,17 @@ from pydantic import ValidationError
 from src.ui.component_properties import (
     PROPERTY_MODELS,
     AlertProperties,
-    AvatarProperties,
     BadgeProperties,
     ButtonProperties,
-    CalendarProperties,
-    ChartProperties,
     CodeBlockProperties,
-    DataGridProperties,
     EntityCardProperties,
     ExecutionTraceProperties,
-    KanbanBoardProperties,
     MemoryCardProperties,
     MetricProperties,
-    ModalProperties,
     ProgressProperties,
-    SelectProperties,
-    StatusIndicatorProperties,
     TableProperties,
-    TabsProperties,
-    TextFieldProperties,
     TextProperties,
     TimelineProperties,
-    ToggleProperties,
 )
 
 
@@ -122,50 +111,6 @@ class TestButtonProperties:
         assert p.variant == "primary"
 
 
-class TestTextFieldProperties:
-    def test_valid_text_field(self):
-        p = TextFieldProperties(label="Name", placeholder="Enter name")
-        assert p.label == "Name"
-
-    def test_missing_label_raises(self):
-        with pytest.raises(ValidationError):
-            TextFieldProperties()
-
-    def test_defaults(self):
-        p = TextFieldProperties(label="x")
-        assert p.placeholder == ""
-        assert p.value == ""
-
-
-class TestSelectProperties:
-    def test_valid_select(self):
-        p = SelectProperties(label="Color", options=[{"value": "red", "label": "Red"}])
-        assert p.label == "Color"
-
-    def test_missing_label_raises(self):
-        with pytest.raises(ValidationError):
-            SelectProperties()
-
-    def test_defaults(self):
-        p = SelectProperties(label="x")
-        assert p.options == []
-        assert p.value == ""
-
-
-class TestToggleProperties:
-    def test_valid_toggle(self):
-        p = ToggleProperties(label="Enable", checked=True)
-        assert p.checked is True
-
-    def test_missing_label_raises(self):
-        with pytest.raises(ValidationError):
-            ToggleProperties()
-
-    def test_default_checked(self):
-        p = ToggleProperties(label="x")
-        assert p.checked is False
-
-
 class TestTableProperties:
     def test_valid_table(self):
         p = TableProperties(columns=[{"key": "name"}], rows=[{"name": "Alice"}])
@@ -178,16 +123,6 @@ class TestTableProperties:
     def test_default_sortable(self):
         p = TableProperties(columns=[], rows=[])
         assert p.sortable is False
-
-
-class TestDataGridProperties:
-    def test_valid_data_grid(self):
-        p = DataGridProperties(columns=[{"key": "id"}], rows=[])
-        assert p.page_size == 10
-
-    def test_missing_columns_raises(self):
-        with pytest.raises(ValidationError):
-            DataGridProperties(rows=[])
 
 
 class TestTimelineProperties:
@@ -233,45 +168,6 @@ class TestProgressProperties:
         assert p.label == "Loading"
 
 
-class TestChartProperties:
-    def test_valid_chart(self):
-        p = ChartProperties(chart_type="bar", data={"labels": [], "values": []})
-        assert p.chart_type == "bar"
-
-    def test_missing_chart_type_raises(self):
-        with pytest.raises(ValidationError):
-            ChartProperties(data={})
-
-    def test_missing_data_raises(self):
-        with pytest.raises(ValidationError):
-            ChartProperties(chart_type="line")
-
-
-class TestAvatarProperties:
-    def test_valid_avatar(self):
-        p = AvatarProperties(name="Alice")
-        assert p.name == "Alice"
-        assert p.size == "md"
-
-    def test_missing_name_raises(self):
-        with pytest.raises(ValidationError):
-            AvatarProperties()
-
-    def test_invalid_size_raises(self):
-        with pytest.raises(ValidationError):
-            AvatarProperties(name="x", size="xl")
-
-
-class TestStatusIndicatorProperties:
-    def test_valid_status(self):
-        p = StatusIndicatorProperties(status="running", label="Running")
-        assert p.label == "Running"
-
-    def test_missing_fields_raise(self):
-        with pytest.raises(ValidationError):
-            StatusIndicatorProperties(status="ok")
-
-
 class TestEntityCardProperties:
     def test_valid_entity_card(self):
         p = EntityCardProperties(name="Acme Corp", entity_type="company", entity_id="ent_01")
@@ -312,61 +208,11 @@ class TestExecutionTraceProperties:
             ExecutionTraceProperties(status="running")
 
 
-class TestKanbanBoardProperties:
-    def test_valid_kanban(self):
-        p = KanbanBoardProperties(columns=[{"title": "Todo", "cards": []}])
-        assert len(p.columns) == 1
-
-    def test_missing_columns_raises(self):
-        with pytest.raises(ValidationError):
-            KanbanBoardProperties()
-
-
-class TestCalendarProperties:
-    def test_valid_calendar(self):
-        p = CalendarProperties(events=[{"date": "2026-01-01"}])
-        assert p.view == "week"
-
-    def test_missing_events_raises(self):
-        with pytest.raises(ValidationError):
-            CalendarProperties()
-
-    def test_invalid_view_raises(self):
-        with pytest.raises(ValidationError):
-            CalendarProperties(events=[], view="year")
-
-
-class TestTabsProperties:
-    def test_valid_tabs(self):
-        p = TabsProperties(labels=["Tab A", "Tab B"])
-        assert p.active_tab == 0
-
-    def test_missing_labels_raises(self):
-        with pytest.raises(ValidationError):
-            TabsProperties()
-
-    def test_custom_active_tab(self):
-        p = TabsProperties(labels=["A", "B", "C"], active_tab=2)
-        assert p.active_tab == 2
-
-
-class TestModalProperties:
-    def test_valid_modal(self):
-        p = ModalProperties(title="Confirm")
-        assert p.open is False
-
-    def test_missing_title_raises(self):
-        with pytest.raises(ValidationError):
-            ModalProperties()
-
-    def test_open_true(self):
-        p = ModalProperties(title="x", open=True)
-        assert p.open is True
-
-
 class TestPropertyModelsRegistry:
-    def test_registry_has_22_entries(self):
-        assert len(PROPERTY_MODELS) == 23  # 22 per spec + Tabs and Modal = 23
+    def test_registry_has_12_entries(self):
+        # 16 live component types minus the 4 layout containers with no required
+        # properties (Card, Row, List, Divider) = 12 registered property models.
+        assert len(PROPERTY_MODELS) == 12
 
     def test_all_registry_values_are_base_model_subclasses(self):
         from pydantic import BaseModel
@@ -375,8 +221,8 @@ class TestPropertyModelsRegistry:
             assert issubclass(model, BaseModel), f"{name} is not a BaseModel subclass"
 
     def test_layout_containers_absent(self):
-        """Card, Row, Column, List, Divider, Form are not in registry."""
-        for layout_type in ("Card", "Row", "Column", "List", "Divider", "Form"):
+        """Card, Row, List, Divider are not in registry."""
+        for layout_type in ("Card", "Row", "List", "Divider"):
             assert layout_type not in PROPERTY_MODELS
 
 

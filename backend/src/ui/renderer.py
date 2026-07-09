@@ -6,28 +6,17 @@ Used by the Presenter agent to generate dynamic UI payloads.
 
 from src.ui.component_properties import (
     AlertProperties,
-    AvatarProperties,
     BadgeProperties,
     ButtonProperties,
-    CalendarProperties,
-    ChartProperties,
     CodeBlockProperties,
-    DataGridProperties,
     EntityCardProperties,
     ExecutionTraceProperties,
-    KanbanBoardProperties,
     MemoryCardProperties,
     MetricProperties,
-    ModalProperties,
     ProgressProperties,
-    SelectProperties,
-    StatusIndicatorProperties,
     TableProperties,
-    TabsProperties,
-    TextFieldProperties,
     TextProperties,
     TimelineProperties,
-    ToggleProperties,
 )
 from src.ui.contracts import (
     A2UIAction,
@@ -88,52 +77,8 @@ def row(id: str, children: list[A2UIComponent]) -> A2UIComponent:
     return A2UIComponent(type="Row", id=id, children=children)
 
 
-def column(id: str, children: list[A2UIComponent]) -> A2UIComponent:
-    return A2UIComponent(type="Column", id=id, children=children)
-
-
 def divider(id: str) -> A2UIComponent:
     return A2UIComponent(type="Divider", id=id)
-
-
-def tabs(
-    id: str,
-    tab_labels: list[str],
-    tab_contents: list[list[A2UIComponent]],
-    active_tab: int = 0,
-) -> A2UIComponent:
-    children = []
-    for i, (label, content) in enumerate(zip(tab_labels, tab_contents)):
-        children.append(
-            A2UIComponent(
-                type="Card",
-                id=f"{id}_tab_{i}",
-                properties={"tab_label": label, "tab_index": i},
-                children=content,
-            )
-        )
-    props = TabsProperties(active_tab=active_tab, labels=tab_labels)
-    return A2UIComponent(
-        type="Tabs",
-        id=id,
-        properties=props.model_dump(),
-        children=children,
-    )
-
-
-def modal(
-    id: str,
-    title: str,
-    children: list[A2UIComponent],
-    open: bool = True,
-) -> A2UIComponent:
-    props = ModalProperties(title=title, open=open)
-    return A2UIComponent(
-        type="Modal",
-        id=id,
-        properties=props.model_dump(),
-        children=children,
-    )
 
 
 # --- Input components ---
@@ -157,61 +102,6 @@ def button(
     )
 
 
-def text_field(
-    id: str,
-    label: str = "",
-    placeholder: str = "",
-    value: str = "",
-) -> A2UIComponent:
-    props = TextFieldProperties(label=label, placeholder=placeholder, value=value)
-    return A2UIComponent(
-        type="TextField",
-        id=id,
-        properties=props.model_dump(),
-    )
-
-
-def select_field(
-    id: str,
-    label: str,
-    options: list[dict],
-    value: str = "",
-) -> A2UIComponent:
-    props = SelectProperties(label=label, options=options, value=value)
-    return A2UIComponent(
-        type="Select",
-        id=id,
-        properties=props.model_dump(),
-    )
-
-
-def toggle(
-    id: str,
-    label: str,
-    checked: bool = False,
-) -> A2UIComponent:
-    props = ToggleProperties(label=label, checked=checked)
-    return A2UIComponent(
-        type="Toggle",
-        id=id,
-        properties=props.model_dump(),
-    )
-
-
-def form(
-    id: str,
-    fields: list[A2UIComponent],
-    submit_label: str = "Submit",
-    submit_payload: dict | None = None,
-) -> A2UIComponent:
-    submit = button(f"{id}_submit", submit_label, "primary", submit_payload)
-    return A2UIComponent(
-        type="Form",
-        id=id,
-        children=fields + [submit],
-    )
-
-
 # --- Data components ---
 
 
@@ -224,20 +114,6 @@ def table(
     props = TableProperties(columns=columns, rows=rows, sortable=sortable)
     return A2UIComponent(
         type="Table",
-        id=id,
-        properties=props.model_dump(),
-    )
-
-
-def data_grid(
-    id: str,
-    columns: list[dict],
-    rows: list[dict],
-    page_size: int = 20,
-) -> A2UIComponent:
-    props = DataGridProperties(columns=columns, rows=rows, page_size=page_size)
-    return A2UIComponent(
-        type="DataGrid",
         id=id,
         properties=props.model_dump(),
     )
@@ -273,48 +149,11 @@ def progress(
     return A2UIComponent(type="Progress", id=id, properties=props.model_dump())
 
 
-def chart(
-    id: str,
-    chart_type: str,
-    data: dict,
-    title: str = "",
-) -> A2UIComponent:
-    props = ChartProperties(chart_type=chart_type, data=data, title=title)
-    return A2UIComponent(
-        type="Chart",
-        id=id,
-        properties=props.model_dump(),
-    )
-
-
 # --- Display components ---
 
 
 def list_component(id: str, children: list[A2UIComponent]) -> A2UIComponent:
     return A2UIComponent(type="List", id=id, children=children)
-
-
-def avatar(
-    id: str,
-    name: str,
-    url: str | None = None,
-    size: str = "md",
-) -> A2UIComponent:
-    props = AvatarProperties(name=name, url=url, size=size)
-    return A2UIComponent(type="Avatar", id=id, properties=props.model_dump())
-
-
-def status_indicator(
-    id: str,
-    status: str,
-    label: str = "",
-) -> A2UIComponent:
-    props = StatusIndicatorProperties(status=status, label=label)
-    return A2UIComponent(
-        type="StatusIndicator",
-        id=id,
-        properties=props.model_dump(),
-    )
 
 
 def entity_card(
@@ -358,31 +197,6 @@ def execution_trace(
     props = ExecutionTraceProperties(steps=steps, status=status)
     return A2UIComponent(
         type="ExecutionTrace",
-        id=id,
-        properties=props.model_dump(),
-    )
-
-
-def kanban_board(
-    id: str,
-    columns_data: list[dict],
-) -> A2UIComponent:
-    props = KanbanBoardProperties(columns=columns_data)
-    return A2UIComponent(
-        type="KanbanBoard",
-        id=id,
-        properties=props.model_dump(),
-    )
-
-
-def calendar_view(
-    id: str,
-    events: list[dict],
-    view: str = "week",
-) -> A2UIComponent:
-    props = CalendarProperties(events=events, view=view)
-    return A2UIComponent(
-        type="Calendar",
         id=id,
         properties=props.model_dump(),
     )
