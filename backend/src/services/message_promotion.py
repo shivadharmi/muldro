@@ -3,7 +3,7 @@
 The Presenter always produces a chat response, but only some of those
 responses are rich enough to deserve a spot in the workspace feed. This
 module encodes the structural heuristic: plain-text replies stay in
-chat; responses containing tables, charts, multi-section analysis, or
+chat; responses containing tables, timelines, multi-section analysis, or
 actionable structural components get promoted to ``message`` surfaces.
 
 Design decision: the gate is **structural**, not semantic. The agent
@@ -20,11 +20,7 @@ from typing import Iterable
 _STRUCTURAL_COMPONENT_TYPES: frozenset[str] = frozenset(
     {
         "Table",
-        "DataGrid",
-        "Chart",
         "Timeline",
-        "KanbanBoard",
-        "Calendar",
         "Metric",
         "ExecutionTrace",
         "EntityCard",
@@ -54,7 +50,7 @@ def has_structural_component(children: Iterable[dict | object]) -> bool:
 
 
 def count_sections(children: Iterable[dict | object]) -> int:
-    """Count top-level Card/Column sections — a rough proxy for multi-part analysis.
+    """Count top-level Card sections — a rough proxy for multi-part analysis.
 
     A ``Card`` containing only a single ``Text`` child is not counted; we
     treat it as a formatting wrapper. A ``Card`` with multiple children,
@@ -63,7 +59,7 @@ def count_sections(children: Iterable[dict | object]) -> int:
     count = 0
     for c in children:
         ctype = _component_type(c)
-        if ctype in ("Card", "Column"):
+        if ctype == "Card":
             child_list = list(_children(c))
             if len(child_list) >= 2 or any(
                 _component_type(gc) in _STRUCTURAL_COMPONENT_TYPES for gc in child_list

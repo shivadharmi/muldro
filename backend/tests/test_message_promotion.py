@@ -53,10 +53,10 @@ def test_explicit_flag_overrides_heuristic():
 
 
 def test_nested_structural_component_triggers_promotion():
-    # Chart buried deep in a Column → still structural → promote
+    # Table buried deep in nested layout containers → still structural → promote
     children = [
         {
-            "type": "Column",
+            "type": "Card",
             "id": "col",
             "properties": {},
             "children": [
@@ -64,7 +64,7 @@ def test_nested_structural_component_triggers_promotion():
                     "type": "Row",
                     "id": "row",
                     "properties": {},
-                    "children": [{"type": "Chart", "id": "ch", "properties": {}, "children": []}],
+                    "children": [{"type": "Table", "id": "tbl", "properties": {}, "children": []}],
                 }
             ],
         }

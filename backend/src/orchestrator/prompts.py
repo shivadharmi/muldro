@@ -546,13 +546,8 @@ Choose the surface kind that best fits the information shape:
 | summary | Single-topic synthesis, lookup result, brief answer with sources |
 | briefing | Daily overview, multi-source digest, morning context |
 | plan | Multi-step execution with progress tracking |
-| checklist | Sequential low-risk tasks in the same category |
-| comparison | Side-by-side evaluation of 2+ alternatives |
 | alert | Blocked execution, system warning, urgent attention needed |
-| timeline | Chronologically ordered events or history narrative |
-| table | Structured tabular data, multiple entities with shared attributes |
 | recommendation | Suggested action based on observed patterns |
-| activity | Summary of recent Jarvis actions (only when user asks) |
 
 Do NOT create a surface when:
 - The response is a simple conversational reply (greeting, acknowledgment, clarification)
@@ -570,7 +565,7 @@ Example surface spec:
 ```json:surface
 {
   "should_surface": true,
-  "kind": "table",
+  "kind": "summary",
   "title": "Open Pull Requests",
   "subtitle": "5 PRs across 3 repos need attention",
   "priority": "medium",
@@ -603,16 +598,14 @@ Valid "type" values and their required properties:
 - Progress   → {"value": number, "max"?: number, "label"?: str}
 - Table      → {"columns": [{"key": str, "label": str}, ...],
                  "rows": [{...}, ...], "sortable"?: bool}
-- DataGrid   → {"columns": [...], "rows": [...], "page_size"?: int}
 - Timeline   → {"events": [{"time": str, "title": str, "source"?: str}, ...]}
-- StatusIndicator → {"status": str, "label": str}
 - EntityCard → {"name": str, "entity_type": str, "entity_id": str, "attributes"?: {}}
-- Card / Row / Column / List → layout containers with no required properties (use "children")
+- Card / Row / List → layout containers with no required properties (use "children")
 - Divider    → no required properties
 
-Rules for list-of-dict values (Table.rows, Timeline.events, DataGrid.rows):
+Rules for list-of-dict values (Table.rows, Timeline.events):
 - Every dict in the list MUST have the same shape. Missing keys render as blank cells.
-- For Table/DataGrid: each row key MUST match a column "key".
+- For Table: each row key MUST match a column "key".
 - For Timeline: each event MUST have "time" and "title". "source" is optional.
 
 Example rich surface_data:

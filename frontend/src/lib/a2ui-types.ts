@@ -6,7 +6,7 @@ export interface A2UIAction {
 }
 
 export interface A2UIComponent {
-  type: string; // Text, Button, Card, List, Row, Column, TextField, etc.
+  type: string; // Text, Card, Row, List, Table, Badge, etc.
   id: string;
   properties: Record<string, unknown>;
   children: A2UIComponent[];
