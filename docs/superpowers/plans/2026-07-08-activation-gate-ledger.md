@@ -239,7 +239,9 @@ gates + a 1-production-clean-week escape hatch (spec Step 10).
     CLAUDE.md two-execution-paths rewrite → incremental flip **chat → perception → autonomous** (each
     armed by 10B's shadow+rollback, 1 production-clean-week hold per surface) → **B7 row-drop migration**
     (6→4 agents: drop Presenter+Librarian AFTER all consuming surfaces flipped, remove `AGENT_PROMPTS`
-    keys first; Perceiver stays; the ONLY Step-10 migration) → retire escape hatch. **Legacy-code deletion
+    keys first; Perceiver stays; the ONLY Step-10 migration — **6→4 requires 10D Task A-8 migrating
+    `generate_briefing` (`jarvis.py:553` `call_agent("presenter")`) off the Presenter agent; else descope
+    to 6→5 Librarian-only**) → retire escape hatch. **Legacy-code deletion
     is OUT of Step 10** (kept as the auto-rollback fallback; a later post-rebuild cleanup).
 
   **ALL 4 SUB-PLANS WRITTEN + COMMITTED 2026-07-10** (`2c30d17`..`9dc559d` on `rebuild/first-principles`,
@@ -264,6 +266,23 @@ gates + a 1-production-clean-week escape hatch (spec Step 10).
   7 arms (5 live + dead `planning`/`partial` = C13 drops); `AGENT_CAPABILITY_SCOPES`/`AGENT_MODEL_TIERS` live in
   `agents.py:28/:16` (not `prompts.py`); the write-lock classifies via pure `is_read_only_capability`
   (`capabilities.py:227`, fail-closed) NOT `is_write_capability`.
+
+  **ALL 4 PLANS REVIEWED + FIXED 2026-07-10** (`e374f96`; 4 parallel adversarial reviewers independently
+  re-verified anchors + hunted false-claims-of-fact — SHIP-WITH-FIXES each, all applied). **3 CRITICAL + 2
+  IMPORTANT the drafts missed:** (1) **10C P1 — the idempotency ledger is NOT in the deep chain** (`grep`
+  empty in `src/deep_runtime/`; deep dispatcher uses RAW `self._tool_executor.execute_tool`; ledger is
+  legacy-`step_runner.py:326`-only) → the draft's "already ledger-guarded, confirm" was FALSE → autonomous
+  deep writes would DOUBLE-FIRE on every mid-step resume → rewrote P1 to an explicit ledger BUILD
+  (`make_idempotent_execute_tool_fn` per-step, stable `identity_key`). (2) **10D B7 — `generate_briefing`
+  (`jarvis.py:553`) is a LIVE scheduler-driven Presenter-agent caller** not retired by any surface flip →
+  dropping the row strands scheduled briefings → "6→4" needs Task A-8 (migrate off) or descope 6→5.
+  (3) **10A NEW-2 — the build-time `capability_scope` guard ALREADY EXISTS** (`agent_builder.py:114-124`,
+  tested) → Task 1 reduced to a test-only regression lock (+ the uncovered guard-POSITION delta). (4) **10B
+  — the `ShadowToolExecutor` had no injection seam** (`_build_deep_agent_for` hard-wires the real executor)
+  → the deep shadow would bypass write-suppression → added an additive `execute_tool=` param + teeth test.
+  (5) **10A A3 — undefined `is_write_capability`** → `not is_read_only_capability` + resolve-cap-before-
+  fail-closed; A6 `thread_id` shortened (`String(64)` headroom). Anchor sampling found ZERO false file:line
+  claims — the CRITICALs were false claims of FACT (grep-disproved), the class the Step-9 census lesson warns of.
 
 ---
 
