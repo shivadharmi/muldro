@@ -18,6 +18,7 @@ from itertools import count
 
 from src.services.idempotency.identity import derive_identity_key
 from src.services.idempotency.ledger import IdempotencyLedger
+from src.services.metrics_service import MetricsService
 
 logger = logging.getLogger(__name__)
 
@@ -79,9 +80,11 @@ def make_idempotent_execute_tool_fn(
             identity_key=identity_key,
         )
         if outcome.already_done:
+            MetricsService.record_double_fire(surface="autonomous", kind="already_done")
             logger.info("[idempotency] %s SKIP (already completed) key=%s", tool_name, identity_key)
             return outcome.result
         if outcome.in_flight_conflict:
+            MetricsService.record_double_fire(surface="autonomous", kind="in_flight_conflict")
             logger.warning(
                 "[idempotency] %s NOT re-fired — prior attempt in-flight key=%s",
                 tool_name,

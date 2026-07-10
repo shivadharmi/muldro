@@ -58,6 +58,40 @@ MEMORY_WRITES = Counter(
     ["memory_type"],
 )
 
+# Step 10B cutover-control-plane rollback-gate signals (defined ahead of the flip
+# so the Phase-5 auto-rollback watcher has something to sample). Activation points:
+# double_fire is wired NOW at the idempotency wrapper (autonomous path only).
+DOUBLE_FIRE = Counter(
+    "jarvis_double_fire_total",
+    "Idempotency double-fire detections (already-completed or in-flight re-fire blocked)",
+    ["surface", "kind"],
+)
+# verification_false_negative: dormant until the Phase-5 sampler gets a real
+# read_fn wired in (10D) — the read_fn=None invariant is locked in Step 10A/A2.
+VERIFICATION_FALSE_NEGATIVE = Counter(
+    "jarvis_verification_false_negative_total",
+    "Verified writes later found to have not actually taken effect (false-negative on read-back)",
+    ["surface"],
+)
+# double_prompt: dormant until the approval-creation observation hook lands (10C/10D).
+DOUBLE_PROMPT = Counter(
+    "jarvis_double_prompt_total",
+    "User re-prompted for approval of an action they had already authorized",
+    ["surface"],
+)
+# ungated_perception_write: dormant until perception-provenance wiring lands (10C).
+UNGATED_PERCEPTION_WRITE = Counter(
+    "jarvis_ungated_perception_write_total",
+    "Perception-sourced write that executed without passing an approval gate",
+    ["surface"],
+)
+# shadow_divergence: dormant until the Phase-3 shadow comparator lands.
+SHADOW_DIVERGENCE = Counter(
+    "jarvis_shadow_divergence_total",
+    "Shadow-compare divergence between authoritative and non-authoritative runtimes, by kind",
+    ["kind"],
+)
+
 # Gauges
 ACTIVE_RUNS = Gauge(
     "jarvis_active_runs",
@@ -166,6 +200,33 @@ class MetricsService:
     @staticmethod
     def record_memory_write(memory_type: str = "general") -> None:
         MEMORY_WRITES.labels(memory_type=memory_type).inc()
+
+    @staticmethod
+    def record_double_fire(surface: str, kind: str) -> None:
+        DOUBLE_FIRE.labels(surface=surface, kind=kind).inc()
+
+    @staticmethod
+    def record_verification_false_negative(surface: str) -> None:
+        VERIFICATION_FALSE_NEGATIVE.labels(surface=surface).inc()
+
+    @staticmethod
+    def record_double_prompt(surface: str) -> None:
+        DOUBLE_PROMPT.labels(surface=surface).inc()
+
+    @staticmethod
+    def record_ungated_perception_write(surface: str) -> None:
+        UNGATED_PERCEPTION_WRITE.labels(surface=surface).inc()
+
+    @staticmethod
+    def record_shadow_divergence(kind: str) -> None:
+        SHADOW_DIVERGENCE.labels(kind=kind).inc()
+
+    @staticmethod
+    def read_counter_total(counter, **labels) -> float:
+        """Read the current value of a labeled Counter child (in-process). Used by the
+        auto-rollback watcher (Phase 5) to compute per-tick deltas. prometheus_client
+        counters are process-global; this reads THIS process's accumulated value."""
+        return counter.labels(**labels)._value.get()
 
     @staticmethod
     def generate_metrics() -> bytes:
