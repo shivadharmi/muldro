@@ -38,6 +38,15 @@ logger = logging.getLogger(__name__)
 _READBACK_UNSERVABLE_CAPABILITIES: frozenset[str] = frozenset({"calendar.get"})
 
 
+def _should_build_write_lock_wrapper(redis, tool_registry, require_redis: bool) -> bool:
+    """Build the cross-path write-lock wrapper when we can classify tools (registry present)
+    AND either Redis is available (normal locking) OR the operator opted into fail-closed
+    (require_redis → the in-wrapper redis-None branch refuses writes rather than run them
+    unlocked). Byte-neutral when require_redis is off: reduces to the old
+    `redis is not None and tool_registry is not None` gate."""
+    return tool_registry is not None and (redis is not None or require_redis)
+
+
 def make_lock_wrapped_execute_tool_fn(
     inner_fn, *, redis, workspace_id, resolve_capability, require_redis: bool = False
 ):
@@ -353,7 +362,15 @@ class StepRunner:
         # Step 6C: fence writes with the cross-path lock, OUTSIDE the idempotency ledger, so
         # the lock serializes the whole write attempt (idempotency check + execute). Same key
         # as the deep-runtime middleware (capability via ToolRegistry.get_tool().capability).
-        if self._redis is not None and self._tool_registry is not None:
+        # Step-10A A3: the gate now builds the wrapper under require_redis even with a None
+        # redis client, so the in-wrapper redis-None fail-closed branch is REACHABLE on the
+        # autonomous path (a malformed redis_url yields a None client at construction, which
+        # would otherwise skip the wrapper entirely and silently no-op the operator's opt-in).
+        # Residual (out of A3 scope): if the tool_registry is ALSO None we cannot classify the
+        # tool, so no wrapper is built and the run proceeds unlocked — a double-failure.
+        if _should_build_write_lock_wrapper(
+            self._redis, self._tool_registry, self._settings.write_lock_require_redis
+        ):
 
             async def _resolve_cap(tool_name: str):
                 try:

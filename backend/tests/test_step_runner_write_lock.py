@@ -2,7 +2,10 @@
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, patch
 
-from src.services.step_runner import make_lock_wrapped_execute_tool_fn
+from src.services.step_runner import (
+    _should_build_write_lock_wrapper,
+    make_lock_wrapped_execute_tool_fn,
+)
 from src.services.write_lock import WriteLockContended, write_lock_key
 
 
@@ -144,3 +147,62 @@ async def test_require_redis_false_default_and_redis_none_write_executes_unlocke
     inner.assert_awaited_once()
     resolve_capability.assert_not_awaited()
     assert result == {"ok": True}
+
+
+# --- Step-10A A3: outer-gate predicate — build the wrapper under require_redis even with a
+# None redis client, so the in-wrapper fail-closed branch is reachable on the autonomous path.
+
+
+def test_predicate_redis_and_registry_present_builds():
+    # Normal case: locking is possible → build.
+    assert _should_build_write_lock_wrapper(object(), object(), require_redis=False) is True
+
+
+def test_predicate_no_redis_flag_off_does_not_build_byte_neutral():
+    # BYTE-NEUTRAL: with the flag off, a None redis reduces to the old gate → do NOT build.
+    assert _should_build_write_lock_wrapper(None, object(), require_redis=False) is False
+
+
+def test_predicate_no_redis_flag_on_builds_so_fail_closed_reachable():
+    # NEW: operator opted into fail-closed → build even with a None redis client, so the
+    # in-wrapper redis-None branch can refuse writes.
+    assert _should_build_write_lock_wrapper(None, object(), require_redis=True) is True
+
+
+def test_predicate_no_registry_never_builds():
+    # No registry → cannot classify tools → never build, regardless of redis/flag.
+    assert _should_build_write_lock_wrapper(object(), None, require_redis=False) is False
+    assert _should_build_write_lock_wrapper(object(), None, require_redis=True) is False
+    assert _should_build_write_lock_wrapper(None, None, require_redis=True) is False
+
+
+async def test_wrapper_with_none_redis_and_require_redis_refuses_write_and_passes_read():
+    # Reachability: the predicate lets StepRunner build the wrapper with redis=None; prove the
+    # in-wrapper branch does the right thing without ever touching acquire_write_lock.
+    inner = AsyncMock(return_value={"ok": True})
+
+    fn_write = make_lock_wrapped_execute_tool_fn(
+        inner,
+        redis=None,
+        workspace_id="ws",
+        resolve_capability=AsyncMock(return_value="email.send"),
+        require_redis=True,
+    )
+    result = await fn_write("send_email", {}, user_id="u1", workspace_id="ws")
+    inner.assert_not_awaited()
+    assert result == {
+        "error": "write refused — redis write-lock required but unavailable",
+        "blocked": True,
+    }
+
+    inner_read = AsyncMock(return_value={"ok": True})
+    fn_read = make_lock_wrapped_execute_tool_fn(
+        inner_read,
+        redis=None,
+        workspace_id="ws",
+        resolve_capability=AsyncMock(return_value="email.read"),
+        require_redis=True,
+    )
+    read_result = await fn_read("list_email", {}, user_id="u1", workspace_id="ws")
+    inner_read.assert_awaited_once()
+    assert read_result == {"ok": True}

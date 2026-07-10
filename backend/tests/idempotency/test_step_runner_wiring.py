@@ -12,7 +12,9 @@ from src.services.step_runner import StepRunner
 
 def _runner():
     r = StepRunner.__new__(StepRunner)
-    r._settings = SimpleNamespace(resolved_model="m")
+    # write_lock_require_redis mirrors the real Settings default (False). The write-lock gate
+    # now reads it unconditionally (Step-10A A3), so the hand-built _settings must carry it.
+    r._settings = SimpleNamespace(resolved_model="m", write_lock_require_redis=False)
     r._client = MagicMock()
     r._store = MagicMock()
     r._store.get_all_steps = AsyncMock(return_value=[])
