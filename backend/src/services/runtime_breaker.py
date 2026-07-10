@@ -72,3 +72,28 @@ async def clear(redis: Any, surface: str) -> None:
 async def breaker_state(redis: Any, surface: str) -> str | None:
     """Current breaker value for ``surface`` (``"legacy"`` if tripped, else ``None``)."""
     return await read_key(redis, "breaker", surface)
+
+
+async def set_manual_override(redis: Any, surface: str, target: str = "legacy") -> None:
+    """Set the manual escape-hatch override (Step 10B Phase 5 Task 5b).
+
+    The override key is the HIGHEST-priority tier in ``effective_runtime`` — it wins
+    over even a tripped breaker or an enable key. ``surface="all"`` fans out to every
+    surface in ``VALID_SURFACES``, forcing the whole system to ``target`` in one call
+    (the "everything's on fire" case).
+    """
+    if surface == "all":
+        for s in VALID_SURFACES:
+            await redis.set(override_key(s), target)
+        return
+    await redis.set(override_key(surface), target)
+
+
+async def clear_manual_override(redis: Any, surface: str) -> None:
+    """Clear the manual override for ``surface`` (or every surface, for ``"all"``),
+    restoring resolution to the breaker/enabled/static tiers."""
+    if surface == "all":
+        for s in VALID_SURFACES:
+            await redis.delete(override_key(s))
+        return
+    await redis.delete(override_key(surface))
