@@ -515,21 +515,39 @@ class StepRunner:
         return output
 
     async def build_step_context(self, run: TaskRun, step: TaskStep) -> str:
-        """Build context prompt for a step using ContextBuilder."""
+        """Build context prompt for a step using ContextBuilder.
+
+        Step 10C P6: this EPHEMERAL context (feeds the executor prompt, never persisted)
+        slims to the JIT core under the autonomous gate. Short-circuits on
+        ``deep_context_jit`` FIRST (default off → no ``effective_runtime`` read, no Redis
+        GET, byte-identical eager pack). When on, the per-surface gate keyed ``"autonomous"``
+        must resolve ``"deep"`` (redis-None / gate error → static ``settings.runtime`` →
+        never an accidental ``"deep"``). ``jit`` threads into BOTH ``build`` and ``to_prompt``,
+        mirroring the chat seam's ``assemble_context``.
+        """
         if not self._context_builder:
             return ""
         try:
             input_data = step.input_data or {}
             query = input_data.get("goal", input_data.get("context", ""))
             task_type = input_data.get("task_type")
+            jit = False
+            if self._settings.deep_context_jit:
+                from src.services.runtime_gate import effective_runtime
+
+                runtime = await effective_runtime(
+                    "autonomous", redis=getattr(self, "_redis", None), settings=self._settings
+                )
+                jit = runtime == "deep"
             pack = await self._context_builder.build(
                 user_id=run.user_id,
                 query=query or "",
                 task_type=task_type,
+                jit=jit,
             )
             from src.services.context_builder import ContextBuilder
 
-            return ContextBuilder.to_prompt(pack)
+            return ContextBuilder.to_prompt(pack, jit=jit)
         except Exception:
             logger.debug("ContextBuilder failed for step %s", step.step_id, exc_info=True)
             return ""

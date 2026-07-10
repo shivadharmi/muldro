@@ -247,9 +247,33 @@ class GraphExecutor:
 
         await self._populate_steps(run, plan)
 
+    async def _autonomous_jit(self) -> bool:
+        """Resolve whether the AUTONOMOUS context builds should slim to the JIT core (P6).
+
+        Short-circuits on ``deep_context_jit`` FIRST so the default path (flag off) adds NO
+        ``effective_runtime`` read — no Redis GET on legacy run creation/resume, strictly
+        byte-neutral. When the flag is on, the per-surface gate keyed ``"autonomous"`` (the
+        10B gate) must resolve ``"deep"``; any redis-None / gate error falls to the static
+        ``settings.runtime`` (never an accidental ``"deep"``), so an outage degrades to the
+        eager pack. Mirrors the chat seam's ``jit=(runtime=="deep" and deep_context_jit)``."""
+        if not self._settings.deep_context_jit:
+            return False
+        from src.services.runtime_gate import effective_runtime
+
+        runtime = await effective_runtime(
+            "autonomous", redis=getattr(self, "_redis", None), settings=self._settings
+        )
+        return runtime == "deep"
+
     async def _populate_steps(self, run: TaskRun, plan: Plan) -> None:
-        """Facade → StepGraphStore.populate_steps."""
-        await self._store.populate_steps(run, plan)
+        """Facade → StepGraphStore.populate_steps.
+
+        P6: the store has no settings/redis, so the JIT gate is computed HERE (this facade
+        is the single forwarding point for both ``create_run`` and Governor's
+        ``populate_run_steps``) and passed down. Byte-neutral when ``deep_context_jit`` is off.
+        """
+        jit = await self._autonomous_jit()
+        await self._store.populate_steps(run, plan, jit=jit)
 
     async def _load_run(self, run_id: str) -> TaskRun:
         """Re-fetch a run by id — the P3 lease back-off path uses this so a worker
@@ -534,6 +558,9 @@ class GraphExecutor:
                     user_id=run.user_id,
                     query=_prior.get("task_summary", "")[:500],
                     workspace_id=run.workspace_id,
+                    # P6: slim the refreshed (persisted) pack under the same autonomous gate;
+                    # byte-neutral (jit=False) on the default flag-off path.
+                    jit=await self._autonomous_jit(),
                 )
                 await RunDetailStore(self._db).upsert_context_pack(
                     run.run_id, run.workspace_id, fresh_pack.model_dump()

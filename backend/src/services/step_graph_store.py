@@ -50,8 +50,16 @@ class StepGraphStore:
                 edges.append({"from": dep_id, "to": task.task_id})
         return {"nodes": nodes, "edges": edges}
 
-    async def populate_steps(self, run: TaskRun, plan: Plan) -> None:
-        """Build step DAG from plan tasks onto an existing run."""
+    async def populate_steps(self, run: TaskRun, plan: Plan, jit: bool = False) -> None:
+        """Build step DAG from plan tasks onto an existing run.
+
+        Step 10C P6: ``jit`` (default ``False`` → byte-identical eager pack) is computed by
+        the caller (``GraphExecutor``, which holds ``settings``/``redis``) and forwarded to
+        the ContextBuilder. The store has no settings/redis so it cannot gate itself. When
+        ``True`` the persisted pack is the SLIM always-on core; it still carries the render-
+        read ``entities`` key (``build(jit=True)`` populates it), so the plan/summary detail
+        tabs stay render-safe.
+        """
         result = await self._db.execute(
             select(PlanTask).where(PlanTask.plan_id == plan.plan_id).order_by(PlanTask.id)
         )
@@ -68,6 +76,7 @@ class StepGraphStore:
                     user_id=run.user_id,
                     query=plan.goal or "",
                     task_type=first_type,
+                    jit=jit,
                 )
                 from src.services.context_builder import ContextBuilder
 
