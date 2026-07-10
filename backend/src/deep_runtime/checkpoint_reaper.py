@@ -34,36 +34,55 @@ async def reap_thread(saver, thread_id: str) -> bool:
 
 
 async def sweep_decided_approval_checkpoints(
-    saver, db_factory, *, retention_hours: int = 24, now=None
+    saver, db_factory, *, workspace_id: str | None = None, retention_hours: int = 24, now=None
 ) -> int:
     """Reap checkpoints for approvals decided > retention_hours ago. Guard: only DECIDED
     (approved/rejected/expired) approvals are swept — a still-PENDING approval's thread is
-    never touched. Returns the number of threads reaped."""
+    never touched. Returns the number of threads reaped.
+
+    When *workspace_id* is given the scan is scoped to that tenant; the default ``None``
+    preserves the global backstop (today's behavior — the sole production caller,
+    ``checkpoint_reaper_tick.py``, does not pass it). A6/NEW-1: a thread whose A6-embedded
+    workspace (``thread_identity.workspace_of_thread_id``) disagrees with its approval's own
+    ``workspace_id`` is never reaped — a cross-tenant thread_id consistency guard."""
     if saver is None or not hasattr(saver, "adelete_thread"):
         return 0
     from datetime import datetime, timedelta, timezone
 
     from sqlalchemy import select
 
+    from src.deep_runtime.thread_identity import workspace_of_thread_id
     from src.models.approvals import Approval
 
     cutoff = (now or datetime.now(timezone.utc)) - timedelta(hours=retention_hours)
+    ws_filter = [Approval.workspace_id == workspace_id] if workspace_id is not None else []
     async with db_factory() as db:
-        decided_stmt = select(Approval.thread_id).where(
+        decided_stmt = select(Approval.thread_id, Approval.workspace_id).where(
             Approval.status.in_(("approved", "rejected", "expired")),
             Approval.decided_at.is_not(None),
             Approval.decided_at < cutoff,
             Approval.thread_id.is_not(None),
+            *ws_filter,
         )
-        decided = {t for t in (await db.execute(decided_stmt)).scalars().all() if t}
+        decided_rows = (await db.execute(decided_stmt)).all()
         # Per-THREAD guard: a thread that ALSO has ANY still-pending approval must NOT be
         # reaped — a deep turn reuses one thread_id across tool calls, so a decided write#1
         # and a pending write#2 can share a thread; reaping would strand write#2's resume.
         pending_stmt = select(Approval.thread_id).where(
-            Approval.status == "pending", Approval.thread_id.is_not(None)
+            Approval.status == "pending", Approval.thread_id.is_not(None), *ws_filter
         )
         pending = {t for t in (await db.execute(pending_stmt)).scalars().all() if t}
-        reapable = decided - pending
+    reapable: set[str] = set()
+    for tid, ws in decided_rows:
+        if not tid or tid in pending:
+            continue
+        embedded = workspace_of_thread_id(tid)
+        if embedded is not None and embedded != ws:
+            # NEW-1: never reap a thread whose A6-embedded workspace disagrees with its
+            # approval's workspace_id (cross-tenant thread_id consistency guard).
+            logger.warning("checkpoint sweep skipped thread: embedded-ws != approval-ws")
+            continue
+        reapable.add(tid)
     reaped = 0
     for tid in reapable:
         if await reap_thread(saver, tid):
