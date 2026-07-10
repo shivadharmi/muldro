@@ -5,7 +5,10 @@ Two failure modes hardened:
 1. A malformed ``model_tier`` (DB corruption / bad migration) on the lead OR the
    Perceiver delegate config used to ``KeyError`` on the raw ``MODEL_TIER_IDS[...]``
    subscript inside ``disable_general_purpose_subagent(MODEL_TIER_IDS[tier])``. Now
-   ``.get(tier, "sonnet")`` degrades to the sonnet id instead of raising.
+   ``.get(tier, MODEL_TIER_IDS["sonnet"])`` degrades to the sonnet MODEL ID
+   (``claude-sonnet-4-6``) instead of raising — a real model id, not the tier NAME
+   ``"sonnet"`` (which every consumer — model build, budget pricing, GP-disable harness
+   key — would misread).
 2. Any exception raised while building the delegate (tool resolution, delegate
    construction, ...) used to propagate and crash the whole deep-agent turn. Now the
    body is wrapped in try/except and degrades to ``[]`` (no delegates) — the lead can
@@ -23,6 +26,7 @@ a real ``AgentInvoker`` with mock collaborators (tool_executor, db_factory) buil
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from src.deep_runtime.model_factory import MODEL_TIER_IDS
 from src.orchestrator.agent_invoker import AgentInvoker
 from src.orchestrator.agents import SubAgent
 from tests.conftest import make_mock_settings
@@ -61,8 +65,8 @@ def _make_invoker() -> AgentInvoker:
 
 async def test_malformed_lead_tier_degrades_to_sonnet_id_not_keyerror():
     """A lead with a bogus (malformed) model_tier must not KeyError on the raw
-    MODEL_TIER_IDS subscript — .get(tier, "sonnet") defaults it instead, and the
-    delegate build proceeds normally (returns [<delegate>])."""
+    MODEL_TIER_IDS subscript — .get(tier, MODEL_TIER_IDS["sonnet"]) defaults it to a real
+    model id instead, and the delegate build proceeds normally (returns [<delegate>])."""
     lead_agent = SubAgent(name="planner", prompt="p", model_tier="bogus", capability_scope=set())
     sentinel_delegate = {"name": "perceiver-delegate"}
 
@@ -79,9 +83,12 @@ async def test_malformed_lead_tier_degrades_to_sonnet_id_not_keyerror():
 
     assert result == [sentinel_delegate]
     mock_build.assert_awaited_once()
-    # The bogus tier defaulted to the "sonnet" fallback (per .get(tier, "sonnet")),
-    # not a raised KeyError.
-    assert mock_disable.call_args_list[0].args[0] == "sonnet"
+    # The bogus tier degrades to the sonnet MODEL ID (a VALUE in MODEL_TIER_IDS), NOT the
+    # tier NAME "sonnet" (a KEY): consumers (build_chat_model, budget pricing, GP-disable
+    # harness key) all require a real Anthropic model id, so the fallback must be one.
+    fallback = mock_disable.call_args_list[0].args[0]
+    assert fallback == MODEL_TIER_IDS["sonnet"] == "claude-sonnet-4-6"
+    assert fallback in MODEL_TIER_IDS.values()  # a model id, never a tier key
 
 
 async def test_delegate_build_failure_degrades_to_empty_list():

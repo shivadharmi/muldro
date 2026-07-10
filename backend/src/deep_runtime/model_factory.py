@@ -39,7 +39,7 @@ def build_chat_model(agent: SubAgent) -> ChatAnthropic:
 
     ``max_tokens`` is always forwarded from the agent.
     """
-    model_id = MODEL_TIER_IDS.get(agent.model_tier, "sonnet")
+    model_id = MODEL_TIER_IDS.get(agent.model_tier, MODEL_TIER_IDS["sonnet"])
     is_adaptive = requires_adaptive_thinking(model_id)
     thinking_cfg = agent.thinking
 

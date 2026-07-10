@@ -367,7 +367,7 @@ class AgentInvoker:
         # (MODEL_TIER_IDS), NOT get_model_for_agent (Bedrock-tainted).
         budget_mw = make_budget_middleware(
             agent_name=agent.name,
-            model=MODEL_TIER_IDS.get(agent.model_tier, "sonnet"),
+            model=MODEL_TIER_IDS.get(agent.model_tier, MODEL_TIER_IDS["sonnet"]),
             workspace_id=workspace_id,
             db_factory=self._db_factory,
             budget=self._budget,
@@ -456,7 +456,9 @@ class AgentInvoker:
         the singleton preserves the Perceiver's sonnet/6144 thinking AND applies the SAME cheap-mode
         transform the lead received.
 
-        GP-disable keys off ``MODEL_TIER_IDS[<tier>]`` — the direct-Anthropic id the deep
+        GP-disable keys off ``MODEL_TIER_IDS.get(<tier>, MODEL_TIER_IDS["sonnet"])`` — the
+        direct-Anthropic model id (a malformed tier degrades to the sonnet id, never a tier
+        name) the deep
         runtime always builds via ``build_chat_model`` (deepagents derives the harness-profile
         key from that built model) — NOT ``get_model_for_agent`` (which returns a Bedrock id
         when ``use_bedrock``). Disabling GP on BOTH models, BEFORE either is built, stops the
@@ -480,8 +482,12 @@ class AgentInvoker:
         # the lead can otherwise serve alone — degrade to no delegates instead.
         try:
             perceiver_cfg = build_agent_set(AGENTS, self._settings.cheap_mode)["perceiver"]
-            disable_general_purpose_subagent(MODEL_TIER_IDS.get(lead_agent.model_tier, "sonnet"))
-            disable_general_purpose_subagent(MODEL_TIER_IDS.get(perceiver_cfg.model_tier, "sonnet"))
+            disable_general_purpose_subagent(
+                MODEL_TIER_IDS.get(lead_agent.model_tier, MODEL_TIER_IDS["sonnet"])
+            )
+            disable_general_purpose_subagent(
+                MODEL_TIER_IDS.get(perceiver_cfg.model_tier, MODEL_TIER_IDS["sonnet"])
+            )
             tools = await self._resolve_tools(perceiver_cfg, workspace_id, None)
             delegate = await build_read_only_delegate(
                 perceiver_cfg,
