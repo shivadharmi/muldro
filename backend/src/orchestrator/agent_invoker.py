@@ -65,6 +65,7 @@ from src.orchestrator.prompts import JARVIS_SOUL_CORE, PRESENTER_VOICE
 from src.orchestrator.services import ServiceContainer
 from src.orchestrator.tool_executor import ToolExecutor
 from src.services.metrics_service import AGENT_RUNTIME_CALLS
+from src.services.runtime_gate import effective_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -536,6 +537,18 @@ class AgentInvoker:
             yield {"event": "error", "message": f"Unknown agent: {agent_name}"}
             return
 
+        # Step 10B Phase 4: resolve the chat surface's runtime ONCE, up front, instead of
+        # reading self._settings.runtime at each of the three points below. Priority
+        # override > breaker > enabled > static settings.runtime (redis=None or any Redis
+        # error falls through to static, never to an accidental "deep" — see
+        # runtime_gate.effective_runtime). With no Redis keys set this returns
+        # self._settings.runtime unchanged, so the seam stays byte-neutral.
+        runtime = await effective_runtime(
+            "chat",
+            redis=self._services.extras.get("redis") if self._services else None,
+            settings=self._settings,
+        )
+
         model = self.get_model_for_agent(agent)
         tools = await self._resolve_tools(agent, workspace_id, tools_override)
         capability_summary = await self._maybe_capability_summary(
@@ -550,14 +563,16 @@ class AgentInvoker:
             # Step 8 P2: the slim JIT context pack only ever applies on the deep
             # runtime AND behind its own flag (dormant by default). Per-agent
             # gating (JIT_ENABLED_AGENTS) happens inside assemble_context itself.
-            jit=(self._settings.runtime == "deep" and self._settings.deep_context_jit),
+            # Step 10B Phase 4: gated on the resolved runtime, not the static setting, so a
+            # gate-flipped surface gets the JIT pack too.
+            jit=(runtime == "deep" and self._settings.deep_context_jit),
         )
         system_blocks = self.build_system_prompt(
             agent, context_block, capability_summary=capability_summary
         )
 
-        AGENT_RUNTIME_CALLS.labels(runtime=self._settings.runtime).inc()
-        if self._settings.runtime == "deep":
+        AGENT_RUNTIME_CALLS.labels(runtime=runtime).inc()
+        if runtime == "deep":
             # Step 6B: the routed chat agent runs on the Deep Agents runtime through the
             # single gated build path (``_build_deep_agent_for``, shared with the resume
             # seam). On live chat authorization_source is direct_user_request, so trust_gate
