@@ -12,6 +12,7 @@ orchestrator. The current agent set is pushed in via ``set_agents`` so the
 orchestrator stays the single source of truth across ``load_agents_from_db``.
 """
 
+import json
 import logging
 from collections.abc import AsyncGenerator, Sequence
 from datetime import datetime, timezone
@@ -91,6 +92,25 @@ def _augment_system_blocks_for_inline(system_blocks: list[dict], inline_format: 
     if any(PRESENTER_VOICE in b.get("text", "") for b in system_blocks):
         return system_blocks
     return [*system_blocks, {"type": "text", "text": PRESENTER_VOICE}]
+
+
+def _parse_tool_result_content(content: Any) -> dict | None:
+    """Best-effort parse a deep ``tool_result`` frame's ``result`` into a dict, or None.
+
+    The deep dispatcher (``jarvis_tool_dispatcher``) serializes a tool's dict result via
+    ``json.dumps`` into the ``ToolMessage`` content, so the frame's ``result`` is usually a
+    JSON string; a plain-string / non-JSON / non-dict payload yields None. Used by
+    ``run_autonomous_deep_step`` to detect the ``auth_required`` envelope.
+    """
+    if isinstance(content, dict):
+        return content
+    if isinstance(content, str):
+        try:
+            parsed = json.loads(content)
+        except (json.JSONDecodeError, ValueError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
 
 
 class AgentInvoker:
@@ -216,6 +236,7 @@ class AgentInvoker:
         context_block: str = "",
         subagents: Sequence[Any] = (),
         execute_tool: ExecuteToolFn | None = None,
+        pre_approved_capabilities: frozenset[str] = frozenset(),
     ):
         """Build a compiled deep agent WITH the full gated middleware chain:
         capability_scope (installed by ``build_deep_agent`` when ``db_factory`` is given)
@@ -235,10 +256,16 @@ class AgentInvoker:
         ``execute_tool`` (Step 10B Task 3b, ADDITIVE): the dispatcher's tool-execution
         function. Defaults to ``None``, which falls back to
         ``self._tool_executor.execute_tool`` — byte-identical to before this param
-        existed. The ONLY caller that overrides it is the shadow-compare harness
-        (``run_shadow_turn``), which injects a ``ShadowToolExecutor`` so a shadow-run
-        WRITE never reaches the real executor. The two live callers (the chat build
-        below and the resume build) never pass it.
+        existed. The shadow-compare harness (``run_shadow_turn``) injects a
+        ``ShadowToolExecutor`` so a shadow WRITE never reaches the real executor, and the
+        autonomous step seam (``run_autonomous_deep_step``) injects the ledger-wrapped
+        adapter. The two chat callers (the chat build below and the resume build) never
+        pass it.
+
+        ``pre_approved_capabilities`` (Step 10C SQ2 Branch C, ADDITIVE): forwarded verbatim
+        to the trust_gate so a capability already gated at the STEP level is not double-
+        prompted at the tool-call level. Defaults to the empty frozenset — the chat + resume
+        + shadow callers never pass it, so the gate is byte-identical for them.
         """
         shells = build_tool_shells(tools)
 
@@ -303,6 +330,7 @@ class AgentInvoker:
             assess_risk=_assess_risk,
             resolve_capability=_gate_cap,
             context_block=context_block,
+            pre_approved_capabilities=pre_approved_capabilities,
         )
         dispatcher = make_jarvis_tool_dispatcher(
             execute_tool=execute_tool or self._tool_executor.execute_tool,
@@ -814,6 +842,169 @@ class AgentInvoker:
             yield frame
         if not paused:
             await reap_thread(self._checkpointer_provider(), thread_id)
+
+    async def run_autonomous_deep_step(
+        self,
+        *,
+        executor: SubAgent,
+        tools: list,
+        message: str,
+        context_block: str,
+        user_id: str,
+        workspace_id: str,
+        run_id: str,
+        step_id: str,
+        pre_approved_capabilities: frozenset[str],
+        model: str | None = None,
+        cancel_event=None,
+    ) -> dict:
+        """Execute one approved autonomous step via a durable deep agent (Step 10C).
+
+        Provenance is the literal AuthorizationSource.AUTONOMOUS captured HERE (never
+        LLM-supplied). The dispatcher's execute_tool is wrapped with the per-step
+        idempotency ledger so LangGraph's at-least-once replay fires each external write
+        EXACTLY ONCE. pre_approved_capabilities (the step's already-step-gated capability)
+        short-circuits the deep trust_gate so it never double-prompts (SQ2 Branch C).
+        Returns the {status, result, tools_called, errors}(+auth_required) dict that
+        dag_runner._finalize_with_verification consumes — identical to the legacy path.
+        """
+        # LOW-1 (P1a security review): fail CLOSED on an empty tenant. CLAUDE.md requires an
+        # explicit workspace_id; an empty ws would make make_thread_id("") -> "c::{ulid}" whose
+        # A6 round-trip degenerates to "" == "" (the guard below becomes a no-op) AND the ledger
+        # reserve would FK-violate (silent no-dedup -> a resumed write could double-fire). A
+        # legitimate run never has an empty workspace_id (TaskRun.workspace_id is NOT NULL);
+        # refuse up front so a future/buggy caller cannot slip past the tenant guards.
+        if not (workspace_id or "").strip():
+            logger.warning(
+                "[deep_runtime] run_autonomous_deep_step refusing empty workspace_id "
+                "run=%s step=%s",
+                run_id,
+                step_id,
+            )
+            return {
+                "status": "error",
+                "result": "",
+                "tools_called": [],
+                "errors": ["missing workspace_id"],
+            }
+
+        from src.services.idempotency import (
+            IdempotencyContext,
+            IdempotencyLedger,
+            make_idempotent_execute_tool_fn,
+        )
+
+        thread_id = make_thread_id(workspace_id or "")
+
+        # A6 (Step-10A carry): the thread_id we just minted MUST embed this workspace.
+        # We just minted it, so it matches — but this defense-in-depth guard is the seam's
+        # carry of the A6 invariant: never build/stream on a ws-mismatched checkpoint thread.
+        if workspace_of_thread_id(thread_id) != (workspace_id or ""):
+            logger.warning(
+                "[deep_runtime] run_autonomous_deep_step refusing ws-mismatched thread_id "
+                "run=%s step=%s",
+                run_id,
+                step_id,
+            )
+            return {
+                "status": "error",
+                "result": "",
+                "tools_called": [],
+                "errors": ["workspace thread mismatch"],
+            }
+
+        # THE CRUX (Step 10C P1a): wrap the dispatcher's execute_tool with the per-step
+        # idempotency ledger. The deep chain wires its dispatcher to the RAW executor, so
+        # without this wrap a resumed autonomous step would double-fire external writes under
+        # LangGraph's at-least-once replay. The ledger dedups writes and BYPASSES reads. Do
+        # NOT also lock-wrap here — the deep chain's write_lock middleware already fences
+        # writes; the NET-NEW layer for the deep build is the LEDGER only.
+        idem_fn = make_idempotent_execute_tool_fn(
+            self._tool_executor.execute_tool,
+            IdempotencyContext(
+                ledger=IdempotencyLedger(self._db_factory),
+                run_id=run_id,
+                step_id=step_id,
+                workspace_id=workspace_id or "",
+                db_factory=self._db_factory,
+            ),
+        )
+
+        # jarvis_tool_dispatcher calls execute_tool(name, args, user_id, workspace_id)
+        # POSITIONALLY, but make_idempotent_execute_tool_fn returns a fn with KEYWORD-ONLY
+        # user_id/workspace_id — bridge the two calling conventions here.
+        async def _ledgered_execute_tool(name, args, user_id, workspace_id):
+            return await idem_fn(name, args, user_id=user_id, workspace_id=workspace_id)
+
+        system_blocks = self.build_system_prompt(executor, context_block)
+        deep_agent = await self._build_deep_agent_for(
+            executor,
+            tools,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            thread_id=thread_id,
+            # AUTONOMOUS activates the deep trust_gate; pre_approved_capabilities short-circuits
+            # the step's already-step-gated capability so it is not double-prompted (Branch C).
+            authorization_source=AuthorizationSource.AUTONOMOUS,
+            system_prompt=build_system_message(system_blocks),
+            context_block=context_block,
+            execute_tool=_ledgered_execute_tool,
+            pre_approved_capabilities=pre_approved_capabilities,
+        )
+
+        result = ""
+        tools_called: list[str] = []
+        errors: list[str] = []
+        auth_required: dict | None = None
+        approval_blocked = False
+        error_occurred = False
+
+        async for frame in stream_deep_agent_events(
+            deep_agent,
+            {"messages": [{"role": "user", "content": message}]},
+            {"configurable": {"thread_id": thread_id}},
+            agent_name=executor.name,
+            model=model,
+            durability="sync",
+        ):
+            event = frame.get("event") if isinstance(frame, dict) else None
+            if event == "agent_done":
+                result = frame.get("text", "") or ""
+                tools_called = frame.get("tools_called") or []
+            elif event == "tool_result":
+                parsed = _parse_tool_result_content(frame.get("result"))
+                if isinstance(parsed, dict) and parsed.get("error_code") == "auth_required":
+                    if auth_required is None:
+                        auth_required = parsed
+                elif frame.get("blocked"):
+                    errors.append(str(frame.get("result")))
+            elif event == "error":
+                errors.append(frame.get("message") or "")
+                error_occurred = True
+            elif event == "approval_needed":
+                # Branch C: the step's PRE-APPROVED capability never reaches here; only an
+                # UN-approved within-step capability expansion would. 10C has NO
+                # GraphInterrupt→run-pause bridge, so fail-block the step (do not pause/bridge).
+                approval_blocked = True
+                errors.append("unapproved within-step capability required approval")
+
+        # Mirror step_runner.run_step_via_agent_loop's output shape EXACTLY.
+        output: dict = {
+            "status": "completed",
+            "result": result,
+            "tools_called": tools_called,
+            "errors": errors,
+        }
+        if auth_required is not None:
+            # auth_required passthrough — surfaced so DagRunner._defer_for_reauth parks the run.
+            output["status"] = "error"
+            output["error_code"] = "auth_required"
+            output["provider"] = auth_required.get("provider", "")
+            output["server"] = auth_required.get("server", "")
+            output["auth_required"] = auth_required
+        elif approval_blocked or error_occurred:
+            output["status"] = "error"
+        return output
 
     async def run_shadow_turn(
         self,

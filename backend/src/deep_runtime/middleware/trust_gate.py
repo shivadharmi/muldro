@@ -236,6 +236,7 @@ def make_trust_gate_middleware(
     assess_risk,
     resolve_capability=None,
     context_block: str = "",
+    pre_approved_capabilities: frozenset[str] = frozenset(),
 ) -> AgentMiddleware:
     """Build THE approval gate for one turn.
 
@@ -264,6 +265,12 @@ def make_trust_gate_middleware(
         context_block: The assembled ContextPack for this turn. Persisted (capped) onto the
             Approval's ``artifact_refs`` at pause time so the resume path can re-inject the
             original turn's ambient context (CF-1). Empty on the dormant direct-chat path.
+        pre_approved_capabilities: Step 10C (SQ2 Branch C) — capabilities already gated at the
+            STEP level by ``dag_runner``'s durable TrustEngine gate. A tool whose capability is
+            in this set passes through the tool-call gate WITHOUT re-prompting (the autonomous
+            step seam passes ``{step.capability}``); an UN-approved within-step capability still
+            falls through to the gate. Defaults to the empty frozenset, so chat/resume callers
+            are byte-identical to before this param existed.
 
     Returns:
         An ``AgentMiddleware`` exposing an async ``wrap_tool_call`` hook.
@@ -308,6 +315,13 @@ def make_trust_gate_middleware(
                 status="error",
             )
         if not capability or is_read_only_capability(capability):
+            return await handler(request)
+
+        # Step 10C (SQ2 Branch C): a capability already gated at the STEP level (dag_runner's
+        # durable TrustEngine gate) must NOT be re-prompted at the tool-call level. The autonomous
+        # step seam passes {step.capability}; chat/resume pass the empty default -> byte-neutral. An
+        # UN-approved within-step capability still falls through to the gate below (not dead-wired).
+        if capability in pre_approved_capabilities:
             return await handler(request)
 
         # CF-2: on the resume REPLAY the Approval already exists — read its persisted decision
