@@ -56,6 +56,18 @@ runtime.
 - [ ] **A7 — Contended-blocked shape reconciliation.** *(6C #3.)* A contended deep write returns a
   `ToolMessage(status="error")`; the autonomous path returns a dict. Reconcile the two shapes (a new
   minor failure mode surfaced at activation).
+- [ ] **NEW-1 — Checkpoint-reaper decided-approval sweep is workspace-agnostic.** *(Step-10A grounding,
+  2026-07-10.)* `checkpoint_reaper.py:52-65` `sweep_decided_approval_checkpoints` selects
+  `Approval.thread_id` across ALL tenants (no `workspace_id` filter) before deleting checkpoints.
+  Delete-only + low severity today, but exactly the cross-tenant scan A6/B10 must not have when the
+  autonomous durable path goes live. With A6's ws-bound `thread_id`, scope the sweep by workspace.
+  **Scheduled in 10A (Task 3).**
+- [ ] **NEW-2 — Assert `capability_scope` is always installed (build-time, fail-closed).** *(Step-10A
+  grounding, 2026-07-10.)* The ungated deep chat path's ONLY fail-closed authz guard is
+  `capability_scope` (`agent_builder.py:104-111`, installed OUTERMOST); `trust_gate`/`write_lock`/
+  `unavailable_server` all fail-OPEN by design. A build-time assertion that a write-capable agent's
+  compiled middleware contains the guard makes "someone drops it from the chain" impossible.
+  **Scheduled in 10A (Task 1).**
 
 ## Category B — CUTOVER-MECHANICAL (the coordinated Step-10 flip)
 
@@ -203,6 +215,32 @@ gates + a 1-production-clean-week escape hatch (spec Step 10).
   Holistic opus = SHIP-WITH-NITS (nit closed `6dd6c4d`: dropped 5 dead-kind labels from
   `surface-card.tsx`). Carries → C12/C13 (unchanged) + C14 (below).
 - [ ] **Step 10 — autonomous-path runtime cutover** (the coordinated flip above + shadow-compare + auto-rollback).
+  **SCOPED + DECOMPOSED 2026-07-10** (4 parallel grounding subagents cross-verified every A/B item at
+  file:line; forks resolved one-by-one with the user). **Split 4 ways along the build-vs-flip fault line
+  — three no-flip, offline/forced-provable build sub-steps, then one live+irreversible closeout:**
+  - **10A — Category-A security hardening** *(plan `docs/superpowers/plans/2026-07-10-step10a-security-hardening.md`,
+    committed `2c30d17`)*: A1, A3, A4, A5, A6, A7 + NEW-1, NEW-2 (A2 = invariant-guard only; real `read_fn`
+    → B4). No flip, byte-neutral, ZERO migrations. **← written first, execution is a later session.**
+  - **10B — Cutover control plane**: the 4 net-new rollback metrics (all NET-NEW — only `AGENT_RUNTIME_CALLS`
+    exists; double-fire has a log-only hook `idempotency/wrapper.py:81/84`) + shadow-compare harness
+    (live reads + hard-suppressed writes at the single `ToolExecutor.execute_tool` choke-point, sampled +
+    async + throwaway session, **spike-first**) + per-surface **effective-runtime gate** (durable manual
+    kill-switch + Redis auto-breaker + static `settings.runtime` fallback — `runtime` CANNOT hot-change,
+    so this gate is the mechanism) + one-directional auto-rollback watcher + escape hatch. No flip.
+  - **10C — Autonomous durable engine**: cut the autonomous **step executor** onto `build_deep_agent`
+    (`authorization_source=autonomous` — the deep chain's only live producer; DAG orchestrator
+    `graph_executor`/`dag_runner` STAYS) + B9 (`AsyncPostgresSaver` + single-flight **lease** +
+    **reconcile-from-event-log** — 3 of 4 net-new) + B10 autonomous reaper + B11-auto slim. **Spike-first**
+    (the AsyncPostgresSaver spike proved the primitive on a minimal `StateGraph`, not `build_deep_agent`-
+    per-step). Dormant behind a flag. Design sub-Qs deferred here: step-vs-DAG durability granularity,
+    dag_runner-gate vs deep-`trust_gate` reconciliation, read-back unification, provenance wiring.
+  - **10D — Coordinated live cutover** (the ONLY live+irreversible step): final whole-branch review →
+    **merge dormant machinery to `main`** (merge-then-flip; byte-identical under default `legacy`) +
+    CLAUDE.md two-execution-paths rewrite → incremental flip **chat → perception → autonomous** (each
+    armed by 10B's shadow+rollback, 1 production-clean-week hold per surface) → **B7 row-drop migration**
+    (6→4 agents: drop Presenter+Librarian AFTER all consuming surfaces flipped, remove `AGENT_PROMPTS`
+    keys first; Perceiver stays; the ONLY Step-10 migration) → retire escape hatch. **Legacy-code deletion
+    is OUT of Step 10** (kept as the auto-rollback fallback; a later post-rebuild cleanup).
 
 ---
 
