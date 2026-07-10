@@ -196,6 +196,14 @@ class Settings(BaseSettings):
     # False the deep path builds the full eager pack (byte-identical to legacy).
     deep_context_jit: bool = False  # JARVIS_DEEP_CONTEXT_JIT
 
+    # Step 10B Task 3b: fraction of chat turns (0.0-1.0) that ALSO run a
+    # NON-authoritative shadow turn on the opposite runtime, for the cutover
+    # control-plane's shadow-compare harness (ShadowRunner). Default 0.0 = off —
+    # the chat seam never even schedules the background shadow task, and
+    # ShadowRunner.maybe_run_shadow's sampling check returns immediately either
+    # way. Live activation (a nonzero rate) is a Step-10 gate.
+    shadow_sample_rate: float = 0.0  # JARVIS_SHADOW_SAMPLE_RATE
+
     # Step-10A A3: opt-in fail-closed write lock. When True, a WRITE tool call is REFUSED
     # (not executed unlocked) if Redis is unreachable — for prod where Redis is expected up.
     # Default False preserves today's fail-OPEN behavior (authz is still enforced by

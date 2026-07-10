@@ -30,7 +30,10 @@ from src.deep_runtime.middleware.governor_audit import make_governor_audit_middl
 from src.deep_runtime.middleware.governor_delegate_critique import (
     make_governor_delegate_critique_middleware,
 )
-from src.deep_runtime.middleware.jarvis_tool_dispatcher import make_jarvis_tool_dispatcher
+from src.deep_runtime.middleware.jarvis_tool_dispatcher import (
+    ExecuteToolFn,
+    make_jarvis_tool_dispatcher,
+)
 from src.deep_runtime.middleware.librarian_extract import make_librarian_extract_middleware
 from src.deep_runtime.middleware.readback import make_readback_middleware
 from src.deep_runtime.middleware.trust_gate import _resolve_tool_def, make_trust_gate_middleware
@@ -57,6 +60,7 @@ from src.orchestrator.agent_loop import (
 from src.orchestrator.agents import SubAgent
 from src.orchestrator.budget import BudgetTracker
 from src.orchestrator.context_assembler import ContextAssembler
+from src.orchestrator.divergence import ShadowDecision
 from src.orchestrator.prompts import JARVIS_SOUL_CORE, PRESENTER_VOICE
 from src.orchestrator.services import ServiceContainer
 from src.orchestrator.tool_executor import ToolExecutor
@@ -210,6 +214,7 @@ class AgentInvoker:
         system_prompt,
         context_block: str = "",
         subagents: Sequence[Any] = (),
+        execute_tool: ExecuteToolFn | None = None,
     ):
         """Build a compiled deep agent WITH the full gated middleware chain:
         capability_scope (installed by ``build_deep_agent`` when ``db_factory`` is given)
@@ -225,6 +230,14 @@ class AgentInvoker:
         ``subagents or None`` to ``create_deep_agent`` — byte-identical to 7B1 when no
         delegates are wired. The resume path (Task 4) never passes any, keeping its rebuild
         delegate-free.
+
+        ``execute_tool`` (Step 10B Task 3b, ADDITIVE): the dispatcher's tool-execution
+        function. Defaults to ``None``, which falls back to
+        ``self._tool_executor.execute_tool`` — byte-identical to before this param
+        existed. The ONLY caller that overrides it is the shadow-compare harness
+        (``run_shadow_turn``), which injects a ``ShadowToolExecutor`` so a shadow-run
+        WRITE never reaches the real executor. The two live callers (the chat build
+        below and the resume build) never pass it.
         """
         shells = build_tool_shells(tools)
 
@@ -291,7 +304,7 @@ class AgentInvoker:
             context_block=context_block,
         )
         dispatcher = make_jarvis_tool_dispatcher(
-            execute_tool=self._tool_executor.execute_tool,
+            execute_tool=execute_tool or self._tool_executor.execute_tool,
             user_id=user_id,
             workspace_id=workspace_id,
         )
@@ -786,6 +799,120 @@ class AgentInvoker:
             yield frame
         if not paused:
             await reap_thread(self._checkpointer_provider(), thread_id)
+
+    async def run_shadow_turn(
+        self,
+        agent_name: str,
+        message: str,
+        *,
+        user_id: str,
+        workspace_id: str,
+        runtime: str,
+        tool_executor,
+    ) -> ShadowDecision:
+        """Run one NON-authoritative turn on ``runtime`` (``"deep"`` | ``"legacy"``) with
+        ALL tool dispatch routed through the injected ``tool_executor`` — a
+        ``ShadowToolExecutor``-shaped wrapper (``execute_tool(name, input, user_id,
+        workspace_id) -> dict``) that hard-suppresses writes. Step 10B Task 3b: this is
+        the method the shadow-compare harness (``ShadowRunner.maybe_run_shadow``) calls;
+        it is NEVER invoked from the live seam (``call_agent_stream``) — the live path is
+        unaffected byte-for-byte.
+
+        Builds fresh, throwaway state on every call: a brand-new deep-agent thread_id
+        (reaped on non-paused completion, mirroring ``call_agent_stream``) and no
+        persisted Plan / InteractionLog / A2UI surface / idempotency wrap on either
+        branch — this is an OBSERVATION run, not a real turn. Reuses the SAME assembly
+        helpers ``call_agent_stream`` uses (``_resolve_tools``, ``ContextAssembler
+        .assemble_context``, ``build_system_prompt``, ``get_model_for_agent``,
+        ``_maybe_capability_summary``) so the shadow decision reflects the real runtime
+        build, not a hand-rolled approximation.
+
+        Deliberately does NOT increment ``AGENT_RUNTIME_CALLS`` — that counter tracks
+        live authoritative traffic for the Step-10 rollback/adoption signal; counting
+        shadow runs against it would corrupt that signal.
+        """
+        agent = self._agents.get(agent_name)
+        if not agent:
+            return ShadowDecision(route=agent_name, final_text="", write_intents=frozenset())
+
+        model = self.get_model_for_agent(agent)
+        tools = await self._resolve_tools(agent, workspace_id, None)
+        capability_summary = await self._maybe_capability_summary(agent_name, "", workspace_id)
+        context_block = await self._context.assemble_context(
+            agent_name,
+            message,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            jit=(runtime == "deep" and self._settings.deep_context_jit),
+        )
+        system_blocks = self.build_system_prompt(
+            agent, context_block, capability_summary=capability_summary
+        )
+
+        final_text = ""
+        if runtime == "deep":
+            thread_id = make_thread_id(workspace_id)
+            deep_agent = await self._build_deep_agent_for(
+                agent,
+                tools,
+                user_id=user_id,
+                workspace_id=workspace_id,
+                thread_id=thread_id,
+                # Matches the live chat build's authorization_source: keeps trust_gate
+                # dormant (short-circuits before any interrupt/DB) so an observation run
+                # never pauses waiting on an approval nobody will ever answer.
+                authorization_source=AuthorizationSource.DIRECT_USER_REQUEST,
+                system_prompt=build_system_message(
+                    _augment_system_blocks_for_inline(
+                        system_blocks, self._settings.deep_inline_format
+                    )
+                ),
+                context_block=context_block,
+                execute_tool=tool_executor.execute_tool,
+            )
+            config = {"configurable": {"thread_id": thread_id}}
+            graph_input = {"messages": [{"role": "user", "content": message}]}
+            paused = False
+            async for frame in stream_deep_agent_events(
+                deep_agent,
+                graph_input,
+                config,
+                agent_name=agent_name,
+                model=model,
+                durability="sync",
+            ):
+                if isinstance(frame, dict) and frame.get("event") == "approval_needed":
+                    paused = True
+                if isinstance(frame, dict) and frame.get("event") == "agent_done":
+                    final_text = frame.get("text", "")
+            if not paused:
+                await reap_thread(self._checkpointer_provider(), thread_id)
+        else:
+            async for evt in agent_loop(
+                client=self._client,
+                agent=agent,
+                model=model,
+                system_blocks=system_blocks,
+                tools=tools,
+                message=message,
+                user_id=user_id,
+                workspace_id=workspace_id,
+                db_factory=self._db_factory,
+                services=self._services,
+                budget=self._budget,
+                trace=None,
+                execute_tool_fn=tool_executor.execute_tool,
+                max_tool_rounds=10,
+                stream=False,
+                circuit_breaker=self._circuit_breaker,
+            ):
+                if isinstance(evt, LoopDone):
+                    final_text = evt.text
+
+        # Read the injected executor's recorded write-intents AFTER the run completes —
+        # it accumulates them as the turn's tool calls happen.
+        write_intents = frozenset(getattr(tool_executor, "write_intents", ()))
+        return ShadowDecision(route=agent_name, final_text=final_text, write_intents=write_intents)
 
     async def call_agent(
         self,

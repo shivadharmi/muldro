@@ -87,6 +87,11 @@ def make_mock_settings(**overrides) -> MagicMock:
         # ON for every test that builds the lock wrapper from a mock Settings. Mirror the real
         # default (False = fail-open).
         write_lock_require_redis=False,
+        # Step 10B Task 3b: MagicMock-truthiness hazard — an unset MagicMock float reads
+        # truthy, which would make `random.random() < rate` compare against a Mock (TypeError)
+        # OR, worse, silently fire the shadow harness in every unrelated chat test. Mirror the
+        # real Settings default (0.0 = off).
+        shadow_sample_rate=0.0,
     )
     defaults.update(overrides)
     for k, v in defaults.items():

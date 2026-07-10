@@ -50,6 +50,7 @@ from src.orchestrator.core_events import (
     agent_event_from_sse,
     core_event_to_sse,
 )
+from src.orchestrator.divergence import ShadowDecision
 from src.orchestrator.intent_classifier import (
     FAST_INTENTS,
     INTENT_CONFIDENCE_THRESHOLD,
@@ -77,6 +78,19 @@ _PLANNER_JSON_CONTRACT_SUFFIX = (
 _FAST_SAFE_CAPABILITIES = frozenset(
     {"respond", "reason", "perceive", "knowledge.search", "system.respond", "none"}
 )
+
+
+def _shadow_compare_enabled(settings) -> bool:
+    """True only when ``settings.shadow_sample_rate`` is a real positive number.
+
+    Several pre-existing orchestrator-construction test harnesses build ``settings``
+    as a bare ``MagicMock()`` (predating this field), whose unconfigured attribute
+    is not float-comparable — ``MagicMock() > 0`` raises ``TypeError``. Treat
+    anything that isn't a real ``int``/``float`` as "off", matching the real
+    ``Settings`` default (0.0) — never raises.
+    """
+    rate = getattr(settings, "shadow_sample_rate", 0.0)
+    return isinstance(rate, (int, float)) and rate > 0
 
 
 def _fast_step_is_write(capability: str) -> bool:
@@ -115,6 +129,7 @@ class ChatProcessor:
         spawn_background,
         ensure_learner_deps,
         interaction_learner,
+        shadow_runner=None,
     ):
         self._settings = settings
         self._client = client
@@ -134,6 +149,7 @@ class ChatProcessor:
         self._spawn_background = spawn_background
         self._ensure_learner_deps = ensure_learner_deps
         self._interaction_learner = interaction_learner
+        self._shadow_runner = shadow_runner
 
     @property
     def _db_factory(self):
@@ -482,6 +498,9 @@ class ChatProcessor:
                 # metadata never leaks into agent prompts (drift #2).
                 presenter_text = ""
                 step_outputs: dict[str, str] = {}
+                # Defined before the loop so it stays in scope for the shadow-compare
+                # spawn below even if step_routing is empty (Step 10B Task 3b).
+                agent_name: str | None = None
                 for step_idx, (step, agent_name, tools) in enumerate(step_routing):
                     if step.capability.startswith("system."):
                         sys_result = await self._system_capability_handler.handle_system_capability(
@@ -629,6 +648,40 @@ class ChatProcessor:
                             agent_response=presenter_text,
                             intent=intent,
                             trace_id=trace.trace_id,
+                        )
+                    )
+
+                # Shadow-compare (Step 10B Task 3b, GUARDED for byte-neutrality): with the
+                # default shadow_sample_rate=0.0 this branch never runs, so NO extra
+                # background task is ever scheduled — the live path is byte-identical to
+                # before this wiring existed. write_intents=frozenset() on the
+                # authoritative side is a documented Phase-3 limitation: authoritative
+                # tool-intent capture (mirroring what _IntentRecordingShadowExecutor does
+                # for the shadow side) is a 10D enrichment, consistent with the plan's
+                # "no live verification-FN signal" scoping.
+                #
+                # getattr(self, "_shadow_runner", None) + _shadow_compare_enabled (rather
+                # than a direct attribute/comparison) are defensive: several pre-existing
+                # orchestrator-construction test harnesses build ``settings`` as a bare
+                # ``MagicMock()`` or build ChatProcessor via ``__new__`` (bypassing
+                # __init__ entirely, so ``_shadow_runner``/``_settings`` are never set) —
+                # neither is float-comparable nor attribute-safe, and this must degrade to
+                # "off" for both, never raise.
+                if (
+                    getattr(self, "_shadow_runner", None) is not None
+                    and _shadow_compare_enabled(self._settings)
+                    and agent_name is not None
+                ):
+                    auth_decision = ShadowDecision(
+                        route=agent_name, final_text=presenter_text, write_intents=frozenset()
+                    )
+                    self._spawn_background(
+                        self._shadow_runner.maybe_run_shadow(
+                            agent_name=agent_name,
+                            message=message,
+                            user_id=user_id,
+                            workspace_id=workspace_id,
+                            authoritative_decision=auth_decision,
                         )
                     )
 

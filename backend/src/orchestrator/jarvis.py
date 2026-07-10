@@ -34,6 +34,7 @@ from src.orchestrator.event_publisher import EventPublisher
 from src.orchestrator.perception_runner import PerceptionRunner
 from src.orchestrator.plan_store import PlanStore
 from src.orchestrator.services import ServiceContainer
+from src.orchestrator.shadow_runner import ShadowRunner
 from src.orchestrator.surface_pusher import SurfacePusher
 from src.orchestrator.system_capability_handler import SystemCapabilityHandler
 from src.orchestrator.tool_executor import ToolExecutor
@@ -181,6 +182,23 @@ class JarvisOrchestrator:
         else:
             self._haiku_model = MODEL_TIERS["haiku"]
 
+        # ShadowRunner (Step 10B Task 3b): sampled, async, isolated shadow-compare
+        # harness — default OFF (settings.shadow_sample_rate=0.0). None-safe: if the
+        # real tool executor is ever unavailable in some future construction path,
+        # this degrades to no shadow runner (byte-neutral — ChatProcessor's spawn is
+        # itself guarded on `shadow_runner is not None`).
+        self._shadow_runner = (
+            ShadowRunner(
+                self._invoker,
+                settings,
+                self._tool_executor,
+                _db_factory_provider,
+                budget=self._budget,
+            )
+            if self._tool_executor is not None
+            else None
+        )
+
         # ChatProcessor owns the user-facing chat pipeline (intent → plan → route
         # → execute → present → surface → learn). Constructed last so all of its
         # collaborators — including the interaction learner and haiku model set
@@ -203,6 +221,7 @@ class JarvisOrchestrator:
             self._spawn_background,
             self._ensure_learner_deps,
             self._interaction_learner,
+            self._shadow_runner,
         )
 
     def _request_services(self, db) -> ServiceContainer:
