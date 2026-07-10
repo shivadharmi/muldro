@@ -988,6 +988,16 @@ class AgentInvoker:
                 approval_blocked = True
                 errors.append("unapproved within-step capability required approval")
 
+        # Step 10C P5: the autonomous per-step thread is never resumed (run-level durable
+        # resume is via P4's reconcile), so reap its durable checkpoints the moment the step
+        # finishes — mirrors the chat path's reap-on-non-paused-completion (resume_deep_turn).
+        # Best-effort + no-op on a saverless/MemorySaver process (dormant-safe). ws-scoped by
+        # construction: reap_thread deletes ONLY this ws-embedded thread_id. Placed after the
+        # stream loop so it runs on EVERY terminal outcome (agent_done / auth_required /
+        # approval-blocked / error) — under Branch C the step never pauses/interrupts, so the
+        # thread is done regardless of which outcome fired.
+        await reap_thread(self._checkpointer_provider(), thread_id)
+
         # Mirror step_runner.run_step_via_agent_loop's output shape EXACTLY.
         output: dict = {
             "status": "completed",

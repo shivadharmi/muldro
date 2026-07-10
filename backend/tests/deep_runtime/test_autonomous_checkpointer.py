@@ -347,6 +347,13 @@ async def test_autonomous_step_persists_checkpoint_to_postgres():
             with (
                 patch(BUILD_CHAT_MODEL, lambda _a: _FakeModel(WRITE_TOOL, {"to": "f@x.com"})),
                 patch(f"{INVOKER_MODULE}.make_thread_id", _capture_thread_id(captured)),
+                # Step 10C P5: run_autonomous_deep_step now reaps its per-step thread on
+                # completion (reap-on-completion). That would delete the very checkpoint this
+                # DURABILITY test asserts persisted, so we no-op the reap for THIS test only —
+                # the durability claim is unchanged (durability="sync" still wrote a real
+                # Postgres checkpoint); we only stop the new reap from deleting the evidence.
+                # Reap-on-completion itself is proved in test_autonomous_reaper.py.
+                patch(f"{INVOKER_MODULE}.reap_thread", AsyncMock(return_value=False)),
             ):
                 out = await inv.run_autonomous_deep_step(
                     executor=_executor_agent(),
