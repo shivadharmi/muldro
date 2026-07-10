@@ -112,6 +112,11 @@ def _fast_step_is_write(capability: str) -> bool:
 class ChatProcessor:
     """Runs the conversational (chat) orchestration pipeline for the orchestrator."""
 
+    # Class-level default so instances built via ``__new__`` (some orchestrator test
+    # harnesses bypass __init__) still resolve ``self._shadow_runner`` as None without
+    # a getattr fallback — the shadow-compare spawn guard below reads it directly.
+    _shadow_runner = None
+
     def __init__(
         self,
         settings: Settings,
@@ -660,15 +665,14 @@ class ChatProcessor:
                 # for the shadow side) is a 10D enrichment, consistent with the plan's
                 # "no live verification-FN signal" scoping.
                 #
-                # getattr(self, "_shadow_runner", None) + _shadow_compare_enabled (rather
-                # than a direct attribute/comparison) are defensive: several pre-existing
-                # orchestrator-construction test harnesses build ``settings`` as a bare
-                # ``MagicMock()`` or build ChatProcessor via ``__new__`` (bypassing
-                # __init__ entirely, so ``_shadow_runner``/``_settings`` are never set) —
-                # neither is float-comparable nor attribute-safe, and this must degrade to
-                # "off" for both, never raise.
+                # The class-level ``_shadow_runner = None`` default lets ``__new__``-built
+                # harnesses read the attribute directly (no getattr). ``_shadow_compare_enabled``
+                # (rather than a direct ``> 0``) is still needed: several pre-existing harnesses
+                # build ``settings`` as a bare ``MagicMock()`` (predating this field), whose
+                # unconfigured rate attribute is not float-comparable — it must degrade to "off",
+                # never raise.
                 if (
-                    getattr(self, "_shadow_runner", None) is not None
+                    self._shadow_runner is not None
                     and _shadow_compare_enabled(self._settings)
                     and agent_name is not None
                 ):

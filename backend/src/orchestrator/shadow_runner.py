@@ -79,6 +79,9 @@ class ShadowRunner:
         self._settings = settings
         self._tool_executor = tool_executor
         self._db_factory_provider = db_factory_provider
+        # Forward scaffolding for the 10C/10D budget gate (see maybe_run_shadow's
+        # TODO). Intentionally unused today — the default-off sample rate is the
+        # primary guard until BudgetTracker exposes a cheap is-exhausted check.
         self._budget = budget
 
     async def maybe_run_shadow(
@@ -91,19 +94,17 @@ class ShadowRunner:
         authoritative_decision: ShadowDecision,
     ) -> None:
         """Sample, build the opposite-runtime shadow decision, diff it against the
-        authoritative one, and record any divergences. Never raises — a shadow-run
-        failure is isolated (logged) so it can never affect the caller's turn."""
-        if random.random() >= self._settings.shadow_sample_rate:
-            return
-
-        # Budget gate: BudgetTracker exposes no cheap synchronous "any budget
-        # remaining" check today (get_budget_status is async + needs a DB session,
-        # and its in-memory _today_spend cache is private state this module should
-        # not reach into). Gating on the sample rate alone is the primary guard —
-        # the default 0.0 means this method returns above before reaching here.
-        # TODO(10D): tighten the budget gate once BudgetTracker exposes a cheap
-        # is-exhausted check (or the shadow harness gets its own sub-budget).
-        if self._settings.shadow_sample_rate <= 0:
+        authoritative one, and record any divergences. Never raises — the ENTIRE
+        operation (run + compare + emit) is isolated (logged) so it can never affect
+        the caller's fire-and-forget turn."""
+        # Single guard: rate<=0 short-circuits (byte-neutral default), and for a
+        # positive rate the sample draw decides. random.random() is [0.0, 1.0), so
+        # rate=1.0 always fires and rate=0.5 fires ~half the turns.
+        # TODO(10D): tighten the budget gate — inspect self._budget once BudgetTracker
+        # exposes a cheap is-exhausted check (or the shadow harness gets its own
+        # sub-budget); today the default-off sample rate is the only guard.
+        rate = self._settings.shadow_sample_rate
+        if rate <= 0 or random.random() >= rate:
             return
 
         authoritative_runtime = self._settings.runtime
@@ -116,6 +117,11 @@ class ShadowRunner:
             ShadowToolExecutor(self._tool_executor, _resolve_cap)
         )
 
+        # Isolation covers the WHOLE operation: run_shadow_turn, the divergence
+        # comparison, AND the metric emit. compare()/record are pure/cheap, but a
+        # raise anywhere here would escape into the untracked background task, so the
+        # try/except must wrap all of it to make the "never raises" invariant
+        # structurally true — not merely true-by-luck-of-well-typed-inputs.
         try:
             shadow_decision = await self._invoker.run_shadow_turn(
                 agent_name,
@@ -125,12 +131,10 @@ class ShadowRunner:
                 runtime=shadow_runtime,
                 tool_executor=shadow_executor,
             )
+            for divergence in DivergenceComparator.compare(authoritative_decision, shadow_decision):
+                MetricsService.record_shadow_divergence(kind=divergence.kind)
         except Exception:
             logger.warning(
                 "[shadow] shadow run failed (isolated) — authoritative turn unaffected",
                 exc_info=True,
             )
-            return
-
-        for divergence in DivergenceComparator.compare(authoritative_decision, shadow_decision):
-            MetricsService.record_shadow_divergence(kind=divergence.kind)

@@ -28,8 +28,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.deep_runtime import agent_builder
+from src.orchestrator import agent_invoker as agent_invoker_module
 from src.orchestrator.agent_invoker import AgentInvoker
+from src.orchestrator.agent_loop import LoopDone
 from src.orchestrator.agents import SubAgent
+from src.orchestrator.chat_processor import _shadow_compare_enabled
 from src.orchestrator.divergence import ShadowDecision
 from src.orchestrator.shadow_runner import ShadowRunner, _IntentRecordingShadowExecutor
 from src.orchestrator.shadow_tool_executor import ShadowToolExecutor
@@ -187,7 +190,7 @@ def _lead() -> SubAgent:
     )
 
 
-def _make_real_invoker(*, real_spy_calls: list) -> AgentInvoker:
+def _make_real_invoker(*, real_spy_calls: list, **settings_overrides) -> AgentInvoker:
     tool_executor = MagicMock()
     tool_executor.apply_cache_control_to_tools = lambda tools: tools
     tool_executor.get_tools_for_agent = AsyncMock(return_value=[])
@@ -197,9 +200,12 @@ def _make_real_invoker(*, real_spy_calls: list) -> AgentInvoker:
     context = MagicMock()
     context.assemble_context = AsyncMock(return_value="")
 
+    settings_kwargs = dict(runtime="deep", deep_readback_enabled=False)
+    settings_kwargs.update(settings_overrides)
+
     lead = _lead()
     return AgentInvoker(
-        settings=make_mock_settings(runtime="deep", deep_readback_enabled=False),
+        settings=make_mock_settings(**settings_kwargs),
         client=MagicMock(),
         services=None,
         budget=MagicMock(),
@@ -252,4 +258,103 @@ async def test_injection_seam_teeth_real_build_path_suppresses_write():
     # The suppression signal was captured as a write-intent.
     assert "email.send:email_send" in shadow_exec.write_intents
     assert decision.route == "presenter"
+    assert decision.write_intents == frozenset({"email.send:email_send"})
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 5. _shadow_compare_enabled — the byte-neutrality guard. False for rate=0.0,
+#    False for a bare MagicMock() settings (the truthiness hazard), True for a
+#    real positive rate. This is the check that keeps the live path inert.
+# ═══════════════════════════════════════════════════════════════════════════
+def test_shadow_compare_enabled_gates_correctly():
+    assert _shadow_compare_enabled(make_mock_settings(shadow_sample_rate=0.0)) is False
+    # A bare MagicMock() settings (predates the field) — its unconfigured
+    # shadow_sample_rate is a Mock, not float-comparable; must degrade to off.
+    assert _shadow_compare_enabled(MagicMock()) is False
+    assert _shadow_compare_enabled(make_mock_settings(shadow_sample_rate=0.5)) is True
+    assert _shadow_compare_enabled(make_mock_settings(shadow_sample_rate=1.0)) is True
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 6. Delegate-free SAFETY invariant (locks the security decision). Even with
+#    deep_delegates_enabled=True, run_shadow_turn's deep build must NOT build
+#    delegates — a delegate wires the REAL execute_tool and would leak a real
+#    write. Spy _build_delegate_subagents; assert it is NEVER called.
+# ═══════════════════════════════════════════════════════════════════════════
+async def test_shadow_deep_lead_is_delegate_free_even_with_delegates_enabled():
+    real_spy_calls: list = []
+    lead_fake = ScriptedModel(_lead_write_turns())
+    invoker = _make_real_invoker(real_spy_calls=real_spy_calls, deep_delegates_enabled=True)
+
+    # Spy: if run_shadow_turn ever builds delegates, this records the call.
+    delegate_spy = AsyncMock(return_value=[])
+    invoker._build_delegate_subagents = delegate_spy
+
+    async def _resolve(name: str) -> str | None:
+        return {"email_send": "email.send"}.get(name)
+
+    shadow_backing = MagicMock()
+    shadow_backing.execute_tool = _write_recorder([])
+    shadow_exec = _IntentRecordingShadowExecutor(ShadowToolExecutor(shadow_backing, _resolve))
+
+    with (
+        patch.object(agent_builder, "build_chat_model", lambda a: lead_fake),
+        patch(CAP_SCOPE_TOOL_REGISTRY, _FakeRegistry),
+        patch(TRUST_GATE_TOOL_REGISTRY, _FakeRegistry),
+        patch("src.deep_runtime.middleware.unavailable_server.ToolRegistry", _FakeRegistry),
+        patch(GET_OR_ASSESS_RISK, AsyncMock(return_value=_STUB_RISK)),
+    ):
+        await invoker.run_shadow_turn(
+            "presenter",
+            "email a@b.com",
+            user_id=USER,
+            workspace_id=WS,
+            runtime="deep",
+            tool_executor=shadow_exec,
+        )
+
+    # THE LOCK: the shadow lead built NO delegates, even with the flag ON — so no
+    # delegate wired the real execute_tool, so no real write could leak.
+    delegate_spy.assert_not_called()
+    # And the write itself stayed suppressed (belt-and-braces).
+    assert real_spy_calls == []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 7. Legacy shadow branch — run_shadow_turn(runtime="legacy") drives the
+#    agent_loop(stream=False) -> LoopDone path. Patch agent_loop so there is no
+#    live model; route it through the injected shadow executor for one write and
+#    assert route/final_text/write_intents are captured from the legacy branch.
+# ═══════════════════════════════════════════════════════════════════════════
+async def test_run_shadow_turn_legacy_branch_captures_decision():
+    real_spy_calls: list = []
+    invoker = _make_real_invoker(real_spy_calls=real_spy_calls)
+
+    async def _resolve(name: str) -> str | None:
+        return {"email_send": "email.send"}.get(name)
+
+    shadow_backing = MagicMock()
+    shadow_backing.execute_tool = _write_recorder([])
+    shadow_exec = _IntentRecordingShadowExecutor(ShadowToolExecutor(shadow_backing, _resolve))
+
+    async def _fake_agent_loop(*, execute_tool_fn, **kwargs):
+        # Prove the injected executor is threaded into the legacy branch's
+        # execute_tool_fn: a WRITE is suppressed (no real dispatch) and recorded.
+        await execute_tool_fn("email_send", {"to": "a@b.com"}, user_id=USER, workspace_id=WS)
+        yield LoopDone(agent="presenter", text="legacy answer")
+
+    with patch.object(agent_invoker_module, "agent_loop", _fake_agent_loop):
+        decision = await invoker.run_shadow_turn(
+            "presenter",
+            "email a@b.com",
+            user_id=USER,
+            workspace_id=WS,
+            runtime="legacy",
+            tool_executor=shadow_exec,
+        )
+
+    assert decision.route == "presenter"
+    assert decision.final_text == "legacy answer"
+    # The write was suppressed (never reached the real spy) but captured as intent.
+    assert real_spy_calls == []
     assert decision.write_intents == frozenset({"email.send:email_send"})

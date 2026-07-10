@@ -852,6 +852,18 @@ class AgentInvoker:
         final_text = ""
         if runtime == "deep":
             thread_id = make_thread_id(workspace_id)
+            # SAFETY INVARIANT (delegate-free shadow lead): we deliberately pass NO
+            # ``subagents`` here, so this defaults to () even when
+            # ``deep_delegates_enabled`` is ON. This is load-bearing, NOT an incidental
+            # omission: ``_build_delegate_subagents`` (this file, ~:511) wires the REAL
+            # ``self._tool_executor.execute_tool`` into ``build_read_only_delegate`` —
+            # the injected shadow ``execute_tool`` reaches ONLY the lead's own
+            # dispatcher, not a delegate's. A shadow lead that built delegates would
+            # therefore LEAK a real write for any non-read-only delegate call, defeating
+            # the whole point of the shadow harness. If shadow delegate-fidelity is ever
+            # needed (10C/10D), the injected shadow executor MUST first be threaded into
+            # the delegate build (build_read_only_delegate(..., execute_tool=<shadow>))
+            # before subagents may be passed here.
             deep_agent = await self._build_deep_agent_for(
                 agent,
                 tools,
