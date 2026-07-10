@@ -38,7 +38,9 @@ logger = logging.getLogger(__name__)
 _READBACK_UNSERVABLE_CAPABILITIES: frozenset[str] = frozenset({"calendar.get"})
 
 
-def make_lock_wrapped_execute_tool_fn(inner_fn, *, redis, workspace_id, resolve_capability):
+def make_lock_wrapped_execute_tool_fn(
+    inner_fn, *, redis, workspace_id, resolve_capability, require_redis: bool = False
+):
     """Wrap an execute_tool_fn so external WRITES acquire the cross-path write lock
     (src.services.write_lock) — same key as the deep-runtime middleware. Reads pass through.
     Layered OUTSIDE the idempotency ledger so the lock serializes the whole write attempt
@@ -49,6 +51,12 @@ def make_lock_wrapped_execute_tool_fn(inner_fn, *, redis, workspace_id, resolve_
     workspace_id are keyword-only, forwarded verbatim to ``inner_fn``. The LOCK KEY, however,
     is keyed on the CLOSURE-captured workspace_id (the run's workspace), never on the call's
     argument, mirroring the deep middleware's closure-captured workspace_id safety property.
+
+    ``require_redis`` (Step-10A A3, default False): when True, a WRITE is REFUSED
+    (fail-closed) rather than executed unlocked if Redis is unavailable. Default False
+    preserves today's fail-OPEN behavior byte-for-byte — the ``redis is None`` early
+    return below runs BEFORE capability resolution, so nothing about the flag-off path
+    changes (not even an extra ``resolve_capability`` call).
     """
     from src.integrations.capabilities import is_read_only_capability
     from src.services.write_lock import WriteLockContended, acquire_write_lock
@@ -56,9 +64,17 @@ def make_lock_wrapped_execute_tool_fn(inner_fn, *, redis, workspace_id, resolve_
     lock_workspace_id = workspace_id  # closure-captured; the lock key never comes from the call
 
     async def _wrapped(tool_name, tool_input, *, user_id, workspace_id):
-        if redis is None:
+        if redis is None and not require_redis:
             return await inner_fn(tool_name, tool_input, user_id=user_id, workspace_id=workspace_id)
         capability = await resolve_capability(tool_name)
+        if redis is None:
+            # require_redis True + Redis down: refuse writes (fail-closed), reads pass.
+            if not is_read_only_capability(capability):
+                return {
+                    "error": "write refused — redis write-lock required but unavailable",
+                    "blocked": True,
+                }
+            return await inner_fn(tool_name, tool_input, user_id=user_id, workspace_id=workspace_id)
         if not capability or is_read_only_capability(capability):
             return await inner_fn(tool_name, tool_input, user_id=user_id, workspace_id=workspace_id)
         try:
@@ -354,6 +370,7 @@ class StepRunner:
                 redis=self._redis,
                 workspace_id=run.workspace_id or "",
                 resolve_capability=_resolve_cap,
+                require_redis=self._settings.write_lock_require_redis,
             )
 
         # Collect events from agent loop

@@ -312,6 +312,7 @@ class AgentInvoker:
             # write lock silently never engaged. None-safe: services may be None in tests.
             redis=self._services.extras.get("redis") if self._services else None,
             resolve_capability=_resolve_cap,
+            require_redis=self._settings.write_lock_require_redis,
         )
 
         # Step 7B1 P3: Librarian → extraction-middleware collapse. This @after_model hook

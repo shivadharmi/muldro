@@ -1,6 +1,6 @@
 # tests/test_step_runner_write_lock.py
 from contextlib import asynccontextmanager
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from src.services.step_runner import make_lock_wrapped_execute_tool_fn
 from src.services.write_lock import WriteLockContended, write_lock_key
@@ -81,3 +81,66 @@ async def test_contention_returns_blocked_envelope_not_raise():
         result = await fn("send_email", {}, user_id="u1", workspace_id="ws1")
 
     assert result.get("blocked") is True and "error" in result
+
+
+# --- Step-10A A3: opt-in write_lock_require_redis (fail-closed when Redis is unwired) ---
+
+
+async def test_require_redis_true_and_redis_none_write_is_refused():
+    """flag ON + redis None + WRITE -> blocked, inner_fn NEVER called."""
+    inner = AsyncMock(return_value={"ok": True})
+    resolve_capability = AsyncMock(return_value="email.send")
+
+    fn = make_lock_wrapped_execute_tool_fn(
+        inner,
+        redis=None,
+        workspace_id="ws1",
+        resolve_capability=resolve_capability,
+        require_redis=True,
+    )
+    result = await fn("send_email", {}, user_id="u1", workspace_id="ws1")
+
+    inner.assert_not_awaited()
+    assert result == {
+        "error": "write refused — redis write-lock required but unavailable",
+        "blocked": True,
+    }
+
+
+async def test_require_redis_true_and_redis_none_read_passes_through():
+    """flag ON + redis None + READ -> passes through, inner_fn IS called."""
+    inner = AsyncMock(return_value={"ok": True})
+    resolve_capability = AsyncMock(return_value="email.read")
+
+    fn = make_lock_wrapped_execute_tool_fn(
+        inner,
+        redis=None,
+        workspace_id="ws1",
+        resolve_capability=resolve_capability,
+        require_redis=True,
+    )
+    result = await fn("list_email", {}, user_id="u1", workspace_id="ws1")
+
+    inner.assert_awaited_once()
+    assert result == {"ok": True}
+
+
+async def test_require_redis_false_default_and_redis_none_write_executes_unlocked():
+    """flag OFF (default) + redis None + WRITE -> byte-identical to today: inner_fn IS
+    called (executes unlocked), and resolve_capability is NEVER called (strict
+    byte-neutrality — the early-return happens before capability resolution)."""
+    inner = AsyncMock(return_value={"ok": True})
+    resolve_capability = AsyncMock(return_value="email.send")
+
+    fn = make_lock_wrapped_execute_tool_fn(
+        inner,
+        redis=None,
+        workspace_id="ws1",
+        resolve_capability=resolve_capability,
+        # require_redis omitted -> defaults False
+    )
+    result = await fn("send_email", {}, user_id="u1", workspace_id="ws1")
+
+    inner.assert_awaited_once()
+    resolve_capability.assert_not_awaited()
+    assert result == {"ok": True}

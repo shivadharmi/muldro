@@ -83,6 +83,10 @@ def make_mock_settings(**overrides) -> MagicMock:
         # Step 8: an unset MagicMock bool is truthy, which would route every
         # runtime="deep" test through the slim JIT pack. Default OFF to mirror prod.
         deep_context_jit=False,
+        # Step-10A A3: MagicMock unset bool is truthy — would flip the fail-closed write lock
+        # ON for every test that builds the lock wrapper from a mock Settings. Mirror the real
+        # default (False = fail-open).
+        write_lock_require_redis=False,
     )
     defaults.update(overrides)
     for k, v in defaults.items():

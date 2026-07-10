@@ -196,6 +196,14 @@ class Settings(BaseSettings):
     # False the deep path builds the full eager pack (byte-identical to legacy).
     deep_context_jit: bool = False  # JARVIS_DEEP_CONTEXT_JIT
 
+    # Step-10A A3: opt-in fail-closed write lock. When True, a WRITE tool call is REFUSED
+    # (not executed unlocked) if Redis is unreachable — for prod where Redis is expected up.
+    # Default False preserves today's fail-OPEN behavior (authz is still enforced by
+    # capability_scope + trust_gate; autonomous double-fire is still guarded by the
+    # idempotency ledger the lock wraps). Applies to BOTH the deep middleware and the
+    # autonomous wrapper.
+    write_lock_require_redis: bool = False  # JARVIS_WRITE_LOCK_REQUIRE_REDIS
+
     # Webhook / push-notification infrastructure (OPTIONAL — empty = poll-only).
     # When unset, webhook registration is a graceful no-op and the system stays
     # poll-only exactly as before. All three must be satisfied (see

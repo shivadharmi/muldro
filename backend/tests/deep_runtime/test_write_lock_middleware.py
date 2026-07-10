@@ -11,6 +11,9 @@ The decorated hook is exposed on the built ``AgentMiddleware`` as ``awrap_tool_c
 use (see ``tests/deep_runtime/test_trust_gate.py``); ``mw.awrap_tool_call(request, handler)``.
 """
 
+import json
+from unittest.mock import AsyncMock
+
 from langchain_core.messages import ToolMessage
 
 from src.deep_runtime.middleware.write_lock import make_write_lock_middleware
@@ -66,3 +69,63 @@ async def test_read_capability_bypasses_lock():
     )
     await mw.awrap_tool_call(_Req("list_email"), handler)
     assert redis.calls == []  # NEVER locked a read
+
+
+# --- Step-10A A3: opt-in write_lock_require_redis (fail-closed when Redis is unwired) ---
+
+
+async def test_require_redis_true_and_redis_none_write_is_refused():
+    """flag ON + redis None + WRITE -> blocked, handler NEVER called."""
+    resolve_capability = AsyncMock(return_value="email.send")
+    handler = AsyncMock(return_value=ToolMessage(content="ok", tool_call_id="tc1", name="x"))
+
+    mw = make_write_lock_middleware(
+        workspace_id="ws1",
+        redis=None,
+        resolve_capability=resolve_capability,
+        require_redis=True,
+    )
+    result = await mw.awrap_tool_call(_Req("send_email"), handler)
+
+    handler.assert_not_awaited()
+    assert result.status == "error"
+    body = json.loads(result.content)
+    assert body["blocked"] is True
+    assert "redis write-lock required but unavailable" in body["error"]
+
+
+async def test_require_redis_true_and_redis_none_read_passes_through():
+    """flag ON + redis None + READ -> passes through, handler IS called."""
+    resolve_capability = AsyncMock(return_value="email.read")
+    handler = AsyncMock(return_value=ToolMessage(content="ok", tool_call_id="tc1", name="x"))
+
+    mw = make_write_lock_middleware(
+        workspace_id="ws1",
+        redis=None,
+        resolve_capability=resolve_capability,
+        require_redis=True,
+    )
+    result = await mw.awrap_tool_call(_Req("list_email"), handler)
+
+    handler.assert_awaited_once()
+    assert result.content == "ok"
+
+
+async def test_require_redis_false_default_and_redis_none_write_executes_unlocked():
+    """flag OFF (default) + redis None + WRITE -> byte-identical to today: handler IS
+    called (executes unlocked), and resolve_capability is NEVER called (strict
+    byte-neutrality — the early-return happens before capability resolution)."""
+    resolve_capability = AsyncMock(return_value="email.send")
+    handler = AsyncMock(return_value=ToolMessage(content="ok", tool_call_id="tc1", name="x"))
+
+    mw = make_write_lock_middleware(
+        workspace_id="ws1",
+        redis=None,
+        resolve_capability=resolve_capability,
+        # require_redis omitted -> defaults False
+    )
+    result = await mw.awrap_tool_call(_Req("send_email"), handler)
+
+    handler.assert_awaited_once()
+    resolve_capability.assert_not_awaited()
+    assert result.content == "ok"

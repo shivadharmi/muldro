@@ -32,22 +32,48 @@ def make_write_lock_middleware(
     workspace_id: str,
     redis,
     resolve_capability: ResolveCapabilityFn,
+    require_redis: bool = False,
 ) -> AgentMiddleware:
     """Build the per-turn write-lock middleware. ``workspace_id`` is closure-captured
     (never LLM-supplied). ``resolve_capability(name) -> capability|None`` maps a tool name
-    to its capability via the registry (same resolution the autonomous path uses)."""
+    to its capability via the registry (same resolution the autonomous path uses).
+
+    ``require_redis`` (Step-10A A3, default False): when True, a WRITE is REFUSED
+    (fail-closed) rather than executed unlocked if Redis is unavailable. Default False
+    preserves today's fail-OPEN behavior byte-for-byte — the ``redis is None`` early
+    return below runs BEFORE capability resolution, so nothing about the flag-off path
+    changes (not even an extra ``resolve_capability`` call).
+    """
 
     @wrap_tool_call
     async def write_lock(request, handler):
         name = request.tool_call["name"]
         if name in DEEPAGENTS_BUILTIN_NAMES:
             return await handler(request)
-        if redis is None:
-            # No Redis wired — fall through (the lock is a safety fence, not a hard dep on
-            # the dormant/legacy path). Logged once so degradation is visible.
+        if redis is None and not require_redis:
+            # No Redis wired + fail-open (default): fall through exactly as before.
             return await handler(request)
 
         capability = await resolve_capability(name)
+        if redis is None:
+            # require_redis is True here: Redis expected up but down. Refuse WRITES
+            # (fail-closed) rather than execute unlocked; reads still pass.
+            if not is_read_only_capability(capability):
+                logger.warning(
+                    "[deep_runtime] write refused (redis required, unavailable): %s", name
+                )
+                return ToolMessage(
+                    content=json.dumps(
+                        {
+                            "error": "write refused — redis write-lock required but unavailable",
+                            "blocked": True,
+                        }
+                    ),
+                    tool_call_id=request.tool_call["id"],
+                    name=name,
+                    status="error",
+                )
+            return await handler(request)
         if not capability or is_read_only_capability(capability):
             return await handler(request)  # reads never lock
 
