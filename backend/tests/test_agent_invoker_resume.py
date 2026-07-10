@@ -16,14 +16,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from langgraph.types import Command
 
+from src.deep_runtime.thread_identity import make_thread_id
 from src.orchestrator.agent_invoker import AgentInvoker
 from src.orchestrator.agents import SubAgent
 from tests.conftest import make_mock_settings
 
 
-def _fake_approval(
-    thread_id="t-resume", agent_name="perceiver", workspace_id="ws", status="pending"
-):
+def _fake_approval(thread_id=None, agent_name="perceiver", workspace_id="ws", status="pending"):
+    # A6 (Step-10A): default to a workspace-bound thread_id so the resume path's
+    # cross-workspace guard round-trips (a colonless literal would now be refused).
+    if thread_id is None:
+        thread_id = make_thread_id(workspace_id)
     return SimpleNamespace(
         workspace_id=workspace_id,
         artifact_refs={"thread_id": thread_id, "agent_name": agent_name},
@@ -91,7 +94,7 @@ def _fake_stream_recorder(recorded: dict):
 
 
 async def test_resume_approve_calls_stream_with_command_and_marks_approved():
-    approval = _fake_approval(thread_id="t-resume")
+    approval = _fake_approval()
     inv, fake_db = _make_invoker_with_approval(approval)
     recorded: dict = {}
 
@@ -118,7 +121,7 @@ async def test_resume_approve_calls_stream_with_command_and_marks_approved():
     assert graph_input.resume == "approve"
 
     config = recorded["args"][2]
-    assert config["configurable"]["thread_id"] == "t-resume"
+    assert config["configurable"]["thread_id"] == approval.artifact_refs["thread_id"]
 
     assert recorded["kwargs"]["durability"] == "sync"
 
@@ -127,7 +130,7 @@ async def test_resume_approve_calls_stream_with_command_and_marks_approved():
 
 
 async def test_resume_reject_marks_rejected():
-    approval = _fake_approval(thread_id="t-resume-2")
+    approval = _fake_approval()
     inv, fake_db = _make_invoker_with_approval(approval)
     recorded: dict = {}
 

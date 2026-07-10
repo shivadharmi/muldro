@@ -38,6 +38,7 @@ from src.config.settings import get_settings
 from src.deep_runtime.checkpointer import build_async_postgres_saver
 from src.deep_runtime.prompt_bridge import build_system_message
 from src.deep_runtime.stream_adapter import stream_deep_agent_events
+from src.deep_runtime.thread_identity import make_thread_id
 from src.models.approvals import Approval
 from src.models.trust_state import TrustCeiling, TrustState
 from src.models.users import User, Workspace
@@ -247,7 +248,7 @@ async def test_interrupt_resume_spans_durable_postgres_saver():
     """
     async with _gate_env() as (factory, user_id, workspace_id):
         executed: list = []
-        thread_id = f"chat_{ULID()}"
+        thread_id = make_thread_id(workspace_id)
 
         saver_a, pool_a = await build_async_postgres_saver(get_settings().database_url)
         holder = {"saver": saver_a}

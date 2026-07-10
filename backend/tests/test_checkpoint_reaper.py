@@ -430,7 +430,7 @@ async def test_non_paused_turn_reaps_its_checkpoints():
         invoker = _make_invoker(factory=factory, checkpointer=saver, executed=executed)
         try:
             with (
-                patch(f"{AGENT_INVOKER_MODULE}.generate_id", return_value=thread_id),
+                patch(f"{AGENT_INVOKER_MODULE}.make_thread_id", return_value=thread_id),
                 patch(f"{AGENT_BUILDER_MODULE}.build_chat_model", return_value=_ScriptedModel()),
                 patch(f"{CAP_SCOPE_MODULE}._is_in_scope", AsyncMock(return_value=True)),
                 patch(
@@ -479,7 +479,7 @@ async def test_negative_control_without_reap_checkpoints_remain():
         invoker = _make_invoker(factory=factory, checkpointer=saver, executed=executed)
         try:
             with (
-                patch(f"{AGENT_INVOKER_MODULE}.generate_id", return_value=thread_id),
+                patch(f"{AGENT_INVOKER_MODULE}.make_thread_id", return_value=thread_id),
                 # THE BYPASS: neutralize the reap so the checkpoints are NOT deleted on completion.
                 patch(f"{AGENT_INVOKER_MODULE}.reap_thread", AsyncMock(return_value=False)),
                 patch(f"{AGENT_BUILDER_MODULE}.build_chat_model", return_value=_ScriptedModel()),

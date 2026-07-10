@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from langchain_core.messages import SystemMessage
 
 from src.deep_runtime.authorization import AuthorizationSource
+from src.deep_runtime.thread_identity import workspace_of_thread_id
 from src.orchestrator.agent_invoker import AgentInvoker
 from src.orchestrator.agents import SubAgent
 from tests.conftest import make_mock_settings
@@ -589,4 +590,6 @@ async def test_librarian_learn_closure_adapts_interaction_learner():
     assert lk["user_message"] == "remember Bob works at Acme"
     assert lk["agent_response"] == "Noted — Bob @ Acme."
     assert lk["intent"] is None
-    assert lk["trace_id"].startswith("chat_")
+    # A6 (Step-10A): the trace_id IS the ws-embedded checkpointer thread_id — assert the
+    # embedded workspace round-trips (stronger than the old startswith("chat_") prefix check).
+    assert workspace_of_thread_id(lk["trace_id"]) == "ws"

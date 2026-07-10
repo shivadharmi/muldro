@@ -39,11 +39,11 @@ from src.deep_runtime.middleware.write_lock import make_write_lock_middleware
 from src.deep_runtime.model_factory import MODEL_TIER_IDS
 from src.deep_runtime.prompt_bridge import build_system_message
 from src.deep_runtime.stream_adapter import stream_deep_agent_events
+from src.deep_runtime.thread_identity import make_thread_id, workspace_of_thread_id
 from src.deep_runtime.tool_bridge import build_tool_shells
 from src.errors import _GENERIC_CODE, _GENERIC_MESSAGE, new_correlation_id
 from src.middleware.observability import get_correlation_id
 from src.models.approvals import Approval
-from src.models.ids import generate_id
 from src.orchestrator.agent_loop import (
     LoopAgentStart,
     LoopDone,
@@ -532,8 +532,11 @@ class AgentInvoker:
             # seam). On live chat authorization_source is direct_user_request, so trust_gate
             # SHORT-CIRCUITS (dormant) — byte-identical to today; the gate only activates for
             # non-direct provenance (6C). thread_id is minted ONCE and shared by both the
-            # graph config and the gate closure so a paused turn is resumable.
-            thread_id = generate_id("chat")
+            # graph config and the gate closure so a paused turn is resumable. A6 (Step-10A):
+            # the thread_id embeds workspace_id (make_thread_id) so the checkpointer's
+            # identity is workspace-bound — the resume path below asserts it as
+            # defense-in-depth on top of the existing approval.workspace_id IDOR guard.
+            thread_id = make_thread_id(workspace_id)
             # Step 7B2 P4 (DORMANT behind deep_delegates_enabled): build the read-only
             # Perceiver delegate list so the lead's built-in ``task`` tool can route reads to
             # it. Flag OFF → ``()`` → _build_deep_agent_for forwards subagents=() →
@@ -711,6 +714,13 @@ class AgentInvoker:
             # approval, so a malformed approval stays pending and re-resumable — not stranded.
             if not thread_id or not agent_name:
                 yield {"event": "error", "message": "approval missing thread_id/agent_name"}
+                return
+            # A6 (Step-10A): defense-in-depth on the :695 workspace IDOR guard — the stored
+            # thread_id must embed the caller's workspace. A thread minted for another tenant
+            # (or a legacy colonless thread_id → workspace_of_thread_id None) is refused with
+            # the SAME generic not-found envelope (no existence leak), before any state change.
+            if workspace_of_thread_id(thread_id) != workspace_id:
+                yield {"event": "error", "message": "approval not found"}
                 return
             agent = self._agents.get(agent_name)
             if agent is None:

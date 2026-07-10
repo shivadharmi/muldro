@@ -36,6 +36,7 @@ from ulid import ULID
 from src.config.settings import get_settings
 from src.deep_runtime.prompt_bridge import build_system_message
 from src.deep_runtime.stream_adapter import stream_deep_agent_events
+from src.deep_runtime.thread_identity import make_thread_id
 from src.models.approvals import Approval
 from src.models.trust_state import TrustCeiling, TrustState
 from src.models.users import User, Workspace
@@ -243,7 +244,7 @@ async def test_forced_autonomous_pauses_persists_then_approve_executes_idempoten
         checkpointer = MemorySaver()
         invoker = _make_invoker(factory=factory, checkpointer=checkpointer, executed=executed)
         agent = invoker._agents["executor"]
-        thread_id = f"chat_{ULID()}"
+        thread_id = make_thread_id(workspace_id)
 
         with (
             patch(f"{AGENT_BUILDER_MODULE}.build_chat_model", return_value=_ScriptedModel()),
@@ -344,7 +345,7 @@ async def test_forced_autonomous_reject_blocks_the_tool():
         checkpointer = MemorySaver()
         invoker = _make_invoker(factory=factory, checkpointer=checkpointer, executed=executed)
         agent = invoker._agents["executor"]
-        thread_id = f"chat_{ULID()}"
+        thread_id = make_thread_id(workspace_id)
 
         with (
             patch(f"{AGENT_BUILDER_MODULE}.build_chat_model", return_value=_ScriptedModel()),
@@ -425,7 +426,7 @@ async def test_direct_user_request_stays_ungated():
         checkpointer = MemorySaver()
         invoker = _make_invoker(factory=factory, checkpointer=checkpointer, executed=executed)
         agent = invoker._agents["executor"]
-        thread_id = f"chat_{ULID()}"
+        thread_id = make_thread_id(workspace_id)
 
         with (
             patch(f"{AGENT_BUILDER_MODULE}.build_chat_model", return_value=_ScriptedModel()),
@@ -490,7 +491,7 @@ async def test_negative_control_bypassed_gate_check_does_not_pause():
         checkpointer = MemorySaver()
         invoker = _make_invoker(factory=factory, checkpointer=checkpointer, executed=executed)
         agent = invoker._agents["executor"]
-        thread_id = f"chat_{ULID()}"
+        thread_id = make_thread_id(workspace_id)
 
         with (
             patch(f"{AGENT_BUILDER_MODULE}.build_chat_model", return_value=_ScriptedModel()),
@@ -563,7 +564,7 @@ async def _drive_pause_then_approve_counting_assess(*, patch_find_existing):
         checkpointer = MemorySaver()
         invoker = _make_invoker(factory=factory, checkpointer=checkpointer, executed=executed)
         agent = invoker._agents["executor"]
-        thread_id = f"chat_{ULID()}"
+        thread_id = make_thread_id(workspace_id)
 
         # SPY on the exact seam _build_deep_agent_for's _assess_risk closure calls. It returns a
         # fixed high-risk assessment; email.send is statically irreversible so approval is forced.

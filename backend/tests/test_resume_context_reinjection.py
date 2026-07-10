@@ -42,6 +42,7 @@ from src.deep_runtime.middleware.trust_gate import (
     _MAX_PERSISTED_CONTEXT_CHARS,
     _decide_and_maybe_persist,
 )
+from src.deep_runtime.thread_identity import make_thread_id
 from src.models.approvals import Approval
 from src.models.trust_state import TrustCeiling, TrustState
 from src.models.users import User, Workspace
@@ -285,7 +286,7 @@ async def test_resume_reinjects_persisted_context_block():
 
     async with _gate_env() as (factory, user_id, workspace_id):
         approval_id = f"apr_{ULID()}"
-        thread_id = f"chat_{ULID()}"
+        thread_id = make_thread_id(workspace_id)
         async with factory() as db:
             db.add(
                 _seed_pending_approval(
@@ -351,7 +352,7 @@ async def test_resume_threads_context_into_rebuilt_gate():
 
     async with _gate_env() as (factory, user_id, workspace_id):
         approval_id = f"apr_{ULID()}"
-        thread_id = f"chat_{ULID()}"
+        thread_id = make_thread_id(workspace_id)
         async with factory() as db:
             db.add(
                 _seed_pending_approval(
