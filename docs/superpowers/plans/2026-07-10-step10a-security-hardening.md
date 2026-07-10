@@ -59,28 +59,30 @@ Step 10 (autonomous-path runtime cutover — the LAST rebuild step) is split **4
 | File | Responsibility | Tasks |
 |---|---|---|
 | `src/deep_runtime/middleware/governor_delegate_critique.py` | Critique prompt fencing (untrusted-data clause + delimited summary) | A1 |
-| `src/deep_runtime/middleware/readback.py` (+ test only) | Invariant guard: `read_fn=None` → UNVERIFIED, never CONTRADICTED | A2 |
+| `src/services/verification/readback.py:63-64` (`ReadBackVerifier.verify_step`; test only) | Invariant guard: `read_fn=None` → UNVERIFIED, never CONTRADICTED | A2 |
 | `src/deep_runtime/middleware/write_lock.py`, `src/services/step_runner.py`, `src/config/settings.py` | Write-lock fail-closed option (`write_lock_require_redis`) on both paths | A3 |
 | `src/orchestrator/agent_invoker.py` | `_build_delegate_subagents` error-path degrade; workspace-bound `thread_id` | A4, A6 |
 | `src/deep_runtime/delegates.py` (+ test) | GP-disable process-global audit + bounded-scope/teardown test | A5 |
 | shared helper (new) `src/deep_runtime/contention.py` + `write_lock.py` + `step_runner.py` | Canonical contended-write shape | A7 |
 | `src/deep_runtime/checkpoint_reaper.py` | Workspace-scoped decided-approval sweep | NEW-1 |
-| `src/deep_runtime/agent_builder.py` | Build-time assert `capability_scope` installed for write-capable agents | NEW-2 |
+| `src/deep_runtime/agent_builder.py:114-124` (guard **already exists**; test only) | Regression-lock the build-time `capability_scope` fail-closed guard + POSITION delta | NEW-2 |
 | `docs/superpowers/plans/2026-07-08-activation-gate-ledger.md` | Mark A-items done; add NEW-1/NEW-2 | Final |
 
 New test files under `tests/deep_runtime/` and `tests/` mirror `src/`.
 
 ---
 
-## Task 1 — NEW-2: assert `capability_scope` is always installed (fail-closed at construction)
+## Task 1 — NEW-2: regression-lock the `capability_scope` build-time guard (already present)
 
-**Why first:** it's the foundational invariant — the ungated deep chat path's *only* fail-closed authz guard is `capability_scope` (subagent-A finding #2). A build-time assertion makes "someone drops it from the chain" impossible.
+**Why first:** it's the foundational invariant — the ungated deep chat path's *only* fail-closed authz guard is `capability_scope` (subagent-A finding #2). The build-time assertion that makes "someone drops it from the chain" impossible **already exists** at `agent_builder.py:114-124` — a post-assembly `if not has_scope_mw and await _has_write_capability_in_scope(...): raise ValueError` (append at `:105-111`, raise at `:119`) — and is already tested (`tests/deep_runtime/test_agent_builder.py` + `test_delegate_builder.py`). So 10A adds **no new assertion**; it locks the existing guard with a mutation-proving regression test (test-only, like Task 9/A2) and scopes the one genuinely-uncovered delta.
+
+**Do NOT re-implement write-classification here as a pure helper.** The guard classifies writes ASYNC + DB-backed via `CapabilityResolver.is_write_capability` (through `_has_write_capability_in_scope`), NOT a pure function of the scope list — the previously-proposed `_is_write_capable`/`_is_capability_scope_mw` pure helpers are wrong and are dropped.
 
 **Files:**
-- Modify: `src/deep_runtime/agent_builder.py` (near the `middleware.append(make_capability_scope_middleware(...))` install at ~`:104-111`)
-- Test: `tests/deep_runtime/test_capability_scope_install_guard.py`
+- Test only: `tests/deep_runtime/test_capability_scope_install_guard.py` (regression + mutation test; **no `agent_builder.py` change**)
+- (Reference, unchanged) `src/deep_runtime/agent_builder.py:104-124` — existing append (`:105-111`), `has_scope_mw` check (`:114-118`), fail-closed raise (`:119-124`).
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the regression test** — assert the EXISTING guard has teeth:
 
 ```python
 # tests/deep_runtime/test_capability_scope_install_guard.py
@@ -88,44 +90,29 @@ import pytest
 from src.deep_runtime.agent_builder import build_deep_agent
 
 async def test_write_capable_agent_without_db_factory_refuses_to_compile():
-    """A write-capable agent MUST get a capability_scope guard; without a db_factory
-    it cannot be installed, so construction must RAISE (fail-closed), not warn."""
+    """The EXISTING guard (agent_builder.py:114-124) MUST raise (fail-closed) when a
+    write-capable agent cannot get its capability_scope middleware installed."""
     with pytest.raises(ValueError, match="capability_scope"):
         await build_deep_agent(
-            agent_name="executor",
-            capability_scope=["email.send"],   # write-capable
+            agent=<write-capable agent, e.g. executor with email.send in scope>,
             tools=[],
             db_factory=None,                    # cannot install the guard
         )
 
-async def test_build_asserts_capability_scope_present_in_final_middleware():
-    """Post-build invariant: a compiled write-capable agent's middleware list
-    contains the capability_scope guard (defense-in-depth against a future
-    refactor removing the append)."""
-    # build a minimal read-capable agent WITH a db_factory stub; assert the
-    # guard middleware object is present by type-name in the installed chain.
+async def test_compiled_write_agent_carries_capability_scope_guard():
+    """Defense-in-depth: a compiled write-capable agent's middleware list contains the
+    capability_scope_guard (by name), matching the has_scope_mw check the guard uses."""
+    # build with a db_factory stub; assert the guard mw is present by name in the chain.
     ...
 ```
 
-- [ ] **Step 2: Run to verify it fails** — `uv run pytest tests/deep_runtime/test_capability_scope_install_guard.py -v` → the first test likely already passes (6A already raises ValueError); the second FAILS (`no post-build assertion`). Confirm the *second* is RED.
+- [ ] **Step 2: Run → GREEN today** — `uv run pytest tests/deep_runtime/test_capability_scope_install_guard.py -v` PASSES against the existing guard. This is a regression *lock*, not a RED→GREEN implement cycle.
 
-- [ ] **Step 3: Implement** — in `build_deep_agent`, after assembling the full `middleware` list and before `create_deep_agent(...)`, add a fail-closed assertion:
+- [ ] **Step 3: Mutation-prove the teeth** — temporarily delete the `:105-111` capability_scope append **or** the `:119` raise → the write-capable build MUST now FAIL the guard test → restore → GREEN. (Step-8/9 negative-control discipline: the test only earns its keep if a one-line mutation defeats it.)
 
-```python
-# agent_builder.py — after middleware is fully assembled, before compile
-if _is_write_capable(capability_scope) and not any(
-    _is_capability_scope_mw(mw) for mw in middleware
-):
-    raise ValueError(
-        "capability_scope guard missing for write-capable agent "
-        f"{agent_name!r}: refusing to compile (fail-closed)."
-    )
-```
-Add small pure helpers `_is_write_capable(scope)` (any cap resolves write via the existing predicate) and `_is_capability_scope_mw(mw)` (identify by the factory's marker/type). Reuse existing write-classification (do NOT re-implement).
+- [ ] **Step 4: NEW-2 delta (guard POSITION)** — the ONE thing neither the existing guard nor its tests check is that the scope guard is **outermost** (present-but-not-outermost would let a later middleware intercept a tool call before the scope check). EITHER (a) scope this explicitly as the NEW-2 delta — add a position assertion (`capability_scope_guard` is first/outermost in the installed chain) + a mutation moving it inward that the test defeats — OR (b) if chain order is already load-bearing/asserted elsewhere, state NEW-2 is **"already satisfied; regression test added"** and stop. Pick one in execution; do NOT add a redundant classifier.
 
-- [ ] **Step 4: Run** — `uv run pytest tests/deep_runtime/test_capability_scope_install_guard.py -v` → PASS.
-- [ ] **Step 5: Negative control** — temporarily delete the `middleware.append(capability_scope...)` line → the post-build assertion RAISES for a write agent → test proves teeth. Restore.
-- [ ] **Step 6: Commit** — `git commit -m "feat(step10a): NEW-2 assert capability_scope installed for write-capable deep agents (fail-closed)"`
+- [ ] **Step 5: Commit** — `git commit -m "test(step10a): NEW-2 regression-lock capability_scope build guard (+ position delta)"`
 
 ---
 
@@ -135,7 +122,7 @@ Add small pure helpers `_is_write_capable(scope)` (any cap resolves write via th
 
 **Files:**
 - Modify: `src/orchestrator/agent_invoker.py` (`:536` mint, `:572` config, `:743` resume-side read)
-- New helper: `src/deep_runtime/thread_identity.py` — `make_thread_id(workspace_id)` / `workspace_of_thread_id(thread_id)` (embed + parse; format e.g. `chat:{workspace_id}:{ulid}`)
+- New helper: `src/deep_runtime/thread_identity.py` — `make_thread_id(workspace_id)` / `workspace_of_thread_id(thread_id)` (embed + parse; format `c:{workspace_id}:{ulid}` — **must fit `Approval.thread_id` = `String(64)`** (`src/models/approvals.py:24`)). The earlier `chat:{ws}:{t_ulid}` scheme is ~63 chars = 1-byte headroom → any later format tweak overflows → forces the migration 10A forbids. Shorten to a 1-char outer tag + bare ULID (no inner `t_`) → ~58 chars, ~6 bytes headroom. (Same `String(64)` constraint binds 10C's autonomous thread_id.)
 - Test: `tests/deep_runtime/test_checkpointer_workspace_isolation.py` (REAL Postgres, self-contained, `_db_reachable` guard)
 
 - [ ] **Step 1: Write the failing blocking test** (real `AsyncPostgresSaver`):
@@ -149,18 +136,25 @@ async def test_thread_id_embeds_workspace_and_cross_ws_resume_is_refused():
     assert workspace_of_thread_id(tid_a) == "ws_A"
     # a thread minted for ws_A cannot be claimed as ws_B's
     assert workspace_of_thread_id(tid_a) != "ws_B"
+    # MUST fit Approval.thread_id = String(64) — overflow here forces the migration 10A forbids
+    assert len(make_thread_id("ws_A")) <= 64
 
 async def test_resume_rejects_thread_id_from_a_different_workspace():
     """resume_deep_turn must reject a thread_id whose embedded workspace != caller ws
     (defense-in-depth ON TOP of the existing Approval.workspace_id guard)."""
-    ...  # forced: call resume with a ws_A thread_id but workspace_id="ws_B" -> refused
+    # forced: an approval whose refs.thread_id = make_thread_id("ws_A"), resumed as ws_B.
+    # To prove the NEW thread_id guard (not the :695 approval.workspace_id guard) is the gate,
+    # set approval.workspace_id = "ws_B" so :695 passes and the thread_id mismatch refuses:
+    #   resume_deep_turn(approval_id=<that approval>, workspace_id="ws_B")
+    #     -> {"event": "error", "message": "approval not found"}  (generic — no existence leak)
+    assert workspace_of_thread_id("legacy_colonless_id") is None  # defensive parse, load-bearing
 ```
 
 - [ ] **Step 2: Run → FAIL** (`make_thread_id`/`workspace_of_thread_id` do not exist; resume has no thread-id workspace assertion).
 - [ ] **Step 3: Implement**
-  - `thread_identity.py`: `make_thread_id(ws) -> f"chat:{ws}:{generate_id('t')}"`; `workspace_of_thread_id(tid) -> tid.split(":", 2)[1]` (defensive on malformed → return `None`).
+  - `thread_identity.py`: `make_thread_id(ws) -> f"c:{ws}:{ulid}"` (1-char outer tag + **bare ULID**, no inner `t_` prefix → ~58 chars, ~6 bytes headroom under `String(64)`); `workspace_of_thread_id(tid)`: split on `":"` and return the workspace segment, else `None` if the id is malformed/colonless (a legacy colonless id MUST parse to `None`, never raise — defensive, load-bearing).
   - `agent_invoker.py:536`: `thread_id = make_thread_id(workspace_id)`.
-  - `resume_deep_turn` (`:695` region): after the existing `approval.workspace_id != workspace_id` guard, ALSO assert `workspace_of_thread_id(thread_id) == workspace_id` (fail-closed, generic not-found on mismatch — no existence leak).
+  - `resume_deep_turn`: `thread_id` isn't bound until `refs.get("thread_id")` (`:704`) and is validated at the presence check (`:712`) — so place the new assertion **AFTER the `:712` `if not thread_id or not agent_name` check** (NOT "after :695", where `thread_id` is still unbound): `if workspace_of_thread_id(thread_id) != workspace_id: <yield generic "approval not found"; return>` (fail-closed, same not-found envelope as the `:695` guard — no existence leak). Defense-in-depth ON TOP of the `:695` `approval.workspace_id` guard.
 - [ ] **Step 4: Run → PASS.**
 - [ ] **Step 5: Negative controls (teeth):** (a) revert the resume-side assertion → cross-ws resume test FAILS; (b) mint `thread_id` without the ws prefix → `workspace_of_thread_id` returns `None` → resume refuses. Restore.
 - [ ] **Step 6: Full gate** — `uv run pytest tests/ --ignore=tests/e2e` (18 skipped NOT ~108) — deletions/format-changes can surface latent thread_id consumers (`checkpoint_reaper`, 6C's `Approval.thread_id` column). Confirm green.
@@ -191,7 +185,24 @@ async def test_resume_rejects_thread_id_from_a_different_workspace():
 
 - [ ] **Step 1: Failing tests** — deep + autonomous: with `write_lock_require_redis=True` and `redis=None`, a WRITE must be refused (raise `WriteLockContended`/return the canonical blocked shape), NOT executed unlocked; reads still pass through; with the flag False, behavior is byte-identical to today (execute unlocked).
 - [ ] **Step 2: Run → FAIL.**
-- [ ] **Step 3: Implement** — thread the flag to both wrappers; when `redis is None and require_redis and is_write_capability(cap)` → contended/blocked (fail-closed) instead of `return await handler/inner(...)`. Add the conftest default.
+- [ ] **Step 3: Implement** — there is **no** module-level `is_write_capability`; the live write-lock classifies via the PURE `is_read_only_capability` (`src/integrations/capabilities.py:227`, fail-closed: unknown cap → `False` → treated as write). Today the `redis is None` early-return (`write_lock.py:45-48`) runs BEFORE capability resolution (`:50`), so `cap` isn't bound at the fail-closed point — **restructure BOTH wrappers to resolve the capability FIRST, then branch on redis**:
+
+```python
+# write_lock.py — after the DEEPAGENTS_BUILTIN_NAMES check, resolve capability FIRST
+capability = await resolve_capability(name)
+if redis is None and settings.write_lock_require_redis and not is_read_only_capability(capability):
+    return contended_tool_message(...)   # fail-closed (A7 canonical shape)
+if redis is None:
+    return await handler(request)        # today's fail-open early-return, PRESERVED EXACTLY
+if not capability or is_read_only_capability(capability):
+    return await handler(request)        # reads never lock (unchanged)
+async with acquire_write_lock(redis, workspace_id, capability):
+    return await handler(request)
+```
+
+  - autonomous `step_runner.py`: same restructure — resolve capability, then `if redis is None and require_redis and not is_read_only_capability(cap): <canonical blocked dict>` else preserve today's fail-open early-return EXACTLY.
+  - Add the `tests/conftest.py` default (`write_lock_require_redis=False`) — MagicMock-truthy hazard.
+  - **Byte-neutral when flag OFF:** the fail-closed branch is skipped, so writes still fall to `return await handler(...)` on the `redis is None` path exactly as today; the only change is that `resolve_capability(name)` now runs before the redis check (side-effect-free; the live path has redis wired per the 6C fix at `agent_invoker.py:313`, so `redis is None` is the degraded/test case).
 - [ ] **Step 4: Run → PASS.** **Step 5:** negative control (flip the guard condition → fail-open test fails). **Step 6:** commit `feat(step10a): A3 opt-in write-lock fail-closed (write_lock_require_redis, default off)`.
 
 > Note: also record in the plan/ledger that with the flag OFF the fail-open is *accepted* (authz still enforced by `capability_scope`+`trust_gate`; autonomous double-fire still guarded by the idempotency ledger the lock wraps).
@@ -219,6 +230,8 @@ async def test_resume_rejects_thread_id_from_a_different_workspace():
 - [ ] **Step 2: Run → FAIL** (`KeyError` today).
 - [ ] **Step 3: Implement** — `MODEL_TIER_IDS.get(tier, "sonnet")` at all three sites (`:369`, `:478`, `:479`); wrap the `build_agent_set`/`_resolve_tools`/`build_read_only_delegate`/`disable_general_purpose_subagent` body in `try/except Exception` → log + `return []`.
 - [ ] **Step 4: Run → PASS.** **Step 5:** negative control (remove the try/except → crash test fails). **Step 6:** commit `fix(step10a): A4 degrade-to-no-delegates on malformed tier / delegate build failure`.
+
+> **Note (residual subscript at `src/deep_runtime/model_factory.py:42`):** `build_chat_model` also raw-subscripts `MODEL_TIER_IDS[agent.model_tier]`. The **DELEGATE** build reaches it inside Task 6's `try/except`, so a malformed delegate tier degrades to no-delegates (covered). The **LEAD** build calls it too, but a malformed LEAD tier crashing its OWN build is **out of A4 scope** — the lead *is* the turn; there is nothing to degrade to. EITHER add `.get(agent.model_tier, "sonnet")` there for consistency, OR explicitly leave it and record "lead-tier build failure is out of A4 scope" in the ledger. Pick one in execution.
 
 ---
 
@@ -250,7 +263,7 @@ async def test_resume_rejects_thread_id_from_a_different_workspace():
 
 ## Task 9 — A2: lock the `read_fn=None`-never-CONTRADICTS invariant (guard only)
 
-**Why:** the real per-connector `read_fn` build rides B4 (10D). 10A only prevents a silent regression: today `readback.py:63-64` short-circuits `read_fn=None` → UNVERIFIED (never CONTRADICTED), avoiding the `calendar.create` false-CONTRADICT footgun. Lock it with a teeth test + the denylist-reproduction discipline documented for B4.
+**Why:** the real per-connector `read_fn` build rides B4 (10D). 10A only prevents a silent regression: today `src/services/verification/readback.py:63-64` (`ReadBackVerifier.verify_step`) short-circuits `read_fn=None` → UNVERIFIED (never CONTRADICTED), avoiding the `calendar.create` false-CONTRADICT footgun. The guard lives in the **verifier**, NOT the `deep_runtime/middleware/readback.py` wrapper (the middleware only wires `read_fn=None` into the verifier). Lock it with a teeth test + the denylist-reproduction discipline documented for B4.
 
 **Files:** Test only `tests/deep_runtime/test_readback_readfn_none_invariant.py`; a doc note in the plan/ledger for B4.
 
