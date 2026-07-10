@@ -34,11 +34,19 @@ async def create_graph_executor(
     execute_tool_fn=None,
     budget=None,
     circuit_breaker=None,
+    deep_step_runner=None,
 ) -> GraphExecutor:
     """Factory that creates a GraphExecutor with all deps consistently resolved.
 
     Use this instead of instantiating GraphExecutor directly so that every
     callsite (API routes, orchestrator, runtime) gets the same dep set.
+
+    ``deep_step_runner`` (Step 10C P2) is the durable autonomous deep step-executor
+    callable (``AgentInvoker.run_autonomous_deep_step``), forwarded to ``GraphExecutor``.
+    Defaults to ``None`` — which keeps every existing caller (routes_approvals,
+    routes_history, runtime, other scheduler ticks) byte-neutral, since the deep step
+    branch is unreachable without both a wired runner AND an ``effective_runtime`` gate
+    resolving to ``deep``.
     """
     from src.services.event_bus import EventBus
     from src.services.graph_executor import GraphExecutor
@@ -153,4 +161,5 @@ async def create_graph_executor(
         trust_engine=trust_engine,
         redis=redis_conn,
         trace_store=trace_store,
+        deep_step_runner=deep_step_runner,
     )
