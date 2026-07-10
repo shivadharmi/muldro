@@ -242,6 +242,29 @@ gates + a 1-production-clean-week escape hatch (spec Step 10).
     keys first; Perceiver stays; the ONLY Step-10 migration) → retire escape hatch. **Legacy-code deletion
     is OUT of Step 10** (kept as the auto-rollback fallback; a later post-rebuild cleanup).
 
+  **ALL 4 SUB-PLANS WRITTEN + COMMITTED 2026-07-10** (`2c30d17`..`9dc559d` on `rebuild/first-principles`,
+  NOT pushed; grounded by 3 parallel plan-drafting subagents that re-verified anchors @ `a5ab52f`):
+  10A `2026-07-10-step10a-security-hardening.md`, 10B `2026-07-10-step10b-cutover-control-plane.md`,
+  10C `2026-07-10-step10c-autonomous-durable-engine.md`, 10D `2026-07-10-step10d-coordinated-live-cutover.md`.
+  Every anchor is `@ a5ab52f` — RE-VERIFY at execution (10A mutates `agent_invoker.py`/`write_lock.py`/
+  `step_runner.py`/`settings.py` + adds `thread_identity.py`; 10B adds `runtime_gate.py`; the plans cross-
+  reference these collisions). **SHARPEST OPEN QUESTIONS (surfaced by the drafters, decided at execution):**
+  (a) **10C SQ1 is a plan-killer** — Phase-0 spike 0.1 must confirm a per-step `build_deep_agent` thread
+  resumes under the outer Python DAG loop (Branch A); if not, Branch B = a `dag_runner` rewrite = a DIFFERENT
+  plan ⇒ STOP+escalate. (b) **10C SQ2 (gate reconciliation) is the crux** — `dag_runner` step-level
+  `TrustEngine` gate vs the deep tool-call `trust_gate` would DOUBLE-gate (`is_gated_source("autonomous")`);
+  recommended hybrid Branch C (step-gate = coarse pre-step pause; deep chain runs but `trust_gate` doesn't
+  re-prompt the already-approved step) — spike 0.3 decides. (c) **10B kill-switch = ZERO-migration Redis
+  override** (deep is opt-in via a Redis enable-key; a Redis outage falls back to static `legacy` = fail-safe;
+  no DB table → preserves "B7 is the ONLY Step-10 migration"). (d) **B7 = single migration after R3** dropping
+  BOTH Presenter+Librarian (a stranded unrouted row is harmless per the operator/governor precedent) — vs two
+  migrations by timing (Presenter droppable after R2/chat, Librarian after R3/perception). (e) **B12 fold** —
+  the native-stream→`surface_update` adapter is built in 10D Part A but first-LIVE at R4 (autonomous is the only
+  phase producer; chat-deep emits none); its exercise may fold into 10C. Correction: `SurfaceUpdate.phase` has
+  7 arms (5 live + dead `planning`/`partial` = C13 drops); `AGENT_CAPABILITY_SCOPES`/`AGENT_MODEL_TIERS` live in
+  `agents.py:28/:16` (not `prompts.py`); the write-lock classifies via pure `is_read_only_capability`
+  (`capabilities.py:227`, fail-closed) NOT `is_write_capability`.
+
 ---
 
 ### Provenance
