@@ -92,6 +92,14 @@ def make_mock_settings(**overrides) -> MagicMock:
         # OR, worse, silently fire the shadow harness in every unrelated chat test. Mirror the
         # real Settings default (0.0 = off).
         shadow_sample_rate=0.0,
+        # Step 10B Task 5a: rollback-watcher thresholds. An unset MagicMock int compares
+        # truthy/greater in `delta >= threshold` in unpredictable ways (Mock vs float
+        # comparison); mirror the real Settings defaults so tests get real int thresholds.
+        rollback_double_fire_threshold=5,
+        rollback_verification_false_negative_threshold=3,
+        rollback_double_prompt_threshold=3,
+        rollback_ungated_perception_write_threshold=1,
+        rollback_shadow_divergence_threshold=10,
     )
     defaults.update(overrides)
     for k, v in defaults.items():

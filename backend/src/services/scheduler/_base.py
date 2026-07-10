@@ -153,6 +153,12 @@ class SchedulerBase:
         # 4d. Stuck run health check — every tick (resume reaper lives here)
         await self._run_subtick("run_health_check", self._tick_run_health_check(factory))
 
+        # 4d-ii. Step 10B Phase 5: one-directional auto-rollback watcher — every tick
+        # (~30s). A fast safety response is desirable; the tick no-ops instantly for
+        # every surface still resolving "legacy" (the 10B default), so running it every
+        # cycle costs one cheap Redis GET per surface with nothing else to do.
+        await self._run_subtick("runtime_rollback", self._tick_runtime_rollback(factory))
+
         # 4e. Webhook push-channel renewal — every 120th tick (~1h).
         # No-op unless settings.webhooks_configured (poll-only default).
         if self._tick_count % 120 == 0:

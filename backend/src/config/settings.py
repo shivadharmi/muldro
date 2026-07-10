@@ -212,6 +212,18 @@ class Settings(BaseSettings):
     # autonomous wrapper.
     write_lock_require_redis: bool = False  # JARVIS_WRITE_LOCK_REQUIRE_REDIS
 
+    # Step 10B Task 5a: auto-rollback watcher per-signal breach thresholds. Each is
+    # the minimum per-TICK DELTA (not cumulative count) of the mapped rollback-gate
+    # signal (see metrics_service.py) that trips a currently-"deep" surface's breaker
+    # back to "legacy" (src/services/scheduler/runtime_rollback_tick.py). Conservative
+    # defaults — the watcher is dormant machinery until a surface's enable key flips it
+    # to "deep"; live tuning is a Step-10D gate.
+    rollback_double_fire_threshold: int = 5  # JARVIS_ROLLBACK_DOUBLE_FIRE_THRESHOLD
+    rollback_verification_false_negative_threshold: int = 3
+    rollback_double_prompt_threshold: int = 3
+    rollback_ungated_perception_write_threshold: int = 1
+    rollback_shadow_divergence_threshold: int = 10
+
     # Webhook / push-notification infrastructure (OPTIONAL — empty = poll-only).
     # When unset, webhook registration is a graceful no-op and the system stays
     # poll-only exactly as before. All three must be satisfied (see
