@@ -35,6 +35,7 @@ rides back to the lead as the ``task`` tool_result free-text.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Any
 
 from deepagents import (
@@ -170,11 +171,17 @@ def disable_general_purpose_subagent(model_name: str) -> None:
     re-registering, so the Phase-4 seam (which calls this on every deep delegate-host
     lead build) does not trigger deepagents' additive-merge INFO log on every turn.
 
-    PROCESS-GLOBAL SCOPE — Step-10 activation gate ("GP-disable process-global scope
-    re-audit"): ``register_harness_profile`` mutates a process-global registry, so the
-    disable persists for the lifetime of the process. This is DORMANT scaffolding; the
-    Phase-4 seam calls it only when ``deep_delegates_enabled`` and the lead is a
-    delegate host.
+    PROCESS-GLOBAL SCOPE — AUDITED + ACCEPTED (Step-10A A5). ``register_harness_profile``
+    mutates a process-global registry, so the disable persists for the process lifetime
+    and affects EVERY deep lead whose model resolves to ``anthropic:{model_name}``. This
+    is ACCEPTABLE and intentional: (a) it is key-scoped to one model id, so opus/haiku
+    leads are unaffected; (b) the ONLY effect is dropping the auto-added general-purpose
+    ``task`` child — a Jarvis delegate host wants exactly that (its ``task`` targets are
+    the explicitly registered read-only Jarvis delegates, never an unscoped GP child);
+    (c) it is dormant (called only under ``deep_delegates_enabled``) and idempotent. For
+    a bounded, reversible scope (tests, or any caller needing to undo), use the
+    ``general_purpose_disabled`` context-manager (restore-not-pop) — a naive pop would
+    delete a pre-existing profile.
 
     Args:
         model_name: The direct Anthropic model id of the lead (e.g. ``"claude-sonnet-4-6"``).
@@ -195,3 +202,31 @@ def disable_general_purpose_subagent(model_name: str) -> None:
         key,
         HarnessProfile(general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False)),
     )
+
+
+@contextmanager
+def general_purpose_disabled(model_name: str):
+    """Bounded-scope form of ``disable_general_purpose_subagent`` that RESTORES the prior
+    harness profile on exit (restore-not-pop): a pre-existing profile for this key — including
+    a deepagents built-in bootstrap — survives the block, and a key we newly added is removed.
+
+    Use this in tests and any bounded-scope caller. The LIVE delegate seam
+    (``_build_delegate_subagents``) uses the imperative ``disable_general_purpose_subagent``
+    instead — there the disable intentionally PERSISTS for the process (audited, see that
+    function's docstring). A plain ``enable_general_purpose_subagent`` is deliberately NOT
+    provided: "restore the prior" requires the captured prior value, which only this
+    context-manager owns.
+    """
+    from deepagents.profiles.harness.harness_profiles import _HARNESS_PROFILES
+
+    key = f"anthropic:{model_name}"
+    had_prior = key in _HARNESS_PROFILES
+    prior = _HARNESS_PROFILES.get(key)
+    disable_general_purpose_subagent(model_name)
+    try:
+        yield
+    finally:
+        if had_prior:
+            _HARNESS_PROFILES[key] = prior  # restore the EXACT prior (built-in survives)
+        else:
+            _HARNESS_PROFILES.pop(key, None)  # nothing before -> remove only what we added
