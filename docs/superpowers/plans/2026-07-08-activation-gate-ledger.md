@@ -152,9 +152,34 @@ gates + a 1-production-clean-week escape hatch (spec Step 10).
 - [ ] **B9 — AsyncPostgresSaver autonomous wiring + `durability="sync"` + single-flight lease +
   reconcile-from-event-log EXECUTION.** *(Step-1 spike green; Step-5 made RuntimeEvent recordable with
   `seq`; Step-10 reconciles.)* The autonomous durable-resume cutover proper.
+  - **10C: MACHINERY BUILT (dormant — no flip).** All 3-of-4 net-new B9 pieces landed behind the
+    effective-runtime gate keyed `"autonomous"` (byte-neutral, ZERO migrations): (a) worker-side
+    `AsyncPostgresSaver` → `AgentInvoker.checkpointer_provider` + `deep_step_runner` wired into the
+    scheduler's `GraphExecutor` (**P2** `a5df7b5`); (b) single-flight Redis `SET NX PX` lease
+    `autonomous_lease.acquire_run_lease` wrapping `execute_run`/`resume_run` on the deep path (**P3**
+    `6da358c`); (c) reconcile-from-event-log `run_reconcile.reconcile_run_from_events` (substrate-agnostic,
+    UP-ONLY, never regresses terminal-success) replacing the WARN in `_resume_run_body` on the deep path
+    (**P4** `a0f5cb7`); (d) `durability="sync"` + the ledger-in-deep BUILD (`run_autonomous_deep_step`,
+    the exactly-once linchpin — the ledger, NOT thread-id stability, is the guarantee) (**P1** `b1b4446`/
+    `48dd672`). **Design note:** per-step thread is fresh-minted + reaped on completion; run-level durable
+    resume is via P4's reconcile + DAG re-pick + the ledger (more robust for the 10D cross-substrate drain
+    than per-step checkpoint resume). **Flip / live durable-resume = 10D.**
 - [ ] **B10 — Checkpoint reaper / TTL cleanup before deep is default.** *(6B CF-4; 6C added
   `checkpoint_reaper.py` reap-on-completion + decided-approval sweep — confirm it's sufficient at scale.)*
+  - **10C: autonomous reaper BUILT (dormant).** `run_autonomous_deep_step` reaps its per-step durable
+    checkpoints on completion (mirrors the chat `resume_deep_turn` reap; no-op on MemorySaver → dormant-
+    safe); the tick's decided-approval sweep remains the substrate-agnostic backstop (covers chat + the
+    rare Branch-C within-step-expansion approvals) (**P5** `779b85b`). **Carry (10D):** a process-crash
+    orphan of a pre-approved autonomous step thread (no Approval, fresh-mint) is a documented rare
+    limitation — a proper age-based checkpoint-table sweep is 10D; also confirm reaper sufficiency at scale.
 - [ ] **B11 — Flip `deep_context_jit=True` + slim the AUTONOMOUS path + live quality-validate.** *(Step 8.)*
+  - **10C: B11-auto slim BUILT (dormant).** The 3 autonomous `ContextBuilder.build` callers slim to the
+    JIT core under `deep_context_jit` + effective-runtime `"autonomous"`==deep (short-circuits on the flag
+    FIRST → no Redis GET on the default path → byte-neutral); render contract verified empirically (the
+    persisted pack carries `entities`; `build(jit=True)` retains them via `_fetch_core_entities` → the
+    plan/summary detail tab renders non-empty) (**P6** `82628af`). **Flip + LIVE quality-validate
+    (slim-core + JIT retrieval doesn't regress autonomous agent output — a behavior change, not byte-
+    provable) = 10D.**
   Step 8 landed the slim/JIT pack DORMANT on the deep CHAT path only (`deep_context_jit` default off,
   scoped to `JIT_ENABLED_AGENTS={planner,perceiver,librarian}`; Presenter/Executor stay eager). At
   activation: (a) flip the flag; (b) slim the autonomous callers (`step_graph_store.py:67` /
@@ -285,13 +310,25 @@ gates + a 1-production-clean-week escape hatch (spec Step 10).
     async + throwaway session, **spike-first**) + per-surface **effective-runtime gate** (durable manual
     kill-switch + Redis auto-breaker + static `settings.runtime` fallback — `runtime` CANNOT hot-change,
     so this gate is the mechanism) + one-directional auto-rollback watcher + escape hatch. No flip.
-  - **10C — Autonomous durable engine**: cut the autonomous **step executor** onto `build_deep_agent`
-    (`authorization_source=autonomous` — the deep chain's only live producer; DAG orchestrator
-    `graph_executor`/`dag_runner` STAYS) + B9 (`AsyncPostgresSaver` + single-flight **lease** +
-    **reconcile-from-event-log** — 3 of 4 net-new) + B10 autonomous reaper + B11-auto slim. **Spike-first**
-    (the AsyncPostgresSaver spike proved the primitive on a minimal `StateGraph`, not `build_deep_agent`-
-    per-step). Dormant behind a flag. Design sub-Qs deferred here: step-vs-DAG durability granularity,
-    dag_runner-gate vs deep-`trust_gate` reconciliation, read-back unification, provenance wiring.
+  - **10C — Autonomous durable engine — DONE = SHIP 2026-07-11** (subagent-driven, TDD, 12 commits
+    `83f9b4c`..`451a3c1`; NO flip, byte-neutral on default `legacy`, ZERO migrations, single head
+    `1a2770a28c39`, 3443 non-e2e passed / 18 skipped, ruff clean; NOT pushed/merged). Cut the autonomous
+    **step executor** onto `build_deep_agent` (`authorization_source=autonomous`; DAG orchestrator
+    `graph_executor`/`dag_runner` STAYS) + B9 (`AsyncPostgresSaver` + `durability="sync"` + single-flight
+    **lease** + **reconcile-from-event-log** — 3 of 4 net-new) + B10 autonomous reaper + B11-auto slim, all
+    DORMANT behind the effective-runtime gate keyed `"autonomous"`. **Spike-first (all 4 Phase-0 gates
+    resolved, independently opus-signed `PHASE_0_SOUND=YES`):** SQ1 **Branch A** CONFIRMED (per-step
+    `build_deep_agent` durable resume + ledger exactly-once — plan NOT disproven); SQ2 **Branch C** (deep
+    `trust_gate` `pre_approved_capabilities` short-circuit — one line, NO thread_id change, NO
+    GraphInterrupt→run-pause bridge; the step-level `dag_runner` gate stays the durable pause); SQ3
+    **Branch A** (inline `_finalize_with_verification` seam kept; deep `read_back` dormant — real read-back
+    unification stays **B4/10D**); SQ4 **Branch A** (reuse `_build_deep_agent_for` + `AUTONOMOUS`, BUT the
+    ledger-in-deep is a genuine BUILD — the deep chain lacked it → double-fire hole closed). **Ledger =
+    exactly-once linchpin** (not thread-id stability). **Reviews:** ledger-in-deep + Branch-C gate
+    independently opus-reviewed SOUND + security-reviewed SAFE (2 LOW hardenings applied: empty-ws
+    fail-closed, `_RUN_TERMINAL_SUCCESS` run guard); P2 A6 ws-binding security-reviewed SAFE; P4 reconcile
+    reviewed SOUND; P7 e2e proved all 6 happy-path assertions + 5 negative controls (GREEN→RED→GREEN) with
+    NO P1–P6 integration bug. **Flip = 10D.**
   - **10D — Coordinated live cutover** (the ONLY live+irreversible step): final whole-branch review →
     **merge dormant machinery to `main`** (merge-then-flip; byte-identical under default `legacy`) +
     CLAUDE.md two-execution-paths rewrite → incremental flip **chat → perception → autonomous** (each
