@@ -367,7 +367,7 @@ class AgentInvoker:
         # (MODEL_TIER_IDS), NOT get_model_for_agent (Bedrock-tainted).
         budget_mw = make_budget_middleware(
             agent_name=agent.name,
-            model=MODEL_TIER_IDS[agent.model_tier],
+            model=MODEL_TIER_IDS.get(agent.model_tier, "sonnet"),
             workspace_id=workspace_id,
             db_factory=self._db_factory,
             budget=self._budget,
@@ -475,19 +475,30 @@ class AgentInvoker:
         )
         from src.orchestrator.agents import AGENTS, build_agent_set
 
-        perceiver_cfg = build_agent_set(AGENTS, self._settings.cheap_mode)["perceiver"]
-        disable_general_purpose_subagent(MODEL_TIER_IDS[lead_agent.model_tier])
-        disable_general_purpose_subagent(MODEL_TIER_IDS[perceiver_cfg.model_tier])
-        tools = await self._resolve_tools(perceiver_cfg, workspace_id, None)
-        delegate = await build_read_only_delegate(
-            perceiver_cfg,
-            tools,
-            workspace_id=workspace_id,
-            user_id=user_id,
-            db_factory=self._db_factory,
-            execute_tool=self._tool_executor.execute_tool,
-        )
-        return [delegate]
+        # A4 (Step-10A): a malformed model_tier (DB corruption/bad migration) or any
+        # failure while resolving tools / building the delegate must not crash a turn
+        # the lead can otherwise serve alone — degrade to no delegates instead.
+        try:
+            perceiver_cfg = build_agent_set(AGENTS, self._settings.cheap_mode)["perceiver"]
+            disable_general_purpose_subagent(MODEL_TIER_IDS.get(lead_agent.model_tier, "sonnet"))
+            disable_general_purpose_subagent(MODEL_TIER_IDS.get(perceiver_cfg.model_tier, "sonnet"))
+            tools = await self._resolve_tools(perceiver_cfg, workspace_id, None)
+            delegate = await build_read_only_delegate(
+                perceiver_cfg,
+                tools,
+                workspace_id=workspace_id,
+                user_id=user_id,
+                db_factory=self._db_factory,
+                execute_tool=self._tool_executor.execute_tool,
+            )
+            return [delegate]
+        except Exception:
+            logger.warning(
+                "[deep_runtime] delegate build failed — degrading to no delegates (lead=%s)",
+                getattr(lead_agent, "name", "?"),
+                exc_info=True,
+            )
+            return []
 
     async def call_agent_stream(
         self,
