@@ -125,7 +125,9 @@ async def test_clear_override_all():
         await r.aclose()
 
 
-# ── admin route (called directly, bypassing FastAPI DI) ──────────────────────────
+# ── admin route handlers (called directly, bypassing FastAPI DI + require_admin) ──
+# These exercise the handler BODY (surface/target validation, redis wiring). The
+# router-level require_admin gate is exercised over HTTP in the integration tests below.
 
 
 async def test_route_post_override_sets_key():
@@ -140,11 +142,9 @@ async def test_route_post_override_sets_key():
     try:
         request = MagicMock()
         request.app.state.redis = r
-        user = MagicMock()
-        user.user_id = "usr_admin_test"
 
         resp = await set_runtime_override(
-            RuntimeOverrideRequest(surface=surface, target="legacy"), request, user
+            RuntimeOverrideRequest(surface=surface, target="legacy"), request
         )
 
         assert resp.status == "set"
@@ -160,13 +160,26 @@ async def test_route_post_override_rejects_invalid_surface():
     from src.api.routes_admin_runtime import RuntimeOverrideRequest, set_runtime_override
 
     request = MagicMock()
-    user = MagicMock()
-    user.user_id = "usr_admin_test"
 
     with pytest.raises(HTTPException) as exc_info:
         await set_runtime_override(
-            RuntimeOverrideRequest(surface="not_a_valid_surface", target="legacy"), request, user
+            RuntimeOverrideRequest(surface="not_a_valid_surface", target="legacy"), request
         )
+    assert exc_info.value.status_code == 400
+
+
+async def test_route_post_override_rejects_target_deep():
+    """FIX A: the escape hatch forces the SAFE direction only. target="deep" (the
+    privilege-escalation vector the security review flagged) must be rejected 400 —
+    flipping a surface to "deep" is the separate ENABLE-key rollout path, not this."""
+    from fastapi import HTTPException
+
+    from src.api.routes_admin_runtime import RuntimeOverrideRequest, set_runtime_override
+
+    request = MagicMock()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await set_runtime_override(RuntimeOverrideRequest(surface="chat", target="deep"), request)
     assert exc_info.value.status_code == 400
 
 
@@ -176,12 +189,10 @@ async def test_route_post_override_rejects_invalid_target():
     from src.api.routes_admin_runtime import RuntimeOverrideRequest, set_runtime_override
 
     request = MagicMock()
-    user = MagicMock()
-    user.user_id = "usr_admin_test"
 
     with pytest.raises(HTTPException) as exc_info:
         await set_runtime_override(
-            RuntimeOverrideRequest(surface="chat", target="not_a_runtime"), request, user
+            RuntimeOverrideRequest(surface="chat", target="not_a_runtime"), request
         )
     assert exc_info.value.status_code == 400
 
@@ -193,13 +204,9 @@ async def test_route_post_override_no_redis_returns_503():
 
     request = MagicMock()
     request.app.state.redis = None
-    user = MagicMock()
-    user.user_id = "usr_admin_test"
 
     with pytest.raises(HTTPException) as exc_info:
-        await set_runtime_override(
-            RuntimeOverrideRequest(surface="chat", target="legacy"), request, user
-        )
+        await set_runtime_override(RuntimeOverrideRequest(surface="chat", target="legacy"), request)
     assert exc_info.value.status_code == 503
 
 
@@ -213,13 +220,120 @@ async def test_route_delete_override_clears_key():
         await runtime_breaker.set_manual_override(r, surface, target="legacy")
         request = MagicMock()
         request.app.state.redis = r
-        user = MagicMock()
-        user.user_id = "usr_admin_test"
 
-        resp = await clear_runtime_override(surface, request, user)
+        resp = await clear_runtime_override(surface, request)
 
         assert resp.status == "cleared"
         assert await runtime_breaker.read_key(r, "override", surface) is None
     finally:
         await _cleanup(r, [surface])
         await r.aclose()
+
+
+# ── require_admin gate — HTTP integration tests (over the app test client) ────────
+# The security review explicitly wants an integration test that hits the endpoint over
+# HTTP and asserts 403 for a non-admin. These are SYNC tests (plain def): TestClient runs
+# the app in its own portal thread, so they must not run under the async-test hook.
+
+_ADMIN_TOKEN = "s3cr3t-operator-token"
+
+
+def _client_with_admin_token(token: str):
+    """A TestClient with server-side ``admin_api_token`` overridden to ``token`` via the
+    get_settings dependency (require_admin reads settings through Depends(get_settings))."""
+    from fastapi.testclient import TestClient
+
+    from src.api.app import app
+    from src.config.settings import get_settings as settings_dep
+
+    app.dependency_overrides[settings_dep] = lambda: make_mock_settings(admin_api_token=token)
+    return TestClient(app), app, settings_dep
+
+
+def _restore(app, settings_dep) -> None:
+    app.dependency_overrides.pop(settings_dep, None)
+
+
+def test_http_no_admin_token_is_403():
+    client, app, settings_dep = _client_with_admin_token(_ADMIN_TOKEN)
+    try:
+        resp = client.post(
+            "/v1/admin/runtime/override", json={"surface": "chat", "target": "legacy"}
+        )
+        assert resp.status_code == 403, resp.text
+    finally:
+        _restore(app, settings_dep)
+
+
+def test_http_wrong_admin_token_is_403():
+    client, app, settings_dep = _client_with_admin_token(_ADMIN_TOKEN)
+    try:
+        resp = client.post(
+            "/v1/admin/runtime/override",
+            json={"surface": "chat", "target": "legacy"},
+            headers={"X-Admin-Token": "wrong-token"},
+        )
+        assert resp.status_code == 403, resp.text
+    finally:
+        _restore(app, settings_dep)
+
+
+def test_http_unset_server_token_is_403_failclosed():
+    """Fail-closed: with no admin token configured server-side, EVEN a caller supplying
+    a token is rejected — the route is disabled entirely by default."""
+    client, app, settings_dep = _client_with_admin_token("")  # server token unset
+    try:
+        resp = client.post(
+            "/v1/admin/runtime/override",
+            json={"surface": "chat", "target": "legacy"},
+            headers={"X-Admin-Token": "anything"},
+        )
+        assert resp.status_code == 403, resp.text
+    finally:
+        _restore(app, settings_dep)
+
+
+def test_http_valid_token_legacy_is_200_and_sets_key():
+    import redis as sync_redis
+    import redis.asyncio as _redis_async
+
+    client, app, settings_dep = _client_with_admin_token(_ADMIN_TOKEN)
+    surface = "chat"
+    prior_redis = getattr(app.state, "redis", None)
+    # TestClient does not run lifespan (no `with`), so wire app.state.redis manually.
+    app.state.redis = _redis_async.from_url(get_settings().redis_url, decode_responses=True)
+    checker = sync_redis.from_url(get_settings().redis_url, decode_responses=True)
+    try:
+        checker.delete(runtime_breaker.override_key(surface))
+
+        resp = client.post(
+            "/v1/admin/runtime/override",
+            json={"surface": surface, "target": "legacy"},
+            headers={"X-Admin-Token": _ADMIN_TOKEN},
+        )
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "set"
+        assert checker.get(runtime_breaker.override_key(surface)) == "legacy"
+    finally:
+        checker.delete(runtime_breaker.override_key(surface))
+        checker.close()
+        app.state.redis = prior_redis
+        _restore(app, settings_dep)
+
+
+def test_http_valid_token_deep_is_400_restricted():
+    """FIX A over HTTP: a valid operator cannot use the escape hatch to force "deep"."""
+    client, app, settings_dep = _client_with_admin_token(_ADMIN_TOKEN)
+    prior_redis = getattr(app.state, "redis", None)
+    app.state.redis = MagicMock()  # target validation rejects before redis is touched
+    try:
+        resp = client.post(
+            "/v1/admin/runtime/override",
+            json={"surface": "chat", "target": "deep"},
+            headers={"X-Admin-Token": _ADMIN_TOKEN},
+        )
+        assert resp.status_code == 400, resp.text
+    finally:
+        app.state.redis = prior_redis
+        _restore(app, settings_dep)

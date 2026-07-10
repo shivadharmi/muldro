@@ -224,6 +224,13 @@ class Settings(BaseSettings):
     rollback_ungated_perception_write_threshold: int = 1
     rollback_shadow_divergence_threshold: int = 10
 
+    # Step 10B Task 5b: operator credential for the runtime kill-switch admin route
+    # (POST/DELETE /v1/admin/runtime/override). Default empty → the admin route is
+    # DISABLED (fail-closed): every request is rejected 403 until ops sets
+    # JARVIS_ADMIN_API_TOKEN. The escape hatch forces the SAFE direction only (legacy);
+    # it is compared against the X-Admin-Token header in constant time (hmac.compare_digest).
+    admin_api_token: str = ""  # JARVIS_ADMIN_API_TOKEN
+
     # Webhook / push-notification infrastructure (OPTIONAL — empty = poll-only).
     # When unset, webhook registration is a graceful no-op and the system stays
     # poll-only exactly as before. All three must be satisfied (see

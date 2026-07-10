@@ -100,6 +100,11 @@ def make_mock_settings(**overrides) -> MagicMock:
         rollback_double_prompt_threshold=3,
         rollback_ungated_perception_write_threshold=1,
         rollback_shadow_divergence_threshold=10,
+        # Step 10B Task 5b: MagicMock-truthiness hazard — an unset MagicMock str reads
+        # truthy, so `require_admin`'s `not expected` fail-closed check would never fire
+        # (the admin route would look "enabled" in every test). Mirror the real Settings
+        # default ("" = disabled/fail-closed).
+        admin_api_token="",
     )
     defaults.update(overrides)
     for k, v in defaults.items():
