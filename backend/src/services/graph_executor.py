@@ -552,12 +552,31 @@ class GraphExecutor:
             actual_steps = await self._get_all_steps(run.run_id)
             actual_completed = {s.step_id for s in actual_steps if s.status in TERMINAL_SUCCESS}
             if cp_completed != actual_completed:
-                logger.warning(
-                    "Checkpoint/DB mismatch for run %s: checkpoint=%d completed, DB=%d completed",
-                    run.run_id,
-                    len(cp_completed),
-                    len(actual_completed),
+                # Step 10C P4: on the DEEP autonomous surface, reconcile the run's
+                # truth rows from the runtime_events log (a crash can leave the DB
+                # behind the log). On legacy the WARN stays byte-identical (default
+                # path). Fail-safe: redis-absent / any gate error resolves to the
+                # static runtime, so legacy never accidentally reconciles.
+                from src.services.runtime_gate import effective_runtime
+
+                runtime = await effective_runtime(
+                    "autonomous", redis=getattr(self, "_redis", None), settings=self._settings
                 )
+                if runtime == "deep":
+                    from src.services.run_reconcile import reconcile_run_from_events
+
+                    summary = await reconcile_run_from_events(self._db, run)
+                    logger.info(
+                        "run %s reconciled from event log on resume: %s", run.run_id, summary
+                    )
+                else:
+                    logger.warning(
+                        "Checkpoint/DB mismatch for run %s: checkpoint=%d completed, "
+                        "DB=%d completed",
+                        run.run_id,
+                        len(cp_completed),
+                        len(actual_completed),
+                    )
 
         transition_run(run, "running")
         await self._db.flush()

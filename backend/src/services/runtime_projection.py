@@ -320,6 +320,11 @@ class RuntimeProjectionService:
             "total_steps": total,
             "completed_steps": done,
             "progress_pct": round(done / total * 100) if total else 0,
+            # ADDITIVE (Step 10C P4): the SET of step_ids the log folds as terminal-success,
+            # so the reconcile-from-event-log consumer can upgrade individual step rows
+            # (not just read the count). Existing callers read status/completed_steps/etc.
+            # and ignore this key.
+            "completed_step_ids": sorted(completed),
         }
 
     async def emit_event(
