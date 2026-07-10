@@ -20,11 +20,28 @@ from langchain_core.messages import ToolMessage
 
 from src.deep_runtime.builtins import DEEPAGENTS_BUILTIN_NAMES
 from src.integrations.capabilities import is_read_only_capability
+from src.services.contention import (
+    CONTENDED_MESSAGE,
+    WRITE_LOCK_UNAVAILABLE_MESSAGE,
+    blocked_body,
+)
 from src.services.write_lock import WriteLockContended, acquire_write_lock
 
 logger = logging.getLogger(__name__)
 
 ResolveCapabilityFn = Callable[[str], Awaitable[str | None]]
+
+
+def _blocked_tool_message(error: str, *, tool_call_id: str, name: str) -> ToolMessage:
+    """Deep-only envelope: wrap the canonical blocked body (``src.services.contention``) in a
+    ``ToolMessage``. Local because only the deep path produces ToolMessages — the autonomous
+    path returns the bare dict directly."""
+    return ToolMessage(
+        content=json.dumps(blocked_body(error)),
+        tool_call_id=tool_call_id,
+        name=name,
+        status="error",
+    )
 
 
 def make_write_lock_middleware(
@@ -62,16 +79,10 @@ def make_write_lock_middleware(
                 logger.warning(
                     "[deep_runtime] write refused (redis required, unavailable): %s", name
                 )
-                return ToolMessage(
-                    content=json.dumps(
-                        {
-                            "error": "write refused — redis write-lock required but unavailable",
-                            "blocked": True,
-                        }
-                    ),
+                return _blocked_tool_message(
+                    WRITE_LOCK_UNAVAILABLE_MESSAGE,
                     tool_call_id=request.tool_call["id"],
                     name=name,
-                    status="error",
                 )
             return await handler(request)
         if not capability or is_read_only_capability(capability):
@@ -82,16 +93,8 @@ def make_write_lock_middleware(
                 return await handler(request)
         except WriteLockContended:
             logger.warning("[deep_runtime] write lock contended for %s (%s)", name, capability)
-            return ToolMessage(
-                content=json.dumps(
-                    {
-                        "error": "resource busy — another write is in progress, retry",
-                        "blocked": True,
-                    }
-                ),
-                tool_call_id=request.tool_call["id"],
-                name=name,
-                status="error",
+            return _blocked_tool_message(
+                CONTENDED_MESSAGE, tool_call_id=request.tool_call["id"], name=name
             )
 
     return write_lock

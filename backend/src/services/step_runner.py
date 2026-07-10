@@ -22,6 +22,11 @@ import logging
 from src.config.settings import Settings
 from src.llm_utils import parse_llm_json
 from src.models.task_graph import TaskRun, TaskStep
+from src.services.contention import (
+    CONTENDED_MESSAGE,
+    WRITE_LOCK_UNAVAILABLE_MESSAGE,
+    blocked_body,
+)
 from src.services.execution_state import TERMINAL_SUCCESS
 from src.services.execution_surface_emitter import SurfaceEmitter
 from src.services.step_graph_store import StepGraphStore
@@ -79,10 +84,7 @@ def make_lock_wrapped_execute_tool_fn(
         if redis is None:
             # require_redis True + Redis down: refuse writes (fail-closed), reads pass.
             if not is_read_only_capability(capability):
-                return {
-                    "error": "write refused — redis write-lock required but unavailable",
-                    "blocked": True,
-                }
+                return blocked_body(WRITE_LOCK_UNAVAILABLE_MESSAGE)
             return await inner_fn(tool_name, tool_input, user_id=user_id, workspace_id=workspace_id)
         if not capability or is_read_only_capability(capability):
             return await inner_fn(tool_name, tool_input, user_id=user_id, workspace_id=workspace_id)
@@ -92,7 +94,7 @@ def make_lock_wrapped_execute_tool_fn(
                     tool_name, tool_input, user_id=user_id, workspace_id=workspace_id
                 )
         except WriteLockContended:
-            return {"error": "resource busy — another write is in progress, retry", "blocked": True}
+            return blocked_body(CONTENDED_MESSAGE)
 
     return _wrapped
 
