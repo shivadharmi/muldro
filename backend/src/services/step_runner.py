@@ -117,6 +117,7 @@ class StepRunner:
         budget=None,
         circuit_breaker=None,
         redis=None,
+        deep_step_runner=None,
     ):
         self._settings = settings
         self._client = client
@@ -130,6 +131,11 @@ class StepRunner:
         self._budget = budget
         self._circuit_breaker = circuit_breaker
         self._redis = redis
+        # Step 10C P1b: the autonomous durable deep step-executor callable
+        # (``AgentInvoker.run_autonomous_deep_step``), injected by GraphExecutor's
+        # worker lifespan (P2). ``None`` in tests/legacy → the deep branch in
+        # ``run_step_action`` is unreachable → byte-neutral.
+        self._deep_step_runner = deep_step_runner
 
     @property
     def _db_factory(self):
@@ -161,6 +167,17 @@ class StepRunner:
             {"run_id": run.run_id, "step_id": step.step_id, "tool_name": task_type},
             workspace_id=run.workspace_id,
         )
+
+        # Step 10C P1b: per-surface effective-runtime gate keyed "autonomous" (the 10B gate).
+        # DOUBLE-guarded byte-neutrality: the deep branch is taken ONLY when (a) the gate
+        # resolves "deep" — which needs a successful ``enabled:autonomous`` Redis read (or a
+        # manual override), so with no key / redis None it falls to settings.runtime="legacy"
+        # — AND (b) an actual deep_step_runner was injected (None by default). Both must hold.
+        from src.services.runtime_gate import effective_runtime
+
+        runtime = await effective_runtime("autonomous", redis=self._redis, settings=self._settings)
+        if runtime == "deep" and self._deep_step_runner is not None and self._db_factory:
+            return await self.run_step_via_deep_agent(step, run, cancel_event=cancel_event)
 
         # Check if agent loop dependencies are available
         if self._db_factory and self._execute_tool_fn and self._budget:
@@ -262,22 +279,13 @@ class StepRunner:
             workspace_id=run.workspace_id or "",
         )
 
-    async def run_step_via_agent_loop(
-        self,
-        step: TaskStep,
-        run: TaskRun,
-        cancel_event=None,
-    ) -> dict:
-        """Execute a step via the Executor agent loop with full tool discovery."""
-        from src.orchestrator.agent_loop import (
-            LoopDone,
-            LoopError,
-            LoopToolCall,
-            LoopToolResult,
-            agent_loop,
-        )
-        from src.orchestrator.agents import AGENTS
+    async def _build_step_message(self, step: TaskStep, run: TaskRun) -> str:
+        """Build the executor's task message from step input + completed predecessor outputs.
 
+        Extracted verbatim from ``run_step_via_agent_loop`` (Step 10C P1b) so the durable
+        deep path (``run_step_via_deep_agent``) hands the executor the byte-identical message
+        the legacy agent loop does — no drift between the two runtimes.
+        """
         input_data = step.input_data or {}
         task_type = input_data.get("capability", input_data.get("task_type", "unknown"))
         goal = input_data.get("goal", input_data.get("context", ""))
@@ -313,6 +321,60 @@ class StepRunner:
                 + "\n\n".join(prior_parts)
                 + "\n--- End of prior step results ---\n"
             )
+        return message
+
+    async def run_step_via_deep_agent(self, step, run, cancel_event=None) -> dict:
+        """Execute a step via the durable deep agent (Step 10C, dormant). Builds the SAME
+        message/context/per-step tools the legacy path builds, then delegates to the injected
+        deep_step_runner (AgentInvoker.run_autonomous_deep_step), which owns the ledger-wrapped
+        build + durable invoke + output mapping. pre_approved_capabilities = the step's single
+        already-step-gated capability (the dag_runner step gate approved it) — never a broad set."""
+        from src.orchestrator.agents import AGENTS
+
+        message = await self._build_step_message(step, run)
+        context_prompt = await self.build_step_context(run, step)
+        executor = AGENTS.get("executor")
+        if not executor:
+            return {
+                "status": "completed",
+                "result": "Executor agent not found",
+                "errors": ["Executor agent not configured"],
+            }
+        step_capability = (step.input_data or {}).get(
+            "capability", (step.input_data or {}).get("task_type", "unknown")
+        )
+        tools = await self.build_executor_tools(step_capability, run.workspace_id or "")
+        return await self._deep_step_runner(
+            executor=executor,
+            tools=tools,
+            message=message,
+            context_block=context_prompt,
+            user_id=run.user_id,
+            workspace_id=run.workspace_id or "",
+            run_id=run.run_id,
+            step_id=step.step_id,
+            pre_approved_capabilities=frozenset({step_capability}),
+            model=self._settings.resolved_model,
+            cancel_event=cancel_event,
+        )
+
+    async def run_step_via_agent_loop(
+        self,
+        step: TaskStep,
+        run: TaskRun,
+        cancel_event=None,
+    ) -> dict:
+        """Execute a step via the Executor agent loop with full tool discovery."""
+        from src.orchestrator.agent_loop import (
+            LoopDone,
+            LoopError,
+            LoopToolCall,
+            LoopToolResult,
+            agent_loop,
+        )
+        from src.orchestrator.agents import AGENTS
+
+        message = await self._build_step_message(step, run)
 
         # Get context
         context_prompt = await self.build_step_context(run, step)

@@ -80,6 +80,10 @@ class GraphExecutor:
         redis=None,
         # Trace persistence for background runs
         trace_store=None,
+        # Step 10C P1b: durable autonomous deep step-executor callable
+        # (AgentInvoker.run_autonomous_deep_step). None keeps the deep step path
+        # dormant/byte-neutral; the worker lifespan wires the real runner in P2.
+        deep_step_runner=None,
     ):
         self._settings = settings
         self._db = db
@@ -137,6 +141,7 @@ class GraphExecutor:
             budget=budget,
             circuit_breaker=circuit_breaker,
             redis=redis,
+            deep_step_runner=deep_step_runner,
         )
         # The side-effecting helpers of the single TrustEngine approval gate
         # (risk assessment, approval persistence + pause, auto-execute trust
