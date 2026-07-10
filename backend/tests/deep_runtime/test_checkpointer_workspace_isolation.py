@@ -44,6 +44,14 @@ def test_workspace_of_thread_id_never_raises_on_a_legacy_colonless_id():
     assert workspace_of_thread_id("legacy_colonless_id") is None
 
 
+def test_workspace_of_thread_id_never_raises_on_none_or_empty():
+    # A6 review (Minor 1): the module contract is "never raises", and the 10C/B9 reuse target
+    # reads Approval.thread_id — a NULLABLE column — so None/empty MUST parse to None
+    # (fail-closed), never AttributeError.
+    assert workspace_of_thread_id(None) is None
+    assert workspace_of_thread_id("") is None
+
+
 async def test_resume_deep_turn_refuses_a_thread_id_minted_for_another_workspace():
     """The pre-existing :695 guard (approval.workspace_id == caller workspace_id) PASSES
     here on purpose — the approval genuinely belongs to ws_B — so a refusal proves it comes

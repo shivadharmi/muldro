@@ -16,14 +16,22 @@ _TAG = "c"
 
 
 def make_thread_id(workspace_id: str) -> str:
-    """Mint a checkpointer thread_id embedding *workspace_id*."""
+    """Mint a checkpointer thread_id embedding *workspace_id*.
+
+    Assumes a colonless ``workspace_id`` (Jarvis ws ids are ``ws_{ULID}``); a colon in the
+    workspace would not round-trip through ``workspace_of_thread_id`` — which fails closed
+    (refuses), never grants — so it is safe but non-recoverable."""
     return f"{_TAG}:{workspace_id}:{ULID()}"
 
 
-def workspace_of_thread_id(thread_id: str) -> str | None:
-    """Parse the workspace out of a thread_id; None if malformed/colonless. Never raises —
-    a legacy colonless id parses to None (defensive, load-bearing: resume refuses any thread
-    whose workspace cannot be recovered)."""
+def workspace_of_thread_id(thread_id: str | None) -> str | None:
+    """Parse the workspace out of a thread_id; None if missing/malformed/colonless. NEVER
+    raises — None, empty, or a legacy colonless id all parse to None (defensive, load-bearing:
+    resume refuses any thread whose workspace cannot be recovered). The None-safety is a
+    contract, not incidental: the 10C/B9 reuse target reads ``Approval.thread_id`` — a
+    NULLABLE column — directly."""
+    if not thread_id or not isinstance(thread_id, str):
+        return None
     parts = thread_id.split(":", 2)
     if len(parts) == 3 and parts[0] == _TAG:
         return parts[1]
