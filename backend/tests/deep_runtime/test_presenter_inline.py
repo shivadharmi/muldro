@@ -120,9 +120,10 @@ class _SurfaceStreamingFakeModel(BaseChatModel):
 
 # --- 1. helper on/off -----------------------------------------------------------------
 def test_augment_on_appends_presenter_voice_block():
-    """When inline_format is True, a NEW list is returned with a PRESENTER_VOICE block."""
+    """When inline_format is True (for the reply lead), a NEW list is returned with a
+    PRESENTER_VOICE block."""
     blocks = [{"type": "text", "text": "soul+role"}]
-    out = _augment_system_blocks_for_inline(blocks, True)
+    out = _augment_system_blocks_for_inline(blocks, True, is_reply_lead=True)
 
     assert out is not blocks  # new list, not the input
     assert len(out) == len(blocks) + 1
@@ -145,7 +146,7 @@ def test_augment_is_idempotent_when_voice_already_present():
     augmentation is a no-op: the voice is NOT injected a second time and the input is
     returned unchanged."""
     blocks = [{"type": "text", "text": f"You are the Presenter.\n\n{PRESENTER_VOICE}"}]
-    out = _augment_system_blocks_for_inline(blocks, True)
+    out = _augment_system_blocks_for_inline(blocks, True, is_reply_lead=True)
 
     assert out is blocks  # identity — no copy, no second injection
     # PRESENTER_VOICE appears exactly once across all block texts.
@@ -159,7 +160,7 @@ def test_augment_does_not_mutate_input():
     blocks = [{"type": "text", "text": "soul+role"}]
     before = list(blocks)
 
-    _augment_system_blocks_for_inline(blocks, True)
+    _augment_system_blocks_for_inline(blocks, True, is_reply_lead=True)
 
     assert blocks == before  # unchanged
     assert len(blocks) == 1
@@ -172,7 +173,10 @@ async def test_inline_format_on_streams_reply_and_surface():
     settings = make_mock_settings(runtime="deep", deep_inline_format=True)
     base_blocks = [{"type": "text", "text": "You are Jarvis's Presenter."}]
 
-    augmented = _augment_system_blocks_for_inline(base_blocks, settings.deep_inline_format)
+    # is_reply_lead=True (the presenter is the reply-producing lead) → voice appended.
+    augmented = _augment_system_blocks_for_inline(
+        base_blocks, settings.deep_inline_format, is_reply_lead=True
+    )
     system = build_system_message(augmented)
     # the augmentation actually reached the built deep system prompt
     assert PRESENTER_VOICE in flatten_system_blocks(system.content)

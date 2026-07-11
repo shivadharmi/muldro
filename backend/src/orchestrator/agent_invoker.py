@@ -71,23 +71,42 @@ from src.services.runtime_gate import effective_runtime
 logger = logging.getLogger(__name__)
 
 
-def _augment_system_blocks_for_inline(system_blocks: list[dict], inline_format: bool) -> list[dict]:
+def _is_reply_lead(agent_name: str) -> bool:
+    """Return True iff ``agent_name`` is the reply-producing lead — the single agent whose
+    output becomes the user-facing reply. Today that is the Presenter: chat_processor's final
+    turn output comes from ``call_agent_stream("presenter", ...)``, while the ``planner``
+    (emits PlanOutput JSON) and the routed per-step read/execute agents (Perceiver /
+    Executor / Librarian) are non-responding steps that must NOT carry surface-generation
+    rules. Both the live seam (``call_agent_stream``) and the shadow seam
+    (``run_shadow_turn``) derive the lead flag from this same pure function on the same
+    ``agent_name``, so they can never diverge on the augmentation for an equivalent turn.
+
+    Step-10 note: when the separate presenter step is dropped (chat_processor change,
+    tracked separately) the reply lead's name changes and this predicate moves with it.
+    """
+    return agent_name == "presenter"
+
+
+def _augment_system_blocks_for_inline(
+    system_blocks: list[dict], inline_format: bool, *, is_reply_lead: bool = False
+) -> list[dict]:
     """Deep-only: append the Presenter voice so a deep agent formats the user-facing reply
     inline (Fork-1, Step 7B1). Off by default; when on, returns a NEW list (legacy blocks
     untouched). Idempotent: an agent whose base prompt already carries PRESENTER_VOICE (the
     presenter itself) is not double-injected.
 
-    Immutable: never mutates ``system_blocks`` — the same list object feeds the legacy
-    agent_loop, which must stay byte-identical. When ``inline_format`` is False the input
-    is returned unchanged (identity), so the deep prompt is byte-neutral by default.
+    Lead-scoped (A-3/B2): the voice is appended ONLY when ``is_reply_lead`` is True (the
+    single reply-producing lead). ``call_agent_stream``/``run_shadow_turn`` also build
+    non-reply agents (planner, Perceiver reads, Executor); those must NOT receive
+    surface-generation rules. The default is the SAFE value (no append), so a caller that
+    omits the flag never leaks the voice into a non-lead prompt.
 
-    ACTIVATION NOTE (Step-10): today this is applied to every deep call_agent_stream agent
-    when the flag is on. At live activation it MUST be restricted to the single reply-producing
-    lead — the planner (emits PlanOutput JSON) and non-responding agents should NOT receive
-    surface-generation rules — and land together with chat_processor dropping the separate
-    presenter step.
+    Immutable: never mutates ``system_blocks`` — the same list object feeds the legacy
+    agent_loop, which must stay byte-identical. When ``inline_format`` is False (or the
+    agent is not the reply lead) the input is returned unchanged (identity), so the deep
+    prompt is byte-neutral by default.
     """
-    if not inline_format:
+    if not (inline_format and is_reply_lead):
         return system_blocks
     if any(PRESENTER_VOICE in b.get("text", "") for b in system_blocks):
         return system_blocks
@@ -636,9 +655,13 @@ class AgentInvoker:
                 # augmentation. Builds a NEW block list (legacy agent_loop below keeps the
                 # ORIGINAL system_blocks) so the deep lead can format the reply inline. A
                 # no-op identity when deep_inline_format is False → deep prompt unchanged.
+                # A-3/B2: lead-scoped — the Presenter voice is appended ONLY for the
+                # reply-producing lead, never the planner or a routed read/execute step.
                 system_prompt=build_system_message(
                     _augment_system_blocks_for_inline(
-                        system_blocks, self._settings.deep_inline_format
+                        system_blocks,
+                        self._settings.deep_inline_format,
+                        is_reply_lead=_is_reply_lead(agent_name),
                     )
                 ),
                 # CF-1: persist the assembled ContextPack on any Approval this turn pauses
@@ -1090,9 +1113,15 @@ class AgentInvoker:
                 # dormant (short-circuits before any interrupt/DB) so an observation run
                 # never pauses waiting on an approval nobody will ever answer.
                 authorization_source=AuthorizationSource.DIRECT_USER_REQUEST,
+                # A-3/B2: the shadow lead must get the SAME lead flag the live lead gets for
+                # the equivalent turn — both derive it from the same ``agent_name`` via
+                # ``_is_reply_lead`` — so a shadow/live mismatch can never poison the
+                # divergence signal.
                 system_prompt=build_system_message(
                     _augment_system_blocks_for_inline(
-                        system_blocks, self._settings.deep_inline_format
+                        system_blocks,
+                        self._settings.deep_inline_format,
+                        is_reply_lead=_is_reply_lead(agent_name),
                     )
                 ),
                 context_block=context_block,
