@@ -62,7 +62,11 @@ from src.orchestrator.agents import SubAgent
 from src.orchestrator.budget import BudgetTracker
 from src.orchestrator.context_assembler import ContextAssembler
 from src.orchestrator.divergence import ShadowDecision
-from src.orchestrator.prompts import JARVIS_SOUL_CORE, PRESENTER_VOICE
+from src.orchestrator.prompts import (
+    DEEP_DELEGATION_INSTRUCTION,
+    JARVIS_SOUL_CORE,
+    PRESENTER_VOICE,
+)
 from src.orchestrator.services import ServiceContainer
 from src.orchestrator.tool_executor import ToolExecutor
 from src.services.metrics_service import AGENT_RUNTIME_CALLS
@@ -111,6 +115,46 @@ def _augment_system_blocks_for_inline(
     if any(PRESENTER_VOICE in b.get("text", "") for b in system_blocks):
         return system_blocks
     return [*system_blocks, {"type": "text", "text": PRESENTER_VOICE}]
+
+
+def _augment_system_blocks_for_delegation(
+    system_blocks: list[dict], *, has_delegates: bool
+) -> list[dict]:
+    """Deep-only: append ``DEEP_DELEGATION_INSTRUCTION`` so a deep agent that has a Perceiver
+    delegate registered on its built-in ``task`` tool is told to route read-only research to
+    it (Step 10 A-4 / B3). The delegate scaffolding (``_build_delegate_subagents`` +
+    ``subagents=``) existed already; this is the live routing INSTRUCTION that turns the
+    dormant scaffolding into an actual routing decision.
+
+    NOT lead-scoped — gated SOLELY on ``has_delegates`` (unlike A-3's
+    ``_augment_system_blocks_for_inline``, which is gated on ``_is_reply_lead``). The
+    instruction is offered to ANY deep agent for which a delegate was built, NOT only the
+    reply lead. Today (``deep_delegates_enabled`` off) that is a dormant no-op; when the flag
+    flips on, the planner and every routed step whose build produced a delegate get the
+    instruction too — not just the reply lead. Lead-scoping the offering is a DELIBERATE
+    Step-10 Part-B activation refinement: the correct "lead" identity is the post-B5 deep lead
+    (which does research inline), NOT the current reply-lead (=presenter, which only formats
+    already-gathered data), so scoping to the presenter now would bake in a soon-to-be-wrong
+    assumption. The current not-yet-scoped behavior is pinned by a test in
+    test_lead_delegate_routing.py so Part-B's scoping is a visible, deliberate change.
+
+    Gated on ``has_delegates`` — True ONLY when a delegate was actually built (a non-empty
+    ``subagents`` list). When the flag is off (``subagents == ()``) OR the delegate build
+    degraded to ``[]`` (10A A4 path), the caller passes ``has_delegates=False`` and this is
+    the IDENTITY — no instruction is added, so the prompt is byte-identical to today's
+    no-delegate turn. Never advertises a delegate that is not registered.
+
+    Composes cleanly with ``_augment_system_blocks_for_inline`` (A-3): both take a block list
+    and return a NEW list (or the input unchanged), never mutating in place, so wrapping one
+    around the other is order-independent and neither clobbers the other. Idempotent: a block
+    list already carrying the instruction is not doubled. The immutable input keeps the legacy
+    ``agent_loop`` path — which reads the same ``system_blocks`` — byte-identical.
+    """
+    if not has_delegates:
+        return system_blocks
+    if any(DEEP_DELEGATION_INSTRUCTION in b.get("text", "") for b in system_blocks):
+        return system_blocks
+    return [*system_blocks, {"type": "text", "text": DEEP_DELEGATION_INSTRUCTION}]
 
 
 def _parse_tool_result_content(content: Any) -> dict | None:
@@ -657,11 +701,23 @@ class AgentInvoker:
                 # no-op identity when deep_inline_format is False → deep prompt unchanged.
                 # A-3/B2: lead-scoped — the Presenter voice is appended ONLY for the
                 # reply-producing lead, never the planner or a routed read/execute step.
+                # A-4/B3: the delegation routing instruction is appended ONLY when a delegate
+                # was actually built (``bool(subagents)`` — flag on AND non-empty). It is
+                # offered to ANY deep agent that built a delegate — NOT lead-scoped (unlike the
+                # Presenter voice above, which is gated on ``_is_reply_lead``). Lead-scoping the
+                # offering to the post-B5 deep lead is a DELIBERATE Step-10 Part-B activation
+                # refinement (scoping to the current reply-lead=presenter now would encode a
+                # transitional assumption — the not-yet-scoped behavior is pinned by a test).
+                # Both augmentations compose immutably; flag off (subagents==()) OR a degraded
+                # build (subagents==[]) → identity → byte-neutral.
                 system_prompt=build_system_message(
-                    _augment_system_blocks_for_inline(
-                        system_blocks,
-                        self._settings.deep_inline_format,
-                        is_reply_lead=_is_reply_lead(agent_name),
+                    _augment_system_blocks_for_delegation(
+                        _augment_system_blocks_for_inline(
+                            system_blocks,
+                            self._settings.deep_inline_format,
+                            is_reply_lead=_is_reply_lead(agent_name),
+                        ),
+                        has_delegates=bool(subagents),
                     )
                 ),
                 # CF-1: persist the assembled ContextPack on any Approval this turn pauses
@@ -1117,6 +1173,12 @@ class AgentInvoker:
                 # the equivalent turn — both derive it from the same ``agent_name`` via
                 # ``_is_reply_lead`` — so a shadow/live mismatch can never poison the
                 # divergence signal.
+                # A-4/B3: ``_augment_system_blocks_for_delegation`` is intentionally NOT
+                # applied here — the shadow lead is deliberately delegate-free (``subagents=()``,
+                # per the SAFETY INVARIANT above), so ``has_delegates`` would be False anyway.
+                # If shadow delegate-fidelity is ever wired (10C/10D), add the delegation
+                # augment here in the same composition the live seam uses, gated on the same
+                # ``bool(subagents)``.
                 system_prompt=build_system_message(
                     _augment_system_blocks_for_inline(
                         system_blocks,

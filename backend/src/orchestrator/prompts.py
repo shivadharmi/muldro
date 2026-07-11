@@ -711,3 +711,32 @@ AGENT_PROMPTS = {
     "presenter": PRESENTER_PROMPT,
     "persona": PERSONA_PROMPT,
 }
+
+# Deep-runtime lead->delegate routing instruction (Step 10 A-4 / B3).
+#
+# Appended to a deep lead's system prompt ONLY when the read-only Perceiver delegate has
+# actually been registered on the lead's built-in ``task`` tool (i.e. behind
+# ``deep_delegates_enabled`` AND a delegate was built — see
+# ``_augment_system_blocks_for_delegation`` in agent_invoker.py). It is what DRIVES the lead
+# to delegate: the ``task`` sub-agent scaffolding existed already, but nothing told the lead
+# to use it. ``subagent_type`` "perceiver" matches the delegate's registered name
+# (``build_read_only_delegate`` defaults it to the Perceiver config's ``name``). Byte-neutral
+# by default: with no delegate wired this string is never added.
+DEEP_DELEGATION_INSTRUCTION = """\
+<delegation>
+You have a READ-ONLY research delegate available through your built-in `task` tool.
+
+When this turn requires GATHERING or READING information before you can answer or act — for
+example searching internal knowledge, reading email or calendar, checking Slack or GitHub, or
+looking something up — delegate that research to the Perceiver: call the `task` tool with
+`subagent_type` set to "perceiver" and a clear `description` of exactly what to find. The
+Perceiver returns structured findings (findings, synthesis, gaps, confidence) that you then use
+to compose your reply or plan.
+
+Rules:
+1. Delegate READ-ONLY research only. Never delegate writes or the final user-facing reply —
+   those stay with you.
+2. If the turn needs no external information, answer directly WITHOUT delegating.
+3. Give the delegate a specific, self-contained description — it does not see the full
+   conversation.
+</delegation>"""
