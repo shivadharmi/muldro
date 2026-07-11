@@ -76,6 +76,38 @@ async def test_resolvable_capability_dispatches_with_expected_args():
     )
 
 
+@pytest.mark.parametrize(
+    "error_result",
+    [
+        {"error": "connector down"},  # unknown-tool / failed / unknown-backend shape
+        {"error": "Tool 'x' is disabled", "blocked": True},  # disabled shape
+        {"status": "error", "error": "internal mcp error"},  # internal-mcp error shape
+    ],
+)
+async def test_executor_error_dict_raises_for_fail_safe(error_result):
+    """execute_tool NEVER raises on a read failure — it returns an error dict. run_readback
+    RAISES on the executor error contract so ReadBackVerifier resolves UNVERIFIED, never a
+    false CONTRADICTED (a verification OUTAGE must not false-fail a correct write, spec §7)."""
+    tool = SimpleNamespace(name="get_message", capability="email.get")
+    execute_tool_fn = AsyncMock(return_value=error_result)
+    runner = _make_runner(tool_registry=_FakeRegistry([tool]), execute_tool_fn=execute_tool_fn)
+
+    with pytest.raises(RuntimeError):
+        await runner.run_readback("email.get", {"message_id": "m1"}, _make_run())
+
+
+async def test_successful_read_dict_is_not_treated_as_error():
+    """A legitimate success dict ({"status": "ok", ...}) must pass through untouched — only
+    the executor's error markers trip the fail-safe guard."""
+    tool = SimpleNamespace(name="get_message", capability="email.get")
+    ok_result = {"status": "ok", "result": {"id": "m1"}}
+    execute_tool_fn = AsyncMock(return_value=ok_result)
+    runner = _make_runner(tool_registry=_FakeRegistry([tool]), execute_tool_fn=execute_tool_fn)
+
+    result = await runner.run_readback("email.get", {"message_id": "m1"}, _make_run())
+    assert result == ok_result
+
+
 async def test_unresolvable_capability_raises():
     """No tool serves the read capability -> raise (verifier fails safe to UNVERIFIED)."""
     runner = _make_runner(tool_registry=_FakeRegistry([]), execute_tool_fn=AsyncMock())

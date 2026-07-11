@@ -272,12 +272,29 @@ class StepRunner:
         if tool is None:
             raise RuntimeError(f"no tool serves read capability {read_capability}")
 
-        return await self._execute_tool_fn(
+        result = await self._execute_tool_fn(
             tool.name,
             read_args,
             user_id=run.user_id,
             workspace_id=run.workspace_id or "",
         )
+
+        # Fail-safe on the executor's ERROR CONTRACT: execute_tool NEVER raises on a read
+        # failure — it CATCHES and RETURNS an error dict ({"error": ...}, {..., "blocked": True},
+        # {"status": "error", ...}). Returning it verbatim would let the post-condition assertion
+        # see a non-matching result and false-CONTRADICT a correct write — the exact false-fail a
+        # verification OUTAGE must never cause. RAISE instead -> ReadBackVerifier resolves it to
+        # UNVERIFIED. Error markers ONLY (a legitimate success dict never trips this).
+        if isinstance(result, dict) and (
+            result.get("error") is not None
+            or result.get("status") == "error"
+            or result.get("blocked")
+        ):
+            raise RuntimeError(
+                f"read-back for {read_capability} returned a tool error — failing safe "
+                "to unverified"
+            )
+        return result
 
     async def _build_step_message(self, step: TaskStep, run: TaskRun) -> str:
         """Build the executor's task message from step input + completed predecessor outputs.

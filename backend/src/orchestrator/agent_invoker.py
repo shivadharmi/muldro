@@ -42,6 +42,7 @@ from src.deep_runtime.middleware.unavailable_server import make_unavailable_serv
 from src.deep_runtime.middleware.write_lock import make_write_lock_middleware
 from src.deep_runtime.model_factory import MODEL_TIER_IDS
 from src.deep_runtime.prompt_bridge import build_system_message
+from src.deep_runtime.readback_readfn import FreshSessionToolLister, make_readback_read_fn
 from src.deep_runtime.stream_adapter import stream_deep_agent_events
 from src.deep_runtime.thread_identity import make_thread_id, workspace_of_thread_id
 from src.deep_runtime.tool_bridge import build_tool_shells
@@ -480,9 +481,15 @@ class AgentInvoker:
             trigger="chat",
         )
 
-        # Step 7C: inline read-back (DORMANT behind deep_readback_enabled). read_fn=None
-        # (deferred-tick template). Reuses _resolve_cap (fail-open cap|None, same as write_lock) +
-        # _assess_risk. CONFIRMED + gated → the deep trust-increment helper.
+        # Step 7C / B4: inline read-back (DORMANT behind deep_readback_enabled). B4 replaced the
+        # deferred-tick read_fn=None with a REAL read_fn that routes the post-condition read
+        # through the central execute_tool dispatcher and reproduces the unservable denylist (so
+        # calendar.create cannot false-CONTRADICT). Safety is NOT from capability-scope (a separate
+        # outer middleware the read_fn bypasses) — the read capability is post-condition-derived,
+        # side-effect-free, and workspace-scoped at dispatch. It uses the BUILD's execute_tool (the
+        # same resolved dispatcher fn the tool chain uses — real / shadow / ledger-wrapped), so a
+        # read honors the turn's execution context. Reuses _resolve_cap (fail-open cap|None, same
+        # as write_lock) + _assess_risk. CONFIRMED + gated → the deep trust-increment helper.
         gated_chain: tuple[Any, ...] = (write_lock, dispatcher)
         if self._settings.deep_readback_enabled:
 
@@ -501,7 +508,12 @@ class AgentInvoker:
                 authorization_source=authorization_source,
                 resolve_capability=_resolve_cap,
                 assess_risk=_assess_risk,
-                read_fn=None,
+                read_fn=make_readback_read_fn(
+                    execute_tool=execute_tool or self._tool_executor.execute_tool,
+                    tool_registry=FreshSessionToolLister(self._db_factory, workspace_id),
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                ),
                 record_confirmed_outcome=_record_confirmed_outcome,
             )
             gated_chain = (write_lock, read_back, dispatcher)
