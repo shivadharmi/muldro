@@ -2,6 +2,8 @@
 
 import { create } from "zustand";
 
+import type { ApprovalContext } from "@/lib/a2ui-types";
+
 // ── TypeScript interfaces ────────────────────────────────────────
 
 export interface HistoryStepSummary {
@@ -13,6 +15,8 @@ export interface HistoryStepSummary {
   completed_at: string | null;
 }
 
+/** Thin approval subset — the byte-neutral fallback the REST/history path returns
+ *  when the run has no persisted rich {@link ApprovalContext}. */
 export interface HistoryApprovalContext {
   approval_id: string | null;
   step_id: string | null;
@@ -20,6 +24,11 @@ export interface HistoryApprovalContext {
   risk_level: string | null;
   trust_level: string | null;
 }
+
+/** Either the rich unified {@link ApprovalContext} (when the run's persisted surface
+ *  carries one) or the thin fallback. The frontend renders the unified
+ *  `InlineApprovalCard` for the rich arm and a legacy fallback for the thin arm. */
+export type RunApproval = ApprovalContext | HistoryApprovalContext;
 
 export interface HistoryItem {
   run_id: string;
@@ -43,7 +52,7 @@ export interface HistoryItem {
   // Last-updated timestamp (distinct from started/completed).
   updated_at?: string | null;
   steps: HistoryStepSummary[];
-  approval: HistoryApprovalContext | null;
+  approval: RunApproval | null;
   live_phase: string | null;
   surface_id: string | null;
 }
@@ -61,7 +70,7 @@ export interface HistoryFilters {
 interface LiveRunUpdate {
   phase?: string;
   steps?: HistoryStepSummary[];
-  approval?: HistoryApprovalContext | null;
+  approval?: RunApproval | null;
   status?: string;
 }
 
