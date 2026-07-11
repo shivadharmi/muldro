@@ -623,6 +623,16 @@ class AgentInvoker:
             )
             return []
 
+    async def effective_chat_runtime(self) -> str:
+        """Resolve the chat surface's effective runtime (override > breaker > enabled >
+        static settings.runtime). Centralizes the resolution call_agent_stream does inline so
+        the chat_processor single-lead branch (5b) can gate on the SAME resolved value."""
+        return await effective_runtime(
+            "chat",
+            redis=self._services.extras.get("redis") if self._services else None,
+            settings=self._settings,
+        )
+
     async def call_agent_stream(
         self,
         agent_name: str,
@@ -834,6 +844,77 @@ class AgentInvoker:
                     "latency_ms": evt.latency_ms,
                     "cost_usd": round(evt.cost_usd, 6),
                 }
+
+    async def stream_deep_lead(
+        self,
+        lead: "SubAgent",
+        tools: list[dict],
+        *,
+        message: str,
+        context_block: str,
+        user_id: str,
+        workspace_id: str,
+        intent: str | None = None,
+        trace=None,
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """Run ONE synthetic deep lead over a whole user goal, streaming SSE-compatible frames
+        (Step 10D A-5). Generalizes the ``call_agent_stream`` ``runtime=="deep"`` branch for a
+        single lead that gathers, acts, and replies inline — replacing the per-step loop +
+        presenter step on the deep single-lead chat path (wired in 5b).
+
+        Differences from the routed deep branch: (1) PRESENTER_VOICE is ALWAYS applied
+        (``is_reply_lead=True``), decoupling the reply lead from ``name=="presenter"`` — the
+        lead is named ``"lead"``. (2) The RAW user ``message`` is the human turn input;
+        ``context_block`` goes into the SYSTEM prompt (not the human message) so any
+        extraction middleware sees a clean source. Authorization is DIRECT_USER_REQUEST
+        (user's message = authorization; trust_gate stays dormant). ``intent``/``trace`` are
+        accepted for the 5c librarian-fidelity wiring; unused in 5a.
+
+        Delegation is DELIBERATELY not composed here (only ``_augment_system_blocks_for_inline``
+        is applied, never ``_augment_system_blocks_for_delegation``): the A-5 single lead does
+        its research INLINE, so it hosts no Perceiver delegate even under
+        ``deep_delegates_enabled``. Composing delegates onto the lead is a Step-10 Part-B (5d)
+        refinement, not a missed parity.
+        """
+        # This method IS the deep single-lead path — it is only ever reached when the chat
+        # runtime resolves to "deep" (the 5b caller gates on it). Increment with the fixed
+        # "deep" label so a live single-lead turn is counted in the Step-10B rollback/adoption
+        # signal, mirroring ``call_agent_stream``'s per-call increment (and UNLIKE the shadow
+        # turn, which is not live authoritative traffic and deliberately omits it). Dormant in
+        # 5a (no live caller), so this is byte-neutral on legacy.
+        AGENT_RUNTIME_CALLS.labels(runtime="deep").inc()
+        model = self.get_model_for_agent(lead)
+        system_blocks = self.build_system_prompt(lead, context_block)
+        # A-5: PRESENTER_VOICE always on the lead — inline_format=True AND is_reply_lead=True
+        # force the append regardless of the deep_inline_format flag (single-lead subsumes it).
+        augmented = _augment_system_blocks_for_inline(system_blocks, True, is_reply_lead=True)
+        thread_id = make_thread_id(workspace_id)
+        deep_agent = await self._build_deep_agent_for(
+            lead,
+            tools,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            thread_id=thread_id,
+            authorization_source=AuthorizationSource.DIRECT_USER_REQUEST,
+            system_prompt=build_system_message(augmented),
+            context_block=context_block,
+        )
+        config = {"configurable": {"thread_id": thread_id}}
+        graph_input = {"messages": [{"role": "user", "content": message}]}
+        paused = False
+        async for frame in stream_deep_agent_events(
+            deep_agent,
+            graph_input,
+            config,
+            agent_name=lead.name,
+            model=model,
+            durability="sync",
+        ):
+            if isinstance(frame, dict) and frame.get("event") == "approval_needed":
+                paused = True
+            yield frame
+        if not paused:
+            await reap_thread(self._checkpointer_provider(), thread_id)
 
     async def resume_deep_turn(
         self, *, approval_id: str, decision: str, user_id: str, workspace_id: str

@@ -83,6 +83,23 @@ class CapabilityResolver:
                 )
         return result
 
+    async def capabilities_for_step(self, step_capability: str) -> set[str]:
+        """Return the set of capabilities whose tools ``resolve_for_step`` would offer for
+        a plan step: the primary ``step_capability`` plus the read-only family capabilities
+        (same ``family.`` prefix, no approval required). Used to derive a deep lead's
+        capability_scope so its offered tools and enforced scope stay consistent."""
+        all_tools = await self._list_enabled_tools()
+        family = step_capability.split(".")[0] if "." in step_capability else step_capability
+        caps = {step_capability}
+        for t in all_tools:
+            if (
+                t.capability is not None
+                and t.capability.startswith(f"{family}.")
+                and not t.requires_approval
+            ):
+                caps.add(t.capability)
+        return caps
+
     async def is_read_capability(self, capability: str) -> bool:
         """True when ALL tools for *capability* are read-only (no approval needed).
 

@@ -196,6 +196,12 @@ class Settings(BaseSettings):
     # False the deep path builds the full eager pack (byte-identical to legacy).
     deep_context_jit: bool = False  # JARVIS_DEEP_CONTEXT_JIT
 
+    # Step 10D A-5: gate the deep-chat single-lead restructure. When True AND runtime
+    # resolves to "deep" AND mode=="ask", the chat path runs ONE synthetic lead over the
+    # whole goal (built in 5a, wired in 5b) instead of the per-step loop + presenter step.
+    # Off by default — dormant until the 5b chat wiring lands and this flag is flipped.
+    deep_single_lead: bool = False  # JARVIS_DEEP_SINGLE_LEAD
+
     # Step 10B Task 3b: fraction of chat turns (0.0-1.0) that ALSO run a
     # NON-authoritative shadow turn on the opposite runtime, for the cutover
     # control-plane's shadow-compare harness (ShadowRunner). Default 0.0 = off —
