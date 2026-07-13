@@ -301,6 +301,7 @@ class AgentInvoker:
         subagents: Sequence[Any] = (),
         execute_tool: ExecuteToolFn | None = None,
         pre_approved_capabilities: frozenset[str] = frozenset(),
+        require_write_lock: bool = False,
     ):
         """Build a compiled deep agent WITH the full gated middleware chain:
         capability_scope (installed by ``build_deep_agent`` when ``db_factory`` is given)
@@ -330,6 +331,13 @@ class AgentInvoker:
         to the trust_gate so a capability already gated at the STEP level is not double-
         prompted at the tool-call level. Defaults to the empty frozenset — the chat + resume
         + shadow callers never pass it, so the gate is byte-identical for them.
+
+        ``require_write_lock`` (Step 10D P1 A3, ADDITIVE): fail the write lock CLOSED for this
+        build, OR'd with the per-caller ``write_lock_require_redis`` setting. The ungated chat
+        single-lead path (``stream_deep_lead``) passes True so its writes are NEVER executed
+        unserialized while Redis is down. Defaults to False, keeping ALL other callers
+        (``call_agent_stream`` deep branch, ``resume_deep_turn``, ``run_autonomous_deep_step``,
+        ``run_shadow_turn``) byte-identical to before this param existed.
         """
         shells = build_tool_shells(tools)
 
@@ -418,7 +426,9 @@ class AgentInvoker:
             # write lock silently never engaged. None-safe: services may be None in tests.
             redis=self._services.extras.get("redis") if self._services else None,
             resolve_capability=_resolve_cap,
-            require_redis=self._settings.write_lock_require_redis,
+            # Step 10D P1 A3: OR in the per-build override so the ungated chat single-lead path
+            # fail-closes its writes even when the global setting default is fail-open.
+            require_redis=self._settings.write_lock_require_redis or require_write_lock,
         )
 
         # Step 7B1 P3: Librarian → extraction-middleware collapse. This @after_model hook
@@ -845,10 +855,22 @@ class AgentInvoker:
                     "cost_usd": round(evt.cost_usd, 6),
                 }
 
+    async def build_chat_lead(self, steps, workspace_id: str) -> SubAgent:
+        """Build the synthetic single-lead SubAgent for a plan (Step 10D chat permission model, P1).
+
+        Delegates to lead_builder.build_chat_lead (which derives the plan-union capability_scope
+        via derive_lead_scope), using the invoker's own agent set + cheap_mode + db_factory.
+        Fail-closed + plan-bounded by construction (see lead_builder)."""
+        from src.orchestrator.lead_builder import build_chat_lead as _build_chat_lead
+
+        return await _build_chat_lead(
+            self._db_factory, workspace_id, steps, self._agents, self._settings.cheap_mode
+        )
+
     async def stream_deep_lead(
         self,
         lead: "SubAgent",
-        tools: list[dict],
+        tools: list[dict] | None = None,
         *,
         message: str,
         context_block: str,
@@ -875,7 +897,19 @@ class AgentInvoker:
         its research INLINE, so it hosts no Perceiver delegate even under
         ``deep_delegates_enabled``. Composing delegates onto the lead is a Step-10 Part-B (5d)
         refinement, not a missed parity.
+
+        ``tools`` (P1 A2): when ``None`` (omitted) the tool set is resolved INTERNALLY via
+        ``_resolve_tools(lead, ws, None)`` → ``get_tools_for_agent(lead)``, which offers EXACTLY
+        the tools whose capability ∈ the lead's scope, so offered-tools ⊆ enforced-scope BY
+        CONSTRUCTION (the caller cannot pass an inconsistent tool set). An EXPLICIT ``[]`` still
+        means "no tools" — only ``None`` triggers the resolve.
+
+        The write lock is forced fail-CLOSED here (``require_write_lock=True`` into
+        ``_build_deep_agent_for``): the single-lead path is ungated, so its writes MUST be
+        serialized and never execute unserialized while Redis is down (P1 A3).
         """
+        if tools is None:
+            tools = await self._resolve_tools(lead, workspace_id, None)
         # This method IS the deep single-lead path — it is only ever reached when the chat
         # runtime resolves to "deep" (the 5b caller gates on it). Increment with the fixed
         # "deep" label so a live single-lead turn is counted in the Step-10B rollback/adoption
@@ -898,6 +932,8 @@ class AgentInvoker:
             authorization_source=AuthorizationSource.DIRECT_USER_REQUEST,
             system_prompt=build_system_message(augmented),
             context_block=context_block,
+            # A3: the ungated single-lead path fail-closes its writes on Redis-down.
+            require_write_lock=True,
         )
         config = {"configurable": {"thread_id": thread_id}}
         graph_input = {"messages": [{"role": "user", "content": message}]}

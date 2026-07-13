@@ -12,8 +12,11 @@ DORMANT: no live path calls ``stream_deep_lead`` in 5a — it is callable-but-un
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from src.contracts import PlanStep
+from src.orchestrator import lead_builder
 from src.orchestrator.agent_invoker import AgentInvoker
 from src.orchestrator.agents import SubAgent, ThinkingConfig
 from src.orchestrator.prompts import PRESENTER_VOICE
@@ -237,3 +240,189 @@ def test_chat_processor_does_not_reference_single_lead_symbols():
     assert "stream_deep_lead" not in src
     assert "build_chat_lead" not in src
     assert "deep_single_lead" not in src
+
+
+# --- P1 A2: stream_deep_lead resolves tools internally when tools is None --------------
+async def test_stream_deep_lead_resolves_tools_when_none():
+    """A1 P1 (SECURITY): ``tools=None`` (omitted) triggers ``_resolve_tools(lead, ws, None)``
+    so the offered tool set is derived from the lead's OWN scope (offered ⊆ enforced by
+    construction) — the caller cannot pass an inconsistent tool set. The resolved tools are
+    forwarded on to the deep build (through ``build_tool_shells``)."""
+    inv = _make_invoker()
+    lead = _lead()
+    sentinel_tools = [{"name": "email_send"}]
+
+    with (
+        patch.object(
+            inv, "_resolve_tools", new=AsyncMock(return_value=sentinel_tools)
+        ) as spy_resolve,
+        patch(
+            "src.orchestrator.agent_invoker.build_tool_shells", return_value=["SHELL"]
+        ) as spy_shells,
+        patch("src.orchestrator.agent_invoker.build_deep_agent", new=AsyncMock()),
+        patch("src.orchestrator.agent_invoker.stream_deep_agent_events", _agent_done_stream),
+    ):
+        _ = [
+            f
+            async for f in inv.stream_deep_lead(
+                lead,
+                None,
+                message="hi",
+                context_block="",
+                user_id="u",
+                workspace_id="ws",
+            )
+        ]
+
+    spy_resolve.assert_awaited_once_with(lead, "ws", None)
+    # The resolved tools (not None) reach the deep build.
+    spy_shells.assert_called_once_with(sentinel_tools)
+
+
+async def test_stream_deep_lead_explicit_empty_tools_skips_resolve():
+    """An EXPLICIT ``[]`` still means "no tools" — only ``None`` triggers the internal
+    resolve. This pins the boundary so 5a's existing ``[]``-passing tests stay valid."""
+    inv = _make_invoker()
+    lead = _lead()
+
+    with (
+        patch.object(inv, "_resolve_tools", new=AsyncMock()) as spy_resolve,
+        patch(
+            "src.orchestrator.agent_invoker.build_tool_shells", return_value=["SHELL"]
+        ) as spy_shells,
+        patch("src.orchestrator.agent_invoker.build_deep_agent", new=AsyncMock()),
+        patch("src.orchestrator.agent_invoker.stream_deep_agent_events", _agent_done_stream),
+    ):
+        _ = [
+            f
+            async for f in inv.stream_deep_lead(
+                lead,
+                [],
+                message="hi",
+                context_block="",
+                user_id="u",
+                workspace_id="ws",
+            )
+        ]
+
+    spy_resolve.assert_not_awaited()
+    spy_shells.assert_called_once_with([])
+
+
+# --- P1 A3: the chat lead ALWAYS fail-closes its write lock on Redis-down --------------
+async def test_stream_deep_lead_forces_write_lock_fail_closed():
+    """A3 (SECURITY): the ungated chat single-lead path serializes its writes even when the
+    per-caller ``write_lock_require_redis`` default is False. ``stream_deep_lead`` passes
+    ``require_write_lock=True``, so ``make_write_lock_middleware`` is built with
+    ``require_redis=True`` — writes never execute unserialized while Redis is down. TEETH:
+    the mock settings default is False, so a True here can only come from the forced flag."""
+    inv = _make_invoker()  # settings.write_lock_require_redis == False (conftest default)
+
+    with (
+        patch("src.orchestrator.agent_invoker.build_deep_agent", new=AsyncMock()),
+        patch("src.orchestrator.agent_invoker.stream_deep_agent_events", _agent_done_stream),
+        patch(
+            "src.orchestrator.agent_invoker.make_write_lock_middleware", return_value=object()
+        ) as mock_wl,
+    ):
+        _ = [
+            f
+            async for f in inv.stream_deep_lead(
+                _lead(),
+                [],
+                message="hi",
+                context_block="",
+                user_id="u",
+                workspace_id="ws",
+            )
+        ]
+
+    assert mock_wl.call_args.kwargs["require_redis"] is True
+
+
+# --- P1 A1: AgentInvoker.build_chat_lead wrapper --------------------------------------
+class _FakeCM:
+    """Async context manager yielding a fake DB session (mirrors test_lead_builder)."""
+
+    def __init__(self, db):
+        self._db = db
+
+    async def __aenter__(self):
+        return self._db
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+def _make_invoker_with_agents(agents, db_factory, *, cheap_mode=False) -> AgentInvoker:
+    """AgentInvoker whose agent set + cheap_mode + db_factory are the single source of truth
+    the ``build_chat_lead`` wrapper reads from."""
+    tool_executor = MagicMock()
+    tool_executor.apply_cache_control_to_tools = lambda tools: tools
+    context = MagicMock()
+    context.assemble_context = AsyncMock(return_value="")
+    return AgentInvoker(
+        settings=make_mock_settings(runtime="deep", cheap_mode=cheap_mode),
+        client=MagicMock(),
+        services=None,
+        budget=MagicMock(),
+        circuit_breaker=MagicMock(),
+        db_factory_provider=lambda: db_factory,
+        tool_executor=tool_executor,
+        context=context,
+        agents=agents,
+    )
+
+
+async def test_build_chat_lead_uses_invoker_agents_and_returns_lead():
+    """The wrapper builds the plan-bounded ``lead`` SubAgent, feeding ``derive_lead_scope``
+    the INVOKER's OWN agent set (the same perceiver the per-step path uses)."""
+    perceiver = SubAgent(
+        name="perceiver", prompt="p", model_tier="sonnet", capability_scope={"email.read"}
+    )
+    agents = {"perceiver": perceiver}
+
+    def _db_factory():
+        return _FakeCM(db=object())
+
+    inv = _make_invoker_with_agents(agents, _db_factory, cheap_mode=False)
+
+    fake_resolver = SimpleNamespace(capabilities_for_step=AsyncMock(side_effect=lambda c: {c}))
+    step = PlanStep(description="email.send", capability="email.send", actor="jarvis")
+    real_derive = lead_builder.derive_lead_scope
+
+    with (
+        patch("src.orchestrator.lead_builder.CapabilityResolver", return_value=fake_resolver),
+        patch("src.orchestrator.lead_builder.derive_lead_scope", wraps=real_derive) as spy_derive,
+    ):
+        lead = await inv.build_chat_lead([step], "ws")
+
+    assert lead.name == "lead"
+    assert lead.capability_scope == {"email.send"}
+    # derive_lead_scope received the invoker's own agent set (positional arg[2]).
+    assert spy_derive.await_args.args[2] is agents
+
+
+async def test_build_chat_lead_forwards_invoker_cheap_mode():
+    """The wrapper forwards ``self._settings.cheap_mode`` — cheap mode halves the lead's
+    thinking budget (4096 -> 2048) while keeping the sonnet tier."""
+    agents = {
+        "perceiver": SubAgent(
+            name="perceiver", prompt="p", model_tier="sonnet", capability_scope=set()
+        )
+    }
+
+    def _db_factory():
+        return _FakeCM(db=object())
+
+    inv = _make_invoker_with_agents(agents, _db_factory, cheap_mode=True)
+
+    fake_resolver = SimpleNamespace(capabilities_for_step=AsyncMock(side_effect=lambda c: {c}))
+    step = PlanStep(description="email.send", capability="email.send", actor="jarvis")
+
+    with patch("src.orchestrator.lead_builder.CapabilityResolver", return_value=fake_resolver):
+        lead = await inv.build_chat_lead([step], "ws")
+
+    assert lead.name == "lead"
+    assert lead.model_tier == "sonnet"
+    assert lead.thinking.budget_tokens == 2048

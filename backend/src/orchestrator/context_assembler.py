@@ -24,6 +24,10 @@ CONTEXT_ENRICHED_AGENTS = {
     "perceiver",
     "librarian",
     "executor",
+    # Step 10D P1: the synthetic single-lead chat agent (name=="lead") gathers, acts, and
+    # replies inline over a whole turn, so it needs the same ambient enrichment the routed
+    # agents get. NOT added to JIT_ENABLED_AGENTS — JIT is a separate dormant concern.
+    "lead",
 }
 
 # Step 8: agents that hold the JIT read tools and can therefore run on the slim

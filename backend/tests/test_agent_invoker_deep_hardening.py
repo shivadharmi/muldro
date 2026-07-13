@@ -477,6 +477,52 @@ async def test_deep_branch_falls_back_to_memorysaver_when_provider_returns_none(
     assert isinstance(mock_build.call_args.kwargs["checkpointer"], MemorySaver)
 
 
+async def test_deep_chat_write_lock_defaults_fail_open():
+    """Step 10D A3 negative control: the routed deep chat build (``call_agent_stream``) does
+    NOT force the write lock closed — ``require_write_lock`` defaults False in
+    ``_build_deep_agent_for``, so with the mock settings' ``write_lock_require_redis=False``
+    the lock is built fail-OPEN (``require_redis=False``), byte-identical to before the param
+    existed. Only the single-lead chat path (``stream_deep_lead``) forces it True."""
+    inv = _make_invoker(runtime="deep", checkpointer_provider=lambda: object())
+
+    async def _fake_adapter(*a, **k):
+        yield {
+            "event": "agent_done",
+            "agent": "perceiver",
+            "text": "ok",
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "cache_creation_tokens": 0,
+            "cache_read_tokens": 0,
+            "tools_called": [],
+            "latency_ms": 1,
+            "cost_usd": 0.0,
+        }
+
+    with (
+        patch("src.orchestrator.agent_invoker.build_deep_agent", new=AsyncMock()),
+        patch("src.orchestrator.agent_invoker.build_tool_shells", return_value=["SHELL"]),
+        patch("src.orchestrator.agent_invoker.make_jarvis_tool_dispatcher", return_value=object()),
+        patch("src.orchestrator.agent_invoker.make_trust_gate_middleware", return_value=object()),
+        patch(
+            "src.orchestrator.agent_invoker.make_write_lock_middleware", return_value=object()
+        ) as mock_wl,
+        patch("src.orchestrator.agent_invoker.stream_deep_agent_events", _fake_adapter),
+    ):
+        _ = [
+            f
+            async for f in inv.call_agent_stream(
+                "perceiver",
+                message="hi",
+                user_id="u",
+                workspace_id="ws",
+                tools_override=[],
+            )
+        ]
+
+    assert mock_wl.call_args.kwargs["require_redis"] is False
+
+
 async def test_legacy_runtime_unchanged_after_new_param():
     """runtime=legacy: agent_loop is still the path; the deep adapter is never called.
 
