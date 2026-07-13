@@ -143,6 +143,44 @@ BEFORE P2 lands — in P1 `bypass` is inert (dormant flags) and plan-bounded, bu
 "broad write authority within connected connectors, no confirmations," so any authenticated member
 being able to POST `permission_mode="bypass"` must be gated by a workspace entitlement by then.
 
+### P2 verified current-state (grounding 2026-07-13 — RE-VERIFY by symbol name, 10D shifted seams)
+The interrupt/approval/resume PRIMITIVES exist and are unit-tested; the CHAT round trip is unwired.
+- **Interrupt path (works):** deep `trust_gate` (`src/deep_runtime/middleware/trust_gate.py`) calls
+  `interrupt(...)` on a gated write; `stream_deep_agent_events` (`src/deep_runtime/stream_adapter.py`)
+  detects the LangGraph `__interrupt__` update and yields an `approval_needed` frame then `return`s.
+  BUT `trust_gate` SHORT-CIRCUITS on `DIRECT_USER_REQUEST` (`is_gated_source` in
+  `src/deep_runtime/authorization.py`) — so on chat it never fires. ⟹ P2's `permission_gate` must
+  interrupt on **mode×risk**, independent of auth source (a SEPARATE middleware; do NOT disturb the
+  autonomous `trust_gate` evaluate path). It can reuse the same `interrupt()` discipline (NO DB session
+  held across `interrupt()`; idempotent create-or-get on `(workspace_id, thread_id, tool_call_id)`).
+- **Approval creation:** `trust_gate._decide_and_maybe_persist` → `create_approval` (via
+  `src/services/approval_service.py`) stores `artifact_refs{thread_id, tool_call_id, capability,
+  context_block(≤8000), tool_name, agent_name, ...}`, `run_id=None`, and promotes `thread_id`/
+  `tool_call_id` to columns. `Approval` model: `src/models/approvals.py` (partial-unique
+  `uq_approvals_thread_tool_call`).
+- **Resume (orphaned):** `AgentInvoker.resume_deep_turn` (`src/orchestrator/agent_invoker.py`)
+  rebuilds the agent + `Command(resume=decision)` from the stored `thread_id`/`context_block`, uses
+  `AUTONOMOUS` auth (so the replayed gate does NOT short-circuit before `interrupt()`). It has ONLY
+  test callers (`test_agent_invoker_resume`, `test_deep_gate_end_to_end`,
+  `test_deep_gate_durable_resume_db`, `test_resume_deep_turn_ordering`, `test_resume_context_reinjection`)
+  — **NO endpoint/production caller.** P2 must add one.
+- **The /approve gap:** `POST /v1/approvals/{id}/approve` for a deep-gate approval (no `run_id`,
+  has `artifact_refs.tool_name`) spins up a **NEW autonomous Plan+TaskRun** (`routes_approvals.py`
+  ~286-351) — it never calls `resume_deep_turn` / the stored `thread_id`. P2 must route a chat-gate
+  approval to `resume_deep_turn` instead (or a new chat-resume endpoint).
+- **Frontend:** the chat SSE switch (`frontend/src/components/jarvis/chat-panel.tsx`) has NO
+  `approval_needed` case — the frame is dropped today. P2 adds a consumer + `InlineApprovalCard`-in-chat
+  + a resume trigger. The SSE **pause/resume protocol** is novel for chat (first stream ends on
+  `approval_needed`; client approves via the resume endpoint; a NEW SSE stream continues the turn).
+- **Risk classifier (reuse):** `get_or_assess_risk(capability, step_input, user_context, workspace_id,
+  client, redis)` (`src/services/risk_assessor.py`) → `RiskAssessment{risk_level, reversible,
+  blast_radius}`, Haiku, 24h Redis cache, **fails closed to HIGH**. The `_assess_risk` closure in
+  `agent_invoker._build_deep_agent_for` already wraps it for the deep build.
+- **SPIKE (do FIRST, decision-gate):** prove interrupt→approve→resume end-to-end for a CHAT lead
+  (permission_gate, real sonnet, a real write-shaped tool) with the synchronous SSE-reconnect — the
+  write executes exactly once on approve, is skipped on reject, and the lead emits its terminal reply
+  either way. Model the harness on `spikes/deep_single_lead/` (real API) + the existing resume tests.
+
 ## 5. P2.5 — drop the Planner (planless)
 Once P2's gate bounds writes at action time and `system.*` are promoted to internal tools
 (catalog+schemas+intelligence_server), the Planner's chat jobs (b)+(c) are re-homed → drop the Planner
