@@ -181,6 +181,7 @@ class ChatProcessor:
         surface: str = "api",
         context: dict | None = None,
         mode: str = "plan",
+        permission_mode: str = "auto",
     ) -> dict:
         """Process a user message and return the batch ``result`` dict.
 
@@ -213,6 +214,7 @@ class ChatProcessor:
             workspace_id,
             surface=surface,
             mode=mode,
+            permission_mode=permission_mode,
             prompt_style="structured",
             context=context,
             conversation_id=conversation_id,
@@ -274,6 +276,7 @@ class ChatProcessor:
         mode: str = "ask",
         context: dict | None = None,
         conversation_id: str | None = None,
+        permission_mode: str = "auto",
     ) -> AsyncGenerator[CoreEvent, None]:
         """Public typed-event entry point for the conversational (streaming) path.
 
@@ -296,6 +299,7 @@ class ChatProcessor:
             workspace_id,
             surface=surface,
             mode=mode,
+            permission_mode=permission_mode,
             prompt_style="conversational",
             context=context,
             conversation_id=conversation_id,
@@ -311,6 +315,7 @@ class ChatProcessor:
         mode: str = "ask",
         context: dict | None = None,
         conversation_id: str | None = None,
+        permission_mode: str = "auto",
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Stream SSE-compatible event dicts while processing a user message.
 
@@ -325,6 +330,7 @@ class ChatProcessor:
             mode=mode,
             context=context,
             conversation_id=conversation_id,
+            permission_mode=permission_mode,
         ):
             sse = core_event_to_sse(event)
             if sse is not None:
@@ -341,6 +347,7 @@ class ChatProcessor:
         prompt_style: str,
         context: dict | None,
         conversation_id: str | None,
+        permission_mode: str = "auto",
     ) -> AsyncGenerator[CoreEvent, None]:
         """Unified chat-orchestration pipeline shared by both public entry points.
 
@@ -497,126 +504,207 @@ class ChatProcessor:
                     self._db_factory, workspace_id, plan.steps
                 )
 
-                # Step 3: Execute steps. `step_outputs` is the narrow prior-context
-                # accumulator (agent step text only) injected into downstream agents
-                # — kept separate from the batch result contract so plan/trace
-                # metadata never leaks into agent prompts (drift #2).
+                # Step 3: Execute steps. `presenter_text` + `agent_name` are declared
+                # before the branch so the SHARED TAIL below (surface push, learner,
+                # shadow-compare) sees them on BOTH paths. The single-lead branch leaves
+                # agent_name=None → the shadow guard (`agent_name is not None`) skips it,
+                # matching the empty-routing case.
                 presenter_text = ""
-                step_outputs: dict[str, str] = {}
-                # Defined before the loop so it stays in scope for the shadow-compare
-                # spawn below even if step_routing is empty (Step 10B Task 3b).
                 agent_name: str | None = None
-                for step_idx, (step, agent_name, tools) in enumerate(step_routing):
-                    if step.capability.startswith("system."):
-                        sys_result = await self._system_capability_handler.handle_system_capability(
-                            step, plan, user_id, workspace_id
+
+                # Step 10D P1 (chat permission model): the deep single-lead chat path.
+                # SECURITY — taken ONLY when the caller explicitly opted into `bypass` AND
+                # the single-lead flag is on AND the chat runtime resolves to "deep". All
+                # three are required, so `permission_mode == "bypass"` is checked FIRST to
+                # short-circuit the default ("auto") BEFORE any settings read or runtime
+                # resolution — the legacy path stays byte-identical (no extra
+                # effective_chat_runtime() Redis round-trip). `permission_mode` is an
+                # INDEPENDENT field, never derived from the legacy `mode` slot.
+                if (
+                    permission_mode == "bypass"
+                    and self._settings.deep_single_lead
+                    and await self._invoker.effective_chat_runtime() == "deep"
+                ):
+                    # SINGLE-LEAD PATH (P1). The Planner already ran → the plan carries the
+                    # plan-union scope + the system.* steps. Same safety posture as today's
+                    # ungated chat, just single-lead execution (one lead vs N per-step calls
+                    # + presenter).
+                    # (a) system.* steps run deterministically here (Planner-produced;
+                    # handle_system_capability takes only (step, plan, ...) — no data dep on
+                    # agent-step outputs — so running them before the lead is behavior-
+                    # equivalent to the per-step loop).
+                    for step in plan.steps:
+                        if getattr(step, "actor", None) != "user" and step.capability.startswith(
+                            "system."
+                        ):
+                            sys_result = (
+                                await self._system_capability_handler.handle_system_capability(
+                                    step, plan, user_id, workspace_id
+                                )
+                            )
+                            yield SystemStepResult(
+                                key=f"system_{step.capability}", output=sys_result
+                            )
+                    # (b) user actions (same contract as the legacy path).
+                    if user_steps:
+                        yield UserActionsReady(
+                            steps=[
+                                {"description": s.description, "context": s.user_context}
+                                for s in user_steps
+                            ]
                         )
-                        yield SystemStepResult(key=f"system_{step.capability}", output=sys_result)
-                        continue
-
-                    if not agent_name:
-                        error_msg = f"No tools available for capability '{step.capability}'"
-                        logger.warning(error_msg)
-                        yield StepError(step_id=step.step_id, error=error_msg)
-                        continue
-
-                    # Plan mode: skip risky execution, present the plan
-                    if mode == "plan" and step.risk in ("medium", "high"):
-                        yield PlanModeStepSkipped(
-                            plan_id=plan.plan_id,
-                            message="Plan created. Review and approve to execute.",
-                        )
-                        continue
-
-                    agent_message = (
-                        f"Execute this step: {step.description}\n"
-                        f"Goal: {plan.goal}\n"
-                        f"User message: {message}"
+                    # (c) build the lead (plan-union scope) + assemble its ambient context,
+                    # stream it, and RE-HOME the reply. The RAW user `message` is the human
+                    # turn; history + plan summary go into the system `context_block`.
+                    lead = await self._invoker.build_chat_lead(plan.steps, workspace_id)
+                    lead_ctx = await self._context.assemble_context(
+                        "lead", message, user_id=user_id, workspace_id=workspace_id
                     )
-                    # Inject prior step results so downstream agents see earlier outputs.
-                    agent_message += format_prior_step_results(step_outputs)
-                    if history_block:
-                        agent_message = f"{history_block}\n\n{agent_message}"
-
-                    step_key = f"step_{step_idx}_{step.capability}"
-                    async for evt in self._invoker.call_agent_stream(
-                        agent_name,
-                        message=agent_message,
-                        user_id=user_id,
-                        trace=trace,
-                        workspace_id=workspace_id,
-                        tools_override=tools if tools else None,
-                    ):
-                        yield agent_event_from_sse(evt)
-                        if evt.get("event") == "agent_done":
-                            done_text = evt.get("text", "")
-                            yield StepResult(key=step_key, output=done_text)
-                            # Capture step outputs for downstream agents (truthy only).
-                            if done_text:
-                                step_outputs[step_key] = done_text
-                            # Capture text from respond/reason steps for surface preview.
-                            if step.capability in ("reason", "respond"):
-                                presenter_text = done_text
-
-                # Build user action block from user_steps
-                user_action_block = ""
-                if user_steps:
-                    user_action_block = build_user_action_block(user_steps)
-                    yield UserActionsReady(
-                        steps=[
-                            {"description": s.description, "context": s.user_context}
-                            for s in user_steps
-                        ]
-                    )
-
-                # Latency: when the whole plan is one read-only Perceiver step,
-                # return that read's own `synthesis` prose directly and skip the
-                # Presenter LLM call (presenter_skip.py). Use the explicit
-                # suffix-match (deterministic for multi-output; drift #3).
-                direct_answer = None
-                read_step = single_read_step(step_routing, user_steps)
-                if read_step is not None and step_outputs:
-                    read_key = next(
-                        (k for k in step_outputs if k.endswith(f"_{read_step.capability}")), None
-                    )
-                    if read_key:
-                        direct_answer = extract_perceiver_synthesis(step_outputs[read_key])
-
-                # Step 4: Presenter formatting — unless we already have the read
-                # agent's own answer above. system.respond steps are no-ops in
-                # _handle_system_capability and reason/respond steps execute with
-                # the wrong context, so for anything other than a single read we
-                # still call the Presenter or the chat is left empty.
-                if direct_answer is not None:
-                    presenter_text = direct_answer
-                    yield Presentation(text=direct_answer)
-                else:
-                    # Collect prior step results so Presenter can reference them.
-                    prior_results_block = format_prior_results_for_presenter(step_outputs)
-                    presenter_msg = build_presenter_message(
-                        prompt_style=prompt_style,
-                        surface=surface,
+                    parts = [p for p in (lead_ctx, history_block) if p]
+                    if plan.goal or plan.reasoning:
+                        parts.append(f"[Plan]\nGoal: {plan.goal}\nReasoning: {plan.reasoning}")
+                    context_block = "\n\n".join(parts)
+                    async for frame in self._invoker.stream_deep_lead(
+                        lead,
                         message=message,
-                        intent=intent,
-                        plan_dict=plan_dict,
-                        plan_text=plan_text,
-                        prior_results_block=prior_results_block,
-                        user_action_block=user_action_block,
-                        history_block=history_block,
-                    )
-                    async for evt in self._invoker.call_agent_stream(
-                        "presenter",
-                        message=presenter_msg,
+                        context_block=context_block,
                         user_id=user_id,
-                        trace=trace,
                         workspace_id=workspace_id,
+                        intent=intent,
+                        trace=trace,
                     ):
-                        yield agent_event_from_sse(evt)
-                        if evt.get("event") == "agent_done":
-                            presenter_text = evt.get("text", "")
-                            # Strip fenced surface blocks for the chat-visible reply
-                            # while keeping presenter_text raw for surface extraction.
+                        yield agent_event_from_sse(frame)
+                        if frame.get("event") == "agent_done":
+                            presenter_text = frame.get("text", "")
+                            # RE-HOME the presenter output (C-CORR2): stream_deep_lead emits
+                            # NO Presentation frame, so synthesize it here — else the reply is
+                            # never persisted (routes_chat persists only on Presentation) and
+                            # the chat bubble is empty. Keep presenter_text RAW for the shared
+                            # tail's surface extraction.
                             yield Presentation(text=strip_surface_blocks(presenter_text))
+                else:
+                    # LEGACY per-step path — the existing body, moved UNCHANGED (indented one
+                    # level). `step_outputs` is the narrow prior-context accumulator (agent
+                    # step text only) injected into downstream agents — kept separate from
+                    # the batch result contract so plan/trace metadata never leaks into agent
+                    # prompts (drift #2).
+                    step_outputs: dict[str, str] = {}
+                    for step_idx, (step, agent_name, tools) in enumerate(step_routing):
+                        if step.capability.startswith("system."):
+                            sys_result = (
+                                await self._system_capability_handler.handle_system_capability(
+                                    step, plan, user_id, workspace_id
+                                )
+                            )
+                            yield SystemStepResult(
+                                key=f"system_{step.capability}", output=sys_result
+                            )
+                            continue
+
+                        if not agent_name:
+                            error_msg = f"No tools available for capability '{step.capability}'"
+                            logger.warning(error_msg)
+                            yield StepError(step_id=step.step_id, error=error_msg)
+                            continue
+
+                        # Plan mode: skip risky execution, present the plan
+                        if mode == "plan" and step.risk in ("medium", "high"):
+                            yield PlanModeStepSkipped(
+                                plan_id=plan.plan_id,
+                                message="Plan created. Review and approve to execute.",
+                            )
+                            continue
+
+                        agent_message = (
+                            f"Execute this step: {step.description}\n"
+                            f"Goal: {plan.goal}\n"
+                            f"User message: {message}"
+                        )
+                        # Inject prior step results so downstream agents see earlier outputs.
+                        agent_message += format_prior_step_results(step_outputs)
+                        if history_block:
+                            agent_message = f"{history_block}\n\n{agent_message}"
+
+                        step_key = f"step_{step_idx}_{step.capability}"
+                        async for evt in self._invoker.call_agent_stream(
+                            agent_name,
+                            message=agent_message,
+                            user_id=user_id,
+                            trace=trace,
+                            workspace_id=workspace_id,
+                            tools_override=tools if tools else None,
+                        ):
+                            yield agent_event_from_sse(evt)
+                            if evt.get("event") == "agent_done":
+                                done_text = evt.get("text", "")
+                                yield StepResult(key=step_key, output=done_text)
+                                # Capture step outputs for downstream agents (truthy only).
+                                if done_text:
+                                    step_outputs[step_key] = done_text
+                                # Capture text from respond/reason steps for surface preview.
+                                if step.capability in ("reason", "respond"):
+                                    presenter_text = done_text
+
+                    # Build user action block from user_steps
+                    user_action_block = ""
+                    if user_steps:
+                        user_action_block = build_user_action_block(user_steps)
+                        yield UserActionsReady(
+                            steps=[
+                                {"description": s.description, "context": s.user_context}
+                                for s in user_steps
+                            ]
+                        )
+
+                    # Latency: when the whole plan is one read-only Perceiver step,
+                    # return that read's own `synthesis` prose directly and skip the
+                    # Presenter LLM call (presenter_skip.py). Use the explicit
+                    # suffix-match (deterministic for multi-output; drift #3).
+                    direct_answer = None
+                    read_step = single_read_step(step_routing, user_steps)
+                    if read_step is not None and step_outputs:
+                        read_key = next(
+                            (k for k in step_outputs if k.endswith(f"_{read_step.capability}")),
+                            None,
+                        )
+                        if read_key:
+                            direct_answer = extract_perceiver_synthesis(step_outputs[read_key])
+
+                    # Step 4: Presenter formatting — unless we already have the read
+                    # agent's own answer above. system.respond steps are no-ops in
+                    # _handle_system_capability and reason/respond steps execute with
+                    # the wrong context, so for anything other than a single read we
+                    # still call the Presenter or the chat is left empty.
+                    if direct_answer is not None:
+                        presenter_text = direct_answer
+                        yield Presentation(text=direct_answer)
+                    else:
+                        # Collect prior step results so Presenter can reference them.
+                        prior_results_block = format_prior_results_for_presenter(step_outputs)
+                        presenter_msg = build_presenter_message(
+                            prompt_style=prompt_style,
+                            surface=surface,
+                            message=message,
+                            intent=intent,
+                            plan_dict=plan_dict,
+                            plan_text=plan_text,
+                            prior_results_block=prior_results_block,
+                            user_action_block=user_action_block,
+                            history_block=history_block,
+                        )
+                        async for evt in self._invoker.call_agent_stream(
+                            "presenter",
+                            message=presenter_msg,
+                            user_id=user_id,
+                            trace=trace,
+                            workspace_id=workspace_id,
+                        ):
+                            yield agent_event_from_sse(evt)
+                            if evt.get("event") == "agent_done":
+                                presenter_text = evt.get("text", "")
+                                # Strip fenced surface blocks for the chat-visible reply
+                                # while keeping presenter_text raw for surface extraction.
+                                yield Presentation(text=strip_surface_blocks(presenter_text))
 
                 _fire_event(
                     "run_completed",

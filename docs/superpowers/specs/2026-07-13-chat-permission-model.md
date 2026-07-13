@@ -138,6 +138,10 @@ frontend `approval_needed` consumer + `InlineApprovalCard`-in-chat; A-7 `decisio
 (approved/modified) on the chat gate. `auto` predicate: interrupt iff
 `not reversible OR blast_radius ∈ {external_single,external_multiple,public} OR risk_level=="high"`.
 Heavy adversarial pressure-test before build.
+**P2 prerequisite (from P1 security review):** add a per-workspace **entitlement/allow-bypass gate**
+BEFORE P2 lands — in P1 `bypass` is inert (dormant flags) and plan-bounded, but in P2+ it becomes
+"broad write authority within connected connectors, no confirmations," so any authenticated member
+being able to POST `permission_mode="bypass"` must be gated by a workspace entitlement by then.
 
 ## 5. P2.5 — drop the Planner (planless)
 Once P2's gate bounds writes at action time and `system.*` are promoted to internal tools
@@ -148,7 +152,21 @@ connected-connector allow-list (NOT whole-catalog — scope to genuinely-authent
 ## 6. P3 — UX + retire `mode`
 Surface the lead's `write_todos` (adapter reads the `todos` channel + a Claude-Code-style todo list);
 retire `mode` (ask/plan/execute) → `permission_mode` across API + frontend (command-store, composer,
-launcher, api.ts, chat-panel). CLAUDE.md two-paths invariant rewrite at merge (R1).
+launcher, api.ts, chat-panel). Add the **per-workspace `permission_mode` default setting** (spec §3.4
+named it; P1 shipped the per-turn param only — the workspace default is a P3/UX concern). CLAUDE.md
+two-paths invariant rewrite at merge (R1).
+
+## 6a. Deferred from P1 (review-noted, non-blocking)
+- **Perf (quality M1):** the bypass branch still runs `resolve_plan_routing` (per-step tool
+  resolution) but consumes only `user_steps`. Negligible vs the N-model-call win it replaces, and
+  dormant. Optimize at bypass activation (R2): derive `user_steps = [s for s in plan.steps if
+  s.actor=="user"]` and move `resolve_plan_routing` into the legacy `else`.
+- **Robustness (quality M2):** the single lead has no error-path fallback reply — if
+  `stream_deep_lead` never reaches `agent_done`, `presenter_text` stays "" (empty bubble). This
+  MATCHES the legacy presenter's behavior on the same failure (not a regression), but a minimal
+  fallback `Presentation` on an error-only stream is a reasonable later-P hardening.
+- **Contract:** `ChatRequest.permission_mode` constrained to `Literal["auto","ask","bypass"]` in P1
+  (typos 422 instead of silently defaulting).
 
 ## 7. Invariant change (recorded at merge)
 New: the chat path is gated **at action time** by the user's `permission_mode` (P2+); P1 `bypass` is

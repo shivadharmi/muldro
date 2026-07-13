@@ -383,6 +383,7 @@ class JarvisOrchestrator:
         surface: str = "api",
         context: dict | None = None,
         mode: str = "plan",
+        permission_mode: str = "auto",
     ) -> dict:
         """Facade -> ChatProcessor.process_message (batch chat entry point)."""
         return await self._chat.process_message(
@@ -393,6 +394,7 @@ class JarvisOrchestrator:
             surface=surface,
             context=context,
             mode=mode,
+            permission_mode=permission_mode,
         )
 
     def process_message_events(
@@ -404,6 +406,7 @@ class JarvisOrchestrator:
         mode: str = "ask",
         context: dict | None = None,
         conversation_id: str | None = None,
+        permission_mode: str = "auto",
     ) -> AsyncGenerator[CoreEvent, None]:
         """Facade -> ChatProcessor.process_message_events (typed-event chat path)."""
         return self._chat.process_message_events(
@@ -414,6 +417,7 @@ class JarvisOrchestrator:
             mode=mode,
             context=context,
             conversation_id=conversation_id,
+            permission_mode=permission_mode,
         )
 
     def process_message_stream(
@@ -425,6 +429,7 @@ class JarvisOrchestrator:
         mode: str = "ask",
         context: dict | None = None,
         conversation_id: str | None = None,
+        permission_mode: str = "auto",
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Facade -> ChatProcessor.process_message_stream (SSE chat path)."""
         return self._chat.process_message_stream(
@@ -435,6 +440,7 @@ class JarvisOrchestrator:
             mode=mode,
             context=context,
             conversation_id=conversation_id,
+            permission_mode=permission_mode,
         )
 
     def _call_agent_stream(

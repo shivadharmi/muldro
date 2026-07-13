@@ -1,0 +1,563 @@
+"""Tests for the deep single-lead chat branch + ``permission_mode`` plumbing (P1 Task B).
+
+These pin the Step-10D chat-permission-model P1 behavior:
+
+* **B1 plumbing** — ``permission_mode`` is a NEW, INDEPENDENT field defaulting to a
+  non-bypass value (``"auto"``), threaded through the facades/adapters, NEVER derived
+  from the legacy ``mode`` slot.
+* **B2 single-lead branch** — on ``runtime=="deep"`` AND ``deep_single_lead`` AND
+  ``permission_mode=="bypass"``, ``_process_core`` runs ONE deep lead (system.* steps
+  deterministically, then the lead streams and its reply is re-homed as a
+  ``Presentation``), instead of the per-step loop + presenter step.
+* **Security** — the branch requires ALL THREE conditions; any other ``permission_mode``
+  (the default), ``deep_single_lead=False``, or a non-deep runtime falls to the LEGACY
+  per-step path. The legacy ``mode`` (ask/plan/execute) NEVER activates the branch.
+
+Harness modeled on ``tests/test_chat_pipeline_golden.py`` (``ChatProcessor.__new__`` +
+mocked collaborators). Reply coverage asserts EVERY shape yields a ``Presentation``.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from src.contracts import PlanOutput, PlanStep
+from tests.conftest import make_mock_settings
+
+pytestmark = pytest.mark.asyncio
+
+TRACE_ID = "trace_lead"
+ILOG_ID = "ilog_lead"
+_MOD = "src.orchestrator.chat_processor"
+
+
+class _Recorder:
+    """Captures the ``(agent_name, message)`` pairs the LEGACY path feeds its agents,
+    plus the ``stream_deep_lead`` call kwargs for the single-lead path."""
+
+    def __init__(self) -> None:
+        self.agent_messages: list[tuple[str, str]] = []
+        self.lead_calls: list[dict] = []
+
+    def called_agent(self, agent_name: str) -> bool:
+        return any(name == agent_name for name, _ in self.agent_messages)
+
+
+def _step(step_id, capability, *, actor="jarvis", risk="none", description="do", user_context=None):
+    return PlanStep(
+        step_id=step_id,
+        description=description,
+        capability=capability,
+        actor=actor,
+        risk=risk,
+        user_context=user_context,
+    )
+
+
+def _make_chat(
+    *,
+    lead_text: str = "LEAD_REPLY",
+    settings_overrides: dict | None = None,
+    runtime: str = "deep",
+) -> tuple[object, _Recorder]:
+    """Construct a ChatProcessor with every collaborator mocked.
+
+    ``runtime`` is what ``effective_chat_runtime`` resolves to. ``lead_text`` is the
+    text the mocked ``stream_deep_lead`` emits on ``agent_done``. ``settings_overrides``
+    is merged into ``make_mock_settings`` (e.g. ``deep_single_lead=True``).
+    """
+    from src.orchestrator.chat_processor import ChatProcessor
+
+    chat = ChatProcessor.__new__(ChatProcessor)
+    rec = _Recorder()
+
+    chat._settings = make_mock_settings(**(settings_overrides or {}))
+
+    trace = MagicMock()
+    trace.trace_id = TRACE_ID
+    chat._trace_manager = MagicMock()
+    chat._trace_manager.start_trace = MagicMock(return_value=trace)
+    chat._trace_manager.finish_trace = AsyncMock()
+
+    chat._client = MagicMock()
+    chat._haiku_model = "claude-haiku"
+    chat._db_factory_provider = lambda: MagicMock()
+    chat._interaction_learner = None
+
+    def _spawn_background(coro):
+        if hasattr(coro, "close"):
+            coro.close()
+
+    chat._spawn_background = _spawn_background
+    chat._ensure_learner_deps = AsyncMock()
+
+    chat._context = MagicMock()
+    chat._context.load_conversation_history = AsyncMock(return_value="")
+    chat._context.assemble_context = AsyncMock(return_value="LEAD_CTX")
+
+    chat._perception = MagicMock()
+    chat._perception._bump_perception_for_sources = AsyncMock()
+
+    chat._events = MagicMock()
+    chat._events.emit_runtime_event = AsyncMock()
+
+    chat._get_available_capabilities = AsyncMock(return_value=[])
+
+    chat._plans = MagicMock()
+    chat._plans.persist_plan_record = AsyncMock(side_effect=lambda plan, *a, **k: plan)
+    chat._plans.log_interaction = AsyncMock(return_value=ILOG_ID)
+
+    chat._system_capability_handler = MagicMock()
+    chat._system_capability_handler.handle_system_capability = AsyncMock(return_value="SYS_OK")
+
+    chat._surfaces = MagicMock()
+    chat._surfaces.push_presenter_surface = AsyncMock(return_value=None)
+
+    # LEGACY per-step / presenter agent call — records so byte-neutral tests can assert
+    # the per-step loop ran (and the single-lead path did NOT).
+    async def _call_agent_stream(agent_name, *, message, **kw):
+        rec.agent_messages.append((agent_name, message))
+        text = f"{agent_name}_out"
+        yield {"event": "agent_start", "agent": agent_name, "model": "m"}
+        yield {"event": "agent_done", "agent": agent_name, "text": text}
+
+    # SINGLE-LEAD deep stream — records call kwargs, emits an agent_done frame.
+    async def _stream_deep_lead(
+        lead,
+        tools=None,
+        *,
+        message,
+        context_block,
+        user_id,
+        workspace_id,
+        intent=None,
+        trace=None,
+    ):
+        rec.lead_calls.append(
+            {
+                "lead": lead,
+                "tools": tools,
+                "message": message,
+                "context_block": context_block,
+                "user_id": user_id,
+                "workspace_id": workspace_id,
+                "intent": intent,
+                "trace": trace,
+            }
+        )
+        yield {"event": "agent_start", "agent": "lead", "model": "m"}
+        yield {"event": "text_delta", "agent": "lead", "text": lead_text}
+        yield {"event": "agent_done", "agent": "lead", "text": lead_text}
+
+    fake_lead = MagicMock(name="fake_lead")
+
+    chat._invoker = MagicMock()
+    chat._invoker.call_agent_stream = _call_agent_stream
+    chat._invoker.effective_chat_runtime = AsyncMock(return_value=runtime)
+    chat._invoker.build_chat_lead = AsyncMock(return_value=fake_lead)
+    chat._invoker.stream_deep_lead = _stream_deep_lead
+    chat._fake_lead = fake_lead
+    return chat, rec
+
+
+def _patches(plan: PlanOutput, routing, user_steps, *, intent="compose_request", confidence=0.9):
+    return [
+        patch(f"{_MOD}.classify_intent", new=AsyncMock(return_value=(intent, confidence, []))),
+        patch(f"{_MOD}.extract_plan", new=MagicMock(return_value=plan)),
+        patch(f"{_MOD}.intent_to_plan", new=MagicMock(return_value=plan)),
+        patch(f"{_MOD}.resolve_plan_routing", new=AsyncMock(return_value=(routing, user_steps))),
+    ]
+
+
+async def _run_stream(chat, **kw):
+    return [
+        evt
+        async for evt in chat.process_message_stream(
+            message=kw.pop("message", "hello"),
+            user_id="usr_1",
+            workspace_id="ws_1",
+            **kw,
+        )
+    ]
+
+
+async def _run_batch(chat, **kw):
+    return await chat.process_message(
+        message=kw.pop("message", "hello"),
+        user_id="usr_1",
+        workspace_id="ws_1",
+        **kw,
+    )
+
+
+def _events(stream) -> list[str]:
+    return [e.get("event") for e in stream]
+
+
+def _responses(stream) -> list[str]:
+    return [e["text"] for e in stream if e.get("event") == "response"]
+
+
+# ── Reply coverage: every plan shape yields exactly one Presentation via the lead ──
+
+
+_SHAPES = {
+    "single_read": [_step("s1", "calendar.read", description="read cal")],
+    "knowledge_only": [_step("s1", "knowledge.search", description="search notes")],
+    "read_plus_write": [
+        _step("s1", "calendar.read", description="read cal"),
+        _step("s2", "email.send", risk="high", description="send email"),
+    ],
+    "pure_write": [_step("s1", "email.send", risk="high", description="send email")],
+    "fast_respond": [_step("s1", "respond", description="answer")],
+    "fast_reason": [_step("s1", "reason", description="think")],
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_SHAPES))
+async def test_single_lead_every_shape_yields_presentation(shape):
+    plan = PlanOutput(goal="g", reasoning="r", steps=_SHAPES[shape])
+    chat, rec = _make_chat(lead_text="THE_REPLY", settings_overrides={"deep_single_lead": True})
+    ctx = _patches(plan, [], [])
+    for c in ctx:
+        c.start()
+    try:
+        stream = await _run_stream(chat, permission_mode="bypass")
+    finally:
+        for c in ctx:
+            c.stop()
+
+    # Single-lead path taken, per-step agents NOT invoked.
+    assert len(rec.lead_calls) == 1
+    assert not rec.called_agent("presenter")
+    assert not rec.called_agent("perceiver")
+    # Exactly one response (the re-homed lead reply); never reply-less.
+    assert _responses(stream) == ["THE_REPLY"]
+    assert _events(stream)[-1] == "done"
+
+
+async def test_single_lead_system_set_goal_runs_deterministically():
+    """system.* steps run before the lead (Planner-produced, no data dep); each yields a
+    SystemStepResult (batch-only) and the lead still replies. Driven via the batch path
+    where SystemStepResult surfaces (it is dropped from the SSE stream by design)."""
+    plan = PlanOutput(
+        goal="remember",
+        reasoning="r",
+        steps=[
+            _step("s1", "system.set_goal", description="set a goal"),
+            _step("s2", "respond", description="confirm"),
+        ],
+    )
+    chat, rec = _make_chat(lead_text="Done.", settings_overrides={"deep_single_lead": True})
+    ctx = _patches(plan, [], [])
+    for c in ctx:
+        c.start()
+    try:
+        result = await _run_batch(chat, mode="execute", permission_mode="bypass")
+    finally:
+        for c in ctx:
+            c.stop()
+
+    handler = chat._system_capability_handler.handle_system_capability
+    handler.assert_awaited_once()
+    args = handler.await_args.args
+    assert args[0].capability == "system.set_goal"
+    assert args[1] is plan
+    assert args[2] == "usr_1"
+    assert args[3] == "ws_1"
+    # The single-lead path ran, the system output surfaced in the batch result, and the
+    # lead still replied.
+    assert len(rec.lead_calls) == 1
+    assert result["system_system.set_goal"] == "SYS_OK"
+    assert result["presentation"] == "Done."
+
+
+async def test_single_lead_skips_user_actor_system_steps():
+    """A user-actor system.* step is NOT executed deterministically (actor guard)."""
+    plan = PlanOutput(
+        goal="g",
+        reasoning="r",
+        steps=[_step("s1", "system.set_goal", actor="user", description="user goal")],
+    )
+    chat, rec = _make_chat(settings_overrides={"deep_single_lead": True})
+    ctx = _patches(plan, [], [])
+    for c in ctx:
+        c.start()
+    try:
+        await _run_stream(chat, permission_mode="bypass")
+    finally:
+        for c in ctx:
+            c.stop()
+    chat._system_capability_handler.handle_system_capability.assert_not_awaited()
+
+
+async def test_single_lead_emits_user_actions_ready():
+    plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
+    user_steps = [
+        _step("u1", "email.reply", actor="user", description="Reply", user_context="urgent")
+    ]
+    chat, rec = _make_chat(settings_overrides={"deep_single_lead": True})
+    ctx = _patches(plan, [], user_steps)
+    for c in ctx:
+        c.start()
+    try:
+        stream = await _run_stream(chat, permission_mode="bypass")
+    finally:
+        for c in ctx:
+            c.stop()
+    ua = [e for e in stream if e.get("event") == "user_actions"]
+    assert ua and ua[0]["steps"] == [{"description": "Reply", "context": "urgent"}]
+
+
+# ── Output re-homing (C-CORR2) ────────────────────────────────────────────────
+
+
+async def test_single_lead_rehomes_output_stripped_reply_raw_surface_and_learner():
+    """The lead's agent_done text is re-homed: Presentation gets the STRIPPED text,
+    while the shared tail's surface push + learner receive the RAW text."""
+    plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
+    chat, rec = _make_chat(lead_text="REPLY_RAW", settings_overrides={"deep_single_lead": True})
+
+    # Learner records the exact agent_response the shared tail spawns.
+    learner = MagicMock()
+    learner.learn = MagicMock(return_value=MagicMock())
+    chat._interaction_learner = learner
+
+    spec = MagicMock()
+    spec.should_surface = True
+
+    ctx = _patches(plan, [], []) + [
+        patch(f"{_MOD}.strip_surface_blocks", new=lambda t: f"STRIPPED::{t}"),
+        patch(f"{_MOD}.extract_surface_spec", new=MagicMock(return_value=spec)),
+    ]
+    for c in ctx:
+        c.start()
+    try:
+        stream = await _run_stream(chat, permission_mode="bypass")
+    finally:
+        for c in ctx:
+            c.stop()
+
+    # Presentation carries the STRIPPED reply (chat-visible).
+    assert _responses(stream) == ["STRIPPED::REPLY_RAW"]
+    # Shared tail surface push gets the RAW presenter_text.
+    push = chat._surfaces.push_presenter_surface
+    push.assert_awaited_once()
+    assert push.await_args.kwargs["response_text"] == "REPLY_RAW"
+    # Learner gets the RAW presenter_text as agent_response.
+    learner.learn.assert_called_once()
+    assert learner.learn.call_args.kwargs["agent_response"] == "REPLY_RAW"
+
+
+async def test_single_lead_builds_lead_with_plan_steps_scope_and_raw_message():
+    """build_chat_lead receives plan.steps (plan-union scope, not a broad scope); the RAW
+    user message is the human turn; plan summary + context go into the system context_block."""
+    steps = [_step("s1", "calendar.read"), _step("s2", "email.send", risk="high")]
+    plan = PlanOutput(goal="THE_GOAL", reasoning="THE_REASON", steps=steps)
+    chat, rec = _make_chat(settings_overrides={"deep_single_lead": True})
+    ctx = _patches(plan, [], [])
+    for c in ctx:
+        c.start()
+    try:
+        await _run_stream(chat, message="do the thing", permission_mode="bypass")
+    finally:
+        for c in ctx:
+            c.stop()
+
+    chat._invoker.build_chat_lead.assert_awaited_once()
+    b_args = chat._invoker.build_chat_lead.await_args.args
+    assert b_args[0] == plan.steps
+    assert b_args[1] == "ws_1"
+
+    assert len(rec.lead_calls) == 1
+    call = rec.lead_calls[0]
+    assert call["lead"] is chat._fake_lead
+    # RAW human message, NOT the plan summary.
+    assert call["message"] == "do the thing"
+    # tools omitted → internal resolve (None), NOT a caller-supplied set.
+    assert call["tools"] is None
+    # Plan goal/reasoning + assembled context live in the system context_block.
+    assert "THE_GOAL" in call["context_block"]
+    assert "THE_REASON" in call["context_block"]
+    assert "LEAD_CTX" in call["context_block"]
+    assert "do the thing" not in call["context_block"]
+
+
+async def test_single_lead_completes_with_run_completed():
+    plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
+    chat, rec = _make_chat(settings_overrides={"deep_single_lead": True})
+    ctx = _patches(plan, [], [])
+    for c in ctx:
+        c.start()
+    try:
+        stream = await _run_stream(chat, permission_mode="bypass")
+    finally:
+        for c in ctx:
+            c.stop()
+    assert _events(stream)[-1] == "done"
+
+
+# ── Legacy byte-neutral: the branch is NOT taken unless ALL THREE conditions hold ──
+
+
+async def test_legacy_when_permission_mode_default_auto():
+    plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
+    chat, rec = _make_chat(settings_overrides={"deep_single_lead": True})
+    ctx = _patches(plan, [(plan.steps[0], "presenter", [{"name": "t"}])], [])
+    for c in ctx:
+        c.start()
+    try:
+        stream = await _run_stream(chat)  # no permission_mode → default "auto"
+    finally:
+        for c in ctx:
+            c.stop()
+    assert rec.lead_calls == []  # single-lead NOT taken
+    assert rec.called_agent("presenter")  # legacy per-step/presenter path ran
+    assert _events(stream)[-1] == "done"
+
+
+async def test_legacy_when_deep_single_lead_flag_off():
+    plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
+    chat, rec = _make_chat(settings_overrides={"deep_single_lead": False})
+    ctx = _patches(plan, [(plan.steps[0], "presenter", [{"name": "t"}])], [])
+    for c in ctx:
+        c.start()
+    try:
+        await _run_stream(chat, permission_mode="bypass")
+    finally:
+        for c in ctx:
+            c.stop()
+    assert rec.lead_calls == []
+    assert rec.called_agent("presenter")
+
+
+async def test_legacy_when_runtime_not_deep_even_with_bypass():
+    """SECURITY: bypass + deep_single_lead but runtime=='legacy' → legacy path (all
+    three required)."""
+    plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
+    chat, rec = _make_chat(settings_overrides={"deep_single_lead": True}, runtime="legacy")
+    ctx = _patches(plan, [(plan.steps[0], "presenter", [{"name": "t"}])], [])
+    for c in ctx:
+        c.start()
+    try:
+        await _run_stream(chat, permission_mode="bypass")
+    finally:
+        for c in ctx:
+            c.stop()
+    assert rec.lead_calls == []
+    assert rec.called_agent("presenter")
+
+
+# ── Security: permission_mode is INDEPENDENT of the legacy ``mode`` slot ──────────
+
+
+async def test_legacy_mode_execute_default_permission_mode_is_legacy():
+    """schedule_dispatch custom_agent_task style: mode='execute' (NO user present) with the
+    DEFAULT permission_mode ('auto') must stay legacy — permission_mode is never derived
+    from mode."""
+    plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
+    chat, rec = _make_chat(settings_overrides={"deep_single_lead": True})
+    ctx = _patches(plan, [(plan.steps[0], "presenter", [{"name": "t"}])], [])
+    for c in ctx:
+        c.start()
+    try:
+        await _run_batch(chat, mode="execute", surface="scheduler")
+    finally:
+        for c in ctx:
+            c.stop()
+    assert rec.lead_calls == []
+    assert rec.called_agent("presenter")
+
+
+async def test_legacy_mode_ask_default_permission_mode_is_legacy():
+    """routes_ws surface-action style: mode='ask' with the DEFAULT permission_mode ('auto')
+    must stay legacy."""
+    plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
+    chat, rec = _make_chat(settings_overrides={"deep_single_lead": True})
+    ctx = _patches(plan, [(plan.steps[0], "presenter", [{"name": "t"}])], [])
+    for c in ctx:
+        c.start()
+    try:
+        await _run_batch(chat, mode="ask")
+    finally:
+        for c in ctx:
+            c.stop()
+    assert rec.lead_calls == []
+    assert rec.called_agent("presenter")
+
+
+async def test_single_lead_via_batch_process_message_with_bypass():
+    """Batch process_message also threads permission_mode → single-lead when bypass."""
+    plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
+    chat, rec = _make_chat(lead_text="BATCH_REPLY", settings_overrides={"deep_single_lead": True})
+    ctx = _patches(plan, [], [])
+    for c in ctx:
+        c.start()
+    try:
+        result = await _run_batch(chat, mode="execute", permission_mode="bypass")
+    finally:
+        for c in ctx:
+            c.stop()
+    assert len(rec.lead_calls) == 1
+    assert result["presentation"] == "BATCH_REPLY"
+
+
+# ── Facade plumbing: jarvis.py forwards permission_mode (independent field) ──────
+
+
+async def test_jarvis_facade_forwards_permission_mode_events():
+    from src.orchestrator.jarvis import JarvisOrchestrator
+
+    orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
+    orch._chat = MagicMock()
+    orch._chat.process_message_events = MagicMock(return_value=iter([]))
+    orch.process_message_events(
+        message="hi",
+        user_id="u",
+        workspace_id="w",
+        permission_mode="bypass",
+    )
+    assert orch._chat.process_message_events.call_args.kwargs["permission_mode"] == "bypass"
+
+
+async def test_jarvis_facade_forwards_permission_mode_stream():
+    from src.orchestrator.jarvis import JarvisOrchestrator
+
+    orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
+    orch._chat = MagicMock()
+    orch._chat.process_message_stream = MagicMock(return_value=iter([]))
+    orch.process_message_stream(
+        message="hi",
+        user_id="u",
+        workspace_id="w",
+        permission_mode="bypass",
+    )
+    assert orch._chat.process_message_stream.call_args.kwargs["permission_mode"] == "bypass"
+
+
+async def test_jarvis_facade_forwards_permission_mode_batch():
+    from src.orchestrator.jarvis import JarvisOrchestrator
+
+    orch = JarvisOrchestrator.__new__(JarvisOrchestrator)
+    orch._chat = MagicMock()
+    orch._chat.process_message = AsyncMock(return_value={})
+    await orch.process_message(
+        message="hi",
+        user_id="u",
+        workspace_id="w",
+        permission_mode="bypass",
+    )
+    assert orch._chat.process_message.call_args.kwargs["permission_mode"] == "bypass"
+
+
+async def test_chat_request_permission_mode_default_is_non_bypass():
+    from src.api.routes_chat import ChatRequest
+
+    req = ChatRequest(message="hi")
+    assert req.permission_mode == "auto"
+    assert req.permission_mode != "bypass"
+    # Independent of the legacy mode slot.
+    req2 = ChatRequest(message="hi", mode="execute")
+    assert req2.permission_mode == "auto"

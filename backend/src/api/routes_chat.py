@@ -8,6 +8,7 @@ agent routing, tool calls, and thinking.
 
 import json
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
@@ -44,6 +45,12 @@ class ChatRequest(BaseModel):
     message: str
     surface: str = "web"
     mode: str = "ask"  # ask, plan, execute
+    # Step 10D P1 (chat permission model): action-time permission mode, INDEPENDENT of
+    # ``mode``. Default ``"auto"`` (a non-bypass value → legacy path in P1). Only
+    # ``"bypass"`` activates the deep single-lead chat path. Never derived from ``mode``.
+    # Constrained to the taxonomy so a typo 422s loudly instead of silently defaulting to
+    # legacy (the exact-equality gate would treat any unknown value as non-bypass anyway).
+    permission_mode: Literal["auto", "ask", "bypass"] = "auto"
     context: dict | None = None
     conversation_id: str | None = None
 
@@ -231,6 +238,7 @@ async def chat_stream(
                 workspace_id=workspace_id,
                 surface=req.surface,
                 mode=req.mode,
+                permission_mode=req.permission_mode,
                 context=req.context,
                 conversation_id=conversation_id,
             ):
