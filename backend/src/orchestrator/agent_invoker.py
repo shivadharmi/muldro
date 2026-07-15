@@ -36,6 +36,7 @@ from src.deep_runtime.middleware.jarvis_tool_dispatcher import (
     make_jarvis_tool_dispatcher,
 )
 from src.deep_runtime.middleware.librarian_extract import make_librarian_extract_middleware
+from src.deep_runtime.middleware.permission_gate import make_permission_gate_middleware
 from src.deep_runtime.middleware.readback import make_readback_middleware
 from src.deep_runtime.middleware.trust_gate import _resolve_tool_def, make_trust_gate_middleware
 from src.deep_runtime.middleware.unavailable_server import make_unavailable_server_middleware
@@ -302,6 +303,7 @@ class AgentInvoker:
         execute_tool: ExecuteToolFn | None = None,
         pre_approved_capabilities: frozenset[str] = frozenset(),
         require_write_lock: bool = False,
+        permission_mode: str | None = None,
     ):
         """Build a compiled deep agent WITH the full gated middleware chain:
         capability_scope (installed by ``build_deep_agent`` when ``db_factory`` is given)
@@ -338,6 +340,13 @@ class AgentInvoker:
         unserialized while Redis is down. Defaults to False, keeping ALL other callers
         (``call_agent_stream`` deep branch, ``resume_deep_turn``, ``run_autonomous_deep_step``,
         ``run_shadow_turn``) byte-identical to before this param existed.
+
+        ``permission_mode`` (P2.1, ADDITIVE): the chat permission model (``bypass``/``ask``/
+        ``auto``). When ``"ask"`` or ``"auto"`` the action-time ``permission_gate`` is inserted
+        immediately AFTER ``trust_gate`` (SEPARATE from it — auth-source-independent, gating on
+        mode × risk). When ``None`` or ``"bypass"`` the gate is NOT installed and
+        ``extra_middleware`` is byte-identical to before this param existed — the
+        byte-neutrality guarantee for all existing callers.
         """
         shells = build_tool_shells(tools)
 
@@ -404,6 +413,29 @@ class AgentInvoker:
             context_block=context_block,
             pre_approved_capabilities=pre_approved_capabilities,
         )
+
+        # P2.1: action-time chat permission gate — installed ONLY for ask/auto, immediately
+        # AFTER trust_gate. SEPARATE from trust_gate (it never consults authorization_source):
+        # on the chat single-lead path trust_gate is dormant (short-circuits) and this gate
+        # does the confirmation. None/bypass → not installed → extra_middleware byte-identical.
+        # Reuses the SAME per-turn resolvers as trust_gate: _gate_cap (fail-closed cap lookup)
+        # + _assess_risk (fails closed to high).
+        permission_gate_chain: tuple[Any, ...] = ()
+        if permission_mode in ("ask", "auto"):
+            permission_gate = make_permission_gate_middleware(
+                permission_mode=permission_mode,
+                workspace_id=workspace_id,
+                user_id=user_id,
+                thread_id=thread_id,
+                agent_name=agent.name,
+                db_factory=self._db_factory,
+                assess_risk=_assess_risk,
+                resolve_capability=_gate_cap,
+                context_block=context_block,
+                lead_scope=agent.capability_scope,
+            )
+            permission_gate_chain = (permission_gate,)
+
         dispatcher = make_jarvis_tool_dispatcher(
             execute_tool=execute_tool or self._tool_executor.execute_tool,
             user_id=user_id,
@@ -530,13 +562,15 @@ class AgentInvoker:
 
         # Order (outer→inner). capability_scope is installed FIRST by build_deep_agent, so the full
         # tool chain is:
-        #   capability_scope → governor_audit → unavailable_server → trust_gate → write_lock
+        #   capability_scope → governor_audit → unavailable_server → trust_gate
+        #     [→ permission_gate (only for ask/auto)] → write_lock
         #     [→ read_back (only when deep_readback_enabled)] → dispatcher
         # librarian_extract + budget_mw are @after_model (tuple position irrelevant to tool chain).
         extra_middleware: tuple[Any, ...] = (
             governor_audit,
             unavailable_server,
             trust_gate,
+            *permission_gate_chain,
             *gated_chain,
             librarian_extract,
             budget_mw,
@@ -878,6 +912,7 @@ class AgentInvoker:
         workspace_id: str,
         intent: str | None = None,
         trace=None,
+        permission_mode: str | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Run ONE synthetic deep lead over a whole user goal, streaming SSE-compatible frames
         (Step 10D A-5). Generalizes the ``call_agent_stream`` ``runtime=="deep"`` branch for a
@@ -907,6 +942,10 @@ class AgentInvoker:
         The write lock is forced fail-CLOSED here (``require_write_lock=True`` into
         ``_build_deep_agent_for``): the single-lead path is ungated, so its writes MUST be
         serialized and never execute unserialized while Redis is down (P1 A3).
+
+        ``permission_mode`` (P2.1): forwarded verbatim into ``_build_deep_agent_for`` — ``ask``/
+        ``auto`` install the action-time permission gate, ``None`` (default) / ``bypass`` leave
+        the chain byte-identical. Current 5b callers pass nothing; P2.3 wires the per-turn mode.
         """
         if tools is None:
             tools = await self._resolve_tools(lead, workspace_id, None)
@@ -934,6 +973,10 @@ class AgentInvoker:
             context_block=context_block,
             # A3: the ungated single-lead path fail-closes its writes on Redis-down.
             require_write_lock=True,
+            # P2.1: the chat permission mode (ask/auto installs the action-time gate; None/
+            # bypass leaves the chain byte-identical). Current 5b callers pass nothing yet;
+            # P2.3 wires the real per-turn mode.
+            permission_mode=permission_mode,
         )
         config = {"configurable": {"thread_id": thread_id}}
         graph_input = {"messages": [{"role": "user", "content": message}]}
