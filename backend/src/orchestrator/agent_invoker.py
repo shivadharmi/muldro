@@ -1010,6 +1010,42 @@ class AgentInvoker:
         if not paused:
             await reap_thread(self._checkpointer_provider(), thread_id)
 
+    async def _load_pending_approval(
+        self, db, approval_id: str, workspace_id: str
+    ) -> tuple[Approval | None, dict | None]:
+        """Load + guard a pending Approval for a resume, SHARED by ``resume_deep_turn`` (the
+        routed per-step lead) and ``resume_deep_lead`` (the synthetic chat single-lead) so no
+        tenant-isolation / replay guard is ever dropped from one path (Sec-N5).
+
+        Runs the four resume guards that are IDENTICAL across both paths:
+
+        (a) load the Approval by id;
+        (b) tenant-isolation (IDOR): a missing OR cross-tenant approval returns the SAME
+            generic "approval not found" so existence is never leaked across tenants
+            (``workspace_id`` is resolved from the caller's auth context, never LLM-supplied);
+        (c) already-decided: ``status != "pending"`` → "approval not pending", which blocks
+            re-resuming (and thus re-executing) an already-decided approval;
+        (d) A6 (Step-10A): the stored ``thread_id`` MUST embed the caller's workspace — a
+            thread minted for another tenant, a legacy colonless id, or a MISSING thread_id
+            (→ ``workspace_of_thread_id`` None) is refused with the SAME generic not-found
+            envelope (no existence leak), before any state change.
+
+        Returns ``(approval, None)`` when all four guards pass, else ``(None, error_frame)`` —
+        the caller yields the frame and returns. NO status mutation happens here, so a rejected
+        guard leaves the row untouched (pending + re-inspectable). Caller-specific refs
+        validation (routed ``agent_name`` vs. plan-derived ``lead_scope``) stays with each
+        caller so each keeps its own message + fail-closed semantics.
+        """
+        approval = await db.get(Approval, approval_id)
+        if approval is None or approval.workspace_id != workspace_id:
+            return None, {"event": "error", "message": "approval not found"}
+        if approval.status != "pending":
+            return None, {"event": "error", "message": "approval not pending"}
+        thread_id = (approval.artifact_refs or {}).get("thread_id")
+        if workspace_of_thread_id(thread_id) != workspace_id:
+            return None, {"event": "error", "message": "approval not found"}
+        return approval, None
+
     async def resume_deep_turn(
         self, *, approval_id: str, decision: str, user_id: str, workspace_id: str
     ) -> AsyncGenerator[dict[str, Any], None]:
@@ -1030,18 +1066,10 @@ class AgentInvoker:
             return
 
         async with self._db_factory() as db:
-            approval = await db.get(Approval, approval_id)
-            # Tenant-isolation (IDOR) guard: an approval is resumable ONLY by its owning
-            # workspace. Return the SAME "not found" for a missing OR cross-tenant approval
-            # so existence is never leaked across tenants. workspace_id is resolved from the
-            # caller's auth context by the (deferred) HTTP endpoint — never LLM-supplied.
-            if approval is None or approval.workspace_id != workspace_id:
-                yield {"event": "error", "message": "approval not found"}
-                return
-            # Only a still-pending approval may be resumed — blocks re-resuming (and thus
-            # re-executing) an already-decided approval.
-            if approval.status != "pending":
-                yield {"event": "error", "message": "approval not pending"}
+            # Shared load + tenant-isolation + status + A6 guards (Sec-N5).
+            approval, guard_error = await self._load_pending_approval(db, approval_id, workspace_id)
+            if guard_error is not None:
+                yield guard_error
                 return
             refs = approval.artifact_refs or {}
             thread_id = refs.get("thread_id")
@@ -1050,17 +1078,12 @@ class AgentInvoker:
             # Approval at pause time). Without this the continuation would rebuild with an
             # EMPTY context block and lose the turn's ambient entities/memories/preferences.
             persisted_context = refs.get("context_block", "")
-            # CF-5: validate the rebuild inputs BEFORE consuming (flipping + committing) the
-            # approval, so a malformed approval stays pending and re-resumable — not stranded.
+            # CF-5: validate the routed-agent rebuild inputs BEFORE consuming (flipping +
+            # committing) the approval, so a malformed approval stays pending and re-resumable.
+            # A missing/ws-mismatched thread_id is already refused by the shared guard's A6
+            # check above; this keeps the agent_name guard (the routed lead's identity).
             if not thread_id or not agent_name:
                 yield {"event": "error", "message": "approval missing thread_id/agent_name"}
-                return
-            # A6 (Step-10A): defense-in-depth on the :695 workspace IDOR guard — the stored
-            # thread_id must embed the caller's workspace. A thread minted for another tenant
-            # (or a legacy colonless thread_id → workspace_of_thread_id None) is refused with
-            # the SAME generic not-found envelope (no existence leak), before any state change.
-            if workspace_of_thread_id(thread_id) != workspace_id:
-                yield {"event": "error", "message": "approval not found"}
                 return
             agent = self._agents.get(agent_name)
             if agent is None:
@@ -1100,6 +1123,145 @@ class AgentInvoker:
             Command(resume=decision),
             config,
             agent_name=agent_name,
+            model=model,
+            durability="sync",
+        ):
+            if isinstance(frame, dict) and frame.get("event") == "approval_needed":
+                paused = True
+            yield frame
+        if not paused:
+            await reap_thread(self._checkpointer_provider(), thread_id)
+
+    async def resume_deep_lead(
+        self,
+        *,
+        approval_id: str,
+        decision: str,
+        reason: str | None = None,
+        user_id: str,
+        workspace_id: str,
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """Re-enter a paused CHAT single-lead turn (P2.2a) via ``Command(resume=decision)`` on
+        the paused Approval's stored ``thread_id``. ``decision`` is ``"approve"`` or
+        ``"reject"``; ``reason`` is the user's optional decline/modify note.
+
+        The sibling of ``resume_deep_turn`` for the SYNTHETIC lead: that lead is NOT registered
+        in ``self._agents`` and its ``capability_scope`` is plan-derived, so it is rebuilt from
+        the plan scope persisted on the Approval (``lead_scope``) via ``_make_lead`` rather than
+        looked up. Two differences from ``resume_deep_turn`` are load-bearing:
+
+        * ``authorization_source`` is ``DIRECT_USER_REQUEST`` (NEVER autonomous) — the chat
+          lead's turn is user-authorized, so the ``trust_gate`` stays DORMANT (short-circuits);
+        * the action-time ``permission_gate`` is ALWAYS re-installed, FAIL-CLOSED. A PENDING
+          chat Approval PROVES the first pass interrupted, so resume MUST re-interrupt to honor
+          the verdict — the gate installation is NEVER keyed on the persisted mode. The
+          fail-closed ``resume_mode`` coerces anything outside ``ask``/``auto`` to ``ask`` so
+          ``_build_deep_agent_for`` always installs the gate. Rebuilding with
+          ``permission_mode=None`` would leave BOTH gates inactive → a REJECTED write would
+          execute (fail-OPEN). That is the invariant the mandatory reject-doesn't-fire test
+          pins.
+        """
+        if decision not in ("approve", "reject"):
+            cid = get_correlation_id() or new_correlation_id()
+            yield {
+                "event": "error",
+                "code": _GENERIC_CODE,
+                "message": _GENERIC_MESSAGE,
+                "correlation_id": cid,
+            }
+            return
+
+        # Lazy import (mirrors build_chat_lead's style) — rebuild the synthetic lead from a scope.
+        from src.orchestrator.lead_builder import _make_lead
+
+        async with self._db_factory() as db:
+            # Shared load + tenant-isolation + status + A6 guards (Sec-N5).
+            approval, guard_error = await self._load_pending_approval(db, approval_id, workspace_id)
+            if guard_error is not None:
+                yield guard_error
+                return
+            refs = approval.artifact_refs or {}
+            thread_id = refs.get("thread_id")
+            lead_scope = refs.get("lead_scope")
+            # Graceful fail-CLOSED on the rebuild inputs, validated BEFORE flipping status so a
+            # malformed approval stays pending + re-inspectable. A missing lead_scope must DENY
+            # (never fall back to a broad scope): the synthetic lead's authority IS exactly the
+            # persisted plan-bounded scope, so with no scope there is nothing safe to rebuild.
+            # (A missing/ws-mismatched thread_id is already refused by the shared guard's A6.)
+            if not thread_id or not isinstance(lead_scope, list) or not lead_scope:
+                # not-a-list (corrupted refs) is denied too: frozenset("email.send") would
+                # silently yield a CHARACTER set (garbage scope) — deny rather than mis-rebuild.
+                yield {"event": "error", "message": "approval not resumable"}
+                return
+            # Rebuild the synthetic lead from the persisted plan-bounded scope. offered-tools ⊆
+            # enforced-scope is reproduced by construction (_resolve_tools →
+            # get_tools_for_agent offers only tools whose capability ∈ this scope).
+            lead = _make_lead(frozenset(lead_scope), self._settings.cheap_mode)
+            # CF-1: re-inject the ContextPack the original turn assembled.
+            persisted_context = refs.get("context_block", "")
+            # FAIL-CLOSED resume mode (THE load-bearing invariant): a PENDING chat Approval
+            # proves the first pass interrupted, so the gate MUST be re-installed to re-reach
+            # interrupt() and honor the verdict. NEVER key installation on the persisted mode —
+            # coerce anything outside ask/auto to "ask" so _build_deep_agent_for installs the
+            # gate. Rebuilding with permission_mode=None would leave BOTH gates inactive
+            # (trust_gate dormant on direct_user_request + no permission_gate) → a REJECTED
+            # write would EXECUTE (fail-open).
+            resume_mode = refs.get("permission_mode")
+            if resume_mode not in ("ask", "auto"):
+                resume_mode = "ask"
+            # Flip + persist BEFORE streaming so the replayed gate reads the decided row (the
+            # permission_gate's CF-2 replay branch quotes decision_reason on reject).
+            approval.status = "approved" if decision == "approve" else "rejected"
+            approval.decided_at = datetime.now(timezone.utc)
+            approval.approved_by = user_id
+            approval.decision_reason = reason
+            if decision == "approve":
+                # A-7 convention (routes_approvals): a reason on an approve = a "modified"
+                # decision, else a plain "approved". Stamped so the verified-outcome hook can
+                # use it (parity with the click-through approve path).
+                approval.artifact_refs = {
+                    **refs,
+                    "decision_type": "modified" if reason else "approved",
+                }
+            await db.commit()
+
+        model = self.get_model_for_agent(lead)
+        tools = await self._resolve_tools(lead, workspace_id, None)
+        system_blocks = self.build_system_prompt(lead, persisted_context)
+        # PRESENTER_VOICE (parity with stream_deep_lead): the RESUMED lead IS the reply-producing
+        # lead — it emits the post-decision user-facing confirmation — so it MUST carry the same
+        # inline/reply-lead augmentation the pause path applies. Omitting it drops the surface
+        # contract from the reply (the PRESENTER_VOICE surface-drop regression class). Mirror
+        # stream_deep_lead exactly (is_reply_lead=True forces PRESENTER_VOICE regardless of flag).
+        augmented = _augment_system_blocks_for_inline(system_blocks, True, is_reply_lead=True)
+        deep_agent = await self._build_deep_agent_for(
+            lead,
+            tools,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            thread_id=thread_id,
+            # NEVER autonomous for the chat lead: direct_user_request keeps the trust_gate
+            # dormant (it short-circuits), so the permission_gate below is the sole active gate.
+            authorization_source=AuthorizationSource.DIRECT_USER_REQUEST,
+            system_prompt=build_system_message(augmented),
+            # CF-1: thread the original turn's context forward so a CHAINED approval (a 2nd write
+            # this resumed continuation pauses on) carries the same context.
+            context_block=persisted_context,
+            # A3: the ungated single-lead path fail-closes its writes on Redis-down.
+            require_write_lock=True,
+            # THE invariant: ALWAYS install the permission_gate on resume (fail-closed ask/auto).
+            permission_mode=resume_mode,
+        )
+        config = {"configurable": {"thread_id": thread_id}}
+        # Same reap-on-non-paused-completion rule as resume_deep_turn: a resume that re-pauses
+        # (a chained 2nd write) keeps its checkpoint for the next resume; one that runs to
+        # completion reaps the thread it just finished.
+        paused = False
+        async for frame in stream_deep_agent_events(
+            deep_agent,
+            Command(resume=decision),
+            config,
+            agent_name=lead.name,
             model=model,
             durability="sync",
         ):
