@@ -348,6 +348,153 @@ class ChatProcessor:
             if sse is not None:
                 yield sse
 
+    async def resume_message_events(
+        self,
+        *,
+        approval_id: str,
+        decision: str,
+        reason: str | None = None,
+        user_id: str,
+        workspace_id: str,
+        conversation_id: str | None = None,
+    ) -> AsyncGenerator[CoreEvent, None]:
+        """Drive a paused chat single-lead turn's RESUME continuation (P2.2b, Corr-C1).
+
+        The sibling of :meth:`_process_core` for the RESUME half of an ask/auto turn: when
+        the action-time permission gate PAUSED for the user's confirmation, ``_process_core``
+        yielded :class:`ApprovalRequired` and ``return``\\ ed — SKIPPING its completion tail
+        (the turn wasn't done). The resume is a SEPARATE HTTP request. This wrapper re-enters
+        the paused thread via :meth:`AgentInvoker.resume_deep_lead`, re-streams the
+        continuation frames, and — critically — RE-HOMES the reply as a :class:`Presentation`
+        and runs the completion tail (surface push + ``RunCompleted``). Without it the
+        approved write fires but the reply is never persisted (``routes_chat`` persists only
+        on a ``Presentation`` → empty bubble) and no A2UI surface builds — the exact C-CORR2
+        failure P1 fixed for the initial turn, un-fixed on resume.
+
+        Yields the SAME ``CoreEvent`` union :meth:`_process_core` yields, so the resume HTTP
+        endpoint (a later task) reuses :func:`core_event_to_sse` verbatim. Mirrors
+        ``_process_core``'s trace / ``turn_scope`` / try / except / finally shell.
+
+        ``conversation_id`` is accepted for the resume endpoint's parity and the P2.7 learner
+        (below); the reply + surface (the user-visible fixes) do not need it, so it is unused
+        today.
+        """
+        trace = self._trace_manager.start_trace("resume_approval")
+
+        async with turn_scope(on_close=close_turn_sessions):
+
+            def _fire_event(event_type: str, **kwargs: Any) -> None:
+                self._spawn_background(self._events.emit_runtime_event(event_type, **kwargs))
+
+            presenter_text = ""
+            try:
+                yield TraceStarted(trace_id=trace.trace_id)
+
+                async for frame in self._invoker.resume_deep_lead(
+                    approval_id=approval_id,
+                    decision=decision,
+                    reason=reason,
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                ):
+                    if frame.get("event") == "error":
+                        # resume_deep_lead REFUSED (invalid decision / tenant-A6 guard failure /
+                        # not-resumable). The frame is ALREADY a client-safe SSE ``error`` dict
+                        # (the invoker owns its message shape) — pass it through verbatim via the
+                        # AgentStreamEvent fallback and STOP. No completion tail runs: nothing
+                        # completed. ``finish_trace`` in the ``finally`` still fires.
+                        yield agent_event_from_sse(frame)
+                        return
+                    if frame.get("event") == "approval_needed":
+                        # CHAINED re-pause: a 2ND write in the resumed continuation paused again.
+                        # Same suspend semantics as ``_process_core``'s pause seam — yield the
+                        # typed pause event and ``return``, SKIPPING the tail (the turn is
+                        # suspended again). The paused checkpoint stays live; the resume path
+                        # re-enters on the NEXT decision. The typed ApprovalRequired REPLACES the
+                        # raw passthrough so the frame is emitted EXACTLY ONCE.
+                        yield ApprovalRequired(
+                            approval_id=frame.get("approval_id"),
+                            capability=frame.get("capability"),
+                            risk_level=frame.get("risk_level"),
+                            thread_id=frame.get("thread_id"),
+                        )
+                        return
+                    yield agent_event_from_sse(frame)
+                    if frame.get("event") == "agent_done":
+                        # RE-HOME the presenter output (C-CORR2): resume_deep_lead emits NO
+                        # Presentation frame, so synthesize it here — else the resumed reply is
+                        # never persisted (routes_chat persists only on Presentation) and the
+                        # chat bubble is empty. Keep presenter_text RAW for the tail's surface
+                        # extraction.
+                        presenter_text = frame.get("text", "")
+                        yield Presentation(text=strip_surface_blocks(presenter_text))
+
+                # COMPLETION TAIL (mirrors ``_process_core``'s completion tail: run_completed →
+                # surface push → RunCompleted, MINUS the interaction-learner — see P2.7 below).
+                # Runs ONLY on the terminal reply (the ``return``s above skip it for a suspended
+                # / refused turn). Currently DUPLICATED with _process_core's tail — the shared
+                # ``_emit_completion_tail`` extraction is the P2.7 structure-only cleanup.
+                _fire_event(
+                    "run_completed",
+                    workspace_id=workspace_id,
+                    user_id=user_id,
+                    run_id=None,
+                    payload={"trace_id": trace.trace_id},
+                )
+
+                # Push workspace surface (Presenter-driven). Keep presenter_text raw for
+                # extraction — it still carries the fenced surface blocks.
+                surface_id = None
+                try:
+                    surface_spec = extract_surface_spec(presenter_text)
+                    if surface_spec and surface_spec.should_surface:
+                        surface_id = await self._surfaces.push_presenter_surface(
+                            spec=surface_spec,
+                            user_id=user_id,
+                            workspace_id=workspace_id,
+                            run_id=None,
+                            response_text=presenter_text,
+                        )
+                except Exception:
+                    logger.warning("Surface push failed", exc_info=True)
+
+                # P2.7 (DEFERRED — not built here): the interaction-learner spawn would go here,
+                # mirroring ``_process_core``'s tail. It needs the ORIGINAL user message
+                # (``learn(user_message=..., agent_response=presenter_text)``), which is NOT
+                # persisted on the Approval today (``context_block`` holds history + plan, not the
+                # raw ask). Persisting ``user_message`` on the Approval (a gate thread-through) +
+                # spawning the learner is a P2.7 enrichment. The reply + surface (the user-visible
+                # Corr-C1 fixes) ship now; the learner (background enrichment) is deferred.
+                #
+                # P2.7 (structure-only): this tail DUPLICATES ``_process_core``'s tail
+                # (run_completed + surface + RunCompleted). Extracting a shared
+                # ``_emit_completion_tail`` helper (alongside the ``_stream_and_reap`` dedup) is a
+                # P2.7 cleanup — NOT refactored here (chat_processor.py is the only file this task
+                # touches; ``_process_core`` is left unchanged).
+
+                yield RunCompleted(trace_id=trace.trace_id, run_id=None, surface_id=surface_id)
+
+            except Exception as e:
+                logger.error("resume_message_events failed: %s", e, exc_info=True)
+                cid = get_correlation_id() or new_correlation_id()
+                code, safe_msg, _ = classify(e)
+                _fire_event(
+                    "run_failed",
+                    workspace_id=workspace_id,
+                    user_id=user_id,
+                    run_id=None,
+                    payload={"code": code, "message": safe_msg, "correlation_id": cid},
+                )
+                yield RunFailed(
+                    trace_id=trace.trace_id, code=code, message=safe_msg, correlation_id=cid
+                )
+            finally:
+                await self._trace_manager.finish_trace(
+                    trace.trace_id,
+                    user_id=user_id,
+                    workspace_id=workspace_id,
+                )
+
     async def _process_core(
         self,
         message: str,
