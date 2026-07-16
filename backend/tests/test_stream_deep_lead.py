@@ -231,19 +231,25 @@ async def test_effective_chat_runtime_resolves_via_gate():
 
 # --- Dormancy proof: 5a adds callable-but-UNWIRED code --------------------------------
 def test_chat_processor_wires_single_lead_branch():
-    """P1 Task B (5b) wires the deep single-lead chat path into ``_process_core``. This
-    inverts the 5a dormancy guard: ``chat_processor.py`` MUST now reference the single-lead
-    symbols. The branch is still gated on ``permission_mode == "bypass"`` (checked FIRST so
-    the default short-circuits), ``deep_single_lead``, and a "deep" chat runtime — see
-    ``tests/test_chat_single_lead.py`` for the behavioral coverage."""
+    """P1 Task B (5b) wired the deep single-lead chat path into ``_process_core``;
+    P2.3 WIDENED it to the full chat permission model. ``chat_processor.py`` MUST reference
+    the single-lead symbols, resolve an EFFECTIVE mode (checking ``deep_single_lead`` FIRST
+    so the default short-circuits with zero extra I/O), and branch on that resolved mode
+    across ``bypass``/``ask``/``auto`` — see ``tests/test_chat_single_lead.py`` for the
+    behavioral coverage."""
     src = (
         Path(__file__).resolve().parent.parent / "src" / "orchestrator" / "chat_processor.py"
     ).read_text()
     assert "stream_deep_lead" in src
     assert "build_chat_lead" in src
     assert "deep_single_lead" in src
-    # The gate is an INDEPENDENT permission_mode field, exact-equality on "bypass".
-    assert 'permission_mode == "bypass"' in src
+    # P2.3: the branch is gated on a resolved effective mode (fail-safe downgrades), not a
+    # bare exact-equality on "bypass". Assert the wiring SYMBOLS (not an exact expression
+    # string, which would break on a benign refactor) — behavioral coverage lives in
+    # tests/test_chat_single_lead.py.
+    assert "effective_mode" in src
+    assert "workspace_allows_bypass" in src
+    assert "has_durable_checkpointer" in src
 
 
 # --- P1 A2: stream_deep_lead resolves tools internally when tools is None --------------

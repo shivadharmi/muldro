@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.types import Command
 
 from src.config.models import BEDROCK_MODEL_TIERS, MODEL_TIERS
@@ -225,6 +226,20 @@ class AgentInvoker:
         without a double-private reach into ``_checkpointer_provider``. Returns ``None`` when
         no durable saver is wired (legacy runtime, or a worker built without one)."""
         return self._checkpointer_provider()
+
+    def has_durable_checkpointer(self) -> bool:
+        """True iff a DURABLE checkpointer (an ``AsyncPostgresSaver``) is wired.
+
+        A chat permission pause spans TWO HTTP requests — the turn suspends on one
+        request, and a separate resume request re-enters the same LangGraph thread — so
+        it can only be served by a checkpointer that survives across requests. The
+        per-build ``MemorySaver`` fallback (used when the durable saver is absent /
+        degraded) lives only in-process and CANNOT resume a paused turn; treat it, and a
+        ``None`` provider, as non-durable. Used by the chat single-lead path to downgrade
+        an ``ask``/``auto`` turn to the legacy path when no durable saver exists (a pause
+        would otherwise orphan the checkpoint). None-safe.
+        """
+        return isinstance(self._checkpointer_provider(), AsyncPostgresSaver)
 
     def set_agents(self, agents: dict[str, SubAgent]) -> None:
         """Replace the agent set (called after a runtime DB agent reload)."""

@@ -191,6 +191,27 @@ class Presentation(_CoreEventBase):
     text: str
 
 
+class ApprovalRequired(_CoreEventBase):
+    """The chat single-lead turn SUSPENDED for the user's confirmation (P2.3).
+
+    Emitted when the action-time ``permission_gate`` pauses a write (``ask``/``auto``
+    mode). It ENDS the turn without running the completion tail — the paused deep
+    checkpoint stays live and the resume path (a later task) re-enters the thread and
+    runs the tail on the terminal reply. The fields are exactly those the gate's
+    ``approval_needed`` interrupt frame carries; ``reversible``/``blast_radius`` live on
+    the persisted ``Approval`` row (a later frontend concern), not here.
+
+    Its SSE mapping (``core_event_to_sse``) is EXPLICIT (never batch-only): a dropped
+    frame would strand the paused checkpoint forever, so the streaming mapping must
+    always emit it."""
+
+    type: Literal["approval_required"] = "approval_required"
+    approval_id: str
+    capability: str
+    risk_level: str
+    thread_id: str
+
+
 class RunCompleted(_CoreEventBase):
     type: Literal["run_completed"] = "run_completed"
     trace_id: str
@@ -229,6 +250,7 @@ CoreEvent = Annotated[
         PlanModeStepSkipped,
         UserActionsReady,
         Presentation,
+        ApprovalRequired,
         RunCompleted,
         RunFailed,
         ValidationFailed,
@@ -339,6 +361,22 @@ def core_event_to_sse(event: CoreEvent) -> dict[str, Any] | None:
             return {"event": "user_actions", "steps": steps}
         case Presentation(text=text):
             return {"event": "response", "text": text}
+        case ApprovalRequired(
+            approval_id=approval_id,
+            capability=capability,
+            risk_level=risk_level,
+            thread_id=thread_id,
+        ):
+            # The frozen pause frame the frontend consumes to render the confirmation
+            # prompt AND to keep the paused checkpoint resumable — key-identical to the
+            # deep stream adapter's ``approval_needed`` frame (minus ``agent``).
+            return {
+                "event": "approval_needed",
+                "approval_id": approval_id,
+                "capability": capability,
+                "risk_level": risk_level,
+                "thread_id": thread_id,
+            }
         case RunCompleted(trace_id=trace_id, run_id=run_id, surface_id=surface_id):
             done: dict[str, Any] = {"event": "done", "trace_id": trace_id, "run_id": run_id}
             if surface_id:

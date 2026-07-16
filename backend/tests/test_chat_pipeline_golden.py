@@ -27,6 +27,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.contracts import PlanOutput, PlanStep
+from tests.conftest import make_mock_settings
 
 pytestmark = pytest.mark.asyncio
 
@@ -64,6 +65,10 @@ def _make_orch(canned: dict[str, str]) -> tuple[object, _Recorder]:
 
     chat = ChatProcessor.__new__(ChatProcessor)
     rec = _Recorder()
+
+    # deep_single_lead=False (explicit) → the P2.3 effective-mode resolution short-circuits
+    # on the cheap flag, keeping these golden scenarios on the legacy path (byte-neutral).
+    chat._settings = make_mock_settings(deep_single_lead=False)
 
     trace = MagicMock()
     trace.trace_id = TRACE_ID

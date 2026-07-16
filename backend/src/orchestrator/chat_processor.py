@@ -33,6 +33,7 @@ from src.orchestrator.chat_pipeline import (
     resolve_plan_routing,
 )
 from src.orchestrator.core_events import (
+    ApprovalRequired,
     CoreEvent,
     IntentClassified,
     InteractionLogged,
@@ -61,6 +62,7 @@ from src.orchestrator.intent_classifier import (
 from src.orchestrator.presenter_skip import extract_perceiver_synthesis, single_read_step
 from src.services.capability_resolver import CapabilityResolver
 from src.services.surface_mapping import extract_surface_spec, strip_surface_blocks
+from src.services.workspace_entitlements import workspace_allows_bypass
 
 logger = logging.getLogger(__name__)
 
@@ -218,6 +220,11 @@ class ChatProcessor:
             prompt_style="structured",
             context=context,
             conversation_id=conversation_id,
+            # Batch/scheduled turns have NO synchronous user to confirm a pause, so the
+            # single-lead permission path (incl. bypass) is never taken here — an
+            # ask/auto pause would orphan the checkpoint and the ApprovalRequired event
+            # is silently dropped by the batch fold below (case _: pass).
+            can_pause=False,
         ):
             match event:
                 case TraceStarted(trace_id=trace_id):
@@ -303,6 +310,11 @@ class ChatProcessor:
             prompt_style="conversational",
             context=context,
             conversation_id=conversation_id,
+            # Streaming entry: a synchronous user IS present to confirm a pause, so the
+            # single-lead ask/auto path may suspend the turn for approval.
+            # ``process_message_stream`` reaches ``_process_core`` through this method,
+            # so it inherits ``can_pause=True`` too.
+            can_pause=True,
         ):
             yield event
 
@@ -348,6 +360,7 @@ class ChatProcessor:
         context: dict | None,
         conversation_id: str | None,
         permission_mode: str = "auto",
+        can_pause: bool = False,
     ) -> AsyncGenerator[CoreEvent, None]:
         """Unified chat-orchestration pipeline shared by both public entry points.
 
@@ -512,20 +525,51 @@ class ChatProcessor:
                 presenter_text = ""
                 agent_name: str | None = None
 
-                # Step 10D P1 (chat permission model): the deep single-lead chat path.
-                # SECURITY — taken ONLY when the caller explicitly opted into `bypass` AND
-                # the single-lead flag is on AND the chat runtime resolves to "deep". All
-                # three are required, so `permission_mode == "bypass"` is checked FIRST to
-                # short-circuit the default ("auto") BEFORE any settings read or runtime
-                # resolution — the legacy path stays byte-identical (no extra
-                # effective_chat_runtime() Redis round-trip). `permission_mode` is an
-                # INDEPENDENT field, never derived from the legacy `mode` slot.
+                # Step 10D P2.3 (chat permission model): resolve the EFFECTIVE permission
+                # mode for the deep single-lead chat path, applying FAIL-SAFE downgrades.
+                # SECURITY — this decides whether/how a write is gated.
+                #
+                # `self._settings.deep_single_lead` (a cheap bool, OFF in prod) is checked
+                # FIRST so the default legacy path does ZERO extra work — no
+                # effective_chat_runtime() Redis round-trip, no entitlement / checkpointer
+                # read — keeping it byte-identical. `can_pause` is False on the batch /
+                # scheduled path (no synchronous user to confirm a pause), so the whole
+                # single-lead path (INCLUDING bypass) is only ever taken on the streaming
+                # entries. `permission_mode` is an INDEPENDENT field, never derived from
+                # the legacy `mode` slot.
+                #
+                # Downgrades are fail-safe ONLY (never escalate authority):
+                #   * bypass on a workspace that has not opted in  → auto
+                #   * ask/auto with no durable checkpointer to resume a pause → legacy
+                effective_mode: str | None = None
                 if (
-                    permission_mode == "bypass"
-                    and self._settings.deep_single_lead
+                    self._settings.deep_single_lead
+                    and can_pause
+                    and permission_mode in ("bypass", "ask", "auto")
                     and await self._invoker.effective_chat_runtime() == "deep"
                 ):
-                    # SINGLE-LEAD PATH (P1). The Planner already ran → the plan carries the
+                    effective_mode = permission_mode
+                    if effective_mode == "bypass" and not await workspace_allows_bypass(
+                        self._db_factory, workspace_id
+                    ):
+                        logger.warning(
+                            "workspace %s not entitled for bypass — downgrading to auto",
+                            workspace_id,
+                        )
+                        effective_mode = "auto"
+                    needs_durable = effective_mode in ("ask", "auto")
+                    if needs_durable and not self._invoker.has_durable_checkpointer():
+                        logger.warning(
+                            "no durable checkpointer — chat permission gate cannot resume a "
+                            "pause; falling back to the legacy path"
+                        )
+                        effective_mode = None
+
+                # The deep single-lead chat path (P2.3): taken for the resolved effective mode
+                # (bypass/ask/auto). Same safety posture as today's ungated chat, plus the
+                # action-time permission gate (ask/auto) that suspends a write for confirmation.
+                if effective_mode in ("bypass", "ask", "auto"):
+                    # SINGLE-LEAD PATH. The Planner already ran → the plan carries the
                     # plan-union scope + the system.* steps. Same safety posture as today's
                     # ungated chat, just single-lead execution (one lead vs N per-step calls
                     # + presenter).
@@ -572,7 +616,33 @@ class ChatProcessor:
                         workspace_id=workspace_id,
                         intent=intent,
                         trace=trace,
+                        permission_mode=effective_mode,
                     ):
+                        # PAUSE SEAM (P2.3): the action-time permission gate paused this
+                        # turn for the user's confirmation. Emit the typed pause event and
+                        # `return` — ending the generator SKIPS the shared completion tail
+                        # (run_completed / surface / learner / RunCompleted) for a suspended
+                        # turn, while the `finally` below still finishes the trace and
+                        # turn_scope still tears down the MCP sessions. The paused deep
+                        # checkpoint stays live; the resume path (later task) re-enters the
+                        # thread and runs the tail on the terminal reply. The typed
+                        # ApprovalRequired REPLACES the raw agent_event_from_sse passthrough
+                        # so the frame is emitted EXACTLY ONCE.
+                        #
+                        # Abandoning the half-consumed stream_deep_lead generator here is
+                        # INTENTIONAL and safe (unlike the drain-the-generator pattern at the
+                        # plan step above): stream_deep_agent_events has ALREADY returned after
+                        # the approval_needed frame (nothing left to drain), and stream_deep_lead
+                        # set its own paused=True before yielding, so its `if not paused:
+                        # reap_thread` never runs — the paused checkpoint is preserved for resume.
+                        if frame.get("event") == "approval_needed":
+                            yield ApprovalRequired(
+                                approval_id=frame.get("approval_id"),
+                                capability=frame.get("capability"),
+                                risk_level=frame.get("risk_level"),
+                                thread_id=frame.get("thread_id"),
+                            )
+                            return
                         yield agent_event_from_sse(frame)
                         if frame.get("event") == "agent_done":
                             presenter_text = frame.get("text", "")

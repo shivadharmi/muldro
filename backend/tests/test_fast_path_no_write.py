@@ -20,6 +20,7 @@ import pytest
 from src.contracts import PlanOutput, PlanStep
 from src.orchestrator.chat_processor import _fast_step_is_write
 from src.orchestrator.intent_classifier import FAST_INTENTS, intent_to_plan
+from tests.conftest import make_mock_settings
 
 _MOD = "src.orchestrator.chat_processor"
 
@@ -63,6 +64,10 @@ def _make_chat() -> object:
     from src.orchestrator.chat_processor import ChatProcessor
 
     chat = ChatProcessor.__new__(ChatProcessor)
+
+    # deep_single_lead=False (explicit) → the P2.3 effective-mode resolution short-circuits
+    # on the cheap flag; the diverted turn runs the legacy path to completion.
+    chat._settings = make_mock_settings(deep_single_lead=False)
 
     trace = MagicMock()
     trace.trace_id = "trace_fence"

@@ -61,12 +61,15 @@ def _make_chat(
     lead_text: str = "LEAD_REPLY",
     settings_overrides: dict | None = None,
     runtime: str = "deep",
+    durable: bool = True,
 ) -> tuple[object, _Recorder]:
     """Construct a ChatProcessor with every collaborator mocked.
 
     ``runtime`` is what ``effective_chat_runtime`` resolves to. ``lead_text`` is the
     text the mocked ``stream_deep_lead`` emits on ``agent_done``. ``settings_overrides``
-    is merged into ``make_mock_settings`` (e.g. ``deep_single_lead=True``).
+    is merged into ``make_mock_settings`` (e.g. ``deep_single_lead=True``). ``durable``
+    is what ``has_durable_checkpointer()`` returns (True by default so ask/auto turns are
+    not downgraded to legacy; set False to exercise the durable-precondition fallback).
     """
     from src.orchestrator.chat_processor import ChatProcessor
 
@@ -123,7 +126,8 @@ def _make_chat(
         yield {"event": "agent_start", "agent": agent_name, "model": "m"}
         yield {"event": "agent_done", "agent": agent_name, "text": text}
 
-    # SINGLE-LEAD deep stream — records call kwargs, emits an agent_done frame.
+    # SINGLE-LEAD deep stream — records call kwargs (incl. permission_mode), emits an
+    # agent_done frame.
     async def _stream_deep_lead(
         lead,
         tools=None,
@@ -134,6 +138,7 @@ def _make_chat(
         workspace_id,
         intent=None,
         trace=None,
+        permission_mode=None,
     ):
         rec.lead_calls.append(
             {
@@ -145,6 +150,7 @@ def _make_chat(
                 "workspace_id": workspace_id,
                 "intent": intent,
                 "trace": trace,
+                "permission_mode": permission_mode,
             }
         )
         yield {"event": "agent_start", "agent": "lead", "model": "m"}
@@ -158,16 +164,31 @@ def _make_chat(
     chat._invoker.effective_chat_runtime = AsyncMock(return_value=runtime)
     chat._invoker.build_chat_lead = AsyncMock(return_value=fake_lead)
     chat._invoker.stream_deep_lead = _stream_deep_lead
+    # P2.3: durable-checkpointer precondition (sync method). True by default so ask/auto
+    # single-lead turns are not downgraded to legacy in the happy-path tests.
+    chat._invoker.has_durable_checkpointer = MagicMock(return_value=durable)
     chat._fake_lead = fake_lead
     return chat, rec
 
 
-def _patches(plan: PlanOutput, routing, user_steps, *, intent="compose_request", confidence=0.9):
+def _patches(
+    plan: PlanOutput,
+    routing,
+    user_steps,
+    *,
+    intent="compose_request",
+    confidence=0.9,
+    allow_bypass: bool = True,
+):
+    """Patch the chat_processor module seams. ``allow_bypass`` is what the entitlement
+    helper (``workspace_allows_bypass``) resolves to — True (entitled) by default so
+    bypass turns stay in bypass; set False to exercise the bypass→auto downgrade."""
     return [
         patch(f"{_MOD}.classify_intent", new=AsyncMock(return_value=(intent, confidence, []))),
         patch(f"{_MOD}.extract_plan", new=MagicMock(return_value=plan)),
         patch(f"{_MOD}.intent_to_plan", new=MagicMock(return_value=plan)),
         patch(f"{_MOD}.resolve_plan_routing", new=AsyncMock(return_value=(routing, user_steps))),
+        patch(f"{_MOD}.workspace_allows_bypass", new=AsyncMock(return_value=allow_bypass)),
     ]
 
 
@@ -239,9 +260,9 @@ async def test_single_lead_every_shape_yields_presentation(shape):
 
 
 async def test_single_lead_system_set_goal_runs_deterministically():
-    """system.* steps run before the lead (Planner-produced, no data dep); each yields a
-    SystemStepResult (batch-only) and the lead still replies. Driven via the batch path
-    where SystemStepResult surfaces (it is dropped from the SSE stream by design)."""
+    """system.* steps run before the lead (Planner-produced, no data dep); the lead still
+    replies. Driven via the STREAMING single-lead path (P2.3: batch is always legacy, so
+    the single-lead system.* determinism is exercised on the streaming entry)."""
     plan = PlanOutput(
         goal="remember",
         reasoning="r",
@@ -255,7 +276,7 @@ async def test_single_lead_system_set_goal_runs_deterministically():
     for c in ctx:
         c.start()
     try:
-        result = await _run_batch(chat, mode="execute", permission_mode="bypass")
+        stream = await _run_stream(chat, permission_mode="bypass")
     finally:
         for c in ctx:
             c.stop()
@@ -267,11 +288,9 @@ async def test_single_lead_system_set_goal_runs_deterministically():
     assert args[1] is plan
     assert args[2] == "usr_1"
     assert args[3] == "ws_1"
-    # The single-lead path ran, the system output surfaced in the batch result, and the
-    # lead still replied.
+    # The single-lead path ran and the lead still replied.
     assert len(rec.lead_calls) == 1
-    assert result["system_system.set_goal"] == "SYS_OK"
-    assert result["presentation"] == "Done."
+    assert _responses(stream) == ["Done."]
 
 
 async def test_single_lead_skips_user_actor_system_steps():
@@ -402,20 +421,77 @@ async def test_single_lead_completes_with_run_completed():
 # ── Legacy byte-neutral: the branch is NOT taken unless ALL THREE conditions hold ──
 
 
-async def test_legacy_when_permission_mode_default_auto():
+async def test_single_lead_auto_mode_takes_single_lead_when_durable():
+    """P2.3 widens the branch to auto: streaming + deep + flag on + durable checkpointer →
+    single-lead in ``auto`` (the mode is forwarded verbatim to stream_deep_lead)."""
     plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
     chat, rec = _make_chat(settings_overrides={"deep_single_lead": True})
     ctx = _patches(plan, [(plan.steps[0], "presenter", [{"name": "t"}])], [])
     for c in ctx:
         c.start()
     try:
-        stream = await _run_stream(chat)  # no permission_mode → default "auto"
+        stream = await _run_stream(chat, permission_mode="auto")
     finally:
         for c in ctx:
             c.stop()
-    assert rec.lead_calls == []  # single-lead NOT taken
+    assert len(rec.lead_calls) == 1  # single-lead taken in auto
+    assert rec.lead_calls[0]["permission_mode"] == "auto"  # mode forwarded
+    assert not rec.called_agent("presenter")
+    assert _events(stream)[-1] == "done"
+
+
+async def test_legacy_when_auto_and_no_durable_checkpointer():
+    """Durable precondition: ask/auto need a durable checkpointer to resume a pause. With
+    none (MemorySaver/none → has_durable_checkpointer()==False) the turn downgrades to the
+    legacy path (fail-safe) rather than risk an unresumable pause."""
+    plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
+    chat, rec = _make_chat(settings_overrides={"deep_single_lead": True}, durable=False)
+    ctx = _patches(plan, [(plan.steps[0], "presenter", [{"name": "t"}])], [])
+    for c in ctx:
+        c.start()
+    try:
+        stream = await _run_stream(chat, permission_mode="auto")
+    finally:
+        for c in ctx:
+            c.stop()
+    assert rec.lead_calls == []  # single-lead NOT taken (downgraded to legacy)
     assert rec.called_agent("presenter")  # legacy per-step/presenter path ran
     assert _events(stream)[-1] == "done"
+
+
+async def test_legacy_when_ask_and_no_durable_checkpointer():
+    """Durable precondition for ``ask`` too — no durable checkpointer → legacy."""
+    plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
+    chat, rec = _make_chat(settings_overrides={"deep_single_lead": True}, durable=False)
+    ctx = _patches(plan, [(plan.steps[0], "presenter", [{"name": "t"}])], [])
+    for c in ctx:
+        c.start()
+    try:
+        await _run_stream(chat, permission_mode="ask")
+    finally:
+        for c in ctx:
+            c.stop()
+    assert rec.lead_calls == []
+    assert rec.called_agent("presenter")
+
+
+async def test_bypass_non_entitled_workspace_downgrades_to_auto():
+    """Entitlement: bypass on a workspace that has NOT opted in (workspace_allows_bypass →
+    False) downgrades to ``auto`` (fail-safe, never silently granting bypass). With a
+    durable checkpointer the turn still runs single-lead — in auto."""
+    plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
+    chat, rec = _make_chat(settings_overrides={"deep_single_lead": True})
+    ctx = _patches(plan, [], [], allow_bypass=False)
+    for c in ctx:
+        c.start()
+    try:
+        await _run_stream(chat, permission_mode="bypass")
+    finally:
+        for c in ctx:
+            c.stop()
+    assert len(rec.lead_calls) == 1
+    # bypass was downgraded to auto and that mode was forwarded to the lead.
+    assert rec.lead_calls[0]["permission_mode"] == "auto"
 
 
 async def test_legacy_when_deep_single_lead_flag_off():
@@ -488,20 +564,113 @@ async def test_legacy_mode_ask_default_permission_mode_is_legacy():
     assert rec.called_agent("presenter")
 
 
-async def test_single_lead_via_batch_process_message_with_bypass():
-    """Batch process_message also threads permission_mode → single-lead when bypass."""
+@pytest.mark.parametrize("perm", ["bypass", "ask", "auto"])
+async def test_batch_guard_stays_legacy_for_every_permission_mode(perm):
+    """Batch guard (P2.3): the batch entry passes ``can_pause=False``, so even with
+    deep_single_lead=True + deep runtime + entitled + durable, NO permission mode enters
+    the single-lead path — batch/scheduled turns have no synchronous user to confirm a
+    pause. All fall to the legacy path."""
     plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
     chat, rec = _make_chat(lead_text="BATCH_REPLY", settings_overrides={"deep_single_lead": True})
+    ctx = _patches(plan, [(plan.steps[0], "presenter", [{"name": "t"}])], [])
+    for c in ctx:
+        c.start()
+    try:
+        await _run_batch(chat, mode="execute", permission_mode=perm)
+    finally:
+        for c in ctx:
+            c.stop()
+    assert rec.lead_calls == []  # single-lead NOT entered on the batch path
+    assert rec.called_agent("presenter")  # legacy path ran
+    # can_pause=False short-circuits BEFORE any runtime/entitlement/checkpointer read.
+    chat._invoker.effective_chat_runtime.assert_not_awaited()
+    chat._invoker.has_durable_checkpointer.assert_not_called()
+
+
+async def test_byte_neutral_flag_off_skips_all_permission_io():
+    """Byte-neutral: with deep_single_lead=False (prod default) the legacy path is taken
+    and NONE of effective_chat_runtime / workspace_allows_bypass / has_durable_checkpointer
+    is consulted — the cheap flag short-circuits first, so the default path does zero extra
+    I/O."""
+    plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
+    chat, rec = _make_chat(settings_overrides={"deep_single_lead": False})
+    entitlement = AsyncMock(return_value=True)
+    ctx = _patches(plan, [(plan.steps[0], "presenter", [{"name": "t"}])], [])
+    # Swap the entitlement patch for one we can assert was never awaited.
+    ctx[-1] = patch(f"{_MOD}.workspace_allows_bypass", new=entitlement)
+    for c in ctx:
+        c.start()
+    try:
+        # Even with an explicit bypass request, the flag-off short-circuit wins.
+        await _run_stream(chat, permission_mode="bypass")
+    finally:
+        for c in ctx:
+            c.stop()
+    assert rec.lead_calls == []
+    assert rec.called_agent("presenter")
+    chat._invoker.effective_chat_runtime.assert_not_awaited()
+    chat._invoker.has_durable_checkpointer.assert_not_called()
+    entitlement.assert_not_awaited()
+
+
+async def test_single_lead_pause_suspends_turn_and_skips_tail():
+    """Pause seam (P2.3): an ask-mode single-lead turn whose stream_deep_lead yields an
+    ``approval_needed`` frame emits a typed ApprovalRequired and STOPS — no Presentation,
+    no ``done`` (RunCompleted), and the surface/learner completion tail is NOT run — while
+    finish_trace still runs (the ``finally``)."""
+    plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "email.send", risk="high")])
+    chat, rec = _make_chat(settings_overrides={"deep_single_lead": True})
+
+    # A learner + surface that MUST NOT be touched on a suspended turn.
+    learner = MagicMock()
+    learner.learn = MagicMock(return_value=MagicMock())
+    chat._interaction_learner = learner
+
+    async def _pausing_stream_deep_lead(lead, tools=None, *, permission_mode=None, **kw):
+        rec.lead_calls.append({"permission_mode": permission_mode})
+        yield {"event": "agent_start", "agent": "lead", "model": "m"}
+        yield {
+            "event": "approval_needed",
+            "agent": "lead",
+            "approval_id": "apr_1",
+            "capability": "email.send",
+            "risk_level": "high",
+            "thread_id": "c:ws_1:t1",
+        }
+        # A terminal reply the gate would only produce AFTER resume — must never be reached.
+        yield {"event": "agent_done", "agent": "lead", "text": "SHOULD_NOT_APPEAR"}
+
+    chat._invoker.stream_deep_lead = _pausing_stream_deep_lead
+
     ctx = _patches(plan, [], [])
     for c in ctx:
         c.start()
     try:
-        result = await _run_batch(chat, mode="execute", permission_mode="bypass")
+        stream = await _run_stream(chat, permission_mode="ask")
     finally:
         for c in ctx:
             c.stop()
-    assert len(rec.lead_calls) == 1
-    assert result["presentation"] == "BATCH_REPLY"
+
+    events = _events(stream)
+    # The pause frame is emitted...
+    approval_frames = [e for e in stream if e.get("event") == "approval_needed"]
+    assert len(approval_frames) == 1
+    assert approval_frames[0] == {
+        "event": "approval_needed",
+        "approval_id": "apr_1",
+        "capability": "email.send",
+        "risk_level": "high",
+        "thread_id": "c:ws_1:t1",
+    }
+    # ...and the turn STOPS: no reply, no completion frame.
+    assert "response" not in events
+    assert "done" not in events
+    assert "SHOULD_NOT_APPEAR" not in "".join(str(e) for e in stream)
+    # The completion tail (surface push + learner spawn) never ran for a suspended turn.
+    chat._surfaces.push_presenter_surface.assert_not_awaited()
+    learner.learn.assert_not_called()
+    # finish_trace STILL ran (the finally survives the early return).
+    chat._trace_manager.finish_trace.assert_awaited_once()
 
 
 # ── Facade plumbing: jarvis.py forwards permission_mode (independent field) ──────
