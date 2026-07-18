@@ -443,6 +443,26 @@ class JarvisOrchestrator:
             permission_mode=permission_mode,
         )
 
+    def resume_message_events(
+        self,
+        *,
+        approval_id: str,
+        decision: str,
+        reason: str | None = None,
+        user_id: str,
+        workspace_id: str,
+        conversation_id: str | None = None,
+    ) -> AsyncGenerator[CoreEvent, None]:
+        """Facade -> ChatProcessor.resume_message_events (paused-turn RESUME, P2.4)."""
+        return self._chat.resume_message_events(
+            approval_id=approval_id,
+            decision=decision,
+            reason=reason,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+        )
+
     def _call_agent_stream(
         self,
         agent_name: str,

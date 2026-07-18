@@ -139,7 +139,10 @@ class TestChatRouteUsesSafeErrorBoundary:
 
         from src.api import routes_chat
 
-        src = inspect.getsource(routes_chat.chat_stream)
+        # P2.4c extracted the fold+serialize+persist (with the error boundary) into
+        # ``_stream_and_persist_chat``, shared by chat_stream + chat_resume. The boundary
+        # lives there now.
+        src = inspect.getsource(routes_chat._stream_and_persist_chat)
         # The except branch builds the frame via the boundary helper.
         assert "safe_error_event(e, get_correlation_id())" in src
         # And does NOT re-introduce the raw-exception frame.
