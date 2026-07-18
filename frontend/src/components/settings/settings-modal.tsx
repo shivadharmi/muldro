@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   fetchPolicyMode,
   setPolicyMode,
+  fetchWorkspaceDefaultPermissionMode,
+  setWorkspaceDefaultPermissionMode,
   fetchBudget,
   updateBudgetLimit,
   fetchTrustDashboard,
@@ -109,6 +111,16 @@ const POLICY_MODES = [
   },
 ];
 
+const PERMISSION_MODES = [
+  { value: "auto", label: "Auto", description: "Confirm only risky writes" },
+  { value: "ask", label: "Ask", description: "Confirm every write" },
+  {
+    value: "bypass",
+    label: "Bypass",
+    description: "Never confirm (requires workspace entitlement)",
+  },
+];
+
 export function SettingsModal() {
   const open = useSettingsModalStore((s) => s.open);
   const activeTab = useSettingsModalStore((s) => s.activeTab);
@@ -125,6 +137,8 @@ export function SettingsModal() {
   const [trustEntries, setTrustEntries] = useState<TrustDashboardEntry[]>([]);
   const [trustLoading, setTrustLoading] = useState(false);
   const [policyLoading, setPolicyLoading] = useState(false);
+  const [defaultPermissionMode, setDefaultPermissionModeState] = useState("auto");
+  const [permissionLoading, setPermissionLoading] = useState(false);
   const [budgetSaving, setBudgetSaving] = useState(false);
   const [ceilingLoading, setCeilingLoading] = useState<string | null>(null);
   const [resetLoading, setResetLoading] = useState<string | null>(null);
@@ -135,6 +149,9 @@ export function SettingsModal() {
     if (!open) return;
     fetchPolicyMode()
       .then((r) => setPolicyModeState(r.mode))
+      .catch(() => {});
+    fetchWorkspaceDefaultPermissionMode()
+      .then((r) => setDefaultPermissionModeState(r.default_permission_mode))
       .catch(() => {});
     fetchBudget()
       .then((r) => setBudgetLimit(r.daily_limit_usd))
@@ -180,6 +197,22 @@ export function SettingsModal() {
         addToast(errorToMessage(err), "error");
       } finally {
         setPolicyLoading(false);
+      }
+    },
+    [addToast],
+  );
+
+  const handleDefaultPermissionModeChange = useCallback(
+    async (mode: string) => {
+      setPermissionLoading(true);
+      try {
+        await setWorkspaceDefaultPermissionMode(mode);
+        setDefaultPermissionModeState(mode);
+        addToast("Default permission mode updated", "success");
+      } catch (err) {
+        addToast(errorToMessage(err), "error");
+      } finally {
+        setPermissionLoading(false);
       }
     },
     [addToast],
@@ -326,6 +359,10 @@ export function SettingsModal() {
                 policyModes={POLICY_MODES}
                 policyLoading={policyLoading}
                 onPolicyChange={handlePolicyChange}
+                defaultPermissionMode={defaultPermissionMode}
+                permissionModes={PERMISSION_MODES}
+                permissionLoading={permissionLoading}
+                onDefaultPermissionModeChange={handleDefaultPermissionModeChange}
               />
             )}
 

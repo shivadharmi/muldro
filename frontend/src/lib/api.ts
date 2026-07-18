@@ -183,6 +183,20 @@ export function setPolicyMode(mode: string): Promise<{ mode: string }> {
   });
 }
 
+export function fetchWorkspaceDefaultPermissionMode(): Promise<{ default_permission_mode: string }> {
+  return api("/workspace/permission-mode-default");
+}
+
+export function setWorkspaceDefaultPermissionMode(
+  mode: string,
+): Promise<{ default_permission_mode: string }> {
+  return api("/workspace/permission-mode-default", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ default_permission_mode: mode }),
+  });
+}
+
 // ── SSE Chat ────────────────────────────────────────────────────
 
 export interface ChatSSEEvent {
