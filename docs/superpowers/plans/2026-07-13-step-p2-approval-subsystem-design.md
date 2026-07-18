@@ -7,6 +7,15 @@
 > tested (2 adversarial critics, both SHIP-WITH-FIXES; grounding verified accurate; all fixes folded
 > §10). §9-A resolved = JSONB `allow_bypass` + fallback-to-auto. Building P2.1-first, dormant/byte-
 > neutral, no migration, no flip.**
+>
+> **BUILD COMPLETE (2026-07-18, `rebuild/first-principles`, NOT pushed/merged, all dormant/byte-
+> neutral/ZERO-migration):** P2.1 `f4d3584` · P2.3 `a09712e` · P2.2a `97f7c39` · P2.2b `8dd34aa`
+> (session-3) · P2.2c `114755c` (chat_processor→`_ChatSingleLeadMixin`, structure-only) · P2.4a
+> `584f875` (I1 atomic CAS flip) · P2.4b `0f0041b` (decision-endpoints 409 chat approvals) · P2.4c
+> `072c54d` (SSE `/chat/resume` + shared `_stream_and_persist_chat`; closed a pre-existing
+> cross-tenant conversation-persist hole) · P2.6 `8cfcd87` (frontend consumer + `streamResume`).
+> 3628/18 green; security-reviewed. DEFERRED follow-ups: learner-on-resume, trust_gate persist-dedup,
+> `_stream_and_reap` dedup (live-autonomous/enrichment); CLAUDE.md two-paths rewrite → merge (R1).
 
 ## 0. What the spike settled (so the design can lean on it)
 - A `permission_gate` that interrupts on **mode × risk** (auth-source-INDEPENDENT, unlike
