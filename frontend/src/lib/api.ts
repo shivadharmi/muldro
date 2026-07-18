@@ -202,6 +202,11 @@ export interface ChatSSEEvent {
   message_id?: string;
   plan?: PlanOutput;
   trace_id?: string;
+  // Chat permission model (event: "approval_needed") — the action-time gate paused the turn.
+  approval_id?: string;
+  capability?: string;
+  risk_level?: string;
+  thread_id?: string;
   input_tokens?: number;
   output_tokens?: number;
   cache_creation_tokens?: number;
@@ -241,6 +246,18 @@ export async function streamChat(
     throw await toApiError(res);
   }
 
+  await readSseStream(res, onEvent);
+}
+
+/**
+ * Read a `text/event-stream` fetch response, parsing each `event:`/`data:` frame into a
+ * ``ChatSSEEvent`` and delivering it to ``onEvent``. Shared by ``streamChat`` and
+ * ``streamResume`` (both consume the identical SSE vocabulary).
+ */
+async function readSseStream(
+  res: Response,
+  onEvent: (event: ChatSSEEvent) => void,
+): Promise<void> {
   const reader = res.body?.getReader();
   if (!reader) throw new Error("No response body");
 
@@ -273,6 +290,45 @@ export async function streamChat(
       }
     }
   }
+}
+
+/**
+ * Resume a chat turn the action-time permission gate PAUSED. Mirrors {@link streamChat} but
+ * POSTs the user's decision to `/jarvis/chat/resume` and streams the continuation. The caller
+ * reuses the pre-pause assistant message and SUPPRESSES this stream's `message_id` frame so
+ * the continuation stays in the SAME chat bubble (single-bubble continuity).
+ */
+export async function streamResume(
+  approvalId: string,
+  decision: "approve" | "reject",
+  onEvent: (event: ChatSSEEvent) => void,
+  signal?: AbortSignal,
+  conversationId?: string | null,
+  reason?: string,
+): Promise<void> {
+  const body: Record<string, unknown> = {
+    approval_id: approvalId,
+    decision,
+    surface: "web",
+  };
+  if (reason) body.reason = reason;
+  if (conversationId) body.conversation_id = conversationId;
+
+  const res = await fetch("/api/jarvis/chat/resume", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders(),
+    },
+    body: JSON.stringify(body),
+    signal,
+  });
+
+  if (!res.ok) {
+    throw await toApiError(res);
+  }
+
+  await readSseStream(res, onEvent);
 }
 
 // ── Events ──────────────────────────────────────────────────────

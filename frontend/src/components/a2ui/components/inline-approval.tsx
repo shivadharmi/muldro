@@ -35,9 +35,16 @@ function formatCountdown(ms: number): string {
 
 interface InlineApprovalCardProps {
   approval: ApprovalContext;
+  /**
+   * Chat permission model (P2.6): when provided, approve/reject route HERE (→ the
+   * `/chat/resume` SSE stream) instead of the WS action store, and the edit-before-approve
+   * button is hidden (chat resume is approve/reject only in P2). Omitted on the execution-
+   * surface render site, which keeps the default WS-action behavior.
+   */
+  onDecision?: (decision: "approve" | "reject", reason?: string) => void;
 }
 
-export function InlineApprovalCard({ approval }: InlineApprovalCardProps) {
+export function InlineApprovalCard({ approval, onDecision }: InlineApprovalCardProps) {
   const sendAction = useWsActionStore((s) => s.sendAction);
   const [showRejectConfirm, setShowRejectConfirm] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
@@ -47,8 +54,12 @@ export function InlineApprovalCard({ approval }: InlineApprovalCardProps) {
 
   const handleApprove = useCallback(() => {
     if (isExpired) return;
+    if (onDecision) {
+      onDecision("approve");
+      return;
+    }
     sendAction("approve", { id: approval.approval_id });
-  }, [sendAction, approval.approval_id, isExpired]);
+  }, [onDecision, sendAction, approval.approval_id, isExpired]);
 
   const handleRejectClick = useCallback(() => {
     if (isExpired) return;
@@ -56,10 +67,14 @@ export function InlineApprovalCard({ approval }: InlineApprovalCardProps) {
   }, [isExpired]);
 
   const handleRejectConfirm = useCallback(() => {
-    sendAction("reject", { id: approval.approval_id, reason: rejectReason || undefined });
+    if (onDecision) {
+      onDecision("reject", rejectReason || undefined);
+    } else {
+      sendAction("reject", { id: approval.approval_id, reason: rejectReason || undefined });
+    }
     setShowRejectConfirm(false);
     setRejectReason("");
-  }, [sendAction, approval.approval_id, rejectReason]);
+  }, [onDecision, sendAction, approval.approval_id, rejectReason]);
 
   const handleEdit = useCallback(() => {
     if (isExpired) return;
@@ -191,16 +206,20 @@ export function InlineApprovalCard({ approval }: InlineApprovalCardProps) {
               Approve
             </button>
           </Tooltip>
-          <Tooltip text="Review and modify before executing">
-            <button
-              type="button"
-              onClick={handleEdit}
-              disabled={isExpired}
-              className="px-4 py-2 text-xs font-medium rounded-[var(--radius-md)] bg-surface-2 text-t-secondary border border-b-secondary hover:bg-surface-3 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Edit
-            </button>
-          </Tooltip>
+          {/* Edit-before-approve is WS-action only; the chat resume path (onDecision) is
+              approve/reject in P2 (edit-in-chat replays original args — a later item). */}
+          {!onDecision && (
+            <Tooltip text="Review and modify before executing">
+              <button
+                type="button"
+                onClick={handleEdit}
+                disabled={isExpired}
+                className="px-4 py-2 text-xs font-medium rounded-[var(--radius-md)] bg-surface-2 text-t-secondary border border-b-secondary hover:bg-surface-3 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Edit
+              </button>
+            </Tooltip>
+          )}
           <Tooltip text="Cancel this action (opens confirmation)">
             <button
               type="button"

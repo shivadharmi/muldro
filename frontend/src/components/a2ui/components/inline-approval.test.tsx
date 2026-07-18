@@ -75,3 +75,30 @@ test("a future expiry shows a live countdown, not 'Expired'", () => {
   expect(screen.queryByText("Expired")).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Approve" })).not.toBeDisabled();
 });
+
+// ── Chat permission model (P2.6): onDecision routes to /chat/resume, not the WS store ──
+
+test("with onDecision, Approve calls onDecision and NOT the WS action store", async () => {
+  const onDecision = vi.fn();
+  render(<InlineApprovalCard approval={approval()} onDecision={onDecision} />);
+  await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+  expect(onDecision).toHaveBeenCalledWith("approve");
+  expect(sendAction).not.toHaveBeenCalled();
+});
+
+test("with onDecision, Reject → confirm calls onDecision with the reason, not the WS store", async () => {
+  const onDecision = vi.fn();
+  render(<InlineApprovalCard approval={approval()} onDecision={onDecision} />);
+  await userEvent.click(screen.getByRole("button", { name: "Reject" }));
+  await userEvent.type(screen.getByPlaceholderText(/wrong recipients/i), "not now");
+  await userEvent.click(screen.getByRole("button", { name: "Yes, Reject" }));
+  expect(onDecision).toHaveBeenCalledWith("reject", "not now");
+  expect(sendAction).not.toHaveBeenCalled();
+});
+
+test("with onDecision, the Edit button is hidden (chat resume is approve/reject only)", () => {
+  render(<InlineApprovalCard approval={approval()} onDecision={vi.fn()} />);
+  expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Reject" })).toBeInTheDocument();
+});
