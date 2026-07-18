@@ -9,13 +9,13 @@ interface Props {
 }
 
 const modes = [
+  { value: "auto", label: "Auto" },
   { value: "ask", label: "Ask" },
-  { value: "plan", label: "Plan" },
-  { value: "execute", label: "Execute" },
+  { value: "bypass", label: "Bypass" },
 ] as const;
 
 export function CommandComposer({ onSend, disabled }: Props) {
-  const { mode, setMode } = useCommandStore();
+  const { permissionMode, setPermissionMode } = useCommandStore();
   const [input, setInput] = useState("");
 
   const handleSubmit = useCallback(
@@ -37,9 +37,9 @@ export function CommandComposer({ onSend, disabled }: Props) {
           <button
             key={m.value}
             type="button"
-            onClick={() => setMode(m.value)}
+            onClick={() => setPermissionMode(m.value)}
             className={`px-2.5 py-1 text-xs rounded-[var(--radius-sm)] transition-colors cursor-pointer ${
-              mode === m.value
+              permissionMode === m.value
                 ? "bg-accent-primary text-white"
                 : "text-t-tertiary hover:text-t-secondary hover:bg-surface-1"
             }`}
@@ -55,11 +55,7 @@ export function CommandComposer({ onSend, disabled }: Props) {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder={
-            mode === "ask"
-              ? "Ask Jarvis anything..."
-              : mode === "plan"
-                ? "Describe what you want to plan..."
-                : "What should Jarvis execute?"
+            permissionMode === "bypass" ? "What should Jarvis do?" : "Ask Jarvis anything..."
           }
           rows={1}
           className="flex-1 bg-surface-1 border border-b-primary rounded-[var(--radius-md)] px-3 py-2 text-sm text-t-primary placeholder:text-t-tertiary resize-none focus:outline-none focus:ring-1 focus:ring-accent-primary"

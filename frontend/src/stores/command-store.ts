@@ -2,12 +2,12 @@
 
 import { create } from "zustand";
 
-export type CommandMode = "ask" | "plan" | "execute";
+export type PermissionMode = "auto" | "ask" | "bypass";
 export type CommandScope = "general" | "workspace" | "entity" | "document";
 
 interface CommandHistoryEntry {
   command: string;
-  mode: CommandMode;
+  permissionMode: PermissionMode;
   timestamp: number;
 }
 
@@ -25,9 +25,9 @@ interface CommandState {
   conversationId: string | null;
   setConversationId: (id: string | null) => void;
 
-  // Mode & scope
-  mode: CommandMode;
-  setMode: (mode: CommandMode) => void;
+  // Permission mode & scope
+  permissionMode: PermissionMode;
+  setPermissionMode: (mode: PermissionMode) => void;
   scope: CommandScope;
   setScope: (scope: CommandScope) => void;
 
@@ -56,8 +56,8 @@ export const useCommandStore = create<CommandState>((set, get) => ({
   conversationId: null,
   setConversationId: (id) => set({ conversationId: id }),
 
-  mode: "ask",
-  setMode: (mode) => set({ mode }),
+  permissionMode: "auto",
+  setPermissionMode: (permissionMode) => set({ permissionMode }),
   scope: "general",
   setScope: (scope) => set({ scope }),
 
@@ -77,7 +77,7 @@ export const useCommandStore = create<CommandState>((set, get) => ({
   addToHistory: (command) =>
     set({
       history: [
-        { command, mode: get().mode, timestamp: Date.now() },
+        { command, permissionMode: get().permissionMode, timestamp: Date.now() },
         ...get().history,
       ].slice(0, 20),
     }),

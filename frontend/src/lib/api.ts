@@ -226,11 +226,11 @@ export async function streamChat(
   onEvent: (event: ChatSSEEvent) => void,
   signal?: AbortSignal,
   conversationId?: string | null,
-  mode?: string,
+  permissionMode?: string,
 ): Promise<void> {
   const body: Record<string, unknown> = { message, surface: "web" };
   if (conversationId) body.conversation_id = conversationId;
-  if (mode) body.mode = mode;
+  if (permissionMode) body.permission_mode = permissionMode;
 
   const res = await fetch("/api/jarvis/chat", {
     method: "POST",

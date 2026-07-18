@@ -30,7 +30,7 @@ export default function ChatPage() {
   const closeDetailModal = useSurfaceStore((s) => s.closeDetailModal);
   const updateSurface = useSurfaceStore((s) => s.updateSurface);
 
-  const { mode, setMode } = useCommandStore();
+  const { permissionMode, setPermissionMode } = useCommandStore();
   const setGlobalSendAction = useWsActionStore((s) => s.setSendAction);
   const { addToast } = useToast();
 
@@ -156,9 +156,9 @@ export default function ChatPage() {
   if (!user) return null;
 
   const MODES = [
+    { value: "auto" as const, label: "Auto" },
     { value: "ask" as const, label: "Ask" },
-    { value: "plan" as const, label: "Plan" },
-    { value: "execute" as const, label: "Execute" },
+    { value: "bypass" as const, label: "Bypass" },
   ];
 
   return (
@@ -182,9 +182,9 @@ export default function ChatPage() {
                     <button
                       key={m.value}
                       type="button"
-                      onClick={() => setMode(m.value)}
+                      onClick={() => setPermissionMode(m.value)}
                       className={`px-3.5 py-1.5 text-[13px] rounded-[var(--radius-md)] transition-all duration-150 cursor-pointer ${
-                        mode === m.value
+                        permissionMode === m.value
                           ? "bg-j-primary text-j-primary-fg font-medium"
                           : "text-t-muted hover:text-t-secondary"
                       }`}

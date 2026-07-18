@@ -548,7 +548,7 @@ export function ChatPanel({
         (event: ChatSSEEvent) => applyStreamEvent(event, ctx),
         abort.signal,
         activeConvoRef.current,
-        useCommandStore.getState().mode,
+        useCommandStore.getState().permissionMode,
       );
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
