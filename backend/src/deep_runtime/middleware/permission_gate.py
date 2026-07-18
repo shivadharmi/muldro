@@ -116,6 +116,7 @@ async def _persist_permission_approval(
     context_block: str,
     permission_mode: str,
     lead_scope,
+    user_message: str = "",
 ) -> str:
     """Idempotently persist the pending Approval for a paused chat write and return its id.
 
@@ -161,6 +162,9 @@ async def _persist_permission_approval(
                 "permission_mode": permission_mode,
                 "chat": True,
                 "lead_scope": sorted(lead_scope),
+                # A1: the ORIGINAL user message, so an approved resume can fire the
+                # interaction-learner (bounded like context_block to keep the row lean).
+                "user_message": user_message[:_MAX_PERSISTED_CONTEXT_CHARS],
             },
         )
 
@@ -205,6 +209,7 @@ def make_permission_gate_middleware(
     resolve_capability,
     context_block: str = "",
     lead_scope=frozenset(),
+    user_message: str = "",
 ) -> AgentMiddleware:
     """Build the action-time permission gate for one chat turn.
 
@@ -229,6 +234,8 @@ def make_permission_gate_middleware(
         context_block: The turn's assembled ContextPack, persisted (capped) onto the Approval.
         lead_scope: The lead's ``capability_scope`` — persisted (sorted) onto the Approval so
             the resume path knows the turn's authorized envelope.
+        user_message: The turn's ORIGINAL user message — persisted (capped) onto the Approval so
+            an approved resume can fire the interaction-learner (parity with the non-paused tail).
 
     Returns:
         An ``AgentMiddleware`` exposing an async ``wrap_tool_call`` hook.
@@ -313,6 +320,7 @@ def make_permission_gate_middleware(
             context_block=context_block,
             permission_mode=permission_mode,
             lead_scope=lead_scope,
+            user_message=user_message,
         )
 
         # Suspend for confirmation. Called OUTSIDE any DB session/transaction. On resume the

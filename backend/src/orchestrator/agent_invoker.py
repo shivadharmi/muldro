@@ -320,6 +320,7 @@ class AgentInvoker:
         pre_approved_capabilities: frozenset[str] = frozenset(),
         require_write_lock: bool = False,
         permission_mode: str | None = None,
+        user_message: str = "",
     ):
         """Build a compiled deep agent WITH the full gated middleware chain:
         capability_scope (installed by ``build_deep_agent`` when ``db_factory`` is given)
@@ -449,6 +450,7 @@ class AgentInvoker:
                 resolve_capability=_gate_cap,
                 context_block=context_block,
                 lead_scope=agent.capability_scope,
+                user_message=user_message,
             )
             permission_gate_chain = (permission_gate,)
 
@@ -1020,6 +1022,9 @@ class AgentInvoker:
             # bypass leaves the chain byte-identical). Current 5b callers pass nothing yet;
             # P2.3 wires the real per-turn mode.
             permission_mode=permission_mode,
+            # A1: persist the ORIGINAL user message on any Approval this turn pauses on, so an
+            # approved resume can fire the interaction-learner (parity with the non-paused tail).
+            user_message=message,
         )
         graph_input = {"messages": [{"role": "user", "content": message}]}
         async for frame in self._stream_and_reap(
@@ -1228,6 +1233,9 @@ class AgentInvoker:
                 yield guard_error
                 return
             refs = approval.artifact_refs or {}
+            # A1: the ORIGINAL user message (persisted at first-pass persist) — surfaced onto the
+            # terminal frame below so resume_message_events can fire the interaction-learner.
+            resume_user_message = refs.get("user_message", "")
             thread_id = refs.get("thread_id")
             lead_scope = refs.get("lead_scope")
             # Graceful fail-CLOSED on the rebuild inputs, validated BEFORE flipping status so a
@@ -1325,6 +1333,12 @@ class AgentInvoker:
             agent_name=lead.name,
             model=model,
         ):
+            # A1: piggyback the ORIGINAL user message onto the terminal frame so
+            # resume_message_events can fire the interaction-learner (parity with the non-paused
+            # tail). agent_event_from_sse is a typed allow-list, so this extra key never leaks to
+            # the client — it is a private channel to the mixin's completion tail.
+            if isinstance(frame, dict) and frame.get("event") == "agent_done":
+                frame["user_message"] = resume_user_message
             yield frame
 
     async def run_autonomous_deep_step(

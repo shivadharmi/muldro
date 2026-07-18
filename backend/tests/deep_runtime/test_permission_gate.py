@@ -195,6 +195,7 @@ def _gate(
     thread_id: str = THREAD_ID,
     lead_scope=LEAD_SCOPE,
     context_block: str = "",
+    user_message: str = "",
 ):
     return make_permission_gate_middleware(
         permission_mode=permission_mode,
@@ -207,6 +208,7 @@ def _gate(
         resolve_capability=resolve_capability,
         context_block=context_block,
         lead_scope=lead_scope,
+        user_message=user_message,
     )
 
 
@@ -415,6 +417,7 @@ async def test_ask_interrupts_every_write_without_assessing_risk():
         thread_id=thread_id,
         lead_scope=frozenset({"email.send", "calendar.create"}),
         context_block="CTX",
+        user_message="book me a flight",
     )
     agent = create_deep_agent(
         model=_ScriptedModel(),
@@ -453,6 +456,8 @@ async def test_ask_interrupts_every_write_without_assessing_risk():
         assert refs["chat"] is True
         assert refs["lead_scope"] == ["calendar.create", "email.send"]  # sorted
         assert refs["context_block"] == "CTX"
+        # A1: the ORIGINAL user message is persisted so an approved resume can fire the learner.
+        assert refs["user_message"] == "book me a flight"
         assert captured["approval_type"] == "tool:echo"
         assert captured["risk_level"] == "n/a"
 

@@ -89,9 +89,10 @@ class _ChatSingleLeadMixin:
           ``agent_name is not None`` guard skips it, matching the pre-split behavior).
         * ``_process_core`` legacy branch — ``run_learner=True``, ``run_shadow=True`` with
           the loop's ``agent_name``.
-        * ``resume_message_events`` — ``run_learner=False``, ``run_shadow=False`` (the
-          resume learner is a P2.7 enrichment: it needs the ORIGINAL user message, not
-          persisted on the Approval today).
+        * ``resume_message_events`` — ``run_learner=True`` (A1: fires the learner on an approved
+          resume; ``message`` = the ORIGINAL user message, persisted on the Approval and read
+          back off the ``agent_done`` frame), ``run_shadow=False`` (resume has no per-step
+          ``agent_name`` to compare).
 
         Ordering is preserved verbatim from the pre-split tails: run_completed →
         surface → learner → shadow → ``RunCompleted``.
@@ -318,6 +319,7 @@ class _ChatSingleLeadMixin:
                 self._spawn_background(self._events.emit_runtime_event(event_type, **kwargs))
 
             presenter_text = ""
+            resume_user_message = ""
             try:
                 yield TraceStarted(trace_id=trace.trace_id)
 
@@ -358,25 +360,30 @@ class _ChatSingleLeadMixin:
                         # chat bubble is empty. Keep presenter_text RAW for the tail's surface
                         # extraction.
                         presenter_text = frame.get("text", "")
+                        # A1: resume_deep_lead piggybacks the ORIGINAL user message here so the
+                        # tail can fire the interaction-learner (see the completion tail below).
+                        resume_user_message = frame.get("user_message", "")
                         yield Presentation(text=strip_surface_blocks(presenter_text))
 
                 # COMPLETION TAIL (the shared ``_emit_completion_tail``: run_completed →
-                # surface push → RunCompleted, MINUS the interaction-learner — P2.7). Runs
-                # ONLY on the terminal reply (the ``return``s above skip it for a suspended /
-                # refused turn).
+                # surface push → interaction-learner → RunCompleted). Runs ONLY on the terminal
+                # reply (the ``return``s above skip it for a suspended / refused turn).
                 #
-                # P2.7 (DEFERRED — not built here): the interaction-learner spawn would run in
-                # the tail (``run_learner=True``), mirroring ``_process_core``'s tail. It needs
-                # the ORIGINAL user message (``learn(user_message=..., ...)``), which is NOT
-                # persisted on the Approval today (``context_block`` holds history + plan, not
-                # the raw ask). Persisting ``user_message`` on the Approval (a gate
-                # thread-through) + enabling ``run_learner`` is a P2.7 enrichment. The reply +
-                # surface (the user-visible Corr-C1 fixes) ship now.
+                # A1: the interaction-learner now fires on an approved resume, at parity with the
+                # non-paused ``_run_single_lead`` tail. ``message`` is the ORIGINAL user message —
+                # persisted on the Approval at first-pass persist and surfaced back on the
+                # ``agent_done`` frame (``resume_user_message``). ``intent`` is not persisted → it
+                # stays None (the learner treats it as optional); ``run_shadow`` stays False
+                # (resume has no per-step ``agent_name`` to compare). ``run_learner`` is gated on a
+                # truthy message: a pre-A1 approval (no persisted ``user_message``) resolves to ""
+                # and must NOT train the learner on an empty ask.
                 async for evt in self._emit_completion_tail(
                     trace=trace,
                     presenter_text=presenter_text,
                     user_id=user_id,
                     workspace_id=workspace_id,
+                    message=resume_user_message,
+                    run_learner=bool(resume_user_message),
                 ):
                     yield evt
 

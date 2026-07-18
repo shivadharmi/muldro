@@ -68,14 +68,18 @@ def _fake_lead_approval(
     workspace_id="ws",
     status="pending",
     context_block="",
+    user_message="",
 ):
     """A SimpleNamespace Approval carrying chat single-lead ``artifact_refs``.
 
     ``thread_id=_UNSET`` defaults to a workspace-bound thread id (so the A6 round-trip
     passes); pass ``thread_id=None`` to OMIT it (malformed) or a literal to force a value.
-    ``lead_scope=None`` omits the scope (malformed).
+    ``lead_scope=None`` omits the scope (malformed). A non-empty ``user_message`` adds the A1
+    key; omitting it leaves the key ABSENT (mirrors a pre-A1 approval → resume's ``.get`` → "").
     """
     refs: dict = {"agent_name": "lead", "chat": True, "context_block": context_block}
+    if user_message:
+        refs["user_message"] = user_message
     if thread_id is _UNSET:
         thread_id = make_thread_id(workspace_id)
     if thread_id is not None:
@@ -388,6 +392,32 @@ async def test_resume_streams_command_and_thread_id():
     assert recorded["args"][2]["configurable"]["thread_id"] == thread_id
     assert recorded["kwargs"]["agent_name"] == "lead"
     assert recorded["kwargs"]["durability"] == "sync"
+
+
+async def test_resume_surfaces_persisted_user_message_on_agent_done_frame():
+    """A1: resume_deep_lead reads the ORIGINAL user message from the Approval's artifact_refs and
+    piggybacks it onto the terminal agent_done frame — the private channel the mixin's completion
+    tail reads to fire the interaction-learner."""
+    approval = _fake_lead_approval(user_message="book me a flight")
+    inv, _ = _make_lead_invoker(approval)
+    inv._build_deep_agent_for = AsyncMock(return_value=MagicMock())
+    with patch(f"{INVOKER_MODULE}.stream_deep_agent_events", _stream_recorder({})):
+        frames = await _drive(inv, decision="approve")
+    done = [f for f in frames if f.get("event") == "agent_done"]
+    assert len(done) == 1
+    assert done[0]["user_message"] == "book me a flight"
+
+
+async def test_resume_agent_done_user_message_empty_when_not_persisted():
+    """Pre-A1 approvals have no persisted user_message → the annotated frame carries "" (the
+    ``refs.get(..., "")`` fallback), keeping the learner spawn a safe no-op-equivalent."""
+    approval = _fake_lead_approval()  # no user_message key in refs
+    inv, _ = _make_lead_invoker(approval)
+    inv._build_deep_agent_for = AsyncMock(return_value=MagicMock())
+    with patch(f"{INVOKER_MODULE}.stream_deep_agent_events", _stream_recorder({})):
+        frames = await _drive(inv, decision="approve")
+    done = [f for f in frames if f.get("event") == "agent_done"]
+    assert done[0]["user_message"] == ""
 
 
 # ── real-DB + MemorySaver: MANDATORY reject-doesn't-fire / approve-fires-once ─────

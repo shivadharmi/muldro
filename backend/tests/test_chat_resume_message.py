@@ -90,7 +90,9 @@ def _make_resume_chat(*, frames: list[dict], surface_id: str | None = None):
     chat._surfaces = MagicMock()
     chat._surfaces.push_presenter_surface = AsyncMock(return_value=surface_id)
 
-    # The interaction-learner is DEFERRED on resume (P2.7): its deps aren't referenced.
+    # Default: no interaction-learner wired, so the completion tail's ``run_learner=True`` (A1)
+    # no-ops (``if run_learner and self._interaction_learner``). The A1 parity test below wires a
+    # learner explicitly to prove it fires on an approved resume.
     chat._interaction_learner = None
     chat._ensure_learner_deps = AsyncMock()
 
@@ -245,6 +247,71 @@ async def test_resume_surface_push_failure_is_swallowed():
     assert len(completed) == 1
     assert completed[0].surface_id is None
     chat._trace_manager.finish_trace.assert_awaited_once()
+
+
+# ── A1: interaction-learner fires on an approved resume ───────────────────────────
+
+
+async def test_resume_fires_interaction_learner_with_original_user_message():
+    """A1: an approved resume fires the interaction-learner at PARITY with the non-paused tail —
+    with the ORIGINAL user message. ``resume_deep_lead`` reads it from the Approval's
+    artifact_refs and piggybacks it onto the terminal ``agent_done`` frame; the completion tail
+    forwards it to ``learn(user_message=...)``. ``intent`` is None (not persisted on resume)."""
+    frames = [
+        {"event": "text_delta", "agent": "lead", "text": "Booked."},
+        {
+            "event": "agent_done",
+            "agent": "lead",
+            "text": "Booked.",
+            # resume_deep_lead surfaces the ORIGINAL user message from refs onto this frame.
+            "user_message": "book me a flight",
+        },
+    ]
+    chat, _ = _make_resume_chat(frames=frames)
+    # Wire a learner (MagicMock.learn returns a MagicMock, which _spawn_background closes — never
+    # a real coroutine, so no "never awaited" warning; the call is still recorded).
+    learner = MagicMock()
+    learner.learn = MagicMock()
+    chat._interaction_learner = learner
+
+    with patch(f"{_MOD}.strip_surface_blocks", new=lambda t: t):
+        events = await _drive(chat)
+
+    # The turn completed (so the tail — and its learner spawn — ran).
+    assert isinstance(events[-1], RunCompleted)
+    learner.learn.assert_called_once()
+    kw = learner.learn.call_args.kwargs
+    assert kw["user_message"] == "book me a flight"
+    assert kw["agent_response"] == "Booked."  # RAW presenter text (parity with _run_single_lead)
+    assert kw["intent"] is None
+    assert kw["trace_id"] == TRACE_ID
+    assert kw["user_id"] == "usr_1"
+    assert kw["workspace_id"] == "ws_1"
+    chat._ensure_learner_deps.assert_awaited_once()
+
+
+async def test_resume_learner_not_fired_when_no_learner_wired():
+    """Default harness (no learner) — the tail's run_learner no-ops via the
+    ``and self._interaction_learner`` guard, so a resume without a learner still completes."""
+    frames = [{"event": "agent_done", "agent": "lead", "text": "done", "user_message": "hi"}]
+    chat, _ = _make_resume_chat(frames=frames)  # _interaction_learner = None
+    events = await _drive(chat)
+    assert isinstance(events[-1], RunCompleted)
+    chat._ensure_learner_deps.assert_not_awaited()
+
+
+async def test_resume_learner_not_fired_on_empty_user_message():
+    """A1 guard: a pre-A1 approval (no persisted user_message → "") must NOT train the learner
+    on an empty ask, even with a learner wired (``run_learner=bool(resume_user_message)``)."""
+    frames = [{"event": "agent_done", "agent": "lead", "text": "done"}]  # no user_message key
+    chat, _ = _make_resume_chat(frames=frames)
+    learner = MagicMock()
+    learner.learn = MagicMock()
+    chat._interaction_learner = learner
+    events = await _drive(chat)
+    assert isinstance(events[-1], RunCompleted)  # turn still completes
+    learner.learn.assert_not_called()  # but no empty-message training
+    chat._ensure_learner_deps.assert_not_awaited()
 
 
 # ── chained pause (2nd write in the resumed continuation) ─────────────────────────
