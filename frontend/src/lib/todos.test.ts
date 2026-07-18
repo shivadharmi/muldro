@@ -24,6 +24,15 @@ test("returns null for a non-write_todos tool_call", () => {
   expect(todosFromToolCall(event)).toBeNull();
 });
 
+test("returns null when a write_todos event's input.todos is not an array", () => {
+  const event = {
+    event: "tool_call",
+    tool: "write_todos",
+    input: { todos: { not: "an array" } },
+  } as unknown as ChatSSEEvent;
+  expect(todosFromToolCall(event)).toBeNull();
+});
+
 test("returns null for a non-tool_call event", () => {
   const event = { event: "text_delta", text: "hi" } as unknown as ChatSSEEvent;
   expect(todosFromToolCall(event)).toBeNull();

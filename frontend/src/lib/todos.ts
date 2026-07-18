@@ -16,9 +16,8 @@ function normalizeStatus(s: unknown): TodoStatus {
  * frame's `input.todos` (verified: stream_adapter.py emits `input: call.args`). Defensive
  * about item shape — deepagents may vary field names across versions. */
 export function todosFromToolCall(event: ChatSSEEvent): Todo[] | null {
-  const e = event as { event?: string; tool?: string; input?: { todos?: unknown } };
-  if (e.event !== "tool_call" || e.tool !== "write_todos") return null;
-  const raw = e.input?.todos;
+  if (event.event !== "tool_call" || event.tool !== "write_todos") return null;
+  const raw = event.input?.todos;
   if (!Array.isArray(raw)) return null;
   return raw
     .filter((t): t is Record<string, unknown> => typeof t === "object" && t !== null)
