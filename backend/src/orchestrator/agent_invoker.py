@@ -807,30 +807,15 @@ class AgentInvoker:
                 # short-circuits before persisting — but threaded uniformly through the seam).
                 context_block=context_block,
             )
-            config = {"configurable": {"thread_id": thread_id}}
             graph_input = {"messages": [{"role": "user", "content": message}]}
-            # durability="sync" keeps the build/stream path uniform across direct and gated
-            # turns (required so a gated interrupt's checkpoint commits BEFORE the
-            # approval_needed frame). It is frame-neutral and a no-op on the live MemorySaver
-            # default; with a durable saver a non-pausing direct turn commits each superstep
-            # synchronously — a minor, accepted latency cost for one shared stream path.
-            # Step 6C CF-4: reap this thread's durable checkpoints once the turn finishes
-            # WITHOUT pausing. A paused turn emits an ``approval_needed`` frame and keeps its
-            # checkpoint until the resume path runs — reaping it here would strand the resume.
-            paused = False
-            async for frame in stream_deep_agent_events(
+            async for frame in self._stream_and_reap(
                 deep_agent,
                 graph_input,
-                config,
+                thread_id=thread_id,
                 agent_name=agent_name,
                 model=model,
-                durability="sync",
             ):
-                if isinstance(frame, dict) and frame.get("event") == "approval_needed":
-                    paused = True
                 yield frame
-            if not paused:
-                await reap_thread(self._checkpointer_provider(), thread_id)
             return
 
         async for evt in agent_loop(
@@ -917,6 +902,48 @@ class AgentInvoker:
             self._db_factory, workspace_id, steps, self._agents, self._settings.cheap_mode
         )
 
+    async def _stream_and_reap(
+        self,
+        deep_agent,
+        graph_input,
+        *,
+        thread_id: str,
+        agent_name: str,
+        model: str,
+    ):
+        """Stream a deep-agent turn (or ``Command(resume=…)`` re-entry), yield every frame, and
+        reap the durable checkpoint IFF the turn ran to non-paused completion. The shared tail of
+        every deep streaming path whose reap is CONDITIONAL on not-pausing: the four passthrough
+        sites (``call_agent_stream`` routed per-step, ``stream_deep_lead`` chat single-lead,
+        ``resume_deep_turn`` per-step resume, ``resume_deep_lead`` chat resume) plus
+        ``run_shadow_turn``, which CONSUMES the yielded frames (capturing ``final_text``) instead of
+        re-yielding them. Only ``run_autonomous_deep_step`` stays inline — its reap is UNCONDITIONAL
+        (Branch C never pauses, so it reaps on EVERY terminal outcome), which this helper's
+        ``if not paused`` guard would break.
+
+        ``durability="sync"`` keeps the build/stream path uniform across direct and gated turns
+        (frame-neutral, a no-op on the live ``MemorySaver`` default): a gated interrupt's
+        checkpoint must commit BEFORE the ``approval_needed`` frame is emitted. Step 6C CF-4: a
+        turn that pauses emits ``approval_needed`` and KEEPS its checkpoint for the resume path —
+        reaping it here would strand the resume; a turn that completes without pausing reaps the
+        thread it just finished.
+        """
+        config = {"configurable": {"thread_id": thread_id}}
+        paused = False
+        async for frame in stream_deep_agent_events(
+            deep_agent,
+            graph_input,
+            config,
+            agent_name=agent_name,
+            model=model,
+            durability="sync",
+        ):
+            if isinstance(frame, dict) and frame.get("event") == "approval_needed":
+                paused = True
+            yield frame
+        if not paused:
+            await reap_thread(self._checkpointer_provider(), thread_id)
+
     async def stream_deep_lead(
         self,
         lead: "SubAgent",
@@ -994,22 +1021,15 @@ class AgentInvoker:
             # P2.3 wires the real per-turn mode.
             permission_mode=permission_mode,
         )
-        config = {"configurable": {"thread_id": thread_id}}
         graph_input = {"messages": [{"role": "user", "content": message}]}
-        paused = False
-        async for frame in stream_deep_agent_events(
+        async for frame in self._stream_and_reap(
             deep_agent,
             graph_input,
-            config,
+            thread_id=thread_id,
             agent_name=lead.name,
             model=model,
-            durability="sync",
         ):
-            if isinstance(frame, dict) and frame.get("event") == "approval_needed":
-                paused = True
             yield frame
-        if not paused:
-            await reap_thread(self._checkpointer_provider(), thread_id)
 
     async def _load_pending_approval(
         self, db, approval_id: str, workspace_id: str
@@ -1150,24 +1170,14 @@ class AgentInvoker:
             # context — otherwise the trust_gate would persist context_block="" for it.
             context_block=persisted_context,
         )
-        config = {"configurable": {"thread_id": thread_id}}
-        # Step 6C CF-4: same reap-on-non-paused-completion rule as the initial turn. A resume
-        # that pauses AGAIN (re-interrupts on a later write) keeps its checkpoint for the next
-        # resume; a resume that runs to completion reaps the thread it just finished.
-        paused = False
-        async for frame in stream_deep_agent_events(
+        async for frame in self._stream_and_reap(
             deep_agent,
             Command(resume=decision),
-            config,
+            thread_id=thread_id,
             agent_name=agent_name,
             model=model,
-            durability="sync",
         ):
-            if isinstance(frame, dict) and frame.get("event") == "approval_needed":
-                paused = True
             yield frame
-        if not paused:
-            await reap_thread(self._checkpointer_provider(), thread_id)
 
     async def resume_deep_lead(
         self,
@@ -1308,24 +1318,14 @@ class AgentInvoker:
             # THE invariant: ALWAYS install the permission_gate on resume (fail-closed ask/auto).
             permission_mode=resume_mode,
         )
-        config = {"configurable": {"thread_id": thread_id}}
-        # Same reap-on-non-paused-completion rule as resume_deep_turn: a resume that re-pauses
-        # (a chained 2nd write) keeps its checkpoint for the next resume; one that runs to
-        # completion reaps the thread it just finished.
-        paused = False
-        async for frame in stream_deep_agent_events(
+        async for frame in self._stream_and_reap(
             deep_agent,
             Command(resume=decision),
-            config,
+            thread_id=thread_id,
             agent_name=lead.name,
             model=model,
-            durability="sync",
         ):
-            if isinstance(frame, dict) and frame.get("event") == "approval_needed":
-                paused = True
             yield frame
-        if not paused:
-            await reap_thread(self._checkpointer_provider(), thread_id)
 
     async def run_autonomous_deep_step(
         self,
@@ -1594,23 +1594,16 @@ class AgentInvoker:
                 context_block=context_block,
                 execute_tool=tool_executor.execute_tool,
             )
-            config = {"configurable": {"thread_id": thread_id}}
             graph_input = {"messages": [{"role": "user", "content": message}]}
-            paused = False
-            async for frame in stream_deep_agent_events(
+            async for frame in self._stream_and_reap(
                 deep_agent,
                 graph_input,
-                config,
+                thread_id=thread_id,
                 agent_name=agent_name,
                 model=model,
-                durability="sync",
             ):
-                if isinstance(frame, dict) and frame.get("event") == "approval_needed":
-                    paused = True
                 if isinstance(frame, dict) and frame.get("event") == "agent_done":
                     final_text = frame.get("text", "")
-            if not paused:
-                await reap_thread(self._checkpointer_provider(), thread_id)
         else:
             async for evt in agent_loop(
                 client=self._client,
