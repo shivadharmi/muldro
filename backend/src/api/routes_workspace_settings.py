@@ -43,7 +43,11 @@ async def get_default_permission_mode(
     user: User = Depends(get_current_user),
     workspace_id: str = Depends(get_current_workspace_id),
 ):
-    """The workspace's default chat permission mode (fail-safe ``auto``)."""
+    """The workspace's default chat permission mode (fail-safe ``auto``).
+
+    Read-only, so it reuses the helper's own fail-safe session (``get_session_factory()``) rather
+    than a request-scoped one — the same single source of truth the chat handler uses.
+    """
     value = await workspace_default_permission_mode(get_session_factory(), workspace_id)
     return DefaultPermissionModeResponse(default_permission_mode=value)
 
@@ -55,7 +59,13 @@ async def set_default_permission_mode(
     workspace_id: str = Depends(get_current_workspace_id),
     db: AsyncSession = Depends(get_session),
 ):
-    """Set the workspace default (JSONB merge; preserves allow_bypass + other keys)."""
+    """Set the workspace default (JSONB merge; preserves allow_bypass + other keys).
+
+    Uses a request-scoped write session (``Depends(get_session)``), unlike the read-only GET.
+    """
+    # Defense-in-depth: the Pydantic ``Literal`` already 422s an invalid value before this runs,
+    # so this branch is unreachable today. It guards the write path if the field type is ever
+    # loosened (e.g. to ``str``) — cheap insurance on a permission-mode write.
     if req.default_permission_mode not in VALID_PERMISSION_MODES:
         raise HTTPException(status_code=400, detail="Invalid permission mode")
     workspace = await db.get(Workspace, workspace_id)
