@@ -43,12 +43,17 @@ def _patched(*, connectors: list[dict], tools_by_server: dict[str, list]):
 
     ``get_user_connectors`` returns *connectors*; ``list_tools(connector_type=...)`` returns
     ``tools_by_server[connector_type]`` (empty for an unmatched server — the fail-closed
-    skip-unmatched path).
+    skip-unmatched path). The mock SIMULATES the real ``list_tools`` SQL tenant bound: when
+    ``workspace_scoped=True`` (what ``resolve_connector_scope`` passes) it drops rows whose
+    ``workspace_id`` is neither NULL (global) nor the turn's ``ws_1``.
     """
     mgr = SimpleNamespace(get_user_connectors=AsyncMock(return_value=connectors))
 
-    async def _list_tools(connector_type=None, enabled_only=True):
-        return list(tools_by_server.get(connector_type, []))
+    async def _list_tools(connector_type=None, enabled_only=True, workspace_scoped=False):
+        tools = list(tools_by_server.get(connector_type, []))
+        if workspace_scoped:
+            tools = [t for t in tools if getattr(t, "workspace_id", None) in (None, "ws_1")]
+        return tools
 
     registry = SimpleNamespace(list_tools=AsyncMock(side_effect=_list_tools))
     return (
@@ -97,9 +102,10 @@ async def test_active_healthy_connector_adds_its_server_caps():
         tools_by_server={"google-workspace": [_tool("email.send"), _tool("calendar.create")]},
     )
     assert {"email.send", "calendar.create"} <= scope
-    # provider is passed through as connector_type identity (Q1: 1:1, no lookup table).
+    # provider is passed through as connector_type identity (Q1: 1:1, no lookup table), and the
+    # tenant bound is delegated to list_tools' SQL scoping (workspace_scoped=True).
     registry.list_tools.assert_awaited_once_with(
-        connector_type="google-workspace", enabled_only=True
+        connector_type="google-workspace", enabled_only=True, workspace_scoped=True
     )
 
 

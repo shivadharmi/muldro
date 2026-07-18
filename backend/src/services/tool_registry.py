@@ -233,12 +233,32 @@ class ToolRegistry:
         self,
         connector_type: str | None = None,
         enabled_only: bool = True,
+        workspace_scoped: bool = False,
     ) -> list[ToolDefinition]:
+        """List tool definitions. ``workspace_scoped`` (default False) applies the SAME tenant
+        bound as :meth:`get_tool`: a workspace-scoped registry sees only its own rows + the
+        global (``workspace_id IS NULL``) catalog, and a workspace-agnostic registry
+        (``self._workspace_id`` is None) sees only global rows.
+
+        Default OFF is the historical WORKSPACE-AGNOSTIC behavior, kept byte-identical for the
+        name-resolution callers (``readback_readfn`` / ``step_runner``) that resolve a capability
+        to a tool NAME here and then re-scope at dispatch via ``get_tool``. Callers that build an
+        agent's actual callable tool set / authority from the result (e.g. ``tool_executor``) pass
+        ``workspace_scoped=True`` so a workspace-specific ToolDefinition from ANOTHER tenant can
+        never leak its schema/capability into this workspace's agent."""
         stmt = select(ToolDefinition)
         if connector_type:
             stmt = stmt.where(ToolDefinition.connector_type == connector_type)
         if enabled_only:
             stmt = stmt.where(ToolDefinition.enabled.is_(True))
+        if workspace_scoped:
+            if self._workspace_id:
+                stmt = stmt.where(
+                    (ToolDefinition.workspace_id == self._workspace_id)
+                    | (ToolDefinition.workspace_id.is_(None))
+                )
+            else:
+                stmt = stmt.where(ToolDefinition.workspace_id.is_(None))
         stmt = stmt.order_by(ToolDefinition.name)
         result = await self._db.execute(stmt)
         return list(result.scalars().all())

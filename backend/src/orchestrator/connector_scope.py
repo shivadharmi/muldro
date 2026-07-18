@@ -85,17 +85,13 @@ async def resolve_connector_scope(
         server = connector.get("provider")
         if not server:
             continue
-        tools = await registry.list_tools(connector_type=server, enabled_only=True)
-        # Tenant guard: ToolRegistry.list_tools is NOT workspace-scoped (it filters only on
-        # connector_type + enabled — a shared-method gap that also affects tool_executor /
-        # step_runner, tracked separately as a broader fix). Filter here so a workspace-specific
+        # Tenant guard: workspace_scoped=True makes list_tools apply the bound in SQL — this
+        # workspace's rows + the global (workspace_id IS NULL) catalog — so a workspace-specific
         # ToolDefinition belonging to ANOTHER tenant can never grant a capability into this
-        # workspace's scope. Global tools (workspace_id IS NULL, the seeded connector schemas) and
-        # this workspace's own rows are kept; other workspaces' rows are dropped.
-        scope |= {
-            tool.capability
-            for tool in tools
-            if tool.capability and getattr(tool, "workspace_id", None) in (None, workspace_id)
-        }
+        # workspace's scope. Same mechanism tool_executor uses to bound the agent's tool set.
+        tools = await registry.list_tools(
+            connector_type=server, enabled_only=True, workspace_scoped=True
+        )
+        scope |= {tool.capability for tool in tools if tool.capability}
 
     return frozenset(scope)

@@ -164,8 +164,11 @@ class ToolExecutor:
                     "input_schema": mcp_tool.get("input_schema", {}),
                 }
 
-            # Add external tools from DB registry, filtered by capability
-            all_db_tools = await registry.list_tools(enabled_only=True)
+            # Add external tools from DB registry, filtered by capability. workspace_scoped=True:
+            # this builds the agent's ACTUAL callable tool set, so a workspace-specific
+            # ToolDefinition from another tenant must never leak in — bound to this workspace +
+            # the global catalog (mirrors the get_tool scoping used for internal tools above).
+            all_db_tools = await registry.list_tools(enabled_only=True, workspace_scoped=True)
 
             # Lazy "discover-once": if any in-scope external tool lacks a
             # persisted schema and has no live session schema yet, run a single
@@ -187,7 +190,9 @@ class ToolExecutor:
                     in_scope_missing, workspace_id=workspace_id
                 )
                 if discovered:
-                    all_db_tools = await registry.list_tools(enabled_only=True)
+                    all_db_tools = await registry.list_tools(
+                        enabled_only=True, workspace_scoped=True
+                    )
                     for mcp_tool in list_mcp_tools(workspace_id=workspace_id):
                         mcp_schemas[mcp_tool["name"]] = {
                             "description": mcp_tool.get("description", ""),
