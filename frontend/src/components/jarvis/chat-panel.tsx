@@ -8,6 +8,8 @@ import { useShellStore } from "@/stores/shell-store";
 import { CommandInput } from "./command-input";
 import { MarkdownRenderer } from "./markdown-renderer";
 import { AgentTrace, type AgentStep } from "./agent-trace";
+import { ChatTodos } from "./chat-todos";
+import { todosFromToolCall, type Todo } from "@/lib/todos";
 import { StepList } from "@/components/a2ui/components/step-list";
 import { InlineApprovalCard } from "@/components/a2ui/components/inline-approval";
 import type { ApprovalContext, StepState } from "@/lib/a2ui-types";
@@ -21,6 +23,9 @@ interface ChatMessage {
   plan?: PlanOutput;
   agents: AgentStep[];
   streaming?: boolean;
+  // P3a: the lead's `write_todos` plan, rendered as an inline Claude-Code-style checklist.
+  // Ephemeral per-turn — rewritten in place on each `write_todos` call (deep path only).
+  todos?: Todo[];
   // Chat permission model (P2.6): the action-time gate PAUSED this turn — the in-chat
   // approval card is shown; approve/reject resumes via `/chat/resume` into this same bubble.
   approval?: ApprovalContext | null;
@@ -406,7 +411,14 @@ export function ChatPanel({
         }
         break;
 
-      case "tool_call":
+      case "tool_call": {
+        // P3a: `write_todos` is the lead's plan channel — render it as an inline checklist
+        // (rewritten in place each call) instead of a generic tool chip.
+        const todos = todosFromToolCall(event);
+        if (todos) {
+          updateAssistant((m) => ({ ...m, todos }));
+          break;
+        }
         updateAssistant((m) => ({
           ...m,
           agents: m.agents.map((a) =>
@@ -425,8 +437,12 @@ export function ChatPanel({
           ),
         }));
         break;
+      }
 
       case "tool_result":
+        // P3a: `write_todos` produced no chip, so skip its result (else it would attach to
+        // an unrelated tool chip).
+        if (event.tool === "write_todos") break;
         updateAssistant((m) => ({
           ...m,
           agents: m.agents.map((a) =>
@@ -629,6 +645,9 @@ function AssistantMessage({
       <div className="max-w-[95%] w-full space-y-2">
         {/* Agent pipeline ("how Jarvis answered") */}
         <AgentTrace agents={msg.agents} plan={msg.plan ?? null} streaming={!!msg.streaming} />
+
+        {/* P3a: the lead's live write_todos plan (deep path) */}
+        {msg.todos && msg.todos.length > 0 && <ChatTodos todos={msg.todos} />}
 
         {/* Inline plan → pipeline steps (reuses the faithful StepList so a
             chat-only user sees the pipeline, not just the surfaces pane). */}
