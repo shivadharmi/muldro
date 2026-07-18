@@ -44,12 +44,13 @@ router = APIRouter()
 class ChatRequest(BaseModel):
     message: str
     surface: str = "web"
-    mode: str = "ask"  # ask, plan, execute
-    # Step 10D P1 (chat permission model): action-time permission mode, INDEPENDENT of
-    # ``mode``. Default ``"auto"`` (a non-bypass value → legacy path in P1). Only
-    # ``"bypass"`` activates the deep single-lead chat path. Never derived from ``mode``.
-    # Constrained to the taxonomy so a typo 422s loudly instead of silently defaulting to
-    # legacy (the exact-equality gate would treat any unknown value as non-bypass anyway).
+    # P3b (chat permission model): the legacy ``mode`` (ask/plan/execute) is retired from the
+    # HTTP contract — the user-facing control is now ``permission_mode``. The interactive handler
+    # forwards a fixed ``mode="ask"`` to keep the live legacy per-step path byte-identical for
+    # non-pinned callers; the internal ``mode`` param survives only for the pinned callers
+    # (schedule_dispatch ``execute`` / routes_ws ``ask``), which invoke the orchestrator directly.
+    # Action-time permission mode, INDEPENDENT of the retired ``mode``; only ``"bypass"`` activates
+    # the deep single-lead path. Constrained to the taxonomy so a typo 422s loudly.
     permission_mode: Literal["auto", "ask", "bypass"] = "auto"
     context: dict | None = None
     conversation_id: str | None = None
@@ -430,7 +431,7 @@ async def chat_stream(
                 user_id=user_id,
                 workspace_id=workspace_id,
                 surface=req.surface,
-                mode=req.mode,
+                mode="ask",  # P3b: legacy planning axis retired from the API; interactive default.
                 context=req.context,
                 conversation_id=conversation_id,
                 permission_mode=req.permission_mode,
