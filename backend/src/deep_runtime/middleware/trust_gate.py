@@ -136,6 +136,67 @@ async def _find_existing_approval(workspace_id, thread_id, tool_call_id, db_fact
         return result.scalars().first()
 
 
+async def _get_or_create_approval(
+    db,
+    *,
+    name: str,
+    capability: str,
+    summary: str | None,
+    risk_level: str,
+    user_id: str,
+    workspace_id: str,
+    thread_id: str,
+    tool_call_id: str,
+    artifact_refs: dict,
+) -> str:
+    """Idempotent get-or-create of the pending Approval on an ALREADY-OPEN session, returning
+    its id. The replay-safe persist shared by the autonomous ``trust_gate`` and the chat
+    ``permission_gate`` (a DELIBERATE TWIN collapsed onto one helper).
+
+    The CALLER owns the session so the autonomous path can keep ``TrustEngine.evaluate`` in the
+    SAME transaction as the create+commit (evaluate may leave an uncommitted first-use
+    ``TrustState`` INSERT that only the trailing commit persists — opening a fresh session here
+    would strand it). Keyed on the promoted COLUMNS ``(workspace_id, thread_id, tool_call_id)``
+    (fenced by the partial UNIQUE index ``uq_approvals_thread_tool_call``) with NO status filter:
+    the gate body replays on resume and the resume path may already have marked the row
+    approved/rejected, so a pending-only filter would miss it and duplicate. On a lost create
+    race the ``IntegrityError`` rolls back and re-selects the winner (fail LOUD if still absent).
+    """
+    stmt = select(Approval).where(
+        Approval.workspace_id == workspace_id,
+        Approval.thread_id == thread_id,
+        Approval.tool_call_id == tool_call_id,
+    )
+    result = await db.execute(stmt)
+    existing = result.scalars().first()
+    if existing is not None:
+        return existing.approval_id
+
+    approval = await create_approval(
+        db,
+        user_id=user_id,
+        workspace_id=workspace_id,
+        approval_type=f"tool:{name}",
+        title=f"Approve: {capability}",
+        summary=summary,
+        risk_level=risk_level,
+        requested_by=user_id,
+        run_id=None,
+        step_id=None,
+        artifact_refs=artifact_refs,
+    )
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        result = await db.execute(stmt)
+        existing = result.scalars().first()
+        if existing is None:
+            raise
+        return existing.approval_id
+    return approval.approval_id
+
+
 async def _decide_and_maybe_persist(
     *,
     name: str,
@@ -170,31 +231,18 @@ async def _decide_and_maybe_persist(
         if not require_approval:
             return (False, None)
 
-        # Idempotent get-or-create keyed on (workspace_id, thread_id, tool_call_id) via the
-        # promoted COLUMNS (fenced by the partial UNIQUE index uq_approvals_thread_tool_call).
-        # NO status filter: the resume path may already have marked this row
-        # approved/rejected, and a pending-only filter would miss it and duplicate.
-        stmt = select(Approval).where(
-            Approval.workspace_id == workspace_id,
-            Approval.thread_id == thread_id,
-            Approval.tool_call_id == tool_call_id,
-        )
-        result = await db.execute(stmt)
-        existing = result.scalars().first()
-        if existing is not None:
-            return (True, existing.approval_id)
-
-        approval = await create_approval(
+        # Persist on THIS open session so TrustEngine.evaluate (above) and the create+commit
+        # stay in ONE transaction — the shared replay-safe get-or-create (see helper docstring).
+        approval_id = await _get_or_create_approval(
             db,
-            user_id=user_id,
-            workspace_id=workspace_id,
-            approval_type=f"tool:{name}",
-            title=f"Approve: {capability}",
+            name=name,
+            capability=capability,
             summary=(getattr(decision, "justification", None) or risk.reasoning),
             risk_level=risk.risk_level,
-            requested_by=user_id,
-            run_id=None,
-            step_id=None,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            thread_id=thread_id,
+            tool_call_id=tool_call_id,
             artifact_refs={
                 "thread_id": thread_id,
                 "tool_call_id": tool_call_id,
@@ -208,21 +256,7 @@ async def _decide_and_maybe_persist(
                 "context_block": context_block[:_MAX_PERSISTED_CONTEXT_CHARS],
             },
         )
-        try:
-            await db.commit()
-        except IntegrityError:
-            # Lost the create race — another concurrent replay/writer committed the same
-            # (workspace_id, thread_id, tool_call_id) first, tripping the partial UNIQUE
-            # index. Roll back and re-select the winner's row.
-            await db.rollback()
-            result = await db.execute(stmt)
-            existing = result.scalars().first()
-            if existing is None:
-                # The unique violation implies a row exists; if we still can't see it,
-                # fail LOUD rather than returning a bogus approval_id.
-                raise
-            return (True, existing.approval_id)
-        return (True, approval.approval_id)
+        return (True, approval_id)
 
 
 def make_trust_gate_middleware(

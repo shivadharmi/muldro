@@ -46,17 +46,14 @@ import logging
 from langchain.agents.middleware import AgentMiddleware, wrap_tool_call
 from langchain_core.messages import ToolMessage
 from langgraph.types import interrupt
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 
 from src.deep_runtime.builtins import DEEPAGENTS_BUILTIN_NAMES
 from src.deep_runtime.middleware.trust_gate import (
     _MAX_PERSISTED_CONTEXT_CHARS,
     _find_existing_approval,
+    _get_or_create_approval,
 )
 from src.integrations.capabilities import is_read_only_capability
-from src.models.approvals import Approval
-from src.services.approval_service import create_approval
 from src.services.risk_assessor import RiskAssessment
 
 logger = logging.getLogger(__name__)
@@ -122,14 +119,12 @@ async def _persist_permission_approval(
 ) -> str:
     """Idempotently persist the pending Approval for a paused chat write and return its id.
 
-    Runs entirely inside ONE short-lived session that is COMMITTED and CLOSED before the
-    caller reaches ``interrupt()``. Get-or-create keyed on ``(workspace_id, thread_id,
-    tool_call_id)`` with NO status filter (the resume path may already have marked the row
-    approved/rejected, and the gate body replays on resume) + an IntegrityError re-select on
-    a lost create race — a DELIBERATE TWIN of ``trust_gate._decide_and_maybe_persist``. Keep
-    the race-handling (find-first → create → IntegrityError rollback+re-select → fail-loud) in
-    lock-step with that function; factoring both onto one shared helper is a tracked cleanup
-    (it would touch the autonomous ``trust_gate``, so it is deferred out of this dormant step).
+    Opens ONE short-lived session (COMMITTED and CLOSED before the caller reaches
+    ``interrupt()``) and delegates the get-or-create to the shared
+    ``trust_gate._get_or_create_approval``. This path only PERSISTS (the decision was already
+    made by ``permission_should_interrupt``), so — unlike the autonomous
+    ``_decide_and_maybe_persist`` — the session carries no TrustEngine state and the helper's
+    commit is the only write.
 
     In ``ask`` mode ``assessment`` is None: ``reversible`` defaults True and ``blast_radius``
     defaults ``"self"`` on the persisted ``artifact_refs`` (the confirmation was requested
@@ -140,27 +135,16 @@ async def _persist_permission_approval(
     summary = assessment.reasoning if assessment else "User confirmation required (ask mode)."
 
     async with db_factory() as db:
-        stmt = select(Approval).where(
-            Approval.workspace_id == workspace_id,
-            Approval.thread_id == thread_id,
-            Approval.tool_call_id == tool_call_id,
-        )
-        result = await db.execute(stmt)
-        existing = result.scalars().first()
-        if existing is not None:
-            return existing.approval_id
-
-        approval = await create_approval(
+        return await _get_or_create_approval(
             db,
-            user_id=user_id,
-            workspace_id=workspace_id,
-            approval_type=f"tool:{name}",
-            title=f"Approve: {capability}",
+            name=name,
+            capability=capability,
             summary=summary,
             risk_level=risk_level,
-            requested_by=user_id,
-            run_id=None,
-            step_id=None,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            thread_id=thread_id,
+            tool_call_id=tool_call_id,
             artifact_refs={
                 "thread_id": thread_id,
                 "tool_call_id": tool_call_id,
@@ -179,21 +163,6 @@ async def _persist_permission_approval(
                 "lead_scope": sorted(lead_scope),
             },
         )
-        try:
-            await db.commit()
-        except IntegrityError:
-            # Lost the create race — another concurrent replay/writer committed the same
-            # (workspace_id, thread_id, tool_call_id) first, tripping the partial-unique
-            # index. Roll back and re-select the winner's row.
-            await db.rollback()
-            result = await db.execute(stmt)
-            existing = result.scalars().first()
-            if existing is None:
-                # The unique violation implies a row exists; if we still can't see it, fail
-                # LOUD rather than returning a bogus approval_id.
-                raise
-            return existing.approval_id
-        return approval.approval_id
 
 
 def _reject_tool_message(name: str, tool_call_id: str, reason: str | None) -> ToolMessage:
