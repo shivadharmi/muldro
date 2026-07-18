@@ -35,6 +35,7 @@ from src.orchestrator.core_events import (
     TraceStarted,
     core_event_to_sse,
 )
+from src.services.workspace_entitlements import workspace_default_permission_mode
 
 logger = logging.getLogger(__name__)
 
@@ -51,9 +52,26 @@ class ChatRequest(BaseModel):
     # (schedule_dispatch ``execute`` / routes_ws ``ask``), which invoke the orchestrator directly.
     # Action-time permission mode, INDEPENDENT of the retired ``mode``; only ``"bypass"`` activates
     # the deep single-lead path. Constrained to the taxonomy so a typo 422s loudly.
-    permission_mode: Literal["auto", "ask", "bypass"] = "auto"
+    # P3c: optional so the interactive handler can substitute the per-workspace default when the
+    # client omits it (``None``). An explicit value always wins. Resolved at the handler, never in
+    # ``_process_core`` (which pinned callers share), so a workspace ``bypass`` default cannot leak
+    # onto scheduled/autonomous turns.
+    permission_mode: Literal["auto", "ask", "bypass"] | None = None
     context: dict | None = None
     conversation_id: str | None = None
+
+
+async def _resolve_request_permission_mode(requested, db_factory, workspace_id: str) -> str:
+    """Resolve the effective per-turn permission_mode for an INTERACTIVE chat request.
+
+    An explicit value wins; when omitted (``None``), substitute the per-workspace default
+    (fail-safe ``auto``). Called ONLY from the interactive handler — the pinned callers
+    (schedule_dispatch, routes_ws) invoke ``process_message*`` directly and never reach here, so a
+    workspace ``bypass`` default can never leak onto scheduled/autonomous turns.
+    """
+    if requested is not None:
+        return requested
+    return await workspace_default_permission_mode(db_factory, workspace_id)
 
 
 def _build_orchestrator(settings: Settings, checkpointer_provider=None):
@@ -424,6 +442,14 @@ async def chat_stream(
 
     assistant_message_id = f"msg_{_ULID()}"
 
+    # P3c: resolve the effective permission_mode HERE (interactive entry only) — omitted → the
+    # per-workspace default (fail-safe auto). Pinned callers never reach this path.
+    from src.models.database import get_session_factory
+
+    resolved_permission_mode = await _resolve_request_permission_mode(
+        req.permission_mode, get_session_factory(), workspace_id
+    )
+
     return StreamingResponse(
         _stream_and_persist_chat(
             orchestrator.process_message_events(
@@ -434,7 +460,7 @@ async def chat_stream(
                 mode="ask",  # P3b: legacy planning axis retired from the API; interactive default.
                 context=req.context,
                 conversation_id=conversation_id,
-                permission_mode=req.permission_mode,
+                permission_mode=resolved_permission_mode,
             ),
             request=request,
             user_id=user_id,

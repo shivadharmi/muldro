@@ -728,12 +728,17 @@ async def test_jarvis_facade_forwards_permission_mode_batch():
 async def test_chat_request_permission_mode_default_is_non_bypass():
     from src.api.routes_chat import ChatRequest
 
+    # P3c: the default is now None (omitted) → the interactive handler substitutes the
+    # per-workspace default (fail-safe auto). The raw request default is NEVER bypass, preserving
+    # the C-SEC3 safety invariant (an omitted permission_mode can never silently activate bypass).
     req = ChatRequest(message="hi")
-    assert req.permission_mode == "auto"
+    assert req.permission_mode is None
     assert req.permission_mode != "bypass"
-    # Independent of the legacy mode slot.
-    req2 = ChatRequest(message="hi", mode="execute")
-    assert req2.permission_mode == "auto"
+    # P3b: the legacy ``mode`` slot is removed from the contract; a client-sent ``mode`` is ignored
+    # and never influences ``permission_mode`` (independence preserved).
+    req2 = ChatRequest.model_validate({"message": "hi", "mode": "execute"})
+    assert req2.permission_mode is None
+    assert not hasattr(req2, "mode")
 
 
 # ── P2.5c: planless reroute (JARVIS_CHAT_PLANLESS) ──────────────────────────────────────
