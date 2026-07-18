@@ -45,7 +45,10 @@ from tests.conftest import make_mock_settings
 pytestmark = pytest.mark.asyncio
 
 TRACE_ID = "trace_resume"
-_MOD = "src.orchestrator.chat_processor"
+# ``resume_message_events`` + its shared completion tail live in the single-lead mixin
+# (P2.2c). The surface seams (``strip_surface_blocks`` / ``extract_surface_spec``) resolve
+# in THAT module's namespace, so patches target it.
+_MOD = "src.orchestrator.chat_single_lead"
 
 
 class _Recorder:

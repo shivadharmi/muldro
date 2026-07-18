@@ -232,24 +232,28 @@ async def test_effective_chat_runtime_resolves_via_gate():
 # --- Dormancy proof: 5a adds callable-but-UNWIRED code --------------------------------
 def test_chat_processor_wires_single_lead_branch():
     """P1 Task B (5b) wired the deep single-lead chat path into ``_process_core``;
-    P2.3 WIDENED it to the full chat permission model. ``chat_processor.py`` MUST reference
-    the single-lead symbols, resolve an EFFECTIVE mode (checking ``deep_single_lead`` FIRST
-    so the default short-circuits with zero extra I/O), and branch on that resolved mode
-    across ``bypass``/``ask``/``auto`` — see ``tests/test_chat_single_lead.py`` for the
-    behavioral coverage."""
-    src = (
-        Path(__file__).resolve().parent.parent / "src" / "orchestrator" / "chat_processor.py"
-    ).read_text()
-    assert "stream_deep_lead" in src
-    assert "build_chat_lead" in src
-    assert "deep_single_lead" in src
-    # P2.3: the branch is gated on a resolved effective mode (fail-safe downgrades), not a
-    # bare exact-equality on "bypass". Assert the wiring SYMBOLS (not an exact expression
+    P2.3 WIDENED it to the full chat permission model; P2.2c EXTRACTED the single-lead
+    body into ``chat_single_lead.py`` (``_ChatSingleLeadMixin``). ``_process_core`` MUST
+    still resolve an EFFECTIVE mode (checking ``deep_single_lead`` FIRST so the default
+    short-circuits with zero extra I/O) and DELEGATE to ``_run_single_lead`` on that
+    resolved mode; the lead build + stream live in the mixin — see
+    ``tests/test_chat_single_lead.py`` for the behavioral coverage."""
+    orch = Path(__file__).resolve().parent.parent / "src" / "orchestrator"
+    core_src = (orch / "chat_processor.py").read_text()
+    lead_src = (orch / "chat_single_lead.py").read_text()
+    # ``_process_core`` resolves the effective mode + delegates to the mixin. P2.3: the
+    # branch is gated on a resolved effective mode (fail-safe downgrades), not a bare
+    # exact-equality on "bypass". Assert the wiring SYMBOLS (not an exact expression
     # string, which would break on a benign refactor) — behavioral coverage lives in
     # tests/test_chat_single_lead.py.
-    assert "effective_mode" in src
-    assert "workspace_allows_bypass" in src
-    assert "has_durable_checkpointer" in src
+    assert "deep_single_lead" in core_src
+    assert "effective_mode" in core_src
+    assert "workspace_allows_bypass" in core_src
+    assert "has_durable_checkpointer" in core_src
+    assert "_run_single_lead" in core_src
+    # The single-lead body (lead build + deep stream) lives in the mixin module (P2.2c).
+    assert "stream_deep_lead" in lead_src
+    assert "build_chat_lead" in lead_src
 
 
 # --- P1 A2: stream_deep_lead resolves tools internally when tools is None --------------

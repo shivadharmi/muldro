@@ -30,7 +30,11 @@ pytestmark = pytest.mark.asyncio
 
 TRACE_ID = "trace_lead"
 ILOG_ID = "ilog_lead"
+# _MOD: the intent/plan/route/entitlement seams that stay in ``chat_processor`` (the top
+# of ``_process_core``). _LEAD: the single-lead BRANCH + shared completion tail moved to
+# the ``_ChatSingleLeadMixin`` module (P2.2c) — its surface seams resolve THERE.
 _MOD = "src.orchestrator.chat_processor"
+_LEAD = "src.orchestrator.chat_single_lead"
 
 
 class _Recorder:
@@ -348,8 +352,8 @@ async def test_single_lead_rehomes_output_stripped_reply_raw_surface_and_learner
     spec.should_surface = True
 
     ctx = _patches(plan, [], []) + [
-        patch(f"{_MOD}.strip_surface_blocks", new=lambda t: f"STRIPPED::{t}"),
-        patch(f"{_MOD}.extract_surface_spec", new=MagicMock(return_value=spec)),
+        patch(f"{_LEAD}.strip_surface_blocks", new=lambda t: f"STRIPPED::{t}"),
+        patch(f"{_LEAD}.extract_surface_spec", new=MagicMock(return_value=spec)),
     ]
     for c in ctx:
         c.start()

@@ -32,8 +32,11 @@ from src.orchestrator.chat_pipeline import (
     format_prior_step_results,
     resolve_plan_routing,
 )
+from src.orchestrator.chat_single_lead import (
+    _ChatSingleLeadMixin,
+    _shadow_compare_enabled,  # noqa: F401 — re-exported for tests.test_shadow_runner
+)
 from src.orchestrator.core_events import (
-    ApprovalRequired,
     CoreEvent,
     IntentClassified,
     InteractionLogged,
@@ -51,7 +54,6 @@ from src.orchestrator.core_events import (
     agent_event_from_sse,
     core_event_to_sse,
 )
-from src.orchestrator.divergence import ShadowDecision
 from src.orchestrator.intent_classifier import (
     FAST_INTENTS,
     INTENT_CONFIDENCE_THRESHOLD,
@@ -61,7 +63,7 @@ from src.orchestrator.intent_classifier import (
 )
 from src.orchestrator.presenter_skip import extract_perceiver_synthesis, single_read_step
 from src.services.capability_resolver import CapabilityResolver
-from src.services.surface_mapping import extract_surface_spec, strip_surface_blocks
+from src.services.surface_mapping import strip_surface_blocks
 from src.services.workspace_entitlements import workspace_allows_bypass
 
 logger = logging.getLogger(__name__)
@@ -82,19 +84,6 @@ _FAST_SAFE_CAPABILITIES = frozenset(
 )
 
 
-def _shadow_compare_enabled(settings) -> bool:
-    """True only when ``settings.shadow_sample_rate`` is a real positive number.
-
-    Several pre-existing orchestrator-construction test harnesses build ``settings``
-    as a bare ``MagicMock()`` (predating this field), whose unconfigured attribute
-    is not float-comparable — ``MagicMock() > 0`` raises ``TypeError``. Treat
-    anything that isn't a real ``int``/``float`` as "off", matching the real
-    ``Settings`` default (0.0) — never raises.
-    """
-    rate = getattr(settings, "shadow_sample_rate", 0.0)
-    return isinstance(rate, (int, float)) and rate > 0
-
-
 def _fast_step_is_write(capability: str) -> bool:
     """Fail-closed write classifier for the ungated fast path.
 
@@ -111,8 +100,12 @@ def _fast_step_is_write(capability: str) -> bool:
     return True  # unknown capability -> fail closed -> route through the gate + lock
 
 
-class ChatProcessor:
-    """Runs the conversational (chat) orchestration pipeline for the orchestrator."""
+class ChatProcessor(_ChatSingleLeadMixin):
+    """Runs the conversational (chat) orchestration pipeline for the orchestrator.
+
+    Inherits the deep single-lead permission path (run + resume + shared completion
+    tail) from :class:`_ChatSingleLeadMixin` (P2.2c split-via-inheritance).
+    """
 
     # Class-level default so instances built via ``__new__`` (some orchestrator test
     # harnesses bypass __init__) still resolve ``self._shadow_runner`` as None without
@@ -348,153 +341,6 @@ class ChatProcessor:
             if sse is not None:
                 yield sse
 
-    async def resume_message_events(
-        self,
-        *,
-        approval_id: str,
-        decision: str,
-        reason: str | None = None,
-        user_id: str,
-        workspace_id: str,
-        conversation_id: str | None = None,
-    ) -> AsyncGenerator[CoreEvent, None]:
-        """Drive a paused chat single-lead turn's RESUME continuation (P2.2b, Corr-C1).
-
-        The sibling of :meth:`_process_core` for the RESUME half of an ask/auto turn: when
-        the action-time permission gate PAUSED for the user's confirmation, ``_process_core``
-        yielded :class:`ApprovalRequired` and ``return``\\ ed — SKIPPING its completion tail
-        (the turn wasn't done). The resume is a SEPARATE HTTP request. This wrapper re-enters
-        the paused thread via :meth:`AgentInvoker.resume_deep_lead`, re-streams the
-        continuation frames, and — critically — RE-HOMES the reply as a :class:`Presentation`
-        and runs the completion tail (surface push + ``RunCompleted``). Without it the
-        approved write fires but the reply is never persisted (``routes_chat`` persists only
-        on a ``Presentation`` → empty bubble) and no A2UI surface builds — the exact C-CORR2
-        failure P1 fixed for the initial turn, un-fixed on resume.
-
-        Yields the SAME ``CoreEvent`` union :meth:`_process_core` yields, so the resume HTTP
-        endpoint (a later task) reuses :func:`core_event_to_sse` verbatim. Mirrors
-        ``_process_core``'s trace / ``turn_scope`` / try / except / finally shell.
-
-        ``conversation_id`` is accepted for the resume endpoint's parity and the P2.7 learner
-        (below); the reply + surface (the user-visible fixes) do not need it, so it is unused
-        today.
-        """
-        trace = self._trace_manager.start_trace("resume_approval")
-
-        async with turn_scope(on_close=close_turn_sessions):
-
-            def _fire_event(event_type: str, **kwargs: Any) -> None:
-                self._spawn_background(self._events.emit_runtime_event(event_type, **kwargs))
-
-            presenter_text = ""
-            try:
-                yield TraceStarted(trace_id=trace.trace_id)
-
-                async for frame in self._invoker.resume_deep_lead(
-                    approval_id=approval_id,
-                    decision=decision,
-                    reason=reason,
-                    user_id=user_id,
-                    workspace_id=workspace_id,
-                ):
-                    if frame.get("event") == "error":
-                        # resume_deep_lead REFUSED (invalid decision / tenant-A6 guard failure /
-                        # not-resumable). The frame is ALREADY a client-safe SSE ``error`` dict
-                        # (the invoker owns its message shape) — pass it through verbatim via the
-                        # AgentStreamEvent fallback and STOP. No completion tail runs: nothing
-                        # completed. ``finish_trace`` in the ``finally`` still fires.
-                        yield agent_event_from_sse(frame)
-                        return
-                    if frame.get("event") == "approval_needed":
-                        # CHAINED re-pause: a 2ND write in the resumed continuation paused again.
-                        # Same suspend semantics as ``_process_core``'s pause seam — yield the
-                        # typed pause event and ``return``, SKIPPING the tail (the turn is
-                        # suspended again). The paused checkpoint stays live; the resume path
-                        # re-enters on the NEXT decision. The typed ApprovalRequired REPLACES the
-                        # raw passthrough so the frame is emitted EXACTLY ONCE.
-                        yield ApprovalRequired(
-                            approval_id=frame.get("approval_id"),
-                            capability=frame.get("capability"),
-                            risk_level=frame.get("risk_level"),
-                            thread_id=frame.get("thread_id"),
-                        )
-                        return
-                    yield agent_event_from_sse(frame)
-                    if frame.get("event") == "agent_done":
-                        # RE-HOME the presenter output (C-CORR2): resume_deep_lead emits NO
-                        # Presentation frame, so synthesize it here — else the resumed reply is
-                        # never persisted (routes_chat persists only on Presentation) and the
-                        # chat bubble is empty. Keep presenter_text RAW for the tail's surface
-                        # extraction.
-                        presenter_text = frame.get("text", "")
-                        yield Presentation(text=strip_surface_blocks(presenter_text))
-
-                # COMPLETION TAIL (mirrors ``_process_core``'s completion tail: run_completed →
-                # surface push → RunCompleted, MINUS the interaction-learner — see P2.7 below).
-                # Runs ONLY on the terminal reply (the ``return``s above skip it for a suspended
-                # / refused turn). Currently DUPLICATED with _process_core's tail — the shared
-                # ``_emit_completion_tail`` extraction is the P2.7 structure-only cleanup.
-                _fire_event(
-                    "run_completed",
-                    workspace_id=workspace_id,
-                    user_id=user_id,
-                    run_id=None,
-                    payload={"trace_id": trace.trace_id},
-                )
-
-                # Push workspace surface (Presenter-driven). Keep presenter_text raw for
-                # extraction — it still carries the fenced surface blocks.
-                surface_id = None
-                try:
-                    surface_spec = extract_surface_spec(presenter_text)
-                    if surface_spec and surface_spec.should_surface:
-                        surface_id = await self._surfaces.push_presenter_surface(
-                            spec=surface_spec,
-                            user_id=user_id,
-                            workspace_id=workspace_id,
-                            run_id=None,
-                            response_text=presenter_text,
-                        )
-                except Exception:
-                    logger.warning("Surface push failed", exc_info=True)
-
-                # P2.7 (DEFERRED — not built here): the interaction-learner spawn would go here,
-                # mirroring ``_process_core``'s tail. It needs the ORIGINAL user message
-                # (``learn(user_message=..., agent_response=presenter_text)``), which is NOT
-                # persisted on the Approval today (``context_block`` holds history + plan, not the
-                # raw ask). Persisting ``user_message`` on the Approval (a gate thread-through) +
-                # spawning the learner is a P2.7 enrichment. The reply + surface (the user-visible
-                # Corr-C1 fixes) ship now; the learner (background enrichment) is deferred.
-                #
-                # P2.7 (structure-only): this tail DUPLICATES ``_process_core``'s tail
-                # (run_completed + surface + RunCompleted). Extracting a shared
-                # ``_emit_completion_tail`` helper (alongside the ``_stream_and_reap`` dedup) is a
-                # P2.7 cleanup — NOT refactored here (chat_processor.py is the only file this task
-                # touches; ``_process_core`` is left unchanged).
-
-                yield RunCompleted(trace_id=trace.trace_id, run_id=None, surface_id=surface_id)
-
-            except Exception as e:
-                logger.error("resume_message_events failed: %s", e, exc_info=True)
-                cid = get_correlation_id() or new_correlation_id()
-                code, safe_msg, _ = classify(e)
-                _fire_event(
-                    "run_failed",
-                    workspace_id=workspace_id,
-                    user_id=user_id,
-                    run_id=None,
-                    payload={"code": code, "message": safe_msg, "correlation_id": cid},
-                )
-                yield RunFailed(
-                    trace_id=trace.trace_id, code=code, message=safe_msg, correlation_id=cid
-                )
-            finally:
-                await self._trace_manager.finish_trace(
-                    trace.trace_id,
-                    user_id=user_id,
-                    workspace_id=workspace_id,
-                )
-
     async def _process_core(
         self,
         message: str,
@@ -664,11 +510,11 @@ class ChatProcessor:
                     self._db_factory, workspace_id, plan.steps
                 )
 
-                # Step 3: Execute steps. `presenter_text` + `agent_name` are declared
-                # before the branch so the SHARED TAIL below (surface push, learner,
-                # shadow-compare) sees them on BOTH paths. The single-lead branch leaves
-                # agent_name=None → the shadow guard (`agent_name is not None`) skips it,
-                # matching the empty-routing case.
+                # Step 3: Execute steps. `presenter_text` + `agent_name` are declared here
+                # for the LEGACY path's shared completion tail below — `agent_name` may stay
+                # None when step_routing is empty, and the tail's shadow guard
+                # (`agent_name is not None`) skips that case. The single-lead path (below)
+                # owns its own presenter_text + completion tail inside the mixin.
                 presenter_text = ""
                 agent_name: str | None = None
 
@@ -716,89 +562,25 @@ class ChatProcessor:
                 # (bypass/ask/auto). Same safety posture as today's ungated chat, plus the
                 # action-time permission gate (ask/auto) that suspends a write for confirmation.
                 if effective_mode in ("bypass", "ask", "auto"):
-                    # SINGLE-LEAD PATH. The Planner already ran → the plan carries the
-                    # plan-union scope + the system.* steps. Same safety posture as today's
-                    # ungated chat, just single-lead execution (one lead vs N per-step calls
-                    # + presenter).
-                    # (a) system.* steps run deterministically here (Planner-produced;
-                    # handle_system_capability takes only (step, plan, ...) — no data dep on
-                    # agent-step outputs — so running them before the lead is behavior-
-                    # equivalent to the per-step loop).
-                    for step in plan.steps:
-                        if getattr(step, "actor", None) != "user" and step.capability.startswith(
-                            "system."
-                        ):
-                            sys_result = (
-                                await self._system_capability_handler.handle_system_capability(
-                                    step, plan, user_id, workspace_id
-                                )
-                            )
-                            yield SystemStepResult(
-                                key=f"system_{step.capability}", output=sys_result
-                            )
-                    # (b) user actions (same contract as the legacy path).
-                    if user_steps:
-                        yield UserActionsReady(
-                            steps=[
-                                {"description": s.description, "context": s.user_context}
-                                for s in user_steps
-                            ]
-                        )
-                    # (c) build the lead (plan-union scope) + assemble its ambient context,
-                    # stream it, and RE-HOME the reply. The RAW user `message` is the human
-                    # turn; history + plan summary go into the system `context_block`.
-                    lead = await self._invoker.build_chat_lead(plan.steps, workspace_id)
-                    lead_ctx = await self._context.assemble_context(
-                        "lead", message, user_id=user_id, workspace_id=workspace_id
-                    )
-                    parts = [p for p in (lead_ctx, history_block) if p]
-                    if plan.goal or plan.reasoning:
-                        parts.append(f"[Plan]\nGoal: {plan.goal}\nReasoning: {plan.reasoning}")
-                    context_block = "\n\n".join(parts)
-                    async for frame in self._invoker.stream_deep_lead(
-                        lead,
+                    # SINGLE-LEAD PATH (P2.3) — delegated to the _ChatSingleLeadMixin
+                    # (:meth:`_run_single_lead`): system.* steps → user actions → build lead
+                    # → stream → pause seam → re-home reply → its own completion tail. On a
+                    # pause it emits ``ApprovalRequired`` and stops WITHOUT the tail. The
+                    # ``return`` here hands the whole single-lead turn (incl. tail) to the
+                    # mixin, so the shared legacy tail below is reached ONLY by the ``else``.
+                    async for evt in self._run_single_lead(
+                        plan=plan,
                         message=message,
-                        context_block=context_block,
-                        user_id=user_id,
-                        workspace_id=workspace_id,
+                        history_block=history_block,
                         intent=intent,
                         trace=trace,
-                        permission_mode=effective_mode,
+                        user_id=user_id,
+                        workspace_id=workspace_id,
+                        effective_mode=effective_mode,
+                        user_steps=user_steps,
                     ):
-                        # PAUSE SEAM (P2.3): the action-time permission gate paused this
-                        # turn for the user's confirmation. Emit the typed pause event and
-                        # `return` — ending the generator SKIPS the shared completion tail
-                        # (run_completed / surface / learner / RunCompleted) for a suspended
-                        # turn, while the `finally` below still finishes the trace and
-                        # turn_scope still tears down the MCP sessions. The paused deep
-                        # checkpoint stays live; the resume path (later task) re-enters the
-                        # thread and runs the tail on the terminal reply. The typed
-                        # ApprovalRequired REPLACES the raw agent_event_from_sse passthrough
-                        # so the frame is emitted EXACTLY ONCE.
-                        #
-                        # Abandoning the half-consumed stream_deep_lead generator here is
-                        # INTENTIONAL and safe (unlike the drain-the-generator pattern at the
-                        # plan step above): stream_deep_agent_events has ALREADY returned after
-                        # the approval_needed frame (nothing left to drain), and stream_deep_lead
-                        # set its own paused=True before yielding, so its `if not paused:
-                        # reap_thread` never runs — the paused checkpoint is preserved for resume.
-                        if frame.get("event") == "approval_needed":
-                            yield ApprovalRequired(
-                                approval_id=frame.get("approval_id"),
-                                capability=frame.get("capability"),
-                                risk_level=frame.get("risk_level"),
-                                thread_id=frame.get("thread_id"),
-                            )
-                            return
-                        yield agent_event_from_sse(frame)
-                        if frame.get("event") == "agent_done":
-                            presenter_text = frame.get("text", "")
-                            # RE-HOME the presenter output (C-CORR2): stream_deep_lead emits
-                            # NO Presentation frame, so synthesize it here — else the reply is
-                            # never persisted (routes_chat persists only on Presentation) and
-                            # the chat bubble is empty. Keep presenter_text RAW for the shared
-                            # tail's surface extraction.
-                            yield Presentation(text=strip_surface_blocks(presenter_text))
+                        yield evt
+                    return
                 else:
                     # LEGACY per-step path — the existing body, moved UNCHANGED (indented one
                     # level). `step_outputs` is the narrow prior-context accumulator (agent
@@ -923,78 +705,23 @@ class ChatProcessor:
                                 # while keeping presenter_text raw for surface extraction.
                                 yield Presentation(text=strip_surface_blocks(presenter_text))
 
-                _fire_event(
-                    "run_completed",
-                    workspace_id=workspace_id,
+                # COMPLETION TAIL (legacy path) — the shared ``_emit_completion_tail``
+                # (run_completed → surface push → learner → shadow → RunCompleted). The
+                # single-lead path runs the SAME helper from inside the mixin; the resume
+                # path runs it with the learner/shadow disabled. ``agent_name`` may be None
+                # (empty step_routing) → the shadow guard skips, matching the pre-split code.
+                async for evt in self._emit_completion_tail(
+                    trace=trace,
+                    presenter_text=presenter_text,
                     user_id=user_id,
-                    run_id=None,
-                    payload={"trace_id": trace.trace_id},
-                )
-
-                # Push workspace surface (Presenter-driven). Keep presenter_text raw
-                # for extraction — it still carries the fenced surface blocks.
-                surface_id = None
-                try:
-                    surface_spec = extract_surface_spec(presenter_text)
-                    if surface_spec and surface_spec.should_surface:
-                        surface_id = await self._surfaces.push_presenter_surface(
-                            spec=surface_spec,
-                            user_id=user_id,
-                            workspace_id=workspace_id,
-                            run_id=None,
-                            response_text=presenter_text,
-                        )
-                except Exception:
-                    logger.warning("Surface push failed", exc_info=True)
-
-                # Interaction learning (async, non-blocking)
-                if self._interaction_learner:
-                    await self._ensure_learner_deps()
-                    self._spawn_background(
-                        self._interaction_learner.learn(
-                            user_id=user_id,
-                            workspace_id=workspace_id,
-                            user_message=message,
-                            agent_response=presenter_text,
-                            intent=intent,
-                            trace_id=trace.trace_id,
-                        )
-                    )
-
-                # Shadow-compare (Step 10B Task 3b, GUARDED for byte-neutrality): with the
-                # default shadow_sample_rate=0.0 this branch never runs, so NO extra
-                # background task is ever scheduled — the live path is byte-identical to
-                # before this wiring existed. write_intents=frozenset() on the
-                # authoritative side is a documented Phase-3 limitation: authoritative
-                # tool-intent capture (mirroring what _IntentRecordingShadowExecutor does
-                # for the shadow side) is a 10D enrichment, consistent with the plan's
-                # "no live verification-FN signal" scoping.
-                #
-                # The class-level ``_shadow_runner = None`` default lets ``__new__``-built
-                # harnesses read the attribute directly (no getattr). ``_shadow_compare_enabled``
-                # (rather than a direct ``> 0``) is still needed: several pre-existing harnesses
-                # build ``settings`` as a bare ``MagicMock()`` (predating this field), whose
-                # unconfigured rate attribute is not float-comparable — it must degrade to "off",
-                # never raise.
-                if (
-                    self._shadow_runner is not None
-                    and _shadow_compare_enabled(self._settings)
-                    and agent_name is not None
+                    workspace_id=workspace_id,
+                    message=message,
+                    intent=intent,
+                    agent_name=agent_name,
+                    run_learner=True,
+                    run_shadow=True,
                 ):
-                    auth_decision = ShadowDecision(
-                        route=agent_name, final_text=presenter_text, write_intents=frozenset()
-                    )
-                    self._spawn_background(
-                        self._shadow_runner.maybe_run_shadow(
-                            agent_name=agent_name,
-                            message=message,
-                            user_id=user_id,
-                            workspace_id=workspace_id,
-                            authoritative_decision=auth_decision,
-                        )
-                    )
-
-                yield RunCompleted(trace_id=trace.trace_id, run_id=None, surface_id=surface_id)
+                    yield evt
 
             except Exception as e:
                 logger.error("_process_core failed: %s", e, exc_info=True)
