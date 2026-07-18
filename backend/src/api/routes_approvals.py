@@ -109,6 +109,33 @@ async def list_approvals(
     ]
 
 
+def _guard_not_chat_approval(approval) -> None:
+    """Reject chat-turn approvals at the TOP of the autonomous decision endpoints (Sec-I2).
+
+    A chat single-lead approval (Step 10D P2.4) carries ``artifact_refs["chat"] is True`` and
+    is resumed via ``POST /v1/jarvis/chat/resume`` — NEVER these endpoints. Letting one flow
+    through here would (a) consume the ``pending`` status, so the paired ``/chat/resume`` turn
+    then refuses ``status != pending`` and strands an empty chat bubble, and (b) on reject,
+    feed ``record_approval_decision`` a chat decision that would pollute the autonomous
+    ``TrustState`` (chat is not trust-graduated). Called BEFORE any status mutation / trust
+    feedback so a mis-routed chat approval is a clean 409, no side effects. The WS decision
+    bridge delegates to these same handlers, so this covers that path too.
+
+    STRICT ``is True`` on a real ``dict`` (never a bare truthiness): the permission_gate
+    persists ``chat`` as the literal ``True``, and a strict check refuses to fire on a
+    non-dict ``artifact_refs`` (e.g. a bare ``MagicMock`` in autonomous-approval tests) —
+    fail-safe toward the AUTONOMOUS path, which is the untouched default.
+    """
+    refs = approval.artifact_refs
+    if isinstance(refs, dict) and refs.get("chat") is True:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This approval belongs to a chat turn; resume it via POST /v1/jarvis/chat/resume."
+            ),
+        )
+
+
 @router.post(
     "/v1/approvals/{approval_id}/approve",
     response_model=ApprovalResponse,
@@ -126,6 +153,7 @@ async def approve_action(
     approval = await _get_approval(
         db, approval_id, user_id, workspace_id, intended_action="approve"
     )
+    _guard_not_chat_approval(approval)
 
     # Idempotent: already approved — return without re-executing (T6)
     if approval.status == "approved":
@@ -375,6 +403,7 @@ async def reject_action(
 ):
     """Reject a pending action."""
     approval = await _get_approval(db, approval_id, user_id, workspace_id, intended_action="reject")
+    _guard_not_chat_approval(approval)
 
     # Idempotent: already rejected — return without re-executing (T6)
     if approval.status == "rejected":
