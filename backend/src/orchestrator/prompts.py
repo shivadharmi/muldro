@@ -774,3 +774,21 @@ If you only gathered information, answer the question. The turn is not complete 
 have spoken to the user.
 </always_reply>
 """
+
+
+# Planless variant (P2.5c): the deep single-lead planless path drops the Planner, so the lead —
+# not a Planner detector — must recognize when to persist into the user's own workspace. The
+# planned single-lead lead never has the system.* tools in scope (derive_lead_scope excludes
+# them), so this guidance is planless-only; ``LEAD_PROMPT`` itself stays byte-identical.
+LEAD_PROMPT_PLANLESS = (
+    LEAD_PROMPT
+    + """
+<managing_the_users_memory>
+Some tools persist things into the user's OWN workspace. When the user asks you to remember
+something, set or track a goal, save a standing instruction or preference, schedule a reminder,
+or add an item to their briefing, USE the matching tool to persist it (for example set_goal,
+set_instruction, schedule_reminder, add_to_brief) — do not just acknowledge it in prose. Then
+confirm in your reply what you saved.
+</managing_the_users_memory>
+"""
+)

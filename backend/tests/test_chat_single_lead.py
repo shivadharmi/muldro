@@ -734,3 +734,162 @@ async def test_chat_request_permission_mode_default_is_non_bypass():
     # Independent of the legacy mode slot.
     req2 = ChatRequest(message="hi", mode="execute")
     assert req2.permission_mode == "auto"
+
+
+# ── P2.5c: planless reroute (JARVIS_CHAT_PLANLESS) ──────────────────────────────────────
+#
+# When chat_planless is ON and the single-lead path is already active, _process_core drops
+# the Planner entirely and routes the turn through ONE connector-scoped lead. Flag-OFF must
+# be byte-identical (the existing tests above, all with chat_planless=False via
+# make_mock_settings, already pin that). These pin the flag-ON behavior.
+
+
+def _planless_patches(*, allow_bypass: bool = True):
+    """Patch the plan-machinery seams as ``assert-not-called`` sentinels — the planless path
+    must touch NONE of them — plus the bypass entitlement helper (True by default)."""
+    return {
+        "classify_intent": patch(
+            f"{_MOD}.classify_intent", new=AsyncMock(return_value=("x", 0.9, []))
+        ),
+        "extract_plan": patch(f"{_MOD}.extract_plan", new=MagicMock()),
+        "intent_to_plan": patch(f"{_MOD}.intent_to_plan", new=MagicMock()),
+        "resolve_plan_routing": patch(
+            f"{_MOD}.resolve_plan_routing", new=AsyncMock(return_value=([], []))
+        ),
+        "workspace_allows_bypass": patch(
+            f"{_MOD}.workspace_allows_bypass", new=AsyncMock(return_value=allow_bypass)
+        ),
+    }
+
+
+def _make_planless_chat(**overrides):
+    chat, rec = _make_chat(
+        settings_overrides={"deep_single_lead": True, "chat_planless": True, **overrides}
+    )
+    # _make_chat only wires build_chat_lead; the planless path uses build_planless_lead.
+    chat._invoker.build_planless_lead = AsyncMock(return_value=chat._fake_lead)
+    return chat, rec
+
+
+async def test_planless_drops_the_planner_entirely():
+    """Flag ON + single-lead active → NONE of the plan machinery runs, no PlanReady, the lead
+    is built from connectors (build_planless_lead), and the turn still replies + completes."""
+    chat, rec = _make_planless_chat()
+    p = _planless_patches()
+    mocks = {k: v.start() for k, v in p.items()}
+    try:
+        stream = await _run_stream(chat, permission_mode="bypass")
+    finally:
+        for v in p.values():
+            v.stop()
+
+    # The Planner + fast-path + routing seams were NEVER touched.
+    mocks["classify_intent"].assert_not_called()
+    mocks["extract_plan"].assert_not_called()
+    mocks["intent_to_plan"].assert_not_called()
+    mocks["resolve_plan_routing"].assert_not_called()
+    # The planned build_chat_lead was NOT used; the planless one WAS.
+    chat._invoker.build_planless_lead.assert_awaited_once_with("usr_1", "ws_1")
+    chat._invoker.build_chat_lead.assert_not_awaited()
+    # No PlanReady in the SSE stream; exactly the re-homed lead reply; terminal done.
+    assert "plan" not in _events(stream)
+    assert _responses(stream) == ["LEAD_REPLY"]
+    assert _events(stream)[-1] == "done"
+
+
+async def test_planless_logs_interaction_without_a_plan():
+    """The planless turn still logs the interaction (audit) — with plan=None, intent=None."""
+    chat, rec = _make_planless_chat()
+    p = _planless_patches()
+    for v in p.values():
+        v.start()
+    try:
+        stream = await _run_stream(chat, permission_mode="bypass")
+    finally:
+        for v in p.values():
+            v.stop()
+
+    chat._plans.log_interaction.assert_awaited_once()
+    kwargs = chat._plans.log_interaction.await_args.kwargs
+    assert kwargs["plan"] is None
+    assert kwargs["intent"] is None
+    # The turn still reached its terminal reply (InteractionLogged is batch-only, not in SSE).
+    assert _events(stream)[-1] == "done"
+
+
+async def test_planless_no_system_pre_run_no_user_actions():
+    """Planless drops the deterministic system.* pre-run (the lead calls its own tools) AND
+    UserActionsReady (no plan → no user steps)."""
+    chat, rec = _make_planless_chat()
+    p = _planless_patches()
+    for v in p.values():
+        v.start()
+    try:
+        stream = await _run_stream(chat, permission_mode="bypass")
+    finally:
+        for v in p.values():
+            v.stop()
+
+    chat._system_capability_handler.handle_system_capability.assert_not_awaited()
+    assert "user_actions" not in _events(stream)
+
+
+async def test_planless_flag_off_still_runs_the_planner():
+    """Flag OFF (chat_planless=False) with the SAME single-lead activation → the Planner path
+    runs exactly as today (byte-identical): classify_intent IS called and the planless lead is
+    never built."""
+    chat, rec = _make_chat(settings_overrides={"deep_single_lead": True})  # chat_planless=False
+    chat._invoker.build_planless_lead = AsyncMock(return_value=chat._fake_lead)
+    plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
+    ctx = _patches(plan, [], [])
+    started = [c.start() for c in ctx]
+    try:
+        await _run_stream(chat, permission_mode="bypass")
+    finally:
+        for c in ctx:
+            c.stop()
+
+    started[0].assert_awaited()  # classify_intent WAS called on the flag-off path
+    chat._invoker.build_planless_lead.assert_not_awaited()  # planless never entered
+
+
+async def test_planless_not_taken_when_runtime_not_deep():
+    """Flag ON but the single-lead path is NOT active (runtime != deep) → planless is NOT
+    entered; control falls through to the legacy Planner flow (classify_intent runs)."""
+    chat, rec = _make_chat(
+        settings_overrides={"deep_single_lead": True, "chat_planless": True},
+        runtime="legacy",
+    )
+    chat._invoker.build_planless_lead = AsyncMock(return_value=chat._fake_lead)
+    plan = PlanOutput(goal="g", reasoning="r", steps=[_step("s1", "respond")])
+    ctx = _patches(plan, [], [])
+    started = [c.start() for c in ctx]
+    try:
+        await _run_stream(chat, permission_mode="bypass")
+    finally:
+        for c in ctx:
+            c.stop()
+
+    chat._invoker.build_planless_lead.assert_not_awaited()  # planless gate did not fire
+    started[0].assert_awaited()  # fell through to classify_intent
+
+
+async def test_planless_entered_in_auto_mode_not_bypass_only():
+    """The planless gate matches ALL single-lead modes, not just bypass: an `auto`-mode turn
+    (durable checkpointer present) is routed planless too, with permission_mode threaded into
+    the shared stream so ask/auto action-time gating still applies."""
+    chat, rec = _make_planless_chat()  # durable=True by default → auto not downgraded
+    p = _planless_patches()
+    for v in p.values():
+        v.start()
+    try:
+        stream = await _run_stream(chat, permission_mode="auto")
+    finally:
+        for v in p.values():
+            v.stop()
+
+    chat._invoker.build_planless_lead.assert_awaited_once_with("usr_1", "ws_1")
+    # permission_mode="auto" was threaded through to the deep stream (gate stays live).
+    assert rec.lead_calls and rec.lead_calls[0]["permission_mode"] == "auto"
+    assert _responses(stream) == ["LEAD_REPLY"]
+    assert _events(stream)[-1] == "done"

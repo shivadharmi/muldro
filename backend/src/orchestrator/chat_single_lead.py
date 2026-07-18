@@ -30,6 +30,7 @@ from src.middleware.observability import get_correlation_id
 from src.orchestrator.core_events import (
     ApprovalRequired,
     CoreEvent,
+    InteractionLogged,
     Presentation,
     RunCompleted,
     RunFailed,
@@ -212,10 +213,9 @@ class _ChatSingleLeadMixin:
                     {"description": s.description, "context": s.user_context} for s in user_steps
                 ]
             )
-        # (c) build the lead (plan-union scope) + assemble its ambient context, stream it,
-        # and RE-HOME the reply. The RAW user `message` is the human turn; history + plan
-        # summary go into the system `context_block`.
-        presenter_text = ""
+        # (c) build the lead (plan-union scope) + assemble its ambient context, then stream +
+        # re-home + tail via the shared seam. The RAW user `message` is the human turn; history
+        # + plan summary go into the system `context_block`.
         lead = await self._invoker.build_chat_lead(plan.steps, workspace_id)
         lead_ctx = await self._context.assemble_context(
             "lead", message, user_id=user_id, workspace_id=workspace_id
@@ -224,6 +224,38 @@ class _ChatSingleLeadMixin:
         if plan.goal or plan.reasoning:
             parts.append(f"[Plan]\nGoal: {plan.goal}\nReasoning: {plan.reasoning}")
         context_block = "\n\n".join(parts)
+        async for evt in self._stream_lead_and_complete(
+            lead=lead,
+            message=message,
+            context_block=context_block,
+            intent=intent,
+            trace=trace,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            effective_mode=effective_mode,
+        ):
+            yield evt
+
+    async def _stream_lead_and_complete(
+        self,
+        *,
+        lead,
+        message: str,
+        context_block: str,
+        intent: str | None,
+        trace,
+        user_id: str,
+        workspace_id: str,
+        effective_mode: str,
+    ) -> AsyncGenerator[CoreEvent, None]:
+        """Stream a built lead, handle the pause seam, re-home the reply, and run the completion
+        tail. Shared verbatim by the planned (:meth:`_run_single_lead`) and planless
+        (:meth:`_run_single_lead_planless`) single-lead paths — the ONLY difference between them
+        is how the lead + ``context_block`` are built, so that setup stays in each caller and this
+        streaming/pause/tail seam lives here once (mirrors how ``_emit_completion_tail`` folds the
+        tail). ``agent_name`` is always None on the single-lead path (no per-step agent → shadow
+        skipped by its own guard)."""
+        presenter_text = ""
         async for frame in self._invoker.stream_deep_lead(
             lead,
             message=message,
@@ -277,6 +309,78 @@ class _ChatSingleLeadMixin:
             agent_name=None,
             run_learner=True,
             run_shadow=True,
+        ):
+            yield evt
+
+    async def _run_single_lead_planless(
+        self,
+        *,
+        message: str,
+        history_block: str,
+        trace,
+        user_id: str,
+        workspace_id: str,
+        effective_mode: str,
+        conversation_id: str | None = None,
+    ) -> AsyncGenerator[CoreEvent, None]:
+        """The PLANLESS deep single-lead chat BRANCH (P2.5c) — the Planner never ran.
+
+        Where :meth:`_run_single_lead` receives a ``plan`` (plan-union scope + deterministic
+        system.* pre-run + user actions), this path has NO plan: it logs the interaction with
+        ``plan=None``, builds ONE lead whose ``capability_scope`` comes from the user's
+        authenticated connectors (:meth:`AgentInvoker.build_planless_lead` →
+        ``resolve_connector_scope``), and routes the WHOLE turn through it. The lead self-plans
+        (write_todos + tool discovery) and calls its own ``system.*`` tools (set_goal / … ) rather
+        than a deterministic pre-run. Reuses the shared stream/pause/tail seam
+        (:meth:`_stream_lead_and_complete`) verbatim, so the reply / surface / learner / pause
+        semantics are identical to the planned path.
+
+        Dropped vs the planned path (by design, D2/D4): classify_intent, the fast-path, the
+        Planner, ``PlanReady``, ``resolve_plan_routing``, the deterministic ``system.*`` pre-run,
+        and ``UserActionsReady``. ``intent`` is None (never classified). Only reached when
+        ``settings.chat_planless`` is on AND the single-lead path is already active — so the
+        flag-off path is byte-identical (this method is never entered).
+
+        SECURITY NOTE (write safety unchanged; one deliberate scope-width delta): dropping the
+        Planner removes ZERO write GATES — every connector write is still gated by
+        ``capability_scope`` (fail-closed) + ``permission_gate`` (ask/auto action-time confirm) +
+        ``write_lock``, and ``system.*`` stay ALWAYS-ALLOWED (D5). The Planner was never a gate,
+        but it DID incidentally NARROW the per-turn scope to user-implied capabilities; the
+        planless lead instead carries a STANDING connector scope (every active+healthy connector's
+        caps). In ``ask``/``auto`` (the default) this is fully gated — every connector write
+        confirms. In ``bypass`` (permission_gate is a no-op, an explicit entitlement-gated
+        opt-out) the wider standing scope means more connector writes are reachable ungated from
+        perception-sourced ``history_block`` content — an EXPANSION of the already-tracked
+        perception-injection latent enhancement (CLAUDE.md "Two execution paths"), scoped to
+        bypass. Bounded by: bypass requires workspace entitlement, and ``can_pause=False``
+        autonomous/perception turns never reach this path (they stay on the gated GraphExecutor)."""
+        ilog_id = await self._plans.log_interaction(
+            user_id,
+            workspace_id,
+            trace.trace_id,
+            message_preview=message[:500],
+            intent=None,
+            plan=None,
+            conversation_id=conversation_id,
+        )
+        yield InteractionLogged(interaction_id=ilog_id)
+
+        # Build the lead from the connector-derived scope (NOT a plan). Its ambient context is
+        # the assembled lead context + history — no plan goal/reasoning block (there is no plan).
+        lead = await self._invoker.build_planless_lead(user_id, workspace_id)
+        lead_ctx = await self._context.assemble_context(
+            "lead", message, user_id=user_id, workspace_id=workspace_id
+        )
+        context_block = "\n\n".join(p for p in (lead_ctx, history_block) if p)
+        async for evt in self._stream_lead_and_complete(
+            lead=lead,
+            message=message,
+            context_block=context_block,
+            intent=None,
+            trace=trace,
+            user_id=user_id,
+            workspace_id=workspace_id,
+            effective_mode=effective_mode,
         ):
             yield evt
 

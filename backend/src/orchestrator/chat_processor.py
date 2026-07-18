@@ -341,6 +341,50 @@ class ChatProcessor(_ChatSingleLeadMixin):
             if sse is not None:
                 yield sse
 
+    async def _resolve_effective_mode(
+        self, permission_mode: str, can_pause: bool, workspace_id: str
+    ) -> str | None:
+        """Resolve the EFFECTIVE permission mode for the deep single-lead chat path, applying
+        FAIL-SAFE downgrades. Returns ``bypass`` / ``ask`` / ``auto`` when the single-lead path
+        should be taken, else ``None`` (legacy path). SECURITY — this decides whether/how a write
+        is gated.
+
+        ``self._settings.deep_single_lead`` (a cheap bool, OFF in prod) is checked FIRST so the
+        default legacy path does ZERO extra work — no ``effective_chat_runtime()`` Redis
+        round-trip, no entitlement / checkpointer read — keeping it byte-identical. ``can_pause``
+        is False on the batch / scheduled path (no synchronous user to confirm a pause), so the
+        whole single-lead path (INCLUDING bypass) is only ever taken on the streaming entries.
+        ``permission_mode`` is an INDEPENDENT field, never derived from the legacy ``mode`` slot.
+
+        Downgrades are fail-safe ONLY (never escalate authority):
+          * bypass on a workspace that has not opted in  → auto
+          * ask/auto with no durable checkpointer to resume a pause → legacy (None)
+        """
+        effective_mode: str | None = None
+        if (
+            self._settings.deep_single_lead
+            and can_pause
+            and permission_mode in ("bypass", "ask", "auto")
+            and await self._invoker.effective_chat_runtime() == "deep"
+        ):
+            effective_mode = permission_mode
+            if effective_mode == "bypass" and not await workspace_allows_bypass(
+                self._db_factory, workspace_id
+            ):
+                logger.warning(
+                    "workspace %s not entitled for bypass — downgrading to auto",
+                    workspace_id,
+                )
+                effective_mode = "auto"
+            needs_durable = effective_mode in ("ask", "auto")
+            if needs_durable and not self._invoker.has_durable_checkpointer():
+                logger.warning(
+                    "no durable checkpointer — chat permission gate cannot resume a "
+                    "pause; falling back to the legacy path"
+                )
+                effective_mode = None
+        return effective_mode
+
     async def _process_core(
         self,
         message: str,
@@ -386,6 +430,32 @@ class ChatProcessor(_ChatSingleLeadMixin):
                 history_block = await self._context.load_conversation_history(
                     conversation_id, user_id=user_id
                 )
+
+                # P2.5c planless reroute: when the flag is on AND the deep single-lead path is
+                # already active, DROP the Planner entirely — skip classify_intent, the fast-path,
+                # the Planner call, the Plan record, PlanReady, resolve_plan_routing, and
+                # UserActionsReady — and route the whole turn through ONE connector-scoped lead
+                # (which self-plans + calls its own system.* tools). `self._settings.chat_planless`
+                # (a cheap bool, OFF by default) short-circuits FIRST so the flag-off path is
+                # byte-identical: this whole block is skipped and control falls through to the
+                # classify_intent + Planner flow below. The single-lead entry check reuses the SAME
+                # `_resolve_effective_mode` the planned path uses at its own site below.
+                if self._settings.chat_planless:
+                    effective_mode = await self._resolve_effective_mode(
+                        permission_mode, can_pause, workspace_id
+                    )
+                    if effective_mode in ("bypass", "ask", "auto"):
+                        async for evt in self._run_single_lead_planless(
+                            message=message,
+                            history_block=history_block,
+                            trace=trace,
+                            user_id=user_id,
+                            workspace_id=workspace_id,
+                            effective_mode=effective_mode,
+                            conversation_id=conversation_id,
+                        ):
+                            yield evt
+                        return
 
                 # Step 0: Fast intent classification
                 intent, confidence, sources = await classify_intent(
@@ -518,45 +588,14 @@ class ChatProcessor(_ChatSingleLeadMixin):
                 presenter_text = ""
                 agent_name: str | None = None
 
-                # Step 10D P2.3 (chat permission model): resolve the EFFECTIVE permission
-                # mode for the deep single-lead chat path, applying FAIL-SAFE downgrades.
-                # SECURITY — this decides whether/how a write is gated.
-                #
-                # `self._settings.deep_single_lead` (a cheap bool, OFF in prod) is checked
-                # FIRST so the default legacy path does ZERO extra work — no
-                # effective_chat_runtime() Redis round-trip, no entitlement / checkpointer
-                # read — keeping it byte-identical. `can_pause` is False on the batch /
-                # scheduled path (no synchronous user to confirm a pause), so the whole
-                # single-lead path (INCLUDING bypass) is only ever taken on the streaming
-                # entries. `permission_mode` is an INDEPENDENT field, never derived from
-                # the legacy `mode` slot.
-                #
-                # Downgrades are fail-safe ONLY (never escalate authority):
-                #   * bypass on a workspace that has not opted in  → auto
-                #   * ask/auto with no durable checkpointer to resume a pause → legacy
-                effective_mode: str | None = None
-                if (
-                    self._settings.deep_single_lead
-                    and can_pause
-                    and permission_mode in ("bypass", "ask", "auto")
-                    and await self._invoker.effective_chat_runtime() == "deep"
-                ):
-                    effective_mode = permission_mode
-                    if effective_mode == "bypass" and not await workspace_allows_bypass(
-                        self._db_factory, workspace_id
-                    ):
-                        logger.warning(
-                            "workspace %s not entitled for bypass — downgrading to auto",
-                            workspace_id,
-                        )
-                        effective_mode = "auto"
-                    needs_durable = effective_mode in ("ask", "auto")
-                    if needs_durable and not self._invoker.has_durable_checkpointer():
-                        logger.warning(
-                            "no durable checkpointer — chat permission gate cannot resume a "
-                            "pause; falling back to the legacy path"
-                        )
-                        effective_mode = None
+                # Step 10D P2.3 (chat permission model): resolve the EFFECTIVE permission mode
+                # for the deep single-lead chat path (fail-safe downgrades). SECURITY — this
+                # decides whether/how a write is gated. Extracted to `_resolve_effective_mode`
+                # so the P2.5c planless early-gate can reuse the SAME resolution before the
+                # plan machinery, without duplicating the downgrade logic.
+                effective_mode = await self._resolve_effective_mode(
+                    permission_mode, can_pause, workspace_id
+                )
 
                 # The deep single-lead chat path (P2.3): taken for the resolved effective mode
                 # (bypass/ask/auto). Same safety posture as today's ungated chat, plus the

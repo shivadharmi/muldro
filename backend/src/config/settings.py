@@ -202,6 +202,14 @@ class Settings(BaseSettings):
     # Off by default — dormant until the 5b chat wiring lands and this flag is flipped.
     deep_single_lead: bool = False  # JARVIS_DEEP_SINGLE_LEAD
 
+    # Step 10D P2.5c: drop the Planner from the deep chat single-lead path. When True (and only
+    # when the single-lead path is already active — deep_single_lead + runtime=="deep" +
+    # permission_mode), a chat turn skips classify_intent + fast-path + Planner + plan record +
+    # resolve_plan_routing entirely and builds ONE lead from the connector-derived scope
+    # (resolve_connector_scope). Off by default — dormant; flag-off is byte-identical (Planner
+    # still called). Gates ONLY the P2.5c reroute, independently of deep_single_lead.
+    chat_planless: bool = False  # JARVIS_CHAT_PLANLESS
+
     # Step 10B Task 3b: fraction of chat turns (0.0-1.0) that ALSO run a
     # NON-authoritative shadow turn on the opposite runtime, for the cutover
     # control-plane's shadow-compare harness (ShadowRunner). Default 0.0 = off —

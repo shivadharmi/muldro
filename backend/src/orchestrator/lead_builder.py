@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from src.contracts import PlanStep
 from src.orchestrator.agents import SubAgent, ThinkingConfig, apply_cheap_mode
-from src.orchestrator.prompts import LEAD_PROMPT
+from src.orchestrator.prompts import LEAD_PROMPT, LEAD_PROMPT_PLANLESS
 from src.services.capability_resolver import CapabilityResolver
 
 # Capabilities that contribute NO tool authority to the lead (handled without external tools).
@@ -50,10 +50,10 @@ async def derive_lead_scope(
     return scope
 
 
-def _make_lead(scope: set[str], cheap_mode: bool) -> SubAgent:
+def _make_lead(scope: set[str], cheap_mode: bool, prompt: str = LEAD_PROMPT) -> SubAgent:
     lead = SubAgent(
         name="lead",
-        prompt=LEAD_PROMPT,
+        prompt=prompt,
         model_tier="sonnet",  # A-5 locked: sonnet lead tier (revisit opus-for-critical later)
         capability_scope=scope,
         max_tokens=4096,
@@ -61,6 +61,15 @@ def _make_lead(scope: set[str], cheap_mode: bool) -> SubAgent:
         thinking=ThinkingConfig(enabled=True, budget_tokens=4096),  # tunable at R2 activation
     )
     return apply_cheap_mode(lead) if cheap_mode else lead
+
+
+def build_chat_lead_planless(scope, cheap_mode: bool) -> SubAgent:
+    """Build the planless single-lead SubAgent (P2.5c) from a precomputed connector-derived
+    ``scope`` (``resolve_connector_scope``) — NOT a plan. Reuses ``_make_lead`` with the planless
+    prompt (the lead self-plans + calls its system.* tools; no Planner). ``scope`` is a frozenset;
+    coerce to ``set`` for SubAgent's set-typed ``capability_scope`` field. Fail-closed by
+    construction: the lead can only call in-scope tools (capability_scope middleware)."""
+    return _make_lead(set(scope), cheap_mode, prompt=LEAD_PROMPT_PLANLESS)
 
 
 async def build_chat_lead(

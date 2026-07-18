@@ -86,6 +86,10 @@ def make_mock_settings(**overrides) -> MagicMock:
         # Step 10D A-5: MagicMock unset bool is truthy — would flip the single-lead path ON
         # for every runtime="deep" test. Mirror the real Settings default (False).
         deep_single_lead=False,
+        # Step 10D P2.5c: MagicMock unset bool is truthy — would flip the planless reroute ON
+        # for every test, firing the early planless gate in _process_core and skipping the
+        # Planner. Mirror the real Settings default (False) so the flag-off path stays exercised.
+        chat_planless=False,
         # Step-10A A3: MagicMock unset bool is truthy — would flip the fail-closed write lock
         # ON for every test that builds the lock wrapper from a mock Settings. Mirror the real
         # default (False = fail-open).

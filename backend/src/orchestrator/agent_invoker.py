@@ -904,6 +904,21 @@ class AgentInvoker:
             self._db_factory, workspace_id, steps, self._agents, self._settings.cheap_mode
         )
 
+    async def build_planless_lead(self, user_id: str, workspace_id: str) -> SubAgent:
+        """Build the PLANLESS single-lead SubAgent (P2.5c) — no plan, no Planner.
+
+        Opens a DB session, derives the capability_scope from the user's authenticated connectors
+        (``resolve_connector_scope`` = internal-read floor ∪ system.* caps ∪ active+healthy
+        connector caps), and builds the lead via ``build_chat_lead_planless``. Fail-closed +
+        connector-bounded by construction (see connector_scope / lead_builder). Mirrors
+        ``build_chat_lead`` but sources scope from connectors instead of a plan's steps."""
+        from src.orchestrator.connector_scope import resolve_connector_scope
+        from src.orchestrator.lead_builder import build_chat_lead_planless
+
+        async with self._db_factory() as db:
+            scope = await resolve_connector_scope(user_id, workspace_id, db)
+        return build_chat_lead_planless(scope, self._settings.cheap_mode)
+
     async def _stream_and_reap(
         self,
         deep_agent,
