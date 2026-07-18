@@ -54,6 +54,9 @@ def _make_invoker_with_approval(approval) -> AgentInvoker:
     fake_db = MagicMock(name="fake-db")
     fake_db.get = AsyncMock(return_value=approval)
     fake_db.commit = AsyncMock()
+    # I1 atomic flip: resume_deep_turn consumes the pending approval via a conditional
+    # UPDATE (``_cas_flip_pending``). rowcount=1 = THIS resume won the flip (happy path).
+    fake_db.execute = AsyncMock(return_value=SimpleNamespace(rowcount=1))
 
     @asynccontextmanager
     async def _db_factory():

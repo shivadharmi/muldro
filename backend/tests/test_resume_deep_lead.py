@@ -110,6 +110,10 @@ def _make_lead_invoker(approval):
     fake_db = MagicMock(name="fake-db")
     fake_db.get = AsyncMock(return_value=approval)
     fake_db.commit = AsyncMock()
+    # I1 atomic flip: resume_deep_lead consumes the pending approval via a conditional
+    # UPDATE (``_cas_flip_pending``). rowcount=1 = THIS resume won the flip (the default
+    # happy path); a lost-race test overrides this to rowcount=0.
+    fake_db.execute = AsyncMock(return_value=SimpleNamespace(rowcount=1))
 
     @asynccontextmanager
     async def _db_factory():
@@ -341,6 +345,32 @@ async def test_reject_persists_reason_and_no_decision_type():
     assert approval.decision_reason == "no thanks"
     # decision_type is stamped only on approve (mirrors routes_approvals A-7).
     assert "decision_type" not in approval.artifact_refs
+
+
+# ── unit: I1 atomic-flip lost-race (double resume) ───────────────────────────────
+
+
+async def test_lost_cas_race_yields_not_pending_and_never_streams():
+    """I1: two concurrent resumes both pass the advisory read-side pending check, but the
+    conditional-UPDATE CAS lets only ONE win. The loser (``rowcount 0``) yields 'approval
+    not pending' and NEVER rebuilds/streams the agent — so the paused write replays exactly
+    once, never twice."""
+    approval = _fake_lead_approval()
+    inv, fake_db = _make_lead_invoker(approval)
+    # This resume LOST the race: the conditional UPDATE matched 0 rows (a concurrent resume
+    # already consumed the pending approval).
+    fake_db.execute = AsyncMock(return_value=SimpleNamespace(rowcount=0))
+    build_spy = AsyncMock(return_value=MagicMock())
+    inv._build_deep_agent_for = build_spy
+    with patch(f"{INVOKER_MODULE}.stream_deep_agent_events", _empty_stream):
+        frames = await _drive(inv, decision="approve")
+
+    assert any(
+        f["event"] == "error" and f.get("message") == "approval not pending" for f in frames
+    ), f"frames={frames}"
+    # The agent is NEVER rebuilt (the CAS aborts before _build_deep_agent_for) → no stream.
+    build_spy.assert_not_awaited()
+    fake_db.execute.assert_awaited_once()
 
 
 async def test_resume_streams_command_and_thread_id():

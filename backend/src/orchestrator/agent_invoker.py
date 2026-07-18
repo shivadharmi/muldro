@@ -21,6 +21,7 @@ from typing import Any
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.types import Command
+from sqlalchemy import update
 
 from src.config.models import BEDROCK_MODEL_TIERS, MODEL_TIERS
 from src.config.settings import Settings
@@ -1046,6 +1047,29 @@ class AgentInvoker:
             return None, {"event": "error", "message": "approval not found"}
         return approval, None
 
+    async def _cas_flip_pending(self, db, approval_id: str, values: dict) -> bool:
+        """Atomically consume a PENDING approval (I1). A conditional
+        ``UPDATE approvals SET … WHERE approval_id=:id AND status='pending'`` +
+        ``commit``; returns True iff THIS caller won the flip (``rowcount == 1``).
+
+        The read-side ``status != "pending"`` check in ``_load_pending_approval`` is
+        ADVISORY only — two concurrent resumes (a double-click, or approve racing reject)
+        can BOTH pass it before either flips. This CAS is the authoritative interlock:
+        Postgres serializes the two conditional UPDATEs on the row lock, so the loser
+        re-evaluates ``status='pending'`` against the already-decided row → matches 0 rows
+        → ``rowcount 0`` → False. The caller then yields "approval not pending" and aborts
+        WITHOUT streaming, so the paused write is replayed exactly once (never twice).
+        Shared by ``resume_deep_turn`` (autonomous per-step lead) and ``resume_deep_lead``
+        (chat single-lead); each builds its own ``values`` so its field-set is preserved.
+        """
+        result = await db.execute(
+            update(Approval)
+            .where(Approval.approval_id == approval_id, Approval.status == "pending")
+            .values(**values)
+        )
+        await db.commit()
+        return result.rowcount == 1
+
     async def resume_deep_turn(
         self, *, approval_id: str, decision: str, user_id: str, workspace_id: str
     ) -> AsyncGenerator[dict[str, Any], None]:
@@ -1089,10 +1113,23 @@ class AgentInvoker:
             if agent is None:
                 yield {"event": "error", "message": f"Unknown agent: {agent_name}"}
                 return
-            approval.status = "approved" if decision == "approve" else "rejected"
-            approval.decided_at = datetime.now(timezone.utc)
+            # I1: atomic compare-and-swap flip (closes the double-resume TOCTOU). The
+            # read-side pending check above is advisory; only ONE concurrent resume wins
+            # this conditional UPDATE.
+            now = datetime.now(timezone.utc)
+            new_status = "approved" if decision == "approve" else "rejected"
+            if not await self._cas_flip_pending(
+                db,
+                approval_id,
+                {"status": new_status, "decided_at": now, "approved_by": user_id},
+            ):
+                yield {"event": "error", "message": "approval not pending"}
+                return
+            # Keep the loaded row consistent with the committed CAS (the bulk UPDATE does
+            # not touch the in-memory object).
+            approval.status = new_status
+            approval.decided_at = now
             approval.approved_by = user_id
-            await db.commit()
 
         model = self.get_model_for_agent(agent)
         tools = await self._resolve_tools(agent, workspace_id, None)
@@ -1211,19 +1248,38 @@ class AgentInvoker:
                 resume_mode = "ask"
             # Flip + persist BEFORE streaming so the replayed gate reads the decided row (the
             # permission_gate's CF-2 replay branch quotes decision_reason on reject).
-            approval.status = "approved" if decision == "approve" else "rejected"
-            approval.decided_at = datetime.now(timezone.utc)
-            approval.approved_by = user_id
-            approval.decision_reason = reason
+            #
+            # I1: atomic compare-and-swap flip (closes the double-resume TOCTOU). The
+            # read-side pending check in _load_pending_approval is advisory; only ONE
+            # concurrent resume wins this conditional UPDATE. The loser aborts here WITHOUT
+            # streaming, so the paused write replays exactly once.
+            now = datetime.now(timezone.utc)
+            new_status = "approved" if decision == "approve" else "rejected"
+            values: dict[str, Any] = {
+                "status": new_status,
+                "decided_at": now,
+                "approved_by": user_id,
+                "decision_reason": reason,
+            }
             if decision == "approve":
                 # A-7 convention (routes_approvals): a reason on an approve = a "modified"
                 # decision, else a plain "approved". Stamped so the verified-outcome hook can
                 # use it (parity with the click-through approve path).
-                approval.artifact_refs = {
+                values["artifact_refs"] = {
                     **refs,
                     "decision_type": "modified" if reason else "approved",
                 }
-            await db.commit()
+            if not await self._cas_flip_pending(db, approval_id, values):
+                yield {"event": "error", "message": "approval not pending"}
+                return
+            # Keep the loaded row consistent with the committed CAS (the bulk UPDATE does not
+            # touch the in-memory object); downstream + the replayed gate read the decided row.
+            approval.status = new_status
+            approval.decided_at = now
+            approval.approved_by = user_id
+            approval.decision_reason = reason
+            if decision == "approve":
+                approval.artifact_refs = values["artifact_refs"]
 
         model = self.get_model_for_agent(lead)
         tools = await self._resolve_tools(lead, workspace_id, None)
