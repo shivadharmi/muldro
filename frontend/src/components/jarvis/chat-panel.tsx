@@ -1,9 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, streamChat, streamResume, type ChatSSEEvent, type ConversationMessage, type PlanOutput } from "@/lib/api";
+import { ApiError, streamChat, streamResume, fetchWorkspaceDefaultPermissionMode, type ChatSSEEvent, type ConversationMessage, type PlanOutput } from "@/lib/api";
 import { formatApiError, parseSseError } from "@/lib/api-error";
-import { useCommandStore } from "@/stores/command-store";
+import { useCommandStore, type PermissionMode } from "@/stores/command-store";
 import { useShellStore } from "@/stores/shell-store";
 import { CommandInput } from "./command-input";
 import { MarkdownRenderer } from "./markdown-renderer";
@@ -185,6 +185,10 @@ function planToStepStates(msg: ChatMessage): StepState[] {
   });
 }
 
+// P3c: seed the permission-mode picker from the per-workspace default ONCE per app load, so a
+// remount never clobbers a user's deliberate mid-session change.
+let permissionSeeded = false;
+
 export function ChatPanel({
   conversationId,
   initialMessages,
@@ -221,6 +225,23 @@ export function ChatPanel({
     activeConvoRef.current = conversationId ?? null;
     useCommandStore.getState().setConversationId(conversationId ?? null);
   }, [conversationId]);
+
+  // P3c: seed the permission-mode picker from the per-workspace default (once per app load).
+  useEffect(() => {
+    if (permissionSeeded) return;
+    permissionSeeded = true;
+    let cancelled = false;
+    fetchWorkspaceDefaultPermissionMode()
+      .then((r) => {
+        if (!cancelled) {
+          useCommandStore.getState().setPermissionMode(r.default_permission_mode as PermissionMode);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Reset messages when conversation changes:
   // - sidebar selection: initialMessages populated → render them
