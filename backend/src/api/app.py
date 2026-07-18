@@ -38,6 +38,7 @@ from src.api.routes_traces import router as traces_router
 from src.api.routes_trust import router as trust_router
 from src.api.routes_ui import router as ui_router
 from src.api.routes_webhooks import router as webhooks_router
+from src.api.routes_workspace_settings import router as workspace_settings_router
 from src.api.routes_ws import router as ws_router
 from src.api.schemas import HealthResponse
 from src.config.settings import get_settings
@@ -502,6 +503,7 @@ def create_app() -> FastAPI:
 
     # Insight surfaces (dismiss + execute)
     app.include_router(insights_router, tags=["insights"])
+    app.include_router(workspace_settings_router, tags=["workspace-settings"])
 
     return app
 
