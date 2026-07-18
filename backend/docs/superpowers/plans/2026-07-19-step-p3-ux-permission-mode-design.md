@@ -3,9 +3,12 @@
 > Chat Permission Model, Phase 3 (the last phase before R1 + the Step-10 cutover).
 > Spec: `docs/superpowers/specs/2026-07-13-chat-permission-model.md` §6. Follows the P2.5 design
 > pass (`backend/docs/superpowers/plans/2026-07-18-step-p2.5-planless-design.md`). On
-> `rebuild/first-principles`. **STATUS: DESIGN (brainstorm-approved 2026-07-19). Not yet built.**
-> Baseline at design time: HEAD `03bd913`, single alembic head `1a2770a28c39`, non-e2e suite
-> 3669/18 green, ruff clean.
+> `rebuild/first-principles`. **STATUS: BUILT — all 12 tasks shipped 2026-07-19 (P3a `1394fe3`..`acbf46c`,
+> P3b `d5b9942`/`2b7ac46`, P3c `d08810a`..`097b20b`), plan `e250beb`. Final gate: backend 3688/18 green,
+> ruff clean, single alembic head `1a2770a28c39` (ZERO migrations), frontend 124 tests + build. NOT
+> pushed/merged. Per-phase security+quality reviews + a final holistic review all SHIP. See §8 for the
+> build record.** Baseline at design time: HEAD `03bd913`, single alembic head `1a2770a28c39`, non-e2e
+> suite 3669/18 green, ruff clean.
 
 ## 0. What settled the shape (grounded current-state, verified by name at design time)
 
@@ -240,3 +243,56 @@ Not pushed/merged.**
 - **`write_todos` frame shape** — re-verify at build that the `tool_call` frame's `input.todos`
   carries the full list each call (content + status) and that suppressing the generic chip for
   `write_todos` doesn't hide a needed `tool_result` error signal.
+
+## 8. Build record (COMPLETE — 2026-07-19)
+
+Built subagent-driven with context-economy: the main loop owned all hot-file mutation + verify +
+commit; grounding (3 read-only scouts + direct re-reads) and per-phase security+quality reviews
+delegated to read-only subagents. Full gate at every commit checkpoint; each phase committed green
+before the next. NOT pushed/merged. 12 commits `1394fe3`..`097b20b`.
+
+- **P3a (`1394fe3`/`bcbc390`/`fee91d2`/`acbf46c`)** — frontend-only inline `write_todos` checklist.
+  `todosFromToolCall` pure helper + `ChatTodos` component + chat-panel interception. **Verified at
+  build:** BOTH `tool_call` and `tool_result` frames carry `event.tool` (`stream_adapter.py:199/228`),
+  so the interception is unambiguous and never misattaches a `write_todos` result to another chip —
+  which kept P3a frontend-only (a missing `tool` field would have forced a backend change). Content is
+  a React-escaped text child (no XSS). Reviews: security SHIP, quality APPROVED (2 nits applied — drop
+  a redundant cast, +1 non-array test).
+- **P3b (`d5b9942`/`2b7ac46`)** — retire `mode` → `permission_mode`. Backend drops `mode` from
+  `ChatRequest` and forwards a fixed `mode="ask"` (matches the prior default, pinned callers
+  byte-identical). Frontend swap was **ATOMIC (one commit)** — the store rename breaks every consumer,
+  and the pre-commit full-project `tsc` gate requires a type-clean tree, so the plan's 3-commit split
+  collapsed to one. The **build (not grep) caught a 6th bare-`mode` site** (a `command-composer`
+  placeholder) that a `\.mode\b` sweep missed — a rename is only done when the type-checker agrees.
+  Reviews: security SHIP (pinned callers + ungated-legacy verified), quality APPROVED.
+- **P3c (`d08810a`/`c1e29f1`/`a547e66`/`ec2b9cd`/`0cf7c1c`/`097b20b`)** — per-workspace default,
+  backend-authoritative. `workspace_default_permission_mode` helper (JSONB, fail-safe auto) beside
+  `workspace_allows_bypass`; new `routes_workspace_settings` GET/PUT (`_merged_settings` new-dict
+  preserves `allow_bypass`); `ChatRequest.permission_mode` → `Optional[...] = None` +
+  `_resolve_request_permission_mode` at the **interactive handler only** (never `_process_core`, so a
+  workspace `bypass` default cannot leak onto pinned/scheduled turns). Frontend: api.ts GET/PUT,
+  PolicyTab section, settings-modal wiring, chat-panel seeds the picker once per app load. **The full
+  gate caught a stale C-SEC3 test** (`test_chat_single_lead` asserted the old `=="auto"` default +
+  passed a removed `mode=` kwarg) → updated to assert the still-true invariant (raw default never
+  bypass; mode-independence). Reviews: security SHIP (6 invariants incl. no-leak + JSONB-merge +
+  bypass-double-gated), quality APPROVED (2 comment-level nits applied), FINAL HOLISTIC review SHIP.
+
+### §7 open-question resolutions
+1. **GET/PUT home** — new dedicated `routes_workspace_settings` module (chosen for clarity).
+2. **optionality vs P3b** — sequenced exactly as planned: P3b left `permission_mode = "auto"`; P3c
+   Task 10 flipped it to `Optional[...] = None` + handler resolution. No caller broke (the stale
+   single-lead test was updated, not a real break).
+3. **seed timing** — the chat-panel seed uses a one-shot effect + module-level `permissionSeeded`
+   guard + a `cancelled` flag; the store default (`"auto"`) is the pre-GET fallback. No hooks-order /
+   render-side-effect violation.
+4. **`write_todos` frame shape** — confirmed: `input.todos` carries the full list each call; the
+   `tool_result` for `write_todos` also carries `tool`, so its chip is suppressed cleanly.
+
+### What P3 does NOT do (→ next)
+- **R1** — CLAUDE.md two-execution-paths invariant rewrite → at the merge/cutover (NOT before; doing it
+  pre-cutover would describe a dormant path as the live invariant).
+- **Step-10 — the runtime cutover** — the only live/irreversible step: push/merge the whole rebuild to
+  `main`, flip `JARVIS_RUNTIME=deep` + `deep_single_lead` + `JARVIS_CHAT_PLANLESS` live, run deep
+  against prod with shadow-compare + rollback. Needs its own brainstorm → design → plan (plan-per-step
+  model) and explicit sign-off at each irreversible gate. This lights up everything P3 built (the
+  picker becomes functional, `write_todos` fires, the per-ws default takes effect).
