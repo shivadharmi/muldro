@@ -14,7 +14,11 @@ exceptions — so a brand-new write capability can never silently skip verificat
 
 from __future__ import annotations
 
-from src.integrations.capabilities import CAPABILITY_CATALOG, is_read_only_capability
+from src.integrations.capabilities import (
+    CAPABILITY_CATALOG,
+    SYSTEM_ACTION_CAPABILITIES,
+    is_read_only_capability,
+)
 
 # The external blast-radius tiers (no bare "external"; no ordering — set membership).
 _EXTERNAL_BLAST_RADIUS = frozenset({"external_single", "external_multiple", "public"})
@@ -51,6 +55,11 @@ REVERSIBLE_INTERNAL_CAPABILITIES: frozenset[str] = frozenset(
         # Marking a message read is trivially reversible and low blast radius.
         "messaging.mark_read",
     }
+    # system.* action writes (P2.5a) are internal, self blast-radius, and undoable (the user's
+    # own goals / instructions / reminders / briefing) — reversible-internal like the
+    # internal.* writes above, so they skip read-back verification. Sourced from the single
+    # SYSTEM_ACTION_CAPABILITIES set so this list can never drift from the middleware exemptions.
+    | SYSTEM_ACTION_CAPABILITIES
 )
 
 

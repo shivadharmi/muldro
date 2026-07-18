@@ -49,6 +49,12 @@ from src.tools.intelligence_server.planning import (
     update_execution,
     verify_run,
 )
+from src.tools.intelligence_server.system import (
+    add_to_brief,
+    schedule_reminder,
+    set_goal,
+    set_instruction,
+)
 from src.tools.intelligence_server.world_model_tools import (
     get_entity,
     get_provenance,
@@ -86,4 +92,8 @@ __all__ = [
     "query_facts",
     "traverse",
     "get_provenance",
+    "set_goal",
+    "set_instruction",
+    "schedule_reminder",
+    "add_to_brief",
 ]

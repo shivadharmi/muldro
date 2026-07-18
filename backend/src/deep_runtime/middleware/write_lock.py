@@ -19,7 +19,7 @@ from langchain.agents.middleware import AgentMiddleware, wrap_tool_call
 from langchain_core.messages import ToolMessage
 
 from src.deep_runtime.builtins import DEEPAGENTS_BUILTIN_NAMES
-from src.integrations.capabilities import is_read_only_capability
+from src.integrations.capabilities import SYSTEM_ACTION_CAPABILITIES, is_read_only_capability
 from src.services.contention import (
     CONTENDED_MESSAGE,
     WRITE_LOCK_UNAVAILABLE_MESSAGE,
@@ -72,6 +72,14 @@ def make_write_lock_middleware(
             return await handler(request)
 
         capability = await resolve_capability(name)
+        # system.* internal action tools are the user's own memory (reversible, `self`
+        # blast-radius) and never contend cross-path — the autonomous handler never locks
+        # them either. ALWAYS-ALLOWED (D5): exempt from the write lock entirely, including the
+        # require_redis fail-closed branch below. Matched against the EXPLICIT
+        # SYSTEM_ACTION_CAPABILITIES set (not a `system.` prefix) so a future system.* capability
+        # is locked by default until deliberately exempted.
+        if capability in SYSTEM_ACTION_CAPABILITIES:
+            return await handler(request)
         if redis is None:
             # require_redis is True here: Redis expected up but down. Refuse WRITES
             # (fail-closed) rather than execute unlocked; reads still pass.

@@ -13,6 +13,7 @@ import pytest
 from src.tools.intelligence_server import intelligence
 
 EXPECTED_TOOLS = {
+    "add_to_brief",
     "approve_action",
     "build_context",
     "discover_capabilities",
@@ -28,7 +29,10 @@ EXPECTED_TOOLS = {
     "ingest_event",
     "query_facts",
     "report_observation",
+    "schedule_reminder",
     "search",
+    "set_goal",
+    "set_instruction",
     "store_memory",
     "store_preference",
     "traverse",

@@ -390,6 +390,57 @@ async def test_bypass_passes_through_without_assessing_or_persisting(handler):
     create_approval_mock.assert_not_called()
 
 
+# ── gate: system.* ALWAYS-ALLOWED (D5, P2.5a) ────────────────────────────────
+
+
+async def test_system_capability_never_gates_ask(handler):
+    """A ``system.*`` internal write is ALWAYS-ALLOWED (D5, P2.5a): even in ``ask`` mode it
+    is never gated — the handler runs, risk is never assessed, and no approval is persisted.
+    ``system.*`` are the user's own memory (reversible, ``self`` blast-radius), exempt like
+    the deepagents built-ins. The pass-through sits AFTER capability resolution (a ``system.``
+    prefix is carried by the capability, not the tool name), so resolve IS awaited."""
+    assess_risk = AsyncMock(name="assess_risk")
+    resolve_capability = AsyncMock(return_value=(True, "system.set_goal"))
+    create_approval_mock = AsyncMock()
+
+    mw = _gate(
+        permission_mode="ask",
+        resolve_capability=resolve_capability,
+        assess_risk=assess_risk,
+        db_factory=_persist_db_factory(),
+    )
+    with patch(f"{TRUST_GATE_MODULE}.create_approval", create_approval_mock):
+        result = await _hook(mw)(_request("set_goal", {}, "c1"), handler)
+
+    handler.assert_awaited_once()
+    assert result is handler.return_value
+    resolve_capability.assert_awaited_once_with("set_goal")
+    assess_risk.assert_not_awaited()
+    create_approval_mock.assert_not_called()
+
+
+async def test_system_capability_never_gates_auto(handler):
+    """``auto`` mode + a ``system.*`` write → never gated (D5): no risk assessment, no
+    persist, handler runs inline — orthogonal to the auto risk policy."""
+    assess_risk = AsyncMock(name="assess_risk")
+    resolve_capability = AsyncMock(return_value=(True, "system.schedule_reminder"))
+    create_approval_mock = AsyncMock()
+
+    mw = _gate(
+        permission_mode="auto",
+        resolve_capability=resolve_capability,
+        assess_risk=assess_risk,
+        db_factory=_persist_db_factory(),
+    )
+    with patch(f"{TRUST_GATE_MODULE}.create_approval", create_approval_mock):
+        result = await _hook(mw)(_request("schedule_reminder", {}, "c1"), handler)
+
+    handler.assert_awaited_once()
+    assert result is handler.return_value
+    assess_risk.assert_not_awaited()
+    create_approval_mock.assert_not_called()
+
+
 # ── gate: interrupt branches (scripted deep agent) ───────────────────────────
 
 

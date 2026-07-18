@@ -262,6 +262,45 @@ class GetProvenanceInput(BaseModel):
     attr_key: str = Field(default="", description="Optional single attribute key")
 
 
+class SetGoalInput(BaseModel):
+    """Record a user goal so Jarvis can track and act toward it. Use when the user states an
+    objective ("my goal is …", "I want to …", "remember I'm trying to …")."""
+
+    title: str = Field(description="The goal statement, e.g. 'Close the seed round by Q3'")
+    priority: str = Field(default="medium", description="Goal priority: low, medium, or high")
+
+
+class SetInstructionInput(BaseModel):
+    """Record a standing user instruction or preference so future turns honor it. Use when the
+    user says "always …", "from now on …", "remember to …", "I prefer …". For time-based
+    reminders use ``schedule_reminder`` instead — this tool stores a durable preference, it does
+    not create schedules or triggers."""
+
+    instruction_text: str = Field(description="The instruction or preference, verbatim")
+    instruction_type: str = Field(
+        default="preference",
+        description="Instruction category label (stored on the preference memory), e.g. "
+        "'preference'",
+    )
+
+
+class ScheduleReminderInput(BaseModel):
+    """Create a one-shot reminder. Use when the user asks to be reminded of something ("remind
+    me to …", "ping me about …")."""
+
+    title: str = Field(description="What to remind the user about")
+    cron_expr: str = Field(
+        default="", description="Optional cron/timing expression for the reminder"
+    )
+
+
+class AddToBriefInput(BaseModel):
+    """Add an item to the user's next daily briefing. Use when the user says "add this to my
+    briefing / brief", "surface this tomorrow", "flag this for my next update"."""
+
+    text: str = Field(description="The briefing item text")
+
+
 # ── Registry ───────────────────────────────────────────────────────
 
 TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
@@ -290,6 +329,10 @@ TOOL_INPUT_MODELS: dict[str, type[BaseModel]] = {
     "query_facts": QueryFactsInput,
     "traverse": TraverseInput,
     "get_provenance": GetProvenanceInput,
+    "set_goal": SetGoalInput,
+    "set_instruction": SetInstructionInput,
+    "schedule_reminder": ScheduleReminderInput,
+    "add_to_brief": AddToBriefInput,
 }
 
 

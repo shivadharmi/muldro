@@ -71,6 +71,47 @@ async def test_read_capability_bypasses_lock():
     assert redis.calls == []  # NEVER locked a read
 
 
+# --- P2.5a: system.* ALWAYS-ALLOWED (D5) — exempt from the write lock ---
+
+
+async def test_system_capability_bypasses_lock():
+    """A ``system.*`` internal write is ALWAYS-ALLOWED (D5) — never write-locked, even with
+    Redis present. system.* are the user's own memory (reversible, ``self`` blast-radius) and
+    never contend cross-path (the autonomous handler never locks them either)."""
+    redis = _FakeRedis()
+    resolve_capability = AsyncMock(return_value="system.set_goal")
+    handler = AsyncMock(return_value=ToolMessage(content="ok", tool_call_id="tc1", name="x"))
+
+    mw = make_write_lock_middleware(
+        workspace_id="ws1", redis=redis, resolve_capability=resolve_capability
+    )
+    result = await mw.awrap_tool_call(_Req("set_goal"), handler)
+
+    handler.assert_awaited_once()
+    assert result.content == "ok"
+    assert redis.calls == []  # never acquired/released a lock for a system.* write
+
+
+async def test_system_capability_passes_even_when_redis_required_but_none():
+    """require_redis=True + redis None + a ``system.*`` write → still PASSES (ALWAYS-ALLOWED),
+    NOT refused: system.* is exempt from the fail-closed write-lock (D5), unlike an external
+    write which would be blocked here. The exemption sits AFTER capability resolution but
+    BEFORE the redis-required fail-closed branch."""
+    resolve_capability = AsyncMock(return_value="system.add_to_brief")
+    handler = AsyncMock(return_value=ToolMessage(content="ok", tool_call_id="tc1", name="x"))
+
+    mw = make_write_lock_middleware(
+        workspace_id="ws1",
+        redis=None,
+        resolve_capability=resolve_capability,
+        require_redis=True,
+    )
+    result = await mw.awrap_tool_call(_Req("add_to_brief"), handler)
+
+    handler.assert_awaited_once()
+    assert result.content == "ok"
+
+
 # --- Step-10A A3: opt-in write_lock_require_redis (fail-closed when Redis is unwired) ---
 
 

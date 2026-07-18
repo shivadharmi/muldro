@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pydantic import BaseModel
 
 from src.tools.schemas import (
+    AddToBriefInput,
     ApproveActionInput,
     BuildContextInput,
     DiscoverCapabilitiesInput,
@@ -34,7 +35,10 @@ from src.tools.schemas import (
     QueryFactsInput,
     ReportGovernorVerdictInput,
     ReportObservationInput,
+    ScheduleReminderInput,
     SearchInput,
+    SetGoalInput,
+    SetInstructionInput,
     StoreMemoryInput,
     StorePreferenceInput,
     TraverseInput,
@@ -299,6 +303,50 @@ INTERNAL_TOOLS: list[InternalToolDef] = [
         server="intelligence",
         description=_desc(GetProvenanceInput),
         read_only=True,
+    ),
+    # System action tools (P2.5a) — the 4 promoted system.* capabilities. Writes into the
+    # user's own data layer (goals / instructions / reminders / briefing); ALWAYS-ALLOWED on
+    # the chat path (permission_gate + write_lock exempt, D5). Not held by any agent scope
+    # yet (surfaced only once P2.5c wires the planless lead) — orphaned-but-harmless.
+    InternalToolDef(
+        name="set_goal",
+        input_model=SetGoalInput,
+        capability="system.set_goal",
+        risk_level="low",
+        requires_approval=False,
+        server="intelligence",
+        description=_desc(SetGoalInput),
+        read_only=False,
+    ),
+    InternalToolDef(
+        name="set_instruction",
+        input_model=SetInstructionInput,
+        capability="system.set_instruction",
+        risk_level="low",
+        requires_approval=False,
+        server="intelligence",
+        description=_desc(SetInstructionInput),
+        read_only=False,
+    ),
+    InternalToolDef(
+        name="schedule_reminder",
+        input_model=ScheduleReminderInput,
+        capability="system.schedule_reminder",
+        risk_level="low",
+        requires_approval=False,
+        server="intelligence",
+        description=_desc(ScheduleReminderInput),
+        read_only=False,
+    ),
+    InternalToolDef(
+        name="add_to_brief",
+        input_model=AddToBriefInput,
+        capability="system.add_to_brief",
+        risk_level="low",
+        requires_approval=False,
+        server="intelligence",
+        description=_desc(AddToBriefInput),
+        read_only=False,
     ),
     # Special: inline-dispatched (not a real MCP tool). Has its own capability
     # (internal.report_verdict) so the tool↔capability mapping stays 1:1 — distinct

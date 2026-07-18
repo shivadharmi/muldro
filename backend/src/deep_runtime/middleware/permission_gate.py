@@ -53,7 +53,7 @@ from src.deep_runtime.middleware.trust_gate import (
     _find_existing_approval,
     _get_or_create_approval,
 )
-from src.integrations.capabilities import is_read_only_capability
+from src.integrations.capabilities import SYSTEM_ACTION_CAPABILITIES, is_read_only_capability
 from src.services.risk_assessor import RiskAssessment
 
 logger = logging.getLogger(__name__)
@@ -271,6 +271,16 @@ def make_permission_gate_middleware(
                 name,
             )
             return _blocked_tool_message(name, tool_call_id)
+        # system.* internal action tools (set_goal / set_instruction / schedule_reminder /
+        # add_to_brief) write into Jarvis's own data layer — the user's own memory (reversible,
+        # `self` blast-radius). They are ALWAYS-ALLOWED on the chat path (D5): never gated in
+        # any mode, mirroring the DEEPAGENTS_BUILTIN_NAMES pass-through above. Matched against
+        # the EXPLICIT SYSTEM_ACTION_CAPABILITIES set (not a `system.` prefix) so a future/renamed
+        # system.* capability is gated by default until deliberately exempted. Placed AFTER the
+        # fail-closed lookup check (a lookup error still blocks) and BEFORE the read-only bypass
+        # (these are writes, so that bypass would not catch them).
+        if capability in SYSTEM_ACTION_CAPABILITIES:
+            return await handler(request)
         if not capability or is_read_only_capability(capability):
             return await handler(request)
 
