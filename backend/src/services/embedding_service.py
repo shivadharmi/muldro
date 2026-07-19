@@ -67,6 +67,25 @@ class EmbeddingService:
                     resp.raise_for_status()
                     data = resp.json()
                     return [item["embedding"] for item in data["data"]]
+            except httpx.HTTPStatusError as e:
+                # 4xx (unsupported model, malformed request) is permanent — retrying
+                # wastes ~14s of backoff and never succeeds. Log the response body so
+                # the cause is visible (e.g. "Model voyage-3 is not supported").
+                body = e.response.text[:500]
+                if e.response.status_code < 500:
+                    logger.warning(
+                        "Voyage embedding rejected (%s): %s", e.response.status_code, body
+                    )
+                    return None
+                if attempt < max_retries:
+                    await asyncio.sleep(2 ** (attempt + 1))
+                    continue
+                logger.warning(
+                    "Voyage embedding failed after retries (%s): %s",
+                    e.response.status_code,
+                    body,
+                )
+                return None
             except Exception:
                 if attempt < max_retries:
                     await asyncio.sleep(2 ** (attempt + 1))

@@ -59,8 +59,10 @@ class Settings(BaseSettings):
     environment: str = "development"  # Environment discriminator (development, staging, production)
     log_json: bool = False  # Use JSON structured logging
 
-    # Embeddings — Voyage AI (primary) or Bedrock Titan (fallback when no voyage_api_key)
-    embedding_model: str = "voyage-3"
+    # Embeddings — Voyage AI (primary) or Bedrock Titan (fallback when no voyage_api_key).
+    # NOTE: the MongoDB-hosted Voyage endpoint (ai.mongodb.com) retired voyage-3; use a
+    # supported 1024-dim model (voyage-3.5 / voyage-3.5-lite / voyage-3-large).
+    embedding_model: str = "voyage-3.5"
     voyage_api_key: str = ""
     voyage_base_url: str = "https://api.voyageai.com/v1"
     # AWS region for the Bedrock Titan embedding fallback (NOT the retired LLM Bedrock).
