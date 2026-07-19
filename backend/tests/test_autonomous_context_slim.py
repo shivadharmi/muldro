@@ -221,19 +221,6 @@ async def test_graph_executor_populate_gate_off_is_byte_neutral_no_redis_get():
     spy_gate.assert_not_awaited()
 
 
-async def test_graph_executor_populate_gate_deep_context_jit_but_legacy_runtime_stays_false():
-    """Flag ON but the autonomous surface resolves ``"legacy"`` → ``jit=False`` (the gate needs
-    BOTH the flag AND a ``"deep"`` resolution)."""
-    settings = make_mock_settings(deep_context_jit=True, runtime="legacy")
-    executor = _make_executor(settings, _mock_db([_plan_task()]), context_builder=_spy_builder())
-    executor._store.populate_steps = AsyncMock()
-
-    with patch(GATE, AsyncMock(return_value="legacy")):
-        await executor._populate_steps(_run(), _plan())
-
-    assert executor._store.populate_steps.await_args.kwargs["jit"] is False
-
-
 # ══════════════ resume-refresh persisting caller ════════════════════════════
 
 

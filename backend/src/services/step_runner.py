@@ -169,22 +169,12 @@ class StepRunner:
             workspace_id=run.workspace_id,
         )
 
-        # Step 10C P1b: per-surface effective-runtime gate keyed "autonomous" (the 10B gate).
-        # DOUBLE-guarded byte-neutrality: the deep branch is taken ONLY when (a) the gate
-        # resolves "deep" — which needs a successful ``enabled:autonomous`` Redis read (or a
-        # manual override), so with no key / redis None it falls to settings.runtime="legacy"
-        # — AND (b) an actual deep_step_runner was injected (None by default). Both must hold.
-        from src.services.runtime_gate import effective_runtime
-
-        runtime = await effective_runtime("autonomous", redis=self._redis, settings=self._settings)
-        if runtime == "deep" and self._deep_step_runner is not None and self._db_factory:
+        # Deep is the ONLY runtime (Step 11 Phase 4). Use the durable deep step runner
+        # when it (+ a db_factory) was injected; otherwise the minimal single-turn fallback.
+        if self._deep_step_runner is not None and self._db_factory:
             return await self.run_step_via_deep_agent(step, run, cancel_event=cancel_event)
 
-        # Check if agent loop dependencies are available
-        if self._db_factory and self._execute_tool_fn and self._budget:
-            return await self.run_step_via_agent_loop(step, run, cancel_event=cancel_event)
-
-        # Fallback: minimal single-turn Claude call
+        # Fallback: minimal single-turn Claude call (no deep step runner injected).
         return await self.minimal_claude_action(step, run)
 
     async def minimal_claude_action(self, step: TaskStep, run: TaskRun) -> dict:
@@ -300,9 +290,8 @@ class StepRunner:
     async def _build_step_message(self, step: TaskStep, run: TaskRun) -> str:
         """Build the executor's task message from step input + completed predecessor outputs.
 
-        Extracted verbatim from ``run_step_via_agent_loop`` (Step 10C P1b) so the durable
-        deep path (``run_step_via_deep_agent``) hands the executor the byte-identical message
-        the legacy agent loop does — no drift between the two runtimes.
+        Shared by the durable deep path (``run_step_via_deep_agent``) and the minimal
+        fallback so both hand the executor the same message.
         """
         input_data = step.input_data or {}
         task_type = input_data.get("capability", input_data.get("task_type", "unknown"))
@@ -376,172 +365,13 @@ class StepRunner:
             cancel_event=cancel_event,
         )
 
-    async def run_step_via_agent_loop(
-        self,
-        step: TaskStep,
-        run: TaskRun,
-        cancel_event=None,
-    ) -> dict:
-        """Execute a step via the Executor agent loop with full tool discovery."""
-        from src.orchestrator.agent_loop import (
-            LoopDone,
-            LoopError,
-            LoopToolCall,
-            LoopToolResult,
-            agent_loop,
-        )
-        from src.orchestrator.agents import AGENTS
-
-        message = await self._build_step_message(step, run)
-
-        # Get context
-        context_prompt = await self.build_step_context(run, step)
-
-        # Resolve executor agent
-        executor = AGENTS.get("executor")
-        if not executor:
-            return {
-                "status": "completed",
-                "result": "Executor agent not found",
-                "errors": ["Executor agent not configured"],
-            }
-
-        # Build system blocks
-        system_blocks = [{"type": "text", "text": executor.prompt}]
-        if context_prompt:
-            system_blocks.append({"type": "text", "text": f"\n--- Context ---\n{context_prompt}"})
-
-        # Build tools list — per-step capability scope (Step 6C): only this step's
-        # capability's tools, not the executor's full write union.
-        step_capability = (step.input_data or {}).get(
-            "capability", (step.input_data or {}).get("task_type", "unknown")
-        )
-        tools = await self.build_executor_tools(step_capability, run.workspace_id or "")
-
-        # Install the per-step idempotency ledger on the injected execute_tool_fn
-        # (autonomous path only — the chat path passes the raw fn, so it stays a
-        # no-op there). Writes go through the ledger keyed on a semantic identity
-        # so an LLM-recomposed payload on resume cannot double-fire (Step 1).
-        from src.services.idempotency import (
-            IdempotencyContext,
-            IdempotencyLedger,
-            make_idempotent_execute_tool_fn,
-        )
-
-        idem_execute_tool_fn = self._execute_tool_fn
-        if self._execute_tool_fn is not None:
-            idem_execute_tool_fn = make_idempotent_execute_tool_fn(
-                self._execute_tool_fn,
-                IdempotencyContext(
-                    ledger=IdempotencyLedger(self._db_factory),
-                    run_id=run.run_id,
-                    step_id=step.step_id,
-                    workspace_id=run.workspace_id or "",
-                    db_factory=self._db_factory,
-                ),
-            )
-
-        # Step 6C: fence writes with the cross-path lock, OUTSIDE the idempotency ledger, so
-        # the lock serializes the whole write attempt (idempotency check + execute). Same key
-        # as the deep-runtime middleware (capability via ToolRegistry.get_tool().capability).
-        # Step-10A A3: the gate now builds the wrapper under require_redis even with a None
-        # redis client, so the in-wrapper redis-None fail-closed branch is REACHABLE on the
-        # autonomous path (a malformed redis_url yields a None client at construction, which
-        # would otherwise skip the wrapper entirely and silently no-op the operator's opt-in).
-        # Residual (out of A3 scope): if the tool_registry is ALSO None we cannot classify the
-        # tool, so no wrapper is built and the run proceeds unlocked — a double-failure.
-        if _should_build_write_lock_wrapper(
-            self._redis, self._tool_registry, self._settings.write_lock_require_redis
-        ):
-
-            async def _resolve_cap(tool_name: str):
-                try:
-                    td = await self._tool_registry.get_tool(tool_name)
-                except Exception:
-                    logger.debug(
-                        "write-lock capability resolution failed for %s", tool_name, exc_info=True
-                    )
-                    return None
-                return getattr(td, "capability", None) if td else None
-
-            idem_execute_tool_fn = make_lock_wrapped_execute_tool_fn(
-                idem_execute_tool_fn,
-                redis=self._redis,
-                workspace_id=run.workspace_id or "",
-                resolve_capability=_resolve_cap,
-                require_redis=self._settings.write_lock_require_redis,
-            )
-
-        # Collect events from agent loop
-        text = ""
-        tools_called = []
-        errors = []
-        # A tool that hit a permanent OAuth failure returns the structured
-        # auth_required envelope as its LoopToolResult. Capture it so the caller
-        # (DagRunner) can defer the run for re-authorization instead of failing.
-        auth_required: dict | None = None
-
-        async for event in agent_loop(
-            client=self._client,
-            agent=executor,
-            model=self._settings.resolved_model,
-            system_blocks=system_blocks,
-            tools=tools,
-            message=message,
-            user_id=run.user_id,
-            workspace_id=run.workspace_id or "",
-            db_factory=self._db_factory,
-            services=None,
-            budget=self._budget,
-            trace=self._active_traces.get(run.run_id),
-            execute_tool_fn=idem_execute_tool_fn,
-            max_tool_rounds=10,
-            stream=False,
-            circuit_breaker=self._circuit_breaker,
-            run_id=run.run_id,
-            cancel_event=cancel_event,
-        ):
-            if isinstance(event, LoopDone):
-                text = event.text
-                tools_called = event.tools_called
-            elif isinstance(event, LoopError):
-                errors.append(event.message)
-            elif isinstance(event, LoopToolResult):
-                result = event.result
-                if (
-                    auth_required is None
-                    and isinstance(result, dict)
-                    and result.get("error_code") == "auth_required"
-                ):
-                    auth_required = result
-            elif isinstance(event, LoopToolCall):
-                pass  # Already tracked in LoopDone.tools_called
-
-        output: dict = {
-            "status": "completed",
-            "result": text,
-            "tools_called": tools_called,
-            "errors": errors,
-        }
-        if auth_required is not None:
-            # Surfaced so DagRunner._defer_for_reauth parks the run for re-auth.
-            output["status"] = "error"
-            output["error_code"] = "auth_required"
-            output["provider"] = auth_required.get("provider", "")
-            output["server"] = auth_required.get("server", "")
-            output["auth_required"] = auth_required
-        return output
-
     async def build_step_context(self, run: TaskRun, step: TaskStep) -> str:
         """Build context prompt for a step using ContextBuilder.
 
         Step 10C P6: this EPHEMERAL context (feeds the executor prompt, never persisted)
-        slims to the JIT core under the autonomous gate. Short-circuits on
-        ``deep_context_jit`` FIRST (default off → no ``effective_runtime`` read, no Redis
-        GET, byte-identical eager pack). When on, the per-surface gate keyed ``"autonomous"``
-        must resolve ``"deep"`` (redis-None / gate error → static ``settings.runtime`` →
-        never an accidental ``"deep"``). ``jit`` threads into BOTH ``build`` and ``to_prompt``,
-        mirroring the chat seam's ``assemble_context``.
+        slims to the JIT core when ``deep_context_jit`` is on (default off → eager pack).
+        ``jit`` threads into BOTH ``build`` and ``to_prompt``, mirroring the chat seam's
+        ``assemble_context``.
         """
         if not self._context_builder:
             return ""
@@ -549,14 +379,8 @@ class StepRunner:
             input_data = step.input_data or {}
             query = input_data.get("goal", input_data.get("context", ""))
             task_type = input_data.get("task_type")
-            jit = False
-            if self._settings.deep_context_jit:
-                from src.services.runtime_gate import effective_runtime
-
-                runtime = await effective_runtime(
-                    "autonomous", redis=getattr(self, "_redis", None), settings=self._settings
-                )
-                jit = runtime == "deep"
+            # Deep is the only runtime; JIT slimming follows the flag alone (Phase 4).
+            jit = self._settings.deep_context_jit
             pack = await self._context_builder.build(
                 user_id=run.user_id,
                 query=query or "",

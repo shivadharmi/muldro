@@ -1403,7 +1403,7 @@ class AgentInvoker:
         # thread is done regardless of which outcome fired.
         await reap_thread(self._checkpointer_provider(), thread_id)
 
-        # Mirror step_runner.run_step_via_agent_loop's output shape EXACTLY.
+        # The autonomous step-result output shape (status/result/tools_called/errors).
         output: dict = {
             "status": "completed",
             "result": result,

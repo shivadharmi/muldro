@@ -346,23 +346,6 @@ def _executor_reaching_mismatch(run: MagicMock):
         return executor, db
 
 
-async def test_legacy_gate_does_not_reconcile_on_resume():
-    """Gate ``legacy`` (default): the checkpoint/DB mismatch takes the byte-identical
-    WARN path — ``reconcile_run_from_events`` is NEVER awaited."""
-    run = _paused_run_with_mismatch()
-    executor, _db = _executor_reaching_mismatch(run)
-    reconcile_spy = AsyncMock(return_value={})
-
-    with (
-        patch("src.services.graph_executor.transition_run"),
-        patch("src.services.runtime_gate.effective_runtime", AsyncMock(return_value="legacy")),
-        patch("src.services.run_reconcile.reconcile_run_from_events", reconcile_spy),
-    ):
-        await executor.resume_run("run_001")
-
-    reconcile_spy.assert_not_awaited()
-
-
 async def test_deep_gate_reconciles_on_resume():
     """Gate ``deep``: the checkpoint/DB mismatch reconciles from the event log —
     ``reconcile_run_from_events`` is awaited exactly once with ``(self._db, run)``."""

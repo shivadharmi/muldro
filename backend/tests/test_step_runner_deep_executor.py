@@ -1,17 +1,15 @@
-"""Step 10C P1b: autonomous deep-step executor ROUTING + wiring.
+"""Autonomous deep-step executor ROUTING + wiring (Step 11 Phase 4: deep-only).
 
-``run_step_action`` gains a per-surface effective-runtime branch keyed ``"autonomous"``.
-When the 10B gate resolves ``"deep"`` AND an injected ``deep_step_runner`` is present AND
-the agent-loop DB factory is wired, the step routes to ``run_step_via_deep_agent`` — which
-builds the SAME message/context/per-step tools the legacy path builds and delegates to the
-injected runner (``AgentInvoker.run_autonomous_deep_step``). Everything is byte-neutral when
-the gate is off (default ``"legacy"``) OR ``deep_step_runner`` is ``None`` (both hold in prod
-and in every existing test), so the legacy path is untouched.
+``run_step_action`` routes to ``run_step_via_deep_agent`` whenever an injected
+``deep_step_runner`` is present AND the DB factory is wired — which builds the message /
+context / per-step tools and delegates to the injected runner
+(``AgentInvoker.run_autonomous_deep_step``). With no injected runner, it falls back to the
+minimal single-turn Claude action.
 
 These tests build a minimal ``StepRunner`` via ``__new__`` (mirroring
 ``tests/idempotency/test_step_runner_wiring.py`` + ``tests/test_step_runner_scope.py``): the
-routing decision + the delegation call are exercised directly, with the deep/legacy leaves
-patched so no real agent build/stream runs.
+routing decision + the delegation call are exercised directly, with the leaves patched so no
+real agent build/stream runs.
 """
 
 from __future__ import annotations
@@ -22,19 +20,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from src.services.step_runner import StepRunner
 from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID, make_mock_settings
 
-GATE = "src.services.runtime_gate.effective_runtime"
-
 
 def _runner(*, deep_step_runner=None, redis=None, settings=None) -> StepRunner:
     """A minimal StepRunner whose routing + delegation can run without a real graph.
 
     Bypasses ``__init__`` (like the other step_runner tests) and wires just the attributes
-    ``run_step_action`` / ``run_step_via_deep_agent`` read. ``_execute_tool_fn`` + ``_budget``
-    are set truthy so the LEGACY branch's ``if self._db_factory and self._execute_tool_fn and
-    self._budget`` guard is satisfied (the routing tests can then assert deep-vs-legacy).
+    ``run_step_action`` / ``run_step_via_deep_agent`` read.
     """
     r = StepRunner.__new__(StepRunner)
-    r._settings = settings or make_mock_settings(runtime="legacy")
+    r._settings = settings or make_mock_settings()
     r._client = MagicMock()
     r._store = MagicMock()
     r._store.get_all_steps = AsyncMock(return_value=[])
@@ -65,29 +59,23 @@ def _run() -> SimpleNamespace:
     return SimpleNamespace(run_id="run_1", user_id=TEST_USER_ID, workspace_id=TEST_WORKSPACE_ID)
 
 
-# ─────────────────────────── Test 1 — route to deep ──────────────────────────
+# ─────────────────── Test 1 — route to the deep step runner ──────────────────
 
 
-async def test_run_step_action_routes_to_deep_when_gate_deep():
-    """Gate ``"deep"`` for ``"autonomous"`` + injected deep_step_runner + wired db_factory →
-    ``run_step_via_deep_agent`` is awaited and the LEGACY agent loop is NOT called."""
+async def test_run_step_action_routes_to_deep_when_runner_injected():
+    """Injected deep_step_runner + wired db_factory → ``run_step_via_deep_agent`` is awaited."""
     deep_runner = AsyncMock(
         return_value={"status": "completed", "result": "ok", "tools_called": [], "errors": []}
     )
     runner = _runner(deep_step_runner=deep_runner)
     step, run = _step(), _run()
 
-    with (
-        patch(GATE, AsyncMock(return_value="deep")),
-        patch.object(
-            runner, "run_step_via_deep_agent", AsyncMock(return_value={"status": "completed"})
-        ) as deep,
-        patch.object(runner, "run_step_via_agent_loop", AsyncMock()) as legacy,
-    ):
+    with patch.object(
+        runner, "run_step_via_deep_agent", AsyncMock(return_value={"status": "completed"})
+    ) as deep:
         result = await runner.run_step_action(step, run)
 
     deep.assert_awaited_once()
-    legacy.assert_not_awaited()
     assert result == {"status": "completed"}
 
 
@@ -97,76 +85,32 @@ async def test_run_step_action_deep_branch_forwards_cancel_event():
     step, run = _step(), _run()
     sentinel = object()
 
-    with (
-        patch(GATE, AsyncMock(return_value="deep")),
-        patch.object(runner, "run_step_via_deep_agent", AsyncMock(return_value={})) as deep,
-        patch.object(runner, "run_step_via_agent_loop", AsyncMock()),
-    ):
+    with patch.object(runner, "run_step_via_deep_agent", AsyncMock(return_value={})) as deep:
         await runner.run_step_action(step, run, cancel_event=sentinel)
 
     assert deep.await_args.kwargs.get("cancel_event") is sentinel
 
 
-# ────────────────────── Test 2 — route to legacy (byte-neutral) ──────────────
+# ──────────────── Test 2 — fall back to minimal when no deep runner ───────────
 
 
-async def test_run_step_action_routes_to_legacy_when_gate_legacy():
-    """Gate ``"legacy"`` (default / no key / redis None) → the LEGACY agent loop runs and the
-    deep path is NOT touched — the byte-neutral floor."""
-    runner = _runner(deep_step_runner=AsyncMock())
-    step, run = _step(), _run()
-
-    with (
-        patch(GATE, AsyncMock(return_value="legacy")),
-        patch.object(runner, "run_step_via_deep_agent", AsyncMock()) as deep,
-        patch.object(
-            runner, "run_step_via_agent_loop", AsyncMock(return_value={"status": "completed"})
-        ) as legacy,
-    ):
-        result = await runner.run_step_action(step, run)
-
-    legacy.assert_awaited_once()
-    deep.assert_not_awaited()
-    assert result == {"status": "completed"}
-
-
-async def test_run_step_action_gate_deep_but_no_deep_runner_falls_to_legacy():
-    """Defensive double-guard: gate ``"deep"`` but ``deep_step_runner is None`` → STILL legacy.
-    Both the gate AND an injected runner must hold to reach the deep branch."""
+async def test_run_step_action_no_deep_runner_falls_to_minimal():
+    """No injected ``deep_step_runner`` → the minimal single-turn Claude action runs and the
+    deep path is NOT touched."""
     runner = _runner(deep_step_runner=None)
     step, run = _step(), _run()
 
     with (
-        patch(GATE, AsyncMock(return_value="deep")),
         patch.object(runner, "run_step_via_deep_agent", AsyncMock()) as deep,
         patch.object(
-            runner, "run_step_via_agent_loop", AsyncMock(return_value={"status": "completed"})
-        ) as legacy,
+            runner, "minimal_claude_action", AsyncMock(return_value={"status": "completed"})
+        ) as minimal,
     ):
-        await runner.run_step_action(step, run)
+        result = await runner.run_step_action(step, run)
 
-    legacy.assert_awaited_once()
+    minimal.assert_awaited_once()
     deep.assert_not_awaited()
-
-
-async def test_run_step_action_default_settings_no_redis_is_byte_neutral():
-    """With the real default (no ``effective_runtime`` patch): ``_redis=None`` → the gate
-    short-circuits to ``settings.runtime="legacy"`` → legacy path, deep untouched."""
-    runner = _runner(
-        deep_step_runner=AsyncMock(), redis=None, settings=make_mock_settings(runtime="legacy")
-    )
-    step, run = _step(), _run()
-
-    with (
-        patch.object(runner, "run_step_via_deep_agent", AsyncMock()) as deep,
-        patch.object(
-            runner, "run_step_via_agent_loop", AsyncMock(return_value={"status": "completed"})
-        ) as legacy,
-    ):
-        await runner.run_step_action(step, run)
-
-    legacy.assert_awaited_once()
-    deep.assert_not_awaited()
+    assert result == {"status": "completed"}
 
 
 # ─────────────── Test 3 — run_step_via_deep_agent delegates correctly ────────

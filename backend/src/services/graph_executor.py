@@ -248,22 +248,11 @@ class GraphExecutor:
         await self._populate_steps(run, plan)
 
     async def _autonomous_jit(self) -> bool:
-        """Resolve whether the AUTONOMOUS context builds should slim to the JIT core (P6).
+        """Whether the AUTONOMOUS context builds should slim to the JIT core (P6).
 
-        Short-circuits on ``deep_context_jit`` FIRST so the default path (flag off) adds NO
-        ``effective_runtime`` read — no Redis GET on legacy run creation/resume, strictly
-        byte-neutral. When the flag is on, the per-surface gate keyed ``"autonomous"`` (the
-        10B gate) must resolve ``"deep"``; any redis-None / gate error falls to the static
-        ``settings.runtime`` (never an accidental ``"deep"``), so an outage degrades to the
-        eager pack. Mirrors the chat seam's ``jit=(runtime=="deep" and deep_context_jit)``."""
-        if not self._settings.deep_context_jit:
-            return False
-        from src.services.runtime_gate import effective_runtime
-
-        runtime = await effective_runtime(
-            "autonomous", redis=getattr(self, "_redis", None), settings=self._settings
-        )
-        return runtime == "deep"
+        Gated solely on ``deep_context_jit`` now that deep is the only runtime (Step 11
+        Phase 4)."""
+        return self._settings.deep_context_jit
 
     async def _populate_steps(self, run: TaskRun, plan: Plan) -> None:
         """Facade → StepGraphStore.populate_steps.
@@ -289,19 +278,14 @@ class GraphExecutor:
     async def execute_run(
         self, run_id: str, trace_id: str | None = None, surface_id: str | None = None
     ) -> TaskRun:
-        """Execute a run's DAG — single-flight lease guard (deep-gated), then the body.
+        """Execute a run's DAG — single-flight lease guard, then the body.
 
-        On the ``"autonomous"`` deep runtime a per-run Redis lease ensures exactly
-        ONE worker drives a durable run; a second concurrent scheduler tick backs
-        off and returns the run's current DB state without re-driving (avoids a
-        wasted ``ainvoke(None, cfg)`` replay + checkpoint contention — the
-        idempotency ledger already makes tool effects exactly-once). With the gate
-        off (default ``legacy`` / ``redis is None``) this delegates straight to the
-        body, byte-identical to the pre-P3 method (only an extra fail-safe
-        ``effective_runtime`` read is added when a Redis is present, which resolves
-        to the static runtime on any Redis error). The lease requires Redis, so
-        when ``self._redis is None`` the whole gate is skipped straight to the body
-        — matching ``effective_runtime``'s own ``redis is None`` → static contract.
+        A per-run Redis lease ensures exactly ONE worker drives a durable run; a
+        second concurrent scheduler tick backs off and returns the run's current DB
+        state without re-driving (avoids a wasted ``ainvoke(None, cfg)`` replay +
+        checkpoint contention — the idempotency ledger already makes tool effects
+        exactly-once). The lease requires Redis, so when ``self._redis is None`` the
+        gate is skipped straight to the body.
 
         The TurnScope activation — ``turn_scope(on_close=close_turn_sessions)`` —
         that fences per-turn MCP sessions lives in the delegated
@@ -309,22 +293,18 @@ class GraphExecutor:
         """
         redis = getattr(self, "_redis", None)
         if redis is not None:
-            from src.services.runtime_gate import effective_runtime
+            from src.services.autonomous_lease import acquire_run_lease
 
-            runtime = await effective_runtime("autonomous", redis=redis, settings=self._settings)
-            if runtime == "deep":
-                from src.services.autonomous_lease import acquire_run_lease
-
-                async with acquire_run_lease(redis, run_id) as acquired:
-                    if not acquired:
-                        logger.info(
-                            "run %s durable lease held by another worker — backing off",
-                            run_id,
-                        )
-                        return await self._load_run(run_id)
-                    return await self._execute_run_body(
-                        run_id, trace_id=trace_id, surface_id=surface_id
+            async with acquire_run_lease(redis, run_id) as acquired:
+                if not acquired:
+                    logger.info(
+                        "run %s durable lease held by another worker — backing off",
+                        run_id,
                     )
+                    return await self._load_run(run_id)
+                return await self._execute_run_body(
+                    run_id, trace_id=trace_id, surface_id=surface_id
+                )
         return await self._execute_run_body(run_id, trace_id=trace_id, surface_id=surface_id)
 
     async def _execute_run_body(
@@ -503,28 +483,23 @@ class GraphExecutor:
     async def resume_run(self, run_id: str) -> TaskRun:
         """Resume a paused/awaiting run — single-flight lease guard, then the body.
 
-        Same lease/back-off contract as ``execute_run``: on the ``"autonomous"``
-        deep runtime exactly one worker resumes a durable run; a second concurrent
-        tick backs off and returns the run's current DB state without re-driving.
-        Gate off (default ``legacy`` / ``redis is None``) → delegates straight to
-        the body, byte-identical to the pre-P3 method.
+        Same lease/back-off contract as ``execute_run``: a per-run Redis lease lets
+        exactly one worker resume a durable run; a second concurrent tick backs off
+        and returns the run's current DB state without re-driving. When ``redis is
+        None`` the gate is skipped straight to the body.
         """
         redis = getattr(self, "_redis", None)
         if redis is not None:
-            from src.services.runtime_gate import effective_runtime
+            from src.services.autonomous_lease import acquire_run_lease
 
-            runtime = await effective_runtime("autonomous", redis=redis, settings=self._settings)
-            if runtime == "deep":
-                from src.services.autonomous_lease import acquire_run_lease
-
-                async with acquire_run_lease(redis, run_id) as acquired:
-                    if not acquired:
-                        logger.info(
-                            "run %s durable resume lease held by another worker — backing off",
-                            run_id,
-                        )
-                        return await self._load_run(run_id)
-                    return await self._resume_run_body(run_id)
+            async with acquire_run_lease(redis, run_id) as acquired:
+                if not acquired:
+                    logger.info(
+                        "run %s durable resume lease held by another worker — backing off",
+                        run_id,
+                    )
+                    return await self._load_run(run_id)
+                return await self._resume_run_body(run_id)
         return await self._resume_run_body(run_id)
 
     async def _resume_run_body(self, run_id: str) -> TaskRun:
@@ -579,31 +554,12 @@ class GraphExecutor:
             actual_steps = await self._get_all_steps(run.run_id)
             actual_completed = {s.step_id for s in actual_steps if s.status in TERMINAL_SUCCESS}
             if cp_completed != actual_completed:
-                # Step 10C P4: on the DEEP autonomous surface, reconcile the run's
-                # truth rows from the runtime_events log (a crash can leave the DB
-                # behind the log). On legacy the WARN stays byte-identical (default
-                # path). Fail-safe: redis-absent / any gate error resolves to the
-                # static runtime, so legacy never accidentally reconciles.
-                from src.services.runtime_gate import effective_runtime
+                # Step 10C P4: reconcile the run's truth rows from the runtime_events
+                # log (a crash can leave the DB behind the log).
+                from src.services.run_reconcile import reconcile_run_from_events
 
-                runtime = await effective_runtime(
-                    "autonomous", redis=getattr(self, "_redis", None), settings=self._settings
-                )
-                if runtime == "deep":
-                    from src.services.run_reconcile import reconcile_run_from_events
-
-                    summary = await reconcile_run_from_events(self._db, run)
-                    logger.info(
-                        "run %s reconciled from event log on resume: %s", run.run_id, summary
-                    )
-                else:
-                    logger.warning(
-                        "Checkpoint/DB mismatch for run %s: checkpoint=%d completed, "
-                        "DB=%d completed",
-                        run.run_id,
-                        len(cp_completed),
-                        len(actual_completed),
-                    )
+                summary = await reconcile_run_from_events(self._db, run)
+                logger.info("run %s reconciled from event log on resume: %s", run.run_id, summary)
 
         transition_run(run, "running")
         await self._db.flush()
@@ -825,15 +781,6 @@ class GraphExecutor:
     ) -> dict:
         """Facade → StepRunner.run_step_action."""
         return await self._runner.run_step_action(step, run, cancel_event=cancel_event)
-
-    async def _run_step_via_agent_loop(
-        self,
-        step: TaskStep,
-        run: TaskRun,
-        cancel_event: asyncio.Event | None = None,
-    ) -> dict:
-        """Facade → StepRunner.run_step_via_agent_loop."""
-        return await self._runner.run_step_via_agent_loop(step, run, cancel_event=cancel_event)
 
     def _roll_trace_onto_run(self, run: TaskRun, trace: JarvisTrace) -> tuple[int, int, float]:
         """Accumulate one segment's trace totals onto the run's rollup columns.
