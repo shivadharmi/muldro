@@ -58,16 +58,16 @@ MEMORY_WRITES = Counter(
     ["memory_type"],
 )
 
-# Step 10B cutover-control-plane rollback-gate signals (defined ahead of the flip
-# so the Phase-5 auto-rollback watcher has something to sample). Activation points:
-# double_fire is wired NOW at the idempotency wrapper (autonomous path only).
+# Step-10 safety-invariant observability signals. double_fire is wired NOW at the
+# idempotency wrapper (autonomous path only); the other three are dormant until
+# their producers land (see the per-counter notes below).
 DOUBLE_FIRE = Counter(
     "jarvis_double_fire_total",
     "Idempotency double-fire detections (already-completed or in-flight re-fire blocked)",
     ["surface", "kind"],
 )
-# verification_false_negative: dormant until the Phase-5 sampler gets a real
-# read_fn wired in (10D) — the read_fn=None invariant is locked in Step 10A/A2.
+# verification_false_negative: dormant until a real read_fn is wired in (10D) —
+# the read_fn=None invariant is locked in Step 10A/A2.
 VERIFICATION_FALSE_NEGATIVE = Counter(
     "jarvis_verification_false_negative_total",
     "Verified writes later found to have not actually taken effect (false-negative on read-back)",
@@ -209,13 +209,6 @@ class MetricsService:
     @staticmethod
     def record_ungated_perception_write(surface: str) -> None:
         UNGATED_PERCEPTION_WRITE.labels(surface=surface).inc()
-
-    @staticmethod
-    def read_counter_total(counter, **labels) -> float:
-        """Read the current value of a labeled Counter child (in-process). Used by the
-        auto-rollback watcher (Phase 5) to compute per-tick deltas. prometheus_client
-        counters are process-global; this reads THIS process's accumulated value."""
-        return counter.labels(**labels)._value.get()
 
     @staticmethod
     def generate_metrics() -> bytes:
