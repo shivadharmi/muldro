@@ -368,7 +368,6 @@ class TestOrchestrator:
 
         settings = make_mock_settings(
             daily_token_budget_usd=5.0,
-            use_bedrock=False,
         )
 
         # Build a mock db session where sync methods (add) are MagicMock

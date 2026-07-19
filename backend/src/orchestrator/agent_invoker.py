@@ -513,9 +513,8 @@ class AgentInvoker:
             db_factory=self._db_factory,
         )
 
-        # Step 7C: re-home the legacy agent_loop authoritative cost record (@after_model).
-        # ADDITIVE — the deep path recorded no TokenUsage before. model = the direct-Anthropic id
-        # (MODEL_TIER_IDS), NOT get_model_for_agent (Bedrock-tainted).
+        # Authoritative cost record (@after_model). model = the direct-Anthropic id
+        # (MODEL_TIER_IDS), matching what the deep runtime actually builds.
         budget_mw = make_budget_middleware(
             agent_name=agent.name,
             model=MODEL_TIER_IDS.get(agent.model_tier, MODEL_TIER_IDS["sonnet"]),
@@ -623,8 +622,7 @@ class AgentInvoker:
         direct-Anthropic model id (a malformed tier degrades to the sonnet id, never a tier
         name) the deep
         runtime always builds via ``build_chat_model`` (deepagents derives the harness-profile
-        key from that built model) — NOT ``get_model_for_agent`` (which returns a Bedrock id
-        when ``use_bedrock``). Disabling GP on BOTH models, BEFORE either is built, stops the
+        key from that built model). Disabling GP on BOTH models, BEFORE either is built, stops the
         sonnet delegate — itself a deep lead — from getting its own ungated general-purpose
         child. Both calls are idempotent + process-global.
 

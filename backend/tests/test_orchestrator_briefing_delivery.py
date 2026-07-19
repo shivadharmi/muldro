@@ -22,7 +22,7 @@ def _build_orchestrator(notifier, *, briefing_exists: bool):
     """
     from src.orchestrator.jarvis import JarvisOrchestrator
 
-    settings = make_mock_settings(use_bedrock=False)
+    settings = make_mock_settings()
 
     mock_db = MagicMock()
     mock_db.add = MagicMock()

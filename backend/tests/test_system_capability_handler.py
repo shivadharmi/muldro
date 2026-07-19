@@ -12,7 +12,6 @@ def _make_orchestrator():
     from src.orchestrator.jarvis import JarvisOrchestrator
 
     settings = MagicMock()
-    settings.use_bedrock = False
     settings.daily_token_budget_usd = 10.0
     settings.redis_url = "redis://localhost:6379"
     db_factory = MagicMock()

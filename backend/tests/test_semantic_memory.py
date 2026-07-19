@@ -13,7 +13,6 @@ from tests.conftest import TEST_USER_ID, make_mock_settings
 def settings():
     s = make_mock_settings()
     s.embedding_model = "amazon.titan-embed-text-v2:0"
-    s.bedrock_region = "ap-south-1"
     return s
 
 

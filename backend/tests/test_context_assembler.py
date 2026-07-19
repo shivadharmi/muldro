@@ -16,7 +16,7 @@ class TestContextAssembly:
         """Test _assemble_context returns empty string for non-enriched agents."""
         from src.orchestrator.jarvis import JarvisOrchestrator
 
-        settings = make_mock_settings(daily_token_budget_usd=5.0, use_bedrock=False)
+        settings = make_mock_settings(daily_token_budget_usd=5.0)
         db_factory = MagicMock()
 
         orchestrator = JarvisOrchestrator(
@@ -34,7 +34,7 @@ class TestContextAssembly:
         """Test _assemble_context returns context for enriched agents with services."""
         from src.orchestrator.jarvis import JarvisOrchestrator
 
-        settings = make_mock_settings(daily_token_budget_usd=5.0, use_bedrock=False)
+        settings = make_mock_settings(daily_token_budget_usd=5.0)
         db_factory = MagicMock()
 
         # Mock memory service
@@ -79,7 +79,7 @@ class TestContextAssembly:
         """Test _assemble_context gracefully handles missing memory service."""
         from src.orchestrator.jarvis import JarvisOrchestrator
 
-        settings = make_mock_settings(daily_token_budget_usd=5.0, use_bedrock=False)
+        settings = make_mock_settings(daily_token_budget_usd=5.0)
         db_factory = MagicMock()
 
         # Mock only world_model, no memory service
@@ -104,7 +104,7 @@ class TestContextAssembly:
         """Test _assemble_context returns empty when services return no results."""
         from src.orchestrator.jarvis import JarvisOrchestrator
 
-        settings = make_mock_settings(daily_token_budget_usd=5.0, use_bedrock=False)
+        settings = make_mock_settings(daily_token_budget_usd=5.0)
         db_factory = MagicMock()
 
         # Mock services that return empty results
@@ -132,7 +132,7 @@ class TestContextAssembly:
         """Test _assemble_context handles service exceptions gracefully."""
         from src.orchestrator.jarvis import JarvisOrchestrator
 
-        settings = make_mock_settings(daily_token_budget_usd=5.0, use_bedrock=False)
+        settings = make_mock_settings(daily_token_budget_usd=5.0)
         db_factory = MagicMock()
 
         # Mock memory service that raises exception
@@ -166,7 +166,7 @@ class TestSystemPromptBuilding:
         from src.orchestrator.agents import AGENTS
         from src.orchestrator.jarvis import JarvisOrchestrator
 
-        settings = make_mock_settings(daily_token_budget_usd=5.0, use_bedrock=False)
+        settings = make_mock_settings(daily_token_budget_usd=5.0)
 
         orchestrator = JarvisOrchestrator(
             settings=settings, db_factory=MagicMock(), services=ServiceContainer()
@@ -190,7 +190,7 @@ class TestSystemPromptBuilding:
         from src.orchestrator.agents import AGENTS
         from src.orchestrator.jarvis import JarvisOrchestrator
 
-        settings = make_mock_settings(daily_token_budget_usd=5.0, use_bedrock=False)
+        settings = make_mock_settings(daily_token_budget_usd=5.0)
 
         orchestrator = JarvisOrchestrator(
             settings=settings, db_factory=MagicMock(), services=ServiceContainer()
@@ -216,7 +216,7 @@ class TestToolCacheControl:
         """Test _apply_cache_control_to_tools adds cache_control to last tool."""
         from src.orchestrator.jarvis import JarvisOrchestrator
 
-        settings = make_mock_settings(daily_token_budget_usd=5.0, use_bedrock=False)
+        settings = make_mock_settings(daily_token_budget_usd=5.0)
 
         orchestrator = JarvisOrchestrator(
             settings=settings, db_factory=MagicMock(), services=ServiceContainer()
@@ -247,7 +247,7 @@ class TestToolCacheControl:
         """Test _apply_cache_control_to_tools handles empty tool list."""
         from src.orchestrator.jarvis import JarvisOrchestrator
 
-        settings = make_mock_settings(daily_token_budget_usd=5.0, use_bedrock=False)
+        settings = make_mock_settings(daily_token_budget_usd=5.0)
 
         orchestrator = JarvisOrchestrator(
             settings=settings, db_factory=MagicMock(), services=ServiceContainer()
@@ -260,7 +260,7 @@ class TestToolCacheControl:
         """Test _apply_cache_control_to_tools with single tool."""
         from src.orchestrator.jarvis import JarvisOrchestrator
 
-        settings = make_mock_settings(daily_token_budget_usd=5.0, use_bedrock=False)
+        settings = make_mock_settings(daily_token_budget_usd=5.0)
 
         orchestrator = JarvisOrchestrator(
             settings=settings, db_factory=MagicMock(), services=ServiceContainer()

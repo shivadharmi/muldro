@@ -70,10 +70,8 @@ AGENT_EVENT_TYPES = {
 class JarvisOrchestrator:
     """The Jarvis brain — orchestrates sub-agents via Claude API.
 
-    This is NOT a ClaudeSDKClient wrapper (SDK not yet stable enough).
-    Instead, we use the Anthropic API directly with structured prompts
-    to simulate sub-agent routing. Each sub-agent call is a separate
-    Claude API call with the agent's specific prompt and tool scope.
+    Sub-agents run on the LangChain / Deep-Agents runtime (``src/llm`` +
+    ``src/deep_runtime``); each routed agent gets its own prompt + tool scope.
     """
 
     def __init__(

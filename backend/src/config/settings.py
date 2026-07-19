@@ -63,6 +63,8 @@ class Settings(BaseSettings):
     embedding_model: str = "voyage-3"
     voyage_api_key: str = ""
     voyage_base_url: str = "https://api.voyageai.com/v1"
+    # AWS region for the Bedrock Titan embedding fallback (NOT the retired LLM Bedrock).
+    bedrock_region: str = "us-east-1"
 
     # Reranker (Bedrock) — available in: us-west-2, eu-central-1, ap-northeast-1, ca-central-1
     reranker_model: str = "amazon.rerank-v1:0"

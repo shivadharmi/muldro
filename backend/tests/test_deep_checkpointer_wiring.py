@@ -15,7 +15,6 @@ def _make_orchestrator(**kwargs):
     JarvisOrchestrator constructor.
     """
     settings = make_mock_settings()
-    settings.use_bedrock = False
 
     from src.orchestrator.jarvis import JarvisOrchestrator
 

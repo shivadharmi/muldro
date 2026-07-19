@@ -2,9 +2,9 @@
 
 Extracted from ``JarvisOrchestrator`` (god-object decomposition, 2026-06-19).
 A leaf collaborator: it loads conversation history (summarizing overflow via
-Haiku), connected-integration identities, and a ``ContextPack`` from the
-``ContextBuilder``, returning prompt-ready text. Depends only on settings, the
-Anthropic client, the service container, and the DB session factory.
+Haiku through the shared LLM seam), connected-integration identities, and a
+``ContextPack`` from the ``ContextBuilder``, returning prompt-ready text. Depends
+only on settings, the service container, and the DB session factory.
 """
 
 import logging

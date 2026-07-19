@@ -714,7 +714,7 @@ class TestMemoryContradictionDeferral:
     async def test_extract_and_store_does_not_call_contradictions_sync(self):
         from src.services.memory_service import MemoryService
 
-        settings = make_mock_settings(use_bedrock=False)
+        settings = make_mock_settings()
         db = AsyncMock()
         db.add = MagicMock()
         db.flush = AsyncMock()

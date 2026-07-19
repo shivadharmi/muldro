@@ -16,7 +16,6 @@ from tests.conftest import make_mock_settings
 async def test_summarize_history_returns_summary():
     """_summarize_history returns the Claude summary text."""
     settings = make_mock_settings()
-    settings.use_bedrock = False
 
     with patch(
         "src.orchestrator.context_assembler.complete_text",
@@ -38,7 +37,6 @@ async def test_summarize_history_returns_summary():
 async def test_summarize_history_without_conversation_id():
     """Without conversation_id, summarization still works."""
     settings = make_mock_settings()
-    settings.use_bedrock = False
 
     with patch(
         "src.orchestrator.context_assembler.complete_text",

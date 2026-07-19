@@ -257,7 +257,6 @@ async def test_graph_executor_no_workspace_mutation():
 
     settings = MagicMock()
     settings.anthropic_api_key = "test"
-    settings.use_bedrock = False
     settings.redis_url = "redis://localhost"
 
     db = MagicMock()
@@ -301,7 +300,6 @@ async def test_create_graph_executor_injects_trust_engine():
 
     settings = MagicMock()
     settings.anthropic_api_key = "test"
-    settings.use_bedrock = False
     settings.redis_url = "redis://localhost:6379"
     settings.qdrant_url = ""
 
