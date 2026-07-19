@@ -167,10 +167,6 @@ class Settings(BaseSettings):
     # Registry validation
     skip_registry_validation: bool = False  # JARVIS_SKIP_REGISTRY_VALIDATION
 
-    # Chat execution runtime: "legacy" (agent_loop) | "deep" (Deep Agents lead).
-    # Default legacy so the Deep Agents path is dormant until explicitly enabled.
-    runtime: str = "legacy"  # JARVIS_RUNTIME
-
     # Deep-only inline-format augmentation (Step 7B1 P4, Fork-1): when True, the deep
     # lead's system prompt is augmented with PRESENTER_VOICE so it formats the
     # user-facing reply inline (chat reply + optional fenced surface spec) instead of
@@ -210,14 +206,6 @@ class Settings(BaseSettings):
     # still called). Gates ONLY the P2.5c reroute, independently of deep_single_lead.
     chat_planless: bool = False  # JARVIS_CHAT_PLANLESS
 
-    # Step 10B Task 3b: fraction of chat turns (0.0-1.0) that ALSO run a
-    # NON-authoritative shadow turn on the opposite runtime, for the cutover
-    # control-plane's shadow-compare harness (ShadowRunner). Default 0.0 = off —
-    # the chat seam never even schedules the background shadow task, and
-    # ShadowRunner.maybe_run_shadow's sampling check returns immediately either
-    # way. Live activation (a nonzero rate) is a Step-10 gate.
-    shadow_sample_rate: float = 0.0  # JARVIS_SHADOW_SAMPLE_RATE
-
     # Step-10A A3: opt-in fail-closed write lock. When True, a WRITE tool call is REFUSED
     # (not executed unlocked) if Redis is unreachable — for prod where Redis is expected up.
     # Default False preserves today's fail-OPEN behavior (authz is still enforced by
@@ -225,25 +213,6 @@ class Settings(BaseSettings):
     # idempotency ledger the lock wraps). Applies to BOTH the deep middleware and the
     # autonomous wrapper.
     write_lock_require_redis: bool = False  # JARVIS_WRITE_LOCK_REQUIRE_REDIS
-
-    # Step 10B Task 5a: auto-rollback watcher per-signal breach thresholds. Each is
-    # the minimum per-TICK DELTA (not cumulative count) of the mapped rollback-gate
-    # signal (see metrics_service.py) that trips a currently-"deep" surface's breaker
-    # back to "legacy" (src/services/scheduler/runtime_rollback_tick.py). Conservative
-    # defaults — the watcher is dormant machinery until a surface's enable key flips it
-    # to "deep"; live tuning is a Step-10D gate.
-    rollback_double_fire_threshold: int = 5  # JARVIS_ROLLBACK_DOUBLE_FIRE_THRESHOLD
-    rollback_verification_false_negative_threshold: int = 3
-    rollback_double_prompt_threshold: int = 3
-    rollback_ungated_perception_write_threshold: int = 1
-    rollback_shadow_divergence_threshold: int = 10
-
-    # Step 10B Task 5b: operator credential for the runtime kill-switch admin route
-    # (POST/DELETE /v1/admin/runtime/override). Default empty → the admin route is
-    # DISABLED (fail-closed): every request is rejected 403 until ops sets
-    # JARVIS_ADMIN_API_TOKEN. The escape hatch forces the SAFE direction only (legacy);
-    # it is compared against the X-Admin-Token header in constant time (hmac.compare_digest).
-    admin_api_token: str = ""  # JARVIS_ADMIN_API_TOKEN
 
     # Webhook / push-notification infrastructure (OPTIONAL — empty = poll-only).
     # When unset, webhook registration is a graceful no-op and the system stays

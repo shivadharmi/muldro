@@ -130,31 +130,28 @@ def main():
                     # Step 10C P2: build the durable worker-side AsyncPostgresSaver so the
                     # autonomous deep step-executor (run_autonomous_deep_step) persists its
                     # LangGraph checkpoints durably instead of the per-call MemorySaver.
-                    # Gated on runtime=="deep" (mirror src/api/app.py's lifespan) so no
-                    # psycopg3 pool opens on legacy — byte-neutral on the default runtime.
                     # RESILIENT: any failure degrades to None (MemorySaver fallback) so a
                     # saver problem can NEVER crash the worker.
                     checkpointer_provider = None
-                    if settings.runtime == "deep":
-                        try:
-                            from src.deep_runtime.checkpointer import (
-                                build_async_postgres_saver,
-                            )
+                    try:
+                        from src.deep_runtime.checkpointer import (
+                            build_async_postgres_saver,
+                        )
 
-                            saver, _pool = await build_async_postgres_saver(settings.database_url)
-                            # TODO(10D): the worker is a daemon thread running
-                            # asyncio.gather with no clean shutdown seam, so the psycopg3
-                            # pool lives for the worker's lifetime (a long-lived worker
-                            # pool is acceptable). Wire _pool.close() when a worker
-                            # shutdown hook lands.
-                            checkpointer_provider = lambda s=saver: s  # noqa: E731
-                            logger.info("[deep_runtime] worker durable checkpointer ready")
-                        except Exception:
-                            logger.error(
-                                "[deep_runtime] worker checkpointer init failed — "
-                                "autonomous deep steps fall back to MemorySaver",
-                                exc_info=True,
-                            )
+                        saver, _pool = await build_async_postgres_saver(settings.database_url)
+                        # TODO(10D): the worker is a daemon thread running
+                        # asyncio.gather with no clean shutdown seam, so the psycopg3
+                        # pool lives for the worker's lifetime (a long-lived worker
+                        # pool is acceptable). Wire _pool.close() when a worker
+                        # shutdown hook lands.
+                        checkpointer_provider = lambda s=saver: s  # noqa: E731
+                        logger.info("[deep_runtime] worker durable checkpointer ready")
+                    except Exception:
+                        logger.error(
+                            "[deep_runtime] worker checkpointer init failed — "
+                            "autonomous deep steps fall back to MemorySaver",
+                            exc_info=True,
+                        )
 
                     return JarvisOrchestrator(
                         settings=settings,

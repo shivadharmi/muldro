@@ -21,10 +21,7 @@ is not otherwise persisted, so a process-crash orphan of one is invisible to thi
 Approval-keyed sweep. That is an accepted edge; a proper age-based checkpoint-table sweep
 (scan the checkpoints table directly, independent of any Approval) is a 10D refinement.
 
-Gated three ways so it is a complete no-op on any non-deep or saver-less process:
-* ``settings.runtime != "deep"`` → return (legacy runtime has no durable saver — and on a
-  Redis-only effective-runtime flip the P2 saver, gated on ``settings.runtime == "deep"``,
-  is likewise absent, so there is nothing durable to sweep either way);
+Gated two ways so it is a complete no-op on any saver-less process:
 * no durable saver reachable via the orchestrator's invoker → return (a worker may have been
   built without one);
 * the saver lacks ``adelete_thread`` (e.g. MemorySaver) → the reaper itself no-ops.
@@ -40,8 +37,6 @@ class CheckpointReaperTickMixin:
 
     async def _tick_checkpoint_reaper(self, factory) -> None:
         """Reap durable checkpoints for approvals decided beyond the retention window."""
-        if getattr(self._settings, "runtime", "legacy") != "deep":
-            return
         saver = getattr(getattr(self._orchestrator, "_invoker", None), "checkpointer", None)
         if saver is None:
             return  # no durable saver reachable in this process → nothing to sweep

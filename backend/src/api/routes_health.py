@@ -478,10 +478,8 @@ async def _build_store_health(
         redis_health = {"status": "disabled"}
 
     # Deep-runtime checkpointer
-    if settings.runtime != "deep":
-        deep_runtime_health: dict = {"status": "disabled", "runtime": settings.runtime}
-    elif deep_checkpointer_degraded:
-        deep_runtime_health = {
+    if deep_checkpointer_degraded:
+        deep_runtime_health: dict = {
             "status": "degraded",
             "durable": False,
             "error": (

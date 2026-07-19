@@ -94,24 +94,6 @@ def make_mock_settings(**overrides) -> MagicMock:
         # ON for every test that builds the lock wrapper from a mock Settings. Mirror the real
         # default (False = fail-open).
         write_lock_require_redis=False,
-        # Step 10B Task 3b: MagicMock-truthiness hazard — an unset MagicMock float reads
-        # truthy, which would make `random.random() < rate` compare against a Mock (TypeError)
-        # OR, worse, silently fire the shadow harness in every unrelated chat test. Mirror the
-        # real Settings default (0.0 = off).
-        shadow_sample_rate=0.0,
-        # Step 10B Task 5a: rollback-watcher thresholds. An unset MagicMock int compares
-        # truthy/greater in `delta >= threshold` in unpredictable ways (Mock vs float
-        # comparison); mirror the real Settings defaults so tests get real int thresholds.
-        rollback_double_fire_threshold=5,
-        rollback_verification_false_negative_threshold=3,
-        rollback_double_prompt_threshold=3,
-        rollback_ungated_perception_write_threshold=1,
-        rollback_shadow_divergence_threshold=10,
-        # Step 10B Task 5b: MagicMock-truthiness hazard — an unset MagicMock str reads
-        # truthy, so `require_admin`'s `not expected` fail-closed check would never fire
-        # (the admin route would look "enabled" in every test). Mirror the real Settings
-        # default ("" = disabled/fail-closed).
-        admin_api_token="",
     )
     defaults.update(overrides)
     for k, v in defaults.items():
