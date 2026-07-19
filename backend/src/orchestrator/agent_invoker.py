@@ -54,7 +54,6 @@ from src.middleware.observability import get_correlation_id
 from src.models.approvals import Approval
 from src.orchestrator.agent_loop import (
     LoopDone,
-    LoopError,
     agent_loop,
 )
 from src.orchestrator.agents import SubAgent
@@ -69,7 +68,6 @@ from src.orchestrator.prompts import (
 from src.orchestrator.services import ServiceContainer
 from src.orchestrator.tool_executor import ToolExecutor
 from src.services.metrics_service import AGENT_RUNTIME_CALLS
-from src.services.runtime_gate import effective_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -1583,108 +1581,53 @@ class AgentInvoker:
             agent, context_block, capability_summary=capability_summary
         )
 
-        # Step 10 (B6): resolve the perception surface's runtime ONCE. redis=None or any
-        # Redis error falls through to static settings.runtime, never an accidental "deep"
-        # (see runtime_gate.effective_runtime). With no keys set this returns
-        # self._settings.runtime unchanged → byte-neutral on legacy. Serves the perception
-        # path (Perceiver + Librarian, perception_runner) and briefing (call_agent facade).
-        runtime = await effective_runtime(
-            "perception",
-            redis=self._services.extras.get("redis") if self._services else None,
-            settings=self._settings,
-        )
-        AGENT_RUNTIME_CALLS.labels(runtime=runtime).inc()
-        if runtime == "deep":
-            # B6: perception + briefing run on the Deep Agents runtime. Perception is
-            # HEADLESS (scheduler-triggered, NO synchronous approver), so the auth-source
-            # must never interrupt(). We pass AUTONOMOUS (honest provenance — perception
-            # ingests untrusted email/Slack content, NOT a user request) + the agent's own
-            # capability_scope pre-approved, so every write short-circuits at trust_gate
-            # (line ~358) as pre-approved instead of pausing on an approval nobody will
-            # answer. Parity with legacy's ungated perception writes, but truthful in the
-            # audit trail. No permission_mode → permission_gate is NOT installed. No durable
-            # checkpointer needed (never pauses); _build_deep_agent_for auto-uses MemorySaver
-            # and _stream_and_reap's reap is a MemorySaver no-op. Final text = the agent_done
-            # frame's "text" (stream_adapter.py) — mirrors run_shadow_turn's consume pattern.
-            thread_id = make_thread_id(workspace_id)
-            deep_agent = await self._build_deep_agent_for(
-                agent,
-                tools,
-                user_id=user_id,
-                workspace_id=workspace_id,
-                thread_id=thread_id,
-                authorization_source=AuthorizationSource.AUTONOMOUS,
-                pre_approved_capabilities=frozenset(agent.capability_scope),
-                system_prompt=build_system_message(system_blocks),
-                context_block=context_block,
-            )
-            graph_input = {"messages": [{"role": "user", "content": message}]}
-            final_text = ""
-            deep_error: str | None = None
-            async for frame in self._stream_and_reap(
-                deep_agent,
-                graph_input,
-                thread_id=thread_id,
-                agent_name=agent_name,
-                model=model,
-            ):
-                if not isinstance(frame, dict):
-                    continue
-                event = frame.get("event")
-                if event == "agent_done":
-                    final_text = frame.get("text", "")
-                elif event == "error":
-                    deep_error = frame.get("message") or "unknown error"
-            # Parity with the legacy path's error envelope: a deep stream that errors emits
-            # an "error" frame and NO "agent_done" (stream_adapter), leaving final_text "".
-            # The briefing facade (jarvis.generate_briefing) feeds this straight into the
-            # user notification body, so a silent "" would ship an empty "Daily Briefing" —
-            # surface the sanitized error string instead, matching the legacy return shape.
-            if not final_text and deep_error is not None:
-                return f"[Agent error: {deep_error}]"
-            return final_text
-
-        text = ""
-        error = None
-        async for evt in agent_loop(
-            client=self._client,
-            agent=agent,
-            model=model,
-            system_blocks=system_blocks,
-            tools=tools,
-            message=message,
+        AGENT_RUNTIME_CALLS.labels(runtime="deep").inc()
+        # Deep Agents is the ONLY perception runtime (Step 11 Phase 4).
+        # B6: perception + briefing run on the Deep Agents runtime. Perception is
+        # HEADLESS (scheduler-triggered, NO synchronous approver), so the auth-source
+        # must never interrupt(). We pass AUTONOMOUS (honest provenance — perception
+        # ingests untrusted email/Slack content, NOT a user request) + the agent's own
+        # capability_scope pre-approved, so every write short-circuits at trust_gate
+        # (line ~358) as pre-approved instead of pausing on an approval nobody will
+        # answer. Parity with legacy's ungated perception writes, but truthful in the
+        # audit trail. No permission_mode → permission_gate is NOT installed. No durable
+        # checkpointer needed (never pauses); _build_deep_agent_for auto-uses MemorySaver
+        # and _stream_and_reap's reap is a MemorySaver no-op. Final text = the agent_done
+        # frame's "text" (stream_adapter.py) — mirrors run_shadow_turn's consume pattern.
+        thread_id = make_thread_id(workspace_id)
+        deep_agent = await self._build_deep_agent_for(
+            agent,
+            tools,
             user_id=user_id,
             workspace_id=workspace_id,
-            db_factory=self._db_factory,
-            services=self._services,
-            budget=self._budget,
-            trace=trace,
-            execute_tool_fn=self._tool_executor.execute_tool,
-            max_tool_rounds=max_tool_rounds,
-            stream=False,
-            circuit_breaker=self._circuit_breaker,
+            thread_id=thread_id,
+            authorization_source=AuthorizationSource.AUTONOMOUS,
+            pre_approved_capabilities=frozenset(agent.capability_scope),
+            system_prompt=build_system_message(system_blocks),
+            context_block=context_block,
+        )
+        graph_input = {"messages": [{"role": "user", "content": message}]}
+        final_text = ""
+        deep_error: str | None = None
+        async for frame in self._stream_and_reap(
+            deep_agent,
+            graph_input,
+            thread_id=thread_id,
+            agent_name=agent_name,
+            model=model,
         ):
-            if isinstance(evt, LoopDone):
-                text = evt.text
-                logger.info(
-                    "agent_call_complete",
-                    extra={
-                        "agent": agent_name,
-                        "model": model,
-                        "input_tokens": evt.input_tokens,
-                        "output_tokens": evt.output_tokens,
-                        "tools_called": evt.tools_called,
-                        "latency_ms": evt.latency_ms,
-                        "trace_id": trace.trace_id if trace else None,
-                    },
-                )
-            elif isinstance(evt, LoopError):
-                error = evt.message
-                logger.warning(
-                    "agent_call_failed",
-                    extra={"agent": agent_name, "error": error},
-                )
-
-        if error and not text:
-            return f"[Agent error: {error}]"
-        return text
+            if not isinstance(frame, dict):
+                continue
+            event = frame.get("event")
+            if event == "agent_done":
+                final_text = frame.get("text", "")
+            elif event == "error":
+                deep_error = frame.get("message") or "unknown error"
+        # Parity with the legacy path's error envelope: a deep stream that errors emits
+        # an "error" frame and NO "agent_done" (stream_adapter), leaving final_text "".
+        # The briefing facade (jarvis.generate_briefing) feeds this straight into the
+        # user notification body, so a silent "" would ship an empty "Daily Briefing" —
+        # surface the sanitized error string instead, matching the legacy return shape.
+        if not final_text and deep_error is not None:
+            return f"[Agent error: {deep_error}]"
+        return final_text

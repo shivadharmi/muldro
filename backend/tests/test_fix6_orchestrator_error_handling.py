@@ -227,47 +227,48 @@ class TestHasPresenterStep:
 
 
 class TestCallAgentErrorPropagation:
-    """Verify _call_agent returns error string on LoopError instead of empty string."""
+    """Verify call_agent returns an error string when the deep stream errors."""
 
     @pytest.mark.asyncio
-    async def test_loop_error_propagated(self):
+    async def test_error_frame_propagated(self):
         from src.orchestrator.agent_invoker import AgentInvoker
-        from src.orchestrator.agent_loop import LoopError
 
-        async def mock_agent_loop(**kwargs):
-            yield LoopError(agent="presenter", message="circuit breaker open")
+        async def fake_reap(*a, **k):
+            yield {"event": "error", "agent": "presenter", "message": "circuit breaker open"}
 
-        with patch("src.orchestrator.agent_invoker.agent_loop", side_effect=mock_agent_loop):
-            settings = MagicMock()
-            settings.use_bedrock = False
+        settings = MagicMock()
+        tool_executor = MagicMock()
+        tool_executor.apply_cache_control_to_tools = MagicMock(return_value=[])
+        tool_executor.get_tools_for_agent = AsyncMock(return_value=[])
+        context = MagicMock()
+        context.assemble_context = AsyncMock(return_value="")
 
-            tool_executor = MagicMock()
-            tool_executor.apply_cache_control_to_tools = MagicMock(return_value=[])
-            tool_executor.get_tools_for_agent = AsyncMock(return_value=[])
-            context = MagicMock()
-            context.assemble_context = AsyncMock(return_value="")
+        agent = MagicMock(name="presenter", prompt="test", model_tier="haiku")
+        agent.capability_scope = set()
 
-            invoker = AgentInvoker(
-                settings,
-                MagicMock(),  # client
-                MagicMock(),  # services
-                MagicMock(),  # budget
-                MagicMock(),  # circuit_breaker
-                lambda: AsyncMock(),  # db_factory_provider
-                tool_executor,
-                context,
-                {
-                    "presenter": MagicMock(name="presenter", prompt="test", model_tier="haiku"),
-                },
-            )
-            invoker.get_model_for_agent = MagicMock(return_value="claude-haiku-4-20250514")
-            invoker.build_system_prompt = MagicMock(return_value=[{"type": "text", "text": "test"}])
+        invoker = AgentInvoker(
+            settings,
+            MagicMock(),  # client
+            MagicMock(),  # services
+            MagicMock(),  # budget
+            MagicMock(),  # circuit_breaker
+            lambda: AsyncMock(),  # db_factory_provider
+            tool_executor,
+            context,
+            {"presenter": agent},
+        )
+        invoker.get_model_for_agent = MagicMock(return_value="claude-haiku-4-20250514")
+        invoker.build_system_prompt = MagicMock(return_value=[{"type": "text", "text": "test"}])
 
+        with (
+            patch.object(invoker, "_build_deep_agent_for", AsyncMock(return_value=object())),
+            patch.object(invoker, "_stream_and_reap", fake_reap),
+        ):
             result = await invoker.call_agent(
                 "presenter",
                 message="test",
                 user_id="u1",
                 workspace_id="ws1",
             )
-            assert result.startswith("[Agent error:")
-            assert "circuit breaker open" in result
+        assert result.startswith("[Agent error:")
+        assert "circuit breaker open" in result

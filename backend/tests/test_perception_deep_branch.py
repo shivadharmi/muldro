@@ -1,17 +1,14 @@
-"""Step 10 B6: ``AgentInvoker.call_agent`` (non-stream) gains a ``runtime=="deep"``
-branch so the perception path (Perceiver + Librarian) + briefing run on the deep
-runtime when ``effective_runtime("perception")=="deep"``.
+"""``AgentInvoker.call_agent`` (non-stream) runs the perception path (Perceiver +
+Librarian) + briefing on the deep runtime — the ONLY runtime (Step 11 Phase 4).
 
-Design (grounded 2026-07-19):
-- Non-stream → final text: mirror ``run_shadow_turn`` — iterate ``_stream_and_reap``
-  and capture the ``agent_done`` frame's ``"text"``.
+Design:
+- Non-stream → final text: iterate ``_stream_and_reap`` and capture the ``agent_done``
+  frame's ``"text"`` (mirrors ``run_shadow_turn``).
 - Headless perception has NO synchronous approver, so the auth-source must never
   ``interrupt()``. We pass ``authorization_source=AUTONOMOUS`` (honest provenance —
-  perception ingests untrusted content) + ``pre_approved_capabilities`` = the
-  agent's own ``capability_scope`` so every write short-circuits at ``trust_gate``
-  as pre-approved (no hang). ``permission_mode`` stays ``None`` (permission_gate
-  not installed).
-- Legacy (default) path stays byte-neutral.
+  perception ingests untrusted content) + ``pre_approved_capabilities`` = the agent's
+  own ``capability_scope`` so every write short-circuits at ``trust_gate`` as
+  pre-approved (no hang). ``permission_mode`` stays ``None`` (permission_gate not installed).
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -24,11 +21,8 @@ from tests.conftest import make_mock_settings
 _LIBRARIAN_SCOPE = {"internal.store_memory", "knowledge.search"}
 
 
-def _make_invoker(runtime: str) -> AgentInvoker:
-    """Minimal AgentInvoker reaching the call_agent runtime branch without real infra.
-
-    Mirrors ``tests/test_agent_invoker_runtime_metric.py::_make_invoker``.
-    """
+def _make_invoker() -> AgentInvoker:
+    """Minimal AgentInvoker reaching call_agent's deep body without real infra."""
     tool_executor = MagicMock()
     tool_executor.apply_cache_control_to_tools = lambda tools: tools
 
@@ -43,7 +37,7 @@ def _make_invoker(runtime: str) -> AgentInvoker:
     )
 
     return AgentInvoker(
-        settings=make_mock_settings(runtime=runtime),
+        settings=make_mock_settings(),
         client=MagicMock(),
         services=None,
         budget=MagicMock(),
@@ -55,44 +49,15 @@ def _make_invoker(runtime: str) -> AgentInvoker:
     )
 
 
-async def test_call_agent_legacy_byte_neutral():
-    """runtime=legacy: call_agent runs agent_loop as today; deep build NOT called."""
-    inv = _make_invoker(runtime="legacy")
-
-    async def _fake_loop(**kw):
-        from src.orchestrator.agent_loop import LoopDone
-
-        yield LoopDone(agent="librarian", text="legacy ok")
-
-    with (
-        patch(
-            "src.orchestrator.agent_invoker.effective_runtime",
-            AsyncMock(return_value="legacy"),
-        ),
-        patch("src.orchestrator.agent_invoker.agent_loop", _fake_loop),
-        patch.object(inv, "_build_deep_agent_for") as build_deep,
-    ):
-        text = await inv.call_agent(
-            "librarian", "obs", user_id="u", workspace_id="w", tools_override=[]
-        )
-
-    build_deep.assert_not_called()
-    assert text == "legacy ok"
-
-
-async def test_call_agent_deep_returns_agent_done_text():
-    """runtime=deep: final text is the agent_done frame's text (mirror run_shadow_turn)."""
-    inv = _make_invoker(runtime="deep")
+async def test_call_agent_returns_agent_done_text():
+    """Final text is the agent_done frame's text (mirror run_shadow_turn)."""
+    inv = _make_invoker()
 
     async def fake_reap(*a, **k):
         yield {"event": "text_delta", "text": "hel"}
         yield {"event": "agent_done", "text": "hello from deep librarian"}
 
     with (
-        patch(
-            "src.orchestrator.agent_invoker.effective_runtime",
-            AsyncMock(return_value="deep"),
-        ),
         patch.object(inv, "_build_deep_agent_for", AsyncMock(return_value=object())),
         patch.object(inv, "_stream_and_reap", fake_reap),
     ):
@@ -103,10 +68,10 @@ async def test_call_agent_deep_returns_agent_done_text():
     assert text == "hello from deep librarian"
 
 
-async def test_call_agent_deep_uses_autonomous_authsource_and_pre_approved_scope():
-    """The deep branch passes AUTONOMOUS provenance + the agent's own scope pre-approved,
+async def test_call_agent_uses_autonomous_authsource_and_pre_approved_scope():
+    """The deep body passes AUTONOMOUS provenance + the agent's own scope pre-approved,
     and NO permission_mode — so a headless perception write never interrupts."""
-    inv = _make_invoker(runtime="deep")
+    inv = _make_invoker()
     captured: dict = {}
 
     async def fake_build(agent, tools, **kw):
@@ -117,10 +82,6 @@ async def test_call_agent_deep_uses_autonomous_authsource_and_pre_approved_scope
         yield {"event": "agent_done", "text": "ok"}
 
     with (
-        patch(
-            "src.orchestrator.agent_invoker.effective_runtime",
-            AsyncMock(return_value="deep"),
-        ),
         patch.object(inv, "_build_deep_agent_for", fake_build),
         patch.object(inv, "_stream_and_reap", fake_reap),
     ):
@@ -131,19 +92,15 @@ async def test_call_agent_deep_uses_autonomous_authsource_and_pre_approved_scope
     assert captured.get("permission_mode") is None
 
 
-async def test_call_agent_deep_error_frame_returns_error_envelope():
-    """A deep stream that errors (no agent_done) returns the legacy error envelope, not "" —
-    else the briefing facade would ship a silent empty briefing (quality review Minor 1)."""
-    inv = _make_invoker(runtime="deep")
+async def test_call_agent_error_frame_returns_error_envelope():
+    """A deep stream that errors (no agent_done) returns the error envelope, not "" —
+    else the briefing facade would ship a silent empty briefing."""
+    inv = _make_invoker()
 
     async def fake_reap(*a, **k):
         yield {"event": "error", "agent": "librarian", "message": "boom"}
 
     with (
-        patch(
-            "src.orchestrator.agent_invoker.effective_runtime",
-            AsyncMock(return_value="deep"),
-        ),
         patch.object(inv, "_build_deep_agent_for", AsyncMock(return_value=object())),
         patch.object(inv, "_stream_and_reap", fake_reap),
     ):
@@ -154,18 +111,14 @@ async def test_call_agent_deep_error_frame_returns_error_envelope():
     assert text == "[Agent error: boom]"
 
 
-async def test_call_agent_deep_empty_stream_returns_empty_string():
+async def test_call_agent_empty_stream_returns_empty_string():
     """No agent_done and no error frame → returns "" (no false error envelope)."""
-    inv = _make_invoker(runtime="deep")
+    inv = _make_invoker()
 
     async def fake_reap(*a, **k):
         yield {"event": "text_delta", "text": "partial"}
 
     with (
-        patch(
-            "src.orchestrator.agent_invoker.effective_runtime",
-            AsyncMock(return_value="deep"),
-        ),
         patch.object(inv, "_build_deep_agent_for", AsyncMock(return_value=object())),
         patch.object(inv, "_stream_and_reap", fake_reap),
     ):
