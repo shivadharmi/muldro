@@ -26,12 +26,14 @@ def mock_db():
     return db
 
 
+@patch("src.services.memory_service.extraction.complete_text")
 @patch("src.services.memory_service._base.EmbeddingService")
 @patch("src.services.memory_service._base.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_extract_stores_with_embedding(mock_get_client, mock_embed_cls, settings, mock_db):
+async def test_extract_stores_with_embedding(
+    mock_get_client, mock_embed_cls, mock_complete, settings, mock_db
+):
     """Should store memories with embeddings when available."""
-    mock_client = MagicMock()
     extraction = {
         "memories": [
             {
@@ -43,10 +45,7 @@ async def test_extract_stores_with_embedding(mock_get_client, mock_embed_cls, se
             }
         ]
     }
-    response = MagicMock()
-    response.content = [MagicMock(text=json.dumps(extraction))]
-    mock_client.messages.create = AsyncMock(return_value=response)
-    mock_get_client.return_value = mock_client
+    mock_complete.return_value = json.dumps(extraction)
 
     fake_embedding = [0.1] * 1024
     mock_embedder = MagicMock()
@@ -153,12 +152,14 @@ async def test_text_fallback_when_embedding_fails(
     assert "similarity" not in results[0]
 
 
+@patch("src.services.memory_service.extraction.complete_text")
 @patch("src.services.memory_service._base.EmbeddingService")
 @patch("src.services.memory_service._base.get_anthropic_client")
 @pytest.mark.asyncio
-async def test_extract_preferences(mock_get_client, mock_embed_cls, settings, mock_db):
+async def test_extract_preferences(
+    mock_get_client, mock_embed_cls, mock_complete, settings, mock_db
+):
     """Should extract and store user preferences."""
-    mock_client = MagicMock()
     extraction = {
         "preferences": [
             {
@@ -169,10 +170,7 @@ async def test_extract_preferences(mock_get_client, mock_embed_cls, settings, mo
             }
         ]
     }
-    response = MagicMock()
-    response.content = [MagicMock(text=json.dumps(extraction))]
-    mock_client.messages.create = AsyncMock(return_value=response)
-    mock_get_client.return_value = mock_client
+    mock_complete.return_value = json.dumps(extraction)
 
     mock_embedder = MagicMock()
     mock_embedder.embed_text = AsyncMock(return_value=[0.1] * 1024)

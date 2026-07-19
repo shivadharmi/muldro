@@ -4,6 +4,7 @@ import logging
 
 from ulid import ULID
 
+from src.llm.utility import complete_text
 from src.models.memory import Memory
 
 logger = logging.getLogger(__name__)
@@ -257,15 +258,15 @@ class MemoryExtraction:
             system_prompt = MEMORY_EXTRACTION_PROMPT
             if prompt_addendum:
                 system_prompt = system_prompt + prompt_addendum
-            response = await self._client.messages.create(
-                model=self._settings.resolved_model,
-                max_tokens=1024,
+            text = await complete_text(
                 system=system_prompt,
-                messages=[{"role": "user", "content": source_text}],
+                user=source_text,
+                tier="resolved",
+                max_tokens=1024,
             )
             from src.llm_utils import parse_llm_json
 
-            return parse_llm_json(response.content[0].text)
+            return parse_llm_json(text)
         except Exception:
             logger.debug("Memory extraction returned non-JSON", exc_info=True)
             return {"memories": []}
@@ -273,15 +274,15 @@ class MemoryExtraction:
     async def _call_preference_extraction(self, source_text: str) -> dict:
         """Call Claude to extract preferences from text."""
         try:
-            response = await self._client.messages.create(
-                model=self._settings.resolved_model,
-                max_tokens=1024,
+            text = await complete_text(
                 system=PREFERENCE_EXTRACTION_PROMPT,
-                messages=[{"role": "user", "content": source_text}],
+                user=source_text,
+                tier="resolved",
+                max_tokens=1024,
             )
             from src.llm_utils import parse_llm_json
 
-            return parse_llm_json(response.content[0].text)
+            return parse_llm_json(text)
         except Exception:
             logger.debug("Preference extraction returned non-JSON", exc_info=True)
             return {"preferences": []}

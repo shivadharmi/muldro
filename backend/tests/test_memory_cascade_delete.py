@@ -43,11 +43,12 @@ def mock_vector_store():
 # ---------------------------------------------------------------------------
 
 
+@patch("src.services.memory_service.contradictions.complete_text")
 @patch("src.services.memory_service._base.EmbeddingService")
 @patch("src.services.memory_service._base.get_anthropic_client")
 @pytest.mark.asyncio
 async def test_superseded_memory_deleted_from_qdrant(
-    mock_get_client, mock_embed_cls, settings, mock_db, mock_vector_store
+    mock_get_client, mock_embed_cls, mock_complete, settings, mock_db, mock_vector_store
 ):
     """When a contradiction is detected, the superseded memory must be deleted from Qdrant."""
     # Stub embedder
@@ -67,11 +68,7 @@ async def test_superseded_memory_deleted_from_qdrant(
     )
 
     # Claude says it's a contradiction
-    mock_client = MagicMock()
-    response = MagicMock()
-    response.content = [MagicMock(text=json.dumps({"contradicts": True}))]
-    mock_client.messages.create = AsyncMock(return_value=response)
-    mock_get_client.return_value = mock_client
+    mock_complete.return_value = json.dumps({"contradicts": True})
 
     service = MemoryService(
         settings=settings,
@@ -90,11 +87,12 @@ async def test_superseded_memory_deleted_from_qdrant(
     mock_vector_store.delete.assert_awaited_once_with("memories", SUPERSEDED_ID)
 
 
+@patch("src.services.memory_service.contradictions.complete_text")
 @patch("src.services.memory_service._base.EmbeddingService")
 @patch("src.services.memory_service._base.get_anthropic_client")
 @pytest.mark.asyncio
 async def test_no_qdrant_delete_when_no_contradiction(
-    mock_get_client, mock_embed_cls, settings, mock_db, mock_vector_store
+    mock_get_client, mock_embed_cls, mock_complete, settings, mock_db, mock_vector_store
 ):
     """When no contradiction is found, Qdrant delete must NOT be called."""
     mock_embedder = MagicMock()
@@ -111,11 +109,7 @@ async def test_no_qdrant_delete_when_no_contradiction(
         ]
     )
 
-    mock_client = MagicMock()
-    response = MagicMock()
-    response.content = [MagicMock(text=json.dumps({"contradicts": False}))]
-    mock_client.messages.create = AsyncMock(return_value=response)
-    mock_get_client.return_value = mock_client
+    mock_complete.return_value = json.dumps({"contradicts": False})
 
     service = MemoryService(
         settings=settings,
@@ -208,11 +202,12 @@ async def test_merged_memory_deleted_from_qdrant(
 # ---------------------------------------------------------------------------
 
 
+@patch("src.services.memory_service.contradictions.complete_text")
 @patch("src.services.memory_service._base.EmbeddingService")
 @patch("src.services.memory_service._base.get_anthropic_client")
 @pytest.mark.asyncio
 async def test_cascade_delete_graceful_on_qdrant_failure(
-    mock_get_client, mock_embed_cls, settings, mock_db, mock_vector_store
+    mock_get_client, mock_embed_cls, mock_complete, settings, mock_db, mock_vector_store
 ):
     """A Qdrant delete failure must not crash check_contradictions."""
     mock_embedder = MagicMock()
@@ -231,11 +226,7 @@ async def test_cascade_delete_graceful_on_qdrant_failure(
     # Simulate a Qdrant connection error
     mock_vector_store.delete = AsyncMock(side_effect=RuntimeError("Qdrant unavailable"))
 
-    mock_client = MagicMock()
-    response = MagicMock()
-    response.content = [MagicMock(text=json.dumps({"contradicts": True}))]
-    mock_client.messages.create = AsyncMock(return_value=response)
-    mock_get_client.return_value = mock_client
+    mock_complete.return_value = json.dumps({"contradicts": True})
 
     service = MemoryService(
         settings=settings,
