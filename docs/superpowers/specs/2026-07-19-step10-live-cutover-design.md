@@ -9,10 +9,15 @@
 
 ## 1. What this is
 
-Activate the deep runtime + chat permission model in production, across **all three surfaces**
-(chat, perception, autonomous), validated by a **local full-stack end-to-end test on deep before
-merge** — NOT by in-prod shadow-compare. Direct flip. Every irreversible gate (push, merge, prod
-deploy) is a separate STOP-and-ASK sign-off.
+Activate the deep runtime + chat permission model, across **all three surfaces**
+(chat, perception, autonomous), validated by a **local full-stack end-to-end test on deep** — NOT by
+in-prod shadow-compare. Direct flip.
+
+> **SESSION BOUNDARY (user decision 2026-07-19):** this session runs **Phases A–D only** and STOPS at
+> local e2e validation. **No push, no merge, no deployment.** The branch stays unpushed/unmerged,
+> validated-on-deep and ready to merge. **Phase E (merge + CLAUDE.md R1 rewrite)** and **Phase F (prod
+> deploy)** are deferred to later, separately-signed-off sessions. Consequence: **every action this
+> session is reversible + on-branch/local** — there is no irreversible gate to cross now.
 
 **Explicitly dropped from the pre-pivot plan (user decision 2026-07-19):**
 - Shadow-compare rework, divergence comparison, and the multi-week shadow-driven clean-week holds.
@@ -97,14 +102,14 @@ Anthropic key + `npm run dev`. Drive every flow (Playwright + HTTP/WS):
 
 Green here is the merge gate.
 
-### Phase E — Merge (irreversible gates #1–2)
+### Phase E — Merge (DEFERRED to a later session — irreversible gates #1–2)
 `--no-ff` merge preserves the 321-commit history (squash would destroy the SHA archaeology the memory
 references; main undiverged → zero conflicts). Push branch → open PR (CI `ci.yml` must pass) → merge.
 **R1 CLAUDE.md rewrite AT merge:** the "Two execution paths" / "Deep Agents runtime" sections — chat is
 now gated **at action time** by `permission_mode` (§7 of the permission-model spec supersedes "chat is
 ungated by design; never add a gate"). Do NOT delete legacy-path docs (still live as rollback fallback).
 
-### Phase F — Prod deploy + arm safety net (irreversible gate #3)
+### Phase F — Prod deploy + arm safety net (DEFERRED to a later session — irreversible gate #3)
 `ssh -i ~/.ssh/jarvis-key.pem ubuntu@65.2.19.78 ; sudo /opt/jarvis/infra/scripts/deploy.sh main` with
 the deep env. Prod smoke on each surface (a chat turn, a perception tick, an autonomous run report the
 deep runtime). **Rollback net (no shadow-compare):**
@@ -123,13 +128,15 @@ Document the manual rollback runbook.
 - **Cross-process auto-rollback watcher (Prometheus HTTP API)** + live emitters for the 4 dormant
   metrics — later ops hardening; the escape hatch + human are the net for now.
 
-## 5. Gate ladder (each = STOP-and-ASK, never batched)
+## 5. Gate ladder — ALL DEFERRED to later sessions (this session has NO irreversible gate)
+This session (Phases A–D) is entirely reversible + on-branch/local. The gates below are the
+STOP-and-ASK sign-offs for **future** sessions, listed here so the closing state is unambiguous:
 1. **Push branch** to origin.
-2. **Open PR / merge to main** (after CI green + R0 SHIP).
-3. **Prod deploy** (deploy.sh main with deep env).
-4. Escape hatch + watcher armed (state, not a flip).
+2. **Open PR / merge to main** (after CI green + R0 SHIP) + CLAUDE.md R1 rewrite.
+3. **Prod deploy** (deploy.sh main with deep env) + arm escape hatch/watcher.
 
-Phase-D flag flips are **local** (reversible). The prod flip *is* the deploy env (folds into gate #3).
+Phase-D flag flips are **local** (reversible env + restart). Nothing this session touches origin,
+`main`, or prod.
 
 ## 6. Risks & mitigations
 | Risk | Mitigation |
