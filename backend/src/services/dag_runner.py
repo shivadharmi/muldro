@@ -30,9 +30,9 @@ from src.contracts import ResultSummary, StepResult
 from src.integrations.mcp_errors import McpAuthRequiredError
 from src.integrations.provider_map import provider_for_server
 from src.models.task_graph import TaskRun, TaskStep
-from src.orchestrator.agent_loop import CancellationRequested
 from src.services.execution_state import TERMINAL_SUCCESS, transition_run, transition_step
 from src.services.execution_support import (
+    CancellationRequested,
     _compute_retry_delay,
     _detect_auth_required,
     _safe_error_fields,

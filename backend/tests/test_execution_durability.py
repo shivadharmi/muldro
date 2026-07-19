@@ -5,8 +5,8 @@ import inspect
 
 import pytest
 
-from src.orchestrator.agent_loop import CancellationRequested, _check_cancellation
 from src.services.execution_state import STEP_TRANSITIONS
+from src.services.execution_support import CancellationRequested, _check_cancellation
 
 
 class TestCancellationToken:

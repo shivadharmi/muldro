@@ -18,6 +18,7 @@ import anthropic
 from src.contracts import SpanToolCall
 from src.integrations.provider_map import provider_for_server
 from src.orchestrator.hooks import _sanitize_secrets, audit_post_tool_hook, governor_pre_tool_hook
+from src.services.execution_support import CancellationRequested, _check_cancellation
 from src.services.tool_registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -238,17 +239,8 @@ LoopEvent = (
 )
 
 
-class CancellationRequested(Exception):  # noqa: N818
-    """Raised when a run cancellation token is set."""
-
-    pass
-
-
-def _check_cancellation(cancel_event: asyncio.Event | None) -> None:
-    """Check cancellation token between tool rounds. Raises if set."""
-    if cancel_event and cancel_event.is_set():
-        raise CancellationRequested("Run cancelled by user")
-
+# CancellationRequested + _check_cancellation re-homed to services.execution_support
+# (Step 11 Phase 4) and re-imported above; used at the cancel checkpoint + catch below.
 
 _MAX_API_RETRIES = 3
 _RETRY_BASE_DELAY = 2.0  # seconds

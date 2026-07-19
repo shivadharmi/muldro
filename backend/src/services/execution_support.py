@@ -10,6 +10,7 @@ imported by everything else in the cluster.
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 
 from src.contracts import StepState, step_status_to_ui
@@ -18,6 +19,22 @@ from src.middleware.observability import get_correlation_id
 
 if TYPE_CHECKING:
     from src.models.task_graph import TaskStep
+
+
+class CancellationRequested(Exception):  # noqa: N818
+    """Raised when a run cancellation token is set.
+
+    Re-homed here from ``agent_loop`` (Step 11 Phase 4) so ``dag_runner`` and the
+    autonomous executors can raise/catch it without importing the legacy engine.
+    """
+
+    pass
+
+
+def _check_cancellation(cancel_event: asyncio.Event | None) -> None:
+    """Check cancellation token between tool rounds. Raises if set."""
+    if cancel_event and cancel_event.is_set():
+        raise CancellationRequested("Run cancelled by user")
 
 
 def _compute_retry_delay(retry_count: int) -> int:
