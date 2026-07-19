@@ -123,20 +123,32 @@ output for identical model text (model mocked at the `UtilityLLM` seam).
 
 ## 4. Worker/MCP dual-loop fix (independent prerequisite)
 
-**Root cause (confirmed by scout):** the module-global singleton `jarvis_tools = FastMCP(...)`
-(`src/tools/server.py`) plus a per-`ToolExecutor` cached `_internal_client`
-(`tool_executor.py` — created via `Client(jarvis_tools).__aenter__()` and cached forever). The
-in-memory transport binds to whichever event loop enters it first. In `run.py --worker`, API and
-worker run in one process on **separate** loops; the worker's later internal-tool call collides →
-`got Future attached to a different loop`. This blocks internal-MCP writes from the worker/scheduler
-(the exact failure the Step-10 D4 live e2e hit on `update_execution`). It is **orthogonal to runtime
-selection** — deleting legacy neither causes nor fixes it.
+**Root cause (CORRECTED at build — the scout's original transport diagnosis was empirically
+disproven; see the build note below).** The collision is in the **DB session factory**, not the
+FastMCP transport. Internal MCP tools acquire their session via `_shared._get_db()`
+(`src/tools/intelligence_server/_shared.py`), which used the **module-global `_shared._db_factory`**.
+That global is set last-writer-wins by `configure_tool_servers()` on BOTH the API thread (per chat
+request, `routes_chat.py`) and the worker thread (startup, `run.py`). The engine itself is
+`threading.local` (`src/models/database.py` — each thread's asyncpg pool binds to that thread's loop),
+but the shared **global pointer** meant a worker background tool call (e.g. `update_execution`) could
+run against the API thread's loop-bound engine → `got Future attached to a different loop` (the
+Step-10 D4 live-e2e failure). It is **orthogonal to runtime selection** — deleting legacy neither
+causes nor fixes it.
 
-**Fix:** loop-isolate the internal MCP server/client — each `ToolExecutor` (API and worker) gets its
-own FastMCP server instance + client bound to its own loop, rather than sharing the process-global
-`jarvis_tools`. Provide a `build_internal_mcp_server()` factory; construct + enter the client on the
-loop that owns the `ToolExecutor`. **Dedicated dual-loop regression test** (simulate two loops, assert
-an internal tool call succeeds from the second). Highest-risk *mechanical* change ⇒ its own phase.
+**Build note — why the transport diagnosis was wrong.** Three probes: (a) `list_tools()` and (b) a
+full `call_tool()` round-trip, each across two concurrent loops on the SHARED global `jarvis_tools`
+server, both **succeed** — FastMCP's in-memory transport creates fresh per-connection streams, so
+sharing the server object across loops is fine. (c) A real asyncpg session factory bound to loop A,
+used from loop B, raises the exact `Future attached to a different loop` error. So the loop-bound
+resource is the DB engine reached inside the tool, not the MCP server/client.
+
+**Fix:** resolve the DB factory **per loop**. `_get_db()` uses the thread-local
+`get_session_factory()` when no explicit override is configured; `_db_factory` remains a TEST-ONLY
+override (tests inject a mock via `configure()`), and the three production `configure_tool_servers`
+call sites pass `None`. No per-instance FastMCP server is needed (`build_internal_mcp_server()` was
+prototyped then dropped — the transport was never the problem). **Regression test:** two threads, two
+concurrent loops, no override, both reach the DB via `_get_db()` (fails RED on the pre-fix
+`not configured` guard; the buggy shared-global variant raises the cross-loop `Future` error).
 
 ## 5. What becomes dead code when legacy is gone (deletion inventory)
 
@@ -261,13 +273,11 @@ Anthropic key and drop the Bedrock env. Confirm prod's current Anthropic access 
 3. **`chat_planless` / `deep_single_lead` → KEPT (see §1/§5).** They gate live chat product shapes
    orthogonal to runtime; not inlinable. Only the `effective_chat_runtime()=="deep"` sub-condition
    becomes constant.
-4. **Worker/MCP fix seam → per-ToolExecutor `build_internal_mcp_server()`.** Each `ToolExecutor`
-   already owns its `_internal_client` (`tool_executor.py:75-76`); the shared thing is the global
-   `jarvis_tools` server (`tools/server.py:14`). A per-instance server (reproducing the 3 mount +
-   `set_up_component_manager` lines) is safe — the only global-`jarvis_tools` importers are
-   `tool_executor.py:279` and a non-test script; **no tests** import it; `_ensure_worker_mcp_bridge` /
-   `initialize_mcp_bridge` / TurnScope teardown touch only the *external* pool. **One caveat to verify
-   at build:** `set_up_component_manager` runtime tool enable/disable state becomes per-instance —
-   confirm it isn't expected to propagate across the API and worker ToolExecutors.
+4. **Worker/MCP fix seam → per-loop DB factory in `_get_db()` (REVISED at build).** The original
+   plan (per-ToolExecutor `build_internal_mcp_server()`) was based on a transport diagnosis that build
+   probes disproved — sharing the FastMCP server across loops works fine; the loop-bound resource is
+   the DB engine. The actual fix makes `_shared._get_db()` resolve the thread-local
+   `get_session_factory()` (no shared global factory); the three production `configure_tool_servers`
+   call sites pass `None`. The FastMCP server/`jarvis_tools` global is untouched. See §4 build note.
 5. **Test-migration inventory → RESOLVED (see §7).** ~737 tests / 67 files, self-distributing;
    worklist and clusters enumerated.

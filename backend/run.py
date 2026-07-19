@@ -122,7 +122,10 @@ def main():
                     # worker orchestrator must NOT hold a shared long-lived
                     # AsyncSession either (P2 #4).
                     services = build_shared(settings)
-                    configure_tool_servers(db_factory, settings, services)
+                    # Pass None: internal tools resolve the thread-local (per-loop)
+                    # session factory. A shared global factory set here would be used
+                    # cross-loop by the API thread and vice versa (Step 11 Phase 3).
+                    configure_tool_servers(None, settings, services)
 
                     # Step 10C P2: build the durable worker-side AsyncPostgresSaver so the
                     # autonomous deep step-executor (run_autonomous_deep_step) persists its

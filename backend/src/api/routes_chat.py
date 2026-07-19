@@ -93,7 +93,9 @@ def _build_orchestrator(settings: Settings, checkpointer_provider=None):
 
     db_factory = get_session_factory()
     svc = build_shared(settings)
-    configure_tool_servers(db_factory, settings, svc)
+    # Pass None: internal tools resolve the thread-local (per-loop) session factory,
+    # never a shared global bound to another thread's loop (Step 11 Phase 3).
+    configure_tool_servers(None, settings, svc)
 
     # Track the shared Redis client for shutdown cleanup (build_shared opens one
     # process-wide client reused by the orchestrator + per-request services).

@@ -31,7 +31,9 @@ async def _trigger_initial_observation(user_id: str, sources: list[str], workspa
         svc_db = db_factory()
         try:
             svc = build_runtime(settings, svc_db)
-            configure_tool_servers(db_factory, settings, svc)
+            # Pass None: internal tools resolve the thread-local (per-loop) session
+            # factory rather than a shared global bound to another loop (Step 11 Phase 3).
+            configure_tool_servers(None, settings, svc)
             orchestrator = JarvisOrchestrator(
                 settings=settings,
                 db_factory=db_factory,
