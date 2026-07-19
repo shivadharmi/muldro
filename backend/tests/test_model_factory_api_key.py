@@ -19,7 +19,7 @@ def _agent() -> SubAgent:
 def test_build_chat_model_passes_api_key_from_settings():
     fake_settings = MagicMock()
     fake_settings.anthropic_api_key = "unit-test-key-xyz"
-    with patch("src.deep_runtime.model_factory.get_settings", return_value=fake_settings):
+    with patch("src.llm.model_factory.get_settings", return_value=fake_settings):
         model = build_chat_model(_agent())
     # langchain_anthropic stores it as a SecretStr on anthropic_api_key
     assert model.anthropic_api_key.get_secret_value() == "unit-test-key-xyz"
@@ -30,7 +30,7 @@ def test_build_chat_model_omits_api_key_when_settings_empty():
     resolution to ChatAnthropic's own env/credentials chain (Bedrock-deep is a separate gap)."""
     fake_settings = MagicMock()
     fake_settings.anthropic_api_key = ""
-    with patch("src.deep_runtime.model_factory.get_settings", return_value=fake_settings):
+    with patch("src.llm.model_factory.get_settings", return_value=fake_settings):
         model = build_chat_model(_agent())
     assert model is not None
 
@@ -44,7 +44,7 @@ def test_build_chat_model_clamps_thinking_budget_below_max_tokens():
     fake_settings.anthropic_api_key = "k"
     agent = _agent()  # sonnet (non-adaptive), default max_tokens==thinking.budget_tokens
     assert agent.max_tokens == agent.thinking.budget_tokens  # the pathological equal case
-    with patch("src.deep_runtime.model_factory.get_settings", return_value=fake_settings):
+    with patch("src.llm.model_factory.get_settings", return_value=fake_settings):
         model = build_chat_model(agent)
     assert model.thinking is not None
     assert model.thinking["budget_tokens"] < model.max_tokens

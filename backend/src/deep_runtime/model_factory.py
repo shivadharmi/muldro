@@ -14,8 +14,8 @@ from __future__ import annotations
 
 from langchain_anthropic import ChatAnthropic
 
-from src.config.settings import get_settings
 from src.deep_runtime._thinking import effort_for_budget, requires_adaptive_thinking
+from src.llm.model_factory import build_langchain_model
 from src.orchestrator.agents import SubAgent
 
 # Model-tier → direct Anthropic model id (CLAUDE.md / env).
@@ -44,22 +44,18 @@ def build_chat_model(agent: SubAgent) -> ChatAnthropic:
     is_adaptive = requires_adaptive_thinking(model_id)
     thinking_cfg = agent.thinking
 
-    kwargs: dict = {"model": model_id, "max_tokens": agent.max_tokens}
-
-    # Deep-runtime models are the DIRECT Anthropic API. LangChain's ChatAnthropic reads
-    # the unprefixed ANTHROPIC_API_KEY env var, which Jarvis never sets (it uses
-    # JARVIS_ANTHROPIC_API_KEY → settings.anthropic_api_key). Pass the key explicitly so the
-    # deep model authenticates without relying on ambient env. Empty key (e.g. a Bedrock
-    # deployment) → omit it and let ChatAnthropic's own resolver run — Bedrock-on-deep is a
-    # separate, not-yet-built path (the factory only builds direct ChatAnthropic today).
-    _api_key = get_settings().anthropic_api_key
-    if _api_key:
-        kwargs["api_key"] = _api_key
+    # Compute the thinking/effort/temperature branches here; the ChatAnthropic construction
+    # (incl. the explicit JARVIS_ANTHROPIC_API_KEY handling) lives in the shared leaf
+    # src.llm.build_langchain_model so the deep-agent path and utility completions build
+    # models the same way.
+    thinking: dict | None = None
+    effort: str | None = None
+    temperature: float | None = None
 
     if thinking_cfg.enabled:
         if is_adaptive:
-            kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
-            kwargs["effort"] = effort_for_budget(thinking_cfg.budget_tokens)
+            thinking = {"type": "adaptive", "display": "summarized"}
+            effort = effort_for_budget(thinking_cfg.budget_tokens)
             # temperature left unset (omitted from request body).
         else:
             # Anthropic requires max_tokens > thinking.budget_tokens (thinking tokens count
@@ -69,11 +65,17 @@ def build_chat_model(agent: SubAgent) -> ChatAnthropic:
             budget = thinking_cfg.budget_tokens
             if budget >= agent.max_tokens:
                 budget = agent.max_tokens - 1
-            kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
-            kwargs["temperature"] = 1  # required when enabled-thinking is on
+            thinking = {"type": "enabled", "budget_tokens": budget}
+            temperature = 1  # required when enabled-thinking is on
     else:
         if not is_adaptive:
-            kwargs["temperature"] = agent.temperature
+            temperature = agent.temperature
         # adaptive + no thinking → no temperature, no thinking (both 400).
 
-    return ChatAnthropic(**kwargs)
+    return build_langchain_model(
+        model_id,
+        max_tokens=agent.max_tokens,
+        temperature=temperature,
+        thinking=thinking,
+        effort=effort,
+    )
