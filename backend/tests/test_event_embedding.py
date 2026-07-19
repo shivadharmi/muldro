@@ -26,31 +26,28 @@ def settings():
     return make_mock_settings()
 
 
-def _make_claude_response(importance: float = 0.85) -> MagicMock:
-    scores = {
-        "importance_score": importance,
-        "urgency_score": 0.5,
-        "confidence_score": 0.8,
-        "importance_signals": {
-            "from_priority_person": False,
-            "contains_deadline": False,
-            "contains_question": False,
-            "related_to_active_project": False,
-        },
-        "summary": "Test summary",
-    }
-    response = MagicMock()
-    response.content = [MagicMock(text=json.dumps(scores))]
-    return response
+def _scores_json(importance: float = 0.85) -> str:
+    return json.dumps(
+        {
+            "importance_score": importance,
+            "urgency_score": 0.5,
+            "confidence_score": 0.8,
+            "importance_signals": {
+                "from_priority_person": False,
+                "contains_deadline": False,
+                "contains_question": False,
+                "related_to_active_project": False,
+            },
+            "summary": "Test summary",
+        }
+    )
 
 
-@patch("src.services.event_processor.get_anthropic_client")
+@patch("src.services.event_processor.complete_text")
 @pytest.mark.asyncio
-async def test_event_embedding_above_threshold(mock_get_client, settings, mock_db):
+async def test_event_embedding_above_threshold(mock_complete, settings, mock_db):
     """Events with importance >= 0.3 should be embedded into Qdrant."""
-    mock_client = MagicMock()
-    mock_client.messages.create = AsyncMock(return_value=_make_claude_response(importance=0.85))
-    mock_get_client.return_value = mock_client
+    mock_complete.return_value = _scores_json(importance=0.85)
 
     embedding_service = MagicMock()
     embedding_service.embed_text = AsyncMock(return_value=[0.1] * 1024)
@@ -78,13 +75,11 @@ async def test_event_embedding_above_threshold(mock_get_client, settings, mock_d
     assert "occurred_at" in payload
 
 
-@patch("src.services.event_processor.get_anthropic_client")
+@patch("src.services.event_processor.complete_text")
 @pytest.mark.asyncio
-async def test_event_embedding_below_threshold_skipped(mock_get_client, settings, mock_db):
+async def test_event_embedding_below_threshold_skipped(mock_complete, settings, mock_db):
     """Events with importance < 0.3 should NOT be embedded into Qdrant."""
-    mock_client = MagicMock()
-    mock_client.messages.create = AsyncMock(return_value=_make_claude_response(importance=0.2))
-    mock_get_client.return_value = mock_client
+    mock_complete.return_value = _scores_json(importance=0.2)
 
     embedding_service = MagicMock()
     embedding_service.embed_text = AsyncMock(return_value=[0.1] * 1024)
@@ -105,13 +100,11 @@ async def test_event_embedding_below_threshold_skipped(mock_get_client, settings
     vector_store.upsert.assert_not_called()
 
 
-@patch("src.services.event_processor.get_anthropic_client")
+@patch("src.services.event_processor.complete_text")
 @pytest.mark.asyncio
-async def test_event_embedding_graceful_on_embed_failure(mock_get_client, settings, mock_db):
+async def test_event_embedding_graceful_on_embed_failure(mock_complete, settings, mock_db):
     """If embedding returns None, upsert is NOT called and processing succeeds."""
-    mock_client = MagicMock()
-    mock_client.messages.create = AsyncMock(return_value=_make_claude_response(importance=0.85))
-    mock_get_client.return_value = mock_client
+    mock_complete.return_value = _scores_json(importance=0.85)
 
     embedding_service = MagicMock()
     embedding_service.embed_text = AsyncMock(return_value=None)

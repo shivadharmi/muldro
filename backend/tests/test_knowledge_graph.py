@@ -196,9 +196,9 @@ class TestTemporalTracking:
 
 
 class TestEntityExtractionExpanded:
-    @patch("src.services.world_model.get_anthropic_client")
+    @patch("src.services.world_model.complete_text")
     @pytest.mark.asyncio
-    async def test_extracts_document_entity(self, mock_get_client, settings, mock_db):
+    async def test_extracts_document_entity(self, mock_complete, settings, mock_db):
         """Should extract document entities from events."""
         mock_event = MagicMock()
         mock_event.event_type = "file_modified"
@@ -233,11 +233,7 @@ class TestEntityExtractionExpanded:
             ],
         }
 
-        mock_client = MagicMock()
-        response = MagicMock()
-        response.content = [MagicMock(text=json.dumps(extraction_result))]
-        mock_client.messages.create = AsyncMock(return_value=response)
-        mock_get_client.return_value = mock_client
+        mock_complete.return_value = json.dumps(extraction_result)
 
         event_result = MagicMock()
         event_result.scalar_one_or_none.return_value = mock_event
@@ -255,9 +251,9 @@ class TestEntityExtractionExpanded:
 
         assert len(entity_ids) == 2
 
-    @patch("src.services.world_model.get_anthropic_client")
+    @patch("src.services.world_model.complete_text")
     @pytest.mark.asyncio
-    async def test_invalid_type_falls_back_to_person(self, mock_get_client, settings, mock_db):
+    async def test_invalid_type_falls_back_to_person(self, mock_complete, settings, mock_db):
         """Unknown entity_type should fall back to 'person'."""
         mock_event = MagicMock()
         mock_event.event_type = "test"
@@ -279,11 +275,7 @@ class TestEntityExtractionExpanded:
             "relationships": [],
         }
 
-        mock_client = MagicMock()
-        response = MagicMock()
-        response.content = [MagicMock(text=json.dumps(extraction_result))]
-        mock_client.messages.create = AsyncMock(return_value=response)
-        mock_get_client.return_value = mock_client
+        mock_complete.return_value = json.dumps(extraction_result)
 
         event_result = MagicMock()
         event_result.scalar_one_or_none.return_value = mock_event
@@ -301,10 +293,10 @@ class TestEntityExtractionExpanded:
         added = mock_db.add.call_args_list[0][0][0]
         assert added.entity_type == "person"
 
-    @patch("src.services.world_model.get_anthropic_client")
+    @patch("src.services.world_model.complete_text")
     @pytest.mark.asyncio
     async def test_invalid_relation_falls_back_to_related_to(
-        self, mock_get_client, settings, mock_db
+        self, mock_complete, settings, mock_db
     ):
         """Unknown relation_type should fall back to 'related_to'."""
         mock_event = MagicMock()
@@ -340,11 +332,7 @@ class TestEntityExtractionExpanded:
             ],
         }
 
-        mock_client = MagicMock()
-        response = MagicMock()
-        response.content = [MagicMock(text=json.dumps(extraction_result))]
-        mock_client.messages.create = AsyncMock(return_value=response)
-        mock_get_client.return_value = mock_client
+        mock_complete.return_value = json.dumps(extraction_result)
 
         event_result = MagicMock()
         event_result.scalar_one_or_none.return_value = mock_event
@@ -410,10 +398,10 @@ class TestEntityExtractionExpanded:
 
 class TestEntityMemoryLinking:
     @patch("src.services.memory_service._base.EmbeddingService")
-    @patch("src.services.memory_service._base.get_anthropic_client")
+    @patch("src.services.memory_service.extraction.complete_text")
     @pytest.mark.asyncio
     async def test_extract_and_store_with_entity_ids(
-        self, mock_get_client, mock_embedder_cls, settings, mock_db
+        self, mock_complete, mock_embedder_cls, settings, mock_db
     ):
         """Memories should store entity_ids when provided."""
         mock_embedder = MagicMock()
@@ -432,11 +420,7 @@ class TestEntityMemoryLinking:
             ]
         }
 
-        mock_client = MagicMock()
-        response = MagicMock()
-        response.content = [MagicMock(text=json.dumps(extraction_result))]
-        mock_client.messages.create = AsyncMock(return_value=response)
-        mock_get_client.return_value = mock_client
+        mock_complete.return_value = json.dumps(extraction_result)
 
         # No duplicate found
         no_result = MagicMock()

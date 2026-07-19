@@ -12,9 +12,9 @@ from tests.conftest import TEST_USER_ID, TEST_WORKSPACE_ID, make_mock_settings, 
 # ---------------------------------------------------------------------------
 
 
-@patch("src.services.event_processor.get_anthropic_client")
+@patch("src.services.event_processor.complete_text")
 @pytest.mark.asyncio
-async def test_event_embedding_called_for_important_events(mock_get_client):
+async def test_event_embedding_called_for_important_events(mock_complete):
     """Events with importance_score >= 0.3 should be embedded into Qdrant."""
     from src.services.event_processor import EventProcessor
 
@@ -25,11 +25,7 @@ async def test_event_embedding_called_for_important_events(mock_get_client):
         "importance_signals": {},
         "summary": "Important update from investor",
     }
-    mock_client = MagicMock()
-    mock_client.messages.create = AsyncMock(
-        return_value=MagicMock(content=[MagicMock(text=json.dumps(scores))])
-    )
-    mock_get_client.return_value = mock_client
+    mock_complete.return_value = json.dumps(scores)
 
     mock_db = MagicMock()
     mock_db.add = MagicMock()
@@ -65,9 +61,9 @@ async def test_event_embedding_called_for_important_events(mock_get_client):
     assert payload["workspace_id"] == TEST_WORKSPACE_ID
 
 
-@patch("src.services.event_processor.get_anthropic_client")
+@patch("src.services.event_processor.complete_text")
 @pytest.mark.asyncio
-async def test_event_embedding_skipped_for_low_importance(mock_get_client):
+async def test_event_embedding_skipped_for_low_importance(mock_complete):
     """Events with importance_score < 0.3 should NOT be embedded."""
     from src.services.event_processor import EventProcessor
 
@@ -78,11 +74,7 @@ async def test_event_embedding_skipped_for_low_importance(mock_get_client):
         "importance_signals": {},
         "summary": "Newsletter",
     }
-    mock_client = MagicMock()
-    mock_client.messages.create = AsyncMock(
-        return_value=MagicMock(content=[MagicMock(text=json.dumps(scores))])
-    )
-    mock_get_client.return_value = mock_client
+    mock_complete.return_value = json.dumps(scores)
 
     mock_db = MagicMock()
     mock_db.add = MagicMock()
@@ -107,9 +99,9 @@ async def test_event_embedding_skipped_for_low_importance(mock_get_client):
     mock_vs.upsert.assert_not_called()
 
 
-@patch("src.services.event_processor.get_anthropic_client")
+@patch("src.services.event_processor.complete_text")
 @pytest.mark.asyncio
-async def test_event_embedding_failure_does_not_block(mock_get_client):
+async def test_event_embedding_failure_does_not_block(mock_complete):
     """Embedding failure should not prevent event from being stored."""
     from src.services.event_processor import EventProcessor
 
@@ -120,11 +112,7 @@ async def test_event_embedding_failure_does_not_block(mock_get_client):
         "importance_signals": {},
         "summary": "Critical update",
     }
-    mock_client = MagicMock()
-    mock_client.messages.create = AsyncMock(
-        return_value=MagicMock(content=[MagicMock(text=json.dumps(scores))])
-    )
-    mock_get_client.return_value = mock_client
+    mock_complete.return_value = json.dumps(scores)
 
     mock_db = MagicMock()
     mock_db.add = MagicMock()
