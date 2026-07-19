@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config.settings import Settings, get_anthropic_client
+from src.llm.utility import complete_text
 from src.models.task_graph import TaskRun, TaskStep
 from src.services.execution_state import TERMINAL_SUCCESS
 
@@ -232,26 +233,24 @@ class Verifier:
         )
 
         try:
-            response = await self._client.messages.create(
-                model=self._settings.resolved_model,
-                max_tokens=256,
+            # Prefill the assistant turn with "{" so the model is forced to continue a JSON
+            # object instead of prose — the canonical fix for the judge returning "No JSON
+            # value found". complete_text returns the CONTINUATION only; we re-attach the "{".
+            continuation = await complete_text(
                 system=(
                     "You are a quality verification engine. "
                     "Evaluate whether the run met the criteria. "
                     'Respond with ONLY a JSON object: {"passed": true/false, "reason": "..."}'
                 ),
-                messages=[
-                    {"role": "user", "content": prompt},
-                    # Prefill the assistant turn with "{" so the model is forced
-                    # to continue a JSON object instead of prose — the canonical
-                    # fix for the judge returning "No JSON value found".
-                    {"role": "assistant", "content": "{"},
-                ],
+                user=prompt,
+                tier="resolved",
+                max_tokens=256,
+                prefill="{",
             )
             from src.llm_utils import parse_llm_json
 
             # Re-attach the prefilled "{" the model continued from.
-            text = "{" + (response.content[0].text or "")
+            text = "{" + (continuation or "")
             # Advisory verification: a malformed/empty judge response must NOT
             # raise (it is informational, not failing). Degrade to not-passed.
             result = parse_llm_json(text, default={"passed": False, "reason": "unparseable"})

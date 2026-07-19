@@ -20,6 +20,7 @@ import json
 import logging
 
 from src.config.settings import Settings
+from src.llm.utility import complete_text
 from src.llm_utils import parse_llm_json
 from src.models.task_graph import TaskRun, TaskStep
 from src.services.contention import (
@@ -211,17 +212,17 @@ class StepRunner:
             'Respond with JSON: {"status": "completed", "result": "...", "details": {...}}'
         )
 
-        response = await self._client.messages.create(
-            model=self._settings.resolved_model,
-            max_tokens=1024,
+        raw = await complete_text(
             system=system,
-            messages=[{"role": "user", "content": "\n".join(parts)}],
+            user="\n".join(parts),
+            tier="resolved",
+            max_tokens=1024,
         )
 
         try:
-            return parse_llm_json(response.content[0].text)
+            return parse_llm_json(raw)
         except json.JSONDecodeError:
-            return {"status": "completed", "result": response.content[0].text}
+            return {"status": "completed", "result": raw}
 
     async def build_executor_tools(self, step_capability: str, workspace_id: str) -> list[dict]:
         """Offer ONLY the current step's capability tools (its primary tool + same-family

@@ -314,38 +314,34 @@ class TestLLMJudgeNonJSONResponse:
     judge response must degrade quietly to a not-passed verdict — NOT raise a
     JSONDecodeError that spews a full traceback on every run (see log2.log)."""
 
-    def _judge_response(self, text: str):
-        block = MagicMock()
-        block.text = text
-        resp = MagicMock()
-        resp.content = [block]
-        return resp
-
     @pytest.mark.asyncio
     async def test_non_json_judge_response_returns_false_without_raising(self, verifier):
-        verifier._client.messages.create = AsyncMock(
-            return_value=self._judge_response("The run looks fine to me.")
-        )
         condition = {"type": "llm_judge", "criteria": "Did the run succeed?"}
-        # Must not raise; advisory failure is a clean False.
-        result = await verifier._llm_judge(condition, _make_run(), [_make_step()])
+        # Must not raise; advisory failure is a clean False. complete_text returns the
+        # continuation after the "{" prefill, which _llm_judge re-prepends.
+        with patch(
+            "src.services.verifier.complete_text",
+            AsyncMock(return_value="The run looks fine to me."),
+        ):
+            result = await verifier._llm_judge(condition, _make_run(), [_make_step()])
         assert result is False
 
     @pytest.mark.asyncio
     async def test_empty_judge_response_returns_false_without_raising(self, verifier):
-        verifier._client.messages.create = AsyncMock(return_value=self._judge_response(""))
         condition = {"type": "llm_judge", "criteria": "Did the run succeed?"}
-        result = await verifier._llm_judge(condition, _make_run(), [_make_step()])
+        with patch("src.services.verifier.complete_text", AsyncMock(return_value="")):
+            result = await verifier._llm_judge(condition, _make_run(), [_make_step()])
         assert result is False
 
     @pytest.mark.asyncio
     async def test_valid_json_judge_response_still_parsed(self, verifier):
-        # With assistant-prefill forcing JSON, the model's text begins after "{".
-        verifier._client.messages.create = AsyncMock(
-            return_value=self._judge_response('"passed": true, "reason": "all good"}')
-        )
+        # With assistant-prefill forcing JSON, the model's continuation begins after "{".
         condition = {"type": "llm_judge", "criteria": "Did the run succeed?"}
-        result = await verifier._llm_judge(condition, _make_run(), [_make_step()])
+        with patch(
+            "src.services.verifier.complete_text",
+            AsyncMock(return_value='"passed": true, "reason": "all good"}'),
+        ):
+            result = await verifier._llm_judge(condition, _make_run(), [_make_step()])
         assert result is True
 
 
