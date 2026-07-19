@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from langchain_anthropic import ChatAnthropic
 
+from src.config.settings import get_settings
 from src.deep_runtime._thinking import effort_for_budget, requires_adaptive_thinking
 from src.orchestrator.agents import SubAgent
 
@@ -45,13 +46,30 @@ def build_chat_model(agent: SubAgent) -> ChatAnthropic:
 
     kwargs: dict = {"model": model_id, "max_tokens": agent.max_tokens}
 
+    # Deep-runtime models are the DIRECT Anthropic API. LangChain's ChatAnthropic reads
+    # the unprefixed ANTHROPIC_API_KEY env var, which Jarvis never sets (it uses
+    # JARVIS_ANTHROPIC_API_KEY → settings.anthropic_api_key). Pass the key explicitly so the
+    # deep model authenticates without relying on ambient env. Empty key (e.g. a Bedrock
+    # deployment) → omit it and let ChatAnthropic's own resolver run — Bedrock-on-deep is a
+    # separate, not-yet-built path (the factory only builds direct ChatAnthropic today).
+    _api_key = get_settings().anthropic_api_key
+    if _api_key:
+        kwargs["api_key"] = _api_key
+
     if thinking_cfg.enabled:
         if is_adaptive:
             kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
             kwargs["effort"] = effort_for_budget(thinking_cfg.budget_tokens)
             # temperature left unset (omitted from request body).
         else:
-            kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking_cfg.budget_tokens}
+            # Anthropic requires max_tokens > thinking.budget_tokens (thinking tokens count
+            # toward max_tokens, so the reply needs headroom). Clamp the budget below
+            # max_tokens, mirroring legacy build_thinking_params (agent_loop.py:458-459) —
+            # a default SubAgent has max_tokens == budget_tokens == 4096, which 400s raw.
+            budget = thinking_cfg.budget_tokens
+            if budget >= agent.max_tokens:
+                budget = agent.max_tokens - 1
+            kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
             kwargs["temperature"] = 1  # required when enabled-thinking is on
     else:
         if not is_adaptive:

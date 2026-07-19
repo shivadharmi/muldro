@@ -51,13 +51,16 @@ def test_planner_opus_adaptive_thinking_high_effort_temp_unset():
 
 
 def test_sonnet_legacy_enabled_thinking_temperature_one():
-    """Sonnet (legacy model) + thinking budget 4096 → legacy enabled-thinking dict,
-    temperature == 1, model claude-sonnet-4-6, no effort."""
+    """Sonnet (legacy model) + thinking budget 4096 with max_tokens 4096 → legacy
+    enabled-thinking dict, temperature == 1, model claude-sonnet-4-6, no effort. The budget
+    is CLAMPED to max_tokens - 1 (4095): Anthropic requires max_tokens > budget_tokens
+    (thinking counts toward max_tokens), so the raw-equal 4096/4096 would 400 — the clamp
+    mirrors legacy build_thinking_params (agent_loop.py:458-459)."""
     agent = _agent(model_tier="sonnet", thinking_enabled=True, budget_tokens=4096)
     model = build_chat_model(agent)
 
     assert model.model == "claude-sonnet-4-6"
-    assert model.thinking == {"type": "enabled", "budget_tokens": 4096}
+    assert model.thinking == {"type": "enabled", "budget_tokens": 4095}
     assert model.temperature == 1
     assert model.effort is None
     assert model.max_tokens == 4096
