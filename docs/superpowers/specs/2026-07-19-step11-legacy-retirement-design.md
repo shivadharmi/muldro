@@ -109,10 +109,17 @@ Grouped for cohesive commits + one characterization test per consumer:
 already *lives inside* the deep runtime yet still calls the raw client — clearest proof that
 "deep path" ≠ "off the raw client."
 
-**Behavior-preserving contract:** same model IDs, same params (temperature/max_tokens), same JSON
-parsing + fallbacks. Each consumer's `client.messages.create(...)` + parse becomes a single
-`utility_llm.complete_*` call. Characterization test asserts identical output for identical input
-(model mocked at the `UtilityLLM` seam).
+**Behavior-preserving contract (grounding-refined):** the minimal seam is to change **only how each
+consumer gets the model's text** — `client.messages.create(...)` → `utility_llm.complete_text(...)` —
+and **leave each consumer's existing parse untouched.** All 15 call sites already funnel through the
+shared tolerant extractor `src/llm_utils.parse_llm_json(text, default=...)` with a domain-specific
+fallback; that stays exactly as-is. Confirmed across all 15: **zero tool-calling, zero streaming**,
+**one prefill** (verifier `_llm_judge` prefills `"{"` and re-prepends it — `UtilityLLM.complete_text`
+needs an optional `prefill` param), **two `temperature=0`** sites (others omit temperature — the
+param must be *unset* vs `0`), **two `system=` block-list shapes** + **one no-system** call
+(relevance), and **one text-only** consumer (`_summarize_history`, no parse). `UtilityLLM` reproduces
+these knobs; the parse layer is not re-touched. Characterization test per consumer asserts identical
+output for identical model text (model mocked at the `UtilityLLM` seam).
 
 ## 4. Worker/MCP dual-loop fix (independent prerequisite)
 
@@ -155,10 +162,17 @@ Confirmed by the control-plane scout (file references are the durable anchors; v
   Bedrock arms.
 - **`get_anthropic_client` / `close_anthropic_client` / `_anthropic_client` singleton** — the raw
   client factory (`settings.py`); deletable once all 12 consumers are re-homed and `agent_loop` gone.
-- **Obsolete settings fields** — `runtime`/`JARVIS_RUNTIME`, `deep_single_lead`, `chat_planless`
-  (becomes always-on / inlined — confirm at build), `shadow_sample_rate`, `rollback_*_threshold`.
-  Static `settings.runtime` checks at `app.py` (open pool unconditionally), `routes_health.py`,
-  `checkpoint_reaper_tick.py`, `run.py` drop their "else legacy" arm.
+- **Obsolete *runtime-selection* settings fields** — `runtime`/`JARVIS_RUNTIME`,
+  `shadow_sample_rate`, `rollback_*_threshold`. Static `settings.runtime` checks at `app.py`
+  (open pool unconditionally), `routes_health.py`, `checkpoint_reaper_tick.py`, `run.py` drop their
+  "else legacy" arm.
+- **KEPT — NOT deleted (grounding correction):** `deep_single_lead` and `chat_planless`. The scout
+  proved these gate **three distinct live chat *product* shapes** — planless-single-lead
+  (`_run_single_lead_planless`), planned-single-lead (`_run_single_lead`), and planned multi-agent
+  per-step — which are **orthogonal to runtime**. `deep_single_lead=False` still selects the
+  Planner + per-step multi-agent path (now executing on deep). Retiring legacy does NOT collapse
+  these; both flags stay. (Only the `effective_chat_runtime()=="deep"` sub-condition inside
+  `_resolve_effective_mode` becomes constant-true.)
 - **Metrics** — `AGENT_RUNTIME_CALLS` runtime label goes single-valued; the rollback counters' watcher
   consumer dies (counters may stay as observability).
 - **Stale doc comments** — `deep_runtime/_thinking.py`, `model_factory.py`,
@@ -188,13 +202,33 @@ anymore) → final deletion → docs. Each phase leaves the tree green.
 
 ## 7. The biggest hidden cost — test migration (surfaced up front)
 
-The current 3697-test suite is green **because it exercises the legacy path** (tests mock `agent_loop`
-and `@patch("src.orchestrator.jarvis.get_anthropic_client")`). Phase 2 is gentle — swap the mock
-target per consumer to the `UtilityLLM` seam. But **Phases 4–5 flip the default runtime to deep for
-the whole suite**: every test that drove `agent_loop` or patched the raw client must be rewritten to
-the deep runtime or retired. That test re-homing is likely the **largest** chunk of Phases 4–5 — not
-the deletions themselves. The plan treats it as first-class work, not cleanup. Verify-don't-trust:
-a phase is not done until the full non-e2e gate is green from a clean checkout.
+The current 3697-test suite is green **because it exercises the legacy path**. Grounding sized the
+migration precisely — **~737 tests across 67 files**, but overwhelmingly mechanical and
+**self-distributing across the phases** (the suite never goes broadly red):
+
+| Effort | Files | ~Tests | Lands in |
+|---|---|---|---|
+| **SWAP-MOCK** — re-point a client mock to the `UtilityLLM` seam | 45 | ~517 | mostly Phase 2 (consumer tests, ~167) + Phase 5 cleanup (~350 defensive stubbers) |
+| **REWRITE-TO-DEEP** — drives `agent_loop` / asserts legacy event translation | 12 | ~125 | Phase 4 (per-surface) |
+| **DELETE** — 10B / shadow / runtime-selection / Bedrock-only + `test_agent_loop.py` | 10 | ~95 | Phases 4–5 (die with code) |
+
+**Key green-keeping mechanic:** a `@patch("...get_anthropic_client")` stays a harmless no-op as long
+as the *symbol* exists, so the ~350 defensive stubbers (that patch the raw client only to avoid real
+init while testing execution/trust/orchestrator) do **not** break during re-homing — they need cleanup
+only when the factory's *import* is removed in Phase 5. So Phase 2 touches ~167 real consumer tests;
+the ~350-test cleanup is a mechanical drop-the-dead-patch pass at the end.
+
+**The genuine-rewrite risk is small and localizable** (Phase 4, per-surface): `test_execution_durability.py`
+(23 — cancellation/gauges; the deep runtime has its *own* cancellation model, so these are
+*re-established* on deep, not re-pointed), `test_graph_executor.py` (27, mixed),
+`test_fix6_orchestrator_error_handling.py` (17 — the legacy `LoopError`→string contract), and the two
+per-surface "gate picks legacy vs deep" files (`test_step_runner_deep_executor.py`,
+`test_perception_deep_branch.py`). No shared conftest `Loop*` fabricator exists — every fake loop is
+file-local (5 copies of a `_fake_loop` idiom), so rewrites don't cascade through one fixture. The one
+shared config mutation point is `make_mock_settings` in `conftest.py` (carries `use_bedrock`/
+`bedrock_region` — a one-line edit at the Bedrock teardown).
+
+Verify-don't-trust: a phase is not done until the full non-e2e gate is green from a clean checkout.
 
 ## 8. Risks & mitigations
 
@@ -213,15 +247,27 @@ After this retirement, prod **must** reach `api.anthropic.com` directly with `JA
 If the current prod deploy runs `JARVIS_USE_BEDROCK=true`, the eventual deploy must provision a direct
 Anthropic key and drop the Bedrock env. Confirm prod's current Anthropic access mode before Phase F.
 
-## 10. Open items for the plan (resolve during writing-plans / grounding)
+## 10. Open items — RESOLVED by grounding (2026-07-19)
 
-1. **`CancellationRequested` new home** — pick the neutral module (a leaf under `orchestrator/` or a
-   small `execution_support`); confirm no other legacy symbol is imported by survivors.
-2. **`UtilityLLM` JSON contract** — confirm each of the 12 consumers' exact output parsing (prefill
-   `"{"`, `.with_structured_output`, bare `json.loads`) so the helper reproduces it faithfully.
-3. **`chat_planless` / `deep_single_lead` fate** — become always-on/inlined vs kept as flags; confirm
-   at grounding (they gate the single-lead branch that is now the only branch).
-4. **Worker/MCP fix seam** — confirm the `build_internal_mcp_server()` + per-ToolExecutor ownership
-   does not break external-MCP bridge init (`_ensure_worker_mcp_bridge`) or turn-scoped teardown.
-5. **Test-migration inventory** — enumerate the tests that mock `agent_loop` / `get_anthropic_client`
-   (the Phase-4/5 re-home worklist) before starting the collapse.
+1. **`CancellationRequested` new home → `src/services/execution_support.py`.** It's a bare
+   `Exception` subclass (`agent_loop.py:241`), no fields. Users: `dag_runner` (import + 3 `except`
+   sites) and `agent_loop` itself (raise `:250`, catch `:926`). `execution_support.py` is the right
+   leaf — `dag_runner` already imports it, and it imports only `contracts`/`errors`/`observability`
+   (no cycle, does not import `agent_loop`). `agent_loop` re-imports it from the new home until
+   `agent_loop` is deleted in Phase 5.
+2. **`UtilityLLM` contract → RESOLVED (see §3).** All 15 sites reuse `llm_utils.parse_llm_json`; keep
+   each consumer's parse; `UtilityLLM.complete_text` needs `tier`, optional `prefill`, optional
+   `system` (string | block-list | none), and unset-vs-0 `temperature`. No tools, no streaming.
+3. **`chat_planless` / `deep_single_lead` → KEPT (see §1/§5).** They gate live chat product shapes
+   orthogonal to runtime; not inlinable. Only the `effective_chat_runtime()=="deep"` sub-condition
+   becomes constant.
+4. **Worker/MCP fix seam → per-ToolExecutor `build_internal_mcp_server()`.** Each `ToolExecutor`
+   already owns its `_internal_client` (`tool_executor.py:75-76`); the shared thing is the global
+   `jarvis_tools` server (`tools/server.py:14`). A per-instance server (reproducing the 3 mount +
+   `set_up_component_manager` lines) is safe — the only global-`jarvis_tools` importers are
+   `tool_executor.py:279` and a non-test script; **no tests** import it; `_ensure_worker_mcp_bridge` /
+   `initialize_mcp_bridge` / TurnScope teardown touch only the *external* pool. **One caveat to verify
+   at build:** `set_up_component_manager` runtime tool enable/disable state becomes per-instance —
+   confirm it isn't expected to propagate across the API and worker ToolExecutors.
+5. **Test-migration inventory → RESOLVED (see §7).** ~737 tests / 67 files, self-distributing;
+   worklist and clusters enumerated.
