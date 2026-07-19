@@ -169,21 +169,19 @@ async def test_conversation_summary_embedded():
             return_value=mock_es,
         ) as _mock_es_cls,
     ):
-        mock_client = MagicMock()
-        mock_client.messages.create = AsyncMock(
-            return_value=MagicMock(
-                content=[MagicMock(type="text", text="User greeted and asked about schedule.")]
-            )
-        )
-        mock_get_client.return_value = mock_client
+        mock_get_client.return_value = MagicMock()
 
         from src.orchestrator.jarvis import JarvisOrchestrator
 
         orch = JarvisOrchestrator(settings=settings, db_factory=MagicMock(), services=MagicMock())
 
-        summary = await orch._context._summarize_history(
-            lines, conversation_id="conv_test123", user_id=TEST_USER_ID
-        )
+        with patch(
+            "src.orchestrator.context_assembler.complete_text",
+            AsyncMock(return_value="User greeted and asked about schedule."),
+        ):
+            summary = await orch._context._summarize_history(
+                lines, conversation_id="conv_test123", user_id=TEST_USER_ID
+            )
 
         assert summary == "User greeted and asked about schedule."
         mock_vs.upsert.assert_called_once()
@@ -210,19 +208,19 @@ async def test_conversation_embedding_skipped_without_conversation_id():
         patch("src.services.vector_store.VectorStore", return_value=mock_vs),
         patch("src.services.embedding_service.EmbeddingService"),
     ):
-        mock_client = MagicMock()
-        mock_client.messages.create = AsyncMock(
-            return_value=MagicMock(content=[MagicMock(type="text", text="Summary")])
-        )
-        mock_get_client.return_value = mock_client
+        mock_get_client.return_value = MagicMock()
 
         from src.orchestrator.jarvis import JarvisOrchestrator
 
         orch = JarvisOrchestrator(settings=settings, db_factory=MagicMock(), services=MagicMock())
 
-        summary = await orch._context._summarize_history(
-            ["line1"], conversation_id=None, user_id=TEST_USER_ID
-        )
+        with patch(
+            "src.orchestrator.context_assembler.complete_text",
+            AsyncMock(return_value="Summary"),
+        ):
+            summary = await orch._context._summarize_history(
+                ["line1"], conversation_id=None, user_id=TEST_USER_ID
+            )
         assert summary == "Summary"
         mock_vs.upsert.assert_not_called()
 

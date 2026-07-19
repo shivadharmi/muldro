@@ -16,9 +16,9 @@ Two branches, keyed on ``is_read_only_delegate``:
   the tool_result (``ToolMessage(status="error")``). 7B2 delegates are read-only so this is
   unreached in production, but it is REAL and tested — it is the teeth.
 
-Clones the RiskAssessor SHAPE (Haiku side-call via ``client.messages.create`` + a best-effort
-Redis 24h cache + graceful fallback), NOT ``services/governor.py`` (the plan-shaped policy
-service — wrong layer).
+Clones the RiskAssessor SHAPE (Haiku side-call via the shared ``complete_text`` seam + a
+best-effort Redis 24h cache + graceful fallback), NOT ``services/governor.py`` (the plan-shaped
+policy service — wrong layer).
 
 DORMANT: wired into ``AgentInvoker._build_deep_agent_for``'s ``extra_middleware`` ONLY when
 ``deep_delegates_enabled``. Flag OFF → not built (byte-identical to 7B1). Even wired it acts
