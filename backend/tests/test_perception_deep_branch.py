@@ -129,3 +129,48 @@ async def test_call_agent_deep_uses_autonomous_authsource_and_pre_approved_scope
     assert captured["authorization_source"] == AuthorizationSource.AUTONOMOUS
     assert captured["pre_approved_capabilities"] == frozenset(_LIBRARIAN_SCOPE)
     assert captured.get("permission_mode") is None
+
+
+async def test_call_agent_deep_error_frame_returns_error_envelope():
+    """A deep stream that errors (no agent_done) returns the legacy error envelope, not "" —
+    else the briefing facade would ship a silent empty briefing (quality review Minor 1)."""
+    inv = _make_invoker(runtime="deep")
+
+    async def fake_reap(*a, **k):
+        yield {"event": "error", "agent": "librarian", "message": "boom"}
+
+    with (
+        patch(
+            "src.orchestrator.agent_invoker.effective_runtime",
+            AsyncMock(return_value="deep"),
+        ),
+        patch.object(inv, "_build_deep_agent_for", AsyncMock(return_value=object())),
+        patch.object(inv, "_stream_and_reap", fake_reap),
+    ):
+        text = await inv.call_agent(
+            "librarian", "obs", user_id="u", workspace_id="w", tools_override=[]
+        )
+
+    assert text == "[Agent error: boom]"
+
+
+async def test_call_agent_deep_empty_stream_returns_empty_string():
+    """No agent_done and no error frame → returns "" (no false error envelope)."""
+    inv = _make_invoker(runtime="deep")
+
+    async def fake_reap(*a, **k):
+        yield {"event": "text_delta", "text": "partial"}
+
+    with (
+        patch(
+            "src.orchestrator.agent_invoker.effective_runtime",
+            AsyncMock(return_value="deep"),
+        ),
+        patch.object(inv, "_build_deep_agent_for", AsyncMock(return_value=object())),
+        patch.object(inv, "_stream_and_reap", fake_reap),
+    ):
+        text = await inv.call_agent(
+            "librarian", "obs", user_id="u", workspace_id="w", tools_override=[]
+        )
+
+    assert text == ""

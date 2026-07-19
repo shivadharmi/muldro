@@ -1726,6 +1726,7 @@ class AgentInvoker:
             )
             graph_input = {"messages": [{"role": "user", "content": message}]}
             final_text = ""
+            deep_error: str | None = None
             async for frame in self._stream_and_reap(
                 deep_agent,
                 graph_input,
@@ -1733,8 +1734,20 @@ class AgentInvoker:
                 agent_name=agent_name,
                 model=model,
             ):
-                if isinstance(frame, dict) and frame.get("event") == "agent_done":
+                if not isinstance(frame, dict):
+                    continue
+                event = frame.get("event")
+                if event == "agent_done":
                     final_text = frame.get("text", "")
+                elif event == "error":
+                    deep_error = frame.get("message") or "unknown error"
+            # Parity with the legacy path's error envelope: a deep stream that errors emits
+            # an "error" frame and NO "agent_done" (stream_adapter), leaving final_text "".
+            # The briefing facade (jarvis.generate_briefing) feeds this straight into the
+            # user notification body, so a silent "" would ship an empty "Daily Briefing" —
+            # surface the sanitized error string instead, matching the legacy return shape.
+            if not final_text and deep_error is not None:
+                return f"[Agent error: {deep_error}]"
             return final_text
 
         text = ""
