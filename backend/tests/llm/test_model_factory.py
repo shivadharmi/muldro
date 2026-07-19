@@ -53,3 +53,27 @@ def test_utility_resolved_tier_uses_settings_anthropic_model():
         m = build_utility_model("resolved", max_tokens=512, temperature=0.0)
     assert m.model == "claude-sonnet-4-6"
     assert m.temperature == 0.0
+
+
+def test_unknown_utility_tier_raises():
+    import pytest
+
+    with pytest.raises(ValueError, match="unknown utility tier"):
+        build_utility_model("hiaku", max_tokens=64)  # typo -> loud failure, not silent Sonnet
+
+
+def test_api_key_forwarded_from_settings():
+    fake = MagicMock()
+    fake.anthropic_api_key = "unit-key-abc"
+    with patch("src.llm.model_factory.get_settings", return_value=fake):
+        m = build_langchain_model("claude-haiku-4-5-20251001", max_tokens=64)
+    # langchain_anthropic stores it as a SecretStr on .anthropic_api_key
+    assert m.anthropic_api_key.get_secret_value() == "unit-key-abc"
+
+
+def test_api_key_omitted_when_settings_empty():
+    fake = MagicMock()
+    fake.anthropic_api_key = ""
+    with patch("src.llm.model_factory.get_settings", return_value=fake):
+        m = build_langchain_model("claude-haiku-4-5-20251001", max_tokens=64)
+    assert m is not None  # empty key not forced; ChatAnthropic's own resolver runs

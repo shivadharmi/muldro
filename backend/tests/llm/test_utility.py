@@ -34,9 +34,36 @@ async def test_complete_text_omits_system_when_none():
     assert out == "summary text"
 
 
-async def test_complete_text_appends_prefill_as_assistant():
+async def test_complete_text_appends_prefill_and_returns_continuation():
     model = _mock_model('"passed": true}')  # continuation after the "{" prefill
     with patch("src.llm.utility.build_utility_model", return_value=model):
-        await complete_text(system="s", user="u", tier="resolved", max_tokens=256, prefill="{")
+        out = await complete_text(
+            system="s", user="u", tier="resolved", max_tokens=256, prefill="{"
+        )
     msgs = model.ainvoke.call_args.args[0]
     assert isinstance(msgs[-1], AIMessage) and msgs[-1].content == "{"
+    # Returns the CONTINUATION only (not the prefill) — verifier re-prepends the "{".
+    assert out == '"passed": true}'
+
+
+async def test_complete_text_joins_block_list_content():
+    model = AsyncMock()
+    model.ainvoke = AsyncMock(
+        return_value=AIMessage(
+            content=[
+                {"type": "text", "text": "a"},
+                {"type": "other", "data": 1},
+                {"type": "text", "text": "b"},
+            ]
+        )
+    )
+    with patch("src.llm.utility.build_utility_model", return_value=model):
+        out = await complete_text(system=None, user="u", tier="haiku", max_tokens=16)
+    assert out == "ab"  # only text blocks joined; non-text/non-dict ignored
+
+
+async def test_complete_text_empty_content_returns_empty():
+    model = _mock_model("")
+    with patch("src.llm.utility.build_utility_model", return_value=model):
+        out = await complete_text(system="s", user="u", tier="haiku", max_tokens=16)
+    assert out == ""

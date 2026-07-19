@@ -8,7 +8,7 @@ OWN ``llm_utils.parse_llm_json`` + domain fallback — this seam only fetches te
 
 from __future__ import annotations
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 from src.llm.model_factory import build_utility_model
 
@@ -30,7 +30,7 @@ async def complete_text(
       matching the raw-SDK prefill behavior.
     """
     model = build_utility_model(tier, max_tokens=max_tokens, temperature=temperature)
-    messages: list = []
+    messages: list[BaseMessage] = []
     if system is not None:
         messages.append(SystemMessage(content=system))
     messages.append(HumanMessage(content=user))

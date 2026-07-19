@@ -9,10 +9,16 @@ importable downward by both services and the deep runtime.
 
 from __future__ import annotations
 
+from typing import Any
+
 from langchain_anthropic import ChatAnthropic
 
 from src.config.models import MODEL_TIERS
 from src.config.settings import get_settings
+
+# Utility completions address a small fixed set of tiers. "haiku" → the Haiku id;
+# "resolved"/"sonnet" → the configured direct model. Anything else is a caller bug.
+_UTILITY_TIERS: tuple[str, ...] = ("haiku", "resolved", "sonnet")
 
 
 def build_langchain_model(
@@ -20,7 +26,7 @@ def build_langchain_model(
     *,
     max_tokens: int,
     temperature: float | None = None,
-    thinking: dict | None = None,
+    thinking: dict[str, Any] | None = None,
     effort: str | None = None,
 ) -> ChatAnthropic:
     """Construct a direct-Anthropic ``ChatAnthropic``.
@@ -30,7 +36,7 @@ def build_langchain_model(
     LangChain otherwise reads the unprefixed ``ANTHROPIC_API_KEY`` which Jarvis never
     sets (it uses ``JARVIS_ANTHROPIC_API_KEY`` -> ``settings.anthropic_api_key``).
     """
-    kwargs: dict = {"model": model_id, "max_tokens": max_tokens}
+    kwargs: dict[str, Any] = {"model": model_id, "max_tokens": max_tokens}
     api_key = get_settings().anthropic_api_key
     if api_key:
         kwargs["api_key"] = api_key
@@ -47,10 +53,15 @@ def _resolve_utility_model_id(tier: str) -> str:
     """Map a utility tier to a DIRECT Anthropic model id (no Bedrock).
 
     - ``"haiku"`` -> the Haiku tier id.
-    - anything else (``"resolved"``/``"sonnet"``) -> the configured direct model
+    - ``"resolved"``/``"sonnet"`` -> the configured direct model
       (``settings.anthropic_model``), preserving the ``JARVIS_ANTHROPIC_MODEL`` override
       that the raw-SDK consumers honored via ``resolved_model``.
+
+    Raises ``ValueError`` on any other tier so a typo fails loudly instead of
+    silently resolving to the Sonnet model.
     """
+    if tier not in _UTILITY_TIERS:
+        raise ValueError(f"unknown utility tier {tier!r} (expected one of {_UTILITY_TIERS})")
     if tier == "haiku":
         return MODEL_TIERS["haiku"]
     return get_settings().anthropic_model
